@@ -4,8 +4,10 @@ plugins {
 }
 
 dependencies {
-    implementation(libs.ksp)
     implementation(libs.kotlin.poet)
     implementation(libs.kotlin.poet.ksp)
+    implementation(libs.kotlinx.coroutines)
+    implementation(libs.ksp)
+
     testImplementation(kotlin("test"))
 }

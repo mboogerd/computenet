@@ -16,3 +16,7 @@ kotlin {
         }
     }
 }
+
+tasks.named("compileKotlin") {
+    dependsOn(project(":gen-test").tasks.named("test"))
+}

@@ -11,5 +11,6 @@ plugins {
 
 include(":kernel")
 include(":gen")
+include(":gen-test")
 
 rootProject.name = "computenet"
