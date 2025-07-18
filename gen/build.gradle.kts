@@ -8,6 +8,7 @@ dependencies {
     implementation(libs.kotlin.poet.ksp)
     implementation(libs.kotlinx.coroutines)
     implementation(libs.ksp)
+    implementation(kotlin("reflect"))
 
     testImplementation(kotlin("test"))
 }

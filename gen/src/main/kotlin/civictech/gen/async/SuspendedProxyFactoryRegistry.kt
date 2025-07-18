@@ -2,20 +2,20 @@ package civictech.gen.async
 
 import kotlin.reflect.KClass
 
-typealias SuspendedProxyFactory<I, S> = (SendOperation<I>) -> S
+typealias SuspendedProxyFactory<S> = (SendOperation) -> S
 
 class SuspendedProxyFactoryRegistry {
-    private val factories: MutableMap<KClass<*>, (SendOperation<*>) -> Any> = mutableMapOf()
+    private val factories: MutableMap<KClass<*>, (SendOperation) -> Any> = mutableMapOf()
 
-    fun <I : Any, S : Any> register(
+    fun <S : Any> register(
         proxyClass: KClass<S>,
-        factory: SuspendedProxyFactory<I, S>
+        factory: SuspendedProxyFactory<S>
     ) {
         @Suppress("UNCHECKED_CAST")
-        factories[proxyClass] = factory as (SendOperation<*>) -> Any
+        factories[proxyClass] = factory as (SendOperation) -> Any
     }
 
-    fun <I : Any, S : Any> create(proxyClass: KClass<S>, op: SendOperation<I>): S? {
+    fun <S : Any> create(proxyClass: KClass<S>, op: SendOperation): S? {
         @Suppress("UNCHECKED_CAST")
         return factories[proxyClass]?.invoke(op) as? S
     }
