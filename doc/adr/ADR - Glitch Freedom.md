@@ -16,6 +16,8 @@ Instead of enforcing glitch-freedom globally, our architecture allows tasks to o
 
 This allows glitch-freedom to be composable and selectively applied without sacrificing global concurrency or throughput.
 
+Additionally, a glitch-free task does not need to recursively track all upstream dependencies across the entire graph. Instead, it may stop its traversal at the closest upstream glitch-free tasks, which are assumed to already provide consistent outputs for each version. This forms a "glitch-free frontier" beyond which causal consistency is already enforced. However, all edges between those upstream glitch-free tasks and the current task must still be tracked and version-buffered to ensure values arriving along fork-join paths are still synchronized correctly. This enables glitch-freedom to compose cleanly across task boundaries.
+
 ## Consequences
 - Tasks that do not require glitch-freedom can process eagerly without coordination.
 - Tasks that opt in must maintain per-version input buffers and track causal completeness.
