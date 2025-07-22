@@ -73,6 +73,12 @@ The dataflow graph framework will offer the following key capabilities:
   - Encryption requirements for transit and storage
 - **Motivation**: Makes the framework viable for both public and sensitive workloads.
 
+### 14. Mutable or immutable
+- Tasks can incorporate mutability, or can represent sources, sinks, or invariants. If they are mutable, they
+  can still have subclasses where they are single-writer (at a time, e.g. serialized), or permit concurrent
+  (decentralized) updates.
+- **Motivation** Data flows will tend to start from external events that demand a change to internal state.
+
 ## Consequences
 
 This rich feature set enables the framework to serve as a foundation for many types of decentralized applications, including:
