@@ -1,5 +1,9 @@
 # ADR: Blocking Mailbox and Computelet Migration
 
+## Status
+
+Superseded by [Computelet Mobility]
+
 ## Context
 
 The dataflow graph abstraction must host computelets that may be either blocking or suspending, and these computelets need to be able to move between hosts at runtime.
@@ -38,10 +42,6 @@ This ensures:
 - The host remains the single consumer of computelets' messages, avoiding complex synchronization.
 - The mailbox abstraction adds a small amount of complexity to the implementation, but only around state transitions.
 - The design maintains a lock-free, high-performance fast path while supporting safe and ordered computelet migration.
-
-## Status
-
-Accepted.
 
 ## Alternatives Considered
 
