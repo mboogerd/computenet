@@ -36,25 +36,27 @@ We need a lower-level model that:
 
 ## Decision
 
-We will adopt a **port-based computelet kernel** as the foundational abstraction:
+We will adopt a **port-based computelet kernel** as the foundational abstraction, incorporating explicit directionality, per-link addressing, multiplexed protocols, and port cardinality constraints:
 
-- **Computelet**: an entity with a set of named ports and a behavior function that reacts to updates on its ports.
-- **Port**: an endpoint that can be linked to other ports, enabling update propagation.
-- **Links**: dynamic associations between ports that can be created or removed at runtime.
-- **Updates**: events sent through ports that may trigger computelet behavior and further emissions.
+- **Computelet**: an entity with a set of named ports and a behavior function that reacts to messages on its input ports. The behavior emits output actions that may broadcast messages on a port or send targeted messages to specific links.
+- **Port**: an endpoint with a declared **direction** (`INPUT`, `OUTPUT`, or `BIDIRECTIONAL`) and a **cardinality** (`SINGLE` or `MULTIPLE`). Ports multiplex multiple protocols and can have stacked protocol handlers, allowing generic propagation mechanisms to be layered without modifying computelet logic.
+- **Link**: a first-class, directional connection between two ports. Links can carry traffic in both directions and are addressable, enabling selective upstream communication (e.g., per-link requests or attention signals) as well as downstream broadcasts.
+- **Messages and Protocols**: messages are tagged with a protocol identifier. Protocols may be generic (e.g., attention propagation, time-based requests) or specific to a computelet. Ports multiplex these protocols, and handlers for them can be composed.
+- **Cardinality Constraints**: ports enforce constraints at link time. Typical downstream ports are multi-consumer, upstream ports are often single-linked for ownership safety, and unions may explicitly allow multiple producers.
 
-Suspension and migration are modeled as link manipulation:
-- **Suspension**: unlink all ports of a computelet (or all computelets of a runner), isolating them from the graph.
-- **Migration**: unlink, move, relink ports to integrate the computelet(s) into a new runner.
+Suspension and migration remain modeled as link manipulation:
+- **Suspension**: unlink all ports of a computelet (and all computelets of a runner), isolating them from the graph.
+- **Migration**: unlink, move, and relink ports to integrate computelet(s) into a new runner.
 
-Concurrency and execution scheduling are **layered on top** of this kernel. Runners manage message queues, isolation, and mobility without affecting the core semantics.
+Concurrency and execution scheduling are still **layered on top**. Runners manage queues and isolation without affecting the logical model.
 
 ## Rationale
 
-- This kernel cleanly separates **what** the graph does (reactive updates between ports) from **how** it executes (concurrency, mobility protocols).
-- It simplifies reasoning about behavior, as the entire graph can be modeled and tested single-threaded.
-- It provides natural hooks for runtime reconfiguration without special-case mechanisms.
-- It aligns with the earlier decision to manage mobility at the runner level.
+- The model now explicitly supports both **broadcast downstream** and **per-link upstream communication**, matching real scenarios like attention propagation and targeted state requests.
+- **Directionality** ensures generic protocols know how to propagate correctly without accidental inversion.
+- **Multiplexed protocols** allow new protocols to be added or stacked without requiring changes in computelet-specific logic.
+- **Cardinality constraints** enable optimizations (e.g., safe transfer of mutable state) and express union semantics.
+- This refinement preserves the kernel’s simplicity while increasing its expressiveness and alignment with real use cases.
 
 ## Consequences
 

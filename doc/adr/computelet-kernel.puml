@@ -1,0 +1,70 @@
+@startuml
+
+class Computelet {
+  +ports: Map<String, Port>
+  +onMessage(port: Port, msg: Message): Iterable<OutputAction>
+}
+
+class Port {
+  +name: String
+  +direction: PortDirection
+  +cardinality: Cardinality
+  -links: List<Link>
+  +link(peer: Port): Link
+  +unlink(link: Link)
+  +broadcast(protocol: Protocol, payload: Any)
+  +sendTo(link: Link, protocol: Protocol, payload: Any)
+}
+
+enum PortDirection {
+  INPUT
+  OUTPUT
+  BIDIRECTIONAL
+}
+
+enum Cardinality {
+  SINGLE
+  MULTIPLE
+}
+
+class Link {
+  -a: Port
+  -b: Port
+  +other(from: Port): Port
+  +send(from: Port, protocol: Protocol, payload: Any)
+}
+
+class Message {
+  +link: Link
+  +protocol: Protocol
+  +payload: Any
+}
+
+class Protocol {
+}
+
+class OutputAction {
+}
+
+class BroadcastAction extends OutputAction {
+  +port: Port
+  +protocol: Protocol
+  +payload: Any
+}
+
+class TargetedAction extends OutputAction {
+  +port: Port
+  +link: Link
+  +protocol: Protocol
+  +payload: Any
+}
+
+Computelet "1" --> "many" Port
+Port "many" --> "many" Link
+Link --> Port : a
+Link --> Port : b
+Message --> Link
+Message --> Protocol
+Computelet --> OutputAction
+
+@enduml
