@@ -43,16 +43,16 @@ class Message {
 class Protocol {
 }
 
-class OutputAction {
+class Emit {
 }
 
-class BroadcastAction extends OutputAction {
+class Broadcast extends Emit {
   +port: Port
   +protocol: Protocol
   +payload: Any
 }
 
-class TargetedAction extends OutputAction {
+class Unicast extends Emit {
   +port: Port
   +link: Link
   +protocol: Protocol
@@ -61,10 +61,10 @@ class TargetedAction extends OutputAction {
 
 Computelet "1" --> "many" Port
 Port "many" --> "many" Link
-Link --> Port : a
-Link --> Port : b
+Link --> Port : from
+Link --> Port : to
 Message --> Link
 Message --> Protocol
-Computelet --> OutputAction
+Computelet --> Emit
 
 @enduml

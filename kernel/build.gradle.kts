@@ -7,6 +7,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines)
     implementation(project(":gen"))
     ksp(project(":gen"))
+
+    testImplementation(libs.kotest.assertions.core)
+    testImplementation(libs.junit)
+    testRuntimeOnly(libs.junit.platform)
 }
 
 kotlin {

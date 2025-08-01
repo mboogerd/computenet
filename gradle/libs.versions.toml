@@ -1,4 +1,6 @@
 [versions]
+junit = "5.13.4"
+kotest = "5.9.1"
 kotlin = "2.1.21"
 kotlinPoet = "2.1.0"
 kotlinxCoroutines = "1.10.2"
@@ -8,6 +10,11 @@ ksp = "2.1.21-2.0.1"
 kotlinCompileTesting = "1.9.0"
 
 [libraries]
+junit = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
+junit-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
+junit-platform = { module = "org.junit.platform:junit-platform-launcher", version = "1.13.4" }
+kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinx-serialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJSON" }

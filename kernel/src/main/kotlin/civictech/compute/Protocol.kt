@@ -1,6 +1,7 @@
 package civictech.compute
 
-interface Multiplex {
+interface Protocol {
+
     /**
      * Must uniquely identify the protocol that is being multiplexed
      */
