@@ -1,4 +1,4 @@
-package civictech.compute
+package civictech.kernel.protocol
 
 interface Protocol {
 

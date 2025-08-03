@@ -1,4 +1,4 @@
-package civictech.compute
+package civictech.kernel.port
 
 enum class PortDirection {
     INPUT,

@@ -1,0 +1,139 @@
+@startuml
+
+package kernel {
+
+    interface Computelet
+
+    ' --- Core Connectivity Layer ---
+    interface Connectable {
+      +ports(): Collection<ConnectablePort>
+      +port(name: String): ConnectablePort
+    }
+
+    interface ConnectablePort {
+      +name: String
+      +linkTo(peer: ConnectablePort)
+      +unlink(peer: ConnectablePort)
+    }
+
+    ' --- Message Processing Capabilities ---
+    interface MessageProcessor {
+      +onMessage(port: ConnectablePort, msg: Message): Iterable<Emit>
+    }
+
+    enum PortDirection {
+      INPUT
+      OUTPUT
+      BIDIRECTIONAL
+    }
+
+    enum Cardinality {
+      SINGLE
+      MULTIPLE
+    }
+
+
+    interface Protocol {
+    }
+
+    ' --- Emission Model ---
+    interface Emit {
+    }
+
+
+    ' --- Ports & Links ---
+    class Link {
+      -a: ConnectablePort
+      -b: ConnectablePort
+      +other(from: ConnectablePort): ConnectablePort
+      +send(from: ConnectablePort, protocol: Protocol, payload: Any)
+    }
+
+    ' --- Messages & Protocol ---
+    class Message {
+      +from: Link
+      +protocol: Protocol
+      +payload: Any
+    }
+
+    class Broadcast extends Emit {
+      +port: ConnectablePort
+      +protocol: Protocol
+      +payload: Any
+    }
+
+    class Unicast extends Emit {
+      +port: ConnectablePort
+      +link: Link
+      +protocol: Protocol
+      +payload: Any
+    }
+
+    package host {
+        class ComputeletHost {
+            computelets: Map<CRef, Connectable>
+            ports: Map<PRef, ConnectablePort>
+        }
+
+    }
+
+    ' --- Relations ---
+    Computelet -|> Connectable
+    Computelet --|> MessageProcessor
+
+    Connectable "1" --> "many" ConnectablePort
+    ConnectablePort "many" --> "many" Link
+
+    Link --> ConnectablePort : from
+    Link --> ConnectablePort : to
+
+    Message --> Protocol
+    Message --> Link
+    MessageProcessor ..> Emit
+
+}
+
+package runtime {
+
+    package blocking {
+        interface BlockingMessageProcessor {
+          +onMessage(port: ConnectablePort, msg: Message): Iterable<Emit>
+        }
+
+        class BlockingComputeletHost
+        class BlockingComputeletAdapter
+        class BlockingConnectableHandle
+        class BlockingConnectablePortHandle
+
+        BlockingComputeletHost -> ComputeletHost : has a
+    }
+
+    package suspending {
+        interface SuspendingMessageProcessor {
+          +suspend onMessage(port: ConnectablePort, msg: Message): Iterable<Emit>
+        }
+
+        class SuspendingComputeletHost
+        interface SuspendingComputelet
+        class SuspendingComputeletAdapter
+        class SuspendingConnectableHandle {
+            ' this represents immutable data, so it can be passed as reference to the handle
+            +ports: Map<PortRef, SuspendingConnectablePortHandle>
+            +getPort(name: String): SuspendingConnectablePortHandle?
+            +getPort(ref: PortRef): SuspendingConnectablePortHandle?
+        }
+        class SuspendingConnectablePortHandle {
+            +suspend link(other: PortRef)
+            +suspend link(other: ConnectablePortHandle)
+        }
+
+        SuspendingComputelet -|> Connectable
+        SuspendingComputelet -|> SuspendingMessageProcessor
+        SuspendingComputeletHost -> ComputeletHost : has a
+
+        SuspendingComputeletAdapter -|> SuspendingComputelet
+        SuspendingComputeletAdapter ..> Computelet : has a
+    }
+}
+
+@enduml

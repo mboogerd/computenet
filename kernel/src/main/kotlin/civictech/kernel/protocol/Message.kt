@@ -1,12 +1,16 @@
-package civictech.compute
+package civictech.kernel.protocol
+
+import civictech.kernel.link.Link
 
 /**
  * Generic Message interface
  */
 interface Message : Protocol {
-    val fromLink: Link
 }
 
+interface LinkMessage : Message {
+    val fromLink: Link
+}
 /**
  * Simple implementation of Message where we can attach an arbitrary payload
  */
@@ -14,4 +18,4 @@ data class ProtocolMessage(
     override val protocolId: Int,
     override val fromLink: Link,
     val payload: Any?
-) : Message
+) : LinkMessage
