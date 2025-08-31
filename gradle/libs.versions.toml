@@ -1,4 +1,5 @@
 [versions]
+assert4j = "3.27.4"
 junit = "5.13.4"
 kotest = "5.9.1"
 kotlin = "2.1.21"
@@ -10,7 +11,9 @@ ksp = "2.1.21-2.0.1"
 kotlinCompileTesting = "1.9.0"
 
 [libraries]
+assert4j = { module = "org.assertj:assertj-core", version.ref = "assert4j" }
 junit = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
 junit-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
 junit-platform = { module = "org.junit.platform:junit-platform-launcher", version = "1.13.4" }

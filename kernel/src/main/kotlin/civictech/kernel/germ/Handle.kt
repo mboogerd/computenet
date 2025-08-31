@@ -1,4 +1,4 @@
-package civictech.kernel.boot
+package civictech.kernel.germ
 
 /**
  * A Handle represents a live, dynamically reconfigurable reference to an API [T].
