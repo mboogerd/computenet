@@ -116,7 +116,7 @@ class OneToManyPortTest {
         assert(invalidated) // should be invalidated after subscribe
     }
 
-    fun OneToManyPort<Consumer<String>>.attachBufferingPort(): Pair<PortRef, MutableList<String>> {
+    fun OneToManyPort<Consumer<String>>.attachBufferingPort(): Pair<PortRef, List<String>> {
         val portRef = PortRef.generate()
         val buffer = mutableListOf<String>()
         val proxy = callback<Consumer<String>> {
