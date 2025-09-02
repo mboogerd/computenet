@@ -1,9 +1,12 @@
 package civictech.kernel.germ
 
-import civictech.kernel.germ.port.Proxy
+import civictech.kernel.germ.proxy.Buffering
+import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.germ.port.Serve
 import civictech.kernel.germ.port.SimplePort
 import civictech.kernel.germ.port.Use
+import civictech.kernel.germ.proxy.Invocation
+import civictech.kernel.germ.proxy.buffering
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -13,9 +16,9 @@ class TrafficLightTest {
     @Test
     fun `a traffic light stops invocations when red`() {
         val trafficLight = TrafficLightCell.create<Consumer<String>>()
-        val invocations = mutableListOf<Proxy.Invocation>()
+        val invocations = mutableListOf<Invocation>()
 
-        trafficLight.dataOutlet.serve(Proxy.buffering(invocations))
+        trafficLight.dataOutlet.serve(buffering(invocations))
 
         trafficLight.controlInlet.use().setRed()
 
@@ -27,8 +30,8 @@ class TrafficLightTest {
     @Test
     fun `a traffic light propagations invocations when disabled`() {
         val trafficLight = TrafficLightCell.create<Consumer<String>>()
-        val invocations = mutableListOf<Proxy.Invocation>()
-        trafficLight.dataOutlet.serve(Proxy.buffering(invocations))
+        val invocations = mutableListOf<Invocation>()
+        trafficLight.dataOutlet.serve(buffering(invocations))
 
         trafficLight.controlInlet.use().setGreen()
 
@@ -41,8 +44,8 @@ class TrafficLightTest {
     @Test
     fun `a traffic light propagates buffered invocations before others`() {
         val trafficLight = TrafficLightCell.create<Consumer<String>>()
-        val invocations = mutableListOf<Proxy.Invocation>()
-        trafficLight.dataOutlet.serve(Proxy.buffering(invocations))
+        val invocations = mutableListOf<Invocation>()
+        trafficLight.dataOutlet.serve(buffering(invocations))
 
         trafficLight.controlInlet.use().setRed()
         trafficLight.dataInlet.use().provide("first")
@@ -74,7 +77,7 @@ class TrafficLightCell<T : Any>(clazz: Class<T>) : TrafficLightApi<T> {
     override val dataOutlet = SimplePort<T>()
 
     private var isStopped = true
-    private val buffer = mutableListOf<Proxy.Invocation>()
+    private val buffer = mutableListOf<Invocation>()
 
     init {
         controlInlet.serve(object : TrafficLightControl {
@@ -91,10 +94,10 @@ class TrafficLightCell<T : Any>(clazz: Class<T>) : TrafficLightApi<T> {
 
             override fun setRed() {
                 if (isStopped) return
-                dataInlet.serve(Proxy.fromClass(clazz, Proxy.Buffering(buffer)))
+                dataInlet.serve(Proxy.fromClass(clazz, Buffering(buffer)))
             }
         })
-        dataInlet.serve(Proxy.fromClass(clazz, Proxy.Buffering(buffer)))
+        dataInlet.serve(Proxy.fromClass(clazz, Buffering(buffer)))
     }
 
     companion object {

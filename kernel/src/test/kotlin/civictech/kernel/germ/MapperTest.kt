@@ -1,9 +1,11 @@
 package civictech.kernel.germ
 
-import civictech.kernel.germ.port.Proxy
 import civictech.kernel.germ.port.Serve
 import civictech.kernel.germ.port.SimplePort
 import civictech.kernel.germ.port.Use
+import civictech.kernel.germ.proxy.Invocation
+import civictech.kernel.germ.proxy.buffering
+import civictech.kernel.germ.proxy.noop
 import org.junit.jupiter.api.Test
 
 class MapperTest {
@@ -17,8 +19,8 @@ class MapperTest {
     @Test
     fun `mapper propagates transformed value`() {
         val mapper = MapperCell.create<Int, String> { it.toString() }
-        val invocationBuffer = mutableListOf<Proxy.Invocation>()
-        val buffer = Proxy.buffering<Consumer<String>>(invocationBuffer)
+        val invocationBuffer = mutableListOf<Invocation>()
+        val buffer = buffering<Consumer<String>>(invocationBuffer)
         mapper.outlet.serve(buffer)
         mapper.inlet.use().provide(1337)
 
@@ -31,8 +33,8 @@ class MapperTest {
     fun `propagation is transitive`() {
         val mapper1 = MapperCell.create<Int, String> { it.toString() }
         val mapper2 = MapperCell.create<String, Long> { it.toLong() }
-        val invocationBuffer = mutableListOf<Proxy.Invocation>()
-        val buffer = Proxy.buffering<Consumer<Long>>(invocationBuffer)
+        val invocationBuffer = mutableListOf<Invocation>()
+        val buffer = buffering<Consumer<Long>>(invocationBuffer)
         mapper2.outlet.serve(buffer)
         mapper1.outlet.delegate(mapper2.inlet)
         mapper1.inlet.use().provide(1337)
@@ -50,8 +52,8 @@ interface MapperApi<A, B> {
 }
 
 class MapperCell<A, B>(f: (A) -> B) : MapperApi<A, B> {
-    override val inlet = SimplePort<Consumer<A>>(Proxy.noop())
-    override val outlet = SimplePort<Consumer<B>>(Proxy.noop())
+    override val inlet = SimplePort<Consumer<A>>(noop())
+    override val outlet = SimplePort<Consumer<B>>(noop())
 
     init {
         inlet.serve(object : Consumer<A> {

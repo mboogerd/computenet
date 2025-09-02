@@ -60,7 +60,7 @@ class SimplePort<Api>(val default: Api? = null) : Port<Api> {
     override fun delegate(useApi: Use<Api>) {
         require(useApi != this)
         setOrigin(useApi)
-        useApi.observeImplementationChanges(this)
+        useApi.attach(this)
         invalidate()
     }
 
@@ -82,7 +82,7 @@ class SimplePort<Api>(val default: Api? = null) : Port<Api> {
         implementationTrackers.forEach { it.invalidate() }
     }
 
-    override fun observeImplementationChanges(invalidating: Invalidating) {
+    override fun attach(invalidating: Invalidating) {
         implementationTrackers += invalidating
     }
 

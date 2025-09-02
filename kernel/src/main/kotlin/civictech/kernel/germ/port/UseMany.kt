@@ -1,11 +1,17 @@
 package civictech.kernel.germ.port
 
-interface Use<Api> {
+import civictech.kernel.port.PortRef
+
+interface UseMany<Api> {
     /**
      * Resolves the current API instance, rebuilding from origin if stale.
-     * @deprecated Use `broadcast` / `announce` or `unicast(portRef)` / `send(portRef)` instead
      */
-    fun use(): Api
+    fun one(portRef: PortRef): Api?
+
+    /**
+     * An Api instance that broadcasts each method invocation to all subscriptions.
+     */
+    fun all(): Api
 
     /**
      * Registers the listener as an observer of implementation changes
@@ -19,8 +25,9 @@ interface Use<Api> {
     fun detach(invalidating: Invalidating)
 
     companion object {
-        fun <Api> fixed(api: Api): Use<Api> = object : Use<Api> {
-            override fun use(): Api = api
+        fun <Api> fixed(api: Api): UseMany<Api> = object : UseMany<Api> {
+            override fun one(portRef: PortRef): Api? = api
+            override fun all(): Api = api
             override fun attach(invalidating: Invalidating) {}
             override fun detach(invalidating: Invalidating) {}
         }
