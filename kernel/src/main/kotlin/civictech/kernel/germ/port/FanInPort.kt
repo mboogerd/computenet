@@ -1,5 +1,7 @@
 package civictech.kernel.germ.port
 
+import civictech.kernel.port.PortRef
+
 /*
 - Question: Can we `use` a Port if we're not registered?
 - Answer:
@@ -16,10 +18,10 @@ Some cells may change by users, e.g. ad hoc; other cells might need to know abou
           So, we mean to _prevent_ a Use from being obtained in an ad hoc way. Registration is a
           prerequisite for acquiring the Use.
  */
-class SimplePort<Api>(val default: Api? = null) : Port<Api> {
+class FanInPort<Api>(val default: Api? = null) : Port<Api> {
 
     /** Current usable API implementation */
-    private var activeImplementation: Api? = null
+    private var activeImplementation: Api? = default
 
     /** Whether this Port's [activeImplementation] is outdated and must be rebuilt from origin */
     private var stale: Boolean = false
@@ -30,18 +32,28 @@ class SimplePort<Api>(val default: Api? = null) : Port<Api> {
     /** Upstream branches that depend on this Use */
     private val implementationTrackers: MutableList<Invalidating> = mutableListOf()
 
+
+    override fun use(portRef: PortRef, block: Api.() -> Any?) {
+        use(block)
+    }
+
     /**
      * Resolves the current API instance, rebuilding from origin if stale.
      */
-    override fun use(): Api {
+    override fun use(block: Api.() -> Any?) {
         if (stale) {
-            val base = origin?.use() ?: throw IllegalStateException("No downstream to rebuild from")
-            return base.also {
-                activeImplementation = it
-                stale = false
+            if (origin == null) {
+                activeImplementation = default
+            } else {
+                origin?.use {
+                    activeImplementation = this
+                    stale = false
+                }
             }
         }
-        return activeImplementation ?: default ?: throw IllegalStateException("Port has not been initialized")
+        if (activeImplementation == null) throw IllegalStateException("Port has not been initialized")
+
+        activeImplementation?.block()
     }
 
     /**
@@ -100,7 +112,7 @@ class SimplePort<Api>(val default: Api? = null) : Port<Api> {
         /**
          * Create a root handle wrapping some API.
          */
-        fun <Api> root(initialApi: Api): SimplePort<Api> = SimplePort<Api>().apply { serve(initialApi) }
+        fun <Api> root(initialApi: Api): FanInPort<Api> = FanInPort<Api>().apply { serve(initialApi) }
     }
 
 }

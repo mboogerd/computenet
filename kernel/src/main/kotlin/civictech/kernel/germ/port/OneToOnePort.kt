@@ -4,45 +4,46 @@ import civictech.kernel.germ.proxy.noop
 import civictech.kernel.port.PortRef
 
 class OneToOnePort<Api : Any>(
-    private val unicastFactory: () -> Api
-) : UseMany<Api>, Broadcast<Api>, Invalidating {
+    unicastFactory: () -> Api
+) : Use<Api>, Broadcast<Api>, Invalidating {
 
-    private var subscription: Pair<PortRef, Use<Api>>? = null
+    private var subscribedPort: PortRef? = null
+    private var subscribedPortApi: Use<Api> = Use.fixed(unicastFactory())
     private var implementationTrackers: MutableSet<Invalidating> = mutableSetOf()
-    private var unicastApi: Api = unicastFactory()
     private var stale: Boolean = false
 
     override fun subscribe(portRef: PortRef, portApi: Use<Api>) {
-        if (subscription != null) {
+        if (subscribedPort != null) {
             throw IllegalStateException("OneToOnePort already has a subscriber")
         }
-        subscription = portRef to portApi
+        subscribedPort = portRef
+        subscribedPortApi = portApi
         portApi.attach(this)
         invalidate()
     }
 
     override fun unsubscribe(portRef: PortRef) {
-        if (subscription?.first == portRef) {
-            subscription?.second?.detach(this)
-            subscription = null
+        if (subscribedPort == portRef) {
+            subscribedPortApi.detach(this)
+            subscribedPort = null
             invalidate()
         }
     }
 
-    override fun one(portRef: PortRef): Api? {
-        if (stale && portRef == subscription?.first) {
-            unicastApi = unicastFactory()
+    override fun use(portRef: PortRef, block: Api.() -> Any?) {
+        if (stale && portRef == subscribedPort) {
             stale = false
         }
-        return unicastApi.takeIf { subscription?.first == portRef }
+        subscribedPortApi
+            .takeIf { subscribedPort == portRef }
+            ?.use { block() }
     }
 
-    override fun all(): Api {
+    override fun use(block: Api.() -> Any?) {
         if (stale) {
-            unicastApi = subscription?.second?.use() ?: unicastFactory()
             stale = false
         }
-        return unicastApi
+        subscribedPortApi.use { block() }
     }
 
     override fun attach(invalidating: Invalidating) {
@@ -60,6 +61,6 @@ class OneToOnePort<Api : Any>(
     }
 
     companion object {
-        inline fun <reified Api : Any> withProxy(): OneToOnePort<Api> = OneToOnePort { noop() }
+        inline fun <reified Api : Any> withNoOp(): OneToOnePort<Api> = OneToOnePort { noop() }
     }
 }

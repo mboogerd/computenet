@@ -1,7 +1,7 @@
 package civictech.kernel.germ
 
 import civictech.kernel.germ.port.Serve
-import civictech.kernel.germ.port.SimplePort
+import civictech.kernel.germ.port.FanInPort
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
@@ -13,7 +13,7 @@ class MapperTest {
     @Test
     fun `mapper can be used without attached outlet`() {
         val mapper = MapperCell.create<Int, String> { it.toString() }
-        mapper.inlet.use().provide(1)
+        mapper.inlet.use { provide(1) }
     }
 
     @Test
@@ -22,7 +22,7 @@ class MapperTest {
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Consumer<String>>(invocationBuffer)
         mapper.outlet.serve(buffer)
-        mapper.inlet.use().provide(1337)
+        mapper.inlet.use { provide(1337) }
 
         assert(invocationBuffer.size == 1)
         assert(invocationBuffer[0].args.size == 1)
@@ -37,7 +37,7 @@ class MapperTest {
         val buffer = buffering<Consumer<Long>>(invocationBuffer)
         mapper2.outlet.serve(buffer)
         mapper1.outlet.delegate(mapper2.inlet)
-        mapper1.inlet.use().provide(1337)
+        mapper1.inlet.use { provide(1337) }
 
         assert(invocationBuffer.size == 1)
         assert(invocationBuffer[0].args.size == 1)
@@ -52,13 +52,13 @@ interface MapperApi<A, B> {
 }
 
 class MapperCell<A, B>(f: (A) -> B) : MapperApi<A, B> {
-    override val inlet = SimplePort<Consumer<A>>(noop())
-    override val outlet = SimplePort<Consumer<B>>(noop())
+    override val inlet = FanInPort<Consumer<A>>(noop())
+    override val outlet = FanInPort<Consumer<B>>(noop())
 
     init {
         inlet.serve(object : Consumer<A> {
             override fun provide(input: A) {
-                outlet.use().provide(f(input))
+                outlet.use { provide(f(input)) }
             }
         })
     }

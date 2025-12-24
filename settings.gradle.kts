@@ -13,7 +13,7 @@ include(":gen")
 include(":gen-test")
 
 include(":kernel")
-include(":runtime")
+//include(":runtime")
 
 rootProject.name = "computenet"
 

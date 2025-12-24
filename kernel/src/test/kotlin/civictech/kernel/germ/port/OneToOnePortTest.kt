@@ -2,7 +2,6 @@ package civictech.kernel.germ.port
 
 import civictech.kernel.germ.Consumer
 import civictech.kernel.germ.proxy.callback
-import civictech.kernel.germ.proxy.noop
 import civictech.kernel.port.PortRef
 import kotlin.test.*
 
@@ -10,14 +9,15 @@ class OneToOnePortTest {
 
     @Test
     fun `subscribing once succeeds`() {
-        val port = OneToOnePort.withProxy<Consumer<String>>()
-        val (ref, _) = port.attachBufferingPort()
-        assertNotNull(port.one(ref))
+        val port = OneToOnePort.withNoOp<Consumer<String>>()
+        val (ref, buffer) = port.attachBufferingPort()
+        port.use(ref) { provide("test") }
+        assertEquals(listOf("test"), buffer)
     }
 
     @Test
     fun `subscribing twice fails`() {
-        val port = OneToOnePort.withProxy<Consumer<String>>()
+        val port = OneToOnePort.withNoOp<Consumer<String>>()
         val (_, _) = port.attachBufferingPort()
         assertFailsWith<IllegalStateException> {
             port.attachBufferingPort()
@@ -26,23 +26,24 @@ class OneToOnePortTest {
 
     @Test
     fun `unsubscribe removes access`() {
-        val port = OneToOnePort.withProxy<Consumer<String>>()
-        val (ref, _) = port.attachBufferingPort()
+        val port = OneToOnePort.withNoOp<Consumer<String>>()
+        val (ref, buffer) = port.attachBufferingPort()
         port.unsubscribe(ref)
-        assertNull(port.one(ref))
+        port.use(ref) { provide("test") }
+        assertEquals(emptyList(), buffer)
     }
 
     @Test
     fun `broadcast through all works`() {
-        val port = OneToOnePort.withProxy<Consumer<String>>()
+        val port = OneToOnePort.withNoOp<Consumer<String>>()
         val (_, buffer) = port.attachBufferingPort()
-        port.all().provide("test")
+        port.use { provide("test") }
         assertEquals(listOf("test"), buffer)
     }
 
     @Test
     fun `unsubscribe is idempotent`() {
-        val port = OneToOnePort.withProxy<Consumer<String>>()
+        val port = OneToOnePort.withNoOp<Consumer<String>>()
         val (ref, _) = port.attachBufferingPort()
         port.unsubscribe(ref)
         port.unsubscribe(ref) // no crash
@@ -50,7 +51,7 @@ class OneToOnePortTest {
 
     @Test
     fun `invalidating listeners are notified`() {
-        val port = OneToOnePort.withProxy<Consumer<String>>()
+        val port = OneToOnePort.withNoOp<Consumer<String>>()
         var invalidated = false
         val tracker = object : Invalidating {
             override fun invalidate() {

@@ -3,7 +3,7 @@ package civictech.kernel.germ
 import civictech.kernel.germ.proxy.Buffering
 import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.germ.port.Serve
-import civictech.kernel.germ.port.SimplePort
+import civictech.kernel.germ.port.FanInPort
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
@@ -20,10 +20,10 @@ class TrafficLightTest {
 
         trafficLight.dataOutlet.serve(buffering(invocations))
 
-        trafficLight.controlInlet.use().setRed()
+        trafficLight.controlInlet.use { setRed() }
 
-        trafficLight.dataInlet.use().provide("first")
-        trafficLight.dataInlet.use().provide("second")
+        trafficLight.dataInlet.use { provide("first") }
+        trafficLight.dataInlet.use { provide("second") }
         invocations.shouldBeEmpty()
     }
 
@@ -33,10 +33,10 @@ class TrafficLightTest {
         val invocations = mutableListOf<Invocation>()
         trafficLight.dataOutlet.serve(buffering(invocations))
 
-        trafficLight.controlInlet.use().setGreen()
+        trafficLight.controlInlet.use { setGreen() }
 
-        trafficLight.dataInlet.use().provide("first")
-        trafficLight.dataInlet.use().provide("second")
+        trafficLight.dataInlet.use { provide("first") }
+        trafficLight.dataInlet.use { provide("second") }
 
         invocations.map { it.args.first() } shouldBe listOf("first", "second")
     }
@@ -47,15 +47,15 @@ class TrafficLightTest {
         val invocations = mutableListOf<Invocation>()
         trafficLight.dataOutlet.serve(buffering(invocations))
 
-        trafficLight.controlInlet.use().setRed()
-        trafficLight.dataInlet.use().provide("first")
-        trafficLight.dataInlet.use().provide("second")
+        trafficLight.controlInlet.use { setRed() }
+        trafficLight.dataInlet.use { provide("first") }
+        trafficLight.dataInlet.use { provide("second") }
         invocations.shouldBeEmpty()
 
-        trafficLight.controlInlet.use().setGreen()
+        trafficLight.controlInlet.use { setGreen() }
         invocations.map { it.args.first() } shouldBe listOf("first", "second")
 
-        trafficLight.dataInlet.use().provide("third")
+        trafficLight.dataInlet.use { provide("third") }
         invocations.map { it.args.first() } shouldBe listOf("first", "second", "third")
     }
 }
@@ -72,9 +72,9 @@ interface TrafficLightApi<T> {
 }
 
 class TrafficLightCell<T : Any>(clazz: Class<T>) : TrafficLightApi<T> {
-    override val controlInlet = SimplePort<TrafficLightControl>()
-    override val dataInlet = SimplePort<T>()
-    override val dataOutlet = SimplePort<T>()
+    override val controlInlet = FanInPort<TrafficLightControl>()
+    override val dataInlet = FanInPort<T>()
+    override val dataOutlet = FanInPort<T>()
 
     private var isStopped = true
     private val buffer = mutableListOf<Invocation>()
@@ -86,7 +86,7 @@ class TrafficLightCell<T : Any>(clazz: Class<T>) : TrafficLightApi<T> {
                 buffer.forEach { invocation ->
                     // Do _not_ cache `use` here. Each invocation might change the downstream implementation, e.g.
                     // we need to re-obtain the current implementation each time.
-                    invocation(dataOutlet.use())
+                    dataOutlet.use { invocation.invoke(this) }
                 }
                 buffer.clear()
                 dataInlet.delegate(dataOutlet)

@@ -3,7 +3,7 @@ package civictech.kernel.germ.port
 import civictech.kernel.germ.proxy.broadcast
 import civictech.kernel.port.PortRef
 
-class OneToManyPort<Api : Any>(val broadcastFactory: (List<Use<Api>>) -> Api) : UseMany<Api>, Broadcast<Api>,
+class FanOutPort<Api : Any>(val broadcastFactory: (List<Use<Api>>) -> Api) : Use<Api>, Broadcast<Api>,
     Invalidating {
     private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
     private val implementationTrackers: MutableSet<Invalidating> = mutableSetOf()
@@ -21,16 +21,16 @@ class OneToManyPort<Api : Any>(val broadcastFactory: (List<Use<Api>>) -> Api) : 
         invalidate()
     }
 
-    override fun one(portRef: PortRef): Api? {
-        return subscriptions[portRef]?.use()
+    override fun use(portRef: PortRef, block: Api.() -> Any?) {
+        subscriptions[portRef]?.use { block() }
     }
 
-    override fun all(): Api {
+    override fun use(block: Api.() -> Any?) {
         if (stale) {
             broadcastApi = updateBroadcastImplementation()
             stale = false
         }
-        return broadcastApi
+        broadcastApi.block()
     }
 
     override fun attach(invalidating: Invalidating) {
@@ -52,7 +52,7 @@ class OneToManyPort<Api : Any>(val broadcastFactory: (List<Use<Api>>) -> Api) : 
     private fun updateBroadcastImplementation(): Api =
         broadcastFactory(subscriptions.values.toList()).also { invalidate() }
 
-    companion object {
-        inline fun <reified Api : Any> withProxy(): OneToManyPort<Api> = OneToManyPort(::broadcast)
+    companion object Companion {
+        inline fun <reified Api : Any> withProxy(): FanOutPort<Api> = FanOutPort(::broadcast)
     }
 }

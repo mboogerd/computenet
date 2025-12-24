@@ -32,7 +32,7 @@ These solutions became complex, error-prone, and introduced subtle race conditio
 
 3. **RCU-style (Read-Copy-Update) synchronization**
    - Proposed tracking per-thread epochs to detect when no sender still uses the old handle.
-   - Correct but requires careful epoch management.
+   - Correct but requires careful management of runner-relations and epochs.
 
 4. **Runner-level orchestration**
    - Rather than migrating individual computelets, treat the entire runner as the unit of migration/suspension.

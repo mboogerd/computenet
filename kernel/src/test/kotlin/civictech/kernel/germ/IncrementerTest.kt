@@ -1,7 +1,7 @@
 package civictech.kernel.germ
 
 import civictech.kernel.germ.port.Serve
-import civictech.kernel.germ.port.SimplePort
+import civictech.kernel.germ.port.FanInPort
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
@@ -13,7 +13,7 @@ class IncrementerTest {
     @Test
     fun `incrementer can be used without attached outlet`() {
         val incrementer = Incrementer.create()
-        incrementer.inlet.use().provide(1)
+        incrementer.inlet.use { provide(1) }
     }
 
     @Test
@@ -21,9 +21,9 @@ class IncrementerTest {
         val buffer = mutableListOf<Invocation>()
         val incrementer = Incrementer.create()
 
-        incrementer.inlet.use().provide(1)
+        incrementer.inlet.use { provide(1) }
         incrementer.outlet.serve(buffering(buffer))
-        incrementer.inlet.use().provide(2)
+        incrementer.inlet.use { provide(2) }
 
         assert(buffer.map { it.args.first() } == listOf(3))
     }
@@ -37,8 +37,8 @@ class IncrementerTest {
         inc1.outlet.delegate(inc2.inlet)
         inc2.outlet.serve(buffering(buffer))
 
-        inc1.inlet.use().provide(1)
-        inc1.inlet.use().provide(2)
+        inc1.inlet.use { provide(1) }
+        inc1.inlet.use { provide(2) }
 
         assert(buffer.map { it.args.first() } == listOf(3, 4))
     }
@@ -50,13 +50,13 @@ interface IncrementerApi {
 }
 
 class Incrementer : IncrementerApi {
-    override val inlet = SimplePort<Consumer<Int>>(noop())
-    override val outlet = SimplePort<Consumer<Int>>(noop())
+    override val inlet = FanInPort<Consumer<Int>>(noop())
+    override val outlet = FanInPort<Consumer<Int>>(noop())
 
     init {
         inlet.serve(object : Consumer<Int> {
             override fun provide(input: Int) {
-                outlet.use().provide(input + 1)
+                outlet.use { provide(input + 1) }
             }
         })
     }

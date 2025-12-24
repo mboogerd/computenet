@@ -4,39 +4,30 @@ import civictech.kernel.germ.Consumer
 import civictech.kernel.germ.proxy.callback
 import civictech.kernel.port.PortRef
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertNotNull
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 
-class OneToManyPortTest {
+class FanOutPortTest {
 
     @Test
     fun `broadcasting on an empty port doesn't do anything`() {
-        val oneToManyPort = OneToManyPort.withProxy<Consumer<String>>()
-        oneToManyPort.all().provide("does not throw, but doesn't do anything either")
+        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        fanOutPort.use { provide("does not throw, but doesn't do anything either") }
     }
 
     @Test
-    fun `retrieving a non-existing downstream api returns null`() {
-        val oneToManyPort = OneToManyPort.withProxy<Consumer<String>>()
-        assertNull(oneToManyPort.one(PortRef.generate()))
-    }
-
-    @Test
-    fun `retrieving an existing downstream api returns the entry`() {
-        val oneToManyPort = OneToManyPort.withProxy<Consumer<String>>()
-        val (portRef1, buffer1) = oneToManyPort.attachBufferingPort()
-        assertNotNull(oneToManyPort.one(portRef1))
+    fun `using a non-existing downstream api completes without error`() {
+        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        fanOutPort.use(PortRef.generate()) { provide("test") }
     }
 
     @Test
     fun `retrieving an existing downstream api returns that entry`() {
-        val oneToManyPort = OneToManyPort.withProxy<Consumer<String>>()
-        val (portRef1, buffer1) = oneToManyPort.attachBufferingPort()
-        val (_, buffer2) = oneToManyPort.attachBufferingPort()
+        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        val (portRef1, buffer1) = fanOutPort.attachBufferingPort()
+        val (_, buffer2) = fanOutPort.attachBufferingPort()
 
-        oneToManyPort.one(portRef1)!!.provide("first")
-        oneToManyPort.one(portRef1)!!.provide("second")
+        fanOutPort.use(portRef1) { provide("first") }
+        fanOutPort.use(portRef1) { provide("second") }
 
         assertEquals(listOf("first", "second"), buffer1)
         assertEquals(emptyList(), buffer2)
@@ -44,17 +35,17 @@ class OneToManyPortTest {
 
     @Test
     fun `broadcasting reaches all active subscriptions`() {
-        val oneToManyPort = OneToManyPort.withProxy<Consumer<String>>()
+        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
 
         // first
-        val (_, buffer1) = oneToManyPort.attachBufferingPort()
-        oneToManyPort.all().provide("first")
+        val (_, buffer1) = fanOutPort.attachBufferingPort()
+        fanOutPort.use { provide("first") }
 
-        val (_, buffer2) = oneToManyPort.attachBufferingPort()
-        oneToManyPort.all().provide("second")
+        val (_, buffer2) = fanOutPort.attachBufferingPort()
+        fanOutPort.use { provide("second") }
 
-        val (_, buffer3) = oneToManyPort.attachBufferingPort()
-        oneToManyPort.all().provide("third")
+        val (_, buffer3) = fanOutPort.attachBufferingPort()
+        fanOutPort.use { provide("third") }
 
         assertEquals(listOf("first", "second", "third"), buffer1)
         assertEquals(listOf("second", "third"), buffer2)
@@ -63,32 +54,32 @@ class OneToManyPortTest {
 
     @Test
     fun `unsubscribed downstream api is no longer available`() {
-        val oneToManyPort = OneToManyPort.withProxy<Consumer<String>>()
-        val (portRef1, buffer1) = oneToManyPort.attachBufferingPort()
+        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        val (portRef1, buffer1) = fanOutPort.attachBufferingPort()
 
-        oneToManyPort.all().provide("first")
-        oneToManyPort.unsubscribe(portRef1)
-        oneToManyPort.all().provide("second")
+        fanOutPort.use { provide("first") }
+        fanOutPort.unsubscribe(portRef1)
+        fanOutPort.use { provide("second") }
+        fanOutPort.use(portRef1) { provide("third") }
 
         assertEquals(listOf("first"), buffer1)
-        assertNull(oneToManyPort.one(portRef1))
     }
 
     @Test
     fun `re-subscribing a PortRef overwrites the previous handler`() {
-        val port = OneToManyPort.withProxy<Consumer<String>>()
+        val port = FanOutPort.withProxy<Consumer<String>>()
         val ref = PortRef.generate()
         val buffer1 = mutableListOf<String>()
         val buffer2 = mutableListOf<String>()
 
         val proxy1 = callback<Consumer<String>> { buffer1 += it.args[0] as String }
         port.subscribe(ref, Use.fixed(proxy1))
-        port.all().provide("first")
+        port.use { provide("first") }
         assertEquals(listOf("first"), buffer1)
 
         val proxy2 = callback<Consumer<String>> { buffer2 += it.args[0] as String }
         port.subscribe(ref, Use.fixed(proxy2))
-        port.all().provide("second")
+        port.use { provide("second") }
 
         assertEquals(listOf("first"), buffer1)
         assertEquals(listOf("second"), buffer2)
@@ -96,7 +87,7 @@ class OneToManyPortTest {
 
     @Test
     fun `multiple unsubscribe calls do not crash`() {
-        val port = OneToManyPort.withProxy<Consumer<String>>()
+        val port = FanOutPort.withProxy<Consumer<String>>()
         val (ref, _) = port.attachBufferingPort()
         port.unsubscribe(ref)
         port.unsubscribe(ref) // no crash or side effect
@@ -104,7 +95,7 @@ class OneToManyPortTest {
 
     @Test
     fun `invalidate triggers tracker when subscriptions change`() {
-        val port = OneToManyPort.withProxy<Consumer<String>>()
+        val port = FanOutPort.withProxy<Consumer<String>>()
         var invalidated = false
         val tracker = object : Invalidating {
             override fun invalidate() {
@@ -116,7 +107,7 @@ class OneToManyPortTest {
         assert(invalidated) // should be invalidated after subscribe
     }
 
-    fun OneToManyPort<Consumer<String>>.attachBufferingPort(): Pair<PortRef, List<String>> {
+    fun FanOutPort<Consumer<String>>.attachBufferingPort(): Pair<PortRef, List<String>> {
         val portRef = PortRef.generate()
         val buffer = mutableListOf<String>()
         val proxy = callback<Consumer<String>> {

@@ -92,4 +92,11 @@ Side notes:
 - Need a NoOpServe<Api>: Implements Api with a no-op dynamic proxy
 - Could use a BufferingServe<Api>: Implements Api with a queuing dynamic proxy
 - Can implement StatefulServe : Serve<UpdateApi>; Ensures new connections receive the current state before receiving updates (though might also be a Cell responsibility, as that owns the state)
+
+
+New Observations:
+- To consistently deal with having an upstream portref and making that available to a generic Api, we need to ensure that
+  we instead register an ApiHandler<Api> { fun handle(upstream: PortRef): Api }. That enables the Serve implementor to
+  handle Api calls that require the upstream portref, while also allowing us to lift an Api into an ApiHandler that ignores
+  that upstream portref.
  */
