@@ -1,15 +1,13 @@
 package civictech.kernel.germ
 
-import civictech.kernel.germ.port.Serve
 import civictech.kernel.germ.port.FanInPort
 import civictech.kernel.germ.port.FanOutPort
-import civictech.kernel.germ.port.ServeMany
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
-import civictech.kernel.germ.proxy.noop
 import civictech.kernel.port.PortRef
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 
 class IncrementerTest {
 
@@ -25,10 +23,11 @@ class IncrementerTest {
         val incrementer = Incrementer.create()
 
         incrementer.inlet.use { provide(1) }
-        incrementer.outlet.subscribe(buffering(buffer))
+        incrementer.outlet.subscribe(Use.fixed(buffering(buffer), PortRef.generate()))
         incrementer.inlet.use { provide(2) }
 
-        assert(buffer.map { it.args.first() } == listOf(3))
+        assertEquals(buffer.map { it.args.first() }, listOf(3))
+
     }
 
     @Test
@@ -38,23 +37,23 @@ class IncrementerTest {
         val inc2 = Incrementer.create()
 
         inc1.outlet.subscribe(inc2.inlet)
-        inc2.outlet.subscribe(buffering(buffer))
+        inc2.outlet.subscribe(Use.fixed(buffering(buffer), PortRef.generate()))
 
         inc1.inlet.use { provide(1) }
         inc1.inlet.use { provide(2) }
 
-        assert(buffer.map { it.args.first() } == listOf(3, 4))
+        assertEquals(buffer.map { it.args.first() }, listOf(3, 4))
     }
 }
 
 interface IncrementerApi {
-    val inlet: Use<Consumer<Int>>
-    val outlet: ServeMany<Consumer<Int>>
+    val inlet: FanInPort<Consumer<Int>>
+    val outlet: FanOutPort<Consumer<Int>>
 }
 
 class Incrementer : IncrementerApi {
-    override val inlet = FanInPort<Consumer<Int>>(noop())
-    override val outlet = FanOutPort<Consumer<Int>>(PortRef.generate(), noop())
+    override val inlet = FanInPort<Consumer<Int>>()
+    override val outlet = FanOutPort<Consumer<Int>>()
 
     init {
         inlet.serve(object : Consumer<Int> {
@@ -65,6 +64,6 @@ class Incrementer : IncrementerApi {
     }
 
     companion object {
-        fun create(): Incrementer = Incrementer()
+        fun create(): IncrementerApi = Incrementer()
     }
 }

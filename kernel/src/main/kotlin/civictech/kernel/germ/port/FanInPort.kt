@@ -24,7 +24,7 @@ class FanInPort<Api>(
 ) : Use<Api>, ServeOne<Api> {
 
     /** Current usable API implementation */
-    private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it) }
+    private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
 
     override fun use(portRef: PortRef, block: Api.() -> Any?) {
         if (activeImplementation == null) throw IllegalStateException("Port has not been initialized")
@@ -45,15 +45,15 @@ class FanInPort<Api>(
      * Replace the root and invalidates upstream branches
      */
     override fun serve(api: Api) {
-        activeImplementation = Use.fixed(api)
+        activeImplementation = Use.fixed(api, ref)
     }
 
     /**
      * Sets the origin to a new Use, clearing any prior origin.
      */
-    override fun delegate(useApi: Use<Api>) {
-        require(useApi != this)
-        activeImplementation = useApi
+    override fun delegate(port: Use<Api>) {
+        require(port != this)
+        activeImplementation = port
 
     }
 

@@ -10,19 +10,19 @@ class FanOutPortTest {
 
     @Test
     fun `broadcasting on an empty port doesn't do anything`() {
-        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        val fanOutPort = FanOutPort<Consumer<String>>()
         fanOutPort.use { provide("does not throw, but doesn't do anything either") }
     }
 
     @Test
     fun `using a non-existing downstream api completes without error`() {
-        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        val fanOutPort = FanOutPort<Consumer<String>>()
         fanOutPort.use(PortRef.generate()) { provide("test") }
     }
 
     @Test
     fun `retrieving an existing downstream api returns that entry`() {
-        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        val fanOutPort = FanOutPort<Consumer<String>>()
         val (portRef1, buffer1) = fanOutPort.attachBufferingPort()
         val (_, buffer2) = fanOutPort.attachBufferingPort()
 
@@ -35,7 +35,7 @@ class FanOutPortTest {
 
     @Test
     fun `broadcasting reaches all active subscriptions`() {
-        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        val fanOutPort = FanOutPort<Consumer<String>>()
 
         // first
         val (_, buffer1) = fanOutPort.attachBufferingPort()
@@ -54,7 +54,7 @@ class FanOutPortTest {
 
     @Test
     fun `unsubscribed downstream api is no longer available`() {
-        val fanOutPort = FanOutPort.withProxy<Consumer<String>>()
+        val fanOutPort = FanOutPort<Consumer<String>>()
         val (portRef1, buffer1) = fanOutPort.attachBufferingPort()
 
         fanOutPort.use { provide("first") }
@@ -67,18 +67,19 @@ class FanOutPortTest {
 
     @Test
     fun `re-subscribing a PortRef overwrites the previous handler`() {
-        val port = FanOutPort.withProxy<Consumer<String>>()
-        val ref = PortRef.generate()
+        val port = FanOutPort<Consumer<String>>()
         val buffer1 = mutableListOf<String>()
         val buffer2 = mutableListOf<String>()
 
+        val fixedPortRef = PortRef.generate()
+
         val proxy1 = callback<Consumer<String>> { buffer1 += it.args[0] as String }
-        port.subscribe(Use.fixed(proxy1))
+        port.subscribe(Use.fixed(proxy1, fixedPortRef))
         port.use { provide("first") }
         assertEquals(listOf("first"), buffer1)
 
         val proxy2 = callback<Consumer<String>> { buffer2 += it.args[0] as String }
-        port.subscribe(Use.fixed(proxy2))
+        port.subscribe(Use.fixed(proxy2, fixedPortRef))
         port.use { provide("second") }
 
         assertEquals(listOf("first"), buffer1)
@@ -87,7 +88,7 @@ class FanOutPortTest {
 
     @Test
     fun `multiple unsubscribe calls do not crash`() {
-        val port = FanOutPort.withProxy<Consumer<String>>()
+        val port = FanOutPort<Consumer<String>>()
         val (ref, _) = port.attachBufferingPort()
         port.unsubscribe(ref)
         port.unsubscribe(ref) // no crash or side effect
