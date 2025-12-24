@@ -3,7 +3,9 @@ package civictech.kernel.germ.port
 import civictech.kernel.germ.Consumer
 import civictech.kernel.germ.proxy.callback
 import civictech.kernel.port.PortRef
-import kotlin.test.*
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class OneToOnePortTest {
 
@@ -48,21 +50,6 @@ class OneToOnePortTest {
         port.unsubscribe(ref)
         port.unsubscribe(ref) // no crash
     }
-
-    @Test
-    fun `invalidating listeners are notified`() {
-        val port = OneToOnePort.withNoOp<Consumer<String>>()
-        var invalidated = false
-        val tracker = object : Invalidating {
-            override fun invalidate() {
-                invalidated = true
-            }
-        }
-        port.attach(tracker)
-        port.attachBufferingPort()
-        assertTrue(invalidated)
-    }
-
 
     fun OneToOnePort<Consumer<String>>.attachBufferingPort(): Pair<PortRef, List<String>> {
         val portRef = PortRef.generate()

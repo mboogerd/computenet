@@ -3,22 +3,18 @@ package civictech.kernel.germ.port
 import civictech.kernel.germ.proxy.broadcast
 import civictech.kernel.port.PortRef
 
-class FanOutPort<Api : Any>(val broadcastFactory: (List<Use<Api>>) -> Api) : Use<Api>, Broadcast<Api>,
-    Invalidating {
+class FanOutPort<Api : Any>(val broadcastFactory: (List<Use<Api>>) -> Api) : Use<Api>, Broadcast<Api> {
     private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
-    private val implementationTrackers: MutableSet<Invalidating> = mutableSetOf()
-    private var broadcastApi: Api = updateBroadcastImplementation()
-    private var stale: Boolean = false
+    private var broadcastApi: Use<Api> = updateBroadcastImplementation()
 
     override fun subscribe(portRef: PortRef, portApi: Use<Api>) {
         subscriptions += portRef to portApi
-        portApi.attach(this)
-        invalidate()
+        broadcastApi = updateBroadcastImplementation()
     }
 
     override fun unsubscribe(portRef: PortRef) {
-        subscriptions.remove(portRef)?.detach(this)
-        invalidate()
+        subscriptions.remove(portRef)
+        broadcastApi = updateBroadcastImplementation()
     }
 
     override fun use(portRef: PortRef, block: Api.() -> Any?) {
@@ -26,31 +22,11 @@ class FanOutPort<Api : Any>(val broadcastFactory: (List<Use<Api>>) -> Api) : Use
     }
 
     override fun use(block: Api.() -> Any?) {
-        if (stale) {
-            broadcastApi = updateBroadcastImplementation()
-            stale = false
-        }
-        broadcastApi.block()
+        broadcastApi.use { block() }
     }
 
-    override fun attach(invalidating: Invalidating) {
-        implementationTrackers.add(invalidating)
-        // caller may already have a copy before attaching
-        if (stale) invalidating.invalidate()
-    }
-
-    override fun detach(invalidating: Invalidating) {
-        implementationTrackers.remove(invalidating)
-    }
-
-    override fun invalidate() {
-        if (stale) return
-        stale = true
-        implementationTrackers.forEach { it.invalidate() }
-    }
-
-    private fun updateBroadcastImplementation(): Api =
-        broadcastFactory(subscriptions.values.toList()).also { invalidate() }
+    private fun updateBroadcastImplementation(): Use<Api> =
+        Use.fixed(broadcastFactory(subscriptions.values.toList()))
 
     companion object Companion {
         inline fun <reified Api : Any> withProxy(): FanOutPort<Api> = FanOutPort(::broadcast)

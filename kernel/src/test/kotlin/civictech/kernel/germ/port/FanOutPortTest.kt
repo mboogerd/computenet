@@ -93,20 +93,6 @@ class FanOutPortTest {
         port.unsubscribe(ref) // no crash or side effect
     }
 
-    @Test
-    fun `invalidate triggers tracker when subscriptions change`() {
-        val port = FanOutPort.withProxy<Consumer<String>>()
-        var invalidated = false
-        val tracker = object : Invalidating {
-            override fun invalidate() {
-                invalidated = true
-            }
-        }
-        port.attach(tracker)
-        port.attachBufferingPort()
-        assert(invalidated) // should be invalidated after subscribe
-    }
-
     fun FanOutPort<Consumer<String>>.attachBufferingPort(): Pair<PortRef, List<String>> {
         val portRef = PortRef.generate()
         val buffer = mutableListOf<String>()

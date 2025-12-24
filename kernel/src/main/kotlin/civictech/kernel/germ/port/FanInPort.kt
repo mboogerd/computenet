@@ -18,52 +18,31 @@ Some cells may change by users, e.g. ad hoc; other cells might need to know abou
           So, we mean to _prevent_ a Use from being obtained in an ad hoc way. Registration is a
           prerequisite for acquiring the Use.
  */
-class FanInPort<Api>(val default: Api? = null) : Port<Api> {
+class FanInPort<Api>(default: Api? = null) : Port<Api> {
 
     /** Current usable API implementation */
-    private var activeImplementation: Api? = default
-
-    /** Whether this Port's [activeImplementation] is outdated and must be rebuilt from origin */
-    private var stale: Boolean = false
-
-    /** Downstream Use from which this one derives, if any */
-    private var origin: Use<Api>? = null
-
-    /** Upstream branches that depend on this Use */
-    private val implementationTrackers: MutableList<Invalidating> = mutableListOf()
-
+    private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it) }
 
     override fun use(portRef: PortRef, block: Api.() -> Any?) {
-        use(block)
+        if (activeImplementation == null) throw IllegalStateException("Port has not been initialized")
+
+        activeImplementation?.use(portRef) { block() }
     }
 
     /**
      * Resolves the current API instance, rebuilding from origin if stale.
      */
     override fun use(block: Api.() -> Any?) {
-        if (stale) {
-            if (origin == null) {
-                activeImplementation = default
-            } else {
-                origin?.use {
-                    activeImplementation = this
-                    stale = false
-                }
-            }
-        }
         if (activeImplementation == null) throw IllegalStateException("Port has not been initialized")
 
-        activeImplementation?.block()
+        activeImplementation?.use { block() }
     }
 
     /**
      * Replace the root and invalidates upstream branches
      */
     override fun serve(api: Api) {
-        origin?.detach(this)
-        activeImplementation = api
-        stale = false
-        implementationTrackers.forEach { it.invalidate() }
+        activeImplementation = Use.fixed(api)
     }
 
     /**
@@ -71,42 +50,9 @@ class FanInPort<Api>(val default: Api? = null) : Port<Api> {
      */
     override fun delegate(useApi: Use<Api>) {
         require(useApi != this)
-        setOrigin(useApi)
-        useApi.attach(this)
-        invalidate()
+        activeImplementation = useApi
+
     }
-
-    override fun detach(invalidating: Invalidating) {
-        implementationTrackers.remove(invalidating)
-    }
-
-    /**
-     * true if this Port has no origin, false otherwise.
-     */
-    fun isRoot(): Boolean = origin == null
-
-    /**
-     * Marks this handle and each downstream branch/fork as stale.
-     */
-    override fun invalidate() {
-        if (stale) return
-        stale = true
-        implementationTrackers.forEach { it.invalidate() }
-    }
-
-    override fun attach(invalidating: Invalidating) {
-        implementationTrackers += invalidating
-    }
-
-    /**
-     * Changes the origin of this handle.
-     */
-    private fun setOrigin(newOrigin: Use<Api>?) {
-        origin?.detach(this)
-        origin = newOrigin
-    }
-
-    internal fun isStale(): Boolean = stale
 
     companion object Companion {
         /**

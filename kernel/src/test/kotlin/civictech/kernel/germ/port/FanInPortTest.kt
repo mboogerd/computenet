@@ -1,13 +1,9 @@
 package civictech.kernel.germ.port
 
 import civictech.kernel.germ.Consumer
-import civictech.kernel.germ.proxy.noop
-import civictech.kernel.port.PortRef
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 import kotlin.test.fail
 
 class FanInPortTest {
@@ -120,40 +116,5 @@ class FanInPortTest {
         port1.use { provide("propagated to the end") }
 
         assertEquals(buffer3, listOf("propagated to the end"))
-    }
-
-    @Test
-    fun `a delegated port can swap its implementation for all upstreams`() {
-        val port1 = FanInPort<Consumer<String>>()
-        val port2 = FanInPort<Consumer<String>>()
-        val port3 = FanInPort<Consumer<String>>()
-
-        port1.delegate(port2)
-        port2.delegate(port3)
-        assertEquals(port3.getDelegate(), port1.getDelegate())
-        assertTrue(port1.isStale())
-        assertTrue(port2.isStale())
-        assertFalse(port3.isStale())
-
-        port3.serve(noop())
-        assertTrue(port1.isStale())
-        assertTrue(port2.isStale())
-        assertFalse(port3.isStale())
-
-        port1.use(PortRef.generate()) {}
-        assertFalse(port1.isStale())
-        assertFalse(port2.isStale())
-        assertFalse(port3.isStale())
-    }
-
-    private fun <T> FanInPort<T>.getDelegate(): T? {
-        try {
-            use(PortRef.generate()) {
-                return@use this
-            }
-            return null
-        } catch (e: Exception) {
-            return null
-        }
     }
 }
