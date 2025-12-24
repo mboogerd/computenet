@@ -57,7 +57,7 @@ class OneToOnePortTest {
         val proxy = callback<Consumer<String>> {
             buffer += it.args[0] as String
         }
-        subscribe(portRef, Use.fixed(proxy))
+        subscribe(Use.fixed(proxy, portRef))
         return portRef to buffer
     }
 }

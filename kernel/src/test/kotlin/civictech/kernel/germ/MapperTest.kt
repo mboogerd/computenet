@@ -2,10 +2,13 @@ package civictech.kernel.germ
 
 import civictech.kernel.germ.port.Serve
 import civictech.kernel.germ.port.FanInPort
+import civictech.kernel.germ.port.FanOutPort
+import civictech.kernel.germ.port.ServeMany
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
 import civictech.kernel.germ.proxy.noop
+import civictech.kernel.port.PortRef
 import org.junit.jupiter.api.Test
 
 class MapperTest {
@@ -21,7 +24,7 @@ class MapperTest {
         val mapper = MapperCell.create<Int, String> { it.toString() }
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Consumer<String>>(invocationBuffer)
-        mapper.outlet.serve(buffer)
+        mapper.outlet.subscribe(Use.fixed(buffer))
         mapper.inlet.use { provide(1337) }
 
         assert(invocationBuffer.size == 1)
@@ -35,8 +38,8 @@ class MapperTest {
         val mapper2 = MapperCell.create<String, Long> { it.toLong() }
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Consumer<Long>>(invocationBuffer)
-        mapper2.outlet.serve(buffer)
-        mapper1.outlet.delegate(mapper2.inlet)
+        mapper2.outlet.subscribe(Use.fixed(buffer))
+        mapper1.outlet.subscribe(mapper2.inlet)
         mapper1.inlet.use { provide(1337) }
 
         assert(invocationBuffer.size == 1)
@@ -48,12 +51,12 @@ class MapperTest {
 
 interface MapperApi<A, B> {
     val inlet: Use<Consumer<A>>
-    val outlet: Serve<Consumer<B>>
+    val outlet: ServeMany<Consumer<B>>
 }
 
 class MapperCell<A, B>(f: (A) -> B) : MapperApi<A, B> {
     override val inlet = FanInPort<Consumer<A>>(noop())
-    override val outlet = FanInPort<Consumer<B>>(noop())
+    override val outlet = FanOutPort<Consumer<B>>(PortRef.generate(), noop())
 
     init {
         inlet.serve(object : Consumer<A> {

@@ -2,7 +2,7 @@ package civictech.kernel.germ.port
 
 import civictech.kernel.port.PortRef
 
-interface Use<Api> {
+interface Use<Api> : LinkFrom<Api> {
     /**
      * Resolves the current API instance, rebuilding from origin if stale.
      */
@@ -15,12 +15,19 @@ interface Use<Api> {
 
     companion object Companion {
         fun <Api> fixed(api: Api, fixedPortRef: PortRef? = null): Use<Api> = object : Use<Api> {
+            override val ref: PortRef
+                get() = fixedPortRef ?: throw IllegalArgumentException("Port has not been initialized")
+
             override fun use(portRef: PortRef, block: Api.() -> Any?) {
                 api.takeIf { fixedPortRef == null || portRef == fixedPortRef }?.block()
             }
 
             override fun use(block: Api.() -> Any?) {
                 api.block()
+            }
+
+            override fun linkFrom(portOut: LinkTo<Api>) {
+                portOut.linkTo(this)
             }
         }
     }

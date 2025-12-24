@@ -73,12 +73,12 @@ class FanOutPortTest {
         val buffer2 = mutableListOf<String>()
 
         val proxy1 = callback<Consumer<String>> { buffer1 += it.args[0] as String }
-        port.subscribe(ref, Use.fixed(proxy1))
+        port.subscribe(Use.fixed(proxy1))
         port.use { provide("first") }
         assertEquals(listOf("first"), buffer1)
 
         val proxy2 = callback<Consumer<String>> { buffer2 += it.args[0] as String }
-        port.subscribe(ref, Use.fixed(proxy2))
+        port.subscribe(Use.fixed(proxy2))
         port.use { provide("second") }
 
         assertEquals(listOf("first"), buffer1)
@@ -99,7 +99,7 @@ class FanOutPortTest {
         val proxy = callback<Consumer<String>> {
             buffer += it.args[0] as String
         }
-        subscribe(portRef, Use.fixed(proxy))
+        subscribe(Use.fixed(proxy, portRef))
         return portRef to buffer
     }
 }

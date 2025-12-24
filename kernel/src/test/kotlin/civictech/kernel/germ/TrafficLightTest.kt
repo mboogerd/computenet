@@ -4,9 +4,14 @@ import civictech.kernel.germ.proxy.Buffering
 import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.germ.port.Serve
 import civictech.kernel.germ.port.FanInPort
+import civictech.kernel.germ.port.FanOutPort
+import civictech.kernel.germ.port.ServeMany
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
+import civictech.kernel.germ.proxy.broadcast
 import civictech.kernel.germ.proxy.buffering
+import civictech.kernel.germ.proxy.noop
+import civictech.kernel.port.PortRef
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -18,7 +23,7 @@ class TrafficLightTest {
         val trafficLight = TrafficLightCell.create<Consumer<String>>()
         val invocations = mutableListOf<Invocation>()
 
-        trafficLight.dataOutlet.serve(buffering(invocations))
+        trafficLight.dataOutlet.subscribe(buffering(invocations))
 
         trafficLight.controlInlet.use { setRed() }
 
@@ -31,7 +36,7 @@ class TrafficLightTest {
     fun `a traffic light propagations invocations when disabled`() {
         val trafficLight = TrafficLightCell.create<Consumer<String>>()
         val invocations = mutableListOf<Invocation>()
-        trafficLight.dataOutlet.serve(buffering(invocations))
+        trafficLight.dataOutlet.subscribe(buffering(invocations))
 
         trafficLight.controlInlet.use { setGreen() }
 
@@ -45,7 +50,7 @@ class TrafficLightTest {
     fun `a traffic light propagates buffered invocations before others`() {
         val trafficLight = TrafficLightCell.create<Consumer<String>>()
         val invocations = mutableListOf<Invocation>()
-        trafficLight.dataOutlet.serve(buffering(invocations))
+        trafficLight.dataOutlet.subscribe(buffering(invocations))
 
         trafficLight.controlInlet.use { setRed() }
         trafficLight.dataInlet.use { provide("first") }
@@ -68,13 +73,13 @@ interface TrafficLightControl {
 interface TrafficLightApi<T> {
     val controlInlet: Use<TrafficLightControl>
     val dataInlet: Use<T>
-    val dataOutlet: Serve<T>
+    val dataOutlet: ServeMany<T>
 }
 
 class TrafficLightCell<T : Any>(clazz: Class<T>) : TrafficLightApi<T> {
     override val controlInlet = FanInPort<TrafficLightControl>()
     override val dataInlet = FanInPort<T>()
-    override val dataOutlet = FanInPort<T>()
+    override val dataOutlet = FanOutPort<T>(PortRef.generate(), noop())
 
     private var isStopped = true
     private val buffer = mutableListOf<Invocation>()

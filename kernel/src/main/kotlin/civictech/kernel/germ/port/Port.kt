@@ -1,3 +1,7 @@
 package civictech.kernel.germ.port
 
-interface Port<Api> : Serve<Api>, Use<Api>
+import civictech.kernel.port.PortRef
+
+interface Port {
+    val ref: PortRef
+}

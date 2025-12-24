@@ -18,7 +18,10 @@ Some cells may change by users, e.g. ad hoc; other cells might need to know abou
           So, we mean to _prevent_ a Use from being obtained in an ad hoc way. Registration is a
           prerequisite for acquiring the Use.
  */
-class FanInPort<Api>(default: Api? = null) : Port<Api> {
+class FanInPort<Api>(
+    override val ref: PortRef = PortRef.generate(),
+    default: Api? = null
+) : Use<Api>, ServeOne<Api> {
 
     /** Current usable API implementation */
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it) }
@@ -52,6 +55,14 @@ class FanInPort<Api>(default: Api? = null) : Port<Api> {
         require(useApi != this)
         activeImplementation = useApi
 
+    }
+
+    override fun linkFrom(portOut: LinkTo<Api>) {
+        portOut.linkTo(this)
+    }
+
+    override fun linkTo(useApi: Use<Api>) {
+        delegate(useApi)
     }
 
     companion object Companion {
