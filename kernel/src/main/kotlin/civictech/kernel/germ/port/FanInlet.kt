@@ -2,26 +2,20 @@ package civictech.kernel.germ.port
 
 import civictech.kernel.port.PortRef
 
-/*
-- Question: Can we `use` a Port if we're not registered?
-- Answer:
-  - Not yet sure, but perhaps we can parameterize the configuration of a Cell to cover for this being mandatory or not
-  - The .use(...) lends itself also well for passing in context: what client is using the API, in the context of what timestamp?
-
-This touches on a bigger subject though:
-- There are change roots, e.g. user actions
-- There are also derived events, e.g. they match the timestamp but were indirectly triggered as a consequence of a root change on some other entity
-
-Some cells may change by users, e.g. ad hoc; other cells might need to know about upstream cells?
-- Question: When is that?
-- Answer: Whenever a cell cannot change by a user, e.g. it has an invariant to uphold. In that case, user interference is undesirable.
-          So, we mean to _prevent_ a Use from being obtained in an ad hoc way. Registration is a
-          prerequisite for acquiring the Use.
+/**
+ * An aggregating input port that supports multiple concurrent producers.
+ *
+ * Its "Fan-In" nature comes from allowing many upstream cells to hold its [Use]
+ * site and push data into it.
+ *
+ * Role:
+ * - Inside the Cell: [Serve] interface is used to provide logic.
+ * - Outside the Cell: [Use] interface is used by multiple upstreams to push data.
  */
-class FanInPort<Api>(
+class FanInlet<Api>(
     override val ref: PortRef = PortRef.generate(),
     default: Api? = null
-) : Use<Api>, ServeOne<Api> {
+) : Use<Api>, Serve<Api> {
 
     /** Current usable API implementation */
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
@@ -64,12 +58,4 @@ class FanInPort<Api>(
     override fun linkTo(useApi: Use<Api>) {
         delegate(useApi)
     }
-
-    companion object Companion {
-        /**
-         * Create a root handle wrapping some API.
-         */
-        fun <Api> root(initialApi: Api): FanInPort<Api> = FanInPort<Api>().apply { serve(initialApi) }
-    }
-
 }

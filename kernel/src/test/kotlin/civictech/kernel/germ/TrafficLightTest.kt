@@ -1,8 +1,8 @@
 package civictech.kernel.germ
 
-import civictech.kernel.germ.port.FanInPort
-import civictech.kernel.germ.port.FanOutPort
-import civictech.kernel.germ.port.ServeMany
+import civictech.kernel.germ.port.FanInlet
+import civictech.kernel.germ.port.FanOutlet
+import civictech.kernel.germ.port.Subscribe
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Buffering
 import civictech.kernel.germ.proxy.Invocation
@@ -70,13 +70,13 @@ interface TrafficLightControl {
 interface TrafficLightApi<T> {
     val controlInlet: Use<TrafficLightControl>
     val dataInlet: Use<T>
-    val dataOutlet: ServeMany<T>
+    val dataOutlet: Subscribe<T>
 }
 
 class TrafficLightCell<T : Any>(clazz: Class<T>) : TrafficLightApi<T> {
-    override val controlInlet = FanInPort<TrafficLightControl>()
-    override val dataInlet = FanInPort<T>()
-    override val dataOutlet = FanOutPort<T>()
+    override val controlInlet = FanInlet<TrafficLightControl>()
+    override val dataInlet = FanInlet<T>()
+    override val dataOutlet = FanOutlet<T>()
 
     private var isStopped = true
     private val buffer = mutableListOf<Invocation>()

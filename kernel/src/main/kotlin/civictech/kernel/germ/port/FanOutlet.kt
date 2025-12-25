@@ -2,7 +2,11 @@ package civictech.kernel.germ.port
 
 import civictech.kernel.port.PortRef
 
-class FanOutPort<Api : Any>(override val ref: PortRef = PortRef.generate()) : Use<Api>, ServeMany<Api> {
+/**
+ * A broadcasting output port.
+ * When [use] is called, it broadcasts the invocation to all subscribed ports.
+ */
+class FanOutlet<Api : Any>(override val ref: PortRef = PortRef.generate()) : Use<Api>, Subscribe<Api> {
     private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
 
     override fun subscribe(port: Use<Api>) {

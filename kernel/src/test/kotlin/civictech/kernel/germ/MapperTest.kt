@@ -1,8 +1,8 @@
 package civictech.kernel.germ
 
-import civictech.kernel.germ.port.FanInPort
-import civictech.kernel.germ.port.FanOutPort
-import civictech.kernel.germ.port.ServeMany
+import civictech.kernel.germ.port.FanInlet
+import civictech.kernel.germ.port.FanOutlet
+import civictech.kernel.germ.port.Subscribe
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
@@ -49,12 +49,12 @@ class MapperTest {
 
 interface MapperApi<A, B> {
     val inlet: Use<Consumer<A>>
-    val outlet: ServeMany<Consumer<B>>
+    val outlet: Subscribe<Consumer<B>>
 }
 
 class MapperCell<A, B>(f: (A) -> B) : MapperApi<A, B> {
-    override val inlet = FanInPort<Consumer<A>>()
-    override val outlet = FanOutPort<Consumer<B>>()
+    override val inlet = FanInlet<Consumer<A>>()
+    override val outlet = FanOutlet<Consumer<B>>()
 
     init {
         inlet.serve(object : Consumer<A> {

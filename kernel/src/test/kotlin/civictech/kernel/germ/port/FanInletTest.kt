@@ -7,18 +7,18 @@ import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
 import kotlin.test.fail
 
-class FanInPortTest {
+class FanInletTest {
 
     @Test
     fun `using an uninitialized port throws`() {
-        val port = FanInPort<Consumer<String>>()
+        val port = FanInlet<Consumer<String>>()
         assertThrows<IllegalStateException> { port.use { fail("This shouldn't be invoked") } }
     }
 
     @Test
     fun `default is employed by use if nothing else is linked`() {
         val (consumer, buffer) = Consumer.buffering<String>()
-        val port = FanInPort(PortRef.generate(), consumer)
+        val port = FanInlet(PortRef.generate(), consumer)
         port.use { provide("first") }
         assertEquals(buffer, listOf("first"))
     }
@@ -27,7 +27,7 @@ class FanInPortTest {
     fun `last serve is returned by use`() {
         val (consumer1, _) = Consumer.buffering<String>()
         val (consumer2, buffer2) = Consumer.buffering<String>()
-        val port = FanInPort<Consumer<String>>()
+        val port = FanInlet<Consumer<String>>()
         port.serve(consumer1)
         port.serve(consumer2)
         port.use { provide("first") }
@@ -36,8 +36,8 @@ class FanInPortTest {
 
     @Test
     fun `using a delegated uninitialized port throws`() {
-        val port1 = FanInPort<Consumer<String>>()
-        val port2 = FanInPort<Consumer<String>>()
+        val port1 = FanInlet<Consumer<String>>()
+        val port2 = FanInlet<Consumer<String>>()
         port1.delegate(port2)
         assertThrows<IllegalStateException> { port1.use { fail("This shouldn't be invoked") } }
     }
@@ -45,8 +45,8 @@ class FanInPortTest {
     @Test
     fun `using a delegated port obtains the delegated implementation`() {
         val (consumer, buffer) = Consumer.buffering<String>()
-        val port1 = FanInPort<Consumer<String>>()
-        val port2 = FanInPort(PortRef.generate(),consumer)
+        val port1 = FanInlet<Consumer<String>>()
+        val port2 = FanInlet(PortRef.generate(),consumer)
         port1.delegate(port2)
         port1.use { provide("first") }
         assertEquals(buffer, listOf("first"))
@@ -56,8 +56,8 @@ class FanInPortTest {
     fun `serve replaces delegate`() {
         val (consumer1, buffer1) = Consumer.buffering<String>()
         val (consumer2, buffer2) = Consumer.buffering<String>()
-        val port1 = FanInPort<Consumer<String>>()
-        val port2 = FanInPort(PortRef.generate(),consumer1)
+        val port1 = FanInlet<Consumer<String>>()
+        val port2 = FanInlet(PortRef.generate(),consumer1)
 
         port1.delegate(port2)
         port1.use { provide("first") }
@@ -73,8 +73,8 @@ class FanInPortTest {
         val (consumer1, buffer1) = Consumer.buffering<String>()
         val (consumer2, buffer2) = Consumer.buffering<String>()
 
-        val port1 = FanInPort<Consumer<String>>()
-        val port2 = FanInPort(PortRef.generate(),consumer2)
+        val port1 = FanInlet<Consumer<String>>()
+        val port2 = FanInlet(PortRef.generate(),consumer2)
 
         port1.serve(consumer1)
         port1.use { provide("first") }
@@ -89,9 +89,9 @@ class FanInPortTest {
     fun `an intermediate delegating port can insert itself`() {
         val (consumer2, buffer2) = Consumer.buffering<String>()
         val (consumer3, _) = Consumer.buffering<String>()
-        val port1 = FanInPort<Consumer<String>>()
-        val port2 = FanInPort<Consumer<String>>()
-        val port3 = FanInPort(PortRef.generate(),consumer3)
+        val port1 = FanInlet<Consumer<String>>()
+        val port2 = FanInlet<Consumer<String>>()
+        val port3 = FanInlet(PortRef.generate(),consumer3)
 
         port1.delegate(port2)
         port2.delegate(port3)
@@ -106,9 +106,9 @@ class FanInPortTest {
     @Test
     fun `a port delegated to can itself delegate`() {
         val (consumer3, buffer3) = Consumer.buffering<String>()
-        val port1 = FanInPort<Consumer<String>>()
-        val port2 = FanInPort<Consumer<String>>()
-        val port3 = FanInPort(PortRef.generate(),consumer3)
+        val port1 = FanInlet<Consumer<String>>()
+        val port2 = FanInlet<Consumer<String>>()
+        val port3 = FanInlet(PortRef.generate(),consumer3)
 
         port1.delegate(port2)
         port2.serve(Consumer.buffering<String>().first)

@@ -1,7 +1,8 @@
 package civictech.kernel.germ
 
-import civictech.kernel.germ.port.FanInPort
-import civictech.kernel.germ.port.FanOutPort
+import civictech.kernel.germ.port.FanInlet
+import civictech.kernel.germ.port.FanOutlet
+import civictech.kernel.germ.port.Subscribe
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
@@ -47,13 +48,13 @@ class IncrementerTest {
 }
 
 interface IncrementerApi {
-    val inlet: FanInPort<Consumer<Int>>
-    val outlet: FanOutPort<Consumer<Int>>
+    val inlet: Use<Consumer<Int>>
+    val outlet: Subscribe<Consumer<Int>>
 }
 
 class Incrementer : IncrementerApi {
-    override val inlet = FanInPort<Consumer<Int>>()
-    override val outlet = FanOutPort<Consumer<Int>>()
+    override val inlet = FanInlet<Consumer<Int>>()
+    override val outlet = FanOutlet<Consumer<Int>>()
 
     init {
         inlet.serve(object : Consumer<Int> {
