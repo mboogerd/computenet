@@ -9,7 +9,7 @@ package civictech.kernel.germ.port
 interface Serve<Api> : LinkTo<Api> {
     /**
      * Serves the port with a concrete [api] implementation.
-     * This establishes the logic that will be invoked when external clients call [Use.use].
+     * This establishes the logic that will be invoked when external clients call [Use.call].
      */
     fun serve(api: Api)
 

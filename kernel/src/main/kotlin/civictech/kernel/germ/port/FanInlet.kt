@@ -12,7 +12,8 @@ import civictech.kernel.port.PortRef
  * - Inside the Cell: [Serve] interface is used to provide logic.
  * - Outside the Cell: [Use] interface is used by multiple upstreams to push data.
  */
-class FanInlet<Api>(
+class FanInlet<Api : Any>(
+    val clazz: Class<Api>,
     override val ref: PortRef = PortRef.generate(),
     default: Api? = null
 ) : Use<Api>, Serve<Api> {
@@ -20,19 +21,14 @@ class FanInlet<Api>(
     /** Current usable API implementation */
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
 
-    override fun use(portRef: PortRef, block: Api.() -> Any?) {
-        if (activeImplementation == null) throw IllegalStateException("Port has not been initialized")
-
-        activeImplementation?.use(portRef) { block() }
+    override val call: Api = civictech.kernel.germ.proxy.Proxy.delegating(clazz) {
+        activeImplementation?.call ?: throw IllegalStateException("Port has not been initialized")
     }
 
-    /**
-     * Resolves the current API instance, rebuilding from origin if stale.
-     */
-    override fun use(block: Api.() -> Any?) {
-        if (activeImplementation == null) throw IllegalStateException("Port has not been initialized")
-
-        activeImplementation?.use { block() }
+    override fun at(portRef: PortRef): Api {
+        return civictech.kernel.germ.proxy.Proxy.delegating(clazz) {
+            activeImplementation?.at(portRef) ?: throw IllegalStateException("Port has not been initialized")
+        }
     }
 
     /**
@@ -57,5 +53,12 @@ class FanInlet<Api>(
 
     override fun linkTo(useApi: Use<Api>) {
         delegate(useApi)
+    }
+
+    companion object {
+        inline fun <reified Api : Any> create(
+            ref: PortRef = PortRef.generate(),
+            default: Api? = null
+        ): FanInlet<Api> = FanInlet(Api::class.java, ref, default)
     }
 }

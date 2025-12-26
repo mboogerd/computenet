@@ -14,7 +14,7 @@ class OutletTest {
     fun `subscribing once succeeds`() {
         val port = Outlet.withNoOp<Consumer<String>>()
         val (ref, buffer) = port.attachBufferingPort()
-        port.use(ref) { provide("test") }
+        port.at(ref).provide("test")
         assertEquals(listOf("test"), buffer)
     }
 
@@ -66,7 +66,7 @@ class OutletTest {
         val port = Outlet.withNoOp<Consumer<String>>()
         val (ref, buffer) = port.attachBufferingPort()
         port.unsubscribe(ref)
-        port.use(ref) { provide("test") }
+        port.at(ref).provide("test")
         assertEquals(emptyList(), buffer)
     }
 
@@ -74,7 +74,7 @@ class OutletTest {
     fun `broadcast through all works`() {
         val port = Outlet.withNoOp<Consumer<String>>()
         val (_, buffer) = port.attachBufferingPort()
-        port.use { provide("test") }
+        port.call.provide("test")
         assertEquals(listOf("test"), buffer)
     }
 

@@ -10,24 +10,24 @@ class FanOutletTest {
 
     @Test
     fun `broadcasting on an empty port doesn't do anything`() {
-        val fanOutlet = FanOutlet<Consumer<String>>()
-        fanOutlet.use { provide("does not throw, but doesn't do anything either") }
+        val fanOutlet = FanOutlet.create<Consumer<String>>()
+        fanOutlet.call.provide("does not throw, but doesn't do anything either")
     }
 
     @Test
     fun `using a non-existing downstream api completes without error`() {
-        val fanOutlet = FanOutlet<Consumer<String>>()
-        fanOutlet.use(PortRef.generate()) { provide("test") }
+        val fanOutlet = FanOutlet.create<Consumer<String>>()
+        fanOutlet.at(PortRef.generate()).provide("test")
     }
 
     @Test
     fun `retrieving an existing downstream api returns that entry`() {
-        val fanOutlet = FanOutlet<Consumer<String>>()
+        val fanOutlet = FanOutlet.create<Consumer<String>>()
         val (portRef1, buffer1) = fanOutlet.attachBufferingPort()
         val (_, buffer2) = fanOutlet.attachBufferingPort()
 
-        fanOutlet.use(portRef1) { provide("first") }
-        fanOutlet.use(portRef1) { provide("second") }
+        fanOutlet.at(portRef1).provide("first")
+        fanOutlet.at(portRef1).provide("second")
 
         assertEquals(listOf("first", "second"), buffer1)
         assertEquals(emptyList(), buffer2)
@@ -35,17 +35,17 @@ class FanOutletTest {
 
     @Test
     fun `broadcasting reaches all active subscriptions`() {
-        val fanOutlet = FanOutlet<Consumer<String>>()
+        val fanOutlet = FanOutlet.create<Consumer<String>>()
 
         // first
         val (_, buffer1) = fanOutlet.attachBufferingPort()
-        fanOutlet.use { provide("first") }
+        fanOutlet.call.provide("first")
 
         val (_, buffer2) = fanOutlet.attachBufferingPort()
-        fanOutlet.use { provide("second") }
+        fanOutlet.call.provide("second")
 
         val (_, buffer3) = fanOutlet.attachBufferingPort()
-        fanOutlet.use { provide("third") }
+        fanOutlet.call.provide("third")
 
         assertEquals(listOf("first", "second", "third"), buffer1)
         assertEquals(listOf("second", "third"), buffer2)
@@ -54,20 +54,20 @@ class FanOutletTest {
 
     @Test
     fun `unsubscribed downstream api is no longer available`() {
-        val fanOutlet = FanOutlet<Consumer<String>>()
+        val fanOutlet = FanOutlet.create<Consumer<String>>()
         val (portRef1, buffer1) = fanOutlet.attachBufferingPort()
 
-        fanOutlet.use { provide("first") }
+        fanOutlet.call.provide("first")
         fanOutlet.unsubscribe(portRef1)
-        fanOutlet.use { provide("second") }
-        fanOutlet.use(portRef1) { provide("third") }
+        fanOutlet.call.provide("second")
+        fanOutlet.at(portRef1).provide("third")
 
         assertEquals(listOf("first"), buffer1)
     }
 
     @Test
     fun `re-subscribing a PortRef overwrites the previous handler`() {
-        val port = FanOutlet<Consumer<String>>()
+        val port = FanOutlet.create<Consumer<String>>()
         val buffer1 = mutableListOf<String>()
         val buffer2 = mutableListOf<String>()
 
@@ -75,12 +75,12 @@ class FanOutletTest {
 
         val proxy1 = callback<Consumer<String>> { buffer1 += it.args[0] as String }
         port.subscribe(Use.fixed(proxy1, fixedPortRef))
-        port.use { provide("first") }
+        port.call.provide("first")
         assertEquals(listOf("first"), buffer1)
 
         val proxy2 = callback<Consumer<String>> { buffer2 += it.args[0] as String }
         port.subscribe(Use.fixed(proxy2, fixedPortRef))
-        port.use { provide("second") }
+        port.call.provide("second")
 
         assertEquals(listOf("first"), buffer1)
         assertEquals(listOf("second"), buffer2)
@@ -88,7 +88,7 @@ class FanOutletTest {
 
     @Test
     fun `multiple unsubscribe calls do not crash`() {
-        val port = FanOutlet<Consumer<String>>()
+        val port = FanOutlet.create<Consumer<String>>()
         val (ref, _) = port.attachBufferingPort()
         port.unsubscribe(ref)
         port.unsubscribe(ref) // no crash or side effect

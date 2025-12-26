@@ -14,12 +14,23 @@ import civictech.kernel.port.PortRef
  * - Outside the Cell: [Use] interface is used by upstreams to push data.
  */
 class Inlet<Api : Any>(
+    val clazz: Class<Api>,
     override val ref: PortRef,
     unicastFactory: () -> Api
 ) : Use<Api>, Serve<Api> {
 
     private var activeProducer: PortRef? = null
     private var activeProducerApi: Use<Api> = Use.fixed(unicastFactory())
+
+    override val call: Api = civictech.kernel.germ.proxy.Proxy.delegating(clazz) { activeProducerApi.call }
+
+    override fun at(portRef: PortRef): Api {
+        return if (activeProducer == portRef) {
+            activeProducerApi.at(portRef)
+        } else {
+            civictech.kernel.germ.proxy.Proxy.noop(clazz)
+        }
+    }
 
     override fun serve(api: Api) {
         activeProducer = null
@@ -29,16 +40,6 @@ class Inlet<Api : Any>(
     override fun delegate(port: Use<Api>) {
         activeProducer = port.ref
         activeProducerApi = port
-    }
-
-    override fun use(portRef: PortRef, block: Api.() -> Any?) {
-        activeProducerApi
-            .takeIf { activeProducer == portRef }
-            ?.use { block() }
-    }
-
-    override fun use(block: Api.() -> Any?) {
-        activeProducerApi.use { block() }
     }
 
     override fun linkFrom(portOut: LinkTo<Api>) {
@@ -58,9 +59,15 @@ class Inlet<Api : Any>(
 
     companion object {
         /**
-         * Creates an [Inlet] served with a No-Op implementation of [Api].
+         * Creates an [Inlet] served with a No-Op default implementation of [Api].
          */
         inline fun <reified Api : Any> withNoOp(portRef: PortRef = PortRef.generate()): Inlet<Api> =
-            Inlet(portRef) { noop() }
+            Inlet(Api::class.java, portRef) { noop() }
+
+        /**
+         * Creates an [Inlet] served with the provided [api] instance.
+         */
+        inline fun <reified Api : Any> withApi(api: Api, portRef: PortRef = PortRef.generate()): Inlet<Api> =
+            Inlet(Api::class.java, portRef) { api }.apply { serve(api) }
     }
 }

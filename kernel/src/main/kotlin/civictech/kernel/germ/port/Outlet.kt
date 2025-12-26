@@ -14,12 +14,23 @@ import civictech.kernel.port.PortRef
  * - Outside the Cell: [Subscribe] interface is used to attach a consumer.
  */
 class Outlet<Api : Any>(
+    val clazz: Class<Api>,
     override val ref: PortRef,
     private val unicastFactory: () -> Api
 ) : Use<Api>, Subscribe<Api> {
 
     private var subscribedPort: PortRef? = null
     private var subscribedPortApi: Use<Api> = Use.fixed(unicastFactory())
+
+    override val call: Api = civictech.kernel.germ.proxy.Proxy.delegating(clazz) { subscribedPortApi.call }
+
+    override fun at(portRef: PortRef): Api {
+        return if (subscribedPort == portRef) {
+            subscribedPortApi.at(portRef)
+        } else {
+            civictech.kernel.germ.proxy.Proxy.noop(clazz)
+        }
+    }
 
     /**
      * Subscribes the provided [port] to receive method calls from this port.
@@ -42,16 +53,6 @@ class Outlet<Api : Any>(
         }
     }
 
-    override fun use(portRef: PortRef, block: Api.() -> Any?) {
-        subscribedPortApi
-            .takeIf { subscribedPort == portRef }
-            ?.use { block() }
-    }
-
-    override fun use(block: Api.() -> Any?) {
-        subscribedPortApi.use { block() }
-    }
-
     override fun linkFrom(portOut: LinkTo<Api>) {
         if (subscribedPort != null) {
             throw IllegalStateException("Outlet already has a subscriber and enforces strict point-to-point connectivity.")
@@ -72,6 +73,6 @@ class Outlet<Api : Any>(
          * Creates an [Outlet] with a No-Op default implementation of [Api].
          */
         inline fun <reified Api : Any> withNoOp(portRef: PortRef = PortRef.generate()): Outlet<Api> =
-            Outlet(portRef) { noop() }
+            Outlet(Api::class.java, portRef) { noop() }
     }
 }

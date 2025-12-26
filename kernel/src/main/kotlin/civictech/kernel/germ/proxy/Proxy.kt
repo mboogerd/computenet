@@ -26,4 +26,40 @@ object Proxy {
             throw IllegalArgumentException("Only interfaces can be represented. $clazz is not an interface")
         }
     }
+
+    /**
+     * Creates a proxy that delegates all calls to the implementation returned by [provider].
+     */
+    fun <T : Any> delegating(clazz: Class<T>, provider: () -> T): T {
+        return fromClass(clazz) { _, method, args ->
+            try {
+                method.invoke(provider(), *(args ?: emptyArray()))
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw e.targetException
+            }
+        }
+    }
+
+    /**
+     * Creates a proxy that broadcasts all calls to the implementations returned by [provider].
+     */
+    fun <T : Any> broadcasting(clazz: Class<T>, provider: () -> Iterable<T>): T {
+        return fromClass(clazz) { _, method, args ->
+            provider().forEach {
+                try {
+                    method.invoke(it, *(args ?: emptyArray()))
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw e.targetException
+                }
+            }
+            null
+        }
+    }
+
+    /**
+     * Creates a proxy that does nothing.
+     */
+    fun <T : Any> noop(clazz: Class<T>): T {
+        return fromClass(clazz) { _, _, _ -> null }
+    }
 }

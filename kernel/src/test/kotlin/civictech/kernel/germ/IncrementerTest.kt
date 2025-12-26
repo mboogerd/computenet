@@ -15,7 +15,7 @@ class IncrementerTest {
     @Test
     fun `incrementer can be used without attached outlet`() {
         val incrementer = Incrementer.create()
-        incrementer.inlet.use { provide(1) }
+        incrementer.inlet.call.provide(1)
     }
 
     @Test
@@ -23,9 +23,9 @@ class IncrementerTest {
         val buffer = mutableListOf<Invocation>()
         val incrementer = Incrementer.create()
 
-        incrementer.inlet.use { provide(1) }
+        incrementer.inlet.call.provide(1)
         incrementer.outlet.subscribe(Use.fixed(buffering(buffer), PortRef.generate()))
-        incrementer.inlet.use { provide(2) }
+        incrementer.inlet.call.provide(2)
 
         assertEquals(buffer.map { it.args.first() }, listOf(3))
 
@@ -40,8 +40,8 @@ class IncrementerTest {
         inc1.outlet.subscribe(inc2.inlet)
         inc2.outlet.subscribe(Use.fixed(buffering(buffer), PortRef.generate()))
 
-        inc1.inlet.use { provide(1) }
-        inc1.inlet.use { provide(2) }
+        inc1.inlet.call.provide(1)
+        inc1.inlet.call.provide(2)
 
         assertEquals(buffer.map { it.args.first() }, listOf(3, 4))
     }
@@ -53,13 +53,13 @@ interface IncrementerApi {
 }
 
 class Incrementer : IncrementerApi {
-    override val inlet = FanInlet<Consumer<Int>>()
-    override val outlet = FanOutlet<Consumer<Int>>()
+    override val inlet = FanInlet.create<Consumer<Int>>()
+    override val outlet = FanOutlet.create<Consumer<Int>>()
 
     init {
         inlet.serve(object : Consumer<Int> {
             override fun provide(input: Int) {
-                outlet.use { provide(input + 1) }
+                outlet.call.provide(input + 1)
             }
         })
     }

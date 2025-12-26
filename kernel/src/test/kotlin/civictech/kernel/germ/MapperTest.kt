@@ -14,7 +14,7 @@ class MapperTest {
     @Test
     fun `mapper can be used without attached outlet`() {
         val mapper = MapperCell.create<Int, String> { it.toString() }
-        mapper.inlet.use { provide(1) }
+        mapper.inlet.call.provide(1)
     }
 
     @Test
@@ -23,7 +23,7 @@ class MapperTest {
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Consumer<String>>(invocationBuffer)
         mapper.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
-        mapper.inlet.use { provide(1337) }
+        mapper.inlet.call.provide(1337)
 
         assert(invocationBuffer.size == 1)
         assert(invocationBuffer[0].args.size == 1)
@@ -38,7 +38,7 @@ class MapperTest {
         val buffer = buffering<Consumer<Long>>(invocationBuffer)
         mapper2.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
         mapper1.outlet.subscribe(mapper2.inlet)
-        mapper1.inlet.use { provide(1337) }
+        mapper1.inlet.call.provide(1337)
 
         assert(invocationBuffer.size == 1)
         assert(invocationBuffer[0].args.size == 1)
@@ -52,20 +52,20 @@ interface MapperApi<A, B> {
     val outlet: Subscribe<Consumer<B>>
 }
 
-class MapperCell<A, B>(f: (A) -> B) : MapperApi<A, B> {
-    override val inlet = FanInlet<Consumer<A>>()
-    override val outlet = FanOutlet<Consumer<B>>()
+class MapperCell<A, B : Any>(clazzA: Class<Consumer<A>>, clazzB: Class<Consumer<B>>, f: (A) -> B) : MapperApi<A, B> {
+    override val inlet = FanInlet(clazzA)
+    override val outlet = FanOutlet(clazzB)
 
     init {
         inlet.serve(object : Consumer<A> {
             override fun provide(input: A) {
-                outlet.use { provide(f(input)) }
+                outlet.call.provide(f(input))
             }
         })
     }
 
     companion object {
         inline fun <reified A : Any, reified B : Any> create(noinline f: (A) -> B): MapperApi<A, B> =
-            MapperCell(f)
+            MapperCell(Consumer::class.java as Class<Consumer<A>>, Consumer::class.java as Class<Consumer<B>>, f)
     }
 }

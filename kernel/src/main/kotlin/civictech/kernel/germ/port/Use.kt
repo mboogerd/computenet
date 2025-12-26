@@ -12,18 +12,17 @@ import civictech.kernel.port.PortRef
  */
 interface Use<Api> : LinkFrom<Api> {
     /**
-     * Invokes the [block] on the [Api] instance, but only if the underlying implementation
-     * matches the specified [portRef]. This is primarily used for targeted (unicast)
-     * invocations, such as sending initial state to a specific new subscriber.
+     * Provides static method access to the port's API.
+     * Calls on this object are dispatched according to the port's connectivity
+     * (e.g. broadcast for fan-out ports).
      */
-    fun use(portRef: PortRef, block: Api.() -> Any?)
+    val call: Api
 
     /**
-     * Invokes the [block] on the [Api] instance(s).
-     * For point-to-point ports, this invokes the block on the single connected implementation.
-     * For fan-out ports, this broadcasts the invocation to all connected implementations.
+     * Returns an [Api] instance that targets a specific [portRef].
+     * Useful for unicast messages in a fan-out scenario.
      */
-    fun use(block: Api.() -> Any?)
+    fun at(portRef: PortRef): Api
 
     companion object Companion {
         /**
@@ -31,17 +30,13 @@ interface Use<Api> : LinkFrom<Api> {
          * @param api The API instance to use.
          * @param fixedPortRef An optional [PortRef] for this consumer.
          */
-        fun <Api> fixed(api: Api, fixedPortRef: PortRef? = null): Use<Api> = object : Use<Api> {
+        fun <Api : Any> fixed(api: Api, fixedPortRef: PortRef? = null): Use<Api> = object : Use<Api> {
             override val ref: PortRef
                 get() = fixedPortRef ?: throw IllegalArgumentException("Port has not been initialized")
 
-            override fun use(portRef: PortRef, block: Api.() -> Any?) {
-                api.takeIf { fixedPortRef == null || portRef == fixedPortRef }?.block()
-            }
+            override val call: Api = api
 
-            override fun use(block: Api.() -> Any?) {
-                api.block()
-            }
+            override fun at(portRef: PortRef): Api = api
 
             override fun linkFrom(portOut: LinkTo<Api>) {
                 portOut.linkTo(this)

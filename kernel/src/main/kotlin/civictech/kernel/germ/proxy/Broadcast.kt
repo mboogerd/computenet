@@ -5,12 +5,15 @@ import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 
 class Broadcast<Api>(val apis: List<Use<Api>>) : InvocationHandler {
-    override fun invoke(proxy: Any?, method: Method?, args: Array<out Any>?): Any {
-        return apis.map { useApi ->
-            useApi.use {
-                method?.invoke(this, *(args ?: arrayOf()))
+    override fun invoke(proxy: Any?, method: Method?, args: Array<out Any>?): Any? {
+        apis.forEach { useApi ->
+            try {
+                method?.invoke(useApi.call, *(args ?: arrayOf()))
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw e.targetException
             }
         }
+        return null
     }
 }
 
