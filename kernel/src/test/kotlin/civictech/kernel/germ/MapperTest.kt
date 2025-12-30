@@ -1,8 +1,5 @@
 package civictech.kernel.germ
 
-import civictech.kernel.germ.port.FanInlet
-import civictech.kernel.germ.port.FanOutlet
-import civictech.kernel.germ.port.Subscribe
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
@@ -13,13 +10,20 @@ class MapperTest {
 
     @Test
     fun `mapper can be used without attached outlet`() {
-        val mapper = MapperCell.create<Int, String> { it.toString() }
+        val runner = ManagedRunner()
+        val api = runner.managementInlet.call
+        val mapper = MapperCell<Int, String>(f = { it.toString() })
+        api.spawn(mapper)
         mapper.inlet.call.provide(1)
     }
 
     @Test
     fun `mapper propagates transformed value`() {
-        val mapper = MapperCell.create<Int, String> { it.toString() }
+        val runner = ManagedRunner()
+        val api = runner.managementInlet.call
+        val mapper = MapperCell<Int, String>(f = { it.toString() })
+        api.spawn(mapper)
+
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Consumer<String>>(invocationBuffer)
         mapper.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
@@ -32,12 +36,19 @@ class MapperTest {
 
     @Test
     fun `propagation is transitive`() {
-        val mapper1 = MapperCell.create<Int, String> { it.toString() }
-        val mapper2 = MapperCell.create<String, Long> { it.toLong() }
+        val runner = ManagedRunner()
+        val api = runner.managementInlet.call
+        val mapper1 = MapperCell<Int, String>(f = { it.toString() })
+        val mapper2 = MapperCell<String, Long>(f = { it.toLong() })
+        api.spawn(mapper1)
+        api.spawn(mapper2)
+
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Consumer<Long>>(invocationBuffer)
         mapper2.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
-        mapper1.outlet.subscribe(mapper2.inlet)
+
+        api.connect(mapper1.ref, "outlet", mapper2.ref, "inlet")
+
         mapper1.inlet.call.provide(1337)
 
         assert(invocationBuffer.size == 1)
@@ -45,27 +56,4 @@ class MapperTest {
         assert(invocationBuffer[0].args[0] == 1337L)
     }
 
-}
-
-interface MapperApi<A, B> {
-    val inlet: Use<Consumer<A>>
-    val outlet: Subscribe<Consumer<B>>
-}
-
-class MapperCell<A, B : Any>(clazzA: Class<Consumer<A>>, clazzB: Class<Consumer<B>>, f: (A) -> B) : MapperApi<A, B> {
-    override val inlet = FanInlet(clazzA)
-    override val outlet = FanOutlet(clazzB)
-
-    init {
-        inlet.serve(object : Consumer<A> {
-            override fun provide(input: A) {
-                outlet.call.provide(f(input))
-            }
-        })
-    }
-
-    companion object {
-        inline fun <reified A : Any, reified B : Any> create(noinline f: (A) -> B): MapperApi<A, B> =
-            MapperCell(Consumer::class.java as Class<Consumer<A>>, Consumer::class.java as Class<Consumer<B>>, f)
-    }
 }

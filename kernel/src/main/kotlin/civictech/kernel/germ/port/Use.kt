@@ -24,7 +24,7 @@ interface Use<Api> : LinkFrom<Api> {
      */
     fun at(portRef: PortRef): Api
 
-    companion object Companion {
+    companion object {
         /**
          * Creates a [Use] implementation that always returns the provided [api].
          * @param api The API instance to use.
@@ -44,3 +44,8 @@ interface Use<Api> : LinkFrom<Api> {
         }
     }
 }
+
+/**
+ * Shorthand for [Use.call] that allows using a block to invoke methods on the port.
+ */
+inline fun <Api, R> Use<Api>.use(block: Api.() -> R): R = call.block()

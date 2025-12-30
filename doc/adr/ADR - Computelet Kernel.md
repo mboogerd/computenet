@@ -38,9 +38,10 @@ We need a lower-level model that:
 
 We will adopt a **port-based computelet kernel** as the foundational abstraction, incorporating explicit directionality, per-link addressing, multiplexed protocols, and port cardinality constraints:
 
-- **Computelet**: an entity with a set of named ports and a behavior function that reacts to messages on its input ports. The behavior emits output actions that may broadcast messages on a port or send targeted messages to specific links.
-- **Port**: an endpoint with a declared **direction** (`INPUT`, `OUTPUT`, or `BIDIRECTIONAL`) and a **cardinality** (`SINGLE` or `MULTIPLE`). Ports multiplex multiple protocols and can have stacked protocol handlers, allowing generic propagation mechanisms to be layered without modifying computelet logic.
-- **Link**: a first-class, directional connection between two ports. Links can carry traffic in both directions and are addressable, enabling selective upstream communication (e.g., per-link requests or attention signals) as well as downstream broadcasts.
+- **Computelet/Cell**: an entity that acts as its own specification. It declares named ports and provides behavior via an `onActivate` hook.
+- **Port**: an endpoint with a declared **direction** and **cardinality**. Ports are declared via delegates for discovery.
+- **Runner**: a specialized cell that hosts other cells. It manages their lifecycle (Cold to Hot transition) and orchestrates links.
+- **Link**: a first-class, directional connection between two ports.
 - **Messages and Protocols**: messages are tagged with a protocol identifier. Protocols may be generic (e.g., attention propagation, time-based requests) or specific to a computelet. Ports multiplex these protocols, and handlers for them can be composed.
 - **Cardinality Constraints**: ports enforce constraints at link time. Typical downstream ports are multi-consumer, upstream ports are often single-linked for ownership safety, and unions may explicitly allow multiple producers.
 

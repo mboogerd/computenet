@@ -1,5 +1,6 @@
 package civictech.kernel.germ.port
 
+import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.germ.proxy.noop
 import civictech.kernel.port.PortRef
 
@@ -22,13 +23,13 @@ class Inlet<Api : Any>(
     private var activeProducer: PortRef? = null
     private var activeProducerApi: Use<Api> = Use.fixed(unicastFactory())
 
-    override val call: Api = civictech.kernel.germ.proxy.Proxy.delegating(clazz) { activeProducerApi.call }
+    override val call: Api = Proxy.delegating(clazz) { activeProducerApi.call }
 
     override fun at(portRef: PortRef): Api {
         return if (activeProducer == portRef) {
             activeProducerApi.at(portRef)
         } else {
-            civictech.kernel.germ.proxy.Proxy.noop(clazz)
+            Proxy.noop(clazz)
         }
     }
 

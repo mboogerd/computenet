@@ -1,5 +1,6 @@
 package civictech.kernel.germ.port
 
+import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.port.PortRef
 
 /**
@@ -21,12 +22,12 @@ class FanInlet<Api : Any>(
     /** Current usable API implementation */
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
 
-    override val call: Api = civictech.kernel.germ.proxy.Proxy.delegating(clazz) {
+    override val call: Api = Proxy.delegating(clazz) {
         activeImplementation?.call ?: throw IllegalStateException("Port has not been initialized")
     }
 
     override fun at(portRef: PortRef): Api {
-        return civictech.kernel.germ.proxy.Proxy.delegating(clazz) {
+        return Proxy.delegating(clazz) {
             activeImplementation?.at(portRef) ?: throw IllegalStateException("Port has not been initialized")
         }
     }

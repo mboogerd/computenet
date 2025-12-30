@@ -1,5 +1,6 @@
 package civictech.kernel.germ.port
 
+import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.germ.proxy.noop
 import civictech.kernel.port.PortRef
 
@@ -22,13 +23,13 @@ class Outlet<Api : Any>(
     private var subscribedPort: PortRef? = null
     private var subscribedPortApi: Use<Api> = Use.fixed(unicastFactory())
 
-    override val call: Api = civictech.kernel.germ.proxy.Proxy.delegating(clazz) { subscribedPortApi.call }
+    override val call: Api = Proxy.delegating(clazz) { subscribedPortApi.call }
 
     override fun at(portRef: PortRef): Api {
         return if (subscribedPort == portRef) {
             subscribedPortApi.at(portRef)
         } else {
-            civictech.kernel.germ.proxy.Proxy.noop(clazz)
+            Proxy.noop(clazz)
         }
     }
 

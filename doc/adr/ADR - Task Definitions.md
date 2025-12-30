@@ -72,16 +72,17 @@ This raises the question: should we separate task and port definitions from thei
 
 ## Decision
 
-We will proceed with **Alternative 2: a unified task model with hosted state**.
+We will proceed with a **Hybrid Unified Model with Explicit Lifecycle Phases**.
 
 This allows us to:
 
-- Avoid duplication between definition and instance
-- Keep APIs composable and expressive with minimal boilerplate
-- Lean into cold vs. hot semantics for graph-building vs. runtime use
+- **Avoid duplication**: A single class acts as both the specification (Cold) and the logic provider (Hot).
+- **Declarative definition**: Ports are declared using property delegates (`by input()`, `by output()`) for automated discovery by the Runner.
+- **Managed Activation**: Logic is moved from the constructor to an `onActivate(CellContext)` hook, ensuring it only runs when hosted.
+- **Late-Bound Wiring**: Runners manage connections between cells, allowing for dynamic reconfiguration and "Fast Path" optimizations.
 
-We will define `Task<T>` interfaces that work both in graph-building (unhosted) and execution (hosted) contexts. The graph runner will upgrade a cold graph into a hot one, assigning identity and connecting ports dynamically.
-
-We will revisit this decision if lifecycle management becomes too error-prone or limiting, in which case a separation of spec and instance may be reintroduced with clear tooling or codegen.
+This model leans into cold vs. hot semantics:
+- **Cold Phase**: Cell instantiation (e.g., in a Graph DSL). Ports are dormant metadata.
+- **Hot Phase**: Runner calls `onActivate()`. Ports are "hydrated" and logic is established.
 
 ---

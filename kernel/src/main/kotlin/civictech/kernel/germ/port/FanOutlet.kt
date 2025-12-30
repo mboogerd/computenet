@@ -1,5 +1,6 @@
 package civictech.kernel.germ.port
 
+import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.port.PortRef
 
 /**
@@ -12,13 +13,13 @@ class FanOutlet<Api : Any>(
 ) : Use<Api>, Subscribe<Api> {
     private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
 
-    override val call: Api = civictech.kernel.germ.proxy.Proxy.broadcasting(clazz) {
+    override val call: Api = Proxy.broadcasting(clazz) {
         subscriptions.values.map { it.call }
     }
 
     override fun at(portRef: PortRef): Api {
-        return civictech.kernel.germ.proxy.Proxy.delegating(clazz) {
-            subscriptions[portRef]?.call ?: civictech.kernel.germ.proxy.Proxy.noop(clazz)
+        return Proxy.delegating(clazz) {
+            subscriptions[portRef]?.call ?: Proxy.noop(clazz)
         }
     }
 
