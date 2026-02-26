@@ -1,9 +1,6 @@
 package civictech.kernel.data
 
-import civictech.kernel.germ.port.FanInlet
-import civictech.kernel.germ.port.FanOutlet
-import civictech.kernel.germ.port.Subscribe
-import civictech.kernel.germ.port.Use
+import civictech.kernel.germ.port.*
 
 interface SetOps<E> {
     fun add(element: E)
@@ -37,22 +34,24 @@ class SetCell<E> : SetApi<E> {
     override val outlet = FanOutlet.create<Propagate<SetDelta<E>>>()
 
     private val state = mutableSetOf<E>()
+    private val inletApi = object : SetOps<E> {
+        override fun add(element: E) {
+            state += element
+            outlet.call.propagate(SetDelta(setOf(element), emptySet()))
+        }
+
+        override fun remove(element: E) {
+            state -= element
+            outlet.call.propagate(SetDelta(emptySet(), setOf(element)))
+        }
+    }
 
     init {
-        inlet.serve(object : SetOps<E> {
-            override fun add(element: E) {
-                state += element
-                outlet.call.propagate(SetDelta(setOf(element), emptySet()))
-            }
-
-            override fun remove(element: E) {
-                state -= element
-                outlet.call.propagate(SetDelta(emptySet(), setOf(element)))
-            }
-        })
+        inlet.serve(inletApi)
     }
 
     companion object {
         fun <E> create(): SetApi<E> = SetCell()
     }
 }
+
