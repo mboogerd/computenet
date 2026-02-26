@@ -11,6 +11,7 @@ class FanOutlet<Api : Any>(
     val clazz: Class<Api>,
     override val ref: PortRef = PortRef.generate()
 ) : Use<Api>, Subscribe<Api> {
+
     private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
 
     override val call: Api = Proxy.broadcasting(clazz) {

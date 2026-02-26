@@ -4,16 +4,21 @@ import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 
 /**
- * Interface for interacting with a [Runner].
+ * Interface for interacting with a [Host].
  *
- * A Runner is a [Cell] that hosts other cells and manages their connections.
+ * A Host is a [Cell] that hosts other cells and manages their connections.
  */
-interface RunnerApi {
+interface HostManagementApi {
     /**
-     * Spawns a cell in the runner and activates it.
+     * Spawns a cell in the host and activates it.
      * The cell acts as its own specification.
      */
     fun spawn(cell: Cell): CellRef
+
+    /**
+     * Returns a managed reference to the API of a hosted cell.
+     */
+    fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T?
 
     /**
      * Connects an outlet of one hosted cell to an inlet of another hosted cell.
@@ -24,12 +29,22 @@ interface RunnerApi {
      * @param inletName The name or identifier of the inlet on the target cell.
      */
     fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String)
+
+    /**
+     * Connects an outlet of a hosted cell to a remote inlet (represented by a [Use] instance).
+     */
+    fun connect(from: CellRef, outletName: String, to: Use<*>)
 }
+
+/**
+ * Shorthand for [HostManagementApi.lookup] using reified types.
+ */
+inline fun <reified T : Any> HostManagementApi.lookup(ref: CellRef): T? = lookup(ref, T::class.java)
 
 /**
  * Interface for routing API calls to inlets of hosted cells.
  */
-interface RouterApi {
+interface HostRoutingApi {
     /**
      * Routes an [Invocation] to a specific inlet of a hosted cell.
      *
@@ -41,9 +56,9 @@ interface RouterApi {
 }
 
 /**
- * A Runner is a computelet (Cell) that can host and execute other cells.
+ * A Host is a computelet (Cell) that can host and execute other cells.
  */
-interface Runner : Cell {
-    val managementInlet: Use<RunnerApi>
-    val routerInlet: Use<RouterApi>
+interface Host : Cell {
+    val managementInlet: Use<HostManagementApi>
+    val routerInlet: Use<HostRoutingApi>
 }

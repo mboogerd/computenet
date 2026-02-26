@@ -5,7 +5,7 @@ import java.lang.reflect.Method
 data class Invocation(
     val methodName: String,
     val parameterTypes: List<String>,
-    val args: List<Any>
+    val args: List<Any?>
 ) : java.io.Serializable {
     operator fun invoke(target: Any?): Any? {
         if (target == null) return null
@@ -27,7 +27,7 @@ data class Invocation(
     fun invoke(): Any? = invoke(fixedTarget)
 
     companion object {
-        fun of(method: Method?, args: Array<out Any>?): Invocation {
+        fun of(method: Method?, args: Array<out Any?>?): Invocation {
             return Invocation(
                 methodName = method?.name ?: "",
                 parameterTypes = method?.parameterTypes?.map { it.name } ?: emptyList(),
