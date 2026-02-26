@@ -1,7 +1,10 @@
 package civictech.kernel.germ
 
 import civictech.kernel.germ.port.*
+import civictech.kernel.germ.proxy.Invocation
+import civictech.kernel.germ.proxy.Proxy
 import java.util.*
+import java.util.concurrent.*
 
 /**
  * A Runner that manages the lifecycle and connectivity of [Cell]s.
@@ -11,11 +14,14 @@ class ManagedRunner(
 ) : Runner {
     override val managementInlet = FanInlet.create<RunnerApi>()
 
-    private val cells = mutableMapOf<CellRef, Cell>()
+    private val cells = ConcurrentHashMap<CellRef, Cell>()
     private val ctx = object : CellContext {}
 
+    private val queue = LinkedBlockingQueue<Invocation>()
+    private val thread: Thread
+
     init {
-        managementInlet.serve(object : RunnerApi {
+        val internalApi = object : RunnerApi {
             override fun spawn(cell: Cell): CellRef {
                 cells[cell.ref] = cell
                 cell.onActivate(ctx)
@@ -34,7 +40,29 @@ class ManagedRunner(
                 @Suppress("UNCHECKED_CAST")
                 (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
             }
+        }
+
+        // The public API proxy puts invocations into the queue
+        managementInlet.serve(Proxy.fromClass(RunnerApi::class.java) { _, method, args ->
+            queue.put(Invocation.of(method, args))
+            null // Management methods are void or return CellRef (which we can't easily return synchronously)
         })
+
+        // Start a virtual thread to process the queue
+        thread = Thread.ofVirtual().name("ManagedRunner-${ref.id}").start {
+            try {
+                while (!Thread.interrupted()) {
+                    val invocation = queue.take()
+                    try {
+                        invocation.invoke(internalApi)
+                    } catch (e: Exception) {
+                        e.printStackTrace() // TODO: Better error handling
+                    }
+                }
+            } catch (e: InterruptedException) {
+                // stop thread
+            }
+        }
     }
 
     private fun findPort(cell: Cell, name: String): Port? {
