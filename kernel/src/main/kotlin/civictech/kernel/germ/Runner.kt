@@ -1,6 +1,7 @@
 package civictech.kernel.germ
 
 import civictech.kernel.germ.port.Use
+import civictech.kernel.germ.proxy.Invocation
 
 /**
  * Interface for interacting with a [Runner].
@@ -26,8 +27,23 @@ interface RunnerApi {
 }
 
 /**
+ * Interface for routing API calls to inlets of hosted cells.
+ */
+interface RouterApi {
+    /**
+     * Routes an [Invocation] to a specific inlet of a hosted cell.
+     *
+     * @param target The reference to the target cell.
+     * @param inletName The name of the inlet on the target cell.
+     * @param invocation The [Invocation] to apply to the inlet.
+     */
+    fun route(target: CellRef, inletName: String, invocation: Invocation)
+}
+
+/**
  * A Runner is a computelet (Cell) that can host and execute other cells.
  */
 interface Runner : Cell {
     val managementInlet: Use<RunnerApi>
+    val routerInlet: Use<RouterApi>
 }

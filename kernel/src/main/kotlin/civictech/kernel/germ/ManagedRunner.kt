@@ -13,11 +13,16 @@ class ManagedRunner(
     override val ref: CellRef = CellRef(UUID.randomUUID())
 ) : Runner {
     override val managementInlet = FanInlet.create<RunnerApi>()
+    override val routerInlet = FanInlet.create<RouterApi>()
 
-    private val cells = ConcurrentHashMap<CellRef, Cell>()
+    private val cells = mutableMapOf<CellRef, Cell>()
     private val ctx = object : CellContext {}
 
-    private val queue = LinkedBlockingQueue<Invocation>()
+    private class PrioritizedInvocation(val priority: Int, val invocation: Invocation) : Comparable<PrioritizedInvocation> {
+        override fun compareTo(other: PrioritizedInvocation): Int = priority.compareTo(other.priority)
+    }
+
+    private val queue = PriorityBlockingQueue<PrioritizedInvocation>()
     private val thread: Thread
 
     init {
@@ -42,19 +47,34 @@ class ManagedRunner(
             }
         }
 
+        val internalRouterApi = object : RouterApi {
+            override fun route(target: CellRef, inletName: String, invocation: Invocation) {
+                val toCell = cells[target] ?: throw IllegalArgumentException("Target cell not found: $target")
+                val inlet = findPort(toCell, inletName) as? Use<*>
+                    ?: throw IllegalArgumentException("Inlet not found or not usable: $inletName on $target")
+
+                invocation.invoke(inlet.call)
+            }
+        }
+
         // The public API proxy puts invocations into the queue
         managementInlet.serve(Proxy.fromClass(RunnerApi::class.java) { _, method, args ->
-            queue.put(Invocation.of(method, args))
+            queue.put(PrioritizedInvocation(0, Invocation.of(method, args).withTarget(internalApi)))
             null // Management methods are void or return CellRef (which we can't easily return synchronously)
+        })
+
+        routerInlet.serve(Proxy.fromClass(RouterApi::class.java) { _, method, args ->
+            queue.put(PrioritizedInvocation(10, Invocation.of(method, args).withTarget(internalRouterApi)))
+            null
         })
 
         // Start a virtual thread to process the queue
         thread = Thread.ofVirtual().name("ManagedRunner-${ref.id}").start {
             try {
                 while (!Thread.interrupted()) {
-                    val invocation = queue.take()
+                    val prioritized = queue.take()
                     try {
-                        invocation.invoke(internalApi)
+                        prioritized.invocation.invoke()
                     } catch (e: Exception) {
                         e.printStackTrace() // TODO: Better error handling
                     }

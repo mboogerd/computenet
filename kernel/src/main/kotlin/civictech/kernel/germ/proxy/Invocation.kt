@@ -16,6 +16,16 @@ data class Invocation(
         return method.invoke(target, *(args.toTypedArray()))
     }
 
+    @Transient
+    private var fixedTarget: Any? = null
+
+    fun withTarget(target: Any): Invocation {
+        this.fixedTarget = target
+        return this
+    }
+
+    fun invoke(): Any? = invoke(fixedTarget)
+
     companion object {
         fun of(method: Method?, args: Array<out Any>?): Invocation {
             return Invocation(
