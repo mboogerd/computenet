@@ -9,6 +9,7 @@ import java.util.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A Host that manages the lifecycle and connectivity of [Cell]s.
@@ -22,17 +23,24 @@ open class ManagedHost(
     private val cells = mutableMapOf<CellRef, Cell>()
     private val ctx = object : CellContext {}
 
-    private class PrioritizedInvocation(val priority: Int, val action: () -> Any?) : Comparable<PrioritizedInvocation> {
-        override fun compareTo(other: PrioritizedInvocation): Int = priority.compareTo(other.priority)
+    private class PrioritizedInvocation(val priority: Int, val sequence: Long, val action: () -> Any?) :
+        Comparable<PrioritizedInvocation> {
+        override fun compareTo(other: PrioritizedInvocation): Int =
+            compareValuesBy(this, other, { it.priority }, { it.sequence })
     }
 
+    private val sequencer = AtomicLong()
     private val queue = PriorityBlockingQueue<PrioritizedInvocation>()
+
+    private fun enqueue(priority: Int, action: () -> Any?) {
+        queue.put(PrioritizedInvocation(priority, sequencer.incrementAndGet(), action))
+    }
     private val thread: Thread
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
-        queue.put(PrioritizedInvocation(20) {
-            val cell = cells[hostedInvocation.cellRef] ?: return@PrioritizedInvocation null
-            val port = findPort(cell, hostedInvocation.portName) ?: return@PrioritizedInvocation null
+        enqueue(20) {
+            val cell = cells[hostedInvocation.cellRef] ?: return@enqueue null
+            val port = findPort(cell, hostedInvocation.portName) ?: return@enqueue null
 
             when (hostedInvocation.type) {
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
@@ -45,7 +53,7 @@ open class ManagedHost(
                     }
                 }
             }
-        })
+        }
     }
 
     /**
@@ -109,11 +117,11 @@ open class ManagedHost(
             if (method.name.startsWith("spawn")) {
                 // Return result of spawn as a raw UUID or CellRef
                 val future = CompletableFuture<CellRef>()
-                queue.put(PrioritizedInvocation(0) {
+                enqueue(0) {
                     val result = internalApi.spawn(args!![0] as Cell)
                     future.complete(result)
                     result
-                })
+                }
                 try {
                     future.get(5, TimeUnit.SECONDS)
                 } catch (e: Exception) {
@@ -121,25 +129,25 @@ open class ManagedHost(
                 }
             } else if (method.name.startsWith("lookup")) {
                 val future = CompletableFuture<Any?>()
-                queue.put(PrioritizedInvocation(0) {
+                enqueue(0) {
                     val result = internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>)
                     future.complete(result)
                     result
-                })
+                }
                 try {
                     future.get(5, TimeUnit.SECONDS)
                 } catch (e: Exception) {
                     throw e.cause ?: e
                 }
             } else {
-                queue.put(PrioritizedInvocation(0) { invocation.invoke() })
+                enqueue(0) { invocation.invoke() }
                 null
             }
         })
 
         routerInlet.serve(Proxy.fromClass(HostRoutingApi::class.java) { _, method, args ->
             val invocation = Invocation.of(method, args).withTarget(internalHostRoutingApi)
-            queue.put(PrioritizedInvocation(10) { invocation.invoke() })
+            enqueue(10) { invocation.invoke() }
             null
         })
 
