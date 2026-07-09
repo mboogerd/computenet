@@ -1,6 +1,7 @@
 package civictech.cell
-import civictech.cell.host.ManagedHost
 
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
 import civictech.cell.port.*
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.collections.shouldContain
@@ -13,7 +14,8 @@ class HostTest {
 
     @Test
     fun `managed host can spawn and connect cells`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val hostApi = host.managementInlet.call
 
         val producer = ProducerCell("Hello")
@@ -22,43 +24,35 @@ class HostTest {
         hostApi.spawn(producer)
         hostApi.spawn(consumer)
 
-        // Wait a bit for async spawn
-        Thread.sleep(100)
-
         hostApi.connect(producer.ref, "outlet", consumer.ref, "inlet")
-
-        // Wait a bit for async connect
-        Thread.sleep(100)
+        controller.runToIdle()
 
         producer.trigger()
+        controller.runToIdle()
 
         consumer.received shouldBe listOf("Hello")
     }
 
     @Test
     fun `managed host can route calls to cell inlets`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val hostApi = host.managementInlet.call
         val routerApi = host.routerInlet.call
 
         val consumer = CollectingConsumerCell()
         hostApi.spawn(consumer)
 
-        // Wait a bit for async spawn
-        Thread.sleep(100)
-
-        // Route a call to the consumer's inlet
         val invocation = Invocation.of(Consumer::class.java.methods.find { it.name == "provide" }, arrayOf("Routed Hello"))
         routerApi.route(consumer.ref, "inlet", invocation)
-
-        // Wait a bit for async route
-        Thread.sleep(100)
+        controller.runToIdle()
 
         consumer.received shouldBe listOf("Routed Hello")
     }
 
     @Test
-    fun `managed host operations run in a different thread`() {
+    fun `managed host operations run in a different virtual thread`() {
+        // Intentionally uses the threaded scheduler — this test is about it.
         val host = ManagedHost()
         val hostApi = host.managementInlet.call
         val mainThread = Thread.currentThread()
@@ -71,9 +65,8 @@ class HostTest {
             }
         }
 
+        // spawn awaits activation, so hostThread is set when it returns
         hostApi.spawn(cell)
-        
-        Thread.sleep(200)
 
         hostThread shouldNotBe mainThread
         hostThread?.isVirtual shouldBe true
@@ -81,41 +74,23 @@ class HostTest {
 
     @Test
     fun `managed host prioritizes management calls over router calls`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val hostApi = host.managementInlet.call
         val routerApi = host.routerInlet.call
 
+        val executionOrder = mutableListOf<String>()
+
         val consumer = CollectingConsumerCell()
         hostApi.spawn(consumer)
-        Thread.sleep(100)
 
-        val executionOrder = Collections.synchronizedList(mutableListOf<String>())
-
-        // 1. Send a call that blocks the host thread briefly
-        val blockingInlet = object : Consumer<String> {
-            override fun provide(input: String) {
-                Thread.sleep(500)
-                executionOrder += "blocking"
-            }
-        }
-        val blockingCell = object : Cell {
-            override val ref = CellRef(UUID.randomUUID())
-            @Suppress("UNUSED")
-            val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>()).apply { serve(blockingInlet) }
-        }
-        hostApi.spawn(blockingCell)
-        Thread.sleep(100)
-
-        // Start blocking
-        val blockInvocation = Invocation.of(Consumer::class.java.methods.find { it.name == "provide" }, arrayOf("block"))
-        routerApi.route(blockingCell.ref, "inlet", blockInvocation)
-        Thread.sleep(50) // Ensure it started processing
-
-        // 2. While blocked, queue a router call
+        // Park a router call (priority 10) — nothing drains until we say so
         val routerInvocation = Invocation.of(Consumer::class.java.methods.find { it.name == "provide" }, arrayOf("router-call"))
         routerApi.route(consumer.ref, "inlet", routerInvocation)
 
-        // 3. Queue a management call (spawn another cell)
+        // A management call (priority 0) queued afterwards must still run first:
+        // spawn's await drives tasks in (priority, sequence) order and stops at
+        // its own completion — the parked router call stays parked.
         val managementCell = object : Cell {
             override val ref = CellRef(UUID.randomUUID())
             override fun onActivate(ctx: CellContext) {
@@ -123,16 +98,13 @@ class HostTest {
             }
         }
         hostApi.spawn(managementCell)
+        executionOrder += "spawn-returned"
 
-        // Wait for all to finish
-        Thread.sleep(1000)
+        controller.runToIdle()
+        executionOrder += "router:" + consumer.received.single()
 
-        // Check overall execution order
-        // "blocking" (priority 10, but first) -> "management" (priority 0) -> "router-call" (priority 10)
-        executionOrder shouldBe listOf("blocking", "management")
-        consumer.received shouldBe listOf("router-call")
+        executionOrder shouldBe listOf("management", "spawn-returned", "router:router-call")
     }
-
 
     class ProducerCell(val value: String, override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val outlet by output<Consumer<String>>()
@@ -165,8 +137,9 @@ class HostTest {
 
     @Test
     fun `can connect cells across different hosts using cell proxy`() {
-        val host1 = ManagedHost()
-        val host2 = ManagedHost()
+        val controller = SimulationController()
+        val host1 = ManagedHost(scheduler = controller.scheduler())
+        val host2 = ManagedHost(scheduler = controller.scheduler())
 
         val producer = ProducerCell("Proxy Hello")
         val consumer = CollectingConsumerCell()
@@ -174,28 +147,20 @@ class HostTest {
         host1.managementInlet.call.spawn(producer)
         host2.managementInlet.call.spawn(consumer)
 
-        // Wait for spawns
-        Thread.sleep(100)
-
-        // Use cell proxy to represent the consumer in host2
         val consumerProxy = host2.lookup<CollectingConsumerInterface>(consumer.ref)!!
 
-        // Link producer outlet (in host1) to consumer inlet proxy
         producer.outlet.linkTo(consumerProxy.inlet)
-
-        // Trigger producer
         producer.trigger()
-
-        // Wait for message propagation across hosts
-        Thread.sleep(200)
+        controller.runToIdle()
 
         consumer.received shouldContain "Proxy Hello"
     }
 
     @Test
     fun `can connect cells using cell proxy outlet`() {
-        val host1 = ManagedHost()
-        val host2 = ManagedHost()
+        val controller = SimulationController()
+        val host1 = ManagedHost(scheduler = controller.scheduler())
+        val host2 = ManagedHost(scheduler = controller.scheduler())
 
         val producer = ProducerCell("OutletProxy Hello")
         val consumer = CollectingConsumerCell()
@@ -203,25 +168,14 @@ class HostTest {
         host1.managementInlet.call.spawn(producer)
         host2.managementInlet.call.spawn(consumer)
 
-        // Wait for spawns
-        Thread.sleep(100)
-
-        // Use cell proxy to represent the producer in host1
         val producerProxy = host1.lookup<ProducerInterface>(producer.ref)!!
-
-        // Use cell proxy to represent the consumer in host2
         val consumerProxy = host2.lookup<CollectingConsumerInterface>(consumer.ref)!!
 
-        // Link producer outlet proxy to consumer inlet proxy
         producerProxy.outlet.linkTo(consumerProxy.inlet)
+        controller.runToIdle()
 
-        Thread.sleep(100)
-
-        // Trigger producer
         producer.trigger()
-
-        // Wait for message propagation across hosts
-        Thread.sleep(200)
+        controller.runToIdle()
 
         consumer.received shouldContain "OutletProxy Hello"
     }

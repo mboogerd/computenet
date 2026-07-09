@@ -1,26 +1,30 @@
 package civictech.cell
-import civictech.cell.host.ManagedHost
 
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.buffering
-import civictech.cell.port.PortRef
 import org.junit.jupiter.api.Test
 
 class MapperTest {
 
     @Test
     fun `mapper can be used without attached outlet`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val api = host.managementInlet.call
         val mapper = MapperCell<Int, String>(f = { it.toString() })
         api.spawn(mapper)
         mapper.inlet.call.provide(1)
+        controller.runToIdle()
     }
 
     @Test
     fun `mapper propagates transformed value`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val api = host.managementInlet.call
         val mapper = MapperCell<Int, String>(f = { it.toString() })
         api.spawn(mapper)
@@ -29,6 +33,7 @@ class MapperTest {
         val buffer = buffering<Consumer<String>>(invocationBuffer)
         mapper.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
         mapper.inlet.call.provide(1337)
+        controller.runToIdle()
 
         assert(invocationBuffer.size == 1)
         assert(invocationBuffer[0].args.size == 1)
@@ -37,7 +42,8 @@ class MapperTest {
 
     @Test
     fun `propagation is transitive`() {
-        val host = ManagedHost()
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
         val api = host.managementInlet.call
         val mapper1 = MapperCell<Int, String>(f = { it.toString() })
         val mapper2 = MapperCell<String, Long>(f = { it.toLong() })
@@ -49,14 +55,13 @@ class MapperTest {
         mapper2.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
 
         api.connect(mapper1.ref, "outlet", mapper2.ref, "inlet")
-        Thread.sleep(100) // Give the host time to process connect call
+        controller.runToIdle()
 
         mapper1.inlet.call.provide(1337)
-        Thread.sleep(100) // Give the host time to process the propagation
+        controller.runToIdle()
 
         assert(invocationBuffer.size == 1)
         assert(invocationBuffer[0].args.size == 1)
         assert(invocationBuffer[0].args[0] == 1337L)
     }
-
 }

@@ -55,6 +55,7 @@ data/management/effect classification as G-11.
 
 Kernel machinery itself (ports, hosts, proxies — the current test suite), and
 cell-logic unit tests during development. Invariants complement, not replace,
-these. Current tests' `Thread.sleep(...)` synchronization is fragile —
-replace with completion signals or the deterministic host (above) as part of
-C-8's ordering fix.
+these. `Thread.sleep(...)` synchronization is gone from the suite: host tests
+run on the deterministic `SimulationController` (drive with `runToIdle()`,
+then assert); the single intentionally-threaded test verifies the
+virtual-thread scheduler itself.
