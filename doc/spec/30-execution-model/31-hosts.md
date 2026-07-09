@@ -2,7 +2,7 @@
 
 > **Status**: Partial (single-host machinery implemented; consolidation and hardening needed)
 > **Sources**: ADR — Computelet Kernel (Runner), ADR — Computelet Mobility, ADR 2
-> **Implementation**: `germ.ManagedHost` (primary), `germ.ManagedRunner` (subset), `germ.Host`/`Runner` interfaces; legacy `runtime.blocking.BlockingComputeletHost`
+> **Implementation**: `germ.ManagedHost` + `germ.host.HostScheduler` (`VirtualThreadScheduler` / `SimulationController`), `germ.Host` interface; legacy `runtime.blocking.BlockingComputeletHost`
 
 ## Definition
 
@@ -72,14 +72,16 @@ coroutine hosts (🟣 hosting suspending/pure). `ManagedHost` is the
 virtual-thread variant. ⚠ GAP (G-27): no coroutine `ManagedHost` in germ —
 port the legacy suspending runtime onto the germ model (bridges in 32).
 
-## ⚠ CONFLICT (C-2): Host vs Runner duplication
+## Host vs Runner duplication (C-2, resolved)
 
-`ManagedRunner` duplicates `ManagedHost` minus queue/lookup/routing — same
-`findPort` copy-pasted, no isolation (spawn/connect run on caller's thread).
-**Resolution** (per glossary): fold into one `ManagedHost`; if a
-queue-less, same-thread variant is genuinely useful (unit composition,
-embedded graphs), express it as a host **configuration** (`inline` execution
-policy), not a second class.
+`ManagedRunner` had already been removed from the tree by the time this was
+implemented; the remaining substance — one host class with execution as a
+*configuration* — is realized as a `HostScheduler` injected into `ManagedHost`:
+`VirtualThreadScheduler` (production: one virtual thread draining the priority
+queue) or a `SimulationController`-issued scheduler (deterministic,
+single-threaded, optionally seed-randomized across hosts; per-host
+`(priority, sequence)` order is inviolable under every seed). The simulated
+configuration is the deterministic test host of 50/52.
 
 ## Hierarchy of hosts
 

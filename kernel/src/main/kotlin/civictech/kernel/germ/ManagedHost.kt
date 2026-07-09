@@ -1,5 +1,7 @@
 package civictech.kernel.germ
 
+import civictech.kernel.germ.host.HostScheduler
+import civictech.kernel.germ.host.VirtualThreadScheduler
 import civictech.kernel.germ.port.*
 import civictech.kernel.germ.proxy.HostedCellProxy
 import civictech.kernel.germ.proxy.HostedPortInvocation
@@ -7,35 +9,46 @@ import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.Proxy
 import java.util.*
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.PriorityBlockingQueue
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A Host that manages the lifecycle and connectivity of [Cell]s.
+ *
+ * Execution is delegated to a [HostScheduler]: threaded ([VirtualThreadScheduler], the default)
+ * or deterministic ([civictech.kernel.germ.host.SimulationController]).
  */
 open class ManagedHost(
-    override val ref: CellRef = CellRef(UUID.randomUUID())
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    scheduler: HostScheduler? = null,
 ) : Host {
     override val managementInlet = FanInlet.create<HostManagementApi>()
     override val routerInlet = FanInlet.create<HostRoutingApi>()
 
+    private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
+
     private val cells = mutableMapOf<CellRef, Cell>()
     private val ctx = object : CellContext {}
 
-    private class PrioritizedInvocation(val priority: Int, val sequence: Long, val action: () -> Any?) :
-        Comparable<PrioritizedInvocation> {
-        override fun compareTo(other: PrioritizedInvocation): Int =
-            compareValuesBy(this, other, { it.priority }, { it.sequence })
-    }
-
-    private val sequencer = AtomicLong()
-    private val queue = PriorityBlockingQueue<PrioritizedInvocation>()
-
     private fun enqueue(priority: Int, action: () -> Any?) {
-        queue.put(PrioritizedInvocation(priority, sequencer.incrementAndGet(), action))
+        scheduler.submit(priority) {
+            try {
+                action()
+            } catch (e: Exception) {
+                e.printStackTrace() // TODO: Better error handling
+            }
+        }
     }
-    private val thread: Thread
+
+    private fun <T> enqueueAwaiting(priority: Int, action: () -> T): T {
+        val future = CompletableFuture<T>()
+        scheduler.submit(priority) {
+            try {
+                future.complete(action())
+            } catch (e: Throwable) {
+                future.completeExceptionally(e)
+            }
+        }
+        return scheduler.await(future)
+    }
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
         enqueue(20) {
@@ -115,30 +128,10 @@ open class ManagedHost(
         managementInlet.serve(Proxy.fromClass(HostManagementApi::class.java) { _, method, args ->
             val invocation = Invocation.of(method, args).withTarget(internalApi)
             if (method.name.startsWith("spawn")) {
-                // Return result of spawn as a raw UUID or CellRef
-                val future = CompletableFuture<CellRef>()
-                enqueue(0) {
-                    val result = internalApi.spawn(args!![0] as Cell)
-                    future.complete(result)
-                    result
-                }
-                try {
-                    future.get(5, TimeUnit.SECONDS)
-                } catch (e: Exception) {
-                    throw e.cause ?: e
-                }
+                enqueueAwaiting(0) { internalApi.spawn(args!![0] as Cell) }
             } else if (method.name.startsWith("lookup")) {
-                val future = CompletableFuture<Any?>()
-                enqueue(0) {
-                    val result = internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>)
-                    future.complete(result)
-                    result
-                }
-                try {
-                    future.get(5, TimeUnit.SECONDS)
-                } catch (e: Exception) {
-                    throw e.cause ?: e
-                }
+                @Suppress("UNCHECKED_CAST")
+                enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
             } else {
                 enqueue(0) { invocation.invoke() }
                 null
@@ -150,22 +143,6 @@ open class ManagedHost(
             enqueue(10) { invocation.invoke() }
             null
         })
-
-        // Start a virtual thread to process the queue
-        thread = Thread.ofVirtual().name("ManagedHost-${ref.id}").start {
-            try {
-                while (!Thread.interrupted()) {
-                    val prioritized = queue.take()
-                    try {
-                        prioritized.action()
-                    } catch (e: Exception) {
-                        e.printStackTrace() // TODO: Better error handling
-                    }
-                }
-            } catch (_: InterruptedException) {
-                // stop thread
-            }
-        }
     }
 
     private fun findPort(cell: Cell, name: String): Port? {

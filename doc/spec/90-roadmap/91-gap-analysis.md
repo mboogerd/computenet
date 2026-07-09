@@ -8,7 +8,7 @@
 | ID | Conflict | Resolution | Where |
 |---|---|---|---|
 | C-1 | Terminology drift: Task / Computelet / Cell | **Cell** canonical; others historical | 00/03 |
-| C-2 | `Runner` vs `Host` split in germ (`ManagedRunner` duplicates a weaker `ManagedHost`) | **Host** canonical; fold Runner in as an `inline` host configuration (also yields the deterministic test host) | 00/03, 30/31, 50/52 |
+| C-2 | `Runner` vs `Host` split in germ (`ManagedRunner` duplicates a weaker `ManagedHost`) | **Resolved**: `ManagedRunner` was already gone from the tree; one `ManagedHost` + injected `HostScheduler` (`VirtualThreadScheduler` / `SimulationController` = the deterministic test host) | 00/03, 30/31, 50/52 |
 | C-3 | `use { }` lambda API (Task Connectivity) vs serializable invocations (ADR 3) — code has both | `.call`/Invocation is canonical & the only wire form; `use {}` = local-only sugar for lease scoping and future context binding | 10/14 |
 | C-4 | Legacy color runtime (`runtime.blocking/suspending`, PureTask/BlockingTask/SuspendingTask) vs germ model — two disconnected generations | Germ is the base; port the color model onto it (G-3); then retire legacy (G-1) | 30/32 |
 | C-5 | Reflection everywhere (`Invocation.of(Method)`, JDK proxies, `findPort`) vs ADR 3's no-reflection-on-wire + KSP direction | Reflection OK in-process short-term; stable ids on the wire; KSP proxies + port registry replace it incrementally | 10/14, 10/15 |
@@ -72,7 +72,7 @@
 | G-32 | No shadow mode (side-effect suppression) | Effect classification (with G-11) + NoOp-served sinks | 50/52 |
 | G-33 | No state migration across incarnations | `exportState/importState` in the swap drain window | 50/53 |
 | G-1 | Legacy packages coexist with germ (two kernels in-tree) | After G-3: delete or rewrite legacy `kernel.computelet|port|link|host|protocol`, `runtime.*`, `Handle` | 00/03, 30/32 |
-| G-2 | `ManagedRunner` duplication | Fold into ManagedHost (see C-2) | 30/31 |
+| G-2 | `ManagedRunner` duplication | **Resolved** with C-2 (class no longer existed; scheduler configuration covers the use case) | 30/31 |
 
 ## Reading the dependency structure
 
