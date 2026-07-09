@@ -75,10 +75,14 @@ assume a host context and MUST tolerate `onActivate` never being called.
 Hosted semantics (queues, isolation, mobility) apply only to spawned cells.
 Document per cell which mode it supports; default guidance: use `onActivate`.
 
-## ⚠ GAP (G-17): port discovery is reflective
+## Port discovery (G-17, resolved)
 
-`ManagedHost.findPort` walks getters and fields. The delegate mechanism
-(`PortDelegates`) already sees every port at construction; it should register
-`name → Port` in a per-cell registry so hosts do map lookups (P2, and a step
-toward KMP where reflection is unavailable). Explicit-style ports register at
-construction via their factory.
+Port resolution is a map lookup in a per-cell `PortRegistry` (`name → Port`);
+the reflective getter/field walk is gone. Delegate-declared ports
+(`by input()` / `by output()`) register at construction via `provideDelegate`
+— ports are therefore **eager**, so cold cells can have their ports enumerated
+without touching logic. Explicit-style ports register via
+`registerPort("name", FanInlet.create<…>())`; the registry key MUST equal the
+property name (client-side proxies derive it from interface getters). The
+registry is keyed per cell instance (JVM weak map today; KSP-generated
+registries are the KMP path, C-5).

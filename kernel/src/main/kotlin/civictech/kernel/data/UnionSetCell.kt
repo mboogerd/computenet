@@ -1,6 +1,7 @@
 package civictech.kernel.data
 
 import civictech.kernel.germ.port.FanInlet
+import civictech.kernel.germ.port.registerPort
 import civictech.kernel.germ.port.FanOutlet
 import civictech.kernel.germ.port.Serve
 import civictech.kernel.germ.port.Subscribe
@@ -11,8 +12,8 @@ interface UnionSetApi<E> {
 }
 
 class UnionSetCell<E> : UnionSetApi<E> {
-    override val inlet = FanInlet.create<Propagate<SetDelta<E>>>()
-    override val outlet = FanOutlet.create<Propagate<SetDelta<E>>>()
+    override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
+    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
     private val elementCounts = mutableMapOf<E, Int>()
 

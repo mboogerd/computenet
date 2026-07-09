@@ -21,8 +21,8 @@ interface ListApi<E> {
 }
 
 class ListCell<E> : ListApi<E> {
-    override val inlet = FanInlet.create<ListOps<E>>()
-    override val outlet = FanOutlet.create<Propagate<ListDelta<E>>>()
+    override val inlet = registerPort("inlet", FanInlet.create<ListOps<E>>())
+    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<ListDelta<E>>>())
 
     private val state = mutableListOf<E>()
 

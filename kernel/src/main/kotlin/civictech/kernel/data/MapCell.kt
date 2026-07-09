@@ -18,8 +18,8 @@ interface MapApi<K, V> {
 }
 
 class MapCell<K, V> : MapApi<K, V> {
-    override val inlet = FanInlet.create<MapOps<K, V>>()
-    override val outlet = FanOutlet.create<Propagate<MapDelta<K, V>>>()
+    override val inlet = registerPort("inlet", FanInlet.create<MapOps<K, V>>())
+    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, V>>>())
 
     private val state = mutableMapOf<K, V>()
 

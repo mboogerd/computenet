@@ -29,10 +29,11 @@ The cell *is its own specification*: the same object describes the cell (cold)
 and provides its behavior (hot). See 10/15 for the lifecycle and the rationale
 (rejected alternatives: separate Def/Instance hierarchies, codegen-first).
 
-Ports are declared as properties — either via delegates for discovery
-(`val inlet by input<Consumer<A>>()`) or as explicit port instances
-(`val inlet = FanInlet.create<SetOps<E>>()`). Both are currently accepted;
-see ⚠ CONFLICT C-6 (90/91) for the unification proposal.
+Ports are declared as properties — either via delegates
+(`val inlet by input<Consumer<A>>()`) or as explicit registered instances
+(`val inlet = registerPort("inlet", FanInlet.create<SetOps<E>>())`). Both are
+accepted and both feed the per-cell port registry (C-6 resolved; see 10/15);
+delegates are preferred for hosted cells.
 
 `CellContext` is intentionally minimal today (empty interface). Planned
 additions (host ref, port resolution, context propagation — see 20/22) MUST

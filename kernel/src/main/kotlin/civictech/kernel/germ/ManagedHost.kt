@@ -20,8 +20,8 @@ open class ManagedHost(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
     scheduler: HostScheduler? = null,
 ) : Host {
-    override val managementInlet = FanInlet.create<HostManagementApi>()
-    override val routerInlet = FanInlet.create<HostRoutingApi>()
+    override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
+    override val routerInlet = registerPort("routerInlet", FanInlet.create<HostRoutingApi>())
 
     private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
 
@@ -145,32 +145,5 @@ open class ManagedHost(
         })
     }
 
-    private fun findPort(cell: Cell, name: String): Port? {
-        // 1. Try finding a direct getter method (standard for Kotlin properties)
-        val getterName = "get" + name.replaceFirstChar { it.uppercase() }
-        try {
-            val getter = cell.javaClass.methods.find { it.name == getterName }
-            if (getter != null) {
-                val value = getter.invoke(cell)
-                if (value is Port) return value
-            }
-        } catch (_: Exception) {
-            // ignore
-        }
-
-        // 2. Try direct field access (fallback)
-        var currentClass: Class<*>? = cell.javaClass
-        while (currentClass != null && currentClass != Any::class.java) {
-            try {
-                val field = currentClass.getDeclaredField(name)
-                field.isAccessible = true
-                val value = field.get(cell)
-                if (value is Port) return value
-            } catch (_: Exception) {
-                // ignore
-            }
-            currentClass = currentClass.superclass
-        }
-        return null
-    }
+    private fun findPort(cell: Cell, name: String): Port? = PortRegistry.of(cell)[name]
 }

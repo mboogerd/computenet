@@ -4,18 +4,18 @@ import kotlin.properties.ReadOnlyProperty
 import kotlin.reflect.KProperty
 
 /**
- * A property delegate for declaring ports in a [civictech.kernel.germ.Cell].
+ * A property-delegate provider for declaring ports in a [civictech.kernel.germ.Cell].
  *
- * This allows the framework to discover ports via reflection and ensures
- * they are lazily initialized when first accessed.
+ * `provideDelegate` runs at construction, handing over the owner instance and the
+ * property name — the port is created eagerly and registered in the owner's
+ * [PortRegistry] under the property name (G-17). Cold cells can therefore have
+ * their ports enumerated without touching logic.
  */
-class PortDelegate<P : Port>(private val factory: () -> P) : ReadOnlyProperty<Any?, P> {
-    private var instance: P? = null
-    override fun getValue(thisRef: Any?, property: KProperty<*>): P {
-        if (instance == null) {
-            instance = factory()
-        }
-        return instance!!
+class PortDelegateProvider<P : Port>(private val factory: () -> P) {
+    operator fun provideDelegate(thisRef: Any?, property: KProperty<*>): ReadOnlyProperty<Any?, P> {
+        val port = factory()
+        thisRef?.let { PortRegistry.of(it).register(property.name, port) }
+        return ReadOnlyProperty { _, _ -> port }
     }
 }
 
@@ -27,7 +27,7 @@ inline fun <reified T : Any> input() = input(T::class.java)
 /**
  * Declares a [FanInlet] for the cell with a specific class.
  */
-fun <T : Any> input(clazz: Class<T>) = PortDelegate { FanInlet(clazz) }
+fun <T : Any> input(clazz: Class<T>) = PortDelegateProvider { FanInlet(clazz) }
 
 /**
  * Declares a [FanOutlet] for the cell.
@@ -37,4 +37,4 @@ inline fun <reified T : Any> output() = output(T::class.java)
 /**
  * Declares a [FanOutlet] for the cell with a specific class.
  */
-fun <T : Any> output(clazz: Class<T>) = PortDelegate { FanOutlet(clazz) }
+fun <T : Any> output(clazz: Class<T>) = PortDelegateProvider { FanOutlet(clazz) }

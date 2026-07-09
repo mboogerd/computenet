@@ -30,8 +30,8 @@ interface SetApi<E> {
 }
 
 class SetCell<E> : SetApi<E> {
-    override val inlet = FanInlet.create<SetOps<E>>()
-    override val outlet = FanOutlet.create<Propagate<SetDelta<E>>>()
+    override val inlet = registerPort("inlet", FanInlet.create<SetOps<E>>())
+    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
     private val state = mutableSetOf<E>()
     private val inletApi = object : SetOps<E> {

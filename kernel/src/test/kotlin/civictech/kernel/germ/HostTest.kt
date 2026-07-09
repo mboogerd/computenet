@@ -100,7 +100,7 @@ class HostTest {
         val blockingCell = object : Cell {
             override val ref = CellRef(UUID.randomUUID())
             @Suppress("UNUSED")
-            val inlet = FanInlet.create<Consumer<String>>().apply { serve(blockingInlet) }
+            val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>()).apply { serve(blockingInlet) }
         }
         hostApi.spawn(blockingCell)
         Thread.sleep(100)

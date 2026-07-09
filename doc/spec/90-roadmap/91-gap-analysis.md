@@ -12,7 +12,7 @@
 | C-3 | `use { }` lambda API (Task Connectivity) vs serializable invocations (ADR 3) — code has both | `.call`/Invocation is canonical & the only wire form; `use {}` = local-only sugar for lease scoping and future context binding | 10/14 |
 | C-4 | Legacy color runtime (`runtime.blocking/suspending`, PureTask/BlockingTask/SuspendingTask) vs germ model — two disconnected generations | Germ is the base; port the color model onto it (G-3); then retire legacy (G-1) | 30/32 |
 | C-5 | Reflection everywhere (`Invocation.of(Method)`, JDK proxies, `findPort`) vs ADR 3's no-reflection-on-wire + KSP direction | Reflection OK in-process short-term; stable ids on the wire; KSP proxies + port registry replace it incrementally | 10/14, 10/15 |
-| C-6 | Two port declaration styles (`by input()` delegates vs explicit `FanInlet.create`) | Both allowed; both must feed one port registry (G-17); delegates preferred for hosted cells | 10/11, 10/12 |
+| C-6 | Two port declaration styles (`by input()` delegates vs explicit `FanInlet.create`) | **Resolved**: both feed the per-cell `PortRegistry` (delegates via `provideDelegate`, explicit via `registerPort`); delegates preferred for hosted cells | 10/11, 10/12 |
 | C-7 | Logic in constructors (`SetCell`, `TrafficLightCell` serve in `init`) vs `onActivate` rule | "Eager cells" allowed for host-free composition, with stated obligations; hosted default is `onActivate` | 10/15 |
 | C-8 | Per-link FIFO required vs `PriorityBlockingQueue` unordered ties in `ManagedHost` | **Resolved (tiebreaker)**: host queue orders by `(priority, sequence)`; sleep-based tests → deterministic host still pending | 30/31, 50/52 |
 
@@ -28,7 +28,7 @@
 | G-13 | No multiplexed ports / generic protocol stacking | Sub-ports keyed by ProtocolId sharing one link; carries attention, state-request, link mgmt | 10/12 |
 | G-14 | No policy representation | Composable `(LinkRequest) -> LinkResult` at link time first; identity slot from day one | 10/13, 40/43 |
 | G-16 | No `onDeactivate` lifecycle hook | Add, invoked post-unlink pre-capture; required by mobility drain | 10/15, 30/33 |
-| G-17 | Port discovery via reflection walk | Delegate- and factory-fed `name → Port` registry per cell | 10/15 |
+| G-17 | Port discovery via reflection walk | **Resolved**: per-cell `PortRegistry` fed by delegates (`provideDelegate`) and `registerPort`; reflective `findPort` deleted | 10/15 |
 
 ## Gaps — semantics (20)
 
