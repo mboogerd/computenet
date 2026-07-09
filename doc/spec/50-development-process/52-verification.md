@@ -33,7 +33,10 @@ keeping concurrency out of the kernel. The deterministic harness exists:
 `cell.host.SimulationController` drives any number of `ManagedHost`s
 single-threadedly, seed-randomized across hosts, reproducible per seed.
 (Virtual time is deliberately omitted — nothing in the kernel is timer-driven
-yet; add it when something is, e.g. G-19 throttling.)
+yet; add it when something is, e.g. G-19 throttling.) The first seeded
+invariant harness is the glitch-freedom diamond test (20/22): 200 seeds
+asserted invariant-style, plus a control run proving the harness can produce
+the failure it guards against.
 
 ## Live invariants (production)
 

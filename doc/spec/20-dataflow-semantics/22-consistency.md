@@ -1,8 +1,8 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified; context machinery implemented (G-4 closed), glitch-freedom wrapper pending
+> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier)
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext)
-> **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.Outlet`/`FanOutlet`
+> **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.Outlet`/`FanOutlet`, `cell.consistency.GlitchFreeCell`
 
 ## MessageContext (normative, as implemented)
 
@@ -67,6 +67,17 @@ cells cost each cell only its local frontier.
 
 Non-declaring cells process eagerly with zero coordination cost (P4, P2).
 
+*(Implemented — static-frontier phase: `GlitchFreeCell` wraps a fan-in edge
+set with per-wave version buffering; the frontier is the inlet's current link
+set, recomputed on every completeness check, so link/unlink adapts the
+condition (the first instance of "topology is part of the completeness
+condition"). Waves flush in per-source counter order; per-link FIFO (30/31)
+makes wave completion monotone per source. Validated by a diamond-topology
+invariant test: 200 seeds of randomized cross-host scheduling glitch-free,
+with a control run proving the harness produces glitches without the wrapper.
+Upstream frontier traversal awaits multiplex ports (G-13); unwaved traffic
+passes through.)*
+
 ## Topology versioning
 
 Structural changes must be causally consistent with value updates:
@@ -81,15 +92,16 @@ Structural changes must be causally consistent with value updates:
   joins get **convergence**, not simultaneity, unless an explicit coordinator
   cell is inserted. Cycles remain open — see below.)*
 
-## Implementation plan (ordered; 1–2 done)
+## Implementation plan (ordered; 1–3 done)
 
 1. ~~Context on `Invocation` + current-context (G-4).~~ Done.
 2. ~~`PortRef` unification.~~ Done (`cell.port.PortRef`).
-3. A `GlitchFree` decorator cell/port wrapper implementing version buffering
-   over any inner cell (keeps kernel untouched, per P1).
+3. ~~A `GlitchFree` decorator cell implementing version buffering (kernel
+   untouched, per P1).~~ Done (`cell.consistency.GlitchFreeCell`).
 4. Upstream traversal via the generic management protocol on multiplex ports
    (12) — "describe your frontier" is a management invocation.
-5. Topology events stamped by hosts (depends on Link objects, G-12).
+5. Topology events stamped by hosts (depends on Link objects, G-12; the
+   static-frontier wrapper already recomputes its edge set from live links).
 
 ## Interaction with other parts
 
