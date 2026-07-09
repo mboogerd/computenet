@@ -1,10 +1,10 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified (semantics); ⚠ entirely unimplemented — highest-priority semantic gap
+> **Status**: Specified; context machinery implemented (G-4 closed), glitch-freedom wrapper pending
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext)
-> **Implementation**: none (germ `Invocation` carries no context)
+> **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.Outlet`/`FanOutlet`
 
-## MessageContext (normative)
+## MessageContext (normative, as implemented)
 
 Every data-path invocation carries:
 
@@ -13,25 +13,29 @@ data class MessageContext(
     val timestamp: Timestamp,  // logical time / propagation-wave id
     val sourcePort: PortRef    // identity of the emitting port
 )
-@JvmInline value class Timestamp(val time: Long)
+data class Timestamp(val sourceId: UUID, val counter: Long)  // per-source waves (G-20 decision)
 ```
 
 Rules:
 
 1. **Origination**: an external event entering the graph (a source cell
-   emitting spontaneously) mints a fresh timestamp (wave id).
+   emitting spontaneously) mints a fresh timestamp (wave id) from the emitting
+   outlet's own monotonic counter.
 2. **Transparent flow**: when a cell emits in response to an inlet invocation,
    the outlet invocation carries the *same* timestamp; `sourcePort` is
    rewritten to the emitting port. Framework responsibility — cell logic never
-   touches context (capture the current context in the host while executing an
-   invocation; stamp emissions from it).
+   touches context. *(Implemented: outlets stamp at emission; `Invocation`
+   carries `context`; `Invocation.invoke` is the single restore point, so
+   delivery and buffered replay both run under the invocation's own context;
+   management invocations have null context and clear any stale wave.)*
 3. **Fan-out** duplicates context; **fan-in** delivers each input's own
    context (that is the point — see buffering below).
 4. Delegation is not a context no-op: a delegated path still presents the
-   correct (new) source port per hop (10/14).
+   correct (new) source port per hop (10/14) — every outlet hop rewrites
+   `sourcePort`.
 
-⚠ GAP (G-4): add `context` to `Invocation`; thread through proxies, bridges,
-and hosts. Everything below depends on it.
+*(G-4 resolved. Context is captured into invocations at the cross-host proxy
+(`HostedCellProxy`) and the `Buffering` recorder; wire bridges are M5.)*
 
 ## Local glitch-freedom (opt-in)
 
@@ -71,19 +75,16 @@ Structural changes must be causally consistent with value updates:
   domain as data waves.
 - A glitch-free cell treats "the set of edges feeding wave *t*" as part of
   wave *t*'s input completeness condition.
-- ⚠ GAP (G-20): no design yet for *who* assigns wave ids in a decentralized
-  graph (a per-source counter? hybrid logical clocks? per-partition?).
-  *Proposal*: per-source monotonic counters + source id (making Timestamp a
-  pair), with glitch-free cells buffering per (source, counter). This matches
-  the "no global time protocol" principle; cross-source joins get
-  *convergence*, not simultaneity, unless an explicit coordinator cell is
-  inserted. Needs a worked design before implementation.
+- *(G-20 decided and implemented: wave ids are per-source monotonic counters —
+  `Timestamp(sourceId, counter)`, minted by the emitting outlet. No global
+  time protocol; glitch-free cells buffer per (source, counter). Cross-source
+  joins get **convergence**, not simultaneity, unless an explicit coordinator
+  cell is inserted. Cycles remain open — see below.)*
 
-## Implementation plan (proposal, ordered)
+## Implementation plan (ordered; 1–2 done)
 
-1. Context on `Invocation` + host-local current-context (G-4).
-2. `PortRef` unification (germ reuses legacy `civictech.kernel.port.PortRef` in
-   tests — one canonical PortRef in the germ model).
+1. ~~Context on `Invocation` + current-context (G-4).~~ Done.
+2. ~~`PortRef` unification.~~ Done (`cell.port.PortRef`).
 3. A `GlitchFree` decorator cell/port wrapper implementing version buffering
    over any inner cell (keeps kernel untouched, per P1).
 4. Upstream traversal via the generic management protocol on multiplex ports

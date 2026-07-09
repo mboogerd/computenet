@@ -1,6 +1,7 @@
 package civictech.cell.proxy
 
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.Port
 import java.lang.reflect.Method
@@ -95,7 +96,8 @@ object HostedCellProxy {
             cellRef = ctx.cellRef,
             portName = portName,
             type = HostedPortInvocation.Type.PORT_API,
-            invocation = Invocation.of(method, args)
+            // data path: carry the wave context across the host boundary (G-4)
+            invocation = Invocation.of(method, args, CurrentContext.get())
         )
     )
 }

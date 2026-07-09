@@ -34,10 +34,10 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-4 | **No MessageContext on invocations** — blocks glitch-freedom, tracing, causal merges | `context` field + host-local current-context; transparent inlet→outlet flow | 10/14, 20/22 |
+| G-4 | **No MessageContext on invocations** — blocks glitch-freedom, tracing, causal merges | **Resolved**: `Invocation.context` + `CurrentContext`; outlets stamp, `Invocation.invoke` restores; transparent inlet→outlet flow verified incl. cross-host | 10/14, 20/22 |
 | G-18 | Pull/on-demand/late-join unspecified | State-request generic protocol + link-time catch-up snapshots | 20/21 |
 | G-19 | Cycle throttling unspecified | `Magnitude` on cycle deltas + quiescence thresholds; fixpoint semantics open | 20/21 |
-| G-20 | Wave-id assignment in a decentralized graph undesigned | Per-source counters (source, counter); convergence not simultaneity across sources | 20/22 |
+| G-20 | Wave-id assignment in a decentralized graph undesigned | **Decided & implemented**: `Timestamp(sourceId, counter)` minted per emitting outlet; convergence not simultaneity across sources; cycles open | 20/22 |
 | G-21 | Ownership contracts unimplemented | Marker types → link-time enforcement (after G-12) → pools only when profiled | 20/23 |
 | G-22 | Data cells can't serve state to late joiners | Snapshot via state-request protocol | 20/24 |
 | G-23 | Delta merges are arrival-order biased; not replica-stable | Causal tags on deltas (context or OR-set ids); prerequisite for replication | 20/24, 40/42 |

@@ -1,8 +1,11 @@
 package civictech.cell.port
 
+import civictech.cell.CurrentContext
+import civictech.cell.MessageContext
+import civictech.cell.Timestamp
 import civictech.cell.proxy.Proxy
 import civictech.cell.proxy.noop
-import civictech.cell.port.PortRef
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A point-to-point output port.
@@ -22,8 +25,20 @@ class Outlet<Api : Any>(
 
     private var subscribedPort: PortRef? = null
     private var subscribedPortApi: Use<Api> = Use.fixed(unicastFactory())
+    private val waveCounter = AtomicLong()
 
-    override val call: Api = Proxy.delegating(clazz) { subscribedPortApi.call }
+    // Emission stamps the wave context — see FanOutlet for the rules.
+    override val call: Api = Proxy.fromClass(clazz) { _, method, args ->
+        val ctx = CurrentContext.get()?.copy(sourcePort = ref)
+            ?: MessageContext(Timestamp(ref.id, waveCounter.incrementAndGet()), ref)
+        CurrentContext.with(ctx) {
+            try {
+                method.invoke(subscribedPortApi.call, *(args ?: emptyArray()))
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw e.targetException
+            }
+        }
+    }
 
     override fun at(portRef: PortRef): Api {
         return if (subscribedPort == portRef) {

@@ -107,15 +107,13 @@ Task Connectivity requires every invocation to carry a `MessageContext`
 (logical timestamp + source port) — transparently flowing inlet → outlet when
 a cell emits in response to receiving (20/22 defines the semantics).
 
-⚠ GAP (G-4): germ `Invocation` has **no context field** and germ `Use` has no
-context parameter. Without it, glitch-freedom (20/22) and several membrane
-behaviors are unimplementable.
-*Proposal*: add `context: MessageContext` to `Invocation`; hosts stamp it at
-capture time; within a host, an implicit "current context" (host-thread-local,
-set while executing an invocation) provides inlet→outlet flow without
-polluting contract signatures. Note the ADR's own caveat: delegation is
-*not* a context no-op — even an unchanged implementation must present the new
-source port in context.
+*(G-4 resolved: `Invocation.context` carries `MessageContext`; outlets stamp
+at emission (fresh wave when spontaneous, same-timestamp/rewritten-sourcePort
+when reactive); `CurrentContext` is the implicit thread-local, and
+`Invocation.invoke` is the single restore point — delivery and buffered replay
+run under the invocation's own context, management calls under none. Contract
+signatures stay unpolluted. The ADR's caveat holds: every outlet hop rewrites
+the source port, so delegation presents the correct new port.)*
 
 ## Reflection budget
 
