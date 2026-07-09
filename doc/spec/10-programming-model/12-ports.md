@@ -87,11 +87,11 @@ Rules (normative):
    semantics (e.g. `UnionSetCell` ref-counting) — "unions may explicitly
    allow multiple producers".
 
-⚠ GAP (G-12): germ Fan ports do not currently *enforce* anything at link time
-(no handshake, no rejection path — `linkTo` always succeeds). The legacy
-package has `PortCardinality` and the Task Connectivity ADR has
-`LinkResult.Rejected`. *Proposal*: adopt the handshake protocol of 10/13 in
-germ ports; enforcement lives in `linkTo`/`onLink`.
+*(G-12 phase 1: the handshake protocol of 10/13 is implemented —
+`linkTo(LinkFrom)` returns `LinkResult`, point-to-point ports reject at
+capacity instead of throwing, and per-port `onLink`/policies can reject.
+Ownership-based cardinality (`Owned`/`Leased`) still awaits the G-21
+markers.)*
 
 ## Multiplexed ports and generic protocols
 

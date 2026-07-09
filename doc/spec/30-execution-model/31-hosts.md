@@ -1,6 +1,6 @@
 # 31 — Hosts
 
-> **Status**: Partial (single-host machinery implemented; consolidation and hardening needed)
+> **Status**: Partial (single-host machinery implemented and consolidated; error protocol minimal, hierarchy/colors open)
 > **Sources**: ADR — Computelet Kernel (Runner), ADR — Computelet Mobility, ADR 2
 > **Implementation**: `cell.host.ManagedHost` + `cell.host.HostScheduler` (`VirtualThreadScheduler` / `SimulationController`), `cell.host.Host` interface; legacy `runtime.blocking.BlockingComputeletHost` (quarantined in `:legacy`)
 

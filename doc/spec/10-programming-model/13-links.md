@@ -1,8 +1,8 @@
 # 13 — Links
 
-> **Status**: Partial (ad-hoc linking implemented; handshake protocol specified but unbuilt)
+> **Status**: Partial (handshake phase 1 implemented: Link/LinkResult/unlink/policies; suspension lifecycle and async cross-host results open)
 > **Sources**: ADR — Task Connectivity, ADR — Computelet Kernel, ADR — Anatomy of Cellular Programs
-> **Implementation**: `cell.port.LinkTo`/`LinkFrom`, `ManagedHost.connect`; legacy `kernel.link.Link`/`DefaultLink`
+> **Implementation**: `cell.port.Link`/`LinkResult`/`LinkSupport`/`LinkPolicy`, `cell.port.LinkTo`/`LinkFrom`, `ManagedHost.connect`
 
 ## Definition
 
@@ -19,8 +19,8 @@ Per the Task Connectivity ADR, both styles are supported, chosen per port:
 Any party holding a reference to the port's external face may interact —
 appropriate for open, shared-state cells (`Var<X>`-like, the data cells of
 20/24). No handshake; cardinality is effectively unconstrained.
-This is what germ implements today: `outlet.linkTo(inlet)` and
-`producer.outlet.linkTo(consumerProxy.inlet)` always succeed.
+Implemented as `linkTo(Use)`/`subscribe`/`serve`/`delegate` — the plain
+mechanism layer beneath the handshake.
 
 ### 2. Explicit (handshake-based)
 

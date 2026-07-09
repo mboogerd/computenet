@@ -21,15 +21,14 @@ newest ADRs and code converged on, and it carries the hierarchy story best.
 ## ⚠ CONFLICT (resolved here): Runner vs Host
 
 ADR 2 uses *Runner* for the concurrency container; the Computelet Kernel ADR
-defines *Runner* as "a specialized cell that hosts other cells"; the `germ`
-code has **both** `Runner`/`ManagedRunner` (spawn + connect only) and
-`Host`/`ManagedHost` (spawn + connect + lookup + routing + own queue/thread).
+defines *Runner* as "a specialized cell that hosts other cells".
 
-**Decision**: **Host** is canonical for "a Cell that hosts other Cells and
-owns their execution". A Host has a **color** (see below) determining its
-concurrency machinery. *Runner* survives only as an adjective for the color
-machinery ("coroutine-hosted", "virtual-thread-hosted") and `ManagedRunner`
-SHOULD be folded into `ManagedHost` (see 90/91, item G-2).
+**Decision (implemented)**: **Host** is canonical for "a Cell that hosts other
+Cells and owns their execution". A Host has a **color** (see below)
+determining its concurrency machinery. *Runner* survives only as an adjective
+for the color machinery ("coroutine-hosted", "virtual-thread-hosted").
+`ManagedRunner` is gone; execution strategy is a `HostScheduler`
+configuration of the one `ManagedHost` class (30/31, C-2/G-2 resolved).
 
 ## Core terms
 
@@ -61,10 +60,11 @@ SHOULD be folded into `ManagedHost` (see 90/91, item G-2).
 ## Naming conventions (normative)
 
 - New packages use `cell`, `port`, `link`, `host`, `proxy`, `data` — not
-  `computelet`, not `task`. `germ` is the incubation package name; when the
-  germ model stabilizes it SHOULD be renamed (proposal: `civictech.cell`),
-  and the legacy `civictech.kernel.computelet|port|link|host|protocol` and
-  `civictech.runtime.*` packages retired or rewritten against it (90/91, G-1).
+  `computelet`, not `task`. The incubation package `germ` has been renamed to
+  `civictech.cell` (with `.port`, `.proxy`, `.host`, `.data`, `.consistency`
+  sub-packages); the legacy `civictech.kernel.computelet|port|link|host|protocol`
+  and `civictech.runtime.*` packages are quarantined in the `:legacy` module
+  pending the G-3 color port (90/91, G-1).
 - Port properties are nouns describing role (`managementInlet`, `dataOutlet`).
 - Contracts are interfaces named for the capability (`SetOps`, `Propagate`,
   `TrafficLightControl`), never `*Message` classes.
