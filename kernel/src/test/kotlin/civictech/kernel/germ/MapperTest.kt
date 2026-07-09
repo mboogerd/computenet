@@ -3,7 +3,7 @@ package civictech.kernel.germ
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 import org.junit.jupiter.api.Test
 
 class MapperTest {

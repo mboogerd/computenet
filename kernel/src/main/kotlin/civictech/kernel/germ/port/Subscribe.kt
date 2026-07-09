@@ -1,6 +1,6 @@
 package civictech.kernel.germ.port
 
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 
 /**
  * Represents the production side of an output port (Outlet) that allows external consumers

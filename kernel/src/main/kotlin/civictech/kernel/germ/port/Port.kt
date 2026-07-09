@@ -1,6 +1,6 @@
 package civictech.kernel.germ.port
 
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 
 /**
  * A Port is a uniquely identified entry or exit point of a [Cell].

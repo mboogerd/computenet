@@ -59,7 +59,7 @@ class HostedProxyTest {
         val outlet = cellProxy.outlet
         val mockUse = Use.fixed<Consumer<String>>(object : Consumer<String> {
             override fun provide(input: String) {}
-        }, civictech.kernel.port.PortRef.generate())
+        }, civictech.kernel.germ.port.PortRef.generate())
 
         outlet.linkTo(mockUse)
 
@@ -96,7 +96,7 @@ class HostedProxyTest {
         }
 
         // Use the proxy to subscribe the collector to mapper2's outlet
-        val collectorUse: Use<Consumer<Long>> = Use.fixed(collector, civictech.kernel.port.PortRef.generate())
+        val collectorUse: Use<Consumer<Long>> = Use.fixed(collector, civictech.kernel.germ.port.PortRef.generate())
         proxy2.outlet.linkTo(collectorUse)
 
         // Link mapper1's outlet to mapper2's inlet across hosts

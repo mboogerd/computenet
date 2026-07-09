@@ -8,7 +8,7 @@ import civictech.kernel.germ.proxy.Buffering
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.germ.proxy.buffering
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test

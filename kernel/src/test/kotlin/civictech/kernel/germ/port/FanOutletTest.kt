@@ -2,7 +2,7 @@ package civictech.kernel.germ.port
 
 import civictech.kernel.germ.Consumer
 import civictech.kernel.germ.proxy.callback
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 

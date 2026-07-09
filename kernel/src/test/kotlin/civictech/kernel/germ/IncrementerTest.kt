@@ -6,7 +6,7 @@ import civictech.kernel.germ.port.Subscribe
 import civictech.kernel.germ.port.Use
 import civictech.kernel.germ.proxy.Invocation
 import civictech.kernel.germ.proxy.buffering
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 

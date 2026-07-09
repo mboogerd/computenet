@@ -1,6 +1,6 @@
 package civictech.kernel.germ.port
 
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 
 /**
  * Represents the consumption side of a port.

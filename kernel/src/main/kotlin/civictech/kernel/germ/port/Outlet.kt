@@ -2,7 +2,7 @@ package civictech.kernel.germ.port
 
 import civictech.kernel.germ.proxy.Proxy
 import civictech.kernel.germ.proxy.noop
-import civictech.kernel.port.PortRef
+import civictech.kernel.germ.port.PortRef
 
 /**
  * A point-to-point output port.
