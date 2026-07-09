@@ -73,7 +73,12 @@ open class ManagedHost(
 
             when (hostedInvocation.type) {
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
-                    hostedInvocation.invocation.invoke(port)
+                    val result = hostedInvocation.invocation.invoke(port)
+                    if (result is LinkResult.Rejected) {
+                        // proxy-initiated handshakes are fire-and-forget until the
+                        // wire layer (M5); rejection is observable here only
+                        deadLetter(null, "link rejected: ${result.reason}", hostedInvocation)
+                    }
                 }
 
                 HostedPortInvocation.Type.PORT_API -> {
@@ -114,7 +119,7 @@ open class ManagedHost(
                 cell.onDeactivate(ctx)
             }
 
-            override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String) {
+            override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult {
                 val fromCell = cells[from] ?: throw IllegalArgumentException("Source cell not found: $from")
                 val toCell = cells[to] ?: throw IllegalArgumentException("Target cell not found: $to")
 
@@ -124,7 +129,7 @@ open class ManagedHost(
                     ?: throw IllegalArgumentException("Inlet not found or not linkable: $inletName on $to")
 
                 @Suppress("UNCHECKED_CAST")
-                (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
+                return (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
             }
 
             override fun connect(from: CellRef, outletName: String, to: Use<*>) {
@@ -154,6 +159,9 @@ open class ManagedHost(
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }
+            } else if (method.name.startsWith("connect")) {
+                // surfaces the LinkResult (management calls may await, spec 31 rule 4)
+                enqueueAwaiting(0) { invocation.invoke() }
             } else {
                 enqueue(0) { invocation.invoke() }
                 null

@@ -38,8 +38,12 @@ interface Use<Api> : LinkFrom<Api> {
 
             override fun at(portRef: PortRef): Api = api
 
-            override fun linkFrom(portOut: LinkTo<Api>) {
+            // ad-hoc endpoint: no handshake state; installs and accepts
+            override fun linkFrom(portOut: LinkTo<Api>): LinkResult {
                 portOut.linkTo(this)
+                return LinkResult.Connected(PortLink(portOut.ref, ref) {
+                    (portOut as? Subscribe<Api>)?.unsubscribe(ref)
+                })
             }
         }
     }

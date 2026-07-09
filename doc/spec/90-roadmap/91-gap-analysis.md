@@ -24,9 +24,9 @@
 | G-9 | No organelle port hiding/exposure | `exposes` declaration; host resolves only exposed ports externally | 10/11 |
 | G-10 | Membranes have no code form | Realize as: handshake hooks → port policies → membrane object (cross-port rules) | 10/11 |
 | G-11 | No data-path vs management contract distinction | Marker/lint via KSP; push-only enforced on data path; also drives shadow-mode effects (G-32) | 10/12 |
-| G-12 | No Link object, no handshake, no unlink, no cardinality enforcement | `Link` handle + `onLink/onUnlink` + `LinkResult`; enforce cardinality & ownership at link time | 10/13 |
+| G-12 | No Link object, no handshake, no unlink, no cardinality enforcement | **Phase 1 done**: `Link`/`LinkResult`/`onLink`/`onUnlink`/`unlink()`, cardinality → `Rejected`, `connect` surfaces results; cross-host = `Deferred` + dead-letter until wire (M5); ownership enforcement waits on G-21 markers | 10/13 |
 | G-13 | No multiplexed ports / generic protocol stacking | Sub-ports keyed by ProtocolId sharing one link; carries attention, state-request, link mgmt | 10/12 |
-| G-14 | No policy representation | Composable `(LinkRequest) -> LinkResult` at link time first; identity slot from day one | 10/13, 40/43 |
+| G-14 | No policy representation | **Phase 1 done**: composable link-time `LinkPolicy` on ports, first-rejection-wins; `LinkRequest.identity` slot exists (marker only, G-29); flow-time policies await membranes | 10/13, 40/43 |
 | G-16 | No `onDeactivate` lifecycle hook | **Resolved (first phase)**: hook + `despawn` + live-ref spawn guard; post-unlink ordering waits on G-12/G-5 | 10/15, 30/33 |
 | G-17 | Port discovery via reflection walk | **Resolved**: per-cell `PortRegistry` fed by delegates (`provideDelegate`) and `registerPort`; reflective `findPort` deleted | 10/15 |
 

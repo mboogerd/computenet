@@ -2,6 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.port.LinkResult
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
 
@@ -35,8 +36,9 @@ interface HostManagementApi {
      * @param outletName The name or identifier of the outlet on the source cell.
      * @param to The reference to the target cell.
      * @param inletName The name or identifier of the inlet on the target cell.
+     * @return the handshake outcome ([LinkResult.Rejected] is returned, not thrown)
      */
-    fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String)
+    fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult
 
     /**
      * Connects an outlet of a hosted cell to a remote inlet (represented by a [Use] instance).

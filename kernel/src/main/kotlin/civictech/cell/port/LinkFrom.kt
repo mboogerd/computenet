@@ -8,8 +8,12 @@ package civictech.cell.port
  */
 interface LinkFrom<Api> : Port {
     /**
-     * Establishes a link from the provided [portOut] producer to this port.
+     * Establishes a link from the provided [portOut] producer to this port,
+     * running the target-side handshake (policies → cardinality → onLink).
      * This is typically called by [LinkTo.linkTo] during the wiring process.
+     *
+     * Returns null when the outcome is unobservable (cross-host proxies) —
+     * [LinkTo.linkTo] maps that to [LinkResult.Deferred].
      */
-    fun linkFrom(portOut: LinkTo<Api>)
+    fun linkFrom(portOut: LinkTo<Api>): LinkResult?
 }

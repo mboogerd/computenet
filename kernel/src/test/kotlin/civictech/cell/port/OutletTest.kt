@@ -1,4 +1,5 @@
 package civictech.cell.port
+import io.kotest.matchers.shouldBe
 
 import civictech.cell.Consumer
 import civictech.cell.proxy.callback
@@ -55,10 +56,9 @@ class OutletTest {
         val inlet1 = Inlet.withNoOp<Consumer<String>>()
         val inlet2 = Inlet.withNoOp<Consumer<String>>()
 
-        port.linkFrom(inlet1)
-        assertThrows<IllegalStateException> {
-            port.linkFrom(inlet2)
-        }
+        port.linkFrom(inlet1) shouldBe LinkResult.Connected((port.linking.links.single()))
+        // cardinality violations reject instead of throwing (spec 13)
+        (port.linkFrom(inlet2) is LinkResult.Rejected) shouldBe true
     }
 
     @Test

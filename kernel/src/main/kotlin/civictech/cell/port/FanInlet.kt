@@ -17,7 +17,9 @@ class FanInlet<Api : Any>(
     val clazz: Class<Api>,
     override val ref: PortRef = PortRef.generate(),
     default: Api? = null
-) : Use<Api>, Serve<Api> {
+) : Use<Api>, Serve<Api>, Linked {
+
+    override val linking = LinkSupport()
 
     /** Current usable API implementation */
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
@@ -48,9 +50,13 @@ class FanInlet<Api : Any>(
 
     }
 
-    override fun linkFrom(portOut: LinkTo<Api>) {
-        portOut.linkTo(this)
-    }
+    override fun linkFrom(portOut: LinkTo<Api>): LinkResult = handshake(
+        portOut = portOut,
+        target = this,
+        targetRef = ref,
+        install = { portOut.linkTo(this as Use<Api>) },
+        uninstall = { (portOut as? Subscribe<Api>)?.unsubscribe(ref) },
+    )
 
     override fun linkTo(useApi: Use<Api>) {
         delegate(useApi)

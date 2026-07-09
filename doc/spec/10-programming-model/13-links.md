@@ -47,16 +47,20 @@ Handshakes are where cardinality (12), ownership constraints (20/23),
 policies, and setup/cleanup run. Rejection reasons include: at capacity,
 schema/contract mismatch, policy denial, ownership violation.
 
-⚠ GAP (G-12, continued): germ has no `Link` object, no handshake, no
-`unlink()`. `ManagedHost.connect(from, "outlet", to, "inlet")` resolves ports
-reflectively and calls `linkTo` unconditionally.
-*Proposal — implement in this order*:
-1. Introduce `Link` as a returned handle from `linkTo`, retained by both ports.
-2. Add `onLink/onUnlink` hooks with default-accept, called synchronously
-   within the owning host's queue (ordering safety).
-3. Route `ManagedHost.connect` through the handshake and surface
-   `LinkResult` to the caller.
-4. Enforce cardinality and ownership rules inside `onLink`.
+*(G-12 phase 1 implemented: `cell.port.Link`/`LinkResult`/`LinkSupport`.
+`linkTo(LinkFrom)` runs the target-side handshake — policies → cardinality →
+`onLink` — and returns `Connected(link)` / `Rejected(reason)`; the link is
+retained by both ports (`port.linking.links`); `link.unlink()` is idempotent,
+detaches both sides and fires the target's `onUnlink`. Cardinality violations
+now return `Rejected` instead of throwing. `ManagedHost.connect` routes
+through the handshake and surfaces the `LinkResult` to the caller.
+Cross-host caveat: a proxy-initiated `linkTo` returns `LinkResult.Deferred` —
+the authoritative handshake runs on the target's host, and a rejection there
+is emitted to that host's `deadLetterOutlet`; a synchronous reply channel
+needs the wire layer (M5). Delegation chains (`inlet.linkTo(use)`,
+serve/delegate) remain plain mechanism — they are intra-cell composition, not
+topology links. Ownership enforcement in `onLink` (G-21) waits for ownership
+markers (M5).)*
 
 `unlink()` is load-bearing for the whole architecture: suspension and
 migration (30/33) are defined as link manipulation, and links are where
@@ -72,9 +76,12 @@ cheap or pushed to the boundary host).
 Policies turn links into **negotiated relationships**. Examples: whitelisted
 peers, encryption requirements (40/43), rate limits, resource quotas.
 
-⚠ GAP (G-14): no policy representation exists. *Proposal*: start with
-link-time-only policies as composable `(LinkRequest) -> LinkResult` functions
-attached to ports; defer flow-time policies until the membrane layer exists.
+*(G-14 phase 1 implemented: link-time policies as composable
+`LinkPolicy { (LinkRequest) -> Rejected? }` attached to ports
+(`port.linking.policies`), evaluated before `onLink`, first rejection wins.
+`LinkRequest` carries the identity slot from day one — `Identity` is a bare
+marker; verification is G-29. Flow-time policies wait for the membrane
+layer.)*
 
 ## Cross-boundary links
 

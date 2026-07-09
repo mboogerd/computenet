@@ -21,7 +21,9 @@ class Outlet<Api : Any>(
     val clazz: Class<Api>,
     override val ref: PortRef,
     private val unicastFactory: () -> Api
-) : Use<Api>, Subscribe<Api> {
+) : Use<Api>, Subscribe<Api>, Linked {
+
+    override val linking = LinkSupport()
 
     private var subscribedPort: PortRef? = null
     private var subscribedPortApi: Use<Api> = Use.fixed(unicastFactory())
@@ -69,12 +71,23 @@ class Outlet<Api : Any>(
         }
     }
 
-    override fun linkFrom(portOut: LinkTo<Api>) {
+    override fun linkFrom(portOut: LinkTo<Api>): LinkResult {
         if (subscribedPort != null) {
-            throw IllegalStateException("Outlet already has a subscriber and enforces strict point-to-point connectivity.")
+            return LinkResult.Rejected("Outlet at capacity: already has a subscriber (strict point-to-point)")
         }
-        subscribedPort = portOut.ref
-        portOut.linkTo(this)
+        return handshake(
+            portOut = portOut,
+            target = this,
+            targetRef = ref,
+            install = {
+                subscribedPort = portOut.ref
+                portOut.linkTo(this as Use<Api>)
+            },
+            uninstall = {
+                (portOut as? Subscribe<Api>)?.unsubscribe(ref)
+                if (subscribedPort == portOut.ref) unsubscribe(portOut.ref)
+            },
+        )
     }
 
     override fun linkTo(useApi: Use<Api>) {
@@ -82,6 +95,14 @@ class Outlet<Api : Any>(
             throw IllegalStateException("Outlet already has a subscriber and enforces strict point-to-point connectivity.")
         }
         subscribe(useApi)
+    }
+
+    /** Source-side cardinality: a second link proposal is rejected, not thrown. */
+    override fun linkTo(linkFrom: LinkFrom<Api>): LinkResult {
+        if (subscribedPort != null) {
+            return LinkResult.Rejected("Outlet at capacity: already has a subscriber (strict point-to-point)")
+        }
+        return linkFrom.linkFrom(this) ?: LinkResult.Deferred
     }
 
     companion object {

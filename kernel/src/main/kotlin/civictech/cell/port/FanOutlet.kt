@@ -18,7 +18,9 @@ import java.util.concurrent.atomic.AtomicLong
 class FanOutlet<Api : Any>(
     val clazz: Class<Api>,
     override val ref: PortRef = PortRef.generate()
-) : Use<Api>, Subscribe<Api> {
+) : Use<Api>, Subscribe<Api>, Linked {
+
+    override val linking = LinkSupport()
 
     private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
     private val waveCounter = AtomicLong()
@@ -53,9 +55,13 @@ class FanOutlet<Api : Any>(
         subscriptions.remove(portRef)
     }
 
-    override fun linkFrom(portOut: LinkTo<Api>) {
-        portOut.linkTo(this)
-    }
+    override fun linkFrom(portOut: LinkTo<Api>): LinkResult = handshake(
+        portOut = portOut,
+        target = this,
+        targetRef = ref,
+        install = { portOut.linkTo(this as Use<Api>) },
+        uninstall = { (portOut as? Subscribe<Api>)?.unsubscribe(ref) },
+    )
 
     override fun linkTo(useApi: Use<Api>) {
         subscribe(useApi)

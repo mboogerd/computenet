@@ -18,7 +18,9 @@ class Inlet<Api : Any>(
     val clazz: Class<Api>,
     override val ref: PortRef,
     unicastFactory: () -> Api
-) : Use<Api>, Serve<Api> {
+) : Use<Api>, Serve<Api>, Linked {
+
+    override val linking = LinkSupport()
 
     private var activeProducer: PortRef? = null
     private var activeProducerApi: Use<Api> = Use.fixed(unicastFactory())
@@ -43,12 +45,23 @@ class Inlet<Api : Any>(
         activeProducerApi = port
     }
 
-    override fun linkFrom(portOut: LinkTo<Api>) {
+    override fun linkFrom(portOut: LinkTo<Api>): LinkResult {
         if (activeProducer != null) {
-            throw IllegalStateException("Inlet already has an active producer and enforces strict point-to-point connectivity.")
+            return LinkResult.Rejected("Inlet at capacity: already has an active producer (strict point-to-point)")
         }
-        activeProducer = portOut.ref
-        portOut.linkTo(this)
+        return handshake(
+            portOut = portOut,
+            target = this,
+            targetRef = ref,
+            install = {
+                activeProducer = portOut.ref
+                portOut.linkTo(this as Use<Api>)
+            },
+            uninstall = {
+                (portOut as? Subscribe<Api>)?.unsubscribe(ref)
+                if (activeProducer == portOut.ref) activeProducer = null
+            },
+        )
     }
 
     override fun linkTo(useApi: Use<Api>) {

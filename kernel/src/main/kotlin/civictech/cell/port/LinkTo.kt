@@ -9,13 +9,14 @@ package civictech.cell.port
  */
 interface LinkTo<Api> : Port {
     /**
-     * Links this port to the provided [useApi] consumer.
+     * Links this port to the provided [useApi] consumer (ad-hoc style, no handshake).
      */
     fun linkTo(useApi: Use<Api>)
 
     /**
-     * Links this port to the provided [linkFrom] consumer.
-     * This is the entry point for external wiring between two ports.
+     * Links this port to the provided [linkFrom] consumer through the target-side
+     * handshake (spec 13). The entry point for external wiring between two ports.
+     * Returns [LinkResult.Deferred] when the target is a cross-host proxy.
      */
-    fun linkTo(linkFrom: LinkFrom<Api>) = linkFrom.linkFrom(this)
+    fun linkTo(linkFrom: LinkFrom<Api>): LinkResult = linkFrom.linkFrom(this) ?: LinkResult.Deferred
 }

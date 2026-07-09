@@ -1,4 +1,5 @@
 package civictech.cell.port
+import io.kotest.matchers.shouldBe
 
 import civictech.cell.Consumer
 import civictech.cell.port.PortRef
@@ -75,10 +76,9 @@ class InletTest {
         val outlet1 = Outlet.withNoOp<Consumer<String>>()
         val outlet2 = Outlet.withNoOp<Consumer<String>>()
 
-        port.linkFrom(outlet1)
-        assertThrows<IllegalStateException> {
-            port.linkFrom(outlet2)
-        }
+        port.linkFrom(outlet1) shouldBe LinkResult.Connected((port.linking.links.single()))
+        // cardinality violations reject instead of throwing (spec 13)
+        (port.linkFrom(outlet2) is LinkResult.Rejected) shouldBe true
     }
 
     @Test
