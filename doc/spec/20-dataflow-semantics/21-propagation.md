@@ -2,7 +2,7 @@
 
 > **Status**: Partial (push+incremental specified and demonstrated; pull unspecified)
 > **Sources**: ADR 1 (§1, §2, §4), ADR — Cellular Software Development Process (incremental dataflow layer)
-> **Implementation**: push+deltas in `civictech.kernel.data` (SetCell → UnionSetCell chains)
+> **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains)
 
 ## Push (default, implemented)
 

@@ -30,7 +30,7 @@ kotest adapter (`checkInvariants(graph, invariants, generators)`) makes them
 runnable in CI. The single-threaded-simulation property of the kernel (P1)
 makes generative graph testing deterministic and cheap — this is a payoff of
 keeping concurrency out of the kernel. The deterministic harness exists:
-`germ.host.SimulationController` drives any number of `ManagedHost`s
+`cell.host.SimulationController` drives any number of `ManagedHost`s
 single-threadedly, seed-randomized across hosts, reproducible per seed.
 (Virtual time is deliberately omitted — nothing in the kernel is timer-driven
 yet; add it when something is, e.g. G-19 throttling.)

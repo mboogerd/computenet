@@ -90,7 +90,7 @@ The codebase contains two generations:
    `civictech.runtime.blocking|suspending`) — implements the ADR 2 color model and
    the earlier port/link kernel. Treated here as historical evidence, not as the
    normative base.
-2. **Current** (`civictech.kernel.germ`, `civictech.kernel.data`) — the living
+2. **Current** (`civictech.cell`, `civictech.cell.data`) — the living
    kernel: `Cell`/`onActivate`, port delegates, Fan ports, `Invocation`-based
    routing, `ManagedHost`, cross-host proxies, delegation, buffering
    (traffic-light) cells, delta-propagating data cells.

@@ -2,7 +2,7 @@
 
 > **Status**: Partial (core specified and implemented; membranes/policies exploratory)
 > **Sources**: ADR — Anatomy of Cellular Programs, ADR — Computelet Kernel, ADR — Cellular Software Development Process, ADR 1 (§3, §14)
-> **Implementation**: `civictech.kernel.germ.Cell`, `CellRef`, `CellContext`; data cells in `civictech.kernel.data`
+> **Implementation**: `civictech.cell.Cell`, `CellRef`, `CellContext`; data cells in `civictech.cell.data`
 
 ## Definition
 

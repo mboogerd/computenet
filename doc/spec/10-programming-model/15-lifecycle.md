@@ -2,7 +2,7 @@
 
 > **Status**: Specified and implemented (core); suspension states in 30/33
 > **Sources**: ADR — Task Definitions, ADR — Computelet Kernel
-> **Implementation**: `germ.Cell.onActivate`, `ManagedHost`/`ManagedRunner.spawn`, `germ.port.PortDelegates`
+> **Implementation**: `cell.Cell.onActivate`, `cell.host.ManagedHost.spawn`, `cell.port.PortDelegates`, `cell.port.PortRegistry`
 
 ## The unified model
 

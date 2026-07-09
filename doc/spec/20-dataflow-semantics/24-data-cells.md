@@ -2,7 +2,7 @@
 
 > **Status**: Partial (set family implemented; map/list present; partitioning unbuilt)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
-> **Implementation**: `civictech.kernel.data`: `SetCell`, `UnionSetCell`, `MapCell`, `ListCell`, `Propagate`
+> **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `MapCell`, `ListCell`, `Propagate`
 
 ## Role
 

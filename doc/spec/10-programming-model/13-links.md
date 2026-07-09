@@ -2,7 +2,7 @@
 
 > **Status**: Partial (ad-hoc linking implemented; handshake protocol specified but unbuilt)
 > **Sources**: ADR — Task Connectivity, ADR — Computelet Kernel, ADR — Anatomy of Cellular Programs
-> **Implementation**: `germ.port.LinkTo`/`LinkFrom`, `ManagedHost.connect`; legacy `kernel.link.Link`/`DefaultLink`
+> **Implementation**: `cell.port.LinkTo`/`LinkFrom`, `ManagedHost.connect`; legacy `kernel.link.Link`/`DefaultLink`
 
 ## Definition
 

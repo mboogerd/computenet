@@ -2,7 +2,7 @@
 
 > **Status**: Specified (decision stable across two ADRs); primitives partially implemented
 > **Sources**: ADR — Computelet Mobility (supersedes ADR — Blocking Mailbox), ADR — Computelet Kernel
-> **Implementation**: Buffering proxy + serve/delegate switching (TrafficLightCell) = the boundary primitive; legacy `germ.Handle`; no closable-queue / drain protocol yet
+> **Implementation**: Buffering proxy + serve/delegate switching (TrafficLightCell) = the boundary primitive; legacy `cell.Handle`; no closable-queue / drain protocol yet
 
 ## Definitions
 
@@ -75,7 +75,7 @@ first membrane behavior in code (11).
 1. Closable-queue wrapper for `ManagedHost` + failure surfaced through
    proxies (today `enqueueHostedInvocation` cannot fail).
 2. Re-resolution: requires a **location registry** — which host currently
-   serves a `CellRef`. Design together with 40/41's addressing. (`germ.Handle`
+   serves a `CellRef`. Design together with 40/41's addressing. (`cell.Handle`
    was the pre-invocation-model attempt; supersede it.)
 3. `onDeactivate` + state capture (P9: cell state must be serializable — tie
    to 24 durability snapshots).

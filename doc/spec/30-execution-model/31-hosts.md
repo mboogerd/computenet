@@ -2,7 +2,7 @@
 
 > **Status**: Partial (single-host machinery implemented; consolidation and hardening needed)
 > **Sources**: ADR — Computelet Kernel (Runner), ADR — Computelet Mobility, ADR 2
-> **Implementation**: `germ.ManagedHost` + `germ.host.HostScheduler` (`VirtualThreadScheduler` / `SimulationController`), `germ.Host` interface; legacy `runtime.blocking.BlockingComputeletHost`
+> **Implementation**: `cell.host.ManagedHost` + `cell.host.HostScheduler` (`VirtualThreadScheduler` / `SimulationController`), `cell.host.Host` interface; legacy `runtime.blocking.BlockingComputeletHost` (quarantined in `:legacy`)
 
 ## Definition
 

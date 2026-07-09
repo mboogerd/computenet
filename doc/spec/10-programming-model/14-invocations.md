@@ -2,7 +2,7 @@
 
 > **Status**: Specified (this is the most implemented part of the system)
 > **Sources**: ADR 3, ADR — Task Connectivity; supersedes the lambda-first `Use.use` design
-> **Implementation**: `germ.proxy.Invocation`, `Proxy`, `HostedCellProxy`, `HostProxy`, `HostedPortInvocation`, `Buffering`, `Broadcast`, `NoOp`, `Throwing`, `Callback`; `germ.port.Serve/Use/Subscribe/Invalidating`
+> **Implementation**: `cell.proxy.Invocation`, `Proxy`, `HostedCellProxy`, `HostProxy`, `HostedPortInvocation`, `Buffering`, `Broadcast`, `NoOp`, `Throwing`, `Callback`; `cell.port.Serve/Use/Subscribe/Invalidating`
 
 ## The core move (ADR 3)
 

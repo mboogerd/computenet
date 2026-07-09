@@ -71,7 +71,7 @@
 | G-31 | No invariant machinery | Invariants as cells; kotest adapter; deterministic SimulatedHost | 50/52 |
 | G-32 | No shadow mode (side-effect suppression) | Effect classification (with G-11) + NoOp-served sinks | 50/52 |
 | G-33 | No state migration across incarnations | `exportState/importState` in the swap drain window | 50/53 |
-| G-1 | Legacy packages coexist with germ (two kernels in-tree) | After G-3: delete or rewrite legacy `kernel.computelet|port|link|host|protocol`, `runtime.*`, `Handle` | 00/03, 30/32 |
+| G-1 | Legacy packages coexist with germ (two kernels in-tree) | **Quarantined**: legacy `kernel.computelet|port|link|host|protocol`, `runtime.*` moved to the `:legacy` module (no dependency either way); delete after the G-3 color port. The living kernel is `civictech.cell` | 00/03, 30/32 |
 | G-2 | `ManagedRunner` duplication | **Resolved** with C-2 (class no longer existed; scheduler configuration covers the use case) | 30/31 |
 
 ## Reading the dependency structure

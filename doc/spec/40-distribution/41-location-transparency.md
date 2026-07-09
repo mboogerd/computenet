@@ -2,7 +2,7 @@
 
 > **Status**: Partial (in-process transparency implemented; wire layer unbuilt)
 > **Sources**: ADR 3, ADR — Task Connectivity (§4)
-> **Implementation**: `germ.proxy.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; KSP seed in `gen` module
+> **Implementation**: `cell.proxy.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; KSP seed in `gen` module
 
 ## Requirement
 

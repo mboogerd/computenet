@@ -1,7 +1,7 @@
 # 03 — Glossary and Canonical Terminology
 
 > **Status**: Specified (contains normative naming decisions)
-> **Sources**: all ADRs; `civictech.kernel.germ` package
+> **Sources**: all ADRs; `civictech.cell` package
 > **Implementation**: partially — code and ADRs currently mix several vocabularies
 
 The ADRs were written over time and use overlapping vocabularies

@@ -2,7 +2,7 @@
 
 > **Status**: Specified (core); multiplex and cardinality enforcement partial
 > **Sources**: ADR — Computelet Kernel, ADR — Task Connectivity, ADR — Anatomy of Cellular Programs, ADR 3
-> **Implementation**: `civictech.kernel.germ.port.*` (Port, Inlet, Outlet, FanInlet, FanOutlet, OneToOnePort, Serve, Use, Subscribe, LinkTo, LinkFrom, delegates); legacy `civictech.kernel.port.*`
+> **Implementation**: `civictech.cell.port.*` (Port, Inlet, Outlet, FanInlet, FanOutlet, OneToOnePort, Serve, Use, Subscribe, LinkTo, LinkFrom, delegates); legacy `civictech.kernel.port.*`
 
 ## Definition
 
