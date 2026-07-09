@@ -6,6 +6,7 @@ import civictech.cell.port.*
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
@@ -26,17 +27,25 @@ open class ManagedHost(
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
     override val routerInlet = registerPort("routerInlet", FanInlet.create<HostRoutingApi>())
 
+    /** Failed/undeliverable invocations are published here instead of being dropped (G-26). */
+    val deadLetterOutlet = registerPort("deadLetterOutlet", FanOutlet.create<Propagate<DeadLetter>>())
+
     private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
 
     private val cells = mutableMapOf<CellRef, Cell>()
     private val ctx = object : CellContext {}
+
+    private fun deadLetter(cause: Throwable?, description: String, invocation: HostedPortInvocation? = null) {
+        System.err.println("[ManagedHost ${ref.id}] dead letter: $description" + (cause?.let { " ($it)" } ?: ""))
+        deadLetterOutlet.call.propagate(DeadLetter(ref, cause, description, invocation))
+    }
 
     private fun enqueue(priority: Int, action: () -> Any?) {
         scheduler.submit(priority) {
             try {
                 action()
             } catch (e: Exception) {
-                e.printStackTrace() // TODO: Better error handling
+                deadLetter(e, "invocation failed: $e")
             }
         }
     }
@@ -55,8 +64,12 @@ open class ManagedHost(
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
         enqueue(20) {
-            val cell = cells[hostedInvocation.cellRef] ?: return@enqueue null
-            val port = findPort(cell, hostedInvocation.portName) ?: return@enqueue null
+            val cell = cells[hostedInvocation.cellRef] ?: return@enqueue deadLetter(
+                null, "unknown cell ${hostedInvocation.cellRef}", hostedInvocation
+            )
+            val port = findPort(cell, hostedInvocation.portName) ?: return@enqueue deadLetter(
+                null, "unknown port '${hostedInvocation.portName}' on ${hostedInvocation.cellRef}", hostedInvocation
+            )
 
             when (hostedInvocation.type) {
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
@@ -86,6 +99,7 @@ open class ManagedHost(
     init {
         val internalApi = object : HostManagementApi {
             override fun spawn(cell: Cell): CellRef {
+                require(!cells.containsKey(cell.ref)) { "Cell already spawned: ${cell.ref}" }
                 cells[cell.ref] = cell
                 cell.onActivate(ctx)
                 return cell.ref
@@ -93,6 +107,11 @@ open class ManagedHost(
 
             override fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T? {
                 return this@ManagedHost.lookup(ref, clazz)
+            }
+
+            override fun despawn(ref: CellRef) {
+                val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
+                cell.onDeactivate(ctx)
             }
 
             override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String) {

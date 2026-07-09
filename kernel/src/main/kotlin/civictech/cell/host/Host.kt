@@ -23,6 +23,12 @@ interface HostManagementApi {
     fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T?
 
     /**
+     * Unregisters a hosted cell and calls its [Cell.onDeactivate] on the
+     * host's execution context. Subsequent invocations for the ref dead-letter.
+     */
+    fun despawn(ref: CellRef)
+
+    /**
      * Connects an outlet of one hosted cell to an inlet of another hosted cell.
      *
      * @param from The reference to the source cell.

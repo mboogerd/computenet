@@ -60,10 +60,12 @@ while internal links remain direct".
 4. **No result-blocking on the data path**: only management calls may await
    futures (spawn/lookup currently block up to 5s — acceptable for
    management; forbidden for `PORT_API`).
-5. **Failure isolation**: a cell throwing MUST NOT kill the host loop
-   (currently: print + continue). ⚠ GAP (G-26): define a real error protocol —
-   per-cell error outlet + host-level dead-letter + supervision policy
-   (restart / suspend / propagate), configured by policy (13).
+5. **Failure isolation**: a cell throwing MUST NOT kill the host loop.
+   *(G-26 minimal in place: failed and undeliverable invocations — including
+   unknown cell/port, previously silent drops — are published as `DeadLetter`
+   on the host's `deadLetterOutlet` port, plus a stderr line when unobserved.)*
+   ⚠ GAP (G-26, remainder): per-cell error outlets and supervision policies
+   (restart / suspend / propagate) configured by policy (13) — M3.
 
 ## Colors of hosts
 

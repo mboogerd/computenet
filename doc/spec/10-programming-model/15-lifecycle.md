@@ -57,10 +57,11 @@ COLD  --spawn(cell)-->  HOT  --suspend-->  SUSPENDED  --resume-->  HOT
    host must be able to enumerate ports by name without running cell logic.
 3. **Hosting-specific operations require HOT.** Calling them cold is an error
    with a clear message (guarded phase state), not undefined behavior.
-4. **Deactivation mirrors activation.** ⚠ GAP (G-16): there is no
-   `onDeactivate`/`onSuspend` hook yet; cells holding external resources have
-   no cleanup point. *Proposal*: add `onDeactivate(ctx)` invoked by the host
-   after its ports are unlinked/buffering (30/33), before state capture.
+4. **Deactivation mirrors activation.** *(G-16 resolved, first phase:
+   `Cell.onDeactivate(ctx)` exists; `despawn(ref)` unregisters the cell and
+   invokes it on the host's execution context, and re-spawning a live ref is
+   rejected. Unlink-before-deactivate ordering and state capture arrive with
+   links (10/13) and mobility (30/33).)*
 
 ## ⚠ CONFLICT (C-7): two initialization styles in code
 

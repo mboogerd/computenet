@@ -13,7 +13,11 @@ data class Invocation(
             it.name == methodName && it.parameterTypes.map { p -> p.name } == parameterTypes
         } ?: throw NoSuchMethodException("Method $methodName with types $parameterTypes not found on ${target.javaClass}")
         
-        return method.invoke(target, *(args.toTypedArray()))
+        return try {
+            method.invoke(target, *(args.toTypedArray()))
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.targetException
+        }
     }
 
     @Transient

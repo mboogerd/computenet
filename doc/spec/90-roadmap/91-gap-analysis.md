@@ -27,7 +27,7 @@
 | G-12 | No Link object, no handshake, no unlink, no cardinality enforcement | `Link` handle + `onLink/onUnlink` + `LinkResult`; enforce cardinality & ownership at link time | 10/13 |
 | G-13 | No multiplexed ports / generic protocol stacking | Sub-ports keyed by ProtocolId sharing one link; carries attention, state-request, link mgmt | 10/12 |
 | G-14 | No policy representation | Composable `(LinkRequest) -> LinkResult` at link time first; identity slot from day one | 10/13, 40/43 |
-| G-16 | No `onDeactivate` lifecycle hook | Add, invoked post-unlink pre-capture; required by mobility drain | 10/15, 30/33 |
+| G-16 | No `onDeactivate` lifecycle hook | **Resolved (first phase)**: hook + `despawn` + live-ref spawn guard; post-unlink ordering waits on G-12/G-5 | 10/15, 30/33 |
 | G-17 | Port discovery via reflection walk | **Resolved**: per-cell `PortRegistry` fed by delegates (`provideDelegate`) and `registerPort`; reflective `findPort` deleted | 10/15 |
 
 ## Gaps — semantics (20)
@@ -50,7 +50,7 @@
 |---|---|---|---|
 | G-3 | Color model not in germ | HostColor + cell color markers + bridge selection in proxies + spawn validation | 30/32 |
 | G-27 | No coroutine ManagedHost | Port from legacy suspending runtime | 30/31, 30/32 |
-| G-26 | Error handling = printStackTrace | Error outlets + dead-letter + supervision policies | 30/31 |
+| G-26 | Error handling = printStackTrace | **Minimal done**: `DeadLetter` on host `deadLetterOutlet` (failures + previously-silent drops); error outlets + supervision policies remain (M3) | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
 | G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | See ordered plan | 30/33 |
 | G-6 | Attention/scheduling undesigned beyond static priorities | Attention protocol sketch; aggregation & fairness open | 30/34 |
