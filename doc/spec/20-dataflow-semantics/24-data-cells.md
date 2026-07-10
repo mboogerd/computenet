@@ -62,8 +62,21 @@ pressure (42).)*
   to a late-joining subscriber, and implements `Stateful` so state survives
   drain/migrate (30/33) — no longer trapped in private fields. On-demand pull
   without relinking remains with G-18/G-13 (21).
-- **Operator library**: intersect, filter/map (exists as `MapperCell` for
-  scalars), join, count — each as a cell with declared incremental semantics.
+- ~~Operator library~~ **Implemented (M4.3)** — each an ordinary cell with
+  declared incremental semantics, all late-join capable and `Stateful`:
+  - `FilterCell` — predicate filter over a tagged set stream, tags intact.
+  - `CountCell` — distinct-element count; emits commutative `CounterDelta`s
+    on membership-size change only.
+  - `IntersectSetCell` — binary (`left`/`right` inlets; n-ary by chaining);
+    advertises entry tags, deletes all advertised tags on exit, absorbs tag
+    churn that doesn't flip membership.
+  - `JoinCell` — incremental keyed inner join over two map streams; inherits
+    `MapDelta`'s arrival-order convergence limit.
+  - The shared live-tag fold lives in `TagState` (internal); `MapperCell`
+    remains the scalar map/filter.
+  Verified: a seeded writers→union→filter→count pipeline equals a batch
+  recompute over final writer state on every seed (the prototype invariant
+  for the generative harness, 52).
 
 ## Partitioned state
 

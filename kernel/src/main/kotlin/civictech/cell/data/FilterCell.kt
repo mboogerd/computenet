@@ -11,19 +11,21 @@ import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
 
-interface UnionSetApi<E> {
+interface FilterSetApi<E> {
     val inlet: Serve<Propagate<SetDelta<E>>>
     val outlet: Subscribe<Propagate<SetDelta<E>>>
 }
 
 /**
- * Merges tagged delta streams (G-23): tracks live add-tags per element and
- * forwards only new tag information, so duplicate deliveries across a diamond
- * fan-in dedup instead of double-counting. Membership (an element is in the
- * union iff it has a live tag) is derivable by any consumer from the forwarded
- * tag algebra.
+ * Incremental filter over a tagged set stream: deltas for elements passing
+ * [predicate] flow through with their tags intact; everything else is
+ * absorbed. Tracks passing live tags so late joiners get catch-up (G-22) and
+ * duplicates dedup.
  */
-class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : UnionSetApi<E>, Cell, Stateful {
+class FilterCell<E>(
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    private val predicate: (E) -> Boolean,
+) : FilterSetApi<E>, Cell, Stateful {
     override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
@@ -32,13 +34,16 @@ class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : 
     init {
         inlet.serve(object : Propagate<SetDelta<E>> {
             override fun propagate(value: SetDelta<E>) {
-                val effective = state.apply(value)
+                val passed = SetDelta(
+                    adds = value.adds.filterKeys(predicate),
+                    dels = value.dels.filterKeys(predicate),
+                )
+                val effective = state.apply(passed)
                 if (effective.adds.isNotEmpty() || effective.dels.isNotEmpty()) {
                     outlet.call.propagate(effective)
                 }
             }
         })
-        // late-join catch-up (G-22): live tags as a delta-from-empty
         outlet.linking.onLinked = { link ->
             if (state.size > 0) outlet.at(link.to).propagate(state.asDelta())
         }
@@ -47,8 +52,4 @@ class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : 
     override fun snapshot(): Serializable = state.snapshot()
 
     override fun restore(state: Serializable) = this.state.restore(state)
-
-    companion object {
-        fun <E> create(): UnionSetApi<E> = UnionSetCell()
-    }
 }
