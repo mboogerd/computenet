@@ -36,6 +36,9 @@ future (see 30/31) — never on data-path contracts.
 ⚠ GAP (G-11): the spec needs a typed marker separating management contracts
 (returns allowed, may block) from data contracts (push-only). *Proposal*: a
 `@DataPath`-checked annotation or a lint rule in the KSP processor.
+*(M5.1 partial: `@Contract(management = true/false)` marks every port
+contract and the flag rides the generated `ContractDescriptor`; push-only
+lint on data contracts is still open.)*
 
 ## The Inlet/Outlet duality
 

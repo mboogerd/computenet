@@ -88,12 +88,28 @@ the same graph is M4.8 (`:demo`).*
 
 *Goal: two processes, one graph.*
 
-1. KSP: method-id tables, serializers, generated proxies (C-5 completion,
-   G-15); port metadata (ownership, color, effect markers).
-2. Bridge cells over one transport (likely WebSocket or TCP first);
-   remote addressing in the location registry (unifies with mobility's).
-3. Ownership enforcement at link time (G-21 phase 2) — now that links,
-   metadata, and the wire exist, `Owned` fan-out is rejectable everywhere.
+Sequenced (decisions: kotlinx.serialization as codec; WebSocket transport in
+a new `:wire` module keeping `:kernel` dependency-free; G-8 deferred behind a
+wire-frame version byte; demo splits as symmetric peers):
+
+1. ~~M5.1 — contract identity: KSP method-id tables (`@Contract` →
+   `ContractDescriptor`, ids hashed from FQN + erased JVM signature),
+   `ContractRegistry`, `Invocation.contractId/methodId` (C-5: stable ids
+   exist; in-process dispatch stays reflective)~~ — done.
+2. M5.2 — generated serializers + `WireFrame` envelope (kotlinx.serialization;
+   version byte reserves G-8).
+3. M5.3 — loopback bridge cells: egress/ingress as ordinary cells on
+   SimulationController hosts; generative harness with a bridge at a random
+   cut, 100 seeds + control run (the wire's P1 proof).
+4. M5.4 — remote addressing: `LocationRegistry` resolves Local|Remote;
+   announcement frames; cross-registry `connect`/`lookup` complete
+   `LinkResult.Deferred` with timeouts.
+5. M5.5 — WebSocket transport driver in `:wire` (org.java-websocket server);
+   disconnect ⇒ unpublish ⇒ park.
+6. M5.6 — ownership enforcement at link time (G-21 phases 1+2) — `Owned`
+   fan-out rejectable everywhere: local, cross-host, and bridge links.
+7. M5.7 — exit: `DistributedCollaborativeAppTest` (loopback split, 100
+   seeds + control run) + the demo as two symmetric WebSocket peers.
 
 *Exit criterion: the M4 demo app running across two JVMs/machines unchanged.*
 

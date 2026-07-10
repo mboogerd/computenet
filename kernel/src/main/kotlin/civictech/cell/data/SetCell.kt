@@ -5,9 +5,11 @@ import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.*
+import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
 
+@Contract
 interface SetOps<E> {
     fun add(element: E)
     fun remove(element: E)

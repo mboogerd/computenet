@@ -4,9 +4,11 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.port.*
+import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
 
+@Contract
 interface ListOps<E> {
     fun add(element: E)
     fun add(index: Int, element: E)

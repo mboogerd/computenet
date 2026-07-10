@@ -11,7 +11,7 @@
 | C-2 | `Runner` vs `Host` split in germ (`ManagedRunner` duplicates a weaker `ManagedHost`) | **Resolved**: `ManagedRunner` was already gone from the tree; one `ManagedHost` + injected `HostScheduler` (`VirtualThreadScheduler` / `SimulationController` = the deterministic test host) | 00/03, 30/31, 50/52 |
 | C-3 | `use { }` lambda API (Task Connectivity) vs serializable invocations (ADR 3) — code has both | `.call`/Invocation is canonical & the only wire form; `use {}` = local-only sugar for lease scoping and future context binding | 10/14 |
 | C-4 | Legacy color runtime (`runtime.blocking/suspending`, PureTask/BlockingTask/SuspendingTask) vs germ model — two disconnected generations | **Resolved (M3.1)**: color model implemented on the kernel (G-3); legacy deleted (G-1) | 30/32 |
-| C-5 | Reflection everywhere (`Invocation.of(Method)`, JDK proxies, `findPort`) vs ADR 3's no-reflection-on-wire + KSP direction | Reflection OK in-process short-term; stable ids on the wire; KSP proxies + port registry replace it incrementally | 10/14, 10/15 |
+| C-5 | Reflection everywhere (`Invocation.of(Method)`, JDK proxies, `findPort`) vs ADR 3's no-reflection-on-wire + KSP direction | Reflection OK in-process short-term; stable ids on the wire; KSP proxies + port registry replace it incrementally. **M5.1**: stable ids landed — `@Contract` → generated `ContractDescriptor` tables, `Invocation.contractId/methodId` at capture | 10/14, 10/15 |
 | C-6 | Two port declaration styles (`by input()` delegates vs explicit `FanInlet.create`) | **Resolved**: both feed the per-cell `PortRegistry` (delegates via `provideDelegate`, explicit via `registerPort`); delegates preferred for hosted cells | 10/11, 10/12 |
 | C-7 | Logic in constructors (`SetCell`, `TrafficLightCell` serve in `init`) vs `onActivate` rule | "Eager cells" allowed for host-free composition, with stated obligations; hosted default is `onActivate` | 10/15 |
 | C-8 | Per-link FIFO required vs `PriorityBlockingQueue` unordered ties in `ManagedHost` | **Resolved (tiebreaker)**: host queue orders by `(priority, sequence)`; sleep-based tests → deterministic host still pending | 30/31, 50/52 |
@@ -23,7 +23,7 @@
 | G-8 | `CellRef` = bare UUID: no logical-vs-incarnation identity | `CellRef(logicalId, incarnation)`; links bind to logicalId | 10/11 |
 | G-9 | No organelle port hiding/exposure | `exposes` declaration; host resolves only exposed ports externally | 10/11 |
 | G-10 | Membranes have no code form | Realize as: handshake hooks → port policies → membrane object (cross-port rules) | 10/11 |
-| G-11 | No data-path vs management contract distinction | Marker/lint via KSP; push-only enforced on data path; also drives shadow-mode effects (G-32) | 10/12 |
+| G-11 | No data-path vs management contract distinction | Marker/lint via KSP; push-only enforced on data path; also drives shadow-mode effects (G-32). **M5.1 partial**: `@Contract(management)` marks every port contract, flag rides the descriptor; push-only lint open | 10/12 |
 | G-12 | No Link object, no handshake, no unlink, no cardinality enforcement | **Phase 1 done**: `Link`/`LinkResult`/`onLink`/`onUnlink`/`unlink()`, cardinality → `Rejected`, `connect` surfaces results; cross-host = `Deferred` + dead-letter until wire (M5); ownership enforcement waits on G-21 markers | 10/13 |
 | G-13 | No multiplexed ports / generic protocol stacking | Sub-ports keyed by ProtocolId sharing one link; carries attention, state-request, link mgmt | 10/12 |
 | G-14 | No policy representation | **Phase 1 done**: composable link-time `LinkPolicy` on ports, first-rejection-wins; `LinkRequest.identity` slot exists (marker only, G-29); flow-time policies await membranes | 10/13, 40/43 |
@@ -59,7 +59,7 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-15 | No wire layer (format, transport, addressing) | KSP method-id tables + serializers; bridge cells as transport; after G-4/G-12 | 40/41 |
+| G-15 | No wire layer (format, transport, addressing) | KSP method-id tables + serializers; bridge cells as transport; after G-4/G-12. **M5.1 done**: method-id tables + `ContractRegistry`; serializers/envelope M5.2, bridges M5.3, addressing M5.4, transport M5.5 | 40/41 |
 | G-7 | Replication undesigned | Replicas = same logicalId on many hosts + delta gossip over ordinary links | 40/42 |
 | G-29 | No threat model / identity | Identity-bearing LinkRequest from the start; full model trails policy substrate | 40/43 |
 

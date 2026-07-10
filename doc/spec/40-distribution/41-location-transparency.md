@@ -29,8 +29,13 @@ direct call → queue hop → serialized send.
 
 1. **Serialized invocation format**: stable method identification (contract id
    + method id from KSP-generated tables — never `java.lang.reflect.Method`,
-   P9) + arguments encoded via generated serializers (`gen`'s
-   `SerializerProcessor` is the seed; kotlinx.serialization the likely codec).
+   P9) + arguments encoded via generated serializers (kotlinx.serialization
+   the chosen codec).
+   *(M5.1: identity half done — `@Contract` interfaces get generated
+   `ContractDescriptor` tables (`gen.wire.ContractProcessor`), ids hashed
+   FNV-1a 64 from FQN / FQN#name+erased-JVM-signature, ServiceLoader-collected
+   into `ContractRegistry`; `Invocation` carries `contractId`/`methodId` at
+   capture. Argument encoding is M5.2.)*
 2. **Generated proxies** (KSP/Poet) replace JDK dynamic proxies at boundaries:
    KMP-compatible, reflection-free, and the natural place to emit port
    metadata (contract ids, ownership flags 20/23, color 30/32).

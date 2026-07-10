@@ -1,5 +1,8 @@
 package civictech.cell
 
+import civictech.gen.wire.Contract
+
+@Contract
 interface Consumer<T> {
     fun provide(input: T)
 

@@ -10,8 +10,10 @@ import civictech.cell.port.registerPort
 import civictech.cell.proxy.Buffering
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
+import civictech.gen.wire.Contract
 import java.util.*
 
+@Contract
 interface TrafficLightControl {
     fun setGreen()
     fun setRed()

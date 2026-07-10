@@ -117,14 +117,18 @@ the source port, so delegation presents the correct new port.)*
 
 ## Reflection budget
 
-⚠ CONFLICT (C-5): `Invocation.of(method, args)` currently holds a
-`java.lang.reflect.Method`, `Proxy.fromClass` uses JDK dynamic proxies, and
-`ManagedHost.findPort` resolves ports reflectively. ADR 3 forbids reflection
-artifacts **in the serialized form** and prefers KSP/Poet generation for KMP
-compatibility and speed.
+⚠ CONFLICT (C-5): `Proxy.fromClass` uses JDK dynamic proxies. ADR 3 forbids
+reflection artifacts **in the serialized form** and prefers KSP/Poet
+generation for KMP compatibility and speed.
 **Resolution**: reflection is acceptable *inside a JVM process* as the interim
 mechanism; the serialized form MUST use stable method ids (name + signature
 hash or ordinal from generated tables). KSP-generated proxies (extending the
 `gen` module) replace dynamic proxies where profiling or KMP demands it.
-Port discovery should move from reflection to the delegate registry created by
-`by input()/by output()` (10/15).
+
+*(M5.1: the stable ids exist. `@Contract`-annotated port interfaces get
+KSP-generated `ContractDescriptor` tables — `contractId = hash(FQN)`,
+`methodId = hash(FQN#name + erased JVM signature)`, FNV-1a 64 — collected via
+ServiceLoader into `gen.wire.ContractRegistry`. `Invocation.of` resolves and
+carries `contractId`/`methodId` at capture; the M5.2 wire form serializes only
+those ids. In-process dispatch stays reflective by resolution above; dynamic
+proxies remain until profiling/KMP demands otherwise.)*

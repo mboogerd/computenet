@@ -2,6 +2,7 @@ package civictech.cell.proxy
 
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
+import civictech.gen.wire.ContractRegistry
 import java.lang.reflect.Method
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
@@ -12,6 +13,14 @@ data class Invocation(
     val args: List<Any?>,
     /** Data-path wave context (G-4); null on management paths and spontaneous calls. */
     val context: MessageContext? = null,
+    /**
+     * Stable wire identity (G-15, C-5) from the generated contract tables;
+     * null when the captured interface has no `@Contract` annotation. The
+     * serialized form (M5.2) uses only these ids — name/parameterTypes stay
+     * the in-process reflective dispatch path.
+     */
+    val contractId: Long? = null,
+    val methodId: Long? = null,
 ) : java.io.Serializable {
     operator fun invoke(target: Any?): Any? {
         if (target == null) return null
@@ -75,11 +84,14 @@ data class Invocation(
             val types = method?.parameterTypes?.map { it.name } ?: emptyList()
             val suspendCapture = method?.parameterTypes?.lastOrNull() == Continuation::class.java
             val values = args?.toList() ?: emptyList()
+            val ids = method?.let { ContractRegistry.idsOf(it) }
             return Invocation(
                 methodName = method?.name ?: "",
                 parameterTypes = if (suspendCapture) types.dropLast(1) else types,
                 args = if (values.lastOrNull() is Continuation<*>) values.dropLast(1) else values,
                 context = context,
+                contractId = ids?.first,
+                methodId = ids?.second,
             )
         }
     }

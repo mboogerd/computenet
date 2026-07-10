@@ -8,9 +8,11 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
 
+@Contract
 interface CounterOps {
     fun increment(amount: Long)
     fun decrement(amount: Long)

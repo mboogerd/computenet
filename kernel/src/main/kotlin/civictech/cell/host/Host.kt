@@ -5,12 +5,14 @@ import civictech.cell.CellRef
 import civictech.cell.port.LinkResult
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
+import civictech.gen.wire.Contract
 
 /**
  * Interface for interacting with a [Host].
  *
  * A Host is a [Cell] that hosts other cells and manages their connections.
  */
+@Contract(management = true)
 interface HostManagementApi {
     /**
      * Spawns a cell in the host and activates it.
@@ -92,6 +94,7 @@ inline fun <reified T : Any> HostManagementApi.lookup(ref: CellRef): T? = lookup
 /**
  * Interface for routing API calls to inlets of hosted cells.
  */
+@Contract(management = true)
 interface HostRoutingApi {
     /**
      * Routes an [Invocation] to a specific inlet of a hosted cell.
