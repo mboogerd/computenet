@@ -1,46 +1,33 @@
 package civictech.cell.data
 
+import civictech.cell.Timestamp
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.buffering
-import civictech.cell.port.PortRef
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.*
 
 class SetCellTest {
 
+    private fun tag(counter: Long) = Timestamp(UUID(0, counter), counter)
+
     @Test
-    fun `SetDelta mergeAddWins works correctly`() {
-        val d1 = SetDelta(adds = setOf(1, 2), dels = setOf(3))
-        val d2 = SetDelta(adds = setOf(3), dels = setOf(2, 4))
+    fun `SetDelta merge is a commutative tag-set union`() {
+        val t1 = tag(1); val t2 = tag(2); val t3 = tag(3)
+        val d1 = SetDelta(adds = mapOf("x" to setOf(t1)), dels = mapOf("y" to setOf(t3)))
+        val d2 = SetDelta(adds = mapOf("x" to setOf(t2)), dels = emptyMap())
 
-        // mergeAddWins: 1, 2 from d1. 3 from d2. 
-        // adds = {1, 2, 3}
-        // dels = {3} (d1) + {2, 4} (d2) = {2, 3, 4}
-        // dels - adds = {4}
-        val result = d1.mergeAddWins(d2)
-
-        assertEquals(setOf(1, 2, 3), result.adds)
-        assertEquals(setOf(4), result.dels)
+        val merged = d1.merge(d2)
+        assertEquals(mapOf("x" to setOf(t1, t2)), merged.adds)
+        assertEquals(mapOf("y" to setOf(t3)), merged.dels)
+        assertEquals(merged, d2.merge(d1))
     }
 
     @Test
-    fun `SetDelta mergeDelWins works correctly`() {
-        val d1 = SetDelta(adds = setOf(1, 2), dels = setOf(3))
-        val d2 = SetDelta(adds = setOf(3), dels = setOf(2, 4))
-
-        // mergeDelWins: 3 from d1. 2, 4 from d2.
-        // dels = {2, 3, 4}
-        // adds = {1, 2} (d1) + {3} (d2) = {1, 2, 3}
-        // adds - dels = {1}
-        val result = d1.mergeDelWins(d2)
-
-        assertEquals(setOf(1), result.adds)
-        assertEquals(setOf(2, 3, 4), result.dels)
-    }
-
-    @Test
-    fun `SetCell propagates additions`() {
+    fun `SetCell propagates additions with a fresh tag per add`() {
         val cell = SetCell<Int>()
 
         val invocationBuffer = mutableListOf<Invocation>()
@@ -48,33 +35,17 @@ class SetCellTest {
         cell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
 
         cell.inlet.call.add(1)
+        cell.inlet.call.add(1)
 
-        assertEquals(1, invocationBuffer.size)
+        assertEquals(2, invocationBuffer.size)
         @Suppress("UNCHECKED_CAST")
-        val delta = invocationBuffer[0].args[0] as SetDelta<Int>
-        assertEquals(setOf(1), delta.adds)
-        assertEquals(emptySet<Int>(), delta.dels)
+        val deltas = invocationBuffer.map { it.args[0] as SetDelta<Int> }
+        val tags = deltas.map { it.adds.getValue(1).single() }
+        assertEquals(2, tags.toSet().size) // re-adding mints a new tag
     }
 
     @Test
-    fun `SetCell propagates deletions`() {
-        val cell = SetCell<Int>()
-
-        val invocationBuffer = mutableListOf<Invocation>()
-        val buffer = buffering<Propagate<SetDelta<Int>>>(invocationBuffer)
-        cell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
-
-        cell.inlet.call.remove(1)
-
-        assertEquals(1, invocationBuffer.size)
-        @Suppress("UNCHECKED_CAST")
-        val delta = invocationBuffer[0].args[0] as SetDelta<Int>
-        assertEquals(emptySet<Int>(), delta.adds)
-        assertEquals(setOf(1), delta.dels)
-    }
-
-    @Test
-    fun `SetCell handles multiple operations`() {
+    fun `SetCell remove emits exactly the observed tags`() {
         val cell = SetCell<Int>()
 
         val invocationBuffer = mutableListOf<Invocation>()
@@ -82,21 +53,25 @@ class SetCellTest {
         cell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
 
         cell.inlet.call.add(1)
-        cell.inlet.call.add(2)
+        cell.inlet.call.add(1)
         cell.inlet.call.remove(1)
 
         assertEquals(3, invocationBuffer.size)
-
         @Suppress("UNCHECKED_CAST")
-        val d1 = invocationBuffer[0].args[0] as SetDelta<Int>
-        assertEquals(setOf(1), d1.adds)
+        val deltas = invocationBuffer.map { it.args[0] as SetDelta<Int> }
+        val minted = deltas.take(2).flatMap { it.adds.getValue(1) }.toSet()
+        assertEquals(minted, deltas[2].dels.getValue(1))
+    }
 
-        @Suppress("UNCHECKED_CAST")
-        val d2 = invocationBuffer[1].args[0] as SetDelta<Int>
-        assertEquals(setOf(2), d2.adds)
+    @Test
+    fun `SetCell remove of an unobserved element is a no-op`() {
+        val cell = SetCell<Int>()
 
-        @Suppress("UNCHECKED_CAST")
-        val d3 = invocationBuffer[2].args[0] as SetDelta<Int>
-        assertEquals(setOf(1), d3.dels)
+        val invocationBuffer = mutableListOf<Invocation>()
+        val buffer = buffering<Propagate<SetDelta<Int>>>(invocationBuffer)
+        cell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
+
+        cell.inlet.call.remove(42)
+        assertTrue(invocationBuffer.isEmpty())
     }
 }

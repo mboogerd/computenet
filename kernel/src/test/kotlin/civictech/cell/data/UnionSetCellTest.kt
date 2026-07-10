@@ -1,127 +1,78 @@
 package civictech.cell.data
 
+import civictech.cell.Timestamp
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.buffering
-import civictech.cell.port.PortRef
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import java.util.*
 
 class UnionSetCellTest {
 
+    private fun tag(counter: Long) = Timestamp(UUID(0, counter), counter)
+
+    @Suppress("UNCHECKED_CAST")
+    private fun deltas(buffer: List<Invocation>) = buffer.map { it.args[0] as SetDelta<Int> }
+
     @Test
-    fun `UnionSetCell merges additions from multiple sources`() {
+    fun `forwards only new tag information`() {
         val unionCell = UnionSetCell<Int>()
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Propagate<SetDelta<Int>>>(invocationBuffer)
         unionCell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
 
-        // Simulate two sources
-        val source1 = unionCell.inlet.call
-        val source2 = unionCell.inlet.call
+        val t1 = tag(1); val t2 = tag(2)
+        unionCell.inlet.call.propagate(SetDelta(adds = mapOf(1 to setOf(t1))))
+        // duplicate delivery of t1 (diamond fan-in) plus a genuinely new tag t2
+        unionCell.inlet.call.propagate(SetDelta(adds = mapOf(1 to setOf(t1, t2))))
 
-        source1.propagate(SetDelta(adds = setOf(1), dels = emptySet()))
-        source2.propagate(SetDelta(adds = setOf(1, 2), dels = emptySet()))
-
-        // Total 3 calls to propagate from sources, but only 2 effective deltas should be propagated
-        // 1st: add {1} -> union {1} (new)
-        // 2nd: add {1, 2} -> {1} is already there, {2} is new.
-        
-        assertEquals(2, invocationBuffer.size)
-        
-        @Suppress("UNCHECKED_CAST")
-        val d1 = invocationBuffer[0].args[0] as SetDelta<Int>
-        assertEquals(setOf(1), d1.adds)
-        
-        @Suppress("UNCHECKED_CAST")
-        val d2 = invocationBuffer[1].args[0] as SetDelta<Int>
-        assertEquals(setOf(2), d2.adds)
+        val out = deltas(invocationBuffer)
+        assertEquals(2, out.size)
+        assertEquals(mapOf(1 to setOf(t1)), out[0].adds)
+        assertEquals(mapOf(1 to setOf(t2)), out[1].adds) // t1 deduped
     }
 
     @Test
-    fun `UnionSetCell keeps element if one source still has it`() {
-        val unionCell = UnionSetCell<Int>()
-        val invocationBuffer = mutableListOf<Invocation>()
-        val buffer = buffering<Propagate<SetDelta<Int>>>(invocationBuffer)
-        unionCell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
-
-        val source1 = unionCell.inlet.call
-        val source2 = unionCell.inlet.call
-
-        source1.propagate(SetDelta(adds = setOf(1), dels = emptySet()))
-        source2.propagate(SetDelta(adds = setOf(1), dels = emptySet()))
-        
-        // Remove from source 1
-        source1.propagate(SetDelta(adds = emptySet(), dels = setOf(1)))
-        
-        // union should still have 1 because source 2 has it.
-        // invocationBuffer should only have the first 'add 1'
-        assertEquals(1, invocationBuffer.size)
-        
-        // Remove from source 2
-        source2.propagate(SetDelta(adds = emptySet(), dels = setOf(1)))
-        
-        // Now it should be removed from union
-        assertEquals(2, invocationBuffer.size)
-        @Suppress("UNCHECKED_CAST")
-        val d2 = invocationBuffer[1].args[0] as SetDelta<Int>
-        assertEquals(setOf(1), d2.dels)
-    }
-
-    @Test
-    fun `UnionSetCell works with SetCell`() {
+    fun `element stays live while another source's tag survives`() {
         val setCell1 = SetCell<Int>()
         val setCell2 = SetCell<Int>()
         val unionCell = UnionSetCell<Int>()
-        
+
         setCell1.outlet.linkTo(unionCell.inlet)
         setCell2.outlet.linkTo(unionCell.inlet)
-        
+
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Propagate<SetDelta<Int>>>(invocationBuffer)
         unionCell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
-        
+
         setCell1.inlet.call.add(1)
         setCell2.inlet.call.add(1)
-        
-        assertEquals(1, invocationBuffer.size)
-        
         setCell1.inlet.call.remove(1)
-        assertEquals(1, invocationBuffer.size)
-        
+
+        // three effective tag events so far: two adds, one del — element still live
+        val afterPartialRemove = deltas(invocationBuffer)
+        assertEquals(3, afterPartialRemove.size)
+        val liveTags = afterPartialRemove.fold(SetDelta<Int>()) { acc, d -> acc.merge(d) }
+            .let { it.adds.getValue(1) - it.dels.getValue(1) }
+        assertEquals(1, liveTags.size)
+
         setCell2.inlet.call.remove(1)
-        assertEquals(2, invocationBuffer.size)
-        
-        @Suppress("UNCHECKED_CAST")
-        val lastDelta = invocationBuffer.last().args[0] as SetDelta<Int>
-        assertEquals(setOf(1), lastDelta.dels)
+
+        // now every add-tag is covered by a del: element dead
+        val all = deltas(invocationBuffer).fold(SetDelta<Int>()) { acc, d -> acc.merge(d) }
+        assertEquals(all.adds.getValue(1), all.dels.getValue(1))
     }
 
     @Test
-    fun `UnionSetCell handles simultaneous add and del of same element correctly`() {
+    fun `del of an unseen tag is dropped`() {
         val unionCell = UnionSetCell<Int>()
         val invocationBuffer = mutableListOf<Invocation>()
         val buffer = buffering<Propagate<SetDelta<Int>>>(invocationBuffer)
         unionCell.outlet.subscribe(Use.fixed(buffer, PortRef.generate()))
 
-        // If an element is in both adds and dels, it's weird but possible.
-        // Our current logic processes adds then dels.
-        // If count was 0:
-        // adds: count becomes 1, effectiveAdds contains element.
-        // dels: count becomes 0, effectiveDels contains element.
-        // finalAdds = effectiveAdds - effectiveDels = empty
-        // finalDels = effectiveDels - effectiveAdds = empty
-        // Result: nothing propagated, which is correct as it's a net-zero change.
-        
-        unionCell.inlet.call.propagate(SetDelta(adds = setOf(1), dels = setOf(1)))
+        unionCell.inlet.call.propagate(SetDelta(dels = mapOf(1 to setOf(tag(9)))))
         assertEquals(0, invocationBuffer.size)
-        
-        // If count was 1:
-        // adds: count becomes 2, effectiveAdds is empty (since it was 1).
-        // dels: count becomes 1, effectiveDels is empty (since it's not going to 0).
-        // Result: nothing propagated, correct.
-        unionCell.inlet.call.propagate(SetDelta(adds = setOf(2), dels = emptySet())) // count(2)=1
-        unionCell.inlet.call.propagate(SetDelta(adds = setOf(2), dels = setOf(2)))
-        assertEquals(1, invocationBuffer.size) // Only for first add of 2
     }
 }

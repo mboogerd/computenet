@@ -1,6 +1,10 @@
 package civictech.cell.data
 
+import civictech.cell.Cell
+import civictech.cell.CellRef
 import civictech.cell.port.*
+import java.io.Serializable
+import java.util.*
 
 interface ListOps<E> {
     fun add(element: E)
@@ -9,18 +13,24 @@ interface ListOps<E> {
     fun removeAt(index: Int)
 }
 
+/**
+ * Convergence limit (G-23, documented): index-addressed deltas are only
+ * meaningful in the emission order of a single FIFO stream — concurrent
+ * multi-writer edits do not converge. Stable multi-writer sequences need
+ * position identifiers (RGA/LSEQ style), out of scope until replication (42).
+ */
 data class ListDelta<E>(
     val adds: List<IndexedValue<E>> = emptyList(),
     val updates: List<IndexedValue<E>> = emptyList(),
     val removals: List<Int> = emptyList()
-)
+) : Serializable
 
 interface ListApi<E> {
     val inlet: Use<ListOps<E>>
     val outlet: Subscribe<Propagate<ListDelta<E>>>
 }
 
-class ListCell<E> : ListApi<E> {
+class ListCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : ListApi<E>, Cell {
     override val inlet = registerPort("inlet", FanInlet.create<ListOps<E>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<ListDelta<E>>>())
 

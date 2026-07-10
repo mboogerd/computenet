@@ -109,6 +109,12 @@ Structural changes must be causally consistent with value updates:
   happens at ports (Buffering proxy) and context rides inside invocations.
 - **Pull/late-join (21)**: catch-up snapshots are stamped with the wave they
   represent, so a glitch-free consumer can align them with live deltas.
+- **Causal merge tags (24)**: observed-remove set tags reuse the `Timestamp`
+  type but are minted cell-locally, *not* taken from the current wave —
+  OR-set correctness needs a tag unique per add instance, and a wave id
+  repeats across every cell the wave touches. The wave context still rides
+  delta invocations unchanged; tags and waves are separate uses of one clock
+  shape.
 - **Cycles (21)**: wave semantics around cycles are unresolved (a cycle
   re-entering a glitch-free cell with the same wave id must be detected —
   candidate: wave id + hop count, or explicit cycle-breaker cells). Open.

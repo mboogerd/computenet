@@ -40,7 +40,7 @@
 | G-20 | Wave-id assignment in a decentralized graph undesigned | **Decided & implemented**: `Timestamp(sourceId, counter)` minted per emitting outlet; convergence not simultaneity across sources; cycles open | 20/22 |
 | G-21 | Ownership contracts unimplemented | Marker types → link-time enforcement (after G-12) → pools only when profiled | 20/23 |
 | G-22 | Data cells can't serve state to late joiners | Snapshot via state-request protocol | 20/24 |
-| G-23 | Delta merges are arrival-order biased; not replica-stable | Causal tags on deltas (context or OR-set ids); prerequisite for replication | 20/24, 40/42 |
+| G-23 | Delta merges are arrival-order biased; not replica-stable | **Resolved for the set family (M4.1)**: observed-remove tags — `SetDelta` carries per-element `Timestamp` tag-sets minted cell-locally; merge = tag union (commutative, associative, idempotent), validated by a 200-seed convergence test with an order-biased control. `CounterCell` commutative by construction. Map/list carry documented convergence limits until replication (42) | 20/24, 40/42 |
 | G-24 | No partitioned state | PartitionedCell = composite cell + key-routing proxy; placement = ordinary placement | 20/24 |
 | G-25 | No durability | **Partial (M3.3)**: `Stateful` snapshot/restore captured by drain, serialization round-trip on migrate; the invocation journal (replay = recovery) remains (M4+) | 20/24, 30/31 |
 

@@ -1,27 +1,38 @@
 package civictech.cell.data
 
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.Timestamp
 import civictech.cell.port.*
+import java.io.Serializable
+import java.util.*
 
 interface SetOps<E> {
     fun add(element: E)
     fun remove(element: E)
 }
 
+/**
+ * Observed-remove set delta (G-23): every add carries a unique tag; a remove
+ * carries exactly the tags it observed. Merging is tag-set union — commutative,
+ * associative, idempotent — so membership converges regardless of arrival
+ * order. An element is present iff it has an add-tag not covered by a del.
+ * Add-wins falls out: a concurrent add's tag is never observed by the remove.
+ */
 data class SetDelta<E>(
-    val adds: Set<E>,
-    val dels: Set<E>
-) {
-    fun mergeAddWins(other: SetDelta<E>): SetDelta<E> {
-        val newAdds = adds.union(other.adds)
-        val newDels = dels.union(other.dels).minus(newAdds)
-        return SetDelta(newAdds, newDels)
-    }
-    fun mergeDelWins(other: SetDelta<E>): SetDelta<E> {
-        val newDels = dels.union(other.dels)
-        val newAdds = adds.union(other.adds).minus(newDels)
-        return SetDelta(newAdds, newDels)
-    }
+    val adds: Map<E, Set<Timestamp>> = emptyMap(),
+    val dels: Map<E, Set<Timestamp>> = emptyMap(),
+) : Serializable {
+    fun merge(other: SetDelta<E>): SetDelta<E> =
+        SetDelta(mergeTags(adds, other.adds), mergeTags(dels, other.dels))
 
+    companion object {
+        private fun <E> mergeTags(
+            a: Map<E, Set<Timestamp>>,
+            b: Map<E, Set<Timestamp>>,
+        ): Map<E, Set<Timestamp>> =
+            (a.keys + b.keys).associateWith { (a[it] ?: emptySet()) + (b[it] ?: emptySet()) }
+    }
 }
 
 interface SetApi<E> {
@@ -29,20 +40,29 @@ interface SetApi<E> {
     val outlet: Subscribe<Propagate<SetDelta<E>>>
 }
 
-class SetCell<E> : SetApi<E> {
+class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetApi<E>, Cell {
     override val inlet = registerPort("inlet", FanInlet.create<SetOps<E>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
-    private val state = mutableSetOf<E>()
+    private val state = mutableMapOf<E, MutableSet<Timestamp>>()
+
+    // Tags are minted locally, not taken from the wave's MessageContext:
+    // observed-remove correctness needs a tag unique per add *instance*, and a
+    // wave timestamp repeats across every cell the wave touches (22).
+    private val tagSource: UUID = UUID.randomUUID()
+    private var tagCounter = 0L
+
     private val inletApi = object : SetOps<E> {
         override fun add(element: E) {
-            state += element
-            outlet.call.propagate(SetDelta(setOf(element), emptySet()))
+            val tag = Timestamp(tagSource, ++tagCounter)
+            state.getOrPut(element) { mutableSetOf() } += tag
+            outlet.call.propagate(SetDelta(adds = mapOf(element to setOf(tag))))
         }
 
         override fun remove(element: E) {
-            state -= element
-            outlet.call.propagate(SetDelta(emptySet(), setOf(element)))
+            // effective-only (21): removing an unobserved element is a no-op
+            val observed = state.remove(element) ?: return
+            outlet.call.propagate(SetDelta(dels = mapOf(element to observed.toSet())))
         }
     }
 
@@ -54,4 +74,3 @@ class SetCell<E> : SetApi<E> {
         fun <E> create(): SetApi<E> = SetCell()
     }
 }
-

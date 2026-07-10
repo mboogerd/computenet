@@ -1,23 +1,33 @@
 package civictech.cell.data
 
+import civictech.cell.Cell
+import civictech.cell.CellRef
 import civictech.cell.port.*
+import java.io.Serializable
+import java.util.*
 
 interface MapOps<K, V> {
     fun put(key: K, value: V)
     fun remove(key: K)
 }
 
+/**
+ * Convergence limit (G-23, documented): unlike [SetDelta], map deltas carry no
+ * causal tags — concurrent puts to the same key resolve by arrival order and
+ * are not replica-stable. Fine within one FIFO stream; multi-writer key
+ * conflicts need last-writer-wins tags or per-key cells before replication (42).
+ */
 data class MapDelta<K, V>(
     val puts: Map<K, V>,
     val removals: Set<K>
-)
+) : Serializable
 
 interface MapApi<K, V> {
     val inlet: Use<MapOps<K, V>>
     val outlet: Subscribe<Propagate<MapDelta<K, V>>>
 }
 
-class MapCell<K, V> : MapApi<K, V> {
+class MapCell<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : MapApi<K, V>, Cell {
     override val inlet = registerPort("inlet", FanInlet.create<MapOps<K, V>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, V>>>())
 
