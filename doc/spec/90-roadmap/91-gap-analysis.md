@@ -27,7 +27,7 @@
 | G-12 | No Link object, no handshake, no unlink, no cardinality enforcement | **Phase 1 done**: `Link`/`LinkResult`/`onLink`/`onUnlink`/`unlink()`, cardinality → `Rejected`, `connect` surfaces results; cross-host = `Deferred` + dead-letter until wire (M5); ownership enforcement waits on G-21 markers | 10/13 |
 | G-13 | No multiplexed ports / generic protocol stacking | Sub-ports keyed by ProtocolId sharing one link; carries attention, state-request, link mgmt | 10/12 |
 | G-14 | No policy representation | **Phase 1 done**: composable link-time `LinkPolicy` on ports, first-rejection-wins; `LinkRequest.identity` slot exists (marker only, G-29); flow-time policies await membranes | 10/13, 40/43 |
-| G-16 | No `onDeactivate` lifecycle hook | **Resolved (first phase)**: hook + `despawn` + live-ref spawn guard; post-unlink ordering waits on G-12/G-5 | 10/15, 30/33 |
+| G-16 | No `onDeactivate` lifecycle hook | **Resolved (M3.3)**: hook + `despawn` + live-ref spawn guard; the drain protocol guarantees deactivation follows the flushed queue and captures state at that point | 10/15, 30/33 |
 | G-17 | Port discovery via reflection walk | **Resolved**: per-cell `PortRegistry` fed by delegates (`provideDelegate`) and `registerPort`; reflective `findPort` deleted | 10/15 |
 
 ## Gaps — semantics (20)
@@ -42,7 +42,7 @@
 | G-22 | Data cells can't serve state to late joiners | Snapshot via state-request protocol | 20/24 |
 | G-23 | Delta merges are arrival-order biased; not replica-stable | Causal tags on deltas (context or OR-set ids); prerequisite for replication | 20/24, 40/42 |
 | G-24 | No partitioned state | PartitionedCell = composite cell + key-routing proxy; placement = ordinary placement | 20/24 |
-| G-25 | No durability | Host-level invocation journal + state snapshots; replay = recovery | 20/24, 30/31 |
+| G-25 | No durability | **Partial (M3.3)**: `Stateful` snapshot/restore captured by drain, serialization round-trip on migrate; the invocation journal (replay = recovery) remains (M4+) | 20/24, 30/31 |
 
 ## Gaps — execution (30)
 
@@ -52,7 +52,7 @@
 | G-27 | No coroutine ManagedHost | **Resolved (M3.1)**: `CoroutineScheduler` written fresh (legacy suspending runtime was empty stubs); suspend-capable `SimulationController` stepping | 30/31, 30/32 |
 | G-26 | Error handling = printStackTrace | **Minimal done**: `DeadLetter` on host `deadLetterOutlet` (failures + previously-silent drops); error outlets + supervision policies remain (M3) | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
-| G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Partial (M3.2)**: closable intake + fail-fast + `LocationRegistry` park/replay done; drain/state-capture remain (M3.3) | 30/33 |
+| G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Resolved (M3.2–M3.3)**: closable intake + fail-fast + `LocationRegistry` park/replay; two-phase `drainHost`/`resumeHost`/`migrate` with `Stateful` snapshot capture. Disk overflow mailbox remains with G-25 | 30/33 |
 | G-6 | Attention/scheduling undesigned beyond static priorities | Attention protocol sketch; aggregation & fairness open | 30/34 |
 
 ## Gaps — distribution (40)

@@ -47,8 +47,8 @@ harness detects glitches (`GlitchFreeDiamondTest`).*
    degenerated to nothing while intakes are unbounded; see 32.
 2. ~~Closable intake + fail-fast send + re-resolution via a location registry
    (G-5); Buffering-based park/replay~~ — done (M3.2).
-3. Full drain protocol: suspend/resume/migrate on `HostManagementApi`;
-   state capture via serializable snapshots (starts G-25).
+3. ~~Full drain protocol: suspend/resume/migrate on `HostManagementApi`;
+   state capture via serializable snapshots (starts G-25)~~ — done (M3.3).
 4. Traffic-light generalized: suspension as a standard membrane behavior.
 
 *Exit criterion: migrate a running subchain between hosts (including across

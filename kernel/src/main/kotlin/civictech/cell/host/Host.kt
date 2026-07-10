@@ -30,6 +30,32 @@ interface HostManagementApi {
     fun despawn(ref: CellRef)
 
     /**
+     * Drains this host (spec 33 steps 1–3): intake closes immediately (new
+     * sends fail fast and park at the registry), everything already accepted
+     * is processed, then cells are deactivated and [civictech.cell.Stateful]
+     * snapshots captured. Fire-and-forget; the host is DRAINED once the queue
+     * has flushed. Only legal while running.
+     */
+    fun drainHost()
+
+    /**
+     * Resumes a drained host (spec 33 step 6–7): cells re-activate, the intake
+     * reopens, and locations republish — parked traffic replays in order
+     * before new sends land. Only legal once DRAINED.
+     */
+    fun resumeHost()
+
+    /**
+     * Drains this host, then moves every cell to [to] (spec 33: the host is
+     * the unit of mobility — for finer granularity, make hosts smaller).
+     * [civictech.cell.Stateful] cells go through a forced snapshot →
+     * serialize → restore round-trip. Target-side spawns publish each cell,
+     * replaying its parked traffic there; color validation applies at the
+     * target, so moving marked cells across colors is a caller error.
+     */
+    fun migrate(to: Use<HostManagementApi>)
+
+    /**
      * Connects an outlet of one hosted cell to an inlet of another hosted cell.
      *
      * @param from The reference to the source cell.

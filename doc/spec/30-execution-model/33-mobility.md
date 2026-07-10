@@ -1,8 +1,8 @@
 # 33 — Mobility: Suspension and Migration
 
-> **Status**: Specified (decision stable across two ADRs); closable intake + re-resolution implemented (M3.2); drain protocol pending
+> **Status**: Implemented (core, M3.2–M3.3): closable intake, re-resolution, drain/resume/migrate with snapshot capture
 > **Sources**: ADR — Computelet Mobility (supersedes ADR — Blocking Mailbox), ADR — Computelet Kernel
-> **Implementation**: Buffering proxy + serve/delegate switching (TrafficLightCell) = the boundary primitive; `ManagedHost.closeIntake`/`IntakeClosedException` + `cell.host.LocationRegistry` (park/replay) = the stale-reference story; drain protocol not yet
+> **Implementation**: Buffering proxy + serve/delegate switching (TrafficLightCell) = the boundary primitive; `ManagedHost.closeIntake`/`IntakeClosedException` + `cell.host.LocationRegistry` (park/replay) = the stale-reference story; `HostManagementApi.drainHost/resumeHost/migrate` + `cell.Stateful` = the drain protocol
 
 ## Definitions
 
@@ -50,7 +50,7 @@ minimal (P2): senders pay only a volatile read + enqueue, ever.
 This is the Link-and-Lease invalidation story (10/14) applied to location:
 optimistic send, lazy re-resolution, O(rare-event) cost.
 
-## The drain protocol (per host)
+## The drain protocol (per host) — implemented (M3.3)
 
 ```
 1. close intake            → new sends fail fast; senders park/retry via re-resolution
@@ -65,6 +65,28 @@ optimistic send, lazy re-resolution, O(rare-event) cost.
 Ordering invariant: for any link, messages accepted before closure are
 delivered before messages sent after re-resolution (matches 13's no-loss
 invariant; per-link FIFO preserved end-to-end).
+
+How the implementation realizes the steps (`HostManagementApi`):
+
+- **`drainHost()`** is two-phase: the management task (priority 0) closes the
+  intake at once; a completion task at priority 30 — *below* data's 20, so no
+  priority inversion — runs after every accepted invocation, deactivates the
+  cells and captures `Stateful` snapshots (steps 1–3). On a 🟣 host a task
+  suspended mid-message completes before deactivation (actor semantics).
+- **`resumeHost()`** re-activates cells, reopens the intake, republishes —
+  the registry replays parked traffic in order before new sends land
+  (steps 6–7 in place).
+- **`migrate(to)`** drains, then spawns each cell on the target; `Stateful`
+  state travels as a snapshot forced through a real serialization round-trip
+  even in-process (the G-25 seam is exercised, not just claimed). The
+  target-side spawn publishes each cell, replaying its parked traffic there.
+  The ordering invariant falls out structurally: the accepted batch flushes on
+  the old host before the parked batch replays on the new one.
+- Step 4 (detach links) needs no code in-process: the cell object moves whole,
+  so direct links travel with it and routed links re-resolve via the registry.
+  Explicit topology capture becomes real work at the wire boundary (M5).
+- Color validation applies at the target: migrating marked cells across colors
+  is a caller error; 🟢 pure cells cross freely (32).
 
 ## Port-level buffering: the traffic-light primitive (implemented)
 
@@ -84,9 +106,10 @@ first membrane behavior in code (11).
 2. ~~Re-resolution via a **location registry**~~ — done (M3.2,
    `cell.host.LocationRegistry`; `cell.Handle`, the pre-invocation-model
    attempt, is deleted). Remote addressing still unifies here in M5 (40/41).
-3. `onDeactivate` + state capture (P9: cell state must be serializable — tie
-   to 24 durability snapshots).
-4. Host suspend/resume/migrate operations on `HostManagementApi`.
+3. ~~`onDeactivate` + state capture~~ — done (M3.3, `cell.Stateful`; ties to
+   24 durability snapshots).
+4. ~~Host suspend/resume/migrate operations on `HostManagementApi`~~ — done
+   (M3.3: `drainHost`/`resumeHost`/`migrate`).
 5. ~~Parked-invocation transfer format~~ — done (M3.2: parked traffic IS
    `HostedPortInvocation`s, already the wire form, 14; contexts ride along).
 

@@ -57,11 +57,15 @@ COLD  --spawn(cell)-->  HOT  --suspend-->  SUSPENDED  --resume-->  HOT
    host must be able to enumerate ports by name without running cell logic.
 3. **Hosting-specific operations require HOT.** Calling them cold is an error
    with a clear message (guarded phase state), not undefined behavior.
-4. **Deactivation mirrors activation.** *(G-16 resolved, first phase:
+4. **Deactivation mirrors activation.** *(G-16 fully resolved, M3.3:
    `Cell.onDeactivate(ctx)` exists; `despawn(ref)` unregisters the cell and
    invokes it on the host's execution context, and re-spawning a live ref is
-   rejected. Unlink-before-deactivate ordering and state capture arrive with
-   links (10/13) and mobility (30/33).)*
+   rejected. The drain protocol (30/33) guarantees deactivation runs only
+   after every accepted invocation has flushed — its phase-2 task sits below
+   data priority — and captures `Stateful` snapshots at that point. The
+   SUSPENDED state in the diagram above is real: `drainHost`/`resumeHost`
+   re-activate the same cells in place, and re-activation after deactivation
+   is legal.)*
 
 ## ⚠ CONFLICT (C-7): two initialization styles in code
 

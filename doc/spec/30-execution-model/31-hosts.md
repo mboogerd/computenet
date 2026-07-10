@@ -29,6 +29,10 @@ A host:
 interface HostManagementApi {
     fun spawn(cell: Cell): CellRef
     fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T?   // proxy to a hosted cell's API
+    fun despawn(ref: CellRef)
+    fun drainHost()                        // spec 33 steps 1–3 (M3.3)
+    fun resumeHost()                       // spec 33 steps 6–7, in place
+    fun migrate(to: Use<HostManagementApi>) // drain + move all cells to the target host
     fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String)
     fun connect(from: CellRef, outletName: String, to: Use<*>)
 }
@@ -38,9 +42,10 @@ interface HostRoutingApi {
 ```
 
 `ManagedHost` runs one **virtual thread** draining a `PriorityBlockingQueue`;
-current priorities: management = 0, router = 10, hosted port invocations = 20
-(management preempts queued data — reconfiguration is never starved by
-traffic).
+current priorities: management = 0, router = 10, hosted port invocations = 20,
+drain completion = 30 (management preempts queued data — reconfiguration is
+never starved by traffic; the drain's phase-2 task sits *below* data so the
+accepted queue flushes before deactivation, 33).
 
 Boundary crossing: a port used across hosts resolves to a proxy that wraps the
 call as `HostedPortInvocation` and enqueues it on the target host

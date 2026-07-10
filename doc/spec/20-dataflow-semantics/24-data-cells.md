@@ -69,7 +69,9 @@ partitioning must not become a second distribution mechanism.
 ## Durability spectrum
 
 ADR 1 §3 requires in-memory / durable / hybrid state.
-⚠ GAP (G-25): no persistence anywhere. *Proposal*: durability as a host
-concern (30/31): a durable host journals applied invocations (they are
-serializable — P9 pays off) and snapshots cell state on suspension (30/33
-already needs state capture). Replay = recovery. Cells stay oblivious.
+⚠ GAP (G-25, journal remainder): no persistence yet, but the state-capture
+half exists (M3.3): `Stateful.snapshot()/restore()` is captured by the drain
+protocol and round-trips through real serialization on migration (30/33).
+*Remaining proposal*: durability as a host concern (30/31): a durable host
+journals applied invocations (they are serializable — P9 pays off) alongside
+those snapshots. Replay = recovery. Cells stay oblivious.

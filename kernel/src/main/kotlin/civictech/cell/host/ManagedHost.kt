@@ -7,7 +7,13 @@ import civictech.cell.BlockingCell
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
+import java.io.Serializable
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
@@ -55,6 +61,42 @@ open class ManagedHost(
 
     internal fun openIntake() {
         intakeOpen = true
+    }
+
+    private enum class State { RUNNING, DRAINING, DRAINED }
+
+    private var state = State.RUNNING
+
+    /** Snapshots captured by the last drain (spec 33 step 3; starts G-25). */
+    private val snapshots = mutableMapOf<CellRef, Serializable>()
+
+    private fun roundTrip(state: Serializable): Serializable {
+        val bytes = ByteArrayOutputStream()
+            .also { ObjectOutputStream(it).use { out -> out.writeObject(state) } }
+            .toByteArray()
+        return ObjectInputStream(ByteArrayInputStream(bytes)).readObject() as Serializable
+    }
+
+    /**
+     * Two-phase drain: phase 1 (management, priority 0) closes the intake at
+     * once; phase 2 runs at priority 30 — BELOW data's 20, so every accepted
+     * invocation flushes first (no priority inversion) — then deactivates
+     * cells and captures snapshots. G-16's ordering remainder: deactivation
+     * provably follows the drained queue.
+     */
+    private fun beginDrain(andThen: () -> Unit = {}) {
+        require(state == State.RUNNING) { "drain requires a RUNNING host (was $state)" }
+        state = State.DRAINING
+        closeIntake()
+        enqueue(30) {
+            snapshots.clear()
+            cells.forEach { (cellRef, cell) ->
+                cell.onDeactivate(ctx)
+                if (cell is Stateful) snapshots[cellRef] = cell.snapshot()
+            }
+            state = State.DRAINED
+            andThen()
+        }
     }
 
     private fun deadLetter(cause: Throwable?, description: String, invocation: HostedPortInvocation? = null) {
@@ -156,6 +198,31 @@ open class ManagedHost(
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
                 registry?.unpublish(ref)
                 cell.onDeactivate(ctx)
+            }
+
+            override fun drainHost() = beginDrain()
+
+            override fun resumeHost() {
+                require(state == State.DRAINED) { "resume requires a DRAINED host (was $state)" }
+                cells.values.forEach { it.onActivate(ctx) }
+                openIntake()
+                // republish only after the intake reopens: replay enqueues here (spec 33 step 7)
+                cells.keys.forEach { registry?.publish(it, this@ManagedHost) }
+                state = State.RUNNING
+            }
+
+            override fun migrate(to: Use<HostManagementApi>) = beginDrain {
+                val moving = cells.toList()
+                cells.clear()
+                moving.forEach { (cellRef, cell) ->
+                    registry?.unpublish(cellRef)
+                    // the serialization seam is exercised even in-process (G-25):
+                    // restore from a round-tripped snapshot, not the live object
+                    snapshots[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
+                    // target spawn activates, publishes, and replays parked traffic
+                    to.call.spawn(cell)
+                }
+                snapshots.clear()
             }
 
             override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult {
