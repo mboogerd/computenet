@@ -1,8 +1,8 @@
 # 51 — Constructing Cellular Programs
 
-> **Status**: Partial (cell authoring exists; DSL/tooling exploratory)
+> **Status**: Partial (cell authoring + graph DSL exist; codegen/tooling exploratory)
 > **Sources**: ADR — Cellular Software Development Process, ADR — Task Definitions, ADR 3 (codegen)
-> **Implementation**: hand-written cells + host API; KSP seed (`gen`); no DSL, no scaffolding
+> **Implementation**: hand-written cells + host API; `cell.graph` DSL (`graph`/`GraphSpec`); KSP seed (`gen`); no scaffolding
 
 ## Authoring a cell today (normative pattern)
 
@@ -35,16 +35,29 @@ Rules: contracts are push-only interfaces (12); no constructor logic (15);
 declare merge semantics for concurrent state (24); declare color if not pure
 (32).
 
-## Graph construction DSL (⚠ GAP G-30)
+## Graph construction DSL (G-30, implemented M4.5)
 
-The process ADR promises declarative graph construction and operator
-composition (`cell.map { }` etc. — Task Definitions' cold/hot operators).
-*Proposal*: a builder that stays a thin veneer over the host protocol —
-`graph { val a = spawn(EchoCell()); val b = a.map { ... }; a.outlet linkTo b.inlet }`
-— producing spawn/connect invocation sequences (which are serializable, hence
-graphs-as-data, hence the declarative/no-code path later). No new semantics in
+A builder that stays a thin veneer over the host protocol (`cell.graph`):
+
+```kotlin
+val spec = graph(host.managementInlet) {
+    val a = spawn("writer") { SetCell<String>() }
+    val u = spawn("union")  { UnionSetCell<String>() }
+    a linkTo u                        // default ports; connect(a, "outlet", u, "inlet") for explicit
+}
+spec.applyTo(otherHost.managementInlet)   // replay: fresh cells, same topology
+```
+
+Every builder operation both applies immediately (`spawn`/`connect` on the
+management inlet — link rejections fail construction loudly) and records into
+a serializable `GraphSpec(steps)` — **graphs-as-data**, the substrate for the
+generative harness (52) and the declarative/no-code path later. Spawn steps
+carry a `CellFactory` (a `Serializable` fun interface; lambda captures must
+be serializable), so replay mints fresh cells and refs. No new semantics in
 the DSL layer, ever: anything the DSL does must be expressible as management
-invocations.
+invocations. Operator combinators (`handle.map { }` — Task Definitions'
+cold/hot operators) stay unbuilt until a caller needs more than
+spawn-and-link.
 
 ## Code generation (direction fixed by ADR 3)
 

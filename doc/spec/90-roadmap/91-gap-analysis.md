@@ -67,7 +67,7 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-30 | No graph DSL / declarative construction | Thin builder over host protocol; graphs-as-serialized-invocations | 50/51 |
+| G-30 | No graph DSL / declarative construction | **Resolved (M4.5)**: `cell.graph` builder lowering to `spawn`/`connect` management invocations; records a serializable `GraphSpec` (graphs-as-data) that replays onto any host — serialization round-trip verified | 50/51 |
 | G-31 | No invariant machinery | **Partial (M4.4)**: `InvariantCell` (fold + check, violations outlet; attaching = linking) + `checkInvariants` kotest adapter on the deterministic `SimulationController`; the generative graph harness remains (M4.6) | 50/52 |
 | G-32 | No shadow mode (side-effect suppression) | Effect classification (with G-11) + NoOp-served sinks | 50/52 |
 | G-33 | No state migration across incarnations | `exportState/importState` in the swap drain window | 50/53 |
