@@ -39,7 +39,7 @@ Replicating a cell = running an instance of the same **logical cell**
    (34) justifies it; interest decay ⇒ replica suspension (33) ⇒ eventual
    eviction.
 
-## Design as implemented (G-7 resolved for the set family, M7)
+## Design as implemented (G-7 resolved for the mergeable class, M7 + session delta 4)
 
 - **Replica discovery & membership**: each replica is a full `CellRef`
   (same logical id, distinct instance id) published like any cell;
@@ -47,11 +47,13 @@ Replicating a cell = running an instance of the same **logical cell**
   membership view. No location sets: one location per full ref.
 - **Gossip wiring**: every peer runs the same local rule — link each local
   replica's delta outlet to every discovered replica's `deltaInlet`
-  (`cell.replication.Replication`) — a full mesh emerges symmetrically with
-  no coordinator. Echoes terminate because a replica re-emits only *new* tag
-  information (effective-only, 21); this is why only idempotent-mergeable
-  cells replicate — counters would double-count echoes (a per-source
-  G-Counter is the upgrade path).
+  (`cell.replication.Replication`, contract: `data.Replicable`) — a full mesh
+  emerges symmetrically with no coordinator. Echoes terminate because a
+  replica re-emits only *new* information (effective-only, 21); this is why
+  only idempotent-mergeable cells replicate. The class today: the tagged set
+  family (tag union) and `PnCounterCell` (per-source cumulative totals,
+  pointwise-max merge). Plain `CounterCell` stays single-instance — raw
+  addition double-counts echoes — remaining valid for derived per-peer views.
 - **Tombstones**: multi-path delivery means a removed tag can arrive late by
   another route; `SetCell` therefore keeps del-tags (full OR-set). Tag sets
   grow monotonically; compaction is future work alongside durability (G-25).

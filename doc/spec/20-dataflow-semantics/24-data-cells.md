@@ -1,8 +1,8 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counter implemented; map/list with documented limits; partitioning unbuilt)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; map/list with documented limits; partitioning unbuilt)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
-> **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `MapCell`, `ListCell`, `Propagate`
+> **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`
 
 ## Role
 
@@ -51,7 +51,14 @@ Elements of the pattern:
    tags per element, forwards only new tag information (duplicate deliveries
    across diamond fan-ins dedup), and any consumer derives membership from
    the forwarded tag algebra. `CounterCell` (`increment`/`decrement` →
-   `CounterDelta`) is commutative by construction: merge is addition.
+   `CounterDelta`) is commutative by construction: merge is addition —
+   commutative but **not idempotent**, so `CounterCell` is single-instance
+   (never replicated; fine for derived per-peer views). The replicable
+   counter is `PnCounterCell` (session delta 4): per-source cumulative
+   inc/dec totals under a private per-instance source id, `PnCounterDelta`
+   merging by pointwise max — commutative, associative, idempotent — so it
+   joins the set family in the mergeable class (`Replicable`, 42) and
+   survives gossip-mesh echoes, partitions, and late-join catch-up.
 
 *(G-23 resolved for the set and counter families, M4.1: convergence validated
 by a 200-seed interleaving test with a control run proving arrival-order

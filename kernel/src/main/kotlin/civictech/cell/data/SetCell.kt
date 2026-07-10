@@ -45,7 +45,8 @@ interface SetApi<E> {
     val outlet: Subscribe<Propagate<SetDelta<E>>>
 }
 
-class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetApi<E>, Cell, Stateful {
+class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
+    SetApi<E>, Cell, Stateful, Replicable<SetDelta<E>> {
     override val inlet = registerPort("inlet", FanInlet.create<SetOps<E>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
@@ -54,7 +55,7 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetAp
      * deltas merge here; only *new* tag information re-emits (effective-only,
      * 21), so gossip echoes around any mesh topology die out.
      */
-    val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<E>>>())
+    override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<E>>>())
 
     // Full OR-set (M7.3): adds = every add-tag ever seen, dels = tombstones.
     // An element is present iff it has an add-tag without a matching del-tag.

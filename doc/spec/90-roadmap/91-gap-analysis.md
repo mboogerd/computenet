@@ -60,7 +60,7 @@
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
 | G-15 | No wire layer (format, transport, addressing) | **Resolved (M5)**: method-id tables + `ContractRegistry` (M5.1); `WireFrame` envelope — kotlinx JSON, ids-only, version byte (M5.2); loopback bridge cells + generative harness across two registries (M5.3); `Location = Local\|Remote` with announcements as ordinary wire traffic (M5.4); WebSocket transport in `:wire` (M5.5); exit: `DistributedCollaborativeAppTest` 100 seeds + two-OS-process demo (M5.7). Remaining interim: JDK dynamic proxies in-process (C-5), no reconnect beyond park, no security (43) | 40/41 |
-| G-7 | Replication undesigned | **Resolved for the set family (M7)**: symmetric gossip-mesh linker (`Replication`) over announcements; tombstoned OR-set + `deltaInlet` (echoes terminate on effective-only); anti-entropy = park/replay + idempotent catch-up. 3-peer 100-seed exit + divergence control. Counters/keyed structures + leader-follower remain | 40/42 |
+| G-7 | Replication undesigned | **Resolved for the mergeable class (M7 + delta 4)**: symmetric gossip-mesh linker (`Replication`, contract `Replicable`) over announcements; tombstoned OR-set + `PnCounterCell` (per-source pointwise-max) gossip via `deltaInlet` (echoes terminate on effective-only); anti-entropy = park/replay + idempotent catch-up. 3-peer 100-seed exit + divergence control; PN mesh/partition/late-join tests. Keyed structures + leader-follower remain | 40/42 |
 | G-29 | No threat model / identity | **Phase 1 done (M8.2–M8.3)**: `PeerId` from transport hello → ingress stamps deliveries → `LinkRequest.identity` (`CurrentPeer`); deny-by-default via `allowPeers` policy + ingress admission gate. Authentication/signing/Sybil remain | 40/43 |
 
 ## Gaps — process (50)
