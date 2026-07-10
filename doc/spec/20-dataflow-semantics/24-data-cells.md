@@ -84,6 +84,13 @@ pressure (42).)*
     churn that doesn't flip membership.
   - `JoinCell` — incremental keyed inner join over two map streams; inherits
     `MapDelta`'s arrival-order convergence limit.
+  - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
+    tagged set stream, input tags passing through. Sound because tag algebra
+    is per-(element, tag): colliding outputs **union** their preimages' tag
+    sets (last-wins remapping is the divergent naive form, proven by control
+    test), so an output stays live until its last live preimage dies —
+    distinct-projection semantics. Transform must be pure; dels translate by
+    re-applying it.
   - The shared live-tag fold lives in `TagState` (internal); `MapperCell`
     remains the scalar map/filter.
   Verified: a seeded writers→union→filter→count pipeline equals a batch

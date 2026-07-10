@@ -29,7 +29,7 @@ interface DeltaInletProxy {
 }
 
 /** Membership under the tag algebra: an element is live iff an add-tag is uncovered. */
-fun tagFold(deltas: List<SetDelta<String>>): Set<String> {
-    val all = deltas.fold(SetDelta<String>()) { acc, d -> acc.merge(d) }
+fun <E> tagFold(deltas: List<SetDelta<E>>): Set<E> {
+    val all = deltas.fold(SetDelta<E>()) { acc, d -> acc.merge(d) }
     return all.adds.filter { (e, tags) -> (tags - (all.dels[e] ?: emptySet())).isNotEmpty() }.keys
 }
