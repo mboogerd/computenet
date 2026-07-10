@@ -1,6 +1,6 @@
 # 53 — Deployment as Evolution
 
-> **Status**: Exploratory (vision fixed; depends on nearly everything else)
+> **Status**: Core implemented (M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`
 > **Sources**: ADR — Cellular Software Development Process (deployment model, versioning), ADR 0 (§7)
 > **Implementation**: none
 
@@ -40,14 +40,15 @@ strongest validation of the kernel-first strategy, and conversely: any
 deployment feature that *would* require a new kernel mechanism should trigger
 a design review (P1 violation likely).
 
-## ⚠ GAP (G-33): state migration across incarnations
+## G-33: state migration across incarnations (resolved, M9.4)
 
-Promoting incarnation B over A with divergent internal state representations
-needs a state-transform hook (export from A's schema → import into B's).
-*Proposal*: cell-declared `exportState()/importState(prior)` (versioned,
-serializable, P9), invoked during the swap's drain window (33). Cells that
-cannot transform state declare it — promotion then requires catch-up replay
-from upstream instead (21's snapshot protocol).
+`StateMigrating.importFrom(prior)` on the candidate consumes the incumbent's
+`Stateful.snapshot()` inside the swap's buffered window
+(`Promotion.promote`: red → transfer → relink → green). Cells that don't
+declare it fall back to upstream catch-up replay — the relink fires
+`onLinked`, so data cells re-sync through the ordinary late-join path (21).
+Verified across representations (`ShadowPromotionTest`: v1 Long → v2 string
+form, post-swap stream identical to the unswapped control, 100 seeds).
 
 ## Trust boundary
 

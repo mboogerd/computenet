@@ -33,12 +33,12 @@ pair of push contracts or a completion callback carried in the payload.
 Methods that *do* return values (e.g. `spawn(cell): CellRef`) are permitted on
 **management** contracts, where the implementation may internally block on a
 future (see 30/31) — never on data-path contracts.
-⚠ GAP (G-11): the spec needs a typed marker separating management contracts
-(returns allowed, may block) from data contracts (push-only). *Proposal*: a
-`@DataPath`-checked annotation or a lint rule in the KSP processor.
-*(M5.1 partial: `@Contract(management = true/false)` marks every port
-contract and the flag rides the generated `ContractDescriptor`; push-only
-lint on data contracts is still open.)*
+*(G-11 resolved, M5.1 + M9.1)*: `@Contract(management = true/false)` marks
+every port contract, the flag rides the generated `ContractDescriptor`, and
+the KSP processor **fails compilation** when a data contract (management =
+false) declares a non-Unit return — push-only is enforced, not advised.
+Effect classification for shadow mode is the `Effectful` cell marker (52,
+G-32), orthogonal to the contract flag.
 
 ## The Inlet/Outlet duality
 

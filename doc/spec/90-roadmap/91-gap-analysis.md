@@ -23,7 +23,7 @@
 | G-8 | `CellRef` = bare UUID: no logical-vs-incarnation identity | **Resolved (M7.1)**: `CellRef(id, incarnation)`; wire VERSION 2; logicalId-binding realized per use-case (gossip mesh M7.3, promotion swap M9) | 10/11 |
 | G-9 | No organelle port hiding/exposure | `exposes` declaration; host resolves only exposed ports externally | 10/11 |
 | G-10 | Membranes have no code form | Realize as: handshake hooks → port policies → membrane object (cross-port rules) | 10/11 |
-| G-11 | No data-path vs management contract distinction | Marker/lint via KSP; push-only enforced on data path; also drives shadow-mode effects (G-32). **M5.1 partial**: `@Contract(management)` marks every port contract, flag rides the descriptor; push-only lint open | 10/12 |
+| G-11 | No data-path vs management contract distinction | **Resolved (M5.1 + M9.1)**: `@Contract(management)` on every contract + KSP push-only lint fails compilation on non-Unit data-contract returns; effect classification = `Effectful` marker (G-32) | 10/12 |
 | G-12 | No Link object, no handshake, no unlink, no cardinality enforcement | **Phase 1 done**: `Link`/`LinkResult`/`onLink`/`onUnlink`/`unlink()`, cardinality → `Rejected`, `connect` surfaces results; cross-host = `Deferred` + dead-letter until wire (M5); ownership enforcement waits on G-21 markers | 10/13 |
 | G-13 | No multiplexed ports / generic protocol stacking | **Minimal form done (M6.1)**: `ProtocolSupport` sub-channels keyed by `ProtocolId` on any port, links carry in-process endpoints; attention + suspension notices ride it. Remaining: data sub-ports, state-request (G-18), wire transport | 10/12 |
 | G-14 | No policy representation | **Phase 1 done**: composable link-time `LinkPolicy` on ports, first-rejection-wins; `LinkRequest.identity` slot exists (marker only, G-29); flow-time policies await membranes | 10/13, 40/43 |
@@ -69,8 +69,8 @@
 |---|---|---|---|
 | G-30 | No graph DSL / declarative construction | **Resolved (M4.5)**: `cell.graph` builder lowering to `spawn`/`connect` management invocations; records a serializable `GraphSpec` (graphs-as-data) that replays onto any host — serialization round-trip verified | 50/51 |
 | G-31 | No invariant machinery | **Resolved (M4.4 + M4.6)**: `InvariantCell` (fold + check, violations outlet; attaching = linking) + `checkInvariants` kotest adapter + generative graph harness (seeded random `GraphSpec` pipelines with late-join/migration events, invariant suite, order-bias control) on the deterministic `SimulationController` | 50/52 |
-| G-32 | No shadow mode (side-effect suppression) | Effect classification (with G-11) + NoOp-served sinks | 50/52 |
-| G-33 | No state migration across incarnations | `exportState/importState` in the swap drain window | 50/53 |
+| G-32 | No shadow mode (side-effect suppression) | **Resolved (M9.2)**: `Effectful` marker + `Shadow.spawn` NoOp-serves effectful inlets; judged by invariant cells; double-fire control verified | 50/52 |
+| G-33 | No state migration across incarnations | **Resolved (M9.4)**: `StateMigrating.importFrom(snapshot)` in `Promotion.promote`'s buffered window; non-migrating cells fall back to catch-up replay | 50/53 |
 | G-1 | Legacy packages coexist with germ (two kernels in-tree) | **Done (M3.1)**: the `:legacy` module is deleted. The kernel is `civictech.cell` | 00/03, 30/32 |
 | G-2 | `ManagedRunner` duplication | **Resolved** with C-2 (class no longer existed; scheduler configuration covers the use case) | 30/31 |
 

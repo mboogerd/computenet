@@ -62,6 +62,20 @@ class ContractProcessor(
                     "%T(contractId·=·%LL, fqn·=·%S, management·=·%L, methods·=·listOf(\n⇥",
                     ContractDescriptor::class.asClassName(), StableHash.of(fqn), fqn, management,
                 )
+                // push-only lint (spec 12, G-11 completed M9.1): data contracts
+                // must not return values — returns are a management privilege
+                if (!management) {
+                    contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
+                        val returns = fn.returnType?.resolve()?.declaration?.qualifiedName?.asString()
+                        if (returns != null && returns != "kotlin.Unit") {
+                            logger.error(
+                                "data contract $fqn#${fn.simpleName.asString()} returns $returns — " +
+                                        "push-only on the data path (spec 12); mark management=true or return Unit",
+                                fn,
+                            )
+                        }
+                    }
+                }
                 contract.getAllFunctions().filter { it.isAbstract }
                     .map { fn ->
                         val name = fn.simpleName.asString()

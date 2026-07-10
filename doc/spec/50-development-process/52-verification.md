@@ -1,6 +1,6 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Partial (invariants-as-cells + kotest adapter + generative graph harness built; live/shadow machinery unbuilt)
+> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9 — live *continuous* production shadowing still awaits a long-running runtime)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
 > **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); seeded harness = `cell.host.SimulationController`
 
@@ -65,9 +65,12 @@ policies, 13 — sinks in shadow mode get NoOp-served inlets, 14's proxy
 behaviors again), and invariant cells reporting to the promotion machinery
 (53).
 
-⚠ GAP (G-32): shadow-mode (side-effect suppression) needs a first-class
-marker — which cells are effectful sinks — plausibly the same
-data/management/effect classification as G-11.
+*(G-32 resolved, M9.1–M9.2)*: the `Effectful` cell marker classifies
+side-effecting sinks; `cell.evolve.Shadow.spawn` NoOp-serves every fan-in
+inlet of an `Effectful` cell, so a shadow subgraph is judged (invariant
+cells on its outlets) without acting twice on the world. Verified:
+`ShadowPromotionTest` — including the control where an unsuppressed shadow
+sink double-fires.
 
 ## What stays example-based
 

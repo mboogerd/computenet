@@ -259,7 +259,7 @@ every identity-bearing link request rejected by policy, refusals observable
 as ordinary dead letters — 100 seeds, control run proving open mode would
 have delivered/linked.*
 
-## Milestone 9 — Evolution (shadow deployment + promotion)
+## Milestone 9 — Evolution (shadow deployment + promotion) ✅ DONE
 
 *Goal: spec 53's claim made real — deployment as incremental graph
 operations: candidate incarnations run as shadows, are judged by invariants,
@@ -279,13 +279,19 @@ and are promoted by link swap.*
    cells that can't transform state fall back to upstream catch-up replay.
 5. M9.5 — exit test.
 
-*Exit criterion: a running M4-style session where a candidate incarnation of
-a middle cell (different internal representation) shadows production
-traffic without duplicating side effects (control: an unmarked effectful
-sink double-fires), is promoted mid-stream via the swap window with state
-carried across incarnations (or caught up where declared untransformable),
-and the post-swap graph converges identically to an unswapped control —
-100 seeds, zero loss, per-link FIFO preserved.*
+Notes: promotion is orchestration over existing primitives — traffic light
+(33), snapshot (G-25), subscribe/unsubscribe (13) — validating 53's central
+claim that no new kernel mechanism is needed; rollback is the same call
+with the roles exchanged. Continuous *live* shadowing (a long-running
+sidecar runtime) remains future operational work, not kernel work.
+
+*Exit criterion — met (`ShadowPromotionTest`): a candidate incarnation of a
+running middle cell (different internal representation) shadows production
+traffic without duplicating side effects (control: an unsuppressed
+effectful sink double-fires), is judged by an invariant cell, and is
+promoted mid-stream via the buffered swap window with state carried across
+incarnations — the post-swap output stream identical to an unswapped
+control, 100 seeds, zero loss, per-link FIFO preserved.*
 
 ## Working agreements (process, immediate)
 
