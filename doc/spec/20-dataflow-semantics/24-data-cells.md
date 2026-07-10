@@ -125,8 +125,14 @@ per-peer recompute converge.
   id (22), so a glitch-free wrap composes normally.
 - Aggregator classes: **self-inverting** (count, sumOf, avgOf — O(1)
   accumulators, retraction is arithmetic; Long selectors — float sums are
-  order-sensitive) — non-invertible aggregates (min/max/top-k) follow in
-  M11.4 with support-multiset accumulators.
+  order-sensitive) and **non-invertible** (minOf/maxOf/topK/collectToSet,
+  M11.4) whose accumulator is the full support multiset (value →
+  multiplicity in a `TreeMap`): needed even under set semantics because
+  distinct elements can share an extracted value, and retraction of the
+  current extremum must reshuffle without a re-scan. Bounded-memory top-k is
+  rejected as unsound under retractions (an evicted value can become top
+  again — control-tested). Selectors must be total orders with deterministic
+  tie-break.
 - **Replication story: recompute, not gossip.** The output is single-writer
   `MapDelta` (its documented contract, satisfied by construction), so
   `GroupByCell` is not `Replicable` — and needn't be: aggregates are

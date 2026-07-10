@@ -96,6 +96,8 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         }
     }
 
+    // ponytail: acc is not deep-copied — every snapshot consumer (checkpoint,
+    // migrate) serializes immediately; copy-on-snapshot if one ever retains it
     override fun snapshot(): Serializable = arrayListOf(
         state.snapshot(),
         HashMap(groups.mapValues { arrayListOf(it.value.count, it.value.acc) }),

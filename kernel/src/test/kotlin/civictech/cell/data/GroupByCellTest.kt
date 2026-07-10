@@ -167,6 +167,88 @@ class GroupByCellTest {
         }
     }
 
+    // for extremum tests: elements "a3x" → group 'a', value 3, suffix distinguishes elements
+    private fun midVal(e: String) = e[1].toString().toLong()
+
+    @Test
+    fun `min survives duplicate-value retraction and reshuffles when the extremum dies`() {
+        val cell = GroupByCell(keyFn = ::key, aggregator = Aggregators.minOf(::midVal))
+        val out = collect(cell.outlet)
+
+        val t1 = tag(1); val t2 = tag(2); val t3 = tag(3)
+        cell.inlet.call.propagate(
+            SetDelta(adds = mapOf("a3x" to setOf(t1), "a3y" to setOf(t2), "a7z" to setOf(t3)))
+        )
+        assertEquals(mapOf("a" to 3L), mapFold(out))
+
+        // one of two duplicate minima retracts: min unchanged, no emission
+        cell.inlet.call.propagate(SetDelta(dels = mapOf("a3x" to setOf(t1))))
+        assertEquals(1, out.size)
+
+        // the last minimum retracts: min reshuffles without a re-scan
+        cell.inlet.call.propagate(SetDelta(dels = mapOf("a3y" to setOf(t2))))
+        assertEquals(mapOf("a" to 7L), mapFold(out))
+    }
+
+    @Test
+    fun `topK keeps the k largest with duplicate multiplicities under retraction`() {
+        val cell = GroupByCell(keyFn = ::key, aggregator = Aggregators.topK(2, ::midVal))
+        val out = collect(cell.outlet)
+
+        val t1 = tag(1); val t2 = tag(2); val t3 = tag(3)
+        cell.inlet.call.propagate(
+            SetDelta(adds = mapOf("a5x" to setOf(t1), "a5y" to setOf(t2), "a9z" to setOf(t3)))
+        )
+        assertEquals(mapOf("a" to listOf(9L, 5L)), mapFold(out))
+
+        // the top value retracts: the evicted duplicate must come back —
+        // this is why bounded-memory top-k is unsound and the full support is kept
+        cell.inlet.call.propagate(SetDelta(dels = mapOf("a9z" to setOf(t3))))
+        assertEquals(mapOf("a" to listOf(5L, 5L)), mapFold(out))
+    }
+
+    @Test
+    fun `collectToSet mirrors group membership`() {
+        val cell = GroupByCell(keyFn = ::key, aggregator = Aggregators.collectToSet<String>())
+        val out = collect(cell.outlet)
+
+        val t1 = tag(1); val t2 = tag(2)
+        cell.inlet.call.propagate(SetDelta(adds = mapOf("a3" to setOf(t1), "a4" to setOf(t2))))
+        assertEquals(mapOf("a" to setOf("a3", "a4")), mapFold(out))
+
+        cell.inlet.call.propagate(SetDelta(dels = mapOf("a4" to setOf(t2))))
+        assertEquals(mapOf("a" to setOf("a3")), mapFold(out))
+    }
+
+    @Test
+    fun `pipeline - grouped max equals batch recompute on every seed`() {
+        for (seed in 0L until 100L) {
+            val rnd = Random(seed)
+            val writers = listOf(SetCell<String>(), SetCell<String>())
+            val union = UnionSetCell<String>()
+            val grouped = GroupByCell(keyFn = ::key, aggregator = Aggregators.maxOf(::amount))
+
+            writers.forEach { it.outlet.linkTo(union.inlet as LinkFrom<Propagate<SetDelta<String>>>) }
+            union.outlet.linkTo(grouped.inlet as LinkFrom<Propagate<SetDelta<String>>>)
+            val out = collect(grouped.outlet)
+
+            val domain = listOf("a1", "a2", "a5", "b3", "b7", "c4")
+            val held = writers.map { mutableSetOf<String>() }
+            repeat(80) {
+                val w = rnd.nextInt(writers.size)
+                val element = domain[rnd.nextInt(domain.size)]
+                if (rnd.nextInt(10) < 6 || element !in held[w]) {
+                    writers[w].inlet.call.add(element); held[w] += element
+                } else {
+                    writers[w].inlet.call.remove(element); held[w] -= element
+                }
+            }
+
+            val batch = held.flatten().toSet().groupBy(::key).mapValues { (_, es) -> es.maxOf(::amount) }
+            assertEquals(batch, mapFold(out), "grouped max diverged from batch on seed $seed")
+        }
+    }
+
     @Test
     fun `control - retraction-blind aggregation diverges from batch`() {
         // the failure class the membership-flip fold guards against: an
