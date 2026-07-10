@@ -56,9 +56,13 @@ class PnCounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<PnCounterDelta>>())
     override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<PnCounterDelta>>())
 
-    // deliberately NOT part of the snapshot: a restored/copied instance mints a
-    // fresh slot, so duplicated instances can never write the same source entry
-    private val sourceId: UUID = UUID.randomUUID()
+    // Replay-stable identity (M10.1): the slot is DERIVED from the ref, so a
+    // recovered instance replaying its journal credits the SAME source the
+    // network already saw (pointwise max then dedups the replay) — a random
+    // slot would double-count at every peer. Slot uniqueness across instances
+    // rides instanceId uniqueness (the replication contract).
+    private val sourceId: UUID =
+        UUID.nameUUIDFromBytes("pn-source:${ref.id}:${ref.instanceId}".toByteArray())
 
     private val incs = mutableMapOf<UUID, Long>()
     private val decs = mutableMapOf<UUID, Long>()

@@ -21,6 +21,8 @@ import civictech.cell.attention.AttentionSupport
 import civictech.cell.attention.NonSuspendable
 import civictech.cell.attention.SuspensionNotice
 import civictech.cell.consistency.GlitchFreeCell
+import civictech.cell.durability.Journal
+import civictech.cell.wire.WireCodec
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
@@ -28,6 +30,9 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
 import java.util.*
 import java.util.concurrent.CompletableFuture
+
+private const val RECORD_FRAME: Byte = 1
+private const val RECORD_CHECKPOINT: Byte = 2
 
 /**
  * A Host that manages the lifecycle and connectivity of [Cell]s.
@@ -48,6 +53,13 @@ open class ManagedHost(
      * parent; this is a sandbox budget, not a resource model.
      */
     private val quota: Int? = null,
+    /**
+     * Write-ahead journal (spec 24 durability, G-25, M10.1): every accepted
+     * data invocation is appended as a wire frame before staging — a journal
+     * is a bridge to disk. Null = volatile host (default, pre-M10 behavior).
+     * Recovery: rebuild the graph (spawn the same cells), then [recoverFrom].
+     */
+    private val journal: Journal? = null,
 ) : Host {
 
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
@@ -190,13 +202,74 @@ open class ManagedHost(
         return scheduler.await(future)
     }
 
+    /** Suppresses journaling while [recoverFrom] replays — replay must not re-journal itself. */
+    @Volatile
+    private var recovering = false
+
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
         if (!intakeOpen) throw IntakeClosedException(ref)
+        // write-ahead (M10.1): the intake is the single funnel, so journal
+        // order = acceptance order = per-cell FIFO on replay
+        if (!recovering) journal?.append(journalFrame(hostedInvocation))
         // stage at SEND time (not dispatch time) so a backlog can form and band
         // selection has something to choose between; one dispatcher task per
         // message keeps message count <= task count (a task may find nothing)
         synchronized(dataLock) { stage(hostedInvocation) }
         enqueue(20) { dispatchOne() }
+    }
+
+    /**
+     * Replay this host's [journal] (M10.1): checkpoint records restore
+     * `Stateful` state directly; invocation frames re-enter through the
+     * ordinary intake (decode = the same path a network frame takes — a
+     * journal is a bridge to disk). Call after the graph is rebuilt (cells
+     * spawned) and before new traffic; replays are not re-journaled.
+     */
+    fun recoverFrom(journal: Journal) {
+        recovering = true
+        try {
+            journal.replay().forEach { record ->
+                when (record[0]) {
+                    RECORD_FRAME -> enqueueHostedInvocation(
+                        WireCodec.decode(record.copyOfRange(1, record.size))
+                    )
+
+                    RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
+                    else -> error("unknown journal record type ${record[0]}")
+                }
+            }
+        } finally {
+            recovering = false
+        }
+    }
+
+    private fun journalFrame(hostedInvocation: HostedPortInvocation): ByteArray =
+        byteArrayOf(RECORD_FRAME) + WireCodec.encode(hostedInvocation)
+
+    /**
+     * Checkpoint (M10.2): capture every `Stateful` cell's snapshot as one
+     * record and compact the journal down to it — replay after a checkpoint
+     * is restore + tail. Runs on the management band so it can't interleave
+     * with a dispatching cell.
+     */
+    fun checkpoint(journal: Journal) {
+        enqueueAwaiting(0) {
+            val state = HashMap<CellRef, Serializable>()
+            cells.forEach { (cellRef, cell) -> if (cell is Stateful) state[cellRef] = cell.snapshot() }
+            val blob = ByteArrayOutputStream()
+                .also { ObjectOutputStream(it).use { out -> out.writeObject(state) } }
+                .toByteArray()
+            journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob))
+        }
+    }
+
+    private fun restoreCheckpoint(blob: ByteArray) {
+        @Suppress("UNCHECKED_CAST")
+        val state = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as Map<CellRef, Serializable>
+        state.forEach { (cellRef, snapshot) ->
+            (cells[cellRef] as? Stateful)?.restore(snapshot)
+                ?: deadLetter(null, "checkpoint state for $cellRef but no Stateful cell — graph rebuilt differently?")
+        }
     }
 
     /** Callers hold [dataLock]: append to the target cell's FIFO (or its attention park). */

@@ -11,9 +11,10 @@ package civictech.cell.port
  * access to the target inlet — impossible when the target lives in another
  * process.
  */
-fun <Api : Any> FanOutlet<Api>.streamTo(target: Api, at: PortRef = PortRef.generate()) {
+fun <Api : Any> FanOutlet<Api>.streamTo(target: Api, at: PortRef = PortRef.generate()): Link {
     subscribe(Use.fixed(target, at))
     val link = PortLink(ref, at) { unsubscribe(at) }
     linking.register(link)
     linking.onLinked(link)
+    return link
 }

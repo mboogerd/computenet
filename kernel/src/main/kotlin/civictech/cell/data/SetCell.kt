@@ -68,7 +68,13 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     // Tags are minted locally, not taken from the wave's MessageContext:
     // observed-remove correctness needs a tag unique per add *instance*, and a
     // wave timestamp repeats across every cell the wave touches (22).
-    private val tagSource: UUID = UUID.randomUUID()
+    // Replay-stable identity (M10.1): the source is DERIVED from the ref, so a
+    // recovered instance replaying its journal re-mints the exact tags the
+    // network already observed — random sources would resurrect removed
+    // elements (a pre-crash remove can't cover a re-minted add). Uniqueness
+    // across instances rides instanceId uniqueness (the replication contract).
+    private val tagSource: UUID =
+        UUID.nameUUIDFromBytes("set-tags:${ref.id}:${ref.instanceId}".toByteArray())
     private var tagCounter = 0L
 
     private fun liveTags(element: E): Set<Timestamp> =
@@ -127,22 +133,26 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         }
     }
 
-    // snapshot/restore (G-25 seam): elements must be Serializable
+    // snapshot/restore (G-25 seam): elements must be Serializable. The tag
+    // counter is state too (M10.2): a checkpoint-restored instance must not
+    // re-mint tags it already used — journal-tail replay continues the count.
     override fun snapshot(): Serializable =
         HashMap(
             mapOf(
                 "adds" to HashMap(adds.mapValues { HashSet(it.value) }),
                 "dels" to HashMap(dels.mapValues { HashSet(it.value) }),
+                "counter" to tagCounter,
             )
         )
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
-        val maps = state as Map<String, Map<E, Set<Timestamp>>>
+        val maps = state as Map<String, Any>
         adds.clear()
         dels.clear()
-        maps.getValue("adds").forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
-        maps.getValue("dels").forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
+        (maps.getValue("adds") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
+        (maps.getValue("dels") as Map<E, Set<Timestamp>>).forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
+        tagCounter = maps["counter"] as? Long ?: 0L
     }
 
     companion object {
