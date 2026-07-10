@@ -59,7 +59,7 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-15 | No wire layer (format, transport, addressing) | KSP method-id tables + serializers; bridge cells as transport; after G-4/G-12. **M5.1 done**: method-id tables + `ContractRegistry`. **M5.2 done**: `WireFrame` envelope (kotlinx JSON, array polymorphism, version byte), ids-only identity, context on the wire. Bridges M5.3, addressing M5.4, transport M5.5 | 40/41 |
+| G-15 | No wire layer (format, transport, addressing) | KSP method-id tables + serializers; bridge cells as transport; after G-4/G-12. **M5.1 done**: method-id tables + `ContractRegistry`. **M5.2 done**: `WireFrame` envelope (kotlinx JSON, array polymorphism, version byte), ids-only identity, context on the wire. **M5.3 done**: loopback bridge cells, generative harness across two registries (100 seeds + fault controls). Addressing M5.4, transport M5.5 | 40/41 |
 | G-7 | Replication undesigned | Replicas = same logicalId on many hosts + delta gossip over ordinary links | 40/42 |
 | G-29 | No threat model / identity | Identity-bearing LinkRequest from the start; full model trails policy substrate | 40/43 |
 

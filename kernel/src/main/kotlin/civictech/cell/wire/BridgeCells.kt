@@ -1,0 +1,52 @@
+package civictech.cell.wire
+
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.data.Propagate
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.registerPort
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.InvocationSink
+import java.util.UUID
+
+/**
+ * The network bridge as ordinary cells (spec 41 point 4): between egress and
+ * ingress only bytes travel — an in-process loopback link (M5.3) or a socket
+ * (M5.5). Because bridges are cells with ordinary ports and links, policies,
+ * membranes and supervision apply to network crossings with no special
+ * casing. P1: fully meaningful on the SimulationController — the generative
+ * harness exercises the whole wire format without a network.
+ */
+class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, InvocationSink {
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<ByteArray>>())
+
+    /** Proxies use this cell as their [InvocationSink]; every send becomes a frame. */
+    override fun deliver(invocation: HostedPortInvocation) {
+        outlet.call.propagate(WireCodec.encode(invocation))
+    }
+}
+
+/**
+ * Frames in, local delivery out: decode and hand to [deliverTo] — typically
+ * the receiving side's `LocationRegistry::deliver`, so parked/replayed
+ * semantics apply to remote traffic unchanged (spec 41 point 5). Decode
+ * failures throw: the hosting host's supervision policy decides, like any
+ * other cell failure.
+ *
+ * Eager cell (C-7): serves in `init` so it composes host-free.
+ */
+class BridgeIngressCell(
+    private val deliverTo: InvocationSink,
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : Cell {
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<ByteArray>>())
+
+    init {
+        inlet.serve(object : Propagate<ByteArray> {
+            override fun propagate(value: ByteArray) {
+                deliverTo.deliver(WireCodec.decode(value))
+            }
+        })
+    }
+}

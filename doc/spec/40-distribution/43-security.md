@@ -21,7 +21,10 @@ untrusting contributors participate safely.
    declarations (ADR 1 §13): whitelisted peers; encryption in transit and at
    rest for flagged flows. Enforcement point: the network bridge cells (41) —
    because network crossings are ordinary cells, encryption is a bridge
-   configuration, not a protocol fork.
+   configuration, not a protocol fork. *(M5.3: the enforcement point now
+   exists — `cell.wire.BridgeEgressCell`/`BridgeIngressCell` are ordinary
+   cells with ordinary links; nothing here is implemented yet, but it has a
+   place to live.)*
 3. **Serialization boundaries**: all inter-cell communication is structured
    `Invocation` data (P9) — no shared memory, no lambda/code injection through
    ports by construction. This is already true in-process and must remain

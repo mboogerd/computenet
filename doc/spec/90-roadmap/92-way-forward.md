@@ -100,9 +100,10 @@ wire-frame version byte; demo splits as symmetric peers):
    array polymorphism, stable `@SerialName` discriminators; version byte
    reserves G-8; uniform polymorphic codec instead of per-method generated
    bindings)~~ — done.
-3. M5.3 — loopback bridge cells: egress/ingress as ordinary cells on
+3. ~~M5.3 — loopback bridge cells: egress/ingress as ordinary cells on
    SimulationController hosts; generative harness with a bridge at a random
-   cut, 100 seeds + control run (the wire's P1 proof).
+   cut, 100 seeds + drop/corrupt control runs (the wire's P1 proof:
+   `BridgedGraphTest`)~~ — done.
 4. M5.4 — remote addressing: `LocationRegistry` resolves Local|Remote;
    announcement frames; cross-registry `connect`/`lookup` complete
    `LinkResult.Deferred` with timeouts.

@@ -57,6 +57,16 @@ direct call → queue hop → serialized send.
    policies/membranes apply to network crossings with no special casing
    (40/43). Transport choice (TCP/QUIC/WebSocket/WebRTC) stays pluggable
    behind the bridge cell.
+   *(M5.3: `cell.wire.BridgeEgressCell` (an `InvocationSink` — proxies aim at
+   it and every send becomes a frame on an ordinary outlet) +
+   `BridgeIngressCell` (frame inlet → decode → the receiving registry's
+   `deliver`). Between them only bytes travel; the loopback form is an
+   in-process link on SimulationController hosts, so the full wire format
+   runs under the 100-seed generative harness (`BridgedGraphTest`: view
+   pipeline split at a random cut across two registries; control runs prove
+   dropped frames diverge detectably and corrupt frames dead-letter on the
+   receiving host and traffic continues). This is the wire's P1 proof; a
+   socket replaces the loopback link in M5.5.)*
 5. **Failure semantics**: remote sends inherit the closable/fail-fast +
    re-resolve + park contract (33). Request/response-style management calls
    over the wire get `Deferred`/`CompletableFuture` wrapping with timeouts
