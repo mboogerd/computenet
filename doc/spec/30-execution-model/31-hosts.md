@@ -81,9 +81,13 @@ while internal links remain direct".
    per-host and does not migrate; a suspended cell leaving the host
    dead-letters its parked traffic. Policies are host-management
    configuration, not link-time policy (13).)*
-   ⚠ GAP (G-26, narrowed): per-cell error *outlets* — deferred until a
-   consumer exists (M4's invariant machinery); no port anyone can link is
-   built speculatively.
+   *(G-26 completed, M4.4: per-cell error outlets. A cell declaring the
+   opt-in `ErrorReporting` marker exposes an `errorOutlet`; its host emits
+   `CellError(cellRef, cause, invocation)` there on every invocation failure,
+   under every supervision policy, in addition to the dead letter. Errors
+   thus flow through visible topology (P3) to whoever links a consumer — the
+   natural one being an invariant cell (52). Opt-in per P6: `Cell` itself
+   stays minimal.)*
 
 ## Colors of hosts
 

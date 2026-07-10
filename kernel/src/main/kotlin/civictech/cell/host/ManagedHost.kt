@@ -6,7 +6,9 @@ import civictech.cell.port.*
 import civictech.cell.BlockingCell
 import civictech.cell.Cell
 import civictech.cell.CellContext
+import civictech.cell.CellError
 import civictech.cell.CellRef
+import civictech.cell.ErrorReporting
 import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
 import java.io.ByteArrayInputStream
@@ -177,6 +179,8 @@ open class ManagedHost(
             } catch (e: Exception) {
                 // every policy dead-letters — observability is not a policy (G-26)
                 deadLetter(e, "invocation failed: $e", hostedInvocation)
+                // a declared error outlet additionally receives the failure as data
+                (cell as? ErrorReporting)?.errorOutlet?.call?.propagate(CellError(cellRef, e, hostedInvocation))
                 when (policies[cellRef] ?: SupervisionPolicy.PROPAGATE) {
                     SupervisionPolicy.PROPAGATE -> {}
                     SupervisionPolicy.RESTART -> {

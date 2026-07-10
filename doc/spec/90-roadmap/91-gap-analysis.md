@@ -50,7 +50,7 @@
 |---|---|---|---|
 | G-3 | Color model not in germ | **Resolved (M3.1)**: `HostColor` on `HostScheduler`, `BlockingCell`/`SuspendingCell` markers, spawn validation; bridges degenerate while intakes are unbounded (32) | 30/32 |
 | G-27 | No coroutine ManagedHost | **Resolved (M3.1)**: `CoroutineScheduler` written fresh (legacy suspending runtime was empty stubs); suspend-capable `SimulationController` stepping | 30/31, 30/32 |
-| G-26 | Error handling = printStackTrace | **Resolved (M3.5, narrowed)**: `DeadLetter` on host `deadLetterOutlet` + per-cell supervision (`supervise`: PROPAGATE / RESTART from spawn checkpoint / SUSPEND with `resume` replay). Per-cell error *outlets* deferred until M4 provides a consumer | 30/31 |
+| G-26 | Error handling = printStackTrace | **Resolved (M3.5 + M4.4)**: `DeadLetter` on host `deadLetterOutlet` + per-cell supervision (PROPAGATE / RESTART / SUSPEND with `resume` replay) + opt-in per-cell error outlets (`ErrorReporting` marker; host emits `CellError` under every policy; consumed by invariant cells) | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
 | G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Resolved (M3.2–M3.3)**: closable intake + fail-fast + `LocationRegistry` park/replay; two-phase `drainHost`/`resumeHost`/`migrate` with `Stateful` snapshot capture. Disk overflow mailbox remains with G-25 | 30/33 |
 | G-6 | Attention/scheduling undesigned beyond static priorities | Attention protocol sketch; aggregation & fairness open | 30/34 |
@@ -68,7 +68,7 @@
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
 | G-30 | No graph DSL / declarative construction | Thin builder over host protocol; graphs-as-serialized-invocations | 50/51 |
-| G-31 | No invariant machinery | Invariants as cells; kotest adapter; deterministic SimulatedHost | 50/52 |
+| G-31 | No invariant machinery | **Partial (M4.4)**: `InvariantCell` (fold + check, violations outlet; attaching = linking) + `checkInvariants` kotest adapter on the deterministic `SimulationController`; the generative graph harness remains (M4.6) | 50/52 |
 | G-32 | No shadow mode (side-effect suppression) | Effect classification (with G-11) + NoOp-served sinks | 50/52 |
 | G-33 | No state migration across incarnations | `exportState/importState` in the swap drain window | 50/53 |
 | G-1 | Legacy packages coexist with germ (two kernels in-tree) | **Done (M3.1)**: the `:legacy` module is deleted. The kernel is `civictech.cell` | 00/03, 30/32 |

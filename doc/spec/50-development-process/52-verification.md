@@ -1,8 +1,8 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Exploratory (philosophy fixed; machinery unbuilt)
+> **Status**: Partial (invariants-as-cells + kotest adapter built; generative harness pending; live/shadow machinery unbuilt)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
-> **Implementation**: conventional example-based tests only (kotest/JUnit)
+> **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); seeded harness = `cell.host.SimulationController`
 
 ## Philosophy
 
@@ -22,12 +22,18 @@ Techniques the process ADR commits to:
 - long-running randomized execution;
 - stopping criteria: coverage stabilization, heuristic saturation.
 
-*Proposal (G-31)*: represent an invariant as a **cell** — subscribing to the
-flows it constrains, emitting violations on an outlet. Then one mechanism
-serves tests, live monitoring, and promotion gates; invariants compose like
-everything else; and "attach invariant to subgraph" is just linking. A thin
-kotest adapter (`checkInvariants(graph, invariants, generators)`) makes them
-runnable in CI. The single-threaded-simulation property of the kernel (P1)
+*(G-31 machinery, implemented M4.4)*: an invariant is a **cell** —
+`cell.verify.InvariantCell(name, initial, fold, check)` subscribes to the
+flows it constrains and emits `Violation`s on its `violations` outlet. One
+mechanism serves tests, live monitoring, and promotion gates; invariants
+compose like everything else; "attach invariant to subgraph" is just linking
+(and a late-linked invariant receives catch-up like any subscriber, 21). The
+thin kotest adapter (`checkInvariants(controller, invariants) { ... }`, test
+sources — kernel main carries no test dependencies) runs the block, drives
+the simulation to idle, and fails with the violation payloads. Cell errors
+feed the same machinery: an `ErrorReporting` cell's `errorOutlet` (31) links
+straight into an invariant cell. The generative graph harness remains (M4.6).
+The single-threaded-simulation property of the kernel (P1)
 makes generative graph testing deterministic and cheap — this is a payoff of
 keeping concurrency out of the kernel. The deterministic harness exists:
 `cell.host.SimulationController` drives any number of `ManagedHost`s
