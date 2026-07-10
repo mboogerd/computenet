@@ -25,11 +25,11 @@ import java.io.Serializable
 import java.util.*
 
 /**
- * M9 exit (spec 52/53, 92): a candidate incarnation of a running middle cell
+ * M9 exit (spec 52/53, 92): a candidate instance of a running middle cell
  * — different internal representation — shadows production traffic without
  * duplicating side effects, is judged by an invariant cell, and is promoted
  * mid-stream through a buffered swap window with state carried across
- * incarnations; the post-swap output stream is identical to an unswapped
+ * instances; the post-swap output stream is identical to an unswapped
  * control run. 100 seeds; a control proves the harness detects duplicated
  * effects from an unsuppressed shadow sink.
  */
@@ -124,8 +124,8 @@ class ShadowPromotionTest {
         val logicalId = UUID.randomUUID()
         val source = SourceCell(@Suppress("UNCHECKED_CAST") (Consumer::class.java as Class<Consumer<Int>>))
         val gate = TrafficLightCell.create<Consumer<Int>>()
-        val incumbent = SummerV1(CellRef(logicalId, incarnation = 0))
-        val candidate = SummerV2(CellRef(logicalId, incarnation = 1))
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = SummerV2(CellRef(logicalId, instanceId = 1))
         val view = CollectorCell()
         val prodNotifier = NotifierCell()
         val shadowNotifier = NotifierCell()

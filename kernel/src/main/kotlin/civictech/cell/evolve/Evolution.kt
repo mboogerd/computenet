@@ -20,14 +20,14 @@ import java.io.Serializable
 interface Effectful
 
 /**
- * State migration across incarnations (G-33, spec 53): a candidate that can
+ * State migration across instances (G-33, spec 53): a candidate that can
  * transform its predecessor's exported state declares this; the transform
  * runs inside the swap's buffered window ([Promotion.promote]). Cells that
  * cannot transform rely on upstream catch-up replay instead (spec 21) — the
  * relink fires `onLinked`, so data cells re-sync without ceremony.
  */
 interface StateMigrating {
-    /** [prior] is the previous incarnation's [Stateful.snapshot] output. */
+    /** [prior] is the previous instance's [Stateful.snapshot] output. */
     fun importFrom(prior: Serializable)
 }
 
@@ -85,7 +85,7 @@ object Promotion {
      *    candidate keeps what shadowing taught it / catches up on relink;
      * 3. relink — [downstream]s move from the incumbent's [outletName] to the
      *    candidate's; the incumbent's gate subscription drops so replay
-     *    reaches only the promoted incarnation (callers despawn it at leisure);
+     *    reaches only the promoted instance (callers despawn it at leisure);
      * 4. green — the gate replays the parked window and removes itself from
      *    the path.
      */

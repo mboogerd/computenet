@@ -20,7 +20,7 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-8 | `CellRef` = bare UUID: no logical-vs-incarnation identity | **Resolved (M7.1)**: `CellRef(id, incarnation)`; wire VERSION 2; logicalId-binding realized per use-case (gossip mesh M7.3, promotion swap M9) | 10/11 |
+| G-8 | `CellRef` = bare UUID: no logical-vs-instance identity | **Resolved (M7.1)**: `CellRef(id, instanceId)`; wire VERSION 2; logicalId-binding realized per use-case (gossip mesh M7.3, promotion swap M9) | 10/11 |
 | G-9 | No organelle port hiding/exposure | `exposes` declaration; host resolves only exposed ports externally | 10/11 |
 | G-10 | Membranes have no code form | Realize as: handshake hooks → port policies → membrane object (cross-port rules) | 10/11 |
 | G-11 | No data-path vs management contract distinction | **Resolved (M5.1 + M9.1)**: `@Contract(management)` on every contract + KSP push-only lint fails compilation on non-Unit data-contract returns; effect classification = `Effectful` marker (G-32) | 10/12 |
@@ -70,7 +70,7 @@
 | G-30 | No graph DSL / declarative construction | **Resolved (M4.5)**: `cell.graph` builder lowering to `spawn`/`connect` management invocations; records a serializable `GraphSpec` (graphs-as-data) that replays onto any host — serialization round-trip verified | 50/51 |
 | G-31 | No invariant machinery | **Resolved (M4.4 + M4.6)**: `InvariantCell` (fold + check, violations outlet; attaching = linking) + `checkInvariants` kotest adapter + generative graph harness (seeded random `GraphSpec` pipelines with late-join/migration events, invariant suite, order-bias control) on the deterministic `SimulationController` | 50/52 |
 | G-32 | No shadow mode (side-effect suppression) | **Resolved (M9.2)**: `Effectful` marker + `Shadow.spawn` NoOp-serves effectful inlets; judged by invariant cells; double-fire control verified | 50/52 |
-| G-33 | No state migration across incarnations | **Resolved (M9.4)**: `StateMigrating.importFrom(snapshot)` in `Promotion.promote`'s buffered window; non-migrating cells fall back to catch-up replay | 50/53 |
+| G-33 | No state migration across instances | **Resolved (M9.4)**: `StateMigrating.importFrom(snapshot)` in `Promotion.promote`'s buffered window; non-migrating cells fall back to catch-up replay | 50/53 |
 | G-1 | Legacy packages coexist with germ (two kernels in-tree) | **Done (M3.1)**: the `:legacy` module is deleted. The kernel is `civictech.cell` | 00/03, 30/32 |
 | G-2 | `ManagedRunner` duplication | **Resolved** with C-2 (class no longer existed; scheduler configuration covers the use case) | 30/31 |
 

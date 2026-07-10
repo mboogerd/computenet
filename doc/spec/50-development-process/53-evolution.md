@@ -2,7 +2,7 @@
 
 > **Status**: Core implemented (M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`
 > **Sources**: ADR — Cellular Software Development Process (deployment model, versioning), ADR 0 (§7)
-> **Implementation**: none
+> **Implementation**: `civictech.cell.evolve` (`Shadow`, `Promotion`, `StateMigrating`, `Effectful`); `ShadowPromotionTest`
 
 ## Model
 
@@ -14,10 +14,10 @@ not binary releases.**
 Versioning is evolutionary selection:
 
 1. Multiple implementations of a logical cell **coexist** (G-8's
-   logicalId/incarnation split is the prerequisite).
+   logicalId/instanceId split is the prerequisite).
 2. Candidates run against **synthetic invariants** (52) and then as **live
    shadows** against production data.
-3. The **active** incarnation is selected on invariant satisfaction under real
+3. The **active** instance is selected on invariant satisfaction under real
    data; promotion and rollback are link-swap operations (13) — atomic per
    membrane (11's atomic multi-port transitions is the primitive that makes a
    swap glitch-free at the boundary).
@@ -26,12 +26,12 @@ Versioning is evolutionary selection:
 
 | Need | Mechanism | Spec |
 |---|---|---|
-| Run two incarnations side by side | replicated spawn, distinct incarnations | G-8, 42 |
+| Run two candidate instances side by side | replicated spawn, distinct instance ids | G-8, 42 |
 | Feed candidate live inputs | fan-out links, shadow mode | 52, G-32 |
 | Judge | invariant cells + promotion policy | 52, G-31 |
 | Swap | buffer inlets (traffic-light) → relink → replay | 33, 14 |
 | Roll back | same swap, reversed; journaled invocations replay | 24, 43 §5 |
-| Continuity of identity | links bound to logicalId, not incarnation | G-8 |
+| Continuity of identity | links bound to logicalId, not instanceId | G-8 |
 
 The load-bearing observation: **every deployment primitive is already a
 kernel/graph primitive** (spawn, link, buffer, replay, subscribe). Evolution
@@ -40,7 +40,7 @@ strongest validation of the kernel-first strategy, and conversely: any
 deployment feature that *would* require a new kernel mechanism should trigger
 a design review (P1 violation likely).
 
-## G-33: state migration across incarnations (resolved, M9.4)
+## G-33: state migration across instances (resolved, M9.4)
 
 `StateMigrating.importFrom(prior)` on the candidate consumes the incumbent's
 `Stateful.snapshot()` inside the swap's buffered window

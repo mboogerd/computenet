@@ -42,7 +42,7 @@ Replicating a cell = running an instance of the same **logical cell**
 ## Design as implemented (G-7 resolved for the set family, M7)
 
 - **Replica discovery & membership**: each replica is a full `CellRef`
-  (same logical id, distinct incarnation) published like any cell;
+  (same logical id, distinct instance id) published like any cell;
   `LocationRegistry.replicasOf(logicalId)` + the `onPublish` hook are the
   membership view. No location sets: one location per full ref.
 - **Gossip wiring**: every peer runs the same local rule — link each local

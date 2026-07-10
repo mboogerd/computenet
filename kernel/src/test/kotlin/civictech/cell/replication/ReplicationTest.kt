@@ -35,8 +35,8 @@ class ReplicationTest {
         val side = Peering.Side(registry, bridgeHost)
         val replication = Replication(registry)
 
-        fun replica(logicalId: UUID, incarnation: Long): SetCell<String> =
-            SetCell<String>(CellRef(logicalId, incarnation)).also { replication.replicate(it, host) }
+        fun replica(logicalId: UUID, instanceId: Long): SetCell<String> =
+            SetCell<String>(CellRef(logicalId, instanceId)).also { replication.replicate(it, host) }
 
         fun ops(replica: SetCell<String>): SetOps<String> =
             (HostedCellProxy.create(replica.ref, registry, SetInletProxy::class.java)

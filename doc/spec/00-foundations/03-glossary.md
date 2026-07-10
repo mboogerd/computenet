@@ -35,6 +35,8 @@ configuration of the one `ManagedHost` class (30/31, C-2/G-2 resolved).
 | Term | Definition | Spec |
 |---|---|---|
 | **Cell** | The unit of state, logic, and identity. Owns its state exclusively; interacts only via ports. Acts as its own specification (cold) and its own logic provider (hot). | 10/11 |
+| **Logical cell** | The placement-independent identity of a cell — what links, views, and users mean by "the cell" (`CellRef.id`). One logical cell may have several live Instances. (G-8, M7.1.) | 10/11, 40/42 |
+| **Instance** | One live realization of a logical cell (`CellRef.instanceId`): a replica (42) or a candidate version under evolution (53). *Avoid*: **incarnation** — historical alias. | 10/11, 40/42, 50/53 |
 | **Organelle** | A cell nested inside another cell (hierarchical composition). | 10/11 |
 | **Membrane** | The conceptual boundary of a cell: the locus of cross-port rules, policies, authority, and observability. Part of the cell in the developer model; separable in the runtime model. | 10/11, 40/43 |
 | **Port** | A named, typed crossing point on a cell. Has a direction and cardinality. The unit the topology connects. | 10/12 |

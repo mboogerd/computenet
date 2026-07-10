@@ -47,9 +47,9 @@ for that identity. This is what makes hot upgrades and evolutionary deployment
 (50/53) coherent: the implementation behind a ref may be replaced while links
 and invariants persist.
 
-*(G-8 resolved, M7.1)*: `CellRef(id, incarnation)` — `id` is the logical
-identity, `incarnation` distinguishes live instances of it: replicas (42, one
-incarnation each) and candidate versions (53). Incarnations are minted
+*(G-8 resolved, M7.1)*: `CellRef(id, instanceId)` — `id` is the logical
+identity, `instanceId` distinguishes live instances of it: replicas (42, one
+instance each) and candidate versions (53). Instance ids are minted
 collision-free without coordination (random; caller-chosen in deterministic
 tests). Links and registries address full refs; "links bound to logicalId"
 as an automatic indirection is realized per use-case (replication links the

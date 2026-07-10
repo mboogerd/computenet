@@ -14,7 +14,7 @@ import java.util.*
 
 /**
  * Replica wiring (spec 42, G-7, M7.3). A replica is an instance of the same
- * logical cell — equal `CellRef.id`, distinct `incarnation` (G-8) — on some
+ * logical cell — equal `CellRef.id`, distinct `instanceId` (G-8) — on some
  * host, possibly behind another registry. Every peer runs the same local
  * rule: *link each of MY replicas' delta outlets to every other replica's
  * `deltaInlet` I learn about* — so the full gossip mesh emerges symmetrically
@@ -48,7 +48,7 @@ class Replication(private val registry: LocationRegistry) {
     /**
      * Spawn [cell] on [host] as a replica: gossip links to every currently
      * known replica of its logical id are installed now, and to future ones
-     * as their announcements arrive. The caller owns incarnation uniqueness
+     * as their announcements arrive. The caller owns instance-id uniqueness
      * (distinct per replica, minted without coordination).
      */
     fun <E> replicate(cell: SetCell<E>, host: ManagedHost) {

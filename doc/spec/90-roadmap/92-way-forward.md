@@ -139,7 +139,7 @@ only track whose enabler (G-13 multiplex) unlocks other residuals (G-18 pull);
 replication (M7) needs G-8 and *uses* M6's interest signal for replica
 extent; trust (M8) trails the policy substrate per 43's sequencing and gives
 replication its untrusting-peers story; evolution (M9) composes everything
-(incarnations from M7, shadow-effect policy from M8's classification work,
+(instances from M7, shadow-effect policy from M8's classification work,
 invariant gates from M4). The programming environment / visualization track
 stays unscheduled — it follows whichever surface stabilizes first.
 
@@ -191,7 +191,7 @@ harness detects the failure it guards against.*
 *Goal: spec 42 real for the mergeable class — same logical cell live on
 several hosts, converging by delta gossip over ordinary links.*
 
-1. M7.1 — ref model (G-8): `CellRef(logicalId, incarnation)`; links,
+1. M7.1 — ref model (G-8): `CellRef(logicalId, instanceId)`; links,
    registries, and proxies bind to `logicalId`; wire frames carry both.
 2. M7.2 — location sets: `LocationRegistry` from "one location" to a set per
    logicalId; `Peering` announcements generalize to multi-peer fan-out
@@ -210,7 +210,7 @@ several hosts, converging by delta gossip over ordinary links.*
    deferred until there's memory pressure to justify it.
 6. M7.6 — exit test.
 
-All six landed. Notes: replicas are distinct incarnations of one logical id
+All six landed. Notes: replicas are distinct instances of one logical id
 (no location sets needed — one location per full ref); SetCell became a full
 OR-set (tombstones) because multi-path gossip demands them; counters stay
 derived-per-peer (delta addition is not idempotent — G-Counter deferred with
@@ -262,19 +262,19 @@ have delivered/linked.*
 ## Milestone 9 — Evolution (shadow deployment + promotion) ✅ DONE
 
 *Goal: spec 53's claim made real — deployment as incremental graph
-operations: candidate incarnations run as shadows, are judged by invariants,
+operations: candidate instances run as shadows, are judged by invariants,
 and are promoted by link swap.*
 
 1. M9.1 — effect classification (G-11 completion + G-32 marker): KSP lint
    enforcing push-only data contracts; an `Effectful` marker for
    side-effecting sink cells.
-2. M9.2 — shadow mode (G-32): spawn a candidate incarnation (G-8) of a
+2. M9.2 — shadow mode (G-32): spawn a candidate instance (G-8) of a
    subgraph subscribed to production outlets via fan-out; `Effectful` cells'
    inlets are NoOp-served under a shadow policy; invariant cells watch the
    shadow.
 3. M9.3 — promotion/rollback: link swap under a traffic-light window
    (buffer → relink → replay, 33/13); rollback is the same swap reversed.
-4. M9.4 — state migration across incarnations (G-33):
+4. M9.4 — state migration across instances (G-33):
    `exportState()/importState(prior)` invoked in the swap's drain window;
    cells that can't transform state fall back to upstream catch-up replay.
 5. M9.5 — exit test.
@@ -285,12 +285,12 @@ claim that no new kernel mechanism is needed; rollback is the same call
 with the roles exchanged. Continuous *live* shadowing (a long-running
 sidecar runtime) remains future operational work, not kernel work.
 
-*Exit criterion — met (`ShadowPromotionTest`): a candidate incarnation of a
+*Exit criterion — met (`ShadowPromotionTest`): a candidate instance of a
 running middle cell (different internal representation) shadows production
 traffic without duplicating side effects (control: an unsuppressed
 effectful sink double-fires), is judged by an invariant cell, and is
 promoted mid-stream via the buffered swap window with state carried across
-incarnations — the post-swap output stream identical to an unswapped
+instances — the post-swap output stream identical to an unswapped
 control, 100 seeds, zero loss, per-link FIFO preserved.*
 
 ## Working agreements (process, immediate)
