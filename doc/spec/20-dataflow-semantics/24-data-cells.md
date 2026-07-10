@@ -83,7 +83,9 @@ pressure (42).)*
 ADR 1 §5: large keyed datasets shard by key for concurrency, locality, and
 scale-out; non-partitioned is for atomic structures.
 
-⚠ GAP (G-24): nothing exists. *Proposal sketch* (kernel-untouched, per P1): a
+⚠ GAP (G-24, deferred with trigger — build when the first keyed dataset
+feels placement pressure; the M4 exit app never sharded): nothing exists.
+*Proposal sketch* (kernel-untouched, per P1): a
 **PartitionedCell** is a composite cell whose organelles each own a key range;
 its inlet routes commands by key (a routing proxy — same mechanism as
 `HostRoutingApi`); its outlet merges child delta streams. Placement of

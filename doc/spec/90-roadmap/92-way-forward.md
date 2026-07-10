@@ -58,19 +58,31 @@ subchain across colors under load, 100 seeds, zero loss, per-link FIFO, with
 a control run proving the harness detects loss. Supervision policies landed
 as M3.5 (G-26 resolved, narrowed to error outlets → M4).*
 
-## Milestone 4 — Data + verification (the developer payoff)
+## Milestone 4 — Data + verification (the developer payoff) ✅ DONE (core)
 
 *Goal: the incremental dataflow layer becomes genuinely usable.*
 
-1. Causal tags on deltas (G-23); state snapshots + late-join catch-up
-   (G-18, G-22); operator library growth (filter/join/count).
-2. Invariants-as-cells + kotest adapter + generative graph harness on the
-   simulated host (G-31).
-3. Graph DSL as thin builder (G-30) — also yields graphs-as-data.
-4. First partitioned cell if a use case demands it (G-24), else defer.
+1. ~~Causal tags on deltas (G-23): observed-remove tags on the set family,
+   commutative CounterCell, documented limits for map/list~~ — done (M4.1).
+   ~~State + late-join catch-up (G-22, G-18 core): post-install `onLinked`
+   hook, state-as-delta unicast, Stateful data cells~~ — done (M4.2).
+   ~~Operator library: filter/count/intersect/join~~ — done (M4.3).
+2. ~~Invariants-as-cells + kotest adapter + per-cell error outlets (G-26
+   completed)~~ — done (M4.4). ~~Generative graph harness on the simulated
+   host (G-31)~~ — done (M4.6).
+3. ~~Graph DSL as thin builder (G-30) — also yields graphs-as-data
+   (`GraphSpec`)~~ — done (M4.5).
+4. Partitioned cell (G-24) **deferred as planned**: the exit app's sets and
+   counters are atomic structures; trigger = the first keyed dataset with
+   placement pressure (24).
 
-*Exit criterion: a small collaborative app (e.g. shared sets/counters UI)
-built purely from cells, with invariants running in CI.*
+*Exit criterion — met: `CollaborativeAppTest` runs a three-user
+shopping-list-with-votes session built purely from cells (DSL-constructed
+views, mixed 🔵/🟣 hosts) with a mid-session joiner catching up, a mid-session
+host migration, and an injected failure consumed via an error outlet under
+RESTART — invariants asserted through the kotest adapter, 100 seeds, with a
+control run proving the harness detects non-convergent views. A demo UI over
+the same graph is M4.8 (`:demo`).*
 
 ## Milestone 5 — Wire (distribution begins)
 

@@ -41,7 +41,7 @@
 | G-21 | Ownership contracts unimplemented | Marker types → link-time enforcement (after G-12) → pools only when profiled | 20/23 |
 | G-22 | Data cells can't serve state to late joiners | **Resolved (M4.2)**: every data cell unicasts state-as-delta-from-empty from `onLinked` and implements `Stateful` (drain/migrate round-trip verified); validated by a 100-seed late-join test with a missed-prefix control | 20/24 |
 | G-23 | Delta merges are arrival-order biased; not replica-stable | **Resolved for the set family (M4.1)**: observed-remove tags — `SetDelta` carries per-element `Timestamp` tag-sets minted cell-locally; merge = tag union (commutative, associative, idempotent), validated by a 200-seed convergence test with an order-biased control. `CounterCell` commutative by construction. Map/list carry documented convergence limits until replication (42) | 20/24, 40/42 |
-| G-24 | No partitioned state | PartitionedCell = composite cell + key-routing proxy; placement = ordinary placement | 20/24 |
+| G-24 | No partitioned state | **Deferred with trigger (M4)**: PartitionedCell = composite cell + key-routing proxy; placement = ordinary placement. Trigger: the first keyed dataset with placement pressure — the M4 exit app's sets/counters are atomic structures and never sharded | 20/24 |
 | G-25 | No durability | **Partial (M3.3)**: `Stateful` snapshot/restore captured by drain, serialization round-trip on migrate; the invocation journal (replay = recovery) remains (M4+) | 20/24, 30/31 |
 
 ## Gaps — execution (30)
