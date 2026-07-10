@@ -2,6 +2,7 @@ package civictech.wire
 
 import civictech.cell.CellRef
 import civictech.cell.data.Propagate
+import civictech.cell.port.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.wire.BridgeEgressCell
@@ -48,11 +49,24 @@ object WsTransport {
 
     private const val HELLO = "HELLO "
 
-    /** One peer socket: bridge cells + mirroring on the local side, bytes on the wire. */
-    internal class Session(private val side: Peering.Side, send: (ByteArray) -> Unit) {
+    /**
+     * One peer socket: bridge cells + mirroring on the local side, bytes on
+     * the wire. The hello carries the local mirror ref and, since M8.2, the
+     * local peer name; a listener with an allowlist refuses unlisted peers at
+     * hello time (M8.3) — the connection closes before any announcement or
+     * frame is accepted. The ingress exists only after an admitted hello, and
+     * stamps every delivery with the peer's identity.
+     */
+    internal class Session(
+        private val side: Peering.Side,
+        send: (ByteArray) -> Unit,
+        private val refuse: () -> Unit,
+    ) {
         val egress = BridgeEgressCell()
-        private val ingress = Peering.hostIngress(side)
         private val mirrorRef = Peering.spawnMirror(side, toPeer = egress)
+
+        @Volatile
+        private var ingress: Propagate<ByteArray>? = null
 
         init {
             egress.outlet.subscribe(Use.fixed(object : Propagate<ByteArray> {
@@ -60,17 +74,26 @@ object WsTransport {
             }, PortRef.generate()))
         }
 
-        fun hello(): String = HELLO + mirrorRef.id
+        fun hello(): String = HELLO + mirrorRef.id + (side.peer?.let { " ${it.name}" } ?: "")
 
         fun onText(message: String) {
             require(message.startsWith(HELLO)) { "unexpected text message: $message" }
-            val peerMirror = CellRef(UUID.fromString(message.removePrefix(HELLO).trim()))
-            Peering.announceTo(side, peerMirror, via = egress)
+            val parts = message.removePrefix(HELLO).trim().split(" ", limit = 2)
+            val peer = parts.getOrNull(1)?.let { PeerId(it) }
+            if (!side.admits(peer)) {
+                System.err.println("[WsTransport] refusing peer $peer: not on the allowlist (spec 43)")
+                refuse()
+                return
+            }
+            ingress = Peering.hostIngress(side, fromPeer = peer)
+            Peering.announceTo(side, CellRef(UUID.fromString(parts[0])), via = egress)
         }
 
         fun onFrame(buffer: ByteBuffer) {
             val bytes = ByteArray(buffer.remaining()).also(buffer::get)
-            ingress.propagate(bytes) // enqueue only — decoding happens on the bridge host
+            // enqueue only — decoding happens on the bridge host; frames
+            // before an admitted hello have nowhere to go and drop
+            ingress?.propagate(bytes)
         }
 
         fun onClose() = side.registry.unpublishRemotes(via = egress)
@@ -87,7 +110,7 @@ object WsTransport {
         override fun onStart() = started.countDown()
 
         override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
-            val session = Session(side) { conn.send(it) }
+            val session = Session(side, { conn.send(it) }, { conn.close() })
             sessions[conn] = session
             conn.send(session.hello())
         }
@@ -111,7 +134,7 @@ object WsTransport {
 
     class WsConnection internal constructor(uri: URI, side: Peering.Side) : WebSocketClient(uri) {
 
-        private val session = Session(side) { send(it) }
+        private val session = Session(side, { send(it) }, { close() })
 
         override fun onOpen(handshake: ServerHandshake) {
             send(session.hello())

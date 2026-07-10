@@ -47,6 +47,50 @@ data class LinkRequest(
 /** Marker only in M2 — a real identity model is G-29. */
 interface Identity
 
+/**
+ * G-29 phase 1 (M8.2): who is asking. A bridge ingress stamps every delivered
+ * invocation with its transport peer's id; handshakes running during that
+ * delivery see it on [LinkRequest.identity]. Local links carry null (= this
+ * process). Authentication of the name is future work (43) — today it
+ * identifies the *connection*, which the transport vouches for.
+ */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("PeerId")
+data class PeerId(val name: String) : Identity, java.io.Serializable
+
+/**
+ * Ambient identity of the delivery being executed (set by the host around
+ * bridged management invocations, read by [handshake]).
+ */
+object CurrentPeer {
+    private val local = ThreadLocal<PeerId?>()
+
+    fun get(): PeerId? = local.get()
+
+    fun <R> with(peer: PeerId?, block: () -> R): R {
+        val previous = local.get()
+        local.set(peer)
+        try {
+            return block()
+        } finally {
+            local.set(previous)
+        }
+    }
+}
+
+/**
+ * Deny-by-default building block (M8.3): remote identities not in [peers]
+ * are rejected; local requests (null identity) pass — boundary control, not
+ * ambient suspicion (spec 43 posture).
+ */
+fun allowPeers(vararg peers: PeerId): LinkPolicy = LinkPolicy { request ->
+    when (request.identity) {
+        null -> null
+        in peers -> null
+        else -> LinkResult.Rejected("peer ${request.identity} is not on the allowlist (spec 43)")
+    }
+}
+
 /** Link-time policy; composable, first rejection wins. Null = no objection. */
 fun interface LinkPolicy {
     fun evaluate(request: LinkRequest): LinkResult.Rejected?
@@ -105,7 +149,8 @@ internal fun <Api> handshake(
     uninstall: (Link) -> Unit,
 ): LinkResult {
     val support = target.linking
-    support.reject(LinkRequest(portOut.ref, targetRef))?.let { return it }
+    // identity rides the delivery (M8.2): bridged requests carry their peer
+    support.reject(LinkRequest(portOut.ref, targetRef, CurrentPeer.get()))?.let { return it }
 
     val sourceLinking = (portOut as? Linked)?.linking
     val link = PortLink(portOut.ref, targetRef, portOut, target as? Port) { link ->

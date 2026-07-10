@@ -51,7 +51,7 @@
 | G-3 | Color model not in germ | **Resolved (M3.1)**: `HostColor` on `HostScheduler`, `BlockingCell`/`SuspendingCell` markers, spawn validation; bridges degenerate while intakes are unbounded (32) | 30/32 |
 | G-27 | No coroutine ManagedHost | **Resolved (M3.1)**: `CoroutineScheduler` written fresh (legacy suspending runtime was empty stubs); suspend-capable `SimulationController` stepping | 30/31, 30/32 |
 | G-26 | Error handling = printStackTrace | **Resolved (M3.5 + M4.4)**: `DeadLetter` on host `deadLetterOutlet` + per-cell supervision (PROPAGATE / RESTART / SUSPEND with `resume` replay) + opt-in per-cell error outlets (`ErrorReporting` marker; host emits `CellError` under every policy; consumed by invariant cells) | 30/31 |
-| G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
+| G-28 | No host hierarchy (quotas, cascade, placement) | **Resolved (M8.1)**: parent/child recorded at spawn; subtree cell quota walks ancestors; drain cascades children-first. Redirection/resource models remain | 30/31, 40/43 |
 | G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Resolved (M3.2–M3.3)**: closable intake + fail-fast + `LocationRegistry` park/replay; two-phase `drainHost`/`resumeHost`/`migrate` with `Stateful` snapshot capture. Disk overflow mailbox remains with G-25 | 30/33 |
 | G-6 | Attention/scheduling undesigned beyond static priorities | **Resolved (M6)**: `AttentionSupport` (max aggregation, band quantization = damping) over generic-protocol sub-channels; `ManagedHost`+`AttentionPolicy` band dispatch, stride floor, NONE-window park/replay; `GlitchFreeCell` WAIT/DEGRADE. 100-seed harness + starvation control. Remaining: no wire crossing, single-hop notices | 30/34 |
 
@@ -61,7 +61,7 @@
 |---|---|---|---|
 | G-15 | No wire layer (format, transport, addressing) | **Resolved (M5)**: method-id tables + `ContractRegistry` (M5.1); `WireFrame` envelope — kotlinx JSON, ids-only, version byte (M5.2); loopback bridge cells + generative harness across two registries (M5.3); `Location = Local\|Remote` with announcements as ordinary wire traffic (M5.4); WebSocket transport in `:wire` (M5.5); exit: `DistributedCollaborativeAppTest` 100 seeds + two-OS-process demo (M5.7). Remaining interim: JDK dynamic proxies in-process (C-5), no reconnect beyond park, no security (43) | 40/41 |
 | G-7 | Replication undesigned | **Resolved for the set family (M7)**: symmetric gossip-mesh linker (`Replication`) over announcements; tombstoned OR-set + `deltaInlet` (echoes terminate on effective-only); anti-entropy = park/replay + idempotent catch-up. 3-peer 100-seed exit + divergence control. Counters/keyed structures + leader-follower remain | 40/42 |
-| G-29 | No threat model / identity | Identity-bearing LinkRequest from the start; full model trails policy substrate | 40/43 |
+| G-29 | No threat model / identity | **Phase 1 done (M8.2–M8.3)**: `PeerId` from transport hello → ingress stamps deliveries → `LinkRequest.identity` (`CurrentPeer`); deny-by-default via `allowPeers` policy + ingress admission gate. Authentication/signing/Sybil remain | 40/43 |
 
 ## Gaps — process (50)
 

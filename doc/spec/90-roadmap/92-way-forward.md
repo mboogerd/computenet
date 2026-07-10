@@ -224,7 +224,7 @@ coordination beyond delta links — control run (no heal) proving the harness
 detects divergence. MapCell/ListCell keep their documented single-writer
 limits.*
 
-## Milestone 8 — Trust boundaries (hierarchy + identity)
+## Milestone 8 — Trust boundaries (hierarchy + identity) ✅ DONE
 
 *Goal: specs 31 (hierarchy) and 43 (posture) get their first mechanisms:
 hosts as sandbox units, links that know who is asking.*
@@ -245,12 +245,19 @@ hosts as sandbox units, links that know who is asking.*
    43.
 4. M8.4 — exit test.
 
-*Exit criterion: an untrusted child host under quota cannot exceed its cell
-budget or outlive its parent (cascade verified under drain), and a
-two-registry session where one peer is not on the allowlist has every link
-request rejected at the boundary with the rejection observable as an
-ordinary LinkResult/dead-letter — 100 seeds on the generative bridge
-harness, control run proving open-mode would have linked.*
+Notes: spawn *redirection* deferred (veto via quota exists; redirect when a
+placement scheduler wants it); cross-wire link *handshakes* still don't
+exist (M5.4 note stands), so identity-bearing LinkRequests are verified on
+host-delivered management invocations — the same path a future connect
+frame would take.
+
+*Exit criterion — met (`HierarchyTest`, `TrustBoundaryTest`): an untrusted
+child host under quota cannot exceed its subtree budget or outlive its
+parent (cascade verified under drain), and a two-registry session where the
+peer is not on the allowlist has every delivery refused at the boundary and
+every identity-bearing link request rejected by policy, refusals observable
+as ordinary dead letters — 100 seeds, control run proving open mode would
+have delivered/linked.*
 
 ## Milestone 9 — Evolution (shadow deployment + promotion)
 

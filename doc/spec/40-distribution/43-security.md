@@ -38,15 +38,22 @@ untrusting contributors participate safely.
    serializable invocations (24 durability), a compromised graph can be
    restored by replaying the log **minus the malicious cells' inputs**.
 
-## ⚠ GAP (G-29): threat model and identity
+## G-29: threat model and identity (phase 1 landed, M8.2–M8.3)
 
-Undefined: peer identity (keys? DIDs?), authentication of links, integrity of
-replicated deltas (signing?), Sybil resistance for interest signals (34 — an
-attacker claiming attention could summon computation). None of this blocks
-layers 10–30, but the policy substrate (G-14) should carry
-identity-bearing link requests from day one:
-`LinkRequest(peer: PeerId, credentials, contract)` even while `PeerId` is
-just "local".
+Landed: `PeerId` as transport identity — the WebSocket hello carries the peer
+name, the bridge ingress stamps every delivery, and handshakes running during
+a bridged delivery see it on `LinkRequest.identity` (`CurrentPeer`); local
+links carry null. Deny-by-default is a boundary control in both layers:
+`allowPeers(...)` as a link policy, and the ingress admission gate
+(`Peering.Side.allow` / `WsTransport` refusing unlisted peers at hello time)
+— refusals surface as ordinary dead letters. Verified: `TrustBoundaryTest`
+(100 seeds + open-mode control).
+
+⚠ Still undefined: *authentication* of the claimed name (keys? DIDs? —
+today the transport connection vouches for it), integrity of replicated
+deltas (signing), Sybil resistance for interest signals (34 — an attacker
+claiming attention could summon computation), encryption at rest. Encryption
+in transit is transport configuration (wss://).
 
 ## Sequencing
 

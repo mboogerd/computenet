@@ -6,6 +6,7 @@ import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.cell.data.Propagate
 import civictech.cell.port.FanInlet
+import civictech.cell.port.PeerId
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
@@ -49,13 +50,22 @@ class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
 class BridgeIngressCell(
     private val deliverTo: InvocationSink,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
+    /** Transport identity of the peer this ingress receives from (M8.2); stamps every delivery. */
+    private val peer: PeerId? = null,
+    /**
+     * Boundary admission (M8.3, spec 43 mechanism 2): allowlists are bridge
+     * configuration, not a protocol fork. A refused frame throws — the
+     * hosting host dead-letters it, so rejection is observable topology.
+     */
+    private val admit: (PeerId?) -> Boolean = { true },
 ) : Cell {
     val inlet = registerPort("inlet", FanInlet.create<Propagate<ByteArray>>())
 
     init {
         inlet.serve(object : Propagate<ByteArray> {
             override fun propagate(value: ByteArray) {
-                deliverTo.deliver(WireCodec.decode(value))
+                check(admit(peer)) { "frame from $peer refused: not on the allowlist (spec 43)" }
+                deliverTo.deliver(WireCodec.decode(value).copy(peer = peer))
             }
         })
     }

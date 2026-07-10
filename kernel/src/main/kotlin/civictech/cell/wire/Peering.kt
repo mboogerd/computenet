@@ -6,6 +6,7 @@ import civictech.cell.data.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
+import civictech.cell.port.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
@@ -52,7 +53,16 @@ class RegistryMirrorCell(
  */
 object Peering {
 
-    class Side(val registry: LocationRegistry, val bridgeHost: ManagedHost)
+    class Side(
+        val registry: LocationRegistry,
+        val bridgeHost: ManagedHost,
+        /** This side's transport identity (M8.2); null = anonymous. */
+        val peer: PeerId? = null,
+        /** Deny-by-default admission (M8.3): peers accepted at this boundary; null = open. */
+        val allow: Set<PeerId>? = null,
+    ) {
+        fun admits(peer: PeerId?): Boolean = allow == null || peer in allow
+    }
 
     interface FrameInletProxy {
         val inlet: Use<Propagate<ByteArray>>
@@ -83,8 +93,8 @@ object Peering {
     }
 
     fun loopback(a: Side, b: Side): Loopback {
-        val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(b), PortRef.generate())) }
-        val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(a), PortRef.generate())) }
+        val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(b, fromPeer = a.peer), PortRef.generate())) }
+        val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(a, fromPeer = b.peer), PortRef.generate())) }
         val mirrorOnB = spawnMirror(b, toPeer = bToA)
         val mirrorOnA = spawnMirror(a, toPeer = aToB)
         announceTo(a, peerMirror = mirrorOnB, via = aToB)
@@ -93,8 +103,8 @@ object Peering {
     }
 
     /** Spawn a [BridgeIngressCell] on [side]'s bridge host; returned api is safe to call from any thread. */
-    fun hostIngress(side: Side): Propagate<ByteArray> {
-        val ingress = BridgeIngressCell(InvocationSink(side.registry::deliver))
+    fun hostIngress(side: Side, fromPeer: PeerId? = null): Propagate<ByteArray> {
+        val ingress = BridgeIngressCell(InvocationSink(side.registry::deliver), peer = fromPeer, admit = side::admits)
         side.bridgeHost.managementInlet.call.spawn(ingress)
         return (HostedCellProxy.create(ingress.ref, side.registry, FrameInletProxy::class.java)
                 as FrameInletProxy).inlet.call

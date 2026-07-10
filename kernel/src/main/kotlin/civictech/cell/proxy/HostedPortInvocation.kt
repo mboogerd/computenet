@@ -9,7 +9,13 @@ data class HostedPortInvocation(
     val cellRef: CellRef,
     val portName: String,
     val type: Type,
-    val invocation: Invocation
+    val invocation: Invocation,
+    /**
+     * Transport identity of the delivery (G-29 phase 1, M8.2): stamped by a
+     * bridge ingress, never serialized into frames — the receiving transport
+     * knows its peer. Null = local origin.
+     */
+    val peer: civictech.cell.port.PeerId? = null,
 ) {
     enum class Type {
         /**

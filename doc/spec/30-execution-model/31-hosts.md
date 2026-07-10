@@ -113,6 +113,10 @@ configuration is the deterministic test host of 50/52.
 Hosts hosting hosts is the intended composition (organelles, 10/11): a machine
 host contains process hosts contains color hosts. Combined with "host control
 is just ports", the management plane recurses naturally.
-⚠ GAP (G-28): parent/child host relationships (resource limits, shutdown
-cascade, spawn placement) are undesigned. Needed for mobility (33) and
-security sandboxes (40/43).
+*(G-28 resolved, M8.1)*: a host spawning a host records the parent/child
+relation. A subtree `quota` (max cells, hosts included) is checked against
+every ancestor's budget on spawn — the sandbox enforcement point of 43 §4;
+`drainHost` cascades children-first, so a child cannot outlive or keep
+accepting after its parent. Verified: `HierarchyTest`. Remaining: richer
+resource models (memory/cpu) and spawn *redirection* (placement) — add when
+a scheduler needs them.

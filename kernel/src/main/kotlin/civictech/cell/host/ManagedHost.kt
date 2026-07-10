@@ -39,7 +39,21 @@ open class ManagedHost(
     private val registry: LocationRegistry? = null,
     /** Attention → resources mapping (spec 34, M6.3); null = pre-M6 FIFO scheduling. */
     private val attention: AttentionPolicy? = null,
+    /**
+     * Max cells in this host's subtree — itself plus child hosts, recursively
+     * (G-28, M8.1). A spawn anywhere in the subtree counts against every
+     * ancestor's quota. Null = unlimited. Hosts count as cells of their
+     * parent; this is a sandbox budget, not a resource model.
+     */
+    private val quota: Int? = null,
 ) : Host {
+
+    /** Parent/child host relations (G-28): recorded when a host spawns a host. */
+    internal var parentHost: ManagedHost? = null
+        private set
+    private val childHosts = mutableListOf<ManagedHost>()
+
+    internal fun subtreeCellCount(): Int = cells.size + childHosts.sumOf { it.subtreeCellCount() }
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
     override val routerInlet = registerPort("routerInlet", FanInlet.create<HostRoutingApi>())
 
@@ -285,7 +299,11 @@ open class ManagedHost(
         try {
             when (hostedInvocation.type) {
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
-                    val result = hostedInvocation.invocation.invoke(port)
+                    // the transport identity of the delivery is ambient for the
+                    // handshake running inside (G-29 phase 1, M8.2)
+                    val result = CurrentPeer.with(hostedInvocation.peer) {
+                        hostedInvocation.invocation.invoke(port)
+                    }
                     if (result is LinkResult.Rejected) {
                         // proxy-initiated handshakes are fire-and-forget until the
                         // wire layer (M5); rejection is observable here only
@@ -341,6 +359,17 @@ open class ManagedHost(
         val internalApi = object : HostManagementApi {
             override fun spawn(cell: Cell): CellRef {
                 require(!cells.containsKey(cell.ref)) { "Cell already spawned: ${cell.ref}" }
+                // quota walks every ancestor (G-28): a sandboxed subtree cannot
+                // grow past any enclosing budget
+                var scope: ManagedHost? = this@ManagedHost
+                while (scope != null) {
+                    scope.quota?.let { limit ->
+                        check(scope!!.subtreeCellCount() < limit) {
+                            "quota exceeded: host ${scope!!.ref} allows $limit cells in its subtree (G-28)"
+                        }
+                    }
+                    scope = scope.parentHost
+                }
                 // color validation (spec 32, G-3): 🔵/🟣 markers must match the host; unmarked = 🟢 pure
                 when (color) {
                     HostColor.BLOCKING -> require(cell !is SuspendingCell) {
@@ -349,6 +378,12 @@ open class ManagedHost(
                     HostColor.SUSPENDING -> require(cell !is BlockingCell) {
                         "BlockingCell ${cell.ref} cannot spawn on a SUSPENDING host"
                     }
+                }
+                if (cell is ManagedHost) {
+                    // hosts hosting hosts (31): record the relation for quota
+                    // walking and shutdown cascade
+                    childHosts += cell
+                    cell.parentHost = this@ManagedHost
                 }
                 cells[cell.ref] = cell
                 cell.onActivate(ctx)
@@ -390,7 +425,12 @@ open class ManagedHost(
                 parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
             }
 
-            override fun drainHost() = beginDrain()
+            override fun drainHost() {
+                // shutdown cascade (G-28, M8.1): children drain first — a child
+                // must not outlive (or keep accepting after) its parent
+                childHosts.forEach { it.managementInlet.call.drainHost() }
+                beginDrain()
+            }
 
             override fun resumeHost() {
                 require(state == State.DRAINED) { "resume requires a DRAINED host (was $state)" }
