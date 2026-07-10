@@ -30,6 +30,8 @@ interface HostManagementApi {
     fun spawn(cell: Cell): CellRef
     fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T?   // proxy to a hosted cell's API
     fun despawn(ref: CellRef)
+    fun supervise(ref: CellRef, policy: SupervisionPolicy) // G-26 (M3.5)
+    fun resume(ref: CellRef)               // replay a SUSPEND-ed cell's parked traffic
     fun drainHost()                        // spec 33 steps 1–3 (M3.3)
     fun resumeHost()                       // spec 33 steps 6–7, in place
     fun migrate(to: Use<HostManagementApi>) // drain + move all cells to the target host
@@ -68,11 +70,20 @@ while internal links remain direct".
    futures (spawn/lookup currently block up to 5s — acceptable for
    management; forbidden for `PORT_API`).
 5. **Failure isolation**: a cell throwing MUST NOT kill the host loop.
-   *(G-26 minimal in place: failed and undeliverable invocations — including
+   *(G-26 in place: failed and undeliverable invocations — including
    unknown cell/port, previously silent drops — are published as `DeadLetter`
-   on the host's `deadLetterOutlet` port, plus a stderr line when unobserved.)*
-   ⚠ GAP (G-26, remainder): per-cell error outlets and supervision policies
-   (restart / suspend / propagate) configured by policy (13) — M3.
+   on the host's `deadLetterOutlet` port, plus a stderr line when unobserved.
+   Per-cell **supervision policies** (M3.5): `supervise(ref, policy)` sets
+   PROPAGATE (default, dead-letter only), RESTART (deactivate → activate →
+   restore the spawn-time `Stateful` checkpoint), or SUSPEND (subsequent
+   traffic parks per-cell, in order, until `resume(ref)` replays it). Every
+   policy still dead-letters — observability is not a policy. Supervision is
+   per-host and does not migrate; a suspended cell leaving the host
+   dead-letters its parked traffic. Policies are host-management
+   configuration, not link-time policy (13).)*
+   ⚠ GAP (G-26, narrowed): per-cell error *outlets* — deferred until a
+   consumer exists (M4's invariant machinery); no port anyone can link is
+   built speculatively.
 
 ## Colors of hosts
 

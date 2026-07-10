@@ -50,7 +50,7 @@
 |---|---|---|---|
 | G-3 | Color model not in germ | **Resolved (M3.1)**: `HostColor` on `HostScheduler`, `BlockingCell`/`SuspendingCell` markers, spawn validation; bridges degenerate while intakes are unbounded (32) | 30/32 |
 | G-27 | No coroutine ManagedHost | **Resolved (M3.1)**: `CoroutineScheduler` written fresh (legacy suspending runtime was empty stubs); suspend-capable `SimulationController` stepping | 30/31, 30/32 |
-| G-26 | Error handling = printStackTrace | **Minimal done**: `DeadLetter` on host `deadLetterOutlet` (failures + previously-silent drops); error outlets + supervision policies remain (M3) | 30/31 |
+| G-26 | Error handling = printStackTrace | **Resolved (M3.5, narrowed)**: `DeadLetter` on host `deadLetterOutlet` + per-cell supervision (`supervise`: PROPAGATE / RESTART from spawn checkpoint / SUSPEND with `resume` replay). Per-cell error *outlets* deferred until M4 provides a consumer | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
 | G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Resolved (M3.2–M3.3)**: closable intake + fail-fast + `LocationRegistry` park/replay; two-phase `drainHost`/`resumeHost`/`migrate` with `Stateful` snapshot capture. Disk overflow mailbox remains with G-25 | 30/33 |
 | G-6 | Attention/scheduling undesigned beyond static priorities | Attention protocol sketch; aggregation & fairness open | 30/34 |

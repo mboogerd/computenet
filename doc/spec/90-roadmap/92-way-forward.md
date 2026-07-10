@@ -55,8 +55,8 @@ harness detects glitches (`GlitchFreeDiamondTest`).*
 
 *Exit criterion — met: `SubchainMigrationTest` migrates a running stateful
 subchain across colors under load, 100 seeds, zero loss, per-link FIFO, with
-a control run proving the harness detects loss. Supervision policies (G-26
-remainder, M3.5) are the one loose end tracked below.*
+a control run proving the harness detects loss. Supervision policies landed
+as M3.5 (G-26 resolved, narrowed to error outlets → M4).*
 
 ## Milestone 4 — Data + verification (the developer payoff)
 

@@ -30,6 +30,18 @@ interface HostManagementApi {
     fun despawn(ref: CellRef)
 
     /**
+     * Sets the failure policy for a hosted cell (G-26). Default is
+     * [SupervisionPolicy.PROPAGATE]; every policy still dead-letters.
+     */
+    fun supervise(ref: CellRef, policy: SupervisionPolicy)
+
+    /**
+     * Replays, in order, the invocations parked for a cell that a
+     * [SupervisionPolicy.SUSPEND] failure sidelined, and resumes delivery.
+     */
+    fun resume(ref: CellRef)
+
+    /**
      * Drains this host (spec 33 steps 1–3): intake closes immediately (new
      * sends fail fast and park at the registry), everything already accepted
      * is processed, then cells are deactivated and [civictech.cell.Stateful]

@@ -81,7 +81,8 @@ peers, encryption requirements (40/43), rate limits, resource quotas.
 (`port.linking.policies`), evaluated before `onLink`, first rejection wins.
 `LinkRequest` carries the identity slot from day one — `Identity` is a bare
 marker; verification is G-29. Flow-time policies wait for the membrane
-layer.)*
+layer. Failure **supervision** policies are deliberately not link policies:
+they are host-management configuration per cell — see 30/31 rule 5.)*
 
 ## Cross-boundary links
 

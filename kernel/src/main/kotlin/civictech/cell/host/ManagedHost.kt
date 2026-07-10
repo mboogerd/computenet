@@ -70,6 +70,20 @@ open class ManagedHost(
     /** Snapshots captured by the last drain (spec 33 step 3; starts G-25). */
     private val snapshots = mutableMapOf<CellRef, Serializable>()
 
+    /** Supervision (G-26): per-cell failure policies, spawn-time checkpoints, and suspended-cell parking. */
+    private val policies = mutableMapOf<CellRef, SupervisionPolicy>()
+    private val checkpoints = mutableMapOf<CellRef, Serializable>()
+    private val suspendedCells = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
+
+    /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
+    private fun clearSupervision(cellRef: CellRef) {
+        policies.remove(cellRef)
+        checkpoints.remove(cellRef)
+        suspendedCells.remove(cellRef)?.forEach {
+            deadLetter(null, "cell $cellRef left the host while suspended", it)
+        }
+    }
+
     private fun roundTrip(state: Serializable): Serializable {
         val bytes = ByteArrayOutputStream()
             .also { ObjectOutputStream(it).use { out -> out.writeObject(state) } }
@@ -129,28 +143,48 @@ open class ManagedHost(
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
         if (!intakeOpen) throw IntakeClosedException(ref)
         enqueue(20) {
-            val cell = cells[hostedInvocation.cellRef] ?: return@enqueue deadLetter(
-                null, "unknown cell ${hostedInvocation.cellRef}", hostedInvocation
+            val cellRef = hostedInvocation.cellRef
+            // a SUSPEND-ed cell's traffic parks per-cell until resume(ref) replays it
+            suspendedCells[cellRef]?.let {
+                it += hostedInvocation
+                return@enqueue null
+            }
+            val cell = cells[cellRef] ?: return@enqueue deadLetter(
+                null, "unknown cell $cellRef", hostedInvocation
             )
             val port = findPort(cell, hostedInvocation.portName) ?: return@enqueue deadLetter(
-                null, "unknown port '${hostedInvocation.portName}' on ${hostedInvocation.cellRef}", hostedInvocation
+                null, "unknown port '${hostedInvocation.portName}' on $cellRef", hostedInvocation
             )
 
-            when (hostedInvocation.type) {
-                HostedPortInvocation.Type.PORT_MANAGEMENT -> {
-                    val result = hostedInvocation.invocation.invoke(port)
-                    if (result is LinkResult.Rejected) {
-                        // proxy-initiated handshakes are fire-and-forget until the
-                        // wire layer (M5); rejection is observable here only
-                        deadLetter(null, "link rejected: ${result.reason}", hostedInvocation)
+            try {
+                when (hostedInvocation.type) {
+                    HostedPortInvocation.Type.PORT_MANAGEMENT -> {
+                        val result = hostedInvocation.invocation.invoke(port)
+                        if (result is LinkResult.Rejected) {
+                            // proxy-initiated handshakes are fire-and-forget until the
+                            // wire layer (M5); rejection is observable here only
+                            deadLetter(null, "link rejected: ${result.reason}", hostedInvocation)
+                        }
+                    }
+
+                    HostedPortInvocation.Type.PORT_API -> {
+                        if (port is Use<*>) {
+                            // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
+                            hostedInvocation.invocation.invokeSuspending(port.call)
+                        }
                     }
                 }
-
-                HostedPortInvocation.Type.PORT_API -> {
-                    if (port is Use<*>) {
-                        // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
-                        hostedInvocation.invocation.invokeSuspending(port.call)
+            } catch (e: Exception) {
+                // every policy dead-letters — observability is not a policy (G-26)
+                deadLetter(e, "invocation failed: $e", hostedInvocation)
+                when (policies[cellRef] ?: SupervisionPolicy.PROPAGATE) {
+                    SupervisionPolicy.PROPAGATE -> {}
+                    SupervisionPolicy.RESTART -> {
+                        cell.onDeactivate(ctx)
+                        cell.onActivate(ctx)
+                        checkpoints[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
                     }
+                    SupervisionPolicy.SUSPEND -> suspendedCells[cellRef] = mutableListOf()
                 }
             }
         }
@@ -184,6 +218,8 @@ open class ManagedHost(
                 }
                 cells[cell.ref] = cell
                 cell.onActivate(ctx)
+                // spawn-time checkpoint: what a RESTART supervision restores (G-26)
+                if (cell is Stateful) checkpoints[cell.ref] = cell.snapshot()
                 // location becomes visible only after activation, so replayed
                 // parked invocations find served ports (spec 33 step 7)
                 registry?.publish(cell.ref, this@ManagedHost)
@@ -197,7 +233,20 @@ open class ManagedHost(
             override fun despawn(ref: CellRef) {
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
                 registry?.unpublish(ref)
+                clearSupervision(ref)
                 cell.onDeactivate(ctx)
+            }
+
+            override fun supervise(ref: CellRef, policy: SupervisionPolicy) {
+                require(cells.containsKey(ref)) { "Cell not found: $ref" }
+                policies[ref] = policy
+            }
+
+            override fun resume(ref: CellRef) {
+                val parked = suspendedCells.remove(ref)
+                    ?: throw IllegalArgumentException("Cell not suspended: $ref")
+                // re-enqueue at data priority: replay order = park order (sequence tiebreaker)
+                parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
             }
 
             override fun drainHost() = beginDrain()
@@ -216,6 +265,8 @@ open class ManagedHost(
                 cells.clear()
                 moving.forEach { (cellRef, cell) ->
                     registry?.unpublish(cellRef)
+                    // supervision is per-host and does not migrate (31)
+                    clearSupervision(cellRef)
                     // the serialization seam is exercised even in-process (G-25):
                     // restore from a round-tripped snapshot, not the live object
                     snapshots[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
