@@ -11,6 +11,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
+import civictech.cell.durability.FileJournal
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -91,7 +92,7 @@ interface DeltaInletProxy {
     val inlet: Use<Propagate<SetDelta<String>>>
 }
 
-class DemoApp(port: Int = 8080, private val wire: Wire? = null) {
+class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
     sealed interface Wire {
         data class Listen(val wsPort: Int) : Wire
@@ -99,7 +100,13 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null) {
     }
 
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    // Durability (M10.4): the app host write-ahead journals every routed
+    // invocation; on restart the same directory replays it — kill -9 safe.
+    private val journal = journalDir?.let { FileJournal(java.io.File(it, "host.journal")) }
+    private val usersFile = journalDir?.let { java.io.File(it, "users.txt") }
+
+    private val host = ManagedHost(registry = registry, journal = journal)
     private val manage = host.managementInlet.call
 
     // union refs are role-derived so each peer can address its counterpart's
@@ -165,10 +172,24 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null) {
             // Tag dedup + effective-only emission make the two-way chain cycle-safe;
             // sends park in the registry until the peer announces, so a late-starting
             // peer replays the full history in order and converges.
-            fun routed(ref: CellRef) =
-                (HostedCellProxy.create(ref, registry, DeltaInletProxy::class.java) as DeltaInletProxy).inlet.call
-            itemsUnion.outlet.streamTo(routed(unionRef("items", peerRole)))
-            votesUnion.outlet.streamTo(routed(unionRef("votes", peerRole)))
+            val chained = mapOf(
+                unionRef("items", peerRole) to
+                        (itemsUnion to itemsUnion.outlet.streamTo(routedDelta(unionRef("items", peerRole)))),
+                unionRef("votes", peerRole) to
+                        (votesUnion to votesUnion.outlet.streamTo(routedDelta(unionRef("votes", peerRole)))),
+            )
+            // Anti-entropy on (re)announce (M10.4): a returning peer may have
+            // missed deltas its dying socket swallowed — re-fire the catch-up
+            // hook so the full state-as-delta flows again; tag idempotence
+            // makes the repeat free. Same pattern as Replication.maybeLink.
+            registry.onPublish { ref ->
+                chained[ref]?.let { (cell, link) -> cell.outlet.linking.onLinked(link) }
+            }
+        }
+
+        if (journal != null) {
+            knownUsers().forEach { writerFor(it) } // graph first: replayed ops need their cells
+            host.recoverFrom(journal)
         }
 
         server.createContext("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }
@@ -177,21 +198,35 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null) {
         server.executor = null
     }
 
-    /** Per-user writer cells, created on first op — every browser tab is a user. */
+    /**
+     * Per-user writer cells, created on first op — every browser tab is a user.
+     * Refs are user-derived and the union links are registry-routed (M10.4):
+     * deterministic identity + routed (journaled) deltas are what make a
+     * journal replay reconstruct the same graph state after kill -9. Recovery
+     * pre-spawns writers for every user in [usersFile], so replayed ops run
+     * through the same cells and re-mint the same replay-stable tags.
+     */
     private fun writerFor(user: String): Pair<SetOps<String>, SetOps<String>> =
         synchronized(writers) {
             writers.getOrPut(user) {
-                val itemCell = SetCell<String>()
-                val voteCell = SetCell<String>()
+                val itemCell = SetCell<String>(CellRef(UUID.nameUUIDFromBytes("demo-writer:items:$user@$myRole".toByteArray())))
+                val voteCell = SetCell<String>(CellRef(UUID.nameUUIDFromBytes("demo-writer:votes:$user@$myRole".toByteArray())))
                 manage.spawn(itemCell)
                 manage.spawn(voteCell)
-                manage.connect(itemCell.ref, "outlet", itemsUnion.ref, "inlet")
-                manage.connect(voteCell.ref, "outlet", votesUnion.ref, "inlet")
+                itemCell.outlet.streamTo(routedDelta(itemsUnion.ref))
+                voteCell.outlet.streamTo(routedDelta(votesUnion.ref))
+                usersFile?.takeIf { user !in knownUsers() }?.appendText(user + "\n")
                 val itemApi = host.lookup<SetInletProxy>(itemCell.ref)!!.inlet.call
                 val voteApi = host.lookup<SetInletProxy>(voteCell.ref)!!.inlet.call
                 itemApi to voteApi
             }
         }
+
+    private fun knownUsers(): List<String> =
+        usersFile?.takeIf { it.exists() }?.readLines()?.filter { it.isNotBlank() } ?: emptyList()
+
+    private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
+        (HostedCellProxy.create(ref, registry, DeltaInletProxy::class.java) as DeltaInletProxy).inlet.call
 
     private fun handleOp(exchange: HttpExchange) {
         val params = exchange.requestBody.readBytes().decodeToString()
@@ -264,8 +299,9 @@ fun main(args: Array<String>) {
         ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
     val wire = value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
         ?: value("--peer")?.let { DemoApp.Wire.Dial(it) }
+    val journalDir = value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
 
-    val app = DemoApp(port, wire).start()
+    val app = DemoApp(port, wire, journalDir).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
     when (wire) {
         is DemoApp.Wire.Listen -> println("  awaiting a peer on ws://localhost:${wire.wsPort}")

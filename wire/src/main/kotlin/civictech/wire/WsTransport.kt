@@ -5,6 +5,7 @@ import civictech.cell.data.Propagate
 import civictech.cell.port.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.host.IntakeClosedException
 import civictech.cell.wire.BridgeEgressCell
 import civictech.cell.wire.Peering
 import org.java_websocket.WebSocket
@@ -74,7 +75,17 @@ object WsTransport {
 
         init {
             egress.outlet.subscribe(Use.fixed(object : Propagate<ByteArray> {
-                override fun propagate(value: ByteArray) = send(value)
+                override fun propagate(value: ByteArray) =
+                    try {
+                        send(value)
+                    } catch (e: Exception) {
+                        // dead socket noticed before the close event (M10.4):
+                        // unpublish now so later sends take the park fast path,
+                        // and signal "destination unavailable" the way a closed
+                        // intake does — the registry parks THIS invocation too
+                        side.registry.unpublishRemotes(via = egress)
+                        throw IntakeClosedException(egress.ref)
+                    }
             }, PortRef.generate()))
         }
 
@@ -101,7 +112,14 @@ object WsTransport {
             ingress?.propagate(bytes)
         }
 
-        fun onClose() = side.registry.unpublishRemotes(via = egress)
+        fun onClose() {
+            // the announcer dies with the session — a stale hook would try the
+            // dead socket on every future local publish (listener sessions are
+            // per-connection, so replace-on-rehello never fires for them)
+            announcement?.close()
+            announcement = null
+            side.registry.unpublishRemotes(via = egress)
+        }
     }
 
     class WsListener internal constructor(port: Int, private val side: Peering.Side) :
@@ -134,6 +152,7 @@ object WsTransport {
 
         override fun onError(conn: WebSocket?, ex: Exception) {
             System.err.println("[WsListener] $ex")
+            ex.printStackTrace()
         }
     }
 

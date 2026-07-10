@@ -88,9 +88,14 @@ class LocationRegistry {
             false
         }
 
-        is Remote -> {
+        is Remote -> try {
             location.sink.deliver(invocation)
             true
+        } catch (_: IntakeClosedException) {
+            // the transport noticed the peer is gone before the close event
+            // landed (M10.4): same contract as a closed local intake — park,
+            // never drop; the sink has unpublished itself
+            false
         }
 
         null -> false
@@ -103,14 +108,28 @@ class LocationRegistry {
      */
     fun publish(ref: CellRef, host: ManagedHost) {
         install(ref, Local(host))
-        onLocalPublish.forEach { it(ref) }
-        onPublish.forEach { it(ref) }
+        onLocalPublish.forEach { notify(it, ref) }
+        onPublish.forEach { notify(it, ref) }
     }
 
     /** Make [ref] remote, reachable through [sink] (a bridge egress, spec 41). */
     fun publish(ref: CellRef, sink: InvocationSink) {
         install(ref, Remote(sink))
-        onPublish.forEach { it(ref) }
+        onPublish.forEach { notify(it, ref) }
+    }
+
+    /**
+     * Hooks are notifications, not participants (M10.4): a failing announcer
+     * (e.g. a dying transport not yet closed) must not break the publish —
+     * or the spawn that triggered it. The peer that mattered is gone; its
+     * re-hello does a full localRefs catch-up anyway.
+     */
+    private fun notify(listener: (CellRef) -> Unit, ref: CellRef) {
+        try {
+            listener(ref)
+        } catch (e: Exception) {
+            System.err.println("[LocationRegistry] publish hook failed for $ref: $e")
+        }
     }
 
     private fun install(ref: CellRef, location: Location) {
