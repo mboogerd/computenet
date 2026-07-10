@@ -25,7 +25,7 @@
 | G-10 | Membranes have no code form | Realize as: handshake hooks → port policies → membrane object (cross-port rules) | 10/11 |
 | G-11 | No data-path vs management contract distinction | Marker/lint via KSP; push-only enforced on data path; also drives shadow-mode effects (G-32). **M5.1 partial**: `@Contract(management)` marks every port contract, flag rides the descriptor; push-only lint open | 10/12 |
 | G-12 | No Link object, no handshake, no unlink, no cardinality enforcement | **Phase 1 done**: `Link`/`LinkResult`/`onLink`/`onUnlink`/`unlink()`, cardinality → `Rejected`, `connect` surfaces results; cross-host = `Deferred` + dead-letter until wire (M5); ownership enforcement waits on G-21 markers | 10/13 |
-| G-13 | No multiplexed ports / generic protocol stacking | Sub-ports keyed by ProtocolId sharing one link; carries attention, state-request, link mgmt | 10/12 |
+| G-13 | No multiplexed ports / generic protocol stacking | **Minimal form done (M6.1)**: `ProtocolSupport` sub-channels keyed by `ProtocolId` on any port, links carry in-process endpoints; attention + suspension notices ride it. Remaining: data sub-ports, state-request (G-18), wire transport | 10/12 |
 | G-14 | No policy representation | **Phase 1 done**: composable link-time `LinkPolicy` on ports, first-rejection-wins; `LinkRequest.identity` slot exists (marker only, G-29); flow-time policies await membranes | 10/13, 40/43 |
 | G-16 | No `onDeactivate` lifecycle hook | **Resolved (M3.3)**: hook + `despawn` + live-ref spawn guard; the drain protocol guarantees deactivation follows the flushed queue and captures state at that point | 10/15, 30/33 |
 | G-17 | Port discovery via reflection walk | **Resolved**: per-cell `PortRegistry` fed by delegates (`provideDelegate`) and `registerPort`; reflective `findPort` deleted | 10/15 |
@@ -53,7 +53,7 @@
 | G-26 | Error handling = printStackTrace | **Resolved (M3.5 + M4.4)**: `DeadLetter` on host `deadLetterOutlet` + per-cell supervision (PROPAGATE / RESTART / SUSPEND with `resume` replay) + opt-in per-cell error outlets (`ErrorReporting` marker; host emits `CellError` under every policy; consumed by invariant cells) | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
 | G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Resolved (M3.2–M3.3)**: closable intake + fail-fast + `LocationRegistry` park/replay; two-phase `drainHost`/`resumeHost`/`migrate` with `Stateful` snapshot capture. Disk overflow mailbox remains with G-25 | 30/33 |
-| G-6 | Attention/scheduling undesigned beyond static priorities | **Designed (M6, 92)**: max-aggregation quantized to bands (damping = quantization), park-not-drop + service-stride fairness floors, glitch-free WAIT default / DEGRADE opt-in via frontier-shrink; implementation M6.1–M6.5 | 30/34 |
+| G-6 | Attention/scheduling undesigned beyond static priorities | **Resolved (M6)**: `AttentionSupport` (max aggregation, band quantization = damping) over generic-protocol sub-channels; `ManagedHost`+`AttentionPolicy` band dispatch, stride floor, NONE-window park/replay; `GlitchFreeCell` WAIT/DEGRADE. 100-seed harness + starvation control. Remaining: no wire crossing, single-hop notices | 30/34 |
 
 ## Gaps — distribution (40)
 

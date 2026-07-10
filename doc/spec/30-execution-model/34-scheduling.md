@@ -1,8 +1,15 @@
 # 34 — Scheduling and Attention-Driven Execution
 
-> **Status**: Designed (open questions resolved by decision below; mechanism = M6, 92)
+> **Status**: Implemented (M6): decisions below are code
 > **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol)
-> **Implementation**: none beyond ManagedHost's static 3-level priority queue; M6 builds the rest
+> **Implementation**: `cell.attention.AttentionSupport`/`AttentionBand` over generic-protocol
+> sub-channels (`cell.port.Protocols`, G-13 minimal); host mapping in `ManagedHost` +
+> `AttentionPolicy` (band dispatch, stride floor, NONE-window park/replay);
+> `GlitchFreeCell.WaveMode` WAIT/DEGRADE. Verified: `AttentionGenerativeTest`
+> (100 seeds + starvation control), `GlitchFreeSuspensionTest`.
+> Remaining: attention does not cross the wire (bridged links carry no
+> protocol endpoints — revisit with replication, 42); notices are single-hop
+> (a join sees only direct upstream parks, not transitive ones).
 
 ## Principle
 
@@ -25,7 +32,7 @@ enforcement arm: no interest → suspend; renewed interest → resume.
 4. Cycles need **magnitude-based throttling** to quiesce (21, G-19) — the
    scheduler must not let feedback loops claim attention forever.
 
-## Design sketch (proposal, ⚠ GAP G-6)
+## Design sketch (implemented, M6 — G-6 resolved)
 
 Minimal attention model compatible with the above:
 

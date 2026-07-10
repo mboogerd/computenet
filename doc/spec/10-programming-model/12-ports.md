@@ -104,13 +104,14 @@ generic protocols (attention propagation 30/34, time/consistency requests
 20/22, link management 10/13) stacked beside the cell-specific contract, with
 composable handlers.
 
-⚠ GAP (G-13): not present in germ. The legacy `MultiplexPort` sketch
-(`asInlet(protocolId)` / `asOutlet(protocolId)`) was only ever an interface,
-deleted with `:legacy` (M3.1).
-*Proposal*: model a multiplex port as a bundle of sub-ports keyed by
-`ProtocolId`, sharing one link and one queue slot; generic protocols get
-well-known ids. This preserves P2 (no per-message dispatch cost beyond one
-table lookup) and keeps composability out of cell logic.
+⚠ GAP (G-13, minimal form landed M6.1): `cell.port.ProtocolSupport` gives any
+port sub-channels keyed by well-known `ProtocolId`s, sharing the port's
+existing links (which now carry in-process endpoint objects); one map lookup
+per delivery (P2), handlers outside cell logic. Attention (34) and suspension
+notices ride it. Remaining: full multiplex *data* sub-ports (several data
+protocols on one link/queue slot), the state-request protocol (21, G-18
+residual), and wire transport for generic protocols (bridged links have no
+endpoint objects).
 
 ## Directionality of generic protocols
 

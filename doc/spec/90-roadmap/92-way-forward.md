@@ -143,7 +143,7 @@ replication its untrusting-peers story; evolution (M9) composes everything
 invariant gates from M4). The programming environment / visualization track
 stays unscheduled — it follows whichever surface stabilizes first.
 
-## Milestone 6 — Attention (interest-driven scheduling)
+## Milestone 6 — Attention (interest-driven scheduling) ✅ DONE
 
 *Goal: spec 34 real — unattended subgraphs quiesce, attended ones get
 resources; the three open scheduling questions resolved (decisions recorded
@@ -172,7 +172,11 @@ frontier-shrink).*
    on resume with catch-up semantics.
 5. M6.5 — exit test.
 
-*Exit criterion: a generative attention harness (SimulationController) where
+All five landed (M6.1–M6.5); wire crossing for generic protocols and
+transitive suspension notices deliberately deferred (noted in 34).
+
+*Exit criterion — met (`AttentionGenerativeTest`, `GlitchFreeSuspensionTest`,
+`AttentionSchedulingTest`): a generative attention harness (SimulationController) where
 a randomized fan-in/fan-out graph with two sinks converges under 100 seeds
 while (a) dropping one sink's attention quiesces exactly its exclusive
 upstream cone (parked, zero loss on re-attention), (b) a low-attention but
