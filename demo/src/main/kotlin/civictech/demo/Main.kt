@@ -12,20 +12,27 @@ import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.graph.graph
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.port.streamTo
+import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.wire.Peering
+import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.net.URI
 import java.net.URLDecoder
 import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 
-// ponytail: JDK httpserver + SSE pushing full state, replace with real
-// transport + incremental client when M5's wire layer lands
+// The UI transport is still JDK httpserver + SSE pushing full state (an
+// incremental browser client is M6+ material); the *peer* transport is the
+// real M5 wire — WebSocket frames between symmetric JVMs.
 
 /** Folds tagged set deltas into current membership (the demo-side tag fold). */
 private class Membership {
@@ -80,9 +87,32 @@ interface SetInletProxy {
     val inlet: Use<SetOps<String>>
 }
 
-class DemoApp(port: Int = 8080) {
-    private val host = ManagedHost()
+interface DeltaInletProxy {
+    val inlet: Use<Propagate<SetDelta<String>>>
+}
+
+class DemoApp(port: Int = 8080, private val wire: Wire? = null) {
+    /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
+    sealed interface Wire {
+        data class Listen(val wsPort: Int) : Wire
+        data class Dial(val uri: String) : Wire
+    }
+
+    private val registry = LocationRegistry()
+    private val host = ManagedHost(registry = registry)
     private val manage = host.managementInlet.call
+
+    // union refs are role-derived so each peer can address its counterpart's
+    // unions without a discovery protocol (that's M6+ territory)
+    private val myRole = when (wire) {
+        is Wire.Listen -> "listener"
+        is Wire.Dial -> "dialer"
+        null -> "solo"
+    }
+    private val peerRole = if (myRole == "listener") "dialer" else "listener"
+
+    private fun unionRef(name: String, role: String) =
+        CellRef(UUID.nameUUIDFromBytes("demo-union:$name@$role".toByteArray()))
 
     private val state = Object()
     private var items: Set<String> = emptySet()
@@ -91,8 +121,8 @@ class DemoApp(port: Int = 8080) {
     private var voteCount: Long = 0
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
-    private val itemsUnion = UnionSetCell<String>()
-    private val votesUnion = UnionSetCell<String>()
+    private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
+    private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
     private val writers = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
@@ -123,6 +153,23 @@ class DemoApp(port: Int = 8080) {
         manage.connect(votesUnion.ref, "outlet", votesHub.ref, "inlet")
         manage.connect(refs.getValue("produce"), "outlet", produceHub.ref, "inlet")
         manage.connect(refs.getValue("count"), "outlet", countHub.ref, "inlet")
+
+        if (wire != null) {
+            val bridgeHost = ManagedHost(registry = registry)
+            val side = Peering.Side(registry, bridgeHost)
+            when (wire) {
+                is Wire.Listen -> WsTransport.listen(wire.wsPort, side)
+                is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
+            }
+            // symmetric view chaining: my unions stream into the peer's counterparts.
+            // Tag dedup + effective-only emission make the two-way chain cycle-safe;
+            // sends park in the registry until the peer announces, so a late-starting
+            // peer replays the full history in order and converges.
+            fun routed(ref: CellRef) =
+                (HostedCellProxy.create(ref, registry, DeltaInletProxy::class.java) as DeltaInletProxy).inlet.call
+            itemsUnion.outlet.streamTo(routed(unionRef("items", peerRole)))
+            votesUnion.outlet.streamTo(routed(unionRef("votes", peerRole)))
+        }
 
         server.createContext("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/op") { exchange -> handleOp(exchange) }
@@ -208,9 +255,23 @@ class DemoApp(port: Int = 8080) {
 }
 
 fun main(args: Array<String>) {
-    val port = args.firstOrNull()?.toIntOrNull() ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
-    val app = DemoApp(port).start()
+    fun value(flag: String): String? {
+        val i = args.indexOf(flag)
+        return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
+    }
+
+    val port = args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
+        ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+    val wire = value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
+        ?: value("--peer")?.let { DemoApp.Wire.Dial(it) }
+
+    val app = DemoApp(port, wire).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
+    when (wire) {
+        is DemoApp.Wire.Listen -> println("  awaiting a peer on ws://localhost:${wire.wsPort}")
+        is DemoApp.Wire.Dial -> println("  peered with ${wire.uri}")
+        null -> println("  single-process mode; add --listen <wsPort> or --peer <ws-uri> to span two JVMs")
+    }
 }
 
 private val PAGE = """

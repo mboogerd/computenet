@@ -1,8 +1,8 @@
 # 41 — Location Transparency
 
-> **Status**: Partial (in-process transparency implemented; wire layer unbuilt)
+> **Status**: Implemented (M5) — in-process transparency and the wire layer; generated boundary proxies (point 2) remain interim JDK proxies
 > **Sources**: ADR 3, ADR — Task Connectivity (§4)
-> **Implementation**: `cell.proxy.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; KSP seed in `gen` module
+> **Implementation**: `cell.proxy.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; `gen.wire.ContractProcessor` + `ContractRegistry`; `cell.wire` (WireCodec, bridge cells, Peering); `:wire` (WebSocket transport)
 
 ## Requirement
 
@@ -25,7 +25,7 @@ direct call → queue hop → serialized send.
 - The registry is in-process; its interface ("where does this ref live
   *now*?") is the seam remote addressing fills in M5 (point 3 below).
 
-## Wire layer (⚠ GAP G-15 — design commitments)
+## Wire layer (G-15 — resolved in M5; commitments annotated below)
 
 1. **Serialized invocation format**: stable method identification (contract id
    + method id from KSP-generated tables — never `java.lang.reflect.Method`,

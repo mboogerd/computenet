@@ -84,7 +84,7 @@ RESTART — invariants asserted through the kotest adapter, 100 seeds, with a
 control run proving the harness detects non-convergent views. A demo UI over
 the same graph is M4.8 (`:demo`).*
 
-## Milestone 5 — Wire (distribution begins)
+## Milestone 5 — Wire (distribution begins) ✅ DONE
 
 *Goal: two processes, one graph.*
 
@@ -118,10 +118,18 @@ wire-frame version byte; demo splits as symmetric peers):
    fan-out rejectable everywhere (local, cross-host, bridge — one funnel:
    `FanOutlet.subscribe`); `Owned` moves-by-serialize, `Leased` refused at
    the boundary~~ — done.
-7. M5.7 — exit: `DistributedCollaborativeAppTest` (loopback split, 100
-   seeds + control run) + the demo as two symmetric WebSocket peers.
+7. ~~M5.7 — exit: `DistributedCollaborativeAppTest` (loopback split, 100
+   seeds + control run) + the demo as two symmetric WebSocket peers
+   (`TwoJvmConvergenceTest` drives two OS processes)~~ — done.
 
-*Exit criterion: the M4 demo app running across two JVMs/machines unchanged.*
+*Exit criterion — met: `DistributedCollaborativeAppTest` runs the M4
+collaborative session with hosts split across two location registries
+connected only by serialized wire frames — same cells, same graph, placement
+the only diff — converging under 100 seeds (late joiner arriving on the other
+peer, mid-session migration, injected failure through an error outlet), with
+the control run proving divergence detection; and the same split runs live
+across two OS processes over WebSocket (`:demo` peer mode), browsers on each
+side converging both directions.*
 
 ## Milestone 6+ — The decentralized horizon (research tracks)
 

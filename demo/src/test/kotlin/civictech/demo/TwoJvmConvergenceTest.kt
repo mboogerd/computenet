@@ -1,0 +1,88 @@
+package civictech.demo
+
+import org.junit.jupiter.api.Test
+import org.opentest4j.AssertionFailedError
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.ServerSocket
+import java.net.URI
+
+/**
+ * M5.7 demonstration smoke: the demo app running across **two OS processes**
+ * peered over WebSocket — the M4 graph unchanged, placement is the only
+ * difference. An edit posted to either peer converges on the other, observed
+ * through the SSE endpoints (each fresh SSE connection is a "browser tab").
+ */
+class TwoJvmConvergenceTest {
+
+    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
+
+    private fun launch(vararg appArgs: String): Process {
+        val java = File(System.getProperty("java.home"), "bin/java").absolutePath
+        return ProcessBuilder(
+            java, "-cp", System.getProperty("java.class.path"), "civictech.demo.MainKt", *appArgs
+        ).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.INHERIT).start()
+    }
+
+    /** One SSE message from /events — a fresh tab is sent the current state immediately. */
+    private fun currentState(httpPort: Int): String {
+        val connection = URI("http://localhost:$httpPort/events").toURL().openConnection() as HttpURLConnection
+        connection.readTimeout = 3000
+        connection.connectTimeout = 3000
+        return connection.inputStream.bufferedReader().use { reader ->
+            generateSequence { reader.readLine() }.first { it.startsWith("data: ") }.removePrefix("data: ")
+        }.also { connection.disconnect() }
+    }
+
+    private fun post(httpPort: Int, user: String, action: String, item: String) {
+        val connection = URI("http://localhost:$httpPort/op").toURL().openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.outputStream.use { it.write("user=$user&action=$action&item=$item".toByteArray()) }
+        check(connection.responseCode == 200) { "op failed: ${connection.responseCode}" }
+        connection.disconnect()
+    }
+
+    private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition()) {
+            if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
+            Thread.sleep(100)
+        }
+    }
+
+    private fun up(httpPort: Int): Boolean = runCatching {
+        (URI("http://localhost:$httpPort/").toURL().openConnection() as HttpURLConnection)
+            .apply { connectTimeout = 500; readTimeout = 500 }
+            .responseCode == 200
+    }.getOrDefault(false)
+
+    @Test
+    fun `edits on either JVM converge on the other`() {
+        val httpA = freePort()
+        val httpB = freePort()
+        val ws = freePort()
+        val peerA = launch("$httpA", "--listen", "$ws")
+        val peerB = launch("$httpB", "--peer", "ws://localhost:$ws")
+        try {
+            await("both peers serving HTTP") { up(httpA) && up(httpB) }
+
+            post(httpA, user = "alice", action = "add", item = "apples")
+            await("apples visible on peer B") { "apples" in currentState(httpB) }
+
+            post(httpB, user = "bob", action = "add", item = "bread")
+            post(httpB, user = "bob", action = "vote", item = "apples")
+            await("bread visible on peer A") { "bread" in currentState(httpA) }
+            await("bob's vote counted on peer A") { "\"voteCount\":1" in currentState(httpA) }
+
+            post(httpA, user = "alice", action = "remove", item = "apples")
+            await("removal visible on peer B") {
+                // scope to the items array — the vote for apples legitimately remains
+                "apples" !in currentState(httpB).substringAfter("\"items\":").substringBefore("]")
+            }
+        } finally {
+            peerA.destroy()
+            peerB.destroy()
+        }
+    }
+}

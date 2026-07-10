@@ -59,7 +59,7 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-15 | No wire layer (format, transport, addressing) | KSP method-id tables + serializers; bridge cells as transport; after G-4/G-12. **M5.1 done**: method-id tables + `ContractRegistry`. **M5.2 done**: `WireFrame` envelope (kotlinx JSON, array polymorphism, version byte), ids-only identity, context on the wire. **M5.3 done**: loopback bridge cells, generative harness across two registries (100 seeds + fault controls). **M5.4 done**: `Location = Local\|Remote`, peer announcements as ordinary wire traffic, placement-blind proxies with park/replay. **M5.5 done**: WebSocket transport in `:wire` (kernel stays dependency-free); disconnect ⇒ unpublish ⇒ park | 40/41 |
+| G-15 | No wire layer (format, transport, addressing) | **Resolved (M5)**: method-id tables + `ContractRegistry` (M5.1); `WireFrame` envelope — kotlinx JSON, ids-only, version byte (M5.2); loopback bridge cells + generative harness across two registries (M5.3); `Location = Local\|Remote` with announcements as ordinary wire traffic (M5.4); WebSocket transport in `:wire` (M5.5); exit: `DistributedCollaborativeAppTest` 100 seeds + two-OS-process demo (M5.7). Remaining interim: JDK dynamic proxies in-process (C-5), no reconnect beyond park, no security (43) | 40/41 |
 | G-7 | Replication undesigned | Replicas = same logicalId on many hosts + delta gossip over ordinary links | 40/42 |
 | G-29 | No threat model / identity | Identity-bearing LinkRequest from the start; full model trails policy substrate | 40/43 |
 

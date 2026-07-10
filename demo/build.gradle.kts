@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     implementation(project(":kernel"))
+    implementation(project(":wire"))
 
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.junit)
