@@ -28,11 +28,26 @@ class LocationRegistry {
     private val parked = ConcurrentHashMap<CellRef, MutableList<HostedPortInvocation>>()
 
     /**
-     * Fires after a *local* publish — the announcement seam (M5.4). Remote
+     * Fire after a *local* publish — the announcement seam (M5.4; multicast
+     * since M7.2 so a registry can peer with several remotes). Remote
      * publishes never re-announce, so mirrored registries cannot loop.
      */
-    @Volatile
-    var onLocalPublish: (CellRef) -> Unit = {}
+    private val onLocalPublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
+
+    /** Fire after *any* publish (local or remote) — the replica-discovery seam (M7.2, spec 42). */
+    private val onPublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
+
+    fun onLocalPublish(listener: (CellRef) -> Unit) {
+        onLocalPublish += listener
+    }
+
+    fun onPublish(listener: (CellRef) -> Unit) {
+        onPublish += listener
+    }
+
+    /** Every published ref sharing [logicalId] — replicas, local and remote (spec 42). */
+    fun replicasOf(logicalId: java.util.UUID): Set<CellRef> =
+        locations.keys.filterTo(mutableSetOf()) { it.id == logicalId }
 
     /** The host currently serving [ref] on this registry, if local. */
     fun locate(ref: CellRef): ManagedHost? = (locations[ref] as? Local)?.host
@@ -86,12 +101,14 @@ class LocationRegistry {
      */
     fun publish(ref: CellRef, host: ManagedHost) {
         install(ref, Local(host))
-        onLocalPublish(ref)
+        onLocalPublish.forEach { it(ref) }
+        onPublish.forEach { it(ref) }
     }
 
     /** Make [ref] remote, reachable through [sink] (a bridge egress, spec 41). */
     fun publish(ref: CellRef, sink: InvocationSink) {
         install(ref, Remote(sink))
+        onPublish.forEach { it(ref) }
     }
 
     private fun install(ref: CellRef, location: Location) {

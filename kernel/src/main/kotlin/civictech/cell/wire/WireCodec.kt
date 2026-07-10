@@ -47,7 +47,7 @@ data class WireFrame(
 )
 
 object WireCodec {
-    const val VERSION = 1
+    const val VERSION = 2 // v2 (M7.1): CellRef carries incarnation (G-8)
 
     private val polyAny = PolymorphicSerializer(Any::class)
 

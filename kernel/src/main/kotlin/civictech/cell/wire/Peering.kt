@@ -62,13 +62,34 @@ object Peering {
         val inlet: Use<RegistryAnnounce>
     }
 
-    fun loopback(a: Side, b: Side) {
+    /**
+     * Handle on an established loopback peering — enough to sever it
+     * ([partition]) and re-establish it ([heal]): the partition/anti-entropy
+     * seam of M7.4. Disconnect drops Remote locations (senders park, spec 33);
+     * heal re-announces, replaying parked traffic and re-syncing state via
+     * the ordinary catch-up path.
+     */
+    class Loopback(private val a: Side, private val b: Side, val aToB: InvocationSink, val bToA: InvocationSink,
+                   private val mirrorOnA: CellRef, private val mirrorOnB: CellRef) {
+        fun partition() {
+            a.registry.unpublishRemotes(aToB)
+            b.registry.unpublishRemotes(bToA)
+        }
+
+        fun heal() {
+            announceTo(a, peerMirror = mirrorOnB, via = aToB)
+            announceTo(b, peerMirror = mirrorOnA, via = bToA)
+        }
+    }
+
+    fun loopback(a: Side, b: Side): Loopback {
         val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(b), PortRef.generate())) }
         val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(a), PortRef.generate())) }
         val mirrorOnB = spawnMirror(b, toPeer = bToA)
         val mirrorOnA = spawnMirror(a, toPeer = aToB)
         announceTo(a, peerMirror = mirrorOnB, via = aToB)
         announceTo(b, peerMirror = mirrorOnA, via = bToA)
+        return Loopback(a, b, aToB, bToA, mirrorOnA, mirrorOnB)
     }
 
     /** Spawn a [BridgeIngressCell] on [side]'s bridge host; returned api is safe to call from any thread. */
@@ -88,13 +109,14 @@ object Peering {
 
     /**
      * Announce [side]'s local publishes — current and future — to [peerMirror]
-     * through [via]. One announcement hook per registry: a registry peers with
-     * one remote at a time (multi-peer fan-out is M6+ replication territory).
+     * through [via]. Announcement hooks are multicast (M7.2): a registry may
+     * peer with several remotes at once; each peer only ever hears about
+     * *local* refs, so nothing loops or forwards second-hand locations.
      */
     fun announceTo(side: Side, peerMirror: CellRef, via: InvocationSink) {
         val announce = (HostedCellProxy.create(peerMirror, via, AnnounceInletProxy::class.java)
                 as AnnounceInletProxy).inlet.call
-        side.registry.onLocalPublish = { announce.published(it) }
+        side.registry.onLocalPublish { announce.published(it) }
         side.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
     }
 }

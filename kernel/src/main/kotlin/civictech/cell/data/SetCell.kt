@@ -49,7 +49,20 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetAp
     override val inlet = registerPort("inlet", FanInlet.create<SetOps<E>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
-    private val state = mutableMapOf<E, MutableSet<Timestamp>>()
+    /**
+     * Replica gossip intake (spec 42, M7.3): another replica's effective
+     * deltas merge here; only *new* tag information re-emits (effective-only,
+     * 21), so gossip echoes around any mesh topology die out.
+     */
+    val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<E>>>())
+
+    // Full OR-set (M7.3): adds = every add-tag ever seen, dels = tombstones.
+    // An element is present iff it has an add-tag without a matching del-tag.
+    // Tombstones are what make multi-path gossip safe: a removed tag arriving
+    // late over another path stays removed.
+    // ponytail: tag sets grow monotonically; compaction is future work (G-25)
+    private val adds = mutableMapOf<E, MutableSet<Timestamp>>()
+    private val dels = mutableMapOf<E, MutableSet<Timestamp>>()
 
     // Tags are minted locally, not taken from the wave's MessageContext:
     // observed-remove correctness needs a tag unique per add *instance*, and a
@@ -57,41 +70,78 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetAp
     private val tagSource: UUID = UUID.randomUUID()
     private var tagCounter = 0L
 
+    private fun liveTags(element: E): Set<Timestamp> =
+        (adds[element] ?: emptySet<Timestamp>()) - (dels[element] ?: emptySet())
+
+    /** Current membership: elements with at least one un-tombstoned add-tag. */
+    fun membership(): Set<E> = adds.keys.filterTo(mutableSetOf()) { liveTags(it).isNotEmpty() }
+
     private val inletApi = object : SetOps<E> {
         override fun add(element: E) {
             val tag = Timestamp(tagSource, ++tagCounter)
-            state.getOrPut(element) { mutableSetOf() } += tag
+            adds.getOrPut(element) { mutableSetOf() } += tag
             outlet.call.propagate(SetDelta(adds = mapOf(element to setOf(tag))))
         }
 
         override fun remove(element: E) {
             // effective-only (21): removing an unobserved element is a no-op
-            val observed = state.remove(element) ?: return
-            outlet.call.propagate(SetDelta(dels = mapOf(element to observed.toSet())))
+            val observed = liveTags(element)
+            if (observed.isEmpty()) return
+            dels.getOrPut(element) { mutableSetOf() } += observed
+            outlet.call.propagate(SetDelta(dels = mapOf(element to observed)))
         }
+    }
+
+    /** Merge a peer replica's delta; re-emit exactly the new tag information. */
+    private fun applyRemote(delta: SetDelta<E>) {
+        val newAdds = delta.adds
+            .mapValues { (e, tags) -> tags - (adds[e] ?: emptySet()) }
+            .filterValues { it.isNotEmpty() }
+        val newDels = delta.dels
+            .mapValues { (e, tags) -> tags - (dels[e] ?: emptySet()) }
+            .filterValues { it.isNotEmpty() }
+        if (newAdds.isEmpty() && newDels.isEmpty()) return // echo terminates here
+        newAdds.forEach { (e, tags) -> adds.getOrPut(e) { mutableSetOf() } += tags }
+        newDels.forEach { (e, tags) -> dels.getOrPut(e) { mutableSetOf() } += tags }
+        outlet.call.propagate(SetDelta(newAdds, newDels))
     }
 
     init {
         inlet.serve(inletApi)
-        // late-join catch-up (G-22): state-as-delta-from-empty to just the new
-        // subscriber; tagged deltas make replay after catch-up idempotent
+        deltaInlet.serve(object : Propagate<SetDelta<E>> {
+            override fun propagate(value: SetDelta<E>) = applyRemote(value)
+        })
+        // late-join catch-up (G-22) — and replica initial sync / anti-entropy
+        // (M7.4): full tag state as one delta-from-empty, tombstones included,
+        // to just the new subscriber; idempotence makes replays harmless
         outlet.linking.onLinked = { link ->
-            if (state.isNotEmpty()) {
-                outlet.at(link.to).propagate(SetDelta(adds = state.mapValues { it.value.toSet() }))
+            if (adds.isNotEmpty() || dels.isNotEmpty()) {
+                outlet.at(link.to).propagate(
+                    SetDelta(
+                        adds = adds.mapValues { it.value.toSet() },
+                        dels = dels.mapValues { it.value.toSet() },
+                    )
+                )
             }
         }
     }
 
     // snapshot/restore (G-25 seam): elements must be Serializable
     override fun snapshot(): Serializable =
-        HashMap(state.mapValues { HashSet(it.value) })
+        HashMap(
+            mapOf(
+                "adds" to HashMap(adds.mapValues { HashSet(it.value) }),
+                "dels" to HashMap(dels.mapValues { HashSet(it.value) }),
+            )
+        )
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
-        this.state.clear()
-        (state as Map<E, Set<Timestamp>>).forEach { (e, tags) ->
-            this.state[e] = tags.toMutableSet()
-        }
+        val maps = state as Map<String, Map<E, Set<Timestamp>>>
+        adds.clear()
+        dels.clear()
+        maps.getValue("adds").forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
+        maps.getValue("dels").forEach { (e, tags) -> dels[e] = tags.toMutableSet() }
     }
 
     companion object {
