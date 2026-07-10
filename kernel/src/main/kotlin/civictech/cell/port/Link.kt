@@ -12,6 +12,15 @@ interface Link {
 
     val to: PortRef
 
+    /**
+     * Endpoint objects where known in-process (G-13 minimal): the producer-
+     * and consumer-side ports, used by generic protocols (12) to travel along
+     * the link. Null for endpoints that are not reachable as objects
+     * (`Use.fixed` ad-hoc endpoints, bridged links across the wire).
+     */
+    val fromPort: Port? get() = null
+    val toPort: Port? get() = null
+
     /** Idempotent: detaches both sides and fires the target port's onUnlink once. */
     fun unlink()
 }
@@ -66,6 +75,14 @@ class LinkSupport {
     var onUnlink: (Link) -> Unit = {}
     val policies = mutableListOf<LinkPolicy>()
 
+    /**
+     * Multicast siblings of [onLinked]/[onUnlink] for infrastructure (generic
+     * protocols, attention) that must observe links without stealing the
+     * single cell-facing hook slots above.
+     */
+    internal val onLinkedListeners = mutableListOf<(Link) -> Unit>()
+    internal val onUnlinkListeners = mutableListOf<(Link) -> Unit>()
+
     fun reject(request: LinkRequest): LinkResult.Rejected? =
         policies.firstNotNullOfOrNull { it.evaluate(request) }
 
@@ -90,19 +107,24 @@ internal fun <Api> handshake(
     val support = target.linking
     support.reject(LinkRequest(portOut.ref, targetRef))?.let { return it }
 
-    val link = PortLink(portOut.ref, targetRef) { link ->
+    val sourceLinking = (portOut as? Linked)?.linking
+    val link = PortLink(portOut.ref, targetRef, portOut, target as? Port) { link ->
         uninstall(link)
-        (portOut as? Linked)?.linking?.remove(link)
+        sourceLinking?.remove(link)
         support.remove(link)
         support.onUnlink(link)
+        support.onUnlinkListeners.forEach { it(link) }
+        sourceLinking?.onUnlinkListeners?.forEach { it(link) }
     }
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
             install()
             support.register(link)
-            (portOut as? Linked)?.linking?.register(link)
+            sourceLinking?.register(link)
             support.onLinked(link)
-            (portOut as? Linked)?.linking?.onLinked?.invoke(link)
+            sourceLinking?.onLinked?.invoke(link)
+            support.onLinkedListeners.forEach { it(link) }
+            sourceLinking?.onLinkedListeners?.forEach { it(link) }
             result
         }
 
@@ -113,6 +135,8 @@ internal fun <Api> handshake(
 internal class PortLink(
     override val from: PortRef,
     override val to: PortRef,
+    override val fromPort: Port? = null,
+    override val toPort: Port? = null,
     private val doUnlink: (PortLink) -> Unit,
 ) : Link {
     override val id: UUID = UUID.randomUUID()
