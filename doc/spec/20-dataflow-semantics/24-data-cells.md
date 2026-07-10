@@ -1,8 +1,8 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; map/list with documented limits; partitioning unbuilt)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; partitioning unbuilt)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
-> **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`
+> **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.RelationalGraphs` (outer joins)
 
 ## Role
 
@@ -74,8 +74,18 @@ pressure (42).)*
   to a late-joining subscriber, and implements `Stateful` so state survives
   drain/migrate (30/33) — no longer trapped in private fields. On-demand pull
   without relinking remains with G-18/G-13 (21).
-- ~~Operator library~~ **Implemented (M4.3)** — each an ordinary cell with
-  declared incremental semantics, all late-join capable and `Stateful`:
+- ~~Operator library~~ **Implemented (M4.3, extended to the full relational
+  suite in M11)** — each an ordinary cell with declared incremental
+  semantics, all late-join capable and `Stateful`. Correspondence to the
+  differential-dataflow vocabulary: `distinct` needs no cell (SetDelta is
+  set-semantic; union is the distinct-preserving merge) and `consolidate`
+  is the effective-only emission rule (21); `negate` has no meaning without
+  signed multiplicities (see the weighted-family deferral below).
+  Convergence classes: **freely replicable** duplicates emit identical tag
+  info (filter, flatMap, union), **convergent duplicates** agree on
+  membership but mint distinct tags (intersect, semijoin/antijoin,
+  equi-join), **single-instance** outputs are single-writer streams
+  (groupBy, the counters outside the PN form):
   - `FilterCell` — predicate filter over a tagged set stream, tags intact.
   - `CountCell` — distinct-element count; emits commutative `CounterDelta`s
     on membership-size change only.

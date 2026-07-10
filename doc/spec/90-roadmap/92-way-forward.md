@@ -338,6 +338,43 @@ mid-session relaunches with the same `--journal` directory, recovers its
 state, reconnects, replays parked edits from the surviving peer, and both
 browsers converge in both directions.*
 
+## Milestone 11 — Incremental dataflow operations (the relational + aggregation suite) ✅ DONE
+
+The operator library (M4.3) grows into a full suite drawing on the cited
+inspirations (Differential Dataflow / DBSP for the relational core; Kafka
+Streams / Flink / SQL for aggregation and windowing), mapped onto the OR-tag
+algebra rather than importing Z-sets (idempotent merge is what gossip
+requires — 42):
+
+1. M11.1 — `FlatMapSetCell`/`mapSet`: tag pass-through with fold-with-union
+   on output collision (last-wins remap is the control-tested divergent form).
+2. M11.2 — `MintedTags` + `SemiJoinCell`/`differenceSet`: the non-monotone
+   core; the tag-hygiene rule becomes normative (21).
+3. M11.3 — `Aggregator` + `GroupByCell`/`.global` + count/sumOf/avgOf;
+   aggregates are deterministic functions of membership; replication =
+   per-peer recompute over replicated inputs.
+4. M11.4 — minOf/maxOf/topK/collectToSet on full support multisets
+   (bounded-memory top-k rejected as unsound under retraction).
+5. M11.5 — `JoinSetCell`/`joinSet`/`crossProduct`: relational equi-join,
+   one minted tag per live pair; `JoinCell` reframed as the LWW dictionary
+   join.
+6. M11.6 — outer joins as GraphDsl compositions; `Windows` assigners —
+   windowing is key derivation over event-time-as-data (no wall clock, P1);
+   windows never close, watermark eviction deferred with trigger.
+
+Deferred with triggers (recorded in 24/91): OR-map keyed family, gossipable
+aggregate outputs, weighted/bag semantics, session windows, watermark
+eviction, PartitionedCell sharding (G-24 trigger now armed), atomic
+outer-join cell.
+
+*Exit criterion — met (`DataflowSuiteExitTest`): writers → union → mapSet
+(many-to-one) → equi-join → antijoin → groupBy(sum) + groupBy(topK)
+composed across two hosts equals a batch recompute over final writer state
+on every one of 100 seeds, through category flaps (join re-entry),
+block-list churn, a mid-run snapshot/restore twin, and a hosted late
+joiner served by catch-up — with a retraction-blind control fold that
+must diverge.*
+
 ## Working agreements (process, immediate)
 
 - **Specs lead code**: changes to semantics update the relevant spec file in

@@ -67,6 +67,11 @@ cells cost each cell only its local frontier.
 
 Non-declaring cells process eagerly with zero coordination cost (P4, P2).
 
+Operators that fan one input delta into several outputs keep per-delta
+atomicity: `GroupByCell` (M11.3) emits all groups touched by one input delta
+as a single `MapDelta` under the input's wave id, so a downstream glitch-free
+wrap composes normally.
+
 *(Implemented — static-frontier phase: `GlitchFreeCell` wraps a fan-in edge
 set with per-wave version buffering; the frontier is the inlet's current link
 set, recomputed on every completeness check, so link/unlink adapts the

@@ -50,6 +50,8 @@ configuration of the one `ManagedHost` class (30/31, C-2/G-2 resolved).
 | **Color** | Execution style of logic and hosts: 🟢 Pure, 🔵 Blocking, 🟣 Suspending. | 30/32 |
 | **Bridge** | A unidirectional adapter carrying invocations between hosts of different colors. | 30/32 |
 | **Delta** | An incremental state transition propagated along links; the default payload style. | 20/21 |
+| **Tag hygiene** | The normative rule for tagged delta emitters: never re-emit a tag previously deleted. Pass-through operators may reuse input tags only when every membership flip-ON rides a fresh input add-tag; non-monotone operators mint fresh output tags per entry. | 20/21, 20/24 |
+| **Aggregator** | A grouped aggregate as a deterministic function of group membership (never arrival order): `empty/insert/retract/value` over a serializable accumulator. | 20/24 |
 | **MessageContext** | Metadata traveling with invocations: logical timestamp / wave id + source port. Required for glitch-freedom. | 20/22 |
 | **Glitch-free frontier** | The nearest upstream set of glitch-free cells at which dependency tracking may stop. | 20/22 |
 | **Ownership contract** | Payload sharing semantics: `Borrowed`, `Owned`, `Leased`, `Frozen`. | 20/23 |
