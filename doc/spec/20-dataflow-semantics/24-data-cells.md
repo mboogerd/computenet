@@ -145,6 +145,24 @@ per-peer recompute converge.
   rejected as unsound under retractions (an evicted value can become top
   again — control-tested). Selectors must be total orders with deterministic
   tie-break.
+- **Windowing = key derivation (M11.6).** There is no wall clock (P1) and
+  wave ids are per-source, so event time is an explicit attribute of the
+  element and a window is just part of the group key: tumbling = composite
+  key via `Windows.tumbling`; sliding = per-element expansion
+  (`FlatMapSetCell` over `Windows.sliding`) then group. **Windows never
+  close** — late elements are ordinary adds, retractions flow (view
+  semantics). Deferred with triggers: watermark-driven eviction (an ordinary
+  watermark-as-data source feeding upstream dels; trigger: real
+  window-state memory pressure) and session windows (assignment is not a
+  per-element function; trigger: first proximity-session consumer).
+  Wave/tick-based windows are rejected: contents would be
+  placement-dependent, breaking P1 and batch equivalence.
+- **Outer joins are compositions, not cells (M11.6)**: `leftJoin` /
+  `rightJoin` / `fullJoin` graph factories union the relational join's
+  matched rows with null-completed antijoin rows. Eventually consistent,
+  not glitch-free — transient `(a, null)`/`(a, b)` overlap while opposing
+  updates are in flight; an atomic outer-join cell waits for a consumer
+  that can't tolerate the transient.
 - **Replication story: recompute, not gossip.** The output is single-writer
   `MapDelta` (its documented contract, satisfied by construction), so
   `GroupByCell` is not `Replicable` — and needn't be: aggregates are
