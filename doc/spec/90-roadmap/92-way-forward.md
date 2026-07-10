@@ -96,8 +96,10 @@ wire-frame version byte; demo splits as symmetric peers):
    `ContractDescriptor`, ids hashed from FQN + erased JVM signature),
    `ContractRegistry`, `Invocation.contractId/methodId` (C-5: stable ids
    exist; in-process dispatch stays reflective)~~ — done.
-2. M5.2 — generated serializers + `WireFrame` envelope (kotlinx.serialization;
-   version byte reserves G-8).
+2. ~~M5.2 — serializers + `WireFrame` envelope (kotlinx.serialization, JSON
+   array polymorphism, stable `@SerialName` discriminators; version byte
+   reserves G-8; uniform polymorphic codec instead of per-method generated
+   bindings)~~ — done.
 3. M5.3 — loopback bridge cells: egress/ingress as ordinary cells on
    SimulationController hosts; generative harness with a bridge at a random
    cut, 100 seeds + control run (the wire's P1 proof).

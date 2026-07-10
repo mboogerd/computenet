@@ -29,13 +29,23 @@ direct call → queue hop → serialized send.
 
 1. **Serialized invocation format**: stable method identification (contract id
    + method id from KSP-generated tables — never `java.lang.reflect.Method`,
-   P9) + arguments encoded via generated serializers (kotlinx.serialization
-   the chosen codec).
-   *(M5.1: identity half done — `@Contract` interfaces get generated
-   `ContractDescriptor` tables (`gen.wire.ContractProcessor`), ids hashed
-   FNV-1a 64 from FQN / FQN#name+erased-JVM-signature, ServiceLoader-collected
-   into `ContractRegistry`; `Invocation` carries `contractId`/`methodId` at
-   capture. Argument encoding is M5.2.)*
+   P9) + arguments encoded via kotlinx.serialization.
+   *(M5.1: `@Contract` interfaces get generated `ContractDescriptor` tables
+   (`gen.wire.ContractProcessor`), ids hashed FNV-1a 64 from FQN /
+   FQN#name+erased-JVM-signature, ServiceLoader-collected into
+   `ContractRegistry`; `Invocation` carries `contractId`/`methodId` at
+   capture.)*
+   *(M5.2: the format is pinned — `cell.wire.WireFrame(version, contractId,
+   methodId, cellRef, portName, type, context, args)` as kotlinx JSON with
+   array polymorphism; a `version` byte reserves the G-8 retrofit. Arguments
+   travel as polymorphic values under `@SerialName`-pinned stable
+   discriminators (`SetDelta`, `Timestamp`, …) — no class names, no method
+   names in the bytes (test-asserted). Decode recovers the reflective
+   in-process dispatch path from the descriptor's name + erased signature.
+   Deviation from the original commitment: a uniform polymorphic codec
+   replaced per-method generated codec bindings — one codec covers all
+   contracts including generic ones; generate bindings only if profiling
+   demands.)*
 2. **Generated proxies** (KSP/Poet) replace JDK dynamic proxies at boundaries:
    KMP-compatible, reflection-free, and the natural place to emit port
    metadata (contract ids, ownership flags 20/23, color 30/32).

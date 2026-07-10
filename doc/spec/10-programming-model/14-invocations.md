@@ -48,10 +48,11 @@ The same invocation takes the cheapest possible path (P2):
    `Invocation`, wrapped as `HostedPortInvocation(cellRef, portName, type)`
    and enqueued on the target host's queue (`ManagedHost.enqueueHostedInvocation`).
 3. **Cross-process / cross-machine**: same capture, but the invocation is
-   serialized and carried by the transport (40/41). ⚠ GAP (G-15): no network
-   transport exists yet; the serialized form (stable method ids, argument
-   encoding) is not yet pinned down. KSP-generated proxies/serializers are the
-   intended mechanism (the `gen` module's `SerializerProcessor` is the seed).
+   serialized and carried by the transport (40/41). ⚠ GAP (G-15, narrowing):
+   the serialized form is pinned (M5.2): `cell.wire.WireFrame` — versioned,
+   ids-only (`contractId`/`methodId` from the generated tables), arguments as
+   `@SerialName`-discriminated polymorphic kotlinx values, context riding
+   along. Transport is M5.3–M5.5.
 
 `HostedPortInvocation.Type` distinguishes `PORT_API` (data path) from
 `PORT_MANAGEMENT` (operations on the port object itself) — keep this split; it

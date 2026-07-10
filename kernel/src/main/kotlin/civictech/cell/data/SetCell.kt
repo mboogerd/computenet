@@ -22,6 +22,8 @@ interface SetOps<E> {
  * order. An element is present iff it has an add-tag not covered by a del.
  * Add-wins falls out: a concurrent add's tag is never observed by the remove.
  */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("SetDelta")
 data class SetDelta<E>(
     val adds: Map<E, Set<Timestamp>> = emptyMap(),
     val dels: Map<E, Set<Timestamp>> = emptyMap(),

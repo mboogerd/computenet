@@ -19,6 +19,8 @@ interface CounterOps {
 }
 
 /** Commutative by construction: merging is addition, any arrival order converges (G-23). */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("CounterDelta")
 data class CounterDelta(val amount: Long) : Serializable {
     fun merge(other: CounterDelta): CounterDelta = CounterDelta(amount + other.amount)
 }

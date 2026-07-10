@@ -2,9 +2,11 @@ plugins {
     // Shared code is located in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`.
     id("buildsrc.convention.kotlin-jvm")
     alias(libs.plugins.ksp)
+    alias(libs.plugins.kotlin.plugin.serialization)
 }
 dependencies {
     implementation(libs.kotlinx.coroutines)
+    implementation(libs.kotlinx.serialization)
     implementation(project(":gen"))
     ksp(project(":gen"))
 

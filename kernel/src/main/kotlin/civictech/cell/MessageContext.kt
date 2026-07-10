@@ -1,8 +1,10 @@
 package civictech.cell
 
 import civictech.cell.port.PortRef
+import civictech.cell.wire.UuidSerializer
 import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import java.io.Serializable
 import java.util.*
 
@@ -10,13 +12,20 @@ import java.util.*
  * Wave id (G-20 decision): per-source monotonic counters. Convergence, not
  * simultaneity, across sources — see spec 20/22.
  */
-data class Timestamp(val sourceId: UUID, val counter: Long) : Serializable
+@kotlinx.serialization.Serializable
+@SerialName("Timestamp")
+data class Timestamp(
+    @kotlinx.serialization.Serializable(with = UuidSerializer::class) val sourceId: UUID,
+    val counter: Long,
+) : Serializable
 
 /**
  * Rides every data-path invocation (G-4). Outlets stamp it: a fresh [Timestamp]
  * when emission is spontaneous (no incoming context), the incoming timestamp with
  * a rewritten [sourcePort] when reactive. Cell authors never touch it.
  */
+@kotlinx.serialization.Serializable
+@SerialName("MessageContext")
 data class MessageContext(
     val timestamp: Timestamp,
     val sourcePort: PortRef,

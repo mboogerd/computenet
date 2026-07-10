@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.port.*
+import civictech.cell.wire.IndexedValueSerializer
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
@@ -22,9 +23,11 @@ interface ListOps<E> {
  * multi-writer edits do not converge. Stable multi-writer sequences need
  * position identifiers (RGA/LSEQ style), out of scope until replication (42).
  */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("ListDelta")
 data class ListDelta<E>(
-    val adds: List<IndexedValue<E>> = emptyList(),
-    val updates: List<IndexedValue<E>> = emptyList(),
+    val adds: List<@kotlinx.serialization.Serializable(with = IndexedValueSerializer::class) IndexedValue<E>> = emptyList(),
+    val updates: List<@kotlinx.serialization.Serializable(with = IndexedValueSerializer::class) IndexedValue<E>> = emptyList(),
     val removals: List<Int> = emptyList()
 ) : Serializable
 

@@ -64,4 +64,36 @@ object JvmDescriptors {
         c.isArray -> "[" + desc(c.componentType)
         else -> "L${c.name.replace('.', '/')};"
     }
+
+    /**
+     * Parameter type names (in `Class.getName` form) recovered from a method
+     * descriptor — how a decoded wire frame regains the reflective in-process
+     * dispatch path without class names ever crossing the wire.
+     */
+    fun parameterTypeNames(methodDescriptor: String): List<String> {
+        val params = methodDescriptor.substringAfter('(').substringBefore(')')
+        val names = mutableListOf<String>()
+        var i = 0
+        while (i < params.length) {
+            val start = i
+            while (params[i] == '[') i++
+            i = if (params[i] == 'L') params.indexOf(';', i) + 1 else i + 1
+            names += typeName(params.substring(start, i))
+        }
+        return names
+    }
+
+    private fun typeName(desc: String): String = when (desc[0]) {
+        'Z' -> "boolean"
+        'B' -> "byte"
+        'C' -> "char"
+        'S' -> "short"
+        'I' -> "int"
+        'J' -> "long"
+        'F' -> "float"
+        'D' -> "double"
+        'L' -> desc.substring(1, desc.length - 1).replace('/', '.')
+        '[' -> desc.replace('/', '.') // Class.getName keeps JVM array form, dot-separated
+        else -> error("unparseable type descriptor: $desc")
+    }
 }

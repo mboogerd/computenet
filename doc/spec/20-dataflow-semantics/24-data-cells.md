@@ -29,6 +29,11 @@ interface SetApi<E> {
 }
 ```
 
+*(M5.2: every delta type is `@kotlinx.serialization.Serializable` with a
+stable `@SerialName` (`SetDelta`, `CounterDelta`, `MapDelta`, `ListDelta`) —
+deltas cross the wire as polymorphic values in the `WireFrame` envelope
+(40/41), tags included, so causal merge semantics hold across processes.)*
+
 Elements of the pattern:
 
 1. **Command contract** on the inlet (semantic operations, not raw deltas) —

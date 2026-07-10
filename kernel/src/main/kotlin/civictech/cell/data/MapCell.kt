@@ -20,6 +20,8 @@ interface MapOps<K, V> {
  * are not replica-stable. Fine within one FIFO stream; multi-writer key
  * conflicts need last-writer-wins tags or per-key cells before replication (42).
  */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("MapDelta")
 data class MapDelta<K, V>(
     val puts: Map<K, V>,
     val removals: Set<K>
