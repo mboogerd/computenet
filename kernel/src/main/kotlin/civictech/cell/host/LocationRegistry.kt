@@ -37,8 +37,10 @@ class LocationRegistry {
     /** Fire after *any* publish (local or remote) — the replica-discovery seam (M7.2, spec 42). */
     private val onPublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
 
-    fun onLocalPublish(listener: (CellRef) -> Unit) {
+    /** Returns a deregistration handle — reconnecting transports replace their announcement hook (M10.3). */
+    fun onLocalPublish(listener: (CellRef) -> Unit): AutoCloseable {
         onLocalPublish += listener
+        return AutoCloseable { onLocalPublish -= listener }
     }
 
     fun onPublish(listener: (CellRef) -> Unit) {

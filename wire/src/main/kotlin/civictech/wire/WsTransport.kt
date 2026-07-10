@@ -68,6 +68,10 @@ object WsTransport {
         @Volatile
         private var ingress: Propagate<ByteArray>? = null
 
+        /** The current announcement hook — replaced on every (re)hello so reconnects don't leak stale announcers (M10.3). */
+        @Volatile
+        private var announcement: AutoCloseable? = null
+
         init {
             egress.outlet.subscribe(Use.fixed(object : Propagate<ByteArray> {
                 override fun propagate(value: ByteArray) = send(value)
@@ -86,7 +90,8 @@ object WsTransport {
                 return
             }
             ingress = Peering.hostIngress(side, fromPeer = peer)
-            Peering.announceTo(side, CellRef(UUID.fromString(parts[0])), via = egress)
+            announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
+            announcement = Peering.announceTo(side, CellRef(UUID.fromString(parts[0])), via = egress)
         }
 
         fun onFrame(buffer: ByteBuffer) {
@@ -134,7 +139,17 @@ object WsTransport {
 
     class WsConnection internal constructor(uri: URI, side: Peering.Side) : WebSocketClient(uri) {
 
-        private val session = Session(side, { send(it) }, { close() })
+        private val session = Session(side, { send(it) }, { shutdown() })
+
+        /** False once [shutdown] is called — the only way a client stays down (M10.3). */
+        @Volatile
+        private var reconnect = true
+
+        /** Deliberate close: stop reconnecting, then close the socket. */
+        fun shutdown() {
+            reconnect = false
+            close()
+        }
 
         override fun onOpen(handshake: ServerHandshake) {
             send(session.hello())
@@ -144,7 +159,29 @@ object WsTransport {
 
         override fun onMessage(bytes: ByteBuffer) = session.onFrame(bytes)
 
-        override fun onClose(code: Int, reason: String?, remote: Boolean) = session.onClose()
+        override fun onClose(code: Int, reason: String?, remote: Boolean) {
+            session.onClose() // unpublish: senders park until the re-hello re-announces
+            if (!reconnect) return
+            // Reconnect with capped backoff (M10.3): the re-hello re-runs the
+            // announcement catch-up on both sides, parked traffic replays, and
+            // replicas anti-entropy through the ordinary catch-up path.
+            // ponytail: fixed doubling schedule, retries forever — jitter and
+            // liveness probing when real networks demand them.
+            Thread {
+                var delay = 1000L
+                while (reconnect && !isOpen) {
+                    try {
+                        Thread.sleep(delay)
+                        if (reconnect && reconnectBlocking()) break
+                    } catch (_: InterruptedException) {
+                        break
+                    } catch (e: Exception) {
+                        System.err.println("[WsConnection] reconnect attempt failed: $e")
+                    }
+                    delay = (delay * 2).coerceAtMost(30_000L)
+                }
+            }.apply { isDaemon = true; name = "ws-reconnect-${getURI()}" }.start()
+        }
 
         override fun onError(ex: Exception) {
             System.err.println("[WsConnection] $ex")

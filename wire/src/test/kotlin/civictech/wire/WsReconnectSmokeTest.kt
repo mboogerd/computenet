@@ -15,7 +15,6 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.wire.Peering
-import io.kotest.matchers.collections.shouldNotBeEmpty
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
 import java.net.URI
@@ -23,12 +22,13 @@ import java.util.Collections
 import java.util.UUID
 
 /**
- * M5.5 smoke: real sockets, real threads — two full stacks in one JVM over
- * localhost WebSocket. Correctness under scheduling chaos is the loopback
- * harness's job (M5.3/M5.4, seeded); this only proves the socket glue:
- * convergence end-to-end and park-on-disconnect.
+ * M10.3 smoke: a client survives its listener dying and coming back on the
+ * same port — the reconnect loop re-runs the hello, announcements re-mirror
+ * both ways, parked sends replay, and traffic flows again. Correctness under
+ * chaos stays with the seeded loopback harnesses; this proves the socket
+ * glue only.
  */
-class WsTransportSmokeTest {
+class WsReconnectSmokeTest {
 
     interface SetInletProxy {
         val inlet: Use<SetOps<String>>
@@ -62,7 +62,7 @@ class WsTransportSmokeTest {
         return live.keys
     }
 
-    private fun await(what: String, timeoutMs: Long = 10_000, condition: () -> Boolean) {
+    private fun await(what: String, timeoutMs: Long = 20_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
             if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
@@ -78,44 +78,46 @@ class WsTransportSmokeTest {
     }
 
     @Test
-    fun `two JVM-shaped stacks converge over localhost websocket and park on disconnect`() {
-        val server = Stack()
+    fun `a client reconnects after the listener restarts and parked sends replay`() {
         val client = Stack()
-        val listener = WsTransport.listen(0, server.side)
-        val connection = WsTransport.connect(URI("ws://localhost:${listener.port}"), client.side)
+        var server = Stack()
+        var listener = WsTransport.listen(0, server.side)
+        val port = listener.port
+        val connection = WsTransport.connect(URI("ws://localhost:$port"), client.side)
         try {
-            // collector lives on the server stack, writer on the client stack
-            val collector = CollectorCell()
+            var collector = CollectorCell()
             server.host.managementInlet.call.spawn(collector)
-            await("collector announced to client") {
-                client.registry.location(collector.ref) is LocationRegistry.Remote
-            }
+            await("collector announced") { client.registry.location(collector.ref) is LocationRegistry.Remote }
 
             val writer = SetCell<String>()
             client.host.managementInlet.call.spawn(writer)
             val remoteInlet = (HostedCellProxy.create(collector.ref, client.registry, DeltaInletProxy::class.java)
                     as DeltaInletProxy).inlet.call
             writer.outlet.subscribe(Use.fixed(remoteInlet, PortRef.generate()))
-
             val api = (HostedCellProxy.create(writer.ref, client.registry, SetInletProxy::class.java)
                     as SetInletProxy).inlet.call
-            listOf("milk", "eggs", "beans").forEach(api::add)
-            api.remove("eggs")
+            api.add("milk")
+            await("pre-restart convergence") { membership(collector.arrivals.toList()) == setOf("milk") }
 
-            await("membership convergence across the socket") {
-                membership(collector.arrivals.toList()) == setOf("milk", "beans")
-            }
-
-            // kill the server side: client senders must park, not crash or drop
+            // the server process "dies": listener gone, refs unpublished, sends park
             listener.stop(1000)
-            await("remote refs unpublished on disconnect") {
-                client.registry.location(collector.ref) == null
+            await("unpublish on disconnect") { client.registry.location(collector.ref) == null }
+            api.add("cheese") // accepted while down: parks at the client
+
+            // the server comes back on the SAME port with a rebuilt graph
+            // (same collector ref — the restart-recovery shape)
+            server = Stack()
+            collector = CollectorCell(collector.ref)
+            server.host.managementInlet.call.spawn(collector)
+            listener = WsTransport.listen(port, server.side)
+
+            // no manual reconnect: the client's backoff loop finds the new
+            // listener, re-hellos, announcements re-mirror, parked sends replay.
+            // (Only the parked delta arrives — recovering "milk" is the
+            // journal/replication story, kernel CrashRecoveryTest territory.)
+            await("parked send replayed via reconnect") {
+                membership(collector.arrivals.toList()).contains("cheese")
             }
-            api.add("cheese")
-            await("post-disconnect send parked") {
-                client.registry.parkedFor(collector.ref).isNotEmpty()
-            }
-            client.registry.parkedFor(collector.ref).shouldNotBeEmpty()
         } finally {
             connection.shutdown()
             runCatching { listener.stop(1000) }

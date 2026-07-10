@@ -123,10 +123,11 @@ object Peering {
      * peer with several remotes at once; each peer only ever hears about
      * *local* refs, so nothing loops or forwards second-hand locations.
      */
-    fun announceTo(side: Side, peerMirror: CellRef, via: InvocationSink) {
+    fun announceTo(side: Side, peerMirror: CellRef, via: InvocationSink): AutoCloseable {
         val announce = (HostedCellProxy.create(peerMirror, via, AnnounceInletProxy::class.java)
                 as AnnounceInletProxy).inlet.call
-        side.registry.onLocalPublish { announce.published(it) }
+        val registration = side.registry.onLocalPublish { announce.published(it) }
         side.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
+        return registration
     }
 }
