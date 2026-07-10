@@ -131,13 +131,143 @@ the control run proving divergence detection; and the same split runs live
 across two OS processes over WebSocket (`:demo` peer mode), browsers on each
 side converging both directions.*
 
-## Milestone 6+ — The decentralized horizon (research tracks)
+## Milestone 6+ — The decentralized horizon (now sequenced)
 
-Not sequenced — these are open designs to be developed against running code:
-interest/attention protocol and suspension-driven scheduling (G-6);
-interest-driven replication + gossip + anti-entropy (G-7); identity, trust,
-sandboxed hosts (G-29, G-28); shadow deployment, promotion, state migration
-(G-32, G-33); the programming environment and visualization.
+Formerly unsequenced research tracks; sequenced here (M6–M9) with the same
+exit-criteria discipline as M1–M5. Ordering rationale: attention (M6) is the
+only track whose enabler (G-13 multiplex) unlocks other residuals (G-18 pull);
+replication (M7) needs G-8 and *uses* M6's interest signal for replica
+extent; trust (M8) trails the policy substrate per 43's sequencing and gives
+replication its untrusting-peers story; evolution (M9) composes everything
+(incarnations from M7, shadow-effect policy from M8's classification work,
+invariant gates from M4). The programming environment / visualization track
+stays unscheduled — it follows whichever surface stabilizes first.
+
+## Milestone 6 — Attention (interest-driven scheduling)
+
+*Goal: spec 34 real — unattended subgraphs quiesce, attended ones get
+resources; the three open scheduling questions resolved (decisions recorded
+in 34: max-aggregation quantized into bands; park-not-drop + service stride
+as fairness floors; glitch-free WAIT default with opt-in DEGRADE via
+frontier-shrink).*
+
+1. M6.1 — generic-protocol substrate (G-13 minimal): sub-channels on existing
+   ports keyed by well-known `ProtocolId`, sharing the port's links and queue
+   slot; each protocol declares direction (with or against data flow).
+   Attention is the first protocol; state-request (G-18 residual) becomes
+   possible but is not built here.
+2. M6.2 — attention protocol: `Attention(level: Float)` emitted by sinks;
+   per-cell aggregation (max over downstream links), quantization to bands
+   (`NONE|LOW|NORMAL|HIGH`), re-emit upstream only on band change. Default
+   handling lives in port/link support, not cell logic.
+3. M6.3 — host mapping: attention band → data-priority sub-bands in the host
+   queue (management > router > data(HIGH>NORMAL>LOW) > drain preserved);
+   fairness stride (default 16) services the oldest lower-band task after N
+   higher-band dequeues; band NONE sustained for a policy window (counted in
+   scheduling steps) → per-cell suspend via the existing park machinery (33);
+   band > NONE on a parked cell → resume/replay.
+4. M6.4 — glitch-freedom interaction: hosts emit suspended/resumed notices
+   downstream for parked cells; `GlitchFree` gains a `WAIT|DEGRADE` policy —
+   DEGRADE shrinks the wave frontier (reusing the unlink path) and restores
+   on resume with catch-up semantics.
+5. M6.5 — exit test.
+
+*Exit criterion: a generative attention harness (SimulationController) where
+a randomized fan-in/fan-out graph with two sinks converges under 100 seeds
+while (a) dropping one sink's attention quiesces exactly its exclusive
+upstream cone (parked, zero loss on re-attention), (b) a low-attention but
+live branch still makes progress under sustained high-attention load
+(stride floor), and (c) a glitch-free diamond with one suspended branch
+holds waves under WAIT and completes degraded waves under DEGRADE — each
+with a control run (stride ∞ starves; WAIT-under-drop stalls) proving the
+harness detects the failure it guards against.*
+
+## Milestone 7 — Replication (interest-driven, convergent)
+
+*Goal: spec 42 real for the mergeable class — same logical cell live on
+several hosts, converging by delta gossip over ordinary links.*
+
+1. M7.1 — ref model (G-8): `CellRef(logicalId, incarnation)`; links,
+   registries, and proxies bind to `logicalId`; wire frames carry both.
+2. M7.2 — location sets: `LocationRegistry` from "one location" to a set per
+   logicalId; `Peering` announcements generalize to multi-peer fan-out
+   (lifting the M5.4 single-peer restriction); deterministic local pick
+   (local > first remote) for non-replicated delivery.
+3. M7.3 — replica gossip: replicated spawn links each replica's delta outlet
+   to the others' inlets over existing bridges — no new sync protocol;
+   restricted to cells whose deltas declare merge semantics (the tagged set
+   family + counters); single-writer cells refuse replicated spawn (leader +
+   followers deferred until a use case).
+4. M7.4 — anti-entropy: on link re-establishment after partition/disconnect,
+   the late-join catch-up path (state-as-delta, idempotent via tags) doubles
+   as recovery — verified, not rebuilt.
+5. M7.5 — interest-scoped extent: replica suspension when local attention
+   (M6) decays to NONE; eviction stays manual (despawn) — automatic eviction
+   deferred until there's memory pressure to justify it.
+6. M7.6 — exit test.
+
+*Exit criterion: a three-registry replicated shopping-list session (the M4/M5
+app's set+counter core) where each peer works against its local replica,
+partitions heal by catch-up, and all replicas converge under 100 seeds with
+zero cross-replica coordination beyond delta links — control run proving the
+harness detects divergence (e.g. untagged merge). MapCell/ListCell keep their
+documented single-writer limits.*
+
+## Milestone 8 — Trust boundaries (hierarchy + identity)
+
+*Goal: specs 31 (hierarchy) and 43 (posture) get their first mechanisms:
+hosts as sandbox units, links that know who is asking.*
+
+1. M8.1 — host hierarchy (G-28): parent/child host relations (a host spawning
+   a host records the relation); shutdown cascade (drain children first);
+   spawn-placement hook (parent may veto/redirect child spawns); a simple
+   cell-count quota as the first resource limit (proof of the enforcement
+   point, not a resource model).
+2. M8.2 — identity (G-29 phase 1): `PeerId` on `LinkRequest.identity`
+   populated end-to-end — local links carry the local peer, bridged links
+   carry the transport peer's id (from the WebSocket hello); link policies
+   can therefore express allowlists.
+3. M8.3 — deny-by-default at the boundary: a bridge/host policy mode where
+   unlisted peers' link requests are `Rejected` (not deferred); the demo peers
+   run with an allowlist. Encryption stays a transport concern (wss:// is
+   configuration, not kernel work); signing/Sybil resistance remain open in
+   43.
+4. M8.4 — exit test.
+
+*Exit criterion: an untrusted child host under quota cannot exceed its cell
+budget or outlive its parent (cascade verified under drain), and a
+two-registry session where one peer is not on the allowlist has every link
+request rejected at the boundary with the rejection observable as an
+ordinary LinkResult/dead-letter — 100 seeds on the generative bridge
+harness, control run proving open-mode would have linked.*
+
+## Milestone 9 — Evolution (shadow deployment + promotion)
+
+*Goal: spec 53's claim made real — deployment as incremental graph
+operations: candidate incarnations run as shadows, are judged by invariants,
+and are promoted by link swap.*
+
+1. M9.1 — effect classification (G-11 completion + G-32 marker): KSP lint
+   enforcing push-only data contracts; an `Effectful` marker for
+   side-effecting sink cells.
+2. M9.2 — shadow mode (G-32): spawn a candidate incarnation (G-8) of a
+   subgraph subscribed to production outlets via fan-out; `Effectful` cells'
+   inlets are NoOp-served under a shadow policy; invariant cells watch the
+   shadow.
+3. M9.3 — promotion/rollback: link swap under a traffic-light window
+   (buffer → relink → replay, 33/13); rollback is the same swap reversed.
+4. M9.4 — state migration across incarnations (G-33):
+   `exportState()/importState(prior)` invoked in the swap's drain window;
+   cells that can't transform state fall back to upstream catch-up replay.
+5. M9.5 — exit test.
+
+*Exit criterion: a running M4-style session where a candidate incarnation of
+a middle cell (different internal representation) shadows production
+traffic without duplicating side effects (control: an unmarked effectful
+sink double-fires), is promoted mid-stream via the swap window with state
+carried across incarnations (or caught up where declared untransformable),
+and the post-swap graph converges identically to an unswapped control —
+100 seeds, zero loss, per-link FIFO preserved.*
 
 ## Working agreements (process, immediate)
 

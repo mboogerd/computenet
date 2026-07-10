@@ -1,8 +1,8 @@
 # 34 — Scheduling and Attention-Driven Execution
 
-> **Status**: Exploratory (principle fixed; mechanism largely undesigned)
+> **Status**: Designed (open questions resolved by decision below; mechanism = M6, 92)
 > **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol)
-> **Implementation**: none beyond ManagedHost's static 3-level priority queue
+> **Implementation**: none beyond ManagedHost's static 3-level priority queue; M6 builds the rest
 
 ## Principle
 
@@ -42,12 +42,44 @@ Minimal attention model compatible with the above:
     management > router > data bands with per-attention data bands);
   - persistent high attention + remote hotspot → migration candidate (40/42).
 
-## Open questions (not yet decidable)
+## Decisions (M6 planning; formerly "open questions")
 
-- Aggregation semantics (max vs sum vs decay) and update damping.
-- Fairness/starvation floors for low-attention but live subgraphs.
-- Interaction with glitch-freedom: suspending one branch of a diamond stalls
-  wave completeness at the join — glitch-free cells likely need to advertise
-  "incomplete-by-suspension" so joins can decide (wait vs degrade). Unresolved.
-- Economic layer (peers advertising willingness to compute for others'
-  interest) — deferred to 40/42; keep the local protocol compatible with it.
+1. **Aggregation = max, damped by quantization.** A cell's attention is the
+   **max** over its downstream links' levels (attention is a priority signal,
+   not a load meter; sum double-counts shared subgraphs on diamonds). The
+   carried level stays a `Float` so a sum/load-signaling variant can be added
+   later without a protocol change, but the *effective* value is quantized
+   into discrete **bands** — `NONE < LOW < NORMAL < HIGH` — and a cell
+   re-emits upstream **only when its aggregated band changes**. Quantization
+   is the damping: intra-band jitter is structurally incapable of propagating,
+   which is the magnitude-throttling rule (21, G-19) applied to attention
+   itself. Decay is the source's job, not the network's: a sink that loses
+   interest emits level 0 or unlinks (unlink already shrinks the link set and
+   thus the max); no TTL/decay machinery in the protocol.
+2. **Fairness floor = park-not-drop + a deterministic service stride.**
+   Two floors, one per resource lever:
+   - *Suspension floor*: attention-driven suspension uses the same
+     park-and-replay buffering as 33 — a quiesced subgraph loses latency,
+     never messages. Suspension requires band NONE sustained for a policy
+     window (measured in host scheduling steps, not wall time, so the
+     simulated host stays deterministic).
+   - *Queue floor*: within the data region of the host queue, bands map to
+     priorities, but after `stride` consecutive dequeues of
+     higher-band tasks the host MUST service the oldest queued lower-band
+     task (by sequence number). `stride` is host policy (default 16;
+     `∞` disables). This bounds starvation at `stride × task-time` without
+     timers or randomness.
+3. **Glitch-freedom × suspension: correctness by default (WAIT), degradation
+   opt-in.** Because suspension parks rather than drops, a glitch-free join
+   above a suspended branch simply sees an incomplete wave and holds the
+   group — correct, latency-unbounded. That is the default (**WAIT**). A
+   glitch-free cell MAY opt into **DEGRADE**: hosts publish
+   suspended/resumed notices for cells they park, the notice travels
+   *downstream* (with data, against attention), and a degrading join removes
+   the suspended link from its wave frontier — reusing the frontier-shrink
+   semantics unlink already has (22) — and restores it on resume, treating
+   post-resume replayed waves as late-join catch-up (21). No new kernel
+   mechanism: a notice is an ordinary generic-protocol message.
+4. **Economic layer** (peers advertising willingness to compute for others'
+   interest) — still deferred to 40/42; the band protocol above is
+   forward-compatible (levels are floats, bands are a local mapping).

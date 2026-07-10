@@ -53,7 +53,7 @@
 | G-26 | Error handling = printStackTrace | **Resolved (M3.5 + M4.4)**: `DeadLetter` on host `deadLetterOutlet` + per-cell supervision (PROPAGATE / RESTART / SUSPEND with `resume` replay) + opt-in per-cell error outlets (`ErrorReporting` marker; host emits `CellError` under every policy; consumed by invariant cells) | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
 | G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Resolved (M3.2–M3.3)**: closable intake + fail-fast + `LocationRegistry` park/replay; two-phase `drainHost`/`resumeHost`/`migrate` with `Stateful` snapshot capture. Disk overflow mailbox remains with G-25 | 30/33 |
-| G-6 | Attention/scheduling undesigned beyond static priorities | Attention protocol sketch; aggregation & fairness open | 30/34 |
+| G-6 | Attention/scheduling undesigned beyond static priorities | **Designed (M6, 92)**: max-aggregation quantized to bands (damping = quantization), park-not-drop + service-stride fairness floors, glitch-free WAIT default / DEGRADE opt-in via frontier-shrink; implementation M6.1–M6.5 | 30/34 |
 
 ## Gaps — distribution (40)
 
