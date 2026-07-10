@@ -44,11 +44,11 @@ class RegistryMirrorCell(
 }
 
 /**
- * Wires two registries into one graph: a full-duplex bridge (two
- * egress/ingress pairs) plus registry mirroring in both directions. The
- * loopback form links the bridges in-process — the deterministic P1 shape of
- * a peer connection; M5.5's transport replaces only the frame link with a
- * socket.
+ * The building blocks of a peer connection — a full-duplex bridge (an
+ * egress/ingress pair per direction) plus registry mirroring — and their
+ * in-process [loopback] composition: the deterministic P1 shape of a peer
+ * connection. A transport (`:wire`, M5.5) composes the same blocks, replacing
+ * only the frame link with a socket.
  */
 object Peering {
 
@@ -63,35 +63,38 @@ object Peering {
     }
 
     fun loopback(a: Side, b: Side) {
-        val aToB = frames(from = a, to = b)
-        val bToA = frames(from = b, to = a)
-        mirror(announcer = a, announcerEgress = aToB, listener = b, returnEgress = bToA)
-        mirror(announcer = b, announcerEgress = bToA, listener = a, returnEgress = aToB)
+        val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(b), PortRef.generate())) }
+        val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(a), PortRef.generate())) }
+        val mirrorOnB = spawnMirror(b, toPeer = bToA)
+        val mirrorOnA = spawnMirror(a, toPeer = aToB)
+        announceTo(a, peerMirror = mirrorOnB, via = aToB)
+        announceTo(b, peerMirror = mirrorOnA, via = bToA)
     }
 
-    /** One direction of the bridge: egress on [from], hosted ingress on [to], linked in-process. */
-    private fun frames(from: Side, to: Side): BridgeEgressCell {
-        val egress = BridgeEgressCell()
-        val ingress = BridgeIngressCell(InvocationSink(to.registry::deliver))
-        to.bridgeHost.managementInlet.call.spawn(ingress)
-        val ingressApi = (HostedCellProxy.create(ingress.ref, to.registry, FrameInletProxy::class.java)
+    /** Spawn a [BridgeIngressCell] on [side]'s bridge host; returned api is safe to call from any thread. */
+    fun hostIngress(side: Side): Propagate<ByteArray> {
+        val ingress = BridgeIngressCell(InvocationSink(side.registry::deliver))
+        side.bridgeHost.managementInlet.call.spawn(ingress)
+        return (HostedCellProxy.create(ingress.ref, side.registry, FrameInletProxy::class.java)
                 as FrameInletProxy).inlet.call
-        egress.outlet.subscribe(Use.fixed(ingressApi, PortRef.generate()))
-        return egress
     }
 
-    /** [announcer]'s local publishes become Remote locations on [listener], routed via [returnEgress]. */
-    private fun mirror(
-        announcer: Side,
-        announcerEgress: BridgeEgressCell,
-        listener: Side,
-        returnEgress: BridgeEgressCell,
-    ) {
-        val mirror = RegistryMirrorCell(listener.registry, toPeer = returnEgress)
-        listener.bridgeHost.managementInlet.call.spawn(mirror)
-        val announce = (HostedCellProxy.create(mirror.ref, announcerEgress, AnnounceInletProxy::class.java)
+    /** Spawn the mirror that turns the peer's announcements into Remote locations routed via [toPeer]. */
+    fun spawnMirror(side: Side, toPeer: InvocationSink): CellRef {
+        val mirror = RegistryMirrorCell(side.registry, toPeer)
+        side.bridgeHost.managementInlet.call.spawn(mirror)
+        return mirror.ref
+    }
+
+    /**
+     * Announce [side]'s local publishes — current and future — to [peerMirror]
+     * through [via]. One announcement hook per registry: a registry peers with
+     * one remote at a time (multi-peer fan-out is M6+ replication territory).
+     */
+    fun announceTo(side: Side, peerMirror: CellRef, via: InvocationSink) {
+        val announce = (HostedCellProxy.create(peerMirror, via, AnnounceInletProxy::class.java)
                 as AnnounceInletProxy).inlet.call
-        announcer.registry.onLocalPublish = { announce.published(it) }
-        announcer.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
+        side.registry.onLocalPublish = { announce.published(it) }
+        side.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
     }
 }

@@ -9,6 +9,7 @@ kotlinxDatetime = "0.7.1"
 kotlinxSerializationJSON = "1.9.0"
 ksp = "2.1.21-2.0.1"
 kotlinCompileTesting = "1.9.0"
+javaWebsocket = "1.6.0"
 
 [libraries]
 assert4j = { module = "org.assertj:assertj-core", version.ref = "assert4j" }
@@ -22,6 +23,7 @@ kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", v
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinxDatetime" }
 kotlinx-serialization = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJSON" }
 kotlinx-coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+java-websocket = { module = "org.java-websocket:Java-WebSocket", version.ref = "javaWebsocket" }
 kotlin-poet = { module = "com.squareup:kotlinpoet", version.ref = "kotlinPoet"}
 kotlin-poet-ksp = { module = "com.squareup:kotlinpoet-ksp", version.ref = "kotlinPoet"}
 ksp = { module = "com.google.devtools.ksp:symbol-processing-api", version.ref = "ksp" }

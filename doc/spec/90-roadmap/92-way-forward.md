@@ -111,8 +111,9 @@ wire-frame version byte; demo splits as symmetric peers):
    `Use.fixed` linking pattern covers the exit app; `LinkResult.Deferred`
    keeps its existing contract (handshake runs on the target host, rejections
    dead-letter there). Revisit only if M5.7 proves it necessary.
-5. M5.5 — WebSocket transport driver in `:wire` (org.java-websocket server);
-   disconnect ⇒ unpublish ⇒ park.
+5. ~~M5.5 — WebSocket transport driver in `:wire` (org.java-websocket
+   server); disconnect ⇒ unpublish ⇒ park; localhost smoke test (seeds stay
+   on the loopback)~~ — done.
 6. M5.6 — ownership enforcement at link time (G-21 phases 1+2) — `Owned`
    fan-out rejectable everywhere: local, cross-host, and bridge links.
 7. M5.7 — exit: `DistributedCollaborativeAppTest` (loopback split, 100

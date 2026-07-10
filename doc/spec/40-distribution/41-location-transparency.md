@@ -76,8 +76,17 @@ direct call → queue hop → serialized send.
    runs under the 100-seed generative harness (`BridgedGraphTest`: view
    pipeline split at a random cut across two registries; control runs prove
    dropped frames diverge detectably and corrupt frames dead-letter on the
-   receiving host and traffic continues). This is the wire's P1 proof; a
-   socket replaces the loopback link in M5.5.)*
+   receiving host and traffic continues). This is the wire's P1 proof.)*
+   *(M5.5: transport chosen — **WebSocket** (`:wire` module, `WsTransport`;
+   `org.java-websocket` for the server since the JDK ships only a client):
+   framed and bidirectional out of the box, lives in the demo's HTTP world,
+   and leaves browser-tabs-as-peers open for M6+ without a second transport.
+   The dependency lives in `:wire`, keeping `:kernel` dependency-free —
+   another transport is another small module behind the same bridge cells.
+   Frames go out as binary messages; a text hello exchanges mirror refs, then
+   `Peering` wires announcements. IO threads only enqueue — decoding happens
+   on the bridge host. Disconnect ⇒ `unpublishRemotes(sink)` ⇒ senders park;
+   reconnection beyond park-and-replay is out of scope.)*
 5. **Failure semantics**: remote sends inherit the closable/fail-fast +
    re-resolve + park contract (33). Request/response-style management calls
    over the wire get `Deferred`/`CompletableFuture` wrapping with timeouts

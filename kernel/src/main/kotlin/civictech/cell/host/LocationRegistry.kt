@@ -107,4 +107,12 @@ class LocationRegistry {
     fun unpublish(ref: CellRef) {
         locations.remove(ref)
     }
+
+    /**
+     * Drop every [Remote] location routed through [via] — the transport's
+     * disconnect hook (M5.5): senders park until the peer re-announces.
+     */
+    fun unpublishRemotes(via: InvocationSink) {
+        locations.entries.removeIf { (it.value as? Remote)?.sink === via }
+    }
 }
