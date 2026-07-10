@@ -2,12 +2,14 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.registerPort
+import java.io.Serializable
 import java.util.*
 
 interface UnionSetApi<E> {
@@ -22,7 +24,7 @@ interface UnionSetApi<E> {
  * union iff it has a live tag) is derivable by any consumer from the forwarded
  * tag algebra.
  */
-class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : UnionSetApi<E>, Cell {
+class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : UnionSetApi<E>, Cell, Stateful {
     override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
@@ -60,6 +62,23 @@ class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : 
                 }
             }
         })
+        // late-join catch-up (G-22): live tags as a delta-from-empty
+        outlet.linking.onLinked = { link ->
+            if (live.isNotEmpty()) {
+                outlet.at(link.to).propagate(SetDelta(adds = live.mapValues { it.value.toSet() }))
+            }
+        }
+    }
+
+    override fun snapshot(): Serializable =
+        HashMap(live.mapValues { HashSet(it.value) })
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: Serializable) {
+        live.clear()
+        (state as Map<E, Set<Timestamp>>).forEach { (e, tags) ->
+            live[e] = tags.toMutableSet()
+        }
     }
 
     companion object {

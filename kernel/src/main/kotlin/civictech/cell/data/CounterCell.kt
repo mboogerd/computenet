@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Stateful
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Subscribe
@@ -25,7 +26,7 @@ interface CounterApi {
     val outlet: Subscribe<Propagate<CounterDelta>>
 }
 
-class CounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : CounterApi, Cell {
+class CounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : CounterApi, Cell, Stateful {
     override val inlet = registerPort("inlet", FanInlet.create<CounterOps>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<CounterDelta>>())
 
@@ -43,6 +44,16 @@ class CounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Coun
 
     init {
         inlet.serve(inletApi)
+        // late-join catch-up (G-22): current total as a delta-from-zero
+        outlet.linking.onLinked = { link ->
+            if (total != 0L) outlet.at(link.to).propagate(CounterDelta(total))
+        }
+    }
+
+    override fun snapshot(): Serializable = total
+
+    override fun restore(state: Serializable) {
+        total = state as Long
     }
 
     companion object {

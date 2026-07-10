@@ -56,6 +56,13 @@ class LinkSupport {
 
     /** Handshake hook on the serving port; default accepts. */
     var onLink: (Link) -> LinkResult = { LinkResult.Connected(it) }
+
+    /**
+     * Post-install hook, fired on both sides once the link is installed and
+     * registered — unlike [onLink], the counterpart is reachable here. The
+     * source-side seam for late-join catch-up (G-22, spec 21).
+     */
+    var onLinked: (Link) -> Unit = {}
     var onUnlink: (Link) -> Unit = {}
     val policies = mutableListOf<LinkPolicy>()
 
@@ -94,6 +101,8 @@ internal fun <Api> handshake(
             install()
             support.register(link)
             (portOut as? Linked)?.linking?.register(link)
+            support.onLinked(link)
+            (portOut as? Linked)?.linking?.onLinked?.invoke(link)
             result
         }
 

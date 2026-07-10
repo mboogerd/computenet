@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.*
 import java.io.Serializable
@@ -40,7 +41,7 @@ interface SetApi<E> {
     val outlet: Subscribe<Propagate<SetDelta<E>>>
 }
 
-class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetApi<E>, Cell {
+class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetApi<E>, Cell, Stateful {
     override val inlet = registerPort("inlet", FanInlet.create<SetOps<E>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
 
@@ -68,6 +69,25 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : SetAp
 
     init {
         inlet.serve(inletApi)
+        // late-join catch-up (G-22): state-as-delta-from-empty to just the new
+        // subscriber; tagged deltas make replay after catch-up idempotent
+        outlet.linking.onLinked = { link ->
+            if (state.isNotEmpty()) {
+                outlet.at(link.to).propagate(SetDelta(adds = state.mapValues { it.value.toSet() }))
+            }
+        }
+    }
+
+    // snapshot/restore (G-25 seam): elements must be Serializable
+    override fun snapshot(): Serializable =
+        HashMap(state.mapValues { HashSet(it.value) })
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: Serializable) {
+        this.state.clear()
+        (state as Map<E, Set<Timestamp>>).forEach { (e, tags) ->
+            this.state[e] = tags.toMutableSet()
+        }
     }
 
     companion object {

@@ -39,8 +39,11 @@ sealed interface LinkResult {
 }
 
 // hooks on the serving port (membrane surface #1):
-fun onLink(link: Link): LinkResult
+fun onLink(link: Link): LinkResult   // pre-install veto point
 fun onUnlink(link: Link)
+// post-install, fired on BOTH sides once the counterpart is reachable —
+// the source-side seam for late-join catch-up (21, G-22):
+fun onLinked(link: Link)
 ```
 
 Handshakes are where cardinality (12), ownership constraints (20/23),

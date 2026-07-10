@@ -57,10 +57,11 @@ pressure (42).)*
 
 ## Required next steps in the family
 
-- ⚠ GAP (G-22): **State + catch-up**: data cells expose current state to
-  late joiners via the pull/snapshot protocol (21). Today state is trapped in
-  private fields. Tagged deltas make catch-up snapshots (state-as-delta)
-  idempotent to re-apply.
+- ~~G-22: State + catch-up~~ **Resolved (M4.2)**: every data cell wires the
+  post-install `onLinked` hook (13, 21) to unicast state-as-delta-from-empty
+  to a late-joining subscriber, and implements `Stateful` so state survives
+  drain/migrate (30/33) — no longer trapped in private fields. On-demand pull
+  without relinking remains with G-18/G-13 (21).
 - **Operator library**: intersect, filter/map (exists as `MapperCell` for
   scalars), join, count — each as a cell with declared incremental semantics.
 

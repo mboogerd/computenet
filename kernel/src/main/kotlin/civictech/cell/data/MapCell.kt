@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Stateful
 import civictech.cell.port.*
 import java.io.Serializable
 import java.util.*
@@ -27,7 +28,7 @@ interface MapApi<K, V> {
     val outlet: Subscribe<Propagate<MapDelta<K, V>>>
 }
 
-class MapCell<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : MapApi<K, V>, Cell {
+class MapCell<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : MapApi<K, V>, Cell, Stateful {
     override val inlet = registerPort("inlet", FanInlet.create<MapOps<K, V>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, V>>>())
 
@@ -47,6 +48,20 @@ class MapCell<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Ma
 
     init {
         inlet.serve(inletApi)
+        // late-join catch-up (G-22): current entries as a delta-from-empty
+        outlet.linking.onLinked = { link ->
+            if (state.isNotEmpty()) {
+                outlet.at(link.to).propagate(MapDelta(state.toMap(), emptySet()))
+            }
+        }
+    }
+
+    override fun snapshot(): Serializable = HashMap(state)
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: Serializable) {
+        this.state.clear()
+        this.state.putAll(state as Map<K, V>)
     }
 
     companion object {

@@ -1,8 +1,8 @@
 # 21 — Propagation: Push/Pull, Incremental/Complete
 
-> **Status**: Partial (push+incremental specified and demonstrated; pull unspecified)
+> **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up implemented; on-demand pull protocol unbuilt)
 > **Sources**: ADR 1 (§1, §2, §4), ADR — Cellular Software Development Process (incremental dataflow layer)
-> **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains)
+> **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains); catch-up via `LinkSupport.onLinked`
 
 ## Push (default, implemented)
 
@@ -43,17 +43,25 @@ ADR 1 requires on-demand reads and recomputation: a consumer asks for current
 state (or a recompute) rather than waiting for pushes — needed for late
 joiners, UI queries, and suspended subgraph reactivation.
 
-⚠ GAP (G-18): pull is entirely unbuilt and underspecified. *Proposal*
-(compatible with the invocation model — pull is not a new mechanism):
-- Model pull as a generic **state-request protocol** on the multiplex port
-  (12): a `RequestState(replyTo)` invocation traveling upstream, answered by a
-  snapshot-or-replay delta stream on the requester's inlet.
-- Late-join = link handshake option: `onLink` MAY trigger an initial
-  "catch-up" emission (snapshot delta) before live deltas — this also gives
-  new subscribers a consistent starting point, tagged with the timestamp
-  (20/22) it corresponds to.
-- Recomputation-on-demand for derived cells = re-emission of current derived
-  state, never re-execution of history.
+**Late-join = catch-up on link** *(implemented, M4.2 — the core of G-18)*:
+the post-install `onLinked` hook (13) fires once the new subscriber is
+reachable; a data cell wires it to unicast its **state-as-delta-from-empty**
+to just that subscriber (`outlet.at(link.to)`), after which the live stream
+follows. No snapshot type exists — a snapshot *is* a delta, satisfying the
+deterministic-application rule above. Observed-remove tags (24) make the
+catch-up idempotent against replayed or duplicated live deltas. Validated:
+a late joiner is indistinguishable from an early joiner at idle, 100 seeds,
+with a control run proving the harness detects a missed prefix. The catch-up
+emission is currently unwaved (glitch-free consumers pass it through); wave
+alignment of snapshots waits for the request protocol below.
+
+⚠ GAP (G-18, residual): **on-demand pull** — a consumer asking for a
+recompute or state *without* relinking. *Proposal* (compatible with the
+invocation model — pull is not a new mechanism): a generic **state-request
+protocol** on the multiplex port (12, G-13): `RequestState(replyTo)`
+traveling upstream, answered by a state-as-delta on the requester's inlet.
+Recomputation-on-demand for derived cells = re-emission of current derived
+state, never re-execution of history.
 
 ## Fusion and the critical path
 

@@ -21,35 +21,6 @@ import java.util.*
  */
 class SetConvergenceTest {
 
-    private val propagateDelta =
-        @Suppress("UNCHECKED_CAST") (Propagate::class.java as Class<Propagate<SetDelta<String>>>)
-
-    class CollectorCell(
-        clazz: Class<Propagate<SetDelta<String>>>,
-        val arrivals: MutableList<SetDelta<String>>,
-        override val ref: CellRef = CellRef(UUID.randomUUID()),
-    ) : Cell {
-        val inlet = registerPort("inlet", FanInlet(clazz))
-
-        init {
-            inlet.serve(object : Propagate<SetDelta<String>> {
-                override fun propagate(value: SetDelta<String>) {
-                    arrivals += value
-                }
-            })
-        }
-    }
-
-    interface DeltaInletProxy {
-        val inlet: Use<Propagate<SetDelta<String>>>
-    }
-
-    /** Membership under the tag algebra: an element is live iff an add-tag is uncovered. */
-    private fun tagFold(deltas: List<SetDelta<String>>): Set<String> {
-        val all = deltas.fold(SetDelta<String>()) { acc, d -> acc.merge(d) }
-        return all.adds.filter { (e, tags) -> (tags - (all.dels[e] ?: emptySet())).isNotEmpty() }.keys
-    }
-
     /** Pre-tag semantics (control): apply element adds/dels in arrival order. */
     private fun naiveFold(deltas: List<SetDelta<String>>): Set<String> {
         val present = mutableSetOf<String>()
@@ -75,7 +46,7 @@ class SetConvergenceTest {
             UnionSetCell<String>().also { host.managementInlet.call.spawn(it) }
         }
         val naiveCollectors = viewHosts.map { host ->
-            CollectorCell(propagateDelta, mutableListOf()).also { host.managementInlet.call.spawn(it) }
+            CollectorCell().also { host.managementInlet.call.spawn(it) }
         }
 
         // every writer streams to both unions and both naive collectors, routed

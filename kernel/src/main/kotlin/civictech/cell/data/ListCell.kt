@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Stateful
 import civictech.cell.port.*
 import java.io.Serializable
 import java.util.*
@@ -30,7 +31,7 @@ interface ListApi<E> {
     val outlet: Subscribe<Propagate<ListDelta<E>>>
 }
 
-class ListCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : ListApi<E>, Cell {
+class ListCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : ListApi<E>, Cell, Stateful {
     override val inlet = registerPort("inlet", FanInlet.create<ListOps<E>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<ListDelta<E>>>())
 
@@ -61,6 +62,20 @@ class ListCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : List
 
     init {
         inlet.serve(inletApi)
+        // late-join catch-up (G-22): current contents as a delta-from-empty
+        outlet.linking.onLinked = { link ->
+            if (state.isNotEmpty()) {
+                outlet.at(link.to).propagate(ListDelta(adds = state.withIndex().toList()))
+            }
+        }
+    }
+
+    override fun snapshot(): Serializable = ArrayList(state)
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: Serializable) {
+        this.state.clear()
+        this.state.addAll(state as List<E>)
     }
 
     companion object {
