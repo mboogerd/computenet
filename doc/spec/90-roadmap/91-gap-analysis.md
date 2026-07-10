@@ -52,7 +52,7 @@
 | G-27 | No coroutine ManagedHost | **Resolved (M3.1)**: `CoroutineScheduler` written fresh (legacy suspending runtime was empty stubs); suspend-capable `SimulationController` stepping | 30/31, 30/32 |
 | G-26 | Error handling = printStackTrace | **Minimal done**: `DeadLetter` on host `deadLetterOutlet` (failures + previously-silent drops); error outlets + supervision policies remain (M3) | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
-| G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | See ordered plan | 30/33 |
+| G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | **Partial (M3.2)**: closable intake + fail-fast + `LocationRegistry` park/replay done; drain/state-capture remain (M3.3) | 30/33 |
 | G-6 | Attention/scheduling undesigned beyond static priorities | Attention protocol sketch; aggregation & fairness open | 30/34 |
 
 ## Gaps — distribution (40)

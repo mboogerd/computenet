@@ -53,7 +53,9 @@ while internal links remain direct".
 1. **Single consumer**: all cell logic of a host executes on its one context;
    cells never share threads with other hosts.
 2. **Fast path**: cross-host send = volatile read + enqueue; intra-host send =
-   direct call. Nothing else on the steady-state path (P2).
+   direct call. Nothing else on the steady-state path (P2). (The closable
+   intake, M3.2, costs the sender one volatile read — a closed intake throws
+   `IntakeClosedException` and the registry parks; see 33.)
 3. **Ordering**: per-link FIFO MUST be preserved. *(C-8 resolved: the host
    queue orders by `(priority, sequence)` with a monotonic per-host sequence
    number as tiebreaker; equal-priority entries are FIFO.)*

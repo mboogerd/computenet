@@ -16,8 +16,14 @@ direct call → queue hop → serialized send.
   interface; its ports are proxy ports usable in `linkTo` exactly like local
   ones (verified: producer in host1 → consumer proxy from host2, both
   directions, including proxy-to-proxy links).
-- Calls captured as `Invocation` → `HostedPortInvocation` → target host queue
-  (14). Senders never know where the target runs.
+- Calls captured as `Invocation` → `HostedPortInvocation` → an
+  `InvocationSink` (14): either a fixed host intake (fail-fast on closure) or
+  the **location registry** (`cell.host.LocationRegistry`, M3.2) — one map
+  read + enqueue on the fast path, park-and-replay on closure/absence, so a
+  proxy survives its target relocating. Senders never know where the target
+  runs, nor when it moves.
+- The registry is in-process; its interface ("where does this ref live
+  *now*?") is the seam remote addressing fills in M5 (point 3 below).
 
 ## Wire layer (⚠ GAP G-15 — design commitments)
 

@@ -45,8 +45,8 @@ harness detects glitches (`GlitchFreeDiamondTest`).*
 1. ~~Coroutine ManagedHost + HostColor + color markers + spawn validation
    (G-3, G-27); legacy runtime deleted (G-1 done)~~ — done (M3.1). Bridges
    degenerated to nothing while intakes are unbounded; see 32.
-2. Closable intake + fail-fast send + re-resolution via a location registry
-   (G-5); Buffering-based park/replay.
+2. ~~Closable intake + fail-fast send + re-resolution via a location registry
+   (G-5); Buffering-based park/replay~~ — done (M3.2).
 3. Full drain protocol: suspend/resume/migrate on `HostManagementApi`;
    state capture via serializable snapshots (starts G-25).
 4. Traffic-light generalized: suspension as a standard membrane behavior.

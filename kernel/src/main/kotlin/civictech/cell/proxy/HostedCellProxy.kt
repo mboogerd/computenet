@@ -2,6 +2,7 @@ package civictech.cell.proxy
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.Port
 import java.lang.reflect.Method
@@ -18,8 +19,16 @@ object HostedCellProxy {
         val isApi: Boolean = false
     )
 
-    fun create(cellRef: CellRef, host: ManagedHost, clazz: Class<*>): Any {
-        return Proxy.fromClass(clazz, HostProxy(host, Context(cellRef)) { ctx, method, args ->
+    /** Fixed-host proxy: a closed intake surfaces [civictech.cell.host.IntakeClosedException] at the send site. */
+    fun create(cellRef: CellRef, host: ManagedHost, clazz: Class<*>): Any =
+        create(cellRef, InvocationSink(host::enqueueHostedInvocation), clazz)
+
+    /** Registry-resolving proxy: closure parks and replays on re-publication (spec 33). */
+    fun create(cellRef: CellRef, registry: LocationRegistry, clazz: Class<*>): Any =
+        create(cellRef, InvocationSink(registry::deliver), clazz)
+
+    fun create(cellRef: CellRef, sink: InvocationSink, clazz: Class<*>): Any {
+        return Proxy.fromClass(clazz, HostProxy(sink, Context(cellRef)) { ctx, method, args ->
             when {
                 ctx.portName == null -> cellInvocation(ctx, method)
                 !ctx.isApi -> portInvocation(ctx, ctx.portName, method, args)

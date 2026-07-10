@@ -1,8 +1,8 @@
 # 33 — Mobility: Suspension and Migration
 
-> **Status**: Specified (decision stable across two ADRs); primitives partially implemented
+> **Status**: Specified (decision stable across two ADRs); closable intake + re-resolution implemented (M3.2); drain protocol pending
 > **Sources**: ADR — Computelet Mobility (supersedes ADR — Blocking Mailbox), ADR — Computelet Kernel
-> **Implementation**: Buffering proxy + serve/delegate switching (TrafficLightCell) = the boundary primitive; legacy `cell.Handle`; no closable-queue / drain protocol yet
+> **Implementation**: Buffering proxy + serve/delegate switching (TrafficLightCell) = the boundary primitive; `ManagedHost.closeIntake`/`IntakeClosedException` + `cell.host.LocationRegistry` (park/replay) = the stale-reference story; drain protocol not yet
 
 ## Definitions
 
@@ -32,13 +32,20 @@ minimal (P2): senders pay only a volatile read + enqueue, ever.
 ## Stale references: closable queues (normative)
 
 - A suspended/moved host's intake is **closed**; sends to it **fail fast**
-  (exception), never block, never silently drop.
+  (exception), never block, never silently drop. *(Implemented, M3.2:
+  `ManagedHost.closeIntake()` — data and router sends throw
+  `IntakeClosedException`; the management inlet stays open so a closed host
+  remains administrable. Closure is one volatile read on the send path and is
+  deliberately NOT a dead letter — it is the re-resolution signal.)*
 - Senders (i.e. link/proxy internals — never cell logic) catch closure,
   **re-resolve** the target's current location from the graph, and retry.
+  *(Implemented, M3.2: proxies deliver through an `InvocationSink` — a fixed
+  intake surfaces the failure at the send site; a `LocationRegistry` sink
+  parks closed/unlocated traffic per-ref in order and replays it into the
+  next published location before the fast path sees it. Spawning on a
+  registry-carrying host publishes the cell; despawn unpublishes.)*
   Re-resolution MAY return a persistent overflow mailbox (disk queue) when the
-  target is suspended indefinitely (13, 24-durability).
-- Coroutine channels already fail on closed; blocking hosts need a closable
-  queue wrapper with identical semantics.
+  target is suspended indefinitely (13, 24-durability) — not yet built.
 
 This is the Link-and-Lease invalidation story (10/14) applied to location:
 optimistic send, lazy re-resolution, O(rare-event) cost.
@@ -72,16 +79,16 @@ first membrane behavior in code (11).
 
 ## Gaps to close (G-5)
 
-1. Closable-queue wrapper for `ManagedHost` + failure surfaced through
-   proxies (today `enqueueHostedInvocation` cannot fail).
-2. Re-resolution: requires a **location registry** — which host currently
-   serves a `CellRef`. Design together with 40/41's addressing. (`cell.Handle`
-   was the pre-invocation-model attempt; supersede it.)
+1. ~~Closable intake for `ManagedHost` + failure surfaced through proxies~~
+   — done (M3.2).
+2. ~~Re-resolution via a **location registry**~~ — done (M3.2,
+   `cell.host.LocationRegistry`; `cell.Handle`, the pre-invocation-model
+   attempt, is deleted). Remote addressing still unifies here in M5 (40/41).
 3. `onDeactivate` + state capture (P9: cell state must be serializable — tie
    to 24 durability snapshots).
 4. Host suspend/resume/migrate operations on `HostManagementApi`.
-5. Parked-invocation transfer format (serialized invocations — already the
-   wire format, 14).
+5. ~~Parked-invocation transfer format~~ — done (M3.2: parked traffic IS
+   `HostedPortInvocation`s, already the wire form, 14; contexts ride along).
 
 ## Constraints from elsewhere
 

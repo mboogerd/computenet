@@ -25,6 +25,7 @@ import java.util.concurrent.CompletableFuture
 open class ManagedHost(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
     scheduler: HostScheduler? = null,
+    private val registry: LocationRegistry? = null,
 ) : Host {
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
     override val routerInlet = registerPort("routerInlet", FanInlet.create<HostRoutingApi>())
@@ -39,6 +40,22 @@ open class ManagedHost(
 
     private val cells = mutableMapOf<CellRef, Cell>()
     private val ctx = object : CellContext {}
+
+    /**
+     * Closable intake (spec 33, G-5): while closed, data and router sends fail
+     * fast with [IntakeClosedException] — the sender's re-resolution signal.
+     * Management stays open (a closed host must remain administrable).
+     */
+    @Volatile
+    private var intakeOpen = true
+
+    internal fun closeIntake() {
+        intakeOpen = false
+    }
+
+    internal fun openIntake() {
+        intakeOpen = true
+    }
 
     private fun deadLetter(cause: Throwable?, description: String, invocation: HostedPortInvocation? = null) {
         System.err.println("[ManagedHost ${ref.id}] dead letter: $description" + (cause?.let { " ($it)" } ?: ""))
@@ -68,6 +85,7 @@ open class ManagedHost(
     }
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
+        if (!intakeOpen) throw IntakeClosedException(ref)
         enqueue(20) {
             val cell = cells[hostedInvocation.cellRef] ?: return@enqueue deadLetter(
                 null, "unknown cell ${hostedInvocation.cellRef}", hostedInvocation
@@ -102,7 +120,9 @@ open class ManagedHost(
     fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T? {
         if (!cells.containsKey(ref)) return null
         @Suppress("UNCHECKED_CAST")
-        return HostedCellProxy.create(ref, this, clazz) as T
+        // with a registry the proxy re-resolves, surviving relocation (spec 33)
+        return (registry?.let { HostedCellProxy.create(ref, it, clazz) }
+            ?: HostedCellProxy.create(ref, this, clazz)) as T
     }
 
     inline fun <reified T : Any> lookup(ref: CellRef): T? = lookup(ref, T::class.java)
@@ -122,6 +142,9 @@ open class ManagedHost(
                 }
                 cells[cell.ref] = cell
                 cell.onActivate(ctx)
+                // location becomes visible only after activation, so replayed
+                // parked invocations find served ports (spec 33 step 7)
+                registry?.publish(cell.ref, this@ManagedHost)
                 return cell.ref
             }
 
@@ -131,6 +154,7 @@ open class ManagedHost(
 
             override fun despawn(ref: CellRef) {
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
+                registry?.unpublish(ref)
                 cell.onDeactivate(ctx)
             }
 
@@ -184,6 +208,7 @@ open class ManagedHost(
         })
 
         routerInlet.serve(Proxy.fromClass(HostRoutingApi::class.java) { _, method, args ->
+            if (!intakeOpen) throw IntakeClosedException(ref)
             val invocation = Invocation.of(method, args).withTarget(internalHostRoutingApi)
             enqueue(10) { invocation.invoke() }
             null
