@@ -24,7 +24,7 @@ enforcement arm: no interest → suspend; renewed interest → resume.
    **upstream** (consumer → producer) along data links without cell-specific
    logic. Precise directionality is why ports/links know their data direction.
 2. **Interest is compositional**: a cell's attention level derives from its
-   downstream subscribers' attention (fan-out: max/sum — to be decided; see
+   downstream subscribers' attention (fan-out: programmable, max default; see
    below).
 3. **Suspendability is the resource lever**: scheduling decisions are
    expressed as suspend/resume/migrate operations (33), not as thread
@@ -51,18 +51,27 @@ Minimal attention model compatible with the above:
 
 ## Decisions (M6 planning; formerly "open questions")
 
-1. **Aggregation = max, damped by quantization.** A cell's attention is the
-   **max** over its downstream links' levels (attention is a priority signal,
-   not a load meter; sum double-counts shared subgraphs on diamonds). The
-   carried level stays a `Float` so a sum/load-signaling variant can be added
-   later without a protocol change, but the *effective* value is quantized
-   into discrete **bands** — `NONE < LOW < NORMAL < HIGH` — and a cell
-   re-emits upstream **only when its aggregated band changes**. Quantization
-   is the damping: intra-band jitter is structurally incapable of propagating,
-   which is the magnitude-throttling rule (21, G-19) applied to attention
-   itself. Decay is the source's job, not the network's: a sink that loses
-   interest emits level 0 or unlinks (unlink already shrinks the link set and
-   thus the max); no TTL/decay machinery in the protocol.
+1. **Aggregation is programmable per cell, damped by quantization.**
+   Aggregation is a per-cell strategy (`AttentionAggregator` on
+   `AttentionSupport`): a pure fold of the cell's own level and its downstream
+   links' levels into one, declaratively defined, assembled (strategies
+   compose — decay wraps a base), and configured at spawn or live. Shipped
+   strategies: **max** (the default — attention is a priority signal, not a
+   load meter; sum double-counts shared subgraphs on diamonds), **sum** (load
+   semantics, for consumers that want the double-count), and **decay** (the
+   base's result halves per configured half-life without a fresh signal).
+   Time-aware strategies read **scheduling-step ticks bound by the host** —
+   never wall time — so the deterministic simulation stays deterministic (P1);
+   re-evaluation between signals is an explicit `refresh` owned by the
+   host/harness cadence, not the dispatch hot path. Whatever the strategy, the
+   *effective* value is quantized into discrete **bands** —
+   `NONE < LOW < NORMAL < HIGH` — and a cell re-emits upstream **only when its
+   aggregated band changes**. Quantization is the damping: intra-band jitter
+   is structurally incapable of propagating, which is the magnitude-throttling
+   rule (21, G-19) applied to attention itself — and it is what keeps
+   non-monotone strategies (sum, decay) from re-exciting cycles. A sink that
+   loses interest emits level 0 or unlinks (unlink already shrinks the link
+   set).
 2. **Fairness floor = park-not-drop + a deterministic service stride.**
    Two floors, one per resource lever:
    - *Suspension floor*: attention-driven suspension uses the same

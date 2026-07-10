@@ -395,6 +395,9 @@ open class ManagedHost(
                     AttentionSupport.of(cell).onBandChange { band ->
                         if (band > AttentionBand.NONE) enqueue(0) { unparkForAttention(cell.ref) }
                     }
+                    // scheduling-step clock for time-aware aggregators (decay);
+                    // racy read is fine — attention is advisory metadata (34)
+                    AttentionSupport.of(cell).ticks = { dispatchStep }
                 }
                 // location becomes visible only after activation, so replayed
                 // parked invocations find served ports (spec 33 step 7)

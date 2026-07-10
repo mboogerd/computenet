@@ -9,6 +9,7 @@ import civictech.cell.port.Protocols
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.math.pow
 
 /**
  * Attention protocol message (spec 34): a raw level travels; receivers
@@ -42,9 +43,49 @@ enum class AttentionBand(val level: Float) {
 }
 
 /**
+ * Aggregation strategy (spec 34 decision 1): folds a cell's own declared
+ * level and its downstream links' levels into one; `null` = no signal at all
+ * (the cell sits at neutral NORMAL). Programmable per cell via
+ * [AttentionSupport.aggregator]; strategies compose (see [decay]).
+ *
+ * [ticksSinceSignal] is scheduling-step time supplied by the owner's host —
+ * never wall time, so the deterministic simulation stays deterministic (P1).
+ * With no host binding it is always 0 (time-independent strategies ignore it).
+ */
+fun interface AttentionAggregator {
+    fun aggregate(own: Float?, downstream: Collection<Float>, ticksSinceSignal: Long): Float?
+
+    companion object {
+        /** Priority semantics (default): as important as the MOST interested consumer. */
+        val Max = AttentionAggregator { own, down, _ ->
+            (listOfNotNull(own) + down).maxOrNull()
+        }
+
+        /** Load semantics: total downstream interest (double-counts diamond fan-in by design). */
+        val Sum = AttentionAggregator { own, down, _ ->
+            (listOfNotNull(own) + down).takeIf { it.isNotEmpty() }?.sum()
+        }
+
+        /**
+         * [base]'s result halves every [halfLifeTicks] without a fresh signal;
+         * quantization still floors sub-band jitter. Re-evaluated on signals
+         * and on explicit [AttentionSupport.refresh] — hosts/harnesses own the
+         * refresh cadence (the dispatch hot path does not poll).
+         */
+        fun decay(halfLifeTicks: Long, base: AttentionAggregator = Max) =
+            AttentionAggregator { own, down, ticks ->
+                base.aggregate(own, down, ticks)?.let {
+                    it * 0.5f.pow(ticks.toFloat() / halfLifeTicks.toFloat())
+                }
+            }
+    }
+}
+
+/**
  * Per-cell attention state (spec 34, G-6): aggregates the levels reported by
- * downstream links (**max** — attention is a priority signal, not a load
- * meter) together with the cell's own declared level (sinks call [attend]),
+ * downstream links together with the cell's own declared level (sinks call
+ * [attend]) through the cell's [aggregator] (default [AttentionAggregator.Max]
+ * — attention is a priority signal, not a load meter),
  * quantizes to an [AttentionBand], and re-emits upstream over the cell's
  * inbound links **only when the band changes** — quantization is the update
  * damping (34 decision 1), and it is also what terminates propagation around
@@ -64,6 +105,22 @@ enum class AttentionBand(val level: Float) {
  * register ports at construction.
  */
 class AttentionSupport private constructor(private val owner: Any) {
+
+    /** Aggregation strategy; assigning one re-evaluates the band immediately. */
+    @Volatile
+    var aggregator: AttentionAggregator = AttentionAggregator.Max
+        set(value) {
+            field = value
+            recompute()
+        }
+
+    /** Scheduling-step clock, bound by the hosting [civictech.cell.host.ManagedHost]; never wall time (P1). */
+    @Volatile
+    var ticks: () -> Long = { 0L }
+
+    /** Step of the last signal (attend / link report / unlink), for time-aware aggregators. */
+    @Volatile
+    private var lastSignalTick: Long = 0L
 
     /** The cell's own declared interest (sinks: UIs, subscriptions, monitors). */
     @Volatile
@@ -85,13 +142,24 @@ class AttentionSupport private constructor(private val owner: Any) {
     /** Declare this cell's own interest level (a sink's entry point). */
     fun attend(level: Float) {
         ownLevel = level
+        signal()
+    }
+
+    /**
+     * Re-evaluate without a new signal — how time-aware aggregators (decay)
+     * observe the clock advancing. No-op for time-independent strategies.
+     */
+    fun refresh() = recompute()
+
+    /** A fresh signal arrived: stamp the clock, then re-evaluate. */
+    private fun signal() {
+        lastSignalTick = ticks()
         recompute()
     }
 
     private fun recompute() {
-        val signals = listOfNotNull(ownLevel) + linkLevels.values
-        val newBand =
-            if (signals.isEmpty()) AttentionBand.NORMAL else AttentionBand.quantize(signals.max())
+        val level = aggregator.aggregate(ownLevel, linkLevels.values, ticks() - lastSignalTick)
+        val newBand = level?.let(AttentionBand::quantize) ?: AttentionBand.NORMAL
         if (newBand == band) return // damping: intra-band jitter stops here
         band = newBand
         listeners.forEach { it(newBand) }
@@ -115,11 +183,11 @@ class AttentionSupport private constructor(private val owner: Any) {
             ProtocolSupport.of(port as Port).handle(Protocols.Attention) { link, message ->
                 if (link.fromPort === port) {
                     linkLevels[link.id] = (message as Attention).level
-                    recompute()
+                    signal()
                 }
             }
             port.linking.onUnlinkListeners += { link ->
-                if (link.fromPort === port && linkLevels.remove(link.id) != null) recompute()
+                if (link.fromPort === port && linkLevels.remove(link.id) != null) signal()
                 // inbound links leaving need no action: the upstream side drops its level
             }
             // inlet face: a fresh inbound link learns our current band at once
