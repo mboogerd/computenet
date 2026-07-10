@@ -24,6 +24,7 @@ internal class MintedTags<E>(ref: CellRef, name: String) {
     private val advertised = mutableMapOf<E, Timestamp>()
 
     val isEmpty: Boolean get() = advertised.isEmpty()
+    val entries: Map<E, Timestamp> get() = advertised
     operator fun contains(element: E): Boolean = element in advertised
 
     /** Fresh tag on entry; null if already advertised (idempotent). */

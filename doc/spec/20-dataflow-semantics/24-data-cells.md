@@ -82,8 +82,20 @@ pressure (42).)*
   - `IntersectSetCell` — binary (`left`/`right` inlets; n-ary by chaining);
     advertises entry tags, deletes all advertised tags on exit, absorbs tag
     churn that doesn't flip membership.
-  - `JoinCell` — incremental keyed inner join over two map streams; inherits
-    `MapDelta`'s arrival-order convergence limit.
+  - `JoinCell` — the **LWW dictionary join**: keyed inner join over two
+    single-writer map streams where either side's put *refreshes* the pair —
+    value-replacement semantics, inherently arrival-order (`MapDelta`'s
+    documented limit). Useful for config/dictionary lookups; not the
+    relational join.
+  - `JoinSetCell` / `joinSet` / `crossProduct` (M11.5) — the **relational
+    equi-join** over convergent tagged set streams: a pair is live iff both
+    rows are live under matching keys; one minted tag per live pair
+    ([MintedTags] — pairs re-enter when a removed row returns), emitted under
+    `combine(a, b)`. Many-to-one `combine` collapses via per-pair tags (the
+    output survives until its last pair dies — whole-element deletion is the
+    divergent naive form, control-tested); many-to-many keys yield all
+    pairs; cross product = the unit key. `combine` outputs crossing the wire
+    must be `@Serializable` app types (`Pair` is not WireCodec-registered).
   - `SemiJoinCell` / `differenceSet` (M11.2) — keyed semijoin (`A ⋉ B`) and
     antijoin (`A ▷ B`, `negated`); difference (`A ⊖ B`, SQL EXCEPT DISTINCT)
     is the antijoin on identity keys. Non-monotone: re-entry rides the other
