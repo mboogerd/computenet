@@ -293,6 +293,51 @@ promoted mid-stream via the buffered swap window with state carried across
 instances — the post-swap output stream identical to an unswapped
 control, 100 seeds, zero loss, per-link FIFO preserved.*
 
+## Milestone 10 — Durability + reconnect ("survive a restart") ✅ DONE
+
+*Goal: nothing is lost to a process death — G-25's journal half lands, and
+the WebSocket transport heals itself. A journal is a **bridge to disk**: the
+same wire frames, encoded once, replayed through the same decode path.*
+
+1. M10.1 — write-ahead journal (G-25 core): `Journal`
+   (`InMemoryJournal` for seeded sims / `FileJournal` — length-prefixed,
+   fsync-per-append, torn-tail tolerant) teed at the host intake (the single
+   funnel: journal order = acceptance order = per-cell FIFO on replay);
+   `recoverFrom` replays frames through the ordinary `WireCodec` decode after
+   the graph is rebuilt. **Replay-stable identity** proved necessary: set
+   tags and PN source slots derive from the ref (random ids resurrect
+   removed elements / double-count on replay), and the tag counter rides
+   snapshots.
+2. M10.2 — checkpoints: `checkpoint(journal)` captures every `Stateful`
+   snapshot as one record and compacts the log (`reset` = atomic tmp+rename);
+   recovery = restore + tail replay. Tombstone/source-slot compaction rides
+   checkpoints.
+3. M10.3 — reconnect (G-15 residual): `WsConnection` retries with capped
+   backoff (`shutdown()` = deliberate close); the re-hello re-runs the
+   announcement catch-up; announcement hooks are deregistrable and die with
+   their session.
+4. M10.4 — the crash window hardened end-to-end: dead-socket sends raise
+   `IntakeClosedException` so the registry **parks instead of dropping**
+   before close detection; catch-up re-fires on every (re)announce
+   (`Replication.maybeLink` and the demo's union chaining) — the transport
+   cannot save bytes buffered into a dying socket, so recovery is
+   end-to-end: journal for what the process accepted, anti-entropy for what
+   the wire swallowed; registry publish hooks are failure-isolated
+   (notifications, not participants). Demo peer mode gains `--journal`
+   (deterministic writer refs, users file, routed writer→union links).
+
+*Exit criterion — met, at both levels like M5: `CrashRecoveryTest` (sim) — a
+three-peer replicated session where one peer's host, registry, queues, and
+links are discarded mid-run (only its journal survives), rebuilt, recovered
+by checkpoint-restore + replay, re-peered, converging under 100 seeds
+including a write burst accepted-but-in-flight at the crash; the control run
+(no journal) still converges via anti-entropy but LOSES the burst on every
+seed — the loss only a write-ahead journal prevents. And
+`CrashRestartConvergenceTest` (two OS processes) — a demo peer kill -9'd
+mid-session relaunches with the same `--journal` directory, recovers its
+state, reconnects, replays parked edits from the surviving peer, and both
+browsers converge in both directions.*
+
 ## Working agreements (process, immediate)
 
 - **Specs lead code**: changes to semantics update the relevant spec file in

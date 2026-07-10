@@ -60,6 +60,10 @@ Replicating a cell = running an instance of the same **logical cell**
 - **Anti-entropy**: partition ⇒ Remote locations drop ⇒ gossip parks
   (spec 33); heal ⇒ re-announce ⇒ parked replay + idempotent catch-up.
   Verified, not rebuilt — the late-join path (21) doubles as recovery.
+  **M10**: a *re*-announce of an already-linked replica re-fires the
+  catch-up unicast through the existing link (`Replication.maybeLink`) —
+  a crashed-and-recovered peer regains whatever its dying transport
+  swallowed; idempotent merges make the repeat cost one redundant delta.
 
 Still open: upstream responsibility (subscribing peers accepting shares of
 upstream partitions, with 24's partitioned cells); interest-driven replica

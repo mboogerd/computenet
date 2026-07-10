@@ -59,6 +59,8 @@ configuration of the one `ManagedHost` class (30/31, C-2/G-2 resolved).
 | **Migration** | Unlink → move → relink of a host's cells to another host. | 30/33 |
 | **Attention / Interest** | A subscription-derived signal that drives scheduling and replication. | 30/34, 40/42 |
 | **Policy** | A constraint governing port use or linking (authz, rate, schema, quota). | 10/13, 40/43 |
+| **Journal** | A host's write-ahead log of accepted invocations, stored as wire frames; replay through the ordinary decode path is recovery. | 20/24, 30/31 |
+| **Checkpoint** | A journal compaction point: every Stateful cell's snapshot as one record; recovery = restore + replay the tail. | 20/24, 30/31 |
 | **Invariant** | A property that must hold across all valid executions; the primary verification artifact. | 50/52 |
 
 ## Naming conventions (normative)

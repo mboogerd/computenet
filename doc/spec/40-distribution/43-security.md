@@ -37,6 +37,9 @@ untrusting contributors participate safely.
 5. **Recovery by replay**: because state transitions are journaled
    serializable invocations (24 durability), a compromised graph can be
    restored by replaying the log **minus the malicious cells' inputs**.
+   *(M10: the journal + replay machinery now exists — `Journal`,
+   `recoverFrom`; the selective minus-malicious-inputs filter remains
+   future security work.)*
 
 ## G-29: threat model and identity (phase 1 landed, M8.2–M8.3)
 

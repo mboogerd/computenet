@@ -85,8 +85,14 @@ direct call → queue hop → serialized send.
    another transport is another small module behind the same bridge cells.
    Frames go out as binary messages; a text hello exchanges mirror refs, then
    `Peering` wires announcements. IO threads only enqueue — decoding happens
-   on the bridge host. Disconnect ⇒ `unpublishRemotes(sink)` ⇒ senders park;
-   reconnection beyond park-and-replay is out of scope.)*
+   on the bridge host. Disconnect ⇒ `unpublishRemotes(sink)` ⇒ senders park.
+   **M10.3–M10.4**: clients reconnect with capped backoff (`shutdown()` is
+   the only permanent close); the re-hello re-runs the announcement catch-up
+   and parked traffic replays. The crash *window* is covered too: a send on
+   a dying socket raises `IntakeClosedException`, which the registry treats
+   exactly like a closed local intake — park, never drop — and bytes the
+   dying socket already swallowed are recovered end-to-end by catch-up
+   re-firing on every (re)announce (42).)*
 5. **Failure semantics**: remote sends inherit the closable/fail-fast +
    re-resolve + park contract (33). Request/response-style management calls
    over the wire get `Deferred`/`CompletableFuture` wrapping with timeouts

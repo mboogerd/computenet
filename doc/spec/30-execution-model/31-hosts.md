@@ -55,6 +55,15 @@ call as `HostedPortInvocation` and enqueues it on the target host
 (14). This realizes "ports crossing runner boundaries become message sends,
 while internal links remain direct".
 
+**Durable hosts** *(G-25 resolved, M10)*: a host constructed with a
+`Journal` write-ahead appends every accepted invocation as a wire frame at
+the intake (the single funnel — journal order = acceptance order), so a
+process death loses nothing it acknowledged. `checkpoint(journal)` compacts
+the log to one snapshot record of every `Stateful` cell; `recoverFrom`
+(after the graph is rebuilt) restores the checkpoint and replays the tail
+through the ordinary decode path. Durability is a hosting decision, not a
+cell concern (24).
+
 ## Normative rules
 
 1. **Single consumer**: all cell logic of a host executes on its one context;

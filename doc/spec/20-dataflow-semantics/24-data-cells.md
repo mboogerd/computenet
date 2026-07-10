@@ -107,9 +107,19 @@ partitioning must not become a second distribution mechanism.
 ## Durability spectrum
 
 ADR 1 §3 requires in-memory / durable / hybrid state.
-⚠ GAP (G-25, journal remainder): no persistence yet, but the state-capture
-half exists (M3.3): `Stateful.snapshot()/restore()` is captured by the drain
-protocol and round-trips through real serialization on migration (30/33).
-*Remaining proposal*: durability as a host concern (30/31): a durable host
-journals applied invocations (they are serializable — P9 pays off) alongside
-those snapshots. Replay = recovery. Cells stay oblivious.
+
+*(G-25 resolved, M10)*: durability is a host concern, exactly as proposed —
+a host constructed with a `Journal` write-ahead appends every accepted
+invocation **as a wire frame** (the same `WireCodec` encoding that crosses
+the network: a journal is a bridge to disk) before staging it; recovery
+rebuilds the graph, then `recoverFrom` restores the latest checkpoint's
+`Stateful` snapshots and replays the frame tail through the ordinary decode
+path. `checkpoint` compacts the log atomically; tombstone and PN-slot growth
+compact with it. Cells stay oblivious — with one honest exception:
+**replay-stable identity**. A recovered instance must re-mint the identities
+the network already observed, so set tags and PN source slots derive from
+the cell's ref (never `randomUUID`) and the tag counter is snapshot state.
+Random identity + replay = resurrected removals and double counts
+(`CrashRecoveryTest` proves both directions). Remaining with a trigger:
+journal segmentation/rotation and the disk-overflow mailbox (33) — the
+first workload where one fsync'd file hurts.
