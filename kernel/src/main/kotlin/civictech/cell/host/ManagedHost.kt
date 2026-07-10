@@ -16,6 +16,9 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
+import civictech.cell.attention.AttentionBand
+import civictech.cell.attention.AttentionSupport
+import civictech.cell.attention.SuspensionNotice
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
@@ -34,6 +37,8 @@ open class ManagedHost(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
     scheduler: HostScheduler? = null,
     private val registry: LocationRegistry? = null,
+    /** Attention → resources mapping (spec 34, M6.3); null = pre-M6 FIFO scheduling. */
+    private val attention: AttentionPolicy? = null,
 ) : Host {
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
     override val routerInlet = registerPort("routerInlet", FanInlet.create<HostRoutingApi>())
@@ -77,12 +82,33 @@ open class ManagedHost(
     private val checkpoints = mutableMapOf<CellRef, Serializable>()
     private val suspendedCells = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
 
+    /**
+     * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues; each
+     * staged message submits one dispatcher task at data priority, and each
+     * dispatch picks the next cell by attention band. Per-cell FIFO (a superset
+     * of per-link FIFO, spec 31 rule 3) holds because band selection happens
+     * BETWEEN cells, never within one — and the one-task-per-message shape
+     * keeps drain's phase 2 (priority 30) behind every accepted message.
+     */
+    private val dataLock = Any()
+    private val dataQueues = LinkedHashMap<CellRef, ArrayDeque<Pair<Long, HostedPortInvocation>>>()
+    private var dataSequence = 0L
+    private var dispatchStep = 0L
+    private var strideCount = 0
+    private val lastAttended = mutableMapOf<CellRef, Long>()
+
+    /** Attention-parked traffic (spec 34 decision 2): parked, never dropped. */
+    private val attentionParked = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
+
     /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
     private fun clearSupervision(cellRef: CellRef) {
         policies.remove(cellRef)
         checkpoints.remove(cellRef)
         suspendedCells.remove(cellRef)?.forEach {
             deadLetter(null, "cell $cellRef left the host while suspended", it)
+        }
+        synchronized(dataLock) { attentionParked.remove(cellRef) }?.forEach {
+            deadLetter(null, "cell $cellRef left the host while attention-parked", it)
         }
     }
 
@@ -105,6 +131,12 @@ open class ManagedHost(
         state = State.DRAINING
         closeIntake()
         enqueue(30) {
+            // attention-parked traffic is accepted work: flush it before
+            // deactivation, same guarantee as the ordinary queue (spec 33/34)
+            val parked = synchronized(dataLock) {
+                attentionParked.values.flatten().also { attentionParked.clear() }
+            }
+            parked.forEach { deliver(it) }
             snapshots.clear()
             cells.forEach { (cellRef, cell) ->
                 cell.onDeactivate(ctx)
@@ -144,52 +176,143 @@ open class ManagedHost(
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
         if (!intakeOpen) throw IntakeClosedException(ref)
-        enqueue(20) {
-            val cellRef = hostedInvocation.cellRef
-            // a SUSPEND-ed cell's traffic parks per-cell until resume(ref) replays it
-            suspendedCells[cellRef]?.let {
-                it += hostedInvocation
-                return@enqueue null
+        // stage at SEND time (not dispatch time) so a backlog can form and band
+        // selection has something to choose between; one dispatcher task per
+        // message keeps message count <= task count (a task may find nothing)
+        synchronized(dataLock) { stage(hostedInvocation) }
+        enqueue(20) { dispatchOne() }
+    }
+
+    /** Callers hold [dataLock]: append to the target cell's FIFO (or its attention park). */
+    private fun stage(hostedInvocation: HostedPortInvocation) {
+        val cellRef = hostedInvocation.cellRef
+        attentionParked[cellRef]?.let {
+            it += hostedInvocation // parked cells accumulate in arrival order
+            return
+        }
+        dataQueues.getOrPut(cellRef) { ArrayDeque() }.addLast(++dataSequence to hostedInvocation)
+    }
+
+    private fun bandOf(cellRef: CellRef): AttentionBand = when {
+        attention == null -> AttentionBand.NORMAL
+        else -> cells[cellRef]?.let { AttentionSupport.of(it).band } ?: AttentionBand.NORMAL
+    }
+
+    /**
+     * Run (at most) one staged message: highest band first, oldest head as
+     * tiebreaker; the stride floor (spec 34 decision 2) bounds how long
+     * lower-band work can be passed over; a cell at NONE past the policy
+     * window parks instead of running (park, never drop).
+     */
+    private suspend fun dispatchOne() {
+        var toPark: CellRef? = null
+        val next: HostedPortInvocation? = synchronized(dataLock) {
+            if (dataQueues.isEmpty()) return
+            dispatchStep++
+            val bands = dataQueues.keys.associateWith { bandOf(it) }
+            bands.forEach { (cellRef, band) ->
+                if (band > AttentionBand.NONE) lastAttended[cellRef] = dispatchStep
             }
-            val cell = cells[cellRef] ?: return@enqueue deadLetter(
-                null, "unknown cell $cellRef", hostedInvocation
-            )
-            val port = findPort(cell, hostedInvocation.portName) ?: return@enqueue deadLetter(
-                null, "unknown port '${hostedInvocation.portName}' on $cellRef", hostedInvocation
-            )
+            val maxBand = bands.values.max()
+            val lower = bands.filterValues { it < maxBand }.keys
+            val stride = attention?.stride ?: Int.MAX_VALUE
+            val pickFrom: Collection<CellRef> = if (strideCount >= stride && lower.isNotEmpty()) {
+                strideCount = 0
+                lower
+            } else {
+                if (lower.isNotEmpty()) strideCount++ else strideCount = 0
+                bands.filterValues { it == maxBand }.keys
+            }
+            val pick = pickFrom.minByOrNull { dataQueues.getValue(it).first().first }!!
+            val suspendAfter = attention?.suspendAfter
+            if (suspendAfter != null && bands.getValue(pick) == AttentionBand.NONE &&
+                dispatchStep - (lastAttended[pick] ?: 0L) > suspendAfter
+            ) {
+                toPark = pick
+                null
+            } else {
+                val queue = dataQueues.getValue(pick)
+                val head = queue.removeFirst().second
+                if (queue.isEmpty()) dataQueues.remove(pick)
+                head
+            }
+        }
+        toPark?.let { parkForAttention(it) }
+        next?.let { deliver(it) }
+    }
 
-            try {
-                when (hostedInvocation.type) {
-                    HostedPortInvocation.Type.PORT_MANAGEMENT -> {
-                        val result = hostedInvocation.invocation.invoke(port)
-                        if (result is LinkResult.Rejected) {
-                            // proxy-initiated handshakes are fire-and-forget until the
-                            // wire layer (M5); rejection is observable here only
-                            deadLetter(null, "link rejected: ${result.reason}", hostedInvocation)
-                        }
-                    }
+    private fun parkForAttention(cellRef: CellRef) {
+        synchronized(dataLock) {
+            val queue = dataQueues.remove(cellRef) ?: ArrayDeque()
+            attentionParked[cellRef] = queue.map { it.second }.toMutableList()
+        }
+        cells[cellRef]?.let { notifyDownstream(it, SuspensionNotice.Suspended) }
+    }
 
-                    HostedPortInvocation.Type.PORT_API -> {
-                        if (port is Use<*>) {
-                            // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
-                            hostedInvocation.invocation.invokeSuspending(port.call)
-                        }
+    private fun unparkForAttention(cellRef: CellRef) {
+        val parked = synchronized(dataLock) {
+            attentionParked.remove(cellRef)?.also { lastAttended[cellRef] = dispatchStep }
+        } ?: return
+        cells[cellRef]?.let { notifyDownstream(it, SuspensionNotice.Resumed) }
+        parked.forEach { enqueueHostedInvocation(it) }
+    }
+
+    /** spec 34 decision 3: suspended/resumed notices travel downstream, with data. */
+    private fun notifyDownstream(cell: Cell, notice: SuspensionNotice) {
+        val ports = PortRegistry.of(cell)
+        ports.names().forEach { name ->
+            val port = ports[name] as? Linked ?: return@forEach
+            port.linking.links.forEach { link ->
+                if (link.fromPort === port) Protocols.sendDownstream(link, Protocols.Suspension, notice)
+            }
+        }
+    }
+
+    private suspend fun deliver(hostedInvocation: HostedPortInvocation) {
+        val cellRef = hostedInvocation.cellRef
+        // a SUSPEND-ed cell's traffic parks per-cell until resume(ref) replays it
+        suspendedCells[cellRef]?.let {
+            it += hostedInvocation
+            return
+        }
+        val cell = cells[cellRef] ?: return deadLetter(
+            null, "unknown cell $cellRef", hostedInvocation
+        )
+        val port = findPort(cell, hostedInvocation.portName) ?: return deadLetter(
+            null, "unknown port '${hostedInvocation.portName}' on $cellRef", hostedInvocation
+        )
+
+        try {
+            when (hostedInvocation.type) {
+                HostedPortInvocation.Type.PORT_MANAGEMENT -> {
+                    val result = hostedInvocation.invocation.invoke(port)
+                    if (result is LinkResult.Rejected) {
+                        // proxy-initiated handshakes are fire-and-forget until the
+                        // wire layer (M5); rejection is observable here only
+                        deadLetter(null, "link rejected: ${result.reason}", hostedInvocation)
                     }
                 }
-            } catch (e: Exception) {
-                // every policy dead-letters — observability is not a policy (G-26)
-                deadLetter(e, "invocation failed: $e", hostedInvocation)
-                // a declared error outlet additionally receives the failure as data
-                (cell as? ErrorReporting)?.errorOutlet?.call?.propagate(CellError(cellRef, e, hostedInvocation))
-                when (policies[cellRef] ?: SupervisionPolicy.PROPAGATE) {
-                    SupervisionPolicy.PROPAGATE -> {}
-                    SupervisionPolicy.RESTART -> {
-                        cell.onDeactivate(ctx)
-                        cell.onActivate(ctx)
-                        checkpoints[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
+
+                HostedPortInvocation.Type.PORT_API -> {
+                    if (port is Use<*>) {
+                        // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
+                        hostedInvocation.invocation.invokeSuspending(port.call)
                     }
-                    SupervisionPolicy.SUSPEND -> suspendedCells[cellRef] = mutableListOf()
                 }
+            }
+        } catch (e: Exception) {
+            // every policy dead-letters — observability is not a policy (G-26)
+            deadLetter(e, "invocation failed: $e", hostedInvocation)
+            // a declared error outlet additionally receives the failure as data
+            (cell as? ErrorReporting)?.errorOutlet?.call?.propagate(CellError(cellRef, e, hostedInvocation))
+            when (policies[cellRef] ?: SupervisionPolicy.PROPAGATE) {
+                SupervisionPolicy.PROPAGATE -> {}
+                SupervisionPolicy.RESTART -> {
+                    cell.onDeactivate(ctx)
+                    cell.onActivate(ctx)
+                    checkpoints[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
+                }
+                SupervisionPolicy.SUSPEND -> suspendedCells[cellRef] = mutableListOf()
             }
         }
     }
@@ -231,6 +354,13 @@ open class ManagedHost(
                 cell.onActivate(ctx)
                 // spawn-time checkpoint: what a RESTART supervision restores (G-26)
                 if (cell is Stateful) checkpoints[cell.ref] = cell.snapshot()
+                if (attention != null) {
+                    // renewed interest resumes a parked cell (spec 34): the listener
+                    // may fire on any thread, so hop through the management band
+                    AttentionSupport.of(cell).onBandChange { band ->
+                        if (band > AttentionBand.NONE) enqueue(0) { unparkForAttention(cell.ref) }
+                    }
+                }
                 // location becomes visible only after activation, so replayed
                 // parked invocations find served ports (spec 33 step 7)
                 registry?.publish(cell.ref, this@ManagedHost)
