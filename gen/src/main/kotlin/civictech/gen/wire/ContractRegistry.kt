@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 object ContractRegistry {
 
     private val byId = ConcurrentHashMap<Long, ContractDescriptor>()
+    private val byFqn = ConcurrentHashMap<String, ContractDescriptor>()
     private val byMethodKey = ConcurrentHashMap<String, Pair<ContractDescriptor, MethodDescriptor>>()
 
     init {
@@ -22,12 +23,16 @@ object ContractRegistry {
 
     fun register(module: ContractModule) = module.contracts.forEach { contract ->
         byId[contract.contractId] = contract
+        byFqn[contract.fqn] = contract
         contract.methods.forEach { method ->
             byMethodKey["${contract.fqn}#${method.name}${method.jvmDescriptor}"] = contract to method
         }
     }
 
     fun contract(contractId: Long): ContractDescriptor? = byId[contractId]
+
+    /** The descriptor of a contract interface, if `@Contract`-annotated and registered. */
+    fun descriptor(clazz: Class<*>): ContractDescriptor? = byFqn[clazz.name.replace('$', '.')]
 
     fun method(contractId: Long, methodId: Long): MethodDescriptor? =
         byId[contractId]?.methods?.find { it.methodId == methodId }

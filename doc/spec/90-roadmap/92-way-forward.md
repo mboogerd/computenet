@@ -114,8 +114,10 @@ wire-frame version byte; demo splits as symmetric peers):
 5. ~~M5.5 — WebSocket transport driver in `:wire` (org.java-websocket
    server); disconnect ⇒ unpublish ⇒ park; localhost smoke test (seeds stay
    on the loopback)~~ — done.
-6. M5.6 — ownership enforcement at link time (G-21 phases 1+2) — `Owned`
-   fan-out rejectable everywhere: local, cross-host, and bridge links.
+6. ~~M5.6 — ownership enforcement at link time (G-21 phases 1+2) — `Owned`
+   fan-out rejectable everywhere (local, cross-host, bridge — one funnel:
+   `FanOutlet.subscribe`); `Owned` moves-by-serialize, `Leased` refused at
+   the boundary~~ — done.
 7. M5.7 — exit: `DistributedCollaborativeAppTest` (loopback split, 100
    seeds + control run) + the demo as two symmetric WebSocket peers.
 

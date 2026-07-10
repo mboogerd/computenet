@@ -1,7 +1,10 @@
 package civictech.cell.wire
 
+import civictech.cell.Borrowed
 import civictech.cell.CellRef
+import civictech.cell.Frozen
 import civictech.cell.MessageContext
+import civictech.cell.Owned
 import civictech.cell.Timestamp
 import civictech.cell.data.CounterDelta
 import civictech.cell.data.ListDelta
@@ -71,6 +74,13 @@ object WireCodec {
                 subclass(MapDelta::class, MapDelta.serializer(polyAny, polyAny) as KSerializer<MapDelta<*, *>>)
                 @Suppress("UNCHECKED_CAST")
                 subclass(ListDelta::class, ListDelta.serializer(polyAny) as KSerializer<ListDelta<*>>)
+                // ownership wrappers (spec 23): Owned moves, Frozen/Borrowed copy; Leased never crosses
+                @Suppress("UNCHECKED_CAST")
+                subclass(Owned::class, Owned.serializer(polyAny) as KSerializer<Owned<*>>)
+                @Suppress("UNCHECKED_CAST")
+                subclass(Frozen::class, Frozen.serializer(polyAny) as KSerializer<Frozen<*>>)
+                @Suppress("UNCHECKED_CAST")
+                subclass(Borrowed::class, Borrowed.serializer(polyAny) as KSerializer<Borrowed<*>>)
             }
         }
         allowStructuredMapKeys = true // polymorphic delta keys encode as [k, v] arrays

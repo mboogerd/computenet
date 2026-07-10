@@ -2,6 +2,8 @@ package civictech.cell.wire
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Leased
+import civictech.cell.Owned
 import civictech.cell.data.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -23,7 +25,15 @@ class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
 
     /** Proxies use this cell as their [InvocationSink]; every send becomes a frame. */
     override fun deliver(invocation: HostedPortInvocation) {
-        outlet.call.propagate(WireCodec.encode(invocation))
+        val args = invocation.invocation.args
+        // spec 23 corollary: a lease on a remote pool is meaningless
+        require(args.none { it is Leased<*> }) {
+            "Leased payloads must not cross machine boundaries (spec 23) — freeze or copy first"
+        }
+        val frame = WireCodec.encode(invocation)
+        // move-by-serialize: the sender's reference dies with the encode (spec 23)
+        args.forEach { (it as? Owned<*>)?.consume() }
+        outlet.call.propagate(frame)
     }
 }
 

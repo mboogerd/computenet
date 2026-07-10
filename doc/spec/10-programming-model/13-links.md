@@ -65,8 +65,9 @@ built; cross-peer linking uses registry proxies + `Use.fixed`, and remote
 `linkFrom` arguments are live objects that cannot cross the wire anyway.
 Revisit only when a real topology needs it.) Delegation chains (`inlet.linkTo(use)`,
 serve/delegate) remain plain mechanism — they are intra-cell composition, not
-topology links. Ownership enforcement in `onLink` (G-21) waits for ownership
-markers (M5).)*
+topology links. Ownership enforcement landed in M5.6 (G-21): exclusive
+contracts reject a second link at the `FanOutlet.subscribe` funnel, on every
+path — handshake, `Use.fixed`, bridged (20/23).)*
 
 `unlink()` is load-bearing for the whole architecture: suspension and
 migration (30/33) are defined as link manipulation, and links are where

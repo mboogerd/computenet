@@ -67,13 +67,14 @@ class ContractProcessor(
                         val name = fn.simpleName.asString()
                         val descriptor = resolver.mapToJvmSignature(fn)
                             ?: error("no JVM signature for $fqn#$name")
-                        Triple(name, descriptor, StableHash.of("$fqn#$name$descriptor"))
+                        val exclusive = fn.parameters.any { carriesExclusive(it.type.resolve()) }
+                        MethodDescriptor(StableHash.of("$fqn#$name$descriptor"), name, descriptor, exclusive)
                     }
-                    .sortedBy { it.third }
-                    .forEach { (name, descriptor, id) ->
+                    .sortedBy { it.methodId }
+                    .forEach { m ->
                         add(
-                            "%T(methodId·=·%LL, name·=·%S, jvmDescriptor·=·%S),\n",
-                            MethodDescriptor::class.asClassName(), id, name, descriptor,
+                            "%T(methodId·=·%LL, name·=·%S, jvmDescriptor·=·%S, exclusive·=·%L),\n",
+                            MethodDescriptor::class.asClassName(), m.methodId, m.name, m.jvmDescriptor, m.exclusive,
                         )
                     }
                 add("⇤)),\n")
@@ -106,7 +107,16 @@ class ContractProcessor(
         return emptyList()
     }
 
+    /** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
+    private fun carriesExclusive(type: com.google.devtools.ksp.symbol.KSType): Boolean {
+        if (type.declaration.qualifiedName?.asString() in EXCLUSIVE_MARKERS) return true
+        return type.arguments.any { it.type?.resolve()?.let(::carriesExclusive) == true }
+    }
+
     companion object {
         const val GENERATED_PACKAGE = "civictech.gen.wire.generated"
+
+        // FQN constants: :gen cannot depend on :kernel (the dependency runs the other way)
+        val EXCLUSIVE_MARKERS = setOf("civictech.cell.Owned", "civictech.cell.Leased")
     }
 }

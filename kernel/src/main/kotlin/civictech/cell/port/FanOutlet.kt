@@ -4,6 +4,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
 import civictech.cell.proxy.Proxy
+import civictech.gen.wire.ContractRegistry
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -24,6 +25,14 @@ class FanOutlet<Api : Any>(
 
     private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
     private val waveCounter = AtomicLong()
+
+    /**
+     * SPSC rule (spec 23, G-21 phase 2): a contract carrying `Owned`/`Leased`
+     * payloads gets exactly one subscriber. Read from generated metadata —
+     * no runtime reflection; un-annotated contracts are never exclusive.
+     */
+    private val exclusive: Boolean =
+        ContractRegistry.descriptor(clazz)?.methods?.any { it.exclusive } == true
 
     override val call: Api = Proxy.fromClass(clazz) { _, method, args ->
         val ctx = CurrentContext.get()?.copy(sourcePort = ref)
@@ -48,7 +57,22 @@ class FanOutlet<Api : Any>(
     }
 
     override fun subscribe(port: Use<Api>) {
+        // every attach path funnels here: handshake installs, Use.fixed links,
+        // cross-host and bridge links alike — "rejectable everywhere"
+        check(!(exclusive && subscriptions.isNotEmpty() && port.ref !in subscriptions)) {
+            "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; a second subscriber is not allowed"
+        }
         subscriptions += port.ref to port
+    }
+
+    /** Source-side rejection for the handshake path (mirrors Outlet's cardinality style). */
+    override fun linkTo(linkFrom: LinkFrom<Api>): LinkResult {
+        if (exclusive && subscriptions.isNotEmpty()) {
+            return LinkResult.Rejected(
+                "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; outlet already has a subscriber"
+            )
+        }
+        return super.linkTo(linkFrom)
     }
 
     override fun unsubscribe(portRef: PortRef) {

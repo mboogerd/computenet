@@ -1,8 +1,8 @@
 # 23 — Payload Ownership Contracts and the SPSC Rule
 
-> **Status**: Specified (semantics clear); unimplemented
+> **Status**: Implemented through phase 2 (M5.6); pooling (phase 3) deliberately unbuilt
 > **Sources**: ADR — SPSC link requirement
-> **Implementation**: none (no ownership types, no link-time validation)
+> **Implementation**: `cell.Ownership` (Borrowed/Owned/Leased/Frozen); exclusive bit in generated `MethodDescriptor`s; `FanOutlet` link/subscribe enforcement; `Broadcast` refusal; `BridgeEgressCell` boundary rules
 
 ## Motivation
 
@@ -47,13 +47,26 @@ Corollaries:
   (serialize + drop sender's reference); `Leased` MUST NOT cross machine
   boundaries (a lease on a remote pool is meaningless) — freeze or copy first.
 
-## Proposal for implementation (G-21)
+## Implementation (G-21, M5.6)
 
-Phase 1 (types only): marker wrappers + conventions, documented; no
-enforcement. Cheap, immediately usable by data cells.
-Phase 2: link-handshake inspection once G-12 lands (KSP can emit the
-"contract carries exclusive types" bit into generated port metadata, avoiding
-runtime reflection).
-Phase 3: pooling (`Leased`) with host-integrated release-on-drain, only when a
-performance-critical use case exists — pools before profiling would violate
-"complexity only where paid for".
+Phase 1 — done: `cell.Ownership` marker wrappers. `Owned.take()` is
+consume-once (use-after-move throws); `Owned.freeze()` is the fan-out path.
+Phase 2 — done: the KSP contract processor scans parameter types (recursively
+through type arguments) for `Owned`/`Leased` and emits the exclusive bit into
+the generated `MethodDescriptor` — enforcement reads metadata, never
+reflection. Enforcement points, one funnel each:
+- **`FanOutlet.subscribe`** — where every attach path converges (handshake
+  installs, `Use.fixed` links, cross-host and bridge links): a second
+  subscriber on an exclusive contract fails; the handshake wrapper returns
+  `Rejected` rather than throwing (source-side, mirroring `Outlet`'s
+  cardinality style). "Rejectable everywhere" holds by construction.
+- **`Broadcast` proxy** — refuses `Owned`/`Leased` payloads when fanning to
+  more than one target.
+- **`BridgeEgressCell`** — `Leased` is refused at the machine boundary;
+  `Owned` crosses as move-by-serialize (the sender's wrapper is consumed as
+  the frame is encoded; `Owned`/`Frozen`/`Borrowed` are wire-registered
+  payloads). Boundary rules are send-time checks — the boundary is where the
+  knowledge lives.
+Phase 3 — pooling (`Leased`) with host-integrated release-on-drain stays
+unbuilt until a performance-critical use case exists — pools before profiling
+would violate "complexity only where paid for".

@@ -93,8 +93,9 @@ Rules (normative):
 *(G-12 phase 1: the handshake protocol of 10/13 is implemented —
 `linkTo(LinkFrom)` returns `LinkResult`, point-to-point ports reject at
 capacity instead of throwing, and per-port `onLink`/policies can reject.
-Ownership-based cardinality (`Owned`/`Leased`) still awaits the G-21
-markers.)*
+Ownership-based cardinality landed in M5.6: `FanOutlet` reads the generated
+exclusive bit and refuses a second subscriber on `Owned`/`Leased`-carrying
+contracts — rule 2 above is enforced, 20/23.)*
 
 ## Multiplexed ports and generic protocols
 
