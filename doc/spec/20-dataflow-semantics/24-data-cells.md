@@ -107,6 +107,35 @@ pressure (42).)*
   recompute over final writer state on every seed (the prototype invariant
   for the generative harness, 52).
 
+## Grouped aggregation (M11.3)
+
+`GroupByCell(keyFn, aggregator)` folds a tagged set stream into per-key
+aggregates on a `MapDelta<K, A>` outlet; `GroupByCell.global` is
+fold-to-scalar (one constant-key group). The normative rule of the family: an
+`Aggregator` is a **deterministic function of group membership** —
+`value(acc)` may depend only on which elements are live, never on
+insertion/retraction order. Arrival-order aggregates (first/last/scan) are
+excluded by this rule; it is what makes incremental-equals-batch testable and
+per-peer recompute converge.
+
+- Membership flips (not tag churn) drive `insert`/`retract`; a group's last
+  retraction removes the group (`MapDelta` removal — SQL group-death
+  semantics); emission is effective-only by value equality (21). All groups
+  touched by one input delta emit as one `MapDelta` under the input's wave
+  id (22), so a glitch-free wrap composes normally.
+- Aggregator classes: **self-inverting** (count, sumOf, avgOf — O(1)
+  accumulators, retraction is arithmetic; Long selectors — float sums are
+  order-sensitive) — non-invertible aggregates (min/max/top-k) follow in
+  M11.4 with support-multiset accumulators.
+- **Replication story: recompute, not gossip.** The output is single-writer
+  `MapDelta` (its documented contract, satisfied by construction), so
+  `GroupByCell` is not `Replicable` — and needn't be: aggregates are
+  deterministic functions of convergent membership, so each peer derives its
+  own from its replicated input and all converge at idle with zero
+  aggregate-level coordination. Gossipable aggregate outputs (per-source
+  keyed cumulative sums, `PnCounterDelta` generalized) stay deferred with
+  trigger: *first aggregate-only replica under input-size pressure*.
+
 ## Partitioned state
 
 ADR 1 §5: large keyed datasets shard by key for concurrency, locality, and
