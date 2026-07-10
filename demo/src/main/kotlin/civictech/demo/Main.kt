@@ -1,0 +1,274 @@
+package civictech.demo
+
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.Timestamp
+import civictech.cell.data.CounterDelta
+import civictech.cell.data.FilterCell
+import civictech.cell.data.CountCell
+import civictech.cell.data.Propagate
+import civictech.cell.data.SetCell
+import civictech.cell.data.SetDelta
+import civictech.cell.data.SetOps
+import civictech.cell.data.UnionSetCell
+import civictech.cell.graph.graph
+import civictech.cell.host.ManagedHost
+import civictech.cell.port.FanInlet
+import civictech.cell.port.Use
+import civictech.cell.port.registerPort
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.URLDecoder
+import java.util.*
+import java.util.concurrent.CopyOnWriteArrayList
+
+// ponytail: JDK httpserver + SSE pushing full state, replace with real
+// transport + incremental client when M5's wire layer lands
+
+/** Folds tagged set deltas into current membership (the demo-side tag fold). */
+private class Membership {
+    private val live = mutableMapOf<String, MutableSet<Timestamp>>()
+
+    fun apply(delta: SetDelta<String>) {
+        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
+        delta.dels.forEach { (e, tags) ->
+            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
+        }
+    }
+
+    fun current(): Set<String> = live.keys.toSet()
+}
+
+/** A hub cell: folds one derived stream and pushes app state to SSE clients. */
+private class SetHubCell(
+    private val onUpdate: (Set<String>) -> Unit,
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : Cell {
+    private val membership = Membership()
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
+
+    init {
+        inlet.serve(object : Propagate<SetDelta<String>> {
+            override fun propagate(value: SetDelta<String>) {
+                membership.apply(value)
+                onUpdate(membership.current())
+            }
+        })
+    }
+}
+
+private class CounterHubCell(
+    private val onUpdate: (Long) -> Unit,
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : Cell {
+    private var total = 0L
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<CounterDelta>>())
+
+    init {
+        inlet.serve(object : Propagate<CounterDelta> {
+            override fun propagate(value: CounterDelta) {
+                total += value.amount
+                onUpdate(total)
+            }
+        })
+    }
+}
+
+interface SetInletProxy {
+    val inlet: Use<SetOps<String>>
+}
+
+class DemoApp(port: Int = 8080) {
+    private val host = ManagedHost()
+    private val manage = host.managementInlet.call
+
+    private val state = Object()
+    private var items: Set<String> = emptySet()
+    private var votes: Set<String> = emptySet()
+    private var produce: Set<String> = emptySet()
+    private var voteCount: Long = 0
+    private val clients = CopyOnWriteArrayList<OutputStream>()
+
+    private val itemsUnion = UnionSetCell<String>()
+    private val votesUnion = UnionSetCell<String>()
+    private val writers = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
+
+    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
+
+    val boundPort: Int get() = server.address.port
+
+    init {
+        manage.spawn(itemsUnion)
+        manage.spawn(votesUnion)
+
+        // the derived views are DSL-built; hubs fold them into UI state
+        val refs = mutableMapOf<String, CellRef>()
+        graph(host.managementInlet) {
+            val produceCell = spawn("produce") { FilterCell<String> { s -> s.firstOrNull()?.lowercaseChar() in 'a'..'m' } }
+            val count = spawn("count") { CountCell<String>() }
+            refs["produce"] = produceCell.ref
+            refs["count"] = count.ref
+        }
+        manage.connect(itemsUnion.ref, "outlet", refs.getValue("produce"), "inlet")
+        manage.connect(votesUnion.ref, "outlet", refs.getValue("count"), "inlet")
+
+        val itemsHub = SetHubCell({ synchronized(state) { items = it }; broadcast() })
+        val votesHub = SetHubCell({ synchronized(state) { votes = it }; broadcast() })
+        val produceHub = SetHubCell({ synchronized(state) { produce = it }; broadcast() })
+        val countHub = CounterHubCell({ synchronized(state) { voteCount = it }; broadcast() })
+        listOf(itemsHub, votesHub, produceHub, countHub).forEach { manage.spawn(it) }
+        manage.connect(itemsUnion.ref, "outlet", itemsHub.ref, "inlet")
+        manage.connect(votesUnion.ref, "outlet", votesHub.ref, "inlet")
+        manage.connect(refs.getValue("produce"), "outlet", produceHub.ref, "inlet")
+        manage.connect(refs.getValue("count"), "outlet", countHub.ref, "inlet")
+
+        server.createContext("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }
+        server.createContext("/op") { exchange -> handleOp(exchange) }
+        server.createContext("/events") { exchange -> handleEvents(exchange) }
+        server.executor = null
+    }
+
+    /** Per-user writer cells, created on first op — every browser tab is a user. */
+    private fun writerFor(user: String): Pair<SetOps<String>, SetOps<String>> =
+        synchronized(writers) {
+            writers.getOrPut(user) {
+                val itemCell = SetCell<String>()
+                val voteCell = SetCell<String>()
+                manage.spawn(itemCell)
+                manage.spawn(voteCell)
+                manage.connect(itemCell.ref, "outlet", itemsUnion.ref, "inlet")
+                manage.connect(voteCell.ref, "outlet", votesUnion.ref, "inlet")
+                val itemApi = host.lookup<SetInletProxy>(itemCell.ref)!!.inlet.call
+                val voteApi = host.lookup<SetInletProxy>(voteCell.ref)!!.inlet.call
+                itemApi to voteApi
+            }
+        }
+
+    private fun handleOp(exchange: HttpExchange) {
+        val params = exchange.requestBody.readBytes().decodeToString()
+            .split("&").filter { it.contains("=") }
+            .associate {
+                val (k, v) = it.split("=", limit = 2)
+                k to URLDecoder.decode(v, Charsets.UTF_8)
+            }
+        val user = params["user"] ?: return exchange.respond(400, "missing user")
+        val item = params["item"]?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: return exchange.respond(400, "missing item")
+        val (itemOps, voteOps) = writerFor(user)
+        when (params["action"]) {
+            "add" -> itemOps.add(item)
+            "remove" -> itemOps.remove(item)
+            "vote" -> voteOps.add(item)
+            else -> return exchange.respond(400, "unknown action")
+        }
+        exchange.respond(200, "ok")
+    }
+
+    private fun handleEvents(exchange: HttpExchange) {
+        exchange.responseHeaders.add("Content-Type", "text/event-stream")
+        exchange.responseHeaders.add("Cache-Control", "no-cache")
+        exchange.sendResponseHeaders(200, 0)
+        val out = exchange.responseBody
+        clients += out
+        send(out, stateJson()) // a fresh tab catches up immediately
+    }
+
+    private fun broadcast() {
+        val json = stateJson()
+        clients.forEach { send(it, json) }
+    }
+
+    private fun send(out: OutputStream, json: String) {
+        try {
+            out.write("data: $json\n\n".toByteArray())
+            out.flush()
+        } catch (_: Exception) {
+            clients -= out
+        }
+    }
+
+    private fun stateJson(): String = synchronized(state) {
+        fun arr(values: Set<String>) =
+            values.sorted().joinToString(",", "[", "]") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
+        """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"voteCount":$voteCount}"""
+    }
+
+    private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
+        responseHeaders.add("Content-Type", contentType)
+        val bytes = body.toByteArray()
+        sendResponseHeaders(status, bytes.size.toLong())
+        responseBody.use { it.write(bytes) }
+    }
+
+    fun start(): DemoApp = apply { server.start() }
+
+    fun stop() = server.stop(0)
+}
+
+fun main(args: Array<String>) {
+    val port = args.firstOrNull()?.toIntOrNull() ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+    val app = DemoApp(port).start()
+    println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
+}
+
+private val PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>computenet — shared shopping list</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; } h2 { font-size: 1rem; color: #555; }
+  li { margin: .2rem 0; } button { margin-left: .5rem; }
+  .voted { color: #b50; font-weight: bold; }
+  #user { color: #888; font-size: .8rem; }
+</style>
+</head>
+<body>
+<h1>Shared shopping list <span id="user"></span></h1>
+<form id="addForm"><input id="item" placeholder="new item" autofocus><button>Add</button></form>
+<h2>Items (<span id="voteCount">0</span> voted)</h2>
+<ul id="items"></ul>
+<h2>A–M aisle (filtered view)</h2>
+<ul id="produce"></ul>
+<script>
+const user = sessionStorage.userId ??= Math.random().toString(36).slice(2, 8);
+document.getElementById('user').textContent = 'you are ' + user;
+const op = (action, item) => fetch('/op', { method: 'POST',
+  headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+  body: new URLSearchParams({ user, action, item }) });
+document.getElementById('addForm').onsubmit = e => {
+  e.preventDefault();
+  const input = document.getElementById('item');
+  if (input.value.trim()) op('add', input.value.trim());
+  input.value = '';
+};
+new EventSource('/events').onmessage = e => {
+  const s = JSON.parse(e.data);
+  document.getElementById('voteCount').textContent = s.voteCount;
+  const render = (id, items, actions) => {
+    const ul = document.getElementById(id); ul.innerHTML = '';
+    for (const item of items) {
+      const li = document.createElement('li');
+      li.textContent = item;
+      if (s.votes.includes(item)) { li.classList.add('voted'); li.textContent += ' ★'; }
+      if (actions) {
+        for (const [label, action] of [['vote','vote'],['remove','remove']]) {
+          const b = document.createElement('button');
+          b.textContent = label; b.onclick = () => op(action, item);
+          li.appendChild(b);
+        }
+      }
+      ul.appendChild(li);
+    }
+  };
+  render('items', s.items, true);
+  render('produce', s.produce, false);
+};
+</script>
+</body>
+</html>
+"""
