@@ -1,6 +1,6 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Partial (invariants-as-cells + kotest adapter built; generative harness pending; live/shadow machinery unbuilt)
+> **Status**: Partial (invariants-as-cells + kotest adapter + generative graph harness built; live/shadow machinery unbuilt)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
 > **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); seeded harness = `cell.host.SimulationController`
 
@@ -32,7 +32,16 @@ thin kotest adapter (`checkInvariants(controller, invariants) { ... }`, test
 sources — kernel main carries no test dependencies) runs the block, drives
 the simulation to idle, and fails with the violation payloads. Cell errors
 feed the same machinery: an `ErrorReporting` cell's `errorOutlet` (31) links
-straight into an invariant cell. The generative graph harness remains (M4.6).
+straight into an invariant cell.
+
+*(Generative graph harness, M4.6 — G-31 complete)*: seeded random pipelines
+from the data-cell vocabulary are emitted as `GraphSpec`s (51) — built on one
+view host, replayed verbatim onto another — and driven with random op
+scripts, a mid-stream late joiner, and a mid-stream host migration. The
+standard suite asserted on every generated graph: cross-view convergence,
+incremental == batch recompute, late joiner == early joiner, a non-negative
+count `InvariantCell`, and zero dead letters; a control run proves
+arrival-order application would be caught (`GenerativeGraphTest`, 100 seeds).
 The single-threaded-simulation property of the kernel (P1)
 makes generative graph testing deterministic and cheap — this is a payoff of
 keeping concurrency out of the kernel. The deterministic harness exists:

@@ -68,7 +68,7 @@
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
 | G-30 | No graph DSL / declarative construction | **Resolved (M4.5)**: `cell.graph` builder lowering to `spawn`/`connect` management invocations; records a serializable `GraphSpec` (graphs-as-data) that replays onto any host — serialization round-trip verified | 50/51 |
-| G-31 | No invariant machinery | **Partial (M4.4)**: `InvariantCell` (fold + check, violations outlet; attaching = linking) + `checkInvariants` kotest adapter on the deterministic `SimulationController`; the generative graph harness remains (M4.6) | 50/52 |
+| G-31 | No invariant machinery | **Resolved (M4.4 + M4.6)**: `InvariantCell` (fold + check, violations outlet; attaching = linking) + `checkInvariants` kotest adapter + generative graph harness (seeded random `GraphSpec` pipelines with late-join/migration events, invariant suite, order-bias control) on the deterministic `SimulationController` | 50/52 |
 | G-32 | No shadow mode (side-effect suppression) | Effect classification (with G-11) + NoOp-served sinks | 50/52 |
 | G-33 | No state migration across incarnations | `exportState/importState` in the swap drain window | 50/53 |
 | G-1 | Legacy packages coexist with germ (two kernels in-tree) | **Done (M3.1)**: the `:legacy` module is deleted. The kernel is `civictech.cell` | 00/03, 30/32 |
