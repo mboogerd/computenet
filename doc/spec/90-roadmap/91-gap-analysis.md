@@ -20,7 +20,7 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-8 | `CellRef` = bare UUID: no logical-vs-incarnation identity | `CellRef(logicalId, incarnation)`; links bind to logicalId | 10/11 |
+| G-8 | `CellRef` = bare UUID: no logical-vs-incarnation identity | **Resolved (M7.1)**: `CellRef(id, incarnation)`; wire VERSION 2; logicalId-binding realized per use-case (gossip mesh M7.3, promotion swap M9) | 10/11 |
 | G-9 | No organelle port hiding/exposure | `exposes` declaration; host resolves only exposed ports externally | 10/11 |
 | G-10 | Membranes have no code form | Realize as: handshake hooks → port policies → membrane object (cross-port rules) | 10/11 |
 | G-11 | No data-path vs management contract distinction | Marker/lint via KSP; push-only enforced on data path; also drives shadow-mode effects (G-32). **M5.1 partial**: `@Contract(management)` marks every port contract, flag rides the descriptor; push-only lint open | 10/12 |
@@ -60,7 +60,7 @@
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
 | G-15 | No wire layer (format, transport, addressing) | **Resolved (M5)**: method-id tables + `ContractRegistry` (M5.1); `WireFrame` envelope — kotlinx JSON, ids-only, version byte (M5.2); loopback bridge cells + generative harness across two registries (M5.3); `Location = Local\|Remote` with announcements as ordinary wire traffic (M5.4); WebSocket transport in `:wire` (M5.5); exit: `DistributedCollaborativeAppTest` 100 seeds + two-OS-process demo (M5.7). Remaining interim: JDK dynamic proxies in-process (C-5), no reconnect beyond park, no security (43) | 40/41 |
-| G-7 | Replication undesigned | Replicas = same logicalId on many hosts + delta gossip over ordinary links | 40/42 |
+| G-7 | Replication undesigned | **Resolved for the set family (M7)**: symmetric gossip-mesh linker (`Replication`) over announcements; tombstoned OR-set + `deltaInlet` (echoes terminate on effective-only); anti-entropy = park/replay + idempotent catch-up. 3-peer 100-seed exit + divergence control. Counters/keyed structures + leader-follower remain | 40/42 |
 | G-29 | No threat model / identity | Identity-bearing LinkRequest from the start; full model trails policy substrate | 40/43 |
 
 ## Gaps — process (50)

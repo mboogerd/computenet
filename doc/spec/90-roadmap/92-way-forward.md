@@ -186,7 +186,7 @@ holds waves under WAIT and completes degraded waves under DEGRADE — each
 with a control run (stride ∞ starves; WAIT-under-drop stalls) proving the
 harness detects the failure it guards against.*
 
-## Milestone 7 — Replication (interest-driven, convergent)
+## Milestone 7 — Replication (interest-driven, convergent) ✅ DONE
 
 *Goal: spec 42 real for the mergeable class — same logical cell live on
 several hosts, converging by delta gossip over ordinary links.*
@@ -210,12 +210,19 @@ several hosts, converging by delta gossip over ordinary links.*
    deferred until there's memory pressure to justify it.
 6. M7.6 — exit test.
 
-*Exit criterion: a three-registry replicated shopping-list session (the M4/M5
-app's set+counter core) where each peer works against its local replica,
-partitions heal by catch-up, and all replicas converge under 100 seeds with
-zero cross-replica coordination beyond delta links — control run proving the
-harness detects divergence (e.g. untagged merge). MapCell/ListCell keep their
-documented single-writer limits.*
+All six landed. Notes: replicas are distinct incarnations of one logical id
+(no location sets needed — one location per full ref); SetCell became a full
+OR-set (tombstones) because multi-path gossip demands them; counters stay
+derived-per-peer (delta addition is not idempotent — G-Counter deferred with
+trigger: the first app needing replicated counter *state*).
+
+*Exit criterion — met (`ReplicatedSessionTest`): a three-registry replicated
+set session where each peer works against its local replica, a mid-run
+partition isolates one peer, the heal converges by park/replay + idempotent
+catch-up, and all replicas converge under 100 seeds with zero cross-replica
+coordination beyond delta links — control run (no heal) proving the harness
+detects divergence. MapCell/ListCell keep their documented single-writer
+limits.*
 
 ## Milestone 8 — Trust boundaries (hierarchy + identity)
 

@@ -47,11 +47,13 @@ for that identity. This is what makes hot upgrades and evolutionary deployment
 (50/53) coherent: the implementation behind a ref may be replaced while links
 and invariants persist.
 
-⚠ GAP (G-8): `CellRef` is currently a bare UUID with no notion of version,
-lineage, or contract hash. For evolution (multiple coexisting implementations
-of one logical cell) the ref model needs: logical identity ≠ implementation
-identity. *Proposal*: `CellRef(logicalId, incarnation)` with links bound to
-`logicalId`, so re-incarnation preserves topology.
+*(G-8 resolved, M7.1)*: `CellRef(id, incarnation)` — `id` is the logical
+identity, `incarnation` distinguishes live instances of it: replicas (42, one
+incarnation each) and candidate versions (53). Incarnations are minted
+collision-free without coordination (random; caller-chosen in deterministic
+tests). Links and registries address full refs; "links bound to logicalId"
+as an automatic indirection is realized per use-case (replication links the
+mesh explicitly, M7.3; promotion re-links in the swap window, M9).
 
 ## Mutability classes
 

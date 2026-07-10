@@ -1,8 +1,13 @@
 # 42 — Interest-Driven Replication
 
-> **Status**: Exploratory (vision fixed; mechanism undesigned)
+> **Status**: Implemented for the mergeable set family (M7); leader/follower and keyed structures open
 > **Sources**: ADR 0 (§5, §6), ADR 1 (§11, §12), ADR — Cellular Software Development Process (runtime characteristics)
-> **Implementation**: none
+> **Implementation**: `cell.replication.Replication` (symmetric gossip-mesh
+> linker over registry announcements), `SetCell.deltaInlet` + tombstoned
+> OR-set state, `LocationRegistry.onPublish`/`replicasOf`, multi-peer
+> `Peering` with `Loopback.partition()/heal()`. Verified:
+> `ReplicationTest`, `ReplicatedSessionTest` (3 peers, 100 seeds,
+> partition+heal, divergence control)
 
 ## Principles (fixed)
 
@@ -34,18 +39,31 @@ Replicating a cell = running an instance of the same **logical cell**
    (34) justifies it; interest decay ⇒ replica suspension (33) ⇒ eventual
    eviction.
 
-## Open design (⚠ GAP G-7)
+## Design as implemented (G-7 resolved for the set family, M7)
 
-- Replica discovery & membership (who else replicates this logicalId?) —
-  likely the same location registry as 33/41, extended from "one location"
-  to "location set".
-- Upstream responsibility: the formal meaning of "volunteering partial
-  responsibility" — candidate: subscribing peers accept links for a share of
-  upstream partitions (24) proportional to interest.
-- Causal tagging prerequisites: replica convergence needs delta tags (G-23)
-  — OR-set-style ids or wave-context (22) reused as causal metadata.
-- Anti-entropy for partition/offline recovery (snapshot + delta replay — the
-  same catch-up protocol as 21's late-join).
+- **Replica discovery & membership**: each replica is a full `CellRef`
+  (same logical id, distinct incarnation) published like any cell;
+  `LocationRegistry.replicasOf(logicalId)` + the `onPublish` hook are the
+  membership view. No location sets: one location per full ref.
+- **Gossip wiring**: every peer runs the same local rule — link each local
+  replica's delta outlet to every discovered replica's `deltaInlet`
+  (`cell.replication.Replication`) — a full mesh emerges symmetrically with
+  no coordinator. Echoes terminate because a replica re-emits only *new* tag
+  information (effective-only, 21); this is why only idempotent-mergeable
+  cells replicate — counters would double-count echoes (a per-source
+  G-Counter is the upgrade path).
+- **Tombstones**: multi-path delivery means a removed tag can arrive late by
+  another route; `SetCell` therefore keeps del-tags (full OR-set). Tag sets
+  grow monotonically; compaction is future work alongside durability (G-25).
+- **Anti-entropy**: partition ⇒ Remote locations drop ⇒ gossip parks
+  (spec 33); heal ⇒ re-announce ⇒ parked replay + idempotent catch-up.
+  Verified, not rebuilt — the late-join path (21) doubles as recovery.
+
+Still open: upstream responsibility (subscribing peers accepting shares of
+upstream partitions, with 24's partitioned cells); interest-driven replica
+*placement* (34's economic layer); replica eviction (suspension via
+attention works today, M7.5; eviction stays manual until memory pressure
+justifies a policy); leader/follower for single-writer cells.
 
 ## Constraint on everything else
 
