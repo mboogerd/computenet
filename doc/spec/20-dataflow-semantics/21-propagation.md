@@ -36,6 +36,15 @@ Normative requirements on a delta type:
    emits only when membership actually flips; empty deltas are not emitted).
 3. If the cell accepts concurrent producers, deltas (or the cell's state) must
    declare merge semantics (20/24).
+4. **Tag hygiene** (M11.2): an emitter of tagged deltas never re-emits a tag
+   it previously deleted — that is what keeps a stream safe for
+   tombstone-folding consumers (24). Operators may pass input tags through
+   only if every membership flip-ON rides a fresh input add-tag on the
+   flipping element (filter, map/flatMap, union, intersect). Non-monotone
+   operators (difference, semijoin/antijoin — re-entry rides the *other*
+   side's removal) must mint fresh cell-owned output tags per entry and
+   delete exactly what they minted (`MintedTags`, replay-stable derived
+   source per the SetCell M10.1 pattern).
 
 ## Pull
 

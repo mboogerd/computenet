@@ -84,6 +84,16 @@ pressure (42).)*
     churn that doesn't flip membership.
   - `JoinCell` — incremental keyed inner join over two map streams; inherits
     `MapDelta`'s arrival-order convergence limit.
+  - `SemiJoinCell` / `differenceSet` (M11.2) — keyed semijoin (`A ⋉ B`) and
+    antijoin (`A ▷ B`, `negated`); difference (`A ⊖ B`, SQL EXCEPT DISTINCT)
+    is the antijoin on identity keys. Non-monotone: re-entry rides the other
+    side's removal, so output tags are **minted per entry** (`MintedTags`,
+    tag hygiene, 21) — never borrowed from inputs (control test: input-tag
+    reuse leaves re-entries dead under tombstone folding). Output membership
+    at idle is a deterministic function of the converged add-wins input
+    memberships; duplicates converge on membership, not tags; not
+    glitch-free (22's wrapper is the remedy). Set semantics only — bag
+    semantics (EXCEPT ALL) would need a weighted family (see below).
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
     tagged set stream, input tags passing through. Sound because tag algebra
     is per-(element, tag): colliding outputs **union** their preimages' tag
