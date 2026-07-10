@@ -59,8 +59,11 @@ now return `Rejected` instead of throwing. `ManagedHost.connect` routes
 through the handshake and surfaces the `LinkResult` to the caller.
 Cross-host caveat: a proxy-initiated `linkTo` returns `LinkResult.Deferred` —
 the authoritative handshake runs on the target's host, and a rejection there
-is emitted to that host's `deadLetterOutlet`; a synchronous reply channel
-needs the wire layer (M5). Delegation chains (`inlet.linkTo(use)`,
+is emitted to that host's `deadLetterOutlet`. (M5.4 decision: this contract
+holds across the wire too — a synchronous reply channel was deliberately not
+built; cross-peer linking uses registry proxies + `Use.fixed`, and remote
+`linkFrom` arguments are live objects that cannot cross the wire anyway.
+Revisit only when a real topology needs it.) Delegation chains (`inlet.linkTo(use)`,
 serve/delegate) remain plain mechanism — they are intra-cell composition, not
 topology links. Ownership enforcement in `onLink` (G-21) waits for ownership
 markers (M5).)*

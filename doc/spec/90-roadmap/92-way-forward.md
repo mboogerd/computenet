@@ -104,9 +104,13 @@ wire-frame version byte; demo splits as symmetric peers):
    SimulationController hosts; generative harness with a bridge at a random
    cut, 100 seeds + drop/corrupt control runs (the wire's P1 proof:
    `BridgedGraphTest`)~~ — done.
-4. M5.4 — remote addressing: `LocationRegistry` resolves Local|Remote;
-   announcement frames; cross-registry `connect`/`lookup` complete
-   `LinkResult.Deferred` with timeouts.
+4. ~~M5.4 — remote addressing: `LocationRegistry` resolves Local|Remote;
+   announcements as ordinary wire invocations (`Peering`/`RegistryMirrorCell`);
+   `lookup` returns remote-backed proxies~~ — done. Cross-registry `connect`
+   request/response frames deliberately skipped: the registry-proxy +
+   `Use.fixed` linking pattern covers the exit app; `LinkResult.Deferred`
+   keeps its existing contract (handshake runs on the target host, rejections
+   dead-letter there). Revisit only if M5.7 proves it necessary.
 5. M5.5 — WebSocket transport driver in `:wire` (org.java-websocket server);
    disconnect ⇒ unpublish ⇒ park.
 6. M5.6 — ownership enforcement at link time (G-21 phases 1+2) — `Owned`

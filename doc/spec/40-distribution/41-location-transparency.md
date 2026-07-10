@@ -52,6 +52,17 @@ direct call → queue hop → serialized send.
 3. **Addressing**: `CellRef`/`PortRef` extend to include a resolvable host
    location; the **location registry** is shared with mobility re-resolution
    (33) — one mechanism: "where does this ref live *now*?".
+   *(M5.4: done, with a design refinement — refs themselves stay bare
+   (G-8 deferred); resolvability lives entirely in the registry:
+   `Location = Local(host) | Remote(sink)`. Remote locations are learned via
+   `RegistryAnnounce` invocations on a peer's `RegistryMirrorCell` — ordinary
+   wire traffic over the same bridge as data (`cell.wire.Peering`). Senders
+   are placement-blind: registry proxies reach either side, park while
+   unlocated or mid-move, replay in order (`RemoteAddressingTest`, 50-seed
+   ordering under mid-stream migration). `host.lookup` returns remote-backed
+   proxies for `Remote` refs; local refs on other hosts remain that host's
+   business. Remote publishes never re-announce, so mirrored registries
+   cannot loop.)*
 4. **Transport**: a network bridge is a pair of boundary cells (egress
    serializer → wire → ingress deserializer) — ordinary cells + links, so
    policies/membranes apply to network crossings with no special casing

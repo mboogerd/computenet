@@ -198,7 +198,14 @@ open class ManagedHost(
      * Returns a managed reference to the API of a hosted cell.
      */
     fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T? {
-        if (!cells.containsKey(ref)) return null
+        if (!cells.containsKey(ref)) {
+            // remote-backed proxy when the ref lives across the wire (M5.4, spec 41):
+            // sends route through the bridge, parking/replaying like any registry send.
+            // Local refs on *other* hosts still answer null — that host's lookup owns them.
+            @Suppress("UNCHECKED_CAST")
+            return registry?.takeIf { it.location(ref) is LocationRegistry.Remote }
+                ?.let { HostedCellProxy.create(ref, it, clazz) } as T?
+        }
         @Suppress("UNCHECKED_CAST")
         // with a registry the proxy re-resolves, surviving relocation (spec 33)
         return (registry?.let { HostedCellProxy.create(ref, it, clazz) }

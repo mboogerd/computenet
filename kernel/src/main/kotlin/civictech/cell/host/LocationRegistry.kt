@@ -2,56 +2,81 @@ package civictech.cell.host
 
 import civictech.cell.CellRef
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.InvocationSink
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Which host currently serves a [CellRef] (spec 33/41, G-5). The fast path is
- * spec 33's contract — one volatile map read + enqueue. On closure or absence
- * the invocation **parks** in per-ref order (the Buffering pattern at location
- * granularity; the wave context rides each invocation, G-4) and replays into
- * the next [publish]ed host before the fast path becomes visible again.
+ * Where a [CellRef] currently lives (spec 33/41, G-5, G-15). The fast path is
+ * spec 33's contract — one volatile map read + enqueue (local) or one frame
+ * encode (remote). On closure or absence the invocation **parks** in per-ref
+ * order (the Buffering pattern at location granularity; the wave context
+ * rides each invocation, G-4) and replays into the next [publish]ed location
+ * before the fast path becomes visible again.
  *
- * In-process only until the wire layer (G-15, M5); the interface is the seam
- * remote addressing will fill.
+ * M5.4: a location is [Local] (a host on this registry) or [Remote] (an
+ * `InvocationSink` — in practice a bridge egress, spec 41). Remote locations
+ * are learned via peer announcements (`cell.wire.Peering`); senders never
+ * know which side of the wire a ref lives on.
  */
 class LocationRegistry {
 
-    private val locations = ConcurrentHashMap<CellRef, ManagedHost>()
+    sealed interface Location
+    data class Local(val host: ManagedHost) : Location
+    data class Remote(val sink: InvocationSink) : Location
+
+    private val locations = ConcurrentHashMap<CellRef, Location>()
     private val parked = ConcurrentHashMap<CellRef, MutableList<HostedPortInvocation>>()
 
-    /** The host currently serving [ref], if any. */
-    fun locate(ref: CellRef): ManagedHost? = locations[ref]
+    /**
+     * Fires after a *local* publish — the announcement seam (M5.4). Remote
+     * publishes never re-announce, so mirrored registries cannot loop.
+     */
+    @Volatile
+    var onLocalPublish: (CellRef) -> Unit = {}
+
+    /** The host currently serving [ref] on this registry, if local. */
+    fun locate(ref: CellRef): ManagedHost? = (locations[ref] as? Local)?.host
+
+    fun location(ref: CellRef): Location? = locations[ref]
+
+    /** Refs currently published as [Local] — the initial-sync set for a new peer. */
+    fun localRefs(): Set<CellRef> =
+        locations.entries.filter { it.value is Local }.mapTo(mutableSetOf()) { it.key }
 
     /** Parked invocations awaiting a [publish] for [ref] (test/introspection surface). */
     fun parkedFor(ref: CellRef): List<HostedPortInvocation> =
         parked[ref]?.let { synchronized(it) { it.toList() } } ?: emptyList()
 
     /**
-     * Optimistic send with lazy re-resolution: enqueue on the located host;
-     * on closed intake or no location, park in order. Never blocks the sender,
-     * never drops (O(rare-event) cost lands here, not on the fast path).
+     * Optimistic send with lazy re-resolution: enqueue on the located host or
+     * hand to the remote sink; on closed intake or no location, park in order.
+     * Never blocks the sender, never drops (O(rare-event) cost lands here,
+     * not on the fast path).
      */
     fun deliver(invocation: HostedPortInvocation) {
-        locations[invocation.cellRef]?.let { host ->
-            try {
-                host.enqueueHostedInvocation(invocation)
-                return
-            } catch (_: IntakeClosedException) {
-                // fall through to park
-            }
-        }
+        if (send(locations[invocation.cellRef], invocation)) return
         val queue = parked.computeIfAbsent(invocation.cellRef) { mutableListOf() }
         synchronized(queue) {
             // re-check under the per-ref lock so a concurrent publish can't strand this invocation
-            locations[invocation.cellRef]?.let { host ->
-                try {
-                    host.enqueueHostedInvocation(invocation)
-                    return
-                } catch (_: IntakeClosedException) {
-                }
-            }
+            if (send(locations[invocation.cellRef], invocation)) return
             queue.add(invocation)
         }
+    }
+
+    private fun send(location: Location?, invocation: HostedPortInvocation): Boolean = when (location) {
+        is Local -> try {
+            location.host.enqueueHostedInvocation(invocation)
+            true
+        } catch (_: IntakeClosedException) {
+            false
+        }
+
+        is Remote -> {
+            location.sink.deliver(invocation)
+            true
+        }
+
+        null -> false
     }
 
     /**
@@ -60,11 +85,21 @@ class LocationRegistry {
      * accepted-then-parked-then-new total order per link (spec 33).
      */
     fun publish(ref: CellRef, host: ManagedHost) {
+        install(ref, Local(host))
+        onLocalPublish(ref)
+    }
+
+    /** Make [ref] remote, reachable through [sink] (a bridge egress, spec 41). */
+    fun publish(ref: CellRef, sink: InvocationSink) {
+        install(ref, Remote(sink))
+    }
+
+    private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { mutableListOf() }
         synchronized(queue) {
-            queue.forEach(host::enqueueHostedInvocation)
+            queue.forEach { check(send(location, it)) { "replay into fresh location failed for $ref" } }
             queue.clear()
-            locations[ref] = host
+            locations[ref] = location
         }
     }
 

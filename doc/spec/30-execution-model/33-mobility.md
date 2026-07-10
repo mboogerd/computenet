@@ -121,7 +121,9 @@ re-resolution) demonstrably loses messages, proving the harness detects loss.
    — done (M3.2).
 2. ~~Re-resolution via a **location registry**~~ — done (M3.2,
    `cell.host.LocationRegistry`; `cell.Handle`, the pre-invocation-model
-   attempt, is deleted). Remote addressing still unifies here in M5 (40/41).
+   attempt, is deleted). ~~Remote addressing unified here~~ — done (M5.4):
+   one mechanism, `Location = Local(host) | Remote(bridge sink)`; park/replay
+   applies identically to closure, migration, and the wire.
 3. ~~`onDeactivate` + state capture~~ — done (M3.3, `cell.Stateful`; ties to
    24 durability snapshots).
 4. ~~Host suspend/resume/migrate operations on `HostManagementApi`~~ — done
