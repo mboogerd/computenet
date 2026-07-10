@@ -12,6 +12,8 @@
 - **Migration**: moving cells to another host: suspend → move → resume
   elsewhere. In kernel terms both are **link manipulation** (P1):
   suspension = unlink/buffer at all ports; migration = unlink, move, relink.
+  Attention-driven suspension additionally treats the **glitch-free region**
+  as its atomic unit, with a per-cell non-suspendable veto (34 decision 3).
 
 ## The core decision: the host is the unit of mobility
 

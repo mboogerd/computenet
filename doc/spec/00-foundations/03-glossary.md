@@ -54,6 +54,8 @@ configuration of the one `ManagedHost` class (30/31, C-2/G-2 resolved).
 | **Glitch-free frontier** | The nearest upstream set of glitch-free cells at which dependency tracking may stop. | 20/22 |
 | **Ownership contract** | Payload sharing semantics: `Borrowed`, `Owned`, `Leased`, `Frozen`. | 20/23 |
 | **Suspension** | Isolating a cell/host from the graph by unlinking (buffering at the boundary). | 30/33 |
+| **Suspension region** | The atomic unit of attention-driven suspension: a glitch-free join plus its local transitive upstream contributors, bounded by further glitch-free cells. Parks together or not at all. | 30/34 |
+| **Non-suspendable** | Per-cell marker vetoing attention suspension; the veto is contagious to the cell's whole suspension region. | 30/34 |
 | **Migration** | Unlink → move → relink of a host's cells to another host. | 30/33 |
 | **Attention / Interest** | A subscription-derived signal that drives scheduling and replication. | 30/34, 40/42 |
 | **Policy** | A constraint governing port use or linking (authz, rate, schema, quota). | 10/13, 40/43 |

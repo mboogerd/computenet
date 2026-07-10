@@ -25,6 +25,13 @@ sealed interface SuspensionNotice {
 }
 
 /**
+ * Marker (spec 34 decision 3, session delta 3): a cell that must never be
+ * attention-parked. Membership is contagious — one non-suspendable member
+ * vetoes suspension for its whole glitch-free region.
+ */
+interface NonSuspendable
+
+/**
  * Quantized attention (spec 34 decision 1). Ordinal order is scheduling
  * order: NONE < LOW < NORMAL < HIGH. [level] is the representative value a
  * cell re-emits upstream, so damping composes across hops.

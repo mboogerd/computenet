@@ -18,7 +18,9 @@ import java.io.ObjectOutputStream
 import java.io.Serializable
 import civictech.cell.attention.AttentionBand
 import civictech.cell.attention.AttentionSupport
+import civictech.cell.attention.NonSuspendable
 import civictech.cell.attention.SuspensionNotice
+import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
@@ -219,7 +221,7 @@ open class ManagedHost(
      * window parks instead of running (park, never drop).
      */
     private suspend fun dispatchOne() {
-        var toPark: CellRef? = null
+        var toPark: Set<CellRef>? = null
         val next: HostedPortInvocation? = synchronized(dataLock) {
             if (dataQueues.isEmpty()) return
             dispatchStep++
@@ -239,20 +241,93 @@ open class ManagedHost(
             }
             val pick = pickFrom.minByOrNull { dataQueues.getValue(it).first().first }!!
             val suspendAfter = attention?.suspendAfter
-            if (suspendAfter != null && bands.getValue(pick) == AttentionBand.NONE &&
+            val region = if (suspendAfter != null && bands.getValue(pick) == AttentionBand.NONE &&
                 dispatchStep - (lastAttended[pick] ?: 0L) > suspendAfter
-            ) {
-                toPark = pick
+            ) suspensionRegionOf(pick) else null
+            if (region != null) {
+                toPark = region
                 null
             } else {
+                // runnable — or its region vetoed suspension (spec 34 decision 3):
+                // a vetoed cell keeps running, it does not strand its queue
                 val queue = dataQueues.getValue(pick)
                 val head = queue.removeFirst().second
                 if (queue.isEmpty()) dataQueues.remove(pick)
                 head
             }
         }
-        toPark?.let { parkForAttention(it) }
+        toPark?.forEach { parkForAttention(it) }
         next?.let { deliver(it) }
+    }
+
+    /**
+     * Session delta 3 (spec 34 decision 3): the unit of attention suspension
+     * is the **glitch-free region** — the local downstream `GlitchFreeCell`
+     * join(s) plus their transitive local upstream contributors, bounded by
+     * further glitch-free cells (the frontier, spec 22). Parking one diamond
+     * branch would stall waves at the join; parking the whole region cannot.
+     * Returns null (veto) if any member is [NonSuspendable] or still attended.
+     * A cell with no local downstream join is its own region (per-cell parking,
+     * as before). Cross-host region members are invisible here by design —
+     * remote branches remain the WAIT/DEGRADE fallback's job (GlitchFreeCell).
+     */
+    private fun suspensionRegionOf(cellRef: CellRef): Set<CellRef>? {
+        val joins = mutableSetOf<CellRef>()
+        bfs(cellRef, downstream = true) { ref, cell ->
+            if (cell is GlitchFreeCell<*>) {
+                joins += ref
+                false // the join bounds the walk; regions don't chain through it
+            } else true
+        }
+        if (joins.isEmpty()) return setOf(cellRef)
+        val region = mutableSetOf<CellRef>()
+        joins.forEach { join ->
+            region += join
+            bfs(join, downstream = false) { ref, cell ->
+                if (cell is GlitchFreeCell<*>) false // another region's join: frontier
+                else {
+                    region += ref
+                    true
+                }
+            }
+        }
+        val vetoed = region.any { ref ->
+            val cell = cells[ref] ?: return@any false
+            cell is NonSuspendable || AttentionSupport.of(cell).band > AttentionBand.NONE
+        }
+        return if (vetoed) null else region
+    }
+
+    /**
+     * Local link-graph walk from [start] (exclusive). [visit] returns whether
+     * to walk past the visited cell; only cells on this host are reachable.
+     * Neighbors resolve by link **port object identity** (the same rule
+     * AttentionSupport uses) — PortRefs don't reliably carry their cell.
+     */
+    private fun bfs(start: CellRef, downstream: Boolean, visit: (CellRef, Cell) -> Boolean) {
+        val portOwner = HashMap<Port, CellRef>()
+        cells.forEach { (ref, cell) ->
+            val ports = PortRegistry.of(cell)
+            ports.names().forEach { name -> ports[name]?.let { portOwner[it] = ref } }
+        }
+        val seen = mutableSetOf(start)
+        val frontier = ArrayDeque(listOf(start))
+        while (frontier.isNotEmpty()) {
+            val current = cells[frontier.removeFirst()] ?: continue
+            val ports = PortRegistry.of(current)
+            ports.names().forEach { name ->
+                val port = ports[name] as? Linked ?: return@forEach
+                port.linking.links.forEach { link ->
+                    val outbound = link.fromPort === port
+                    if (outbound != downstream) return@forEach
+                    val neighborPort = (if (outbound) link.toPort else link.fromPort) ?: return@forEach
+                    val neighbor = portOwner[neighborPort] // absent: remote — fallback territory
+                        ?.takeIf { it != current.ref && seen.add(it) } ?: return@forEach
+                    val cell = cells[neighbor] ?: return@forEach
+                    if (visit(neighbor, cell)) frontier.addLast(neighbor)
+                }
+            }
+        }
     }
 
     private fun parkForAttention(cellRef: CellRef) {

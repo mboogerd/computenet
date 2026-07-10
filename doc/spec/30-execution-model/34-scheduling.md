@@ -85,17 +85,30 @@ Minimal attention model compatible with the above:
      task (by sequence number). `stride` is host policy (default 16;
      `∞` disables). This bounds starvation at `stride × task-time` without
      timers or randomness.
-3. **Glitch-freedom × suspension: correctness by default (WAIT), degradation
-   opt-in.** Because suspension parks rather than drops, a glitch-free join
-   above a suspended branch simply sees an incomplete wave and holds the
-   group — correct, latency-unbounded. That is the default (**WAIT**). A
-   glitch-free cell MAY opt into **DEGRADE**: hosts publish
-   suspended/resumed notices for cells they park, the notice travels
-   *downstream* (with data, against attention), and a degrading join removes
-   the suspended link from its wave frontier — reusing the frontier-shrink
-   semantics unlink already has (22) — and restores it on resume, treating
-   post-resume replayed waves as late-join catch-up (21). No new kernel
-   mechanism: a notice is an ordinary generic-protocol message.
+3. **Glitch-freedom × suspension: the region is the unit; WAIT/DEGRADE is
+   the cross-host fallback.** The **suspension region** — a glitch-free join
+   plus its transitive upstream contributors, bounded by further glitch-free
+   cells (the frontier, 22) — suspends **atomically**: a host parking a
+   starved cell first resolves the cell's local region, and either the whole
+   region parks together (a partial-diamond stall cannot exist by
+   construction) or nothing parks. Any member that is still attended, or is
+   marked **non-suspendable** (`NonSuspendable` — the veto is contagious to
+   the whole region), vetoes suspension and the region keeps running. Region
+   *resume* is emergent, not orchestrated: renewed interest at any member
+   propagates upstream over the attention protocol and every member's own
+   band listener unparks it. Region resolution is local to the host —
+   **cross-host branches fall back to WAIT/DEGRADE**: because suspension
+   parks rather than drops, a glitch-free join above a remotely suspended
+   branch sees an incomplete wave and holds the group — correct,
+   latency-unbounded (**WAIT**, the default). A glitch-free cell MAY opt
+   into **DEGRADE**: hosts publish suspended/resumed notices for cells they
+   park, the notice travels *downstream* (with data, against attention), and
+   a degrading join removes the suspended link from its wave frontier —
+   reusing the frontier-shrink semantics unlink already has (22) — and
+   restores it on resume, treating post-resume replayed waves as late-join
+   catch-up (21). No new kernel mechanism: regions are a link-graph walk,
+   the veto is a marker interface, and a notice is an ordinary
+   generic-protocol message.
 4. **Economic layer** (peers advertising willingness to compute for others'
    interest) — still deferred to 40/42; the band protocol above is
    forward-compatible (levels are floats, bands are a local mapping).
