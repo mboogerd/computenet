@@ -62,9 +62,8 @@ configuration of the one `ManagedHost` class (30/31, C-2/G-2 resolved).
 - New packages use `cell`, `port`, `link`, `host`, `proxy`, `data` — not
   `computelet`, not `task`. The incubation package `germ` has been renamed to
   `civictech.cell` (with `.port`, `.proxy`, `.host`, `.data`, `.consistency`
-  sub-packages); the legacy `civictech.kernel.computelet|port|link|host|protocol`
-  and `civictech.runtime.*` packages are quarantined in the `:legacy` module
-  pending the G-3 color port (90/91, G-1).
+  sub-packages); the legacy `civictech.kernel.*` / `civictech.runtime.*`
+  generation (`:legacy`) was deleted after the G-3 color port (G-1, done M3.1).
 - Port properties are nouns describing role (`managementInlet`, `dataOutlet`).
 - Contracts are interfaces named for the capability (`SetOps`, `Propagate`,
   `TrafficLightControl`), never `*Message` classes.

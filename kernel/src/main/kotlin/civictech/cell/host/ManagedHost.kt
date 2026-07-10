@@ -3,9 +3,11 @@ package civictech.cell.host
 
 
 import civictech.cell.port.*
+import civictech.cell.BlockingCell
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.SuspendingCell
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
@@ -32,6 +34,9 @@ open class ManagedHost(
 
     private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
 
+    /** The concurrency color of this host's execution context (spec 32). */
+    val color: HostColor get() = scheduler.color
+
     private val cells = mutableMapOf<CellRef, Cell>()
     private val ctx = object : CellContext {}
 
@@ -40,7 +45,7 @@ open class ManagedHost(
         deadLetterOutlet.call.propagate(DeadLetter(ref, cause, description, invocation))
     }
 
-    private fun enqueue(priority: Int, action: () -> Any?) {
+    private fun enqueue(priority: Int, action: suspend () -> Any?) {
         scheduler.submit(priority) {
             try {
                 action()
@@ -50,7 +55,7 @@ open class ManagedHost(
         }
     }
 
-    private fun <T> enqueueAwaiting(priority: Int, action: () -> T): T {
+    private fun <T> enqueueAwaiting(priority: Int, action: suspend () -> T): T {
         val future = CompletableFuture<T>()
         scheduler.submit(priority) {
             try {
@@ -83,7 +88,8 @@ open class ManagedHost(
 
                 HostedPortInvocation.Type.PORT_API -> {
                     if (port is Use<*>) {
-                        hostedInvocation.invocation.invoke(port.call)
+                        // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
+                        hostedInvocation.invocation.invokeSuspending(port.call)
                     }
                 }
             }
@@ -105,6 +111,15 @@ open class ManagedHost(
         val internalApi = object : HostManagementApi {
             override fun spawn(cell: Cell): CellRef {
                 require(!cells.containsKey(cell.ref)) { "Cell already spawned: ${cell.ref}" }
+                // color validation (spec 32, G-3): 🔵/🟣 markers must match the host; unmarked = 🟢 pure
+                when (color) {
+                    HostColor.BLOCKING -> require(cell !is SuspendingCell) {
+                        "SuspendingCell ${cell.ref} cannot spawn on a BLOCKING host"
+                    }
+                    HostColor.SUSPENDING -> require(cell !is BlockingCell) {
+                        "BlockingCell ${cell.ref} cannot spawn on a SUSPENDING host"
+                    }
+                }
                 cells[cell.ref] = cell
                 cell.onActivate(ctx)
                 return cell.ref

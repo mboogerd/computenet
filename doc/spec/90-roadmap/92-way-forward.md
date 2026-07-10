@@ -42,8 +42,9 @@ harness detects glitches (`GlitchFreeDiamondTest`).*
 
 *Goal: spec sections 32, 33 real; graphs survive placement changes.*
 
-1. Coroutine ManagedHost + HostColor + color markers + spawn validation +
-   bridges in proxies (G-3, G-27); retire legacy runtime (G-1 done).
+1. ~~Coroutine ManagedHost + HostColor + color markers + spawn validation
+   (G-3, G-27); legacy runtime deleted (G-1 done)~~ — done (M3.1). Bridges
+   degenerated to nothing while intakes are unbounded; see 32.
 2. Closable intake + fail-fast send + re-resolution via a location registry
    (G-5); Buffering-based park/replay.
 3. Full drain protocol: suspend/resume/migrate on `HostManagementApi`;

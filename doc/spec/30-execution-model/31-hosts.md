@@ -2,7 +2,7 @@
 
 > **Status**: Partial (single-host machinery implemented and consolidated; error protocol minimal, hierarchy/colors open)
 > **Sources**: ADR — Computelet Kernel (Runner), ADR — Computelet Mobility, ADR 2
-> **Implementation**: `cell.host.ManagedHost` + `cell.host.HostScheduler` (`VirtualThreadScheduler` / `SimulationController`), `cell.host.Host` interface; legacy `runtime.blocking.BlockingComputeletHost` (quarantined in `:legacy`)
+> **Implementation**: `cell.host.ManagedHost` + `cell.host.HostScheduler` (`VirtualThreadScheduler` 🔵 / `CoroutineScheduler` 🟣 / `SimulationController`, which issues either color), `cell.host.Host` interface
 
 ## Definition
 
@@ -70,9 +70,10 @@ while internal links remain direct".
 ## Colors of hosts
 
 Hosts come in colors (32): virtual-thread hosts (🔵 hosting blocking/pure) and
-coroutine hosts (🟣 hosting suspending/pure). `ManagedHost` is the
-virtual-thread variant. ⚠ GAP (G-27): no coroutine `ManagedHost` in germ —
-port the legacy suspending runtime onto the germ model (bridges in 32).
+coroutine hosts (🟣 hosting suspending/pure). One `ManagedHost` class serves
+both — the color lives on the injected `HostScheduler`
+(`VirtualThreadScheduler` / `CoroutineScheduler`), and spawn validates cell
+color markers against it (G-3/G-27, resolved M3.1).
 
 ## Host vs Runner duplication (C-2, resolved)
 

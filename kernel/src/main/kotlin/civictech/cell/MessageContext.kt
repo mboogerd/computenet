@@ -1,6 +1,8 @@
 package civictech.cell
 
 import civictech.cell.port.PortRef
+import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.withContext
 import java.io.Serializable
 import java.util.*
 
@@ -29,6 +31,14 @@ object CurrentContext {
     private val local = ThreadLocal<MessageContext?>()
 
     fun get(): MessageContext? = local.get()
+
+    /**
+     * Suspend-capable variant of [with]: the coroutine context element
+     * re-installs [ctx] on every resumption, so a wave survives suspension
+     * instead of welding into whatever ran meanwhile on the same thread.
+     */
+    suspend fun <R> withSuspending(ctx: MessageContext?, block: suspend () -> R): R =
+        withContext(local.asContextElement(ctx)) { block() }
 
     fun <R> with(ctx: MessageContext?, block: () -> R): R {
         val previous = local.get()

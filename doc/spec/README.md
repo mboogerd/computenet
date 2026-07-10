@@ -84,16 +84,12 @@ are consolidated in [90-roadmap/91-gap-analysis.md](90-roadmap/91-gap-analysis.m
 
 ## Relationship to the code
 
-The codebase contains two generations:
+One generation remains: **`civictech.cell`** — the living kernel:
+`Cell`/`onActivate`, port delegates, Fan ports, `Invocation`-based routing,
+`ManagedHost` in both colors (`VirtualThreadScheduler` 🔵 /
+`CoroutineScheduler` 🟣), cross-host proxies, delegation, buffering
+(traffic-light) cells, delta-propagating data cells. The legacy generation
+(`civictech.kernel.*`, `civictech.runtime.*`) that carried ADR 2's color model
+was deleted in M3.1 (G-1); the ADRs remain its historical record.
 
-1. **Legacy** (`civictech.kernel.computelet|port|link|host|protocol`,
-   `civictech.runtime.blocking|suspending`) — implements the ADR 2 color model and
-   the earlier port/link kernel. Treated here as historical evidence, not as the
-   normative base.
-2. **Current** (`civictech.cell`, `civictech.cell.data`) — the living
-   kernel: `Cell`/`onActivate`, port delegates, Fan ports, `Invocation`-based
-   routing, `ManagedHost`, cross-host proxies, delegation, buffering
-   (traffic-light) cells, delta-propagating data cells.
-
-This spec is written against the **germ** iteration and states per section what
-exists, what must be migrated from legacy, and what is unbuilt.
+This spec states per section what exists and what is unbuilt.

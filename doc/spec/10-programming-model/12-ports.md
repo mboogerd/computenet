@@ -2,7 +2,7 @@
 
 > **Status**: Specified (core); multiplex and cardinality enforcement partial
 > **Sources**: ADR — Computelet Kernel, ADR — Task Connectivity, ADR — Anatomy of Cellular Programs, ADR 3
-> **Implementation**: `civictech.cell.port.*` (Port, Inlet, Outlet, FanInlet, FanOutlet, OneToOnePort, Serve, Use, Subscribe, LinkTo, LinkFrom, delegates); legacy `civictech.kernel.port.*`
+> **Implementation**: `civictech.cell.port.*` (Port, Inlet, Outlet, FanInlet, FanOutlet, OneToOnePort, Serve, Use, Subscribe, LinkTo, LinkFrom, delegates)
 
 ## Definition
 
@@ -101,7 +101,8 @@ generic protocols (attention propagation 30/34, time/consistency requests
 composable handlers.
 
 ⚠ GAP (G-13): not present in germ. The legacy `MultiplexPort` sketch
-(`asInlet(protocolId)` / `asOutlet(protocolId)`) exists only as an interface.
+(`asInlet(protocolId)` / `asOutlet(protocolId)`) was only ever an interface,
+deleted with `:legacy` (M3.1).
 *Proposal*: model a multiplex port as a bundle of sub-ports keyed by
 `ProtocolId`, sharing one link and one queue slot; generic protocols get
 well-known ids. This preserves P2 (no per-message dispatch cost beyond one

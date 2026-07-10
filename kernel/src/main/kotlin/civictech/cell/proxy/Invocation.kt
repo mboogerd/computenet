@@ -3,6 +3,8 @@ package civictech.cell.proxy
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import java.lang.reflect.Method
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
 
 data class Invocation(
     val methodName: String,
@@ -29,6 +31,32 @@ data class Invocation(
         }
     }
 
+    /**
+     * Suspend-aware delivery (spec 32): if the target method is a suspend fun
+     * (trailing [Continuation] parameter), call it with a real continuation so
+     * it may park the host's task; otherwise fall back to [invoke]. The context
+     * rides a coroutine element, surviving suspension (G-4).
+     */
+    suspend fun invokeSuspending(target: Any?): Any? {
+        if (target == null) return null
+        val method = target.javaClass.methods.find {
+            it.name == methodName &&
+                it.parameterTypes.size == parameterTypes.size + 1 &&
+                it.parameterTypes.last() == Continuation::class.java &&
+                it.parameterTypes.dropLast(1).map { p -> p.name } == parameterTypes
+        } ?: return invoke(target)
+
+        return CurrentContext.withSuspending(context) {
+            suspendCoroutineUninterceptedOrReturn { cont ->
+                try {
+                    method.invoke(target, *(args.toTypedArray()), cont)
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    throw e.targetException
+                }
+            }
+        }
+    }
+
     @Transient
     private var fixedTarget: Any? = null
 
@@ -41,10 +69,16 @@ data class Invocation(
 
     companion object {
         fun of(method: Method?, args: Array<out Any?>?, context: MessageContext? = null): Invocation {
+            // A captured suspend fun arrives with a trailing Continuation; the
+            // invocation is fire-and-forget across the boundary (spec 32), so the
+            // continuation is stripped here and re-supplied by invokeSuspending.
+            val types = method?.parameterTypes?.map { it.name } ?: emptyList()
+            val suspendCapture = method?.parameterTypes?.lastOrNull() == Continuation::class.java
+            val values = args?.toList() ?: emptyList()
             return Invocation(
                 methodName = method?.name ?: "",
-                parameterTypes = method?.parameterTypes?.map { it.name } ?: emptyList(),
-                args = args?.toList() ?: emptyList(),
+                parameterTypes = if (suspendCapture) types.dropLast(1) else types,
+                args = if (values.lastOrNull() is Continuation<*>) values.dropLast(1) else values,
                 context = context,
             )
         }

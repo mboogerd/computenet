@@ -10,7 +10,7 @@
 | C-1 | Terminology drift: Task / Computelet / Cell | **Cell** canonical; others historical | 00/03 |
 | C-2 | `Runner` vs `Host` split in germ (`ManagedRunner` duplicates a weaker `ManagedHost`) | **Resolved**: `ManagedRunner` was already gone from the tree; one `ManagedHost` + injected `HostScheduler` (`VirtualThreadScheduler` / `SimulationController` = the deterministic test host) | 00/03, 30/31, 50/52 |
 | C-3 | `use { }` lambda API (Task Connectivity) vs serializable invocations (ADR 3) — code has both | `.call`/Invocation is canonical & the only wire form; `use {}` = local-only sugar for lease scoping and future context binding | 10/14 |
-| C-4 | Legacy color runtime (`runtime.blocking/suspending`, PureTask/BlockingTask/SuspendingTask) vs germ model — two disconnected generations | Germ is the base; port the color model onto it (G-3); then retire legacy (G-1) | 30/32 |
+| C-4 | Legacy color runtime (`runtime.blocking/suspending`, PureTask/BlockingTask/SuspendingTask) vs germ model — two disconnected generations | **Resolved (M3.1)**: color model implemented on the kernel (G-3); legacy deleted (G-1) | 30/32 |
 | C-5 | Reflection everywhere (`Invocation.of(Method)`, JDK proxies, `findPort`) vs ADR 3's no-reflection-on-wire + KSP direction | Reflection OK in-process short-term; stable ids on the wire; KSP proxies + port registry replace it incrementally | 10/14, 10/15 |
 | C-6 | Two port declaration styles (`by input()` delegates vs explicit `FanInlet.create`) | **Resolved**: both feed the per-cell `PortRegistry` (delegates via `provideDelegate`, explicit via `registerPort`); delegates preferred for hosted cells | 10/11, 10/12 |
 | C-7 | Logic in constructors (`SetCell`, `TrafficLightCell` serve in `init`) vs `onActivate` rule | "Eager cells" allowed for host-free composition, with stated obligations; hosted default is `onActivate` | 10/15 |
@@ -48,8 +48,8 @@
 
 | ID | Gap | Proposal | Where |
 |---|---|---|---|
-| G-3 | Color model not in germ | HostColor + cell color markers + bridge selection in proxies + spawn validation | 30/32 |
-| G-27 | No coroutine ManagedHost | Port from legacy suspending runtime | 30/31, 30/32 |
+| G-3 | Color model not in germ | **Resolved (M3.1)**: `HostColor` on `HostScheduler`, `BlockingCell`/`SuspendingCell` markers, spawn validation; bridges degenerate while intakes are unbounded (32) | 30/32 |
+| G-27 | No coroutine ManagedHost | **Resolved (M3.1)**: `CoroutineScheduler` written fresh (legacy suspending runtime was empty stubs); suspend-capable `SimulationController` stepping | 30/31, 30/32 |
 | G-26 | Error handling = printStackTrace | **Minimal done**: `DeadLetter` on host `deadLetterOutlet` (failures + previously-silent drops); error outlets + supervision policies remain (M3) | 30/31 |
 | G-28 | No host hierarchy (quotas, cascade, placement) | Parent/child host relations; sandbox unit for security | 30/31, 40/43 |
 | G-5 | Mobility protocol unimplemented (closable queues, drain, location registry, state capture) | See ordered plan | 30/33 |
@@ -71,7 +71,7 @@
 | G-31 | No invariant machinery | Invariants as cells; kotest adapter; deterministic SimulatedHost | 50/52 |
 | G-32 | No shadow mode (side-effect suppression) | Effect classification (with G-11) + NoOp-served sinks | 50/52 |
 | G-33 | No state migration across incarnations | `exportState/importState` in the swap drain window | 50/53 |
-| G-1 | Legacy packages coexist with germ (two kernels in-tree) | **Quarantined**: legacy `kernel.computelet|port|link|host|protocol`, `runtime.*` moved to the `:legacy` module (no dependency either way); delete after the G-3 color port. The living kernel is `civictech.cell` | 00/03, 30/32 |
+| G-1 | Legacy packages coexist with germ (two kernels in-tree) | **Done (M3.1)**: the `:legacy` module is deleted. The kernel is `civictech.cell` | 00/03, 30/32 |
 | G-2 | `ManagedRunner` duplication | **Resolved** with C-2 (class no longer existed; scheduler configuration covers the use case) | 30/31 |
 
 ## Reading the dependency structure
