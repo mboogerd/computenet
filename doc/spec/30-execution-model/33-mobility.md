@@ -90,14 +90,30 @@ How the implementation realizes the steps (`HostManagementApi`):
 
 ## Port-level buffering: the traffic-light primitive (implemented)
 
-`TrafficLightCell` demonstrates boundary suspension with zero fast-path cost:
+`cell.membrane.TrafficLightCell` (promoted from test code in M3.4 — a real
+`Cell` with registered ports) demonstrates boundary suspension with zero
+fast-path cost:
 
 - **red**: serve a `Buffering` proxy — invocations park in order.
 - **green**: replay buffer downstream, then `delegate(dataOutlet)` — the cell
   removes itself from the message path entirely.
 
 This is the reusable primitive for steps 1/6 at port granularity, and the
-first membrane behavior in code (11).
+first membrane behavior in code (11). The generalization M3 promised is a
+statement, not new machinery: the same `Buffering` capture — invocations
+parked in order with their contexts — is the primitive behind **both**
+port-level suspension (this cell) and location-level parking (the
+`LocationRegistry`). Suspension is one behavior at two granularities.
+
+## Exit criterion (M3) — met
+
+`SubchainMigrationTest`: a running two-cell stateful subchain on its own 🔵
+host, fed continuously from a 🔵 source host and observed by a suspending
+cell on a 🟣 host, migrates mid-stream to a 🟣 host (pure cells crossing
+colors) over 100 seeds of randomized scheduling — zero loss, exactly-once,
+per-link FIFO, monotonic wave order, state continuous through the
+serialization round-trip. A control run with fixed-host proxies (no
+re-resolution) demonstrably loses messages, proving the harness detects loss.
 
 ## Gaps to close (G-5)
 

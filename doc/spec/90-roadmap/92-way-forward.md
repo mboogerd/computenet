@@ -38,7 +38,7 @@ port resolution, one host class; legacy quarantined in `:legacy`.*
 randomized cross-host scheduling glitch-free, with a control run proving the
 harness detects glitches (`GlitchFreeDiamondTest`).*
 
-## Milestone 3 — Colors and mobility (execution completeness)
+## Milestone 3 — Colors and mobility (execution completeness) ✅ DONE (core)
 
 *Goal: spec sections 32, 33 real; graphs survive placement changes.*
 
@@ -49,10 +49,14 @@ harness detects glitches (`GlitchFreeDiamondTest`).*
    (G-5); Buffering-based park/replay~~ — done (M3.2).
 3. ~~Full drain protocol: suspend/resume/migrate on `HostManagementApi`;
    state capture via serializable snapshots (starts G-25)~~ — done (M3.3).
-4. Traffic-light generalized: suspension as a standard membrane behavior.
+4. ~~Traffic-light generalized: suspension as a standard membrane behavior~~
+   — done (M3.4): `cell.membrane.TrafficLightCell`; same `Buffering`
+   primitive at port and location granularity (33).
 
-*Exit criterion: migrate a running subchain between hosts (including across
-colors) with zero message loss and preserved per-link order, under load.*
+*Exit criterion — met: `SubchainMigrationTest` migrates a running stateful
+subchain across colors under load, 100 seeds, zero loss, per-link FIFO, with
+a control run proving the harness detects loss. Supervision policies (G-26
+remainder, M3.5) are the one loose end tracked below.*
 
 ## Milestone 4 — Data + verification (the developer payoff)
 
