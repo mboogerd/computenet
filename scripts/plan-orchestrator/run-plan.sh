@@ -132,8 +132,14 @@ EOF
 
 run_agent() {
   local id=$1 attempt=$2 worktree=$3 prompt_file=$4 log=$5 result=$6
-  local -a model_args=()
-  [[ -n "$MODEL" ]] && model_args=(--model "$MODEL")
+  local -a codex_args=(
+    --dangerously-bypass-approvals-and-sandbox
+    --dangerously-bypass-hook-trust
+    --ignore-user-config --ephemeral --json --color never
+    --output-schema /result.schema.json
+    --output-last-message /workspace/.codex-result.json
+  )
+  [[ -n "$MODEL" ]] && codex_args+=(--model "$MODEL")
   docker run --rm \
     --network bridge \
     --cpus "${WORKER_CPUS:-4}" \
@@ -143,12 +149,7 @@ run_agent() {
     --mount "type=volume,src=computenet-gradle-cache,dst=/root/.gradle" \
     --mount "type=bind,src=$HOME/.codex/auth.json,dst=/codex-home/auth.json,readonly" \
     --mount "type=bind,src=$ROOT/scripts/plan-orchestrator/result.schema.json,dst=/result.schema.json,readonly" \
-    "$IMAGE" \
-    --dangerously-bypass-approvals-and-sandbox \
-    --dangerously-bypass-hook-trust \
-    --ignore-user-config --ephemeral --json --color never \
-    --output-schema /result.schema.json --output-last-message /workspace/.codex-result.json \
-    "${model_args[@]}" - <"$prompt_file" >"$log" 2>&1
+    "$IMAGE" "${codex_args[@]}" - <"$prompt_file" >"$log" 2>&1
   cp "$worktree/.codex-result.json" "$result"
   rm -f "$worktree/.codex-result.json"
 }
@@ -294,6 +295,7 @@ run_wave() {
 
   if ((failed)); then
     for id in "${batch_ids[@]}"; do
+      [[ -f "$STATE_DIR/$id.status" ]] || continue
       read -r state _ _ worktree < <(tr '\t' ' ' <"$STATE_DIR/$id.status")
       [[ "$state" == failed ]] && root_cause_report "$id" "$worktree"
     done
