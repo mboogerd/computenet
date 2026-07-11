@@ -38,6 +38,10 @@
   font-size: 11px;
 }
 
+.junction-pulse {
+  animation: agora-pulse-svg 2s ease-out forwards;
+}
+
 .map-card {
   position: absolute;
   display: flex;

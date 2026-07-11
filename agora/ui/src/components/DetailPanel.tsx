@@ -5,6 +5,7 @@ import { graph, nodes, nodeOf, structuralVersion, selection, setSelection } from
 import { labelOf } from '../util/label';
 import CredenceBadge from './CredenceBadge';
 import StanceSlider from './StanceSlider';
+import Sparkline from './Sparkline';
 import './DetailPanel.css';
 
 const HINT_KEY = 'agora.hint.edge';
@@ -152,6 +153,11 @@ export default function DetailPanel() {
                 </For>
               </ul>
             </Show>
+          </div>
+
+          <div class="panel__field">
+            <span class="panel__field-label">History (since you opened this page)</span>
+            <Sparkline nodeRef={n().ref} credence={n().credence} />
           </div>
 
           <button class="panel__remove" onClick={del}>

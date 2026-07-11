@@ -69,6 +69,24 @@
   }
 }
 
+@keyframes agora-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-amber) 75%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+
+@keyframes agora-pulse-svg {
+  0% {
+    stroke-opacity: 0.9;
+  }
+  100% {
+    stroke-opacity: 0;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

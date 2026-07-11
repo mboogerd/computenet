@@ -13,10 +13,13 @@ import DebateView from './components/DebateView';
 import GraphCanvas from './components/GraphCanvas';
 import DetailPanel from './components/DetailPanel';
 import AddClaim from './components/AddClaim';
+import ActivityTicker from './components/ActivityTicker';
 import Legend from './components/Legend';
+import { theme, motion, toggleTheme, toggleMotion, initPrefs } from './solid/prefs';
 import './app.css';
 
 export default function App() {
+  initPrefs();
   onMount(() => {
     const [m, f] = location.hash.replace(/^#\/?/, '').split('/');
     if (m === 'map' || m === 'debate') setMode(m);
@@ -46,6 +49,7 @@ export default function App() {
         <h1>agora</h1>
         <span class="app-tagline">argue, attack the argument, or attack the attack</span>
         <div class="app-header__spacer" />
+        <ActivityTicker />
         <div class="mode-toggle" role="tablist">
           <button classList={{ active: mode() === 'debate' }} onClick={() => setMode('debate')}>
             Debate
@@ -54,6 +58,20 @@ export default function App() {
             Map
           </button>
         </div>
+        <button
+          class="icon-btn"
+          title="Toggle light / dark"
+          onClick={toggleTheme}
+        >
+          {theme() === 'dark' ? '☀ Light' : '☾ Dark'}
+        </button>
+        <button
+          class="icon-btn"
+          title="Toggle animations"
+          onClick={toggleMotion}
+        >
+          {motion() ? 'Motion on' : 'Motion off'}
+        </button>
         <AddClaim />
       </header>
       <div class="app-body">

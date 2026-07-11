@@ -1,5 +1,6 @@
 import { createMemo, createSignal, createEffect, For, Show, onMount } from 'solid-js';
 import { graph, nodes, structuralVersion, focal, selection, setSelection } from '../solid/graph';
+import { pulsing } from '../solid/hot';
 import { layoutMap, type Vertex, type MapLayout } from '../layout/map';
 import { bandFor, bandVar } from '../styles/bands';
 import { labelOf } from '../util/label';
@@ -180,6 +181,7 @@ export default function GraphCanvas() {
                   {(v) => {
                     const rec = () => nodes[v.ref];
                     const band = () => (rec() ? bandFor(rec()!.credence) : 'contested');
+                    const pulse = pulsing(v.ref);
                     const r = v.w / 2;
                     return (
                       <g
@@ -187,6 +189,15 @@ export default function GraphCanvas() {
                         transform={`translate(${cx(v)}, ${cy(v)})`}
                         onClick={() => setSelection(v.ref)}
                       >
+                        <Show when={pulse()}>
+                          <circle
+                            class="junction-pulse"
+                            r={r + 5}
+                            fill="none"
+                            stroke="var(--status-amber)"
+                            stroke-width="2"
+                          />
+                        </Show>
                         <rect
                           x={-r}
                           y={-r}
@@ -213,10 +224,11 @@ export default function GraphCanvas() {
                 {(v) => {
                   const rec = () => nodes[v.ref];
                   const band = () => (rec() ? bandFor(rec()!.credence) : 'contested');
+                  const pulse = pulsing(v.ref);
                   return (
                     <div
                       class="map-card"
-                      classList={{ 'is-selected': selection() === v.ref }}
+                      classList={{ 'is-selected': selection() === v.ref, 'is-pulsing': pulse() }}
                       style={{
                         left: `${v.x}px`,
                         top: `${v.y}px`,

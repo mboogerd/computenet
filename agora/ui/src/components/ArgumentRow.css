@@ -1,8 +1,32 @@
+.arg-row-wrap {
+  margin: 0.4rem 0;
+}
+
 .arg-row {
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
-  margin: 0.4rem 0;
+}
+
+.arg-row__more {
+  margin: 0.2rem 0 0 0.2rem;
+  padding: 0.1rem 0.3rem;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.arg-row__more:hover {
+  color: var(--text);
+}
+
+.arg-row__children {
+  margin-left: 1rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--hairline);
 }
 
 .arg-row__claim {

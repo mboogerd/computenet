@@ -6,8 +6,9 @@
 
 .app-header {
   display: flex;
-  align-items: baseline;
-  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--hairline);
 }
@@ -67,4 +68,24 @@
 .app-placeholder {
   color: var(--text-secondary);
   margin: 0;
+}
+
+/* shared hot-change ring (spec §5) — applied where a node's credence just moved */
+.is-pulsing {
+  animation: agora-pulse 2s ease-out;
+}
+
+.icon-btn {
+  padding: 0.35rem 0.6rem;
+  background: var(--surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  border-color: var(--text-secondary);
 }
