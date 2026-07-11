@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; partitioning unbuilt)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; partitioning, tag-epoch continuity, and restart supersession design decided in 93, unbuilt)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.RelationalGraphs` (outer joins)
 
@@ -46,7 +46,11 @@ Elements of the pattern:
    tag is never observed by the remove. Tags are `Timestamp`s minted
    cell-locally (unique per add instance — see 22 for why wave ids are not
    reused). This is the CRDT-style ingredient for decentralized replication
-   (40/42) without imposing CRDTs everywhere.
+   (40/42) without imposing CRDTs everywhere. (Contrast — decided in
+   [93 I-4](../90-roadmap/93-feature-interactions.md): the attention
+   protocol (30/34) is *not* this pattern; per-link LWW level state over a
+   bounded key space — the direct downstream link set — needs no tags, and
+   slot replacement + a commutative fold is its merge law.)
 4. **Derived cells consume delta contracts**: `UnionSetCell` tracks live
    tags per element, forwards only new tag information (duplicate deliveries
    across diamond fan-ins dedup), and any consumer derives membership from
@@ -182,19 +186,205 @@ per-peer recompute converge.
   keyed cumulative sums, `PnCounterDelta` generalized) stay deferred with
   trigger: *first aggregate-only replica under input-size pressure*.
 
+⚠ GAP (G-44): Single-writer replication (leader→follower log-shipping)
+defers its liveness half: no automatic leader election, no failure
+detector, no follower-unpark rule under SAFETY_PARK, and split-brain
+reconciliation beyond last-epoch-wins is undesigned. Proposal: opt-in
+epoch-claim election folded from the eventually-consistent membership index
+with a stated convergence/liveness bound and a generative leader-churn
+harness; a failure-detection window that does not become a second heartbeat
+protocol; a witness-set-superset unpark rule for SAFETY_PARK; an
+application-level reconciliation hook for fenced divergent writes; an
+optional ack-from-k durability tier; and per-shard leader routing when
+partitions replicate (93 I-25/I-2/I-3/I-8).
+
 ## Partitioned state
 
 ADR 1 §5: large keyed datasets shard by key for concurrency, locality, and
 scale-out; non-partitioned is for atomic structures.
 
 ⚠ GAP (G-24, deferred with trigger — build when the first keyed dataset
-feels placement pressure; the M4 exit app never sharded): nothing exists.
-*Proposal sketch* (kernel-untouched, per P1): a
-**PartitionedCell** is a composite cell whose organelles each own a key range;
-its inlet routes commands by key (a routing proxy — same mechanism as
-`HostRoutingApi`); its outlet merges child delta streams. Placement of
-partitions across hosts is then ordinary cell placement (30/33, 40/42) —
-partitioning must not become a second distribution mechanism.
+feels placement pressure; the M4 exit app never sharded): nothing is built,
+but the composite design is decided (93 I-8, evaluated under placement in
+93 I-19). Everything below is decided design, not code; kernel untouched,
+per P1.
+
+A **PartitionedCell** is one composite cell — one membrane, one logical id —
+owning organelle cells that each hold a **disjoint key range**. Keyed
+structures only (Set = element-keyed, Map = key-keyed): positionally-indexed
+`ListCell` is out of scope — a global position index across shards is
+ill-defined, and `ListDelta`'s convergence limit is not dissolved by
+disjointness; partition a list by keying entries on a stable id, never on
+position.
+
+- **Two membrane ports.** A routing inlet carrying the organelles' own
+  command contract and a merging outlet carrying the delta contract; from
+  outside the composite is indistinguishable from a single data cell.
+  External links bind the composite's ports, so rebalancing never
+  re-handshakes counterparts; organelles are never externally addressed.
+- **Routing is a served proxy keyed by a `@Key` descriptor slot.** A `@Key`
+  annotation on one data-contract parameter emits a `keyIndex` into the
+  method descriptor; the router extracts the key, applies the Serializable
+  total partitioner, and forwards to exactly one organelle inlet — O(1)
+  dispatch, the one place per-message routing is intrinsic to the feature
+  (same accepted status as `HostRoutingApi.route`). Key-less methods
+  (`clear()`) broadcast and MUST be non-exclusive (KSP lint).
+- **Demux preserves SPSC.** The partitioner maps each key to exactly one
+  organelle, so the exclusive bit (G-21, 23) holds end-to-end: an `Owned`
+  payload moves exactly once into exactly one organelle. Fan-out is not
+  demux; broadcasting an exclusive payload is refused.
+- **Wave-transparent merge; disjointness is the merge-safety proof.** The
+  merging outlet forwards each organelle's delta preserving its
+  `MessageContext` — it neither re-mints a wave nor coalesces sources; each
+  organelle outlet is its own wave source. Because ranges are disjoint, a
+  delta from one organelle only ever mentions its own keys: merging is
+  conflict-free union, no downstream diamond joins two partitions on the
+  same key, and cross-source glitches are impossible without coordination.
+- **Repartition = per-range Buffering + a versioned routing table.** Moving
+  range R: set R to Buffering on the router (other ranges flow), transfer
+  R's state-as-delta-from-empty, flip the table atomically and bump its
+  epoch, replay parked commands in order; a stale-epoch command re-routes.
+  External links observe none of it.
+- **Late join = per-organelle catch-up.** Each organelle unicasts its
+  key-range state-as-delta-from-empty (the G-22 mechanism); the union of
+  disjoint-key catch-ups IS the coherent cross-partition snapshot.
+
+Under real placement (93 I-19) the composite reduces to shipped primitives —
+partitioning must not become a second distribution mechanism, and doesn't:
+
+- **A membrane, not a host.** The composite adds no node to the host
+  hierarchy; organelles are ordinary cells spawned on ordinary hosts by
+  ordinary placement (30/33, 40/42). Partitioning contributes a third map —
+  keys→cells, the routing table — which is not a distribution mechanism at
+  all: placement distributes cells across machines (registry), replication
+  distributes copies of a cell (mesh), both untouched.
+- **Routing epoch and registry location are orthogonal.** Repartition
+  mutates ranges and bumps the epoch, never the registry; migration
+  re-resolves the organelle's registry location, never the epoch (the table
+  holds ref-bound proxies, not locations). Migration is invisible to
+  routing; repartition is invisible to the registry.
+- **Per-link drain suffices for single-organelle migration.** Migrating one
+  organelle is the ordinary per-link drain (30/33); disjointness reduces
+  the composite's ordering obligation to the per-link FIFO the drain
+  already guarantees — no barrier, other partitions flow untouched.
+- **Supervision is placement config the composite re-applies.** Each
+  organelle is supervised by its own host; the composite holds a policy per
+  partition and MUST re-apply it after every (re)placement, since
+  supervision is per-host and does not migrate.
+- **Replication composes per organelle.** A mergeable organelle joins its
+  own gossip mesh (40/42) independently; the composite never coordinates
+  replication.
+
+⚠ GAP (G-56): PartitionedCell's adopted design (G-24, trigger armed) leaves
+its distribution edges open: routing-table epoch consistency under
+concurrent organelle migration, repartition-window buffering bounds,
+bulk-rebalance atomicity, supervision-travels-with-placement, per-shard
+replica targeting, range queries, and per-key attention routing. Proposal:
+generative wire tests for the stale-epoch re-route racing registry
+re-resolution and for migrate-during-repartition (ownership and placement
+maps changing near-simultaneously); a buffering-bound analysis for long
+state transfers under quotas and backpressure; a
+supervision-follows-placement API replacing composite-local re-apply
+discipline; router targeting rules when shards replicate (leader per
+shard); a scatter-gather range-read protocol over the state-request
+substrate; and the attention-routing proxy forwarding interest per key
+(93 I-8/I-19/I-9).
+
+## Tag continuity across epochs, restart, and swap
+
+Three tag-algebra rules govern replication, RESTART, and instance swap.
+They are decided design (93 I-14, I-22, I-27), unimplemented.
+
+- **Tags are data, never re-minted for received state** (decided in 93 I-14
+  Rule S3). A genuinely new local add mints its tag under the cell's
+  current source epoch; thereafter the tag travels **verbatim** — copied
+  unchanged by gossip (40/42), by `Stateful.snapshot()`, by
+  `StateMigrating.importFrom` (50/53), and by state-as-delta-from-empty
+  catch-up (21). A cell MUST NOT re-mint tags for state it received or
+  imported. This is the replication-level complement of the landed
+  operator-level tag-hygiene rule (`MintedTags` above): derived output
+  mints fresh tags; relayed or imported state preserves them. Outlet-counter
+  durability is optional — a fresh epoch on recovery is the always-correct
+  default (`(sourceId, counter)` is never reused by construction); a
+  durable host MAY persist the counter high-water purely to preserve wave
+  continuity, never as a correctness dependency. The wave-side complement
+  (93 I-14 Rule S4) — a `Replicable` cell's post-merge re-emission
+  *originates* a fresh wave per replica, convergence riding the tags — is
+  contradicted by shipped `SetCell.applyRemote`, which re-emits under the
+  incoming wave (⚠ CONFLICT C-10, recorded in 22 and 40/42).
+- **Generational supersede** (decided in 93 I-22). RESTART is decided as
+  restore-the-freshest-checkpoint plus a generation-stamped `ReBaseline`
+  notice over the ordinary catch-up path — never a bare local rollback. The
+  consumer half lives in this file's tag algebra: on receiving
+  `ReBaseline(source, supersedes, state, supersede = true)` a convergent
+  consumer MUST (a) drop every live tag from the listed superseded sources
+  that the re-baseline does not re-assert, (b) apply `state` by ordinary
+  tag-union merge, and (c) fence the superseded source ids as dead lanes,
+  rejecting any late delta stamped with a dead `sourceId`. Tags are
+  source-scoped, so the retraction removes only the reverted producer's
+  lost contribution — healthy peers' tags survive — and the rule composes
+  with multi-writer merge; `supersede = false` (pull-merge) retracts
+  nothing, forward idempotent merge only. Landed RESTART (30/31 rule 5:
+  restore the spawn-time checkpoint, same sourceId with a rolled-back
+  counter, no downstream reconciliation) is exactly the bare rollback this
+  rule forbids (⚠ CONFLICT C-12, recorded in 30/31 and 22).
+- **Swap handoff tiers are typed by merge class** (decided in 93 I-27). An
+  instance swap's catch-up-fallback tier (discard the incumbent's snapshot,
+  fresh source id, downstream re-baselines) is sound only for cells whose
+  catch-up is idempotent against existing downstream state under a
+  source-identity change: the tagged set family and complete-value scalars.
+  Cells whose merge is non-idempotent across source identity — the counters
+  — MUST hand off by state transform (`restore`/`importFrom`) with source
+  continuity (the candidate adopts the incumbent's outlet `sourceId` +
+  counter high-water): a fallback re-baseline under a fresh source would
+  double-count the incumbent's already-delivered contribution (§Established
+  pattern). A fallback swap MUST announce its fresh source via the I-22
+  `ReBaseline` supersession notice — the landed shadow-promotion fallback
+  (50/53) is silent: the candidate emits under its own fresh sourceId with
+  no supersession signal. The drain-window export snapshot is the same
+  `Stateful.snapshot()` that G-25 journals — one capture serves the
+  handoff, the rollback checkpoint, and the journal.
+
+⚠ GAP (G-42): Epoch source-ids and restart generations accrete unboundedly:
+OR-set/PN source columns, stale glitch-free partial-wave buffers, and
+frontier entries for vanished epochs are never reclaimed, and
+counter/generation continuity across migration and host failure is
+unpinned. Proposal: safe reclamation of provably-superseded epochs
+(compaction riding G-25 checkpoints), frontier GC for orphaned partial
+waves triggered by relink-driven recompute, a concrete migration-payload
+field carrying the outlet counter high-water, durable-counter batching kept
+off the emission hot path, and generation derivation from the journal
+high-water (fresh high base on non-durable hosts) so post-restart tags
+never alias (93 I-14/I-22/I-3/I-7).
+
+⚠ GAP (G-43): RESTART's restore-freshest-checkpoint + generation-stamped
+re-baseline leaves precedence and cost open: supersede vs concurrent
+multi-source remove, re-baseline cost under wide fan-out, hybrid push/pull
+direction, poison-write loops, and the recovery-cell pattern are
+unstandardized. Proposal: state a supersede-vs-remove precedence with a
+generative convergence test; bound the push-authoritative re-baseline
+(diff-against-last-acked / delta-since-generation); define the per-cell
+direction policy for hybrid derivation+owned-state cells; add a
+poison-write escape (dead-letter the replaying write after N RESTARTs);
+standardize the deadLetter→requestState recovery cell — replicated cells
+re-baseline from mesh peers, resolving the RESTART-within-replication
+question carried by four earlier challenges
+(93 I-22/I-2/I-7/I-18/I-19/I-25).
+
+⚠ GAP (G-49): The two-phase swap + state-transform design is by-convention
+at its load-bearing spots: non-vetoing commit, contract-schema identity
+across builds, source continuity under representation change, fallback
+soundness, hidden-state cells, coupled-flow windows, and
+rollback-after-retire. Proposal: KSP-distinguish admission policies
+(Phase 0) from setup-only commit hooks; a contract-version discipline
+guarding importFrom schemaVersion against same-FQN hash collisions; pin
+sourceId adoption vs fresh-source reset when a candidate changes delta
+representation (drain-convergence fallback otherwise); a fallback-tier
+soundness marker refusing catch-up for non-idempotent cells; an explicit
+non-promotable declaration for hidden-state cells; a retention window for
+the retired incumbent's export snapshot with rollback-by-journal-reversal
+semantics pinned against 53/24; and a transform-correctness generative
+harness (93 I-11/I-27/I-21).
 
 ## Durability spectrum
 
@@ -215,3 +405,58 @@ Random identity + replay = resurrected removals and double counts
 (`CrashRecoveryTest` proves both directions). Remaining with a trigger:
 journal segmentation/rotation and the disk-overflow mailbox (33) — the
 first workload where one fsync'd file hurts.
+
+⚠ CONFLICT (C-9): M10 journal replay re-drives effectful sinks
+un-suppressed (replay-stable identity makes *state* safe), contradicting
+the decided `Effectful` processed-frontier suppression (93 I-7).
+
+**Boundary of the landed mechanism** (decided in 93 I-7): un-suppressed
+replay through the ordinary decode path is safe exactly for the
+replay-stable idempotent vocabulary above — ref-derived identities,
+idempotent merges, and anti-entropy/catch-up dedup absorb the
+re-emissions. For non-idempotent emissions and for `Effectful` sinks the
+decided remedy — suppressed-emission replay (outlets NoOp-served, G-32) or
+a durable processed-frontier that drops post-recovery re-delivery as
+already-acted — is design, not code. The decided journal classification
+also diverges from the landed tee: 93 I-7 journals only `PORT_API` data
+plus topology events, while the shipped journal appends every intake frame
+(management included) and does not journal topology at all — the graph is
+rebuilt out-of-band before `recoverFrom`.
+
+⚠ GAP (G-59): The M10 journal replays intake frames, which is sound only
+for deterministic, input-driven cells: wall-clock/random logic,
+spontaneously-emitting sources, Effectful sinks without idempotency keys,
+glitch-free partial-wave buffers, and cross-host recovery-frontier drift
+are unhandled. Proposal: a determinism marker/lint forcing
+non-deterministic cells to output-mode journaling (or a captured-entropy
+WAL record); an emitted-delta log format for sources and a
+processed-frontier shape for Effectful sinks with a generative
+recovery-dedup test; document the external-idempotency ceiling as a stated
+limit; verify deterministic replay reconstructs partial-wave buffers or
+include them in Stateful.snapshot; and evaluate an opt-in coordinated
+checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
+
+⚠ GAP (G-46): Exclusive (Owned/Leased) payloads have no defined story off
+the happy path: a payload parked-but-unsnapshotted at crash is lost with no
+stated at-most-once contract, and the DeadLetter envelope for
+freezing/serializing/redacting them is unspecified. Proposal: state the
+sender-durability contract that makes crash loss at-most-once acceptable
+(or require the producing host to be durable), and pin the DeadLetter
+envelope: Owned → move-by-serialize at capture, Leased → released, with a
+redaction rule for non-serializable payloads — mergeable parked traffic is
+already covered end-to-end by the M10 journal + anti-entropy pair
+(93 I-7/I-22/I-12).
+
+⚠ GAP (G-54): Boundary policy vocabulary beyond peer allowlists is
+undesigned: disclosure projections, capability hand-out/revocation for
+exposed ports and taps, management-plane authority for remote graph
+mutation, multi-hop trust composition, and encryption at rest. Proposal: a
+registered, serialization-friendly ProjectionId transform language with
+stated composition across nested/transitive membranes; exposed refs and
+taps as revocable capabilities where revocation tears down live links
+rather than only refusing new ones (tap attachment governed by the same
+promotion/link authority membrane); an authority model for who may drive
+PORT_MANAGEMENT (spawn/connect/despawn/swap) and attach observers across a
+bridge; hop-composition rules for disclosure/integrity when a peer relays
+disclosed state; and an at-rest encryption stance for durable journals and
+parked/overflow state (93 I-28/I-10/I-20/I-17).

@@ -1,6 +1,6 @@
 # 13 — Links
 
-> **Status**: Partial (handshake phase 1 implemented: Link/LinkResult/unlink/policies; suspension lifecycle and async cross-host results open)
+> **Status**: Partial (handshake phase 1 implemented: Link/LinkResult/unlink/policies; suspension lifecycle and async cross-host results open; rebind, admission/activation, cycle-check, edge-event, and saturation rules decided in 93, unimplemented)
 > **Sources**: ADR — Task Connectivity, ADR — Computelet Kernel, ADR — Anatomy of Cellular Programs
 > **Implementation**: `cell.port.Link`/`LinkResult`/`LinkSupport`/`LinkPolicy`, `cell.port.LinkTo`/`LinkFrom`, `ManagedHost.connect`
 
@@ -48,7 +48,42 @@ fun onLinked(link: Link)
 
 Handshakes are where cardinality (12), ownership constraints (20/23),
 policies, and setup/cleanup run. Rejection reasons include: at capacity,
-schema/contract mismatch, policy denial, ownership violation.
+schema/contract mismatch, policy denial, ownership violation. One rejection
+is structural-topological (decided in
+[93 I-5](../90-roadmap/93-feature-interactions.md)): a `connect` that would
+close a cycle wholly visible to one host and containing no declared
+`CycleHead` (20/22) MUST be `Rejected` with a `CycleWithoutHead` reason — a
+rare-path walk of the new cycle (P2 permits expensive linking). Cross-host
+cycles are not locally visible; they fall to the runtime hop guard (20/22).
+
+**Admission vs activation** (decided in 93 I-26): "link time" decomposes.
+*Admission* is structural and phase-independent — policy predicates, the
+cardinality budget, the ownership exclusive bit, contract compatibility
+`(portName, contractId)`, and protocol-capability negotiation read only
+declaration-derived port metadata, so they run in any lifecycle phase and
+are binding from construction (a cold cell admits). *Activation* is
+behavioral: data traffic dispatches only into an installed handler (10/15);
+a link admitted before activation is live topology with a parked tail —
+inbound invocations park in order and replay at activation, before any
+post-activation send lands. A *stateful* `onLink` (one that consults hot
+state — a per-port declaration; the default is structural-only) on a
+not-yet-hot cell MUST defer on the always-open management inlet (30/33) and
+replay its handshake at activation, surfacing `Connected`/`Rejected` then —
+the same `LinkResult.Deferred` contract already used cross-host (below).
+
+⚠ GAP (G-55): the admission (structural, from construction) vs activation
+(behavioral, handler-establishment) split needs its enforcement surface —
+stateful-onLink classification, deferred-admission result surfacing
+including cross-host, Eager verification, dropped-protocol observability,
+and remote-spawn rejection channels. *Proposal*: a per-port structural-only
+vs stateful `onLink` declaration with defined defer/replay/result-surfacing
+of admission requests to not-yet-hot cells, composing with
+`LinkResult.Deferred` and registry park/replay across the wire; a
+KSP-checked Eager capability (handler in constructor, pure, allocation-free,
+host-context-free) from which unhosted-linking permission derives; a
+count/log policy for protocols dropped before handler install; and a typed
+rejection surface for wrong-color or invalid remote spawns pinned against
+G-26/G-12 (93 I-26/I-15).
 
 *(G-12 phase 1 implemented: `cell.port.Link`/`LinkResult`/`LinkSupport`.
 `linkTo(LinkFrom)` runs the target-side handshake — policies → cardinality →
@@ -73,6 +108,40 @@ path — handshake, `Use.fixed`, bridged (20/23).)*
 migration (30/33) are defined as link manipulation, and links are where
 stale-reference re-resolution happens (40/41).
 
+**Rebind semantics** (decided in 93 I-2): any *new* full-ref link MUST run
+the full target-side handshake — policies → cardinality → `onLink`.
+Migration and RESTART preserve `instanceId` (the same instance moves or
+recovers in place, 30/31, 30/33), so their links are *not* rebinds: direct
+links travel with the cell, routed links re-resolve the same ref, and no
+spurious handshake re-runs. A promotion relink (50/53) *is* a rebind — a new
+`instanceId` — so the handshake DOES re-run against the candidate, including
+the port-compatibility check: for each rebindable link the candidate MUST
+present a port with matching `(portName, contractId)`, else the relink is
+`Rejected`. No link ever transfers silently past its veto point.
+
+For the promotion swap, admission is hoisted out of the commit (decided in
+93 I-11): the candidate's link policies are dry-run against each inbound
+`LinkRequest` in a side-effect-free Phase 0, before any traffic buffers, so
+the commit-time relink runs `onLink` as *setup only* and MUST NOT newly
+reject. Buffered traffic's home is the retained incumbent until the commit
+fully succeeds — a failed commit re-greens onto the incumbent and replays
+the buffer there, so no buffered message is ever orphaned (50/53).
+
+⚠ GAP (G-49): the two-phase swap + state-transform design is by-convention
+at its load-bearing spots — non-vetoing commit, contract-schema identity
+across builds, source continuity under representation change, fallback
+soundness, hidden-state cells, coupled-flow windows, and
+rollback-after-retire. *Proposal*: KSP-distinguish admission policies
+(Phase 0) from setup-only commit hooks; a contract-version discipline
+guarding `importFrom` schemaVersion against same-FQN hash collisions; pin
+sourceId adoption vs fresh-source reset when a candidate changes delta
+representation (drain-convergence fallback otherwise); a fallback-tier
+soundness marker refusing catch-up for non-idempotent cells; an explicit
+non-promotable declaration for hidden-state cells; a retention window for
+the retired incumbent's export snapshot with rollback-by-journal-reversal
+semantics pinned against 53/24; and a transform-correctness generative
+harness (93 I-11/I-27/I-21).
+
 ## Policies
 
 A **policy** is a predicate/effect pair attached to a port or membrane,
@@ -90,6 +159,20 @@ peers, encryption requirements (40/43), rate limits, resource quotas.
 marker; verification is G-29. Flow-time policies wait for the membrane
 layer. Failure **supervision** policies are deliberately not link policies:
 they are host-management configuration per cell — see 30/31 rule 5.)*
+
+⚠ GAP (G-54): boundary policy vocabulary beyond peer allowlists is
+undesigned — disclosure projections, capability hand-out/revocation for
+exposed ports and taps, management-plane authority for remote graph
+mutation, multi-hop trust composition, and encryption at rest. *Proposal*:
+a registered, serialization-friendly ProjectionId transform language with
+stated composition across nested/transitive membranes; exposed refs and
+taps as revocable capabilities where revocation tears down live links
+rather than only refusing new ones (tap attachment governed by the same
+promotion/link authority membrane); an authority model for who may drive
+PORT_MANAGEMENT (spawn/connect/despawn/swap) and attach observers across a
+bridge; hop-composition rules for disclosure/integrity when a peer relays
+disclosed state; and an at-rest encryption stance for durable journals and
+parked/overflow state (93 I-28/I-10/I-20/I-17).
 
 ## Cross-boundary links
 
@@ -112,7 +195,33 @@ suspended target: connected link buffers/fails-fast per policy, then
 re-resolves (never silently drops)
 ```
 
+**Edge events** (decided in 93 I-13): a successful `onLink`/`onUnlink` on a
+topology-interested edge MUST emit an in-band `EdgeOpen`/`EdgeClose` marker
+riding the link's own per-link FIFO channel — `EdgeOpen` ahead of any data,
+`EdgeClose` after the final data — so topology changes sit in the same
+logical-time domain as the waves they affect (20/22 §Topology versioning).
+Emission is gated on a downstream having expressed topology-order interest;
+outlets without glitch-free subscribers pay nothing.
+
 Invariant (normative): **no message loss at link operations** — a message
 accepted by a link before `unlink`/suspend MUST be delivered or explicitly
 parked in a durable/inspectable place; ordering per link MUST be preserved
-(see 30/33 for the drain protocol).
+(see 30/33 for the drain protocol). Under intake saturation (decided in
+93 I-12) the invariant extends to name the SATURATED state: a message
+accepted by a link MUST be delivered, coalesced (mergeable deltas fold into
+a bounded per-source pending slot), or parked in a bounded inspectable
+place — with a visible dead-letter on park overflow, never silent loss.
+
+⚠ GAP (G-34): intakes are unbounded — no saturation signal, no admission
+gate; the ADR-2 color bridges are degenerate and every parking bound
+(pre-activation park, router funnel, park-at-sender) is unenforceable.
+*Proposal*: a three-state OPEN/SATURATED/CLOSED intake flag on the existing
+closure fast-path read; saturated sends dispatch by payload class
+(mergeable deltas coalesce into bounded per-source pending slots,
+exclusive/non-mergeable park in-order at the sender, management band
+exempt); `SaturationSignal` rides the metadata plane upstream with a
+terminal park-overflow policy (visible dead-letter default, Block(timeout)
+opt-in only, with Block × glitch-free-wave semantics pinned), realized at
+the `enqueueHostedInvocation` seam keyed by (senderHostColor,
+targetHostColor), including the cross-wire saturation frame vs transport
+flow control (93 I-12/I-15/I-9/I-19/I-26).

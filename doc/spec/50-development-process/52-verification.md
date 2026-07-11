@@ -1,6 +1,6 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9 — live *continuous* production shadowing still awaits a long-running runtime)
+> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9 — live *continuous* production shadowing still awaits a long-running runtime; observation membrane, exclusive-payload discharge + taps, monitor bands, replica-convergence invariants, and the Effectful processed-frontier are design decided in 93, unimplemented)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
 > **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); seeded harness = `cell.host.SimulationController`
 
@@ -34,6 +34,27 @@ the simulation to idle, and fails with the violation payloads. Cell errors
 feed the same machinery: an `ErrorReporting` cell's `errorOutlet` (31) links
 straight into an invariant cell.
 
+*(Replica convergence — decided in
+[93 I-3](../90-roadmap/93-feature-interactions.md), unimplemented)*: a
+convergence invariant over a replicated cell attaches by the same rule. It
+MUST link to **each replica's** delta outlet — replicas enumerated via
+`replicasOf(id)` (42) — fold the per-replica streams independently, and
+assert the folds agree at quiescence. Each link fires the ordinary
+idempotent catch-up, so the anti-entropy catch-up doubles as the invariant's
+late-join feed; no merged global view is needed. Replicas of one `logicalId`
+are the special case of the harness's cross-view convergence assertion where
+the views share a `logicalId`.
+
+⚠ GAP (G-45): the gossip-mesh skeleton lacks its liveness and churn
+arguments — membership-churn reconvergence is unproven, shutdown of the last
+connected replica is unpoliced, and convergence invariants can
+false-positive on replicas that legitimately depart mid-run. *Proposal*:
+state the bounded-gossip-hop reconciliation argument (duplicate/stale mesh
+links safe by tag idempotence) with a generative membership-churn harness;
+define graceful last-replica handoff to durable storage (G-25) vs accidental
+deletion; give cross-replica convergence invariants a departed-stream rule
+(93 I-3).
+
 *(Generative graph harness, M4.6 — G-31 complete)*: seeded random pipelines
 from the data-cell vocabulary are emitted as `GraphSpec`s (51) — built on one
 view host, replayed verbatim onto another — and driven with random op
@@ -48,7 +69,10 @@ keeping concurrency out of the kernel. The deterministic harness exists:
 `cell.host.SimulationController` drives any number of `ManagedHost`s
 single-threadedly, seed-randomized across hosts, reproducible per seed.
 (Virtual time is deliberately omitted — nothing in the kernel is timer-driven
-yet; add it when something is, e.g. G-19 throttling.) The first seeded
+yet; add it when something is, e.g. G-19 throttling. The attention
+suspension policy window needs none of it: it is counted in host scheduling
+steps, not wall time — decided in 93 I-9 — so it is testable here
+deterministically by step count.) The first seeded
 invariant harness is the glitch-freedom diamond test (20/22): 200 seeds
 asserted invariant-style, plus a control run proving the harness can produce
 the failure it guards against.
@@ -71,6 +95,94 @@ inlet of an `Effectful` cell, so a shadow subgraph is judged (invariant
 cells on its outlets) without acting twice on the world. Verified:
 `ShadowPromotionTest` — including the control where an unsuppressed shadow
 sink double-fires.
+
+*(Observation membrane — decided in 93 I-17, unimplemented; amends the
+granularity of the resolved G-32 mechanism above)*: effect classification
+refines from the cell marker to a contract flag — `@Contract(effect = true)`
+on world-touching boundary contracts, emitted by the same KSP scan as the
+management flag (12). Suppression MUST cut at exactly those boundary
+contracts, never at a cell's data inlets: interior cells run fully, so the
+judge still sees every derived delta (the cell-granularity rule above
+deletes exactly the emissions a judge needs for a mid-graph effectful cell).
+The `Effectful` cell marker demotes to a coarse fallback for opaque in-logic
+I/O: such a cell is replaced wholesale by a NoOp/mock instance and
+terminates judgeability downstream of itself, flagged at cut construction.
+Further membrane rules: **taps are downstream-only** — the shadow-side port
+negotiates no upstream protocol capabilities, so shadow-raised attention or
+state-requests drop at the membrane and a read-only shadow can never summon
+production computation (it initializes only via the downstream late-join
+catch-up, 21); the cut MUST be **SCC-closed** — feedback cycles close inside
+the membrane as real shadow→shadow links, and a loop that would re-enter
+production marks the shadow open-loop only (judged as a transfer function,
+never granted closed-loop claims); the **shadow owns its own boundary
+instances** — fresh shadow instances of every effect-boundary cell, the tap
+being the only production→shadow edge, which prevents double-fire
+structurally; and **gate invariants** (promotion-deciding, unlike eager
+monitoring invariants which may see glitches) are trusted only at consistent
+evaluation points — glitch-free per-wave evaluation (20/22) when their
+inlets share an upstream fork, convergence-at-quiescence for independent
+sources.
+
+*(Exclusive payloads in shadow mode — decided in 93 I-20, unimplemented)*:
+NoOp-serving an inlet whose contract carries an exclusive payload MUST
+install a **discharging** sink, not a plain drop: `Owned` →
+`take()`-and-drop (consume-once satisfied), `Leased` → `release()` (buffer
+returned to its pool) — generated from the same exclusive bit (20/23).
+Observation of exclusive flows is the decided province of **taps**: an
+Observe-role link receives a `Borrowed` projection of the outlet contract,
+fired before the sole consumer and uncounted by the SPSC rule, so
+invariants, shadows, and judges watch an exclusive pipeline without
+contending for consumption.
+
+⚠ CONFLICT (C-11): `Shadow.spawn`'s plain NoOp proxy drops Owned/Leased
+payloads without `take()`/`release()`, contradicting the decided
+discharging-sink rule for exclusive payloads (93 I-20).
+
+⚠ GAP (G-47): the uncounted read-only Tap (a Borrowed projection fired
+before the sole consumer) that lets invariants/shadows/judges observe
+exclusive flows is adopted but unbuilt — projection derivation, catch-up,
+and copy-fork are open. *Proposal*: KSP derives Borrowed-projected observer
+descriptors from exclusive-carrying contracts (nested/generic payloads,
+link-time validation that a tap's contract equals the outlet projection);
+taps on exclusive flows are attach-forward-only (no retained history to
+replay); a Cloneable/copy capability for `Shadow.forkExclusive` with a
+stated failure mode for uncloneable payloads and unspecified Leased forks
+(93 I-20).
+
+*(Monitor attention — decided in 93 I-9, unimplemented)*: a live invariant
+monitor holds its subgraph awake through `setSelf` attention only, never a
+bespoke exception. A *passive* monitor emits NONE — it observes while the
+subgraph is independently awake and catches up on resume via late-join (21),
+tolerating observation gaps; an *active* monitor (liveness, security) emits
+LOW, yielding to real HIGH work under the stride floor (30/34). A monitor
+MUST NOT pin HIGH.
+
+*(Effectful recovery — decided in 93 I-7, unimplemented)*: the `Effectful`
+marker connects to durability. An `Effectful` sink SHOULD journal a
+**processed-frontier** — a durable record of the tags/waves it has already
+acted on — so both journal replay and post-recovery live re-delivery are
+*deduped* (dropped as already-processed) rather than re-acted. Divergence,
+recorded: the I-7 resolution's linchpin was replay with outlets NoOp-served
+(this section's suppression mechanism) so recovery never re-transmits; the
+landed M10 design instead replays intake frames with emission
+**un-suppressed** (the recovering flag only prevents re-journaling), made
+safe for *state* by replay-stable identity + idempotent merges + catch-up
+dedup — which is exactly what leaves effectful sinks exposed on replay
+(conflict C-9, recorded at 30/31 and 20/24). The processed-frontier is the
+decided closure for that case.
+
+⚠ GAP (G-59): the M10 journal replays intake frames, which is sound only
+for deterministic, input-driven cells — wall-clock/random logic,
+spontaneously-emitting sources, Effectful sinks without idempotency keys,
+glitch-free partial-wave buffers, and cross-host recovery-frontier drift are
+unhandled. *Proposal*: a determinism marker/lint forcing non-deterministic
+cells to output-mode journaling (or a captured-entropy WAL record); an
+emitted-delta log format for sources and a processed-frontier shape for
+Effectful sinks with a generative recovery-dedup test; document the
+external-idempotency ceiling as a stated limit; verify deterministic replay
+reconstructs partial-wave buffers or include them in `Stateful.snapshot`;
+evaluate an opt-in coordinated checkpoint for tightly-coupled subgraphs
+(never global, per P4) (93 I-7).
 
 ## What stays example-based
 

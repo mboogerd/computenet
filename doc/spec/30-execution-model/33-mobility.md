@@ -48,6 +48,20 @@ minimal (P2): senders pay only a volatile read + enqueue, ever.
   registry-carrying host publishes the cell; despawn unpublishes.)*
   Re-resolution MAY return a persistent overflow mailbox (disk queue) when the
   target is suspended indefinitely (13, 24-durability) — not yet built.
+- Re-resolution resolves only the **same full ref** — park/replay never
+  crosses an instance boundary (decided in
+  [93 I-3](../90-roadmap/93-feature-interactions.md)). A sender parked on a
+  closed intake replays into *that instance's* next published location, never
+  into a sibling replica (40/42). Switching replicas is an **explicit
+  relink** — a rare-path topology op, never automatic: always safe for a
+  mergeable target (replicas are equivalent; tags make the re-catch-up
+  idempotent); for a single-writer target the relink MUST target the leader.
+- Parked-write safety for single-writer cells (decided in 93 I-25): a parked
+  write replays only onto the **epoch-confirmed leader**. RESTART, migration,
+  and suspend-resume preserve the instance, so replay lands on the same
+  leader ref by the rule above; failover is an explicit promotion relink
+  (50/53). While leadership is unresolved or contested the write MUST stay
+  parked, released only once a single epoch-confirmed leader exists.
 
 This is the Link-and-Lease invalidation story (10/14) applied to location:
 optimistic send, lazy re-resolution, O(rare-event) cost.
@@ -90,6 +104,19 @@ How the implementation realizes the steps (`HostManagementApi`):
 - Color validation applies at the target: migrating marked cells across colors
   is a caller error; 🟢 pure cells cross freely (32).
 
+Step 3 couples snapshot capture to deactivation because in migration the
+instance leaves. In *promotion* (50/53) they decouple (decided in 93 I-27;
+matches the landed swap): the snapshot is a pure read taken at a quiescent
+inter-invocation boundary, the incumbent is retained hot until retire, and
+`onDeactivate` runs only at the final despawn. Promotion's *catch-up
+fallback* is narrower than 50/53 §G-33 currently states: it is sound only
+for cells idempotent across a source-identity change and MUST emit the
+`ReBaseline` supersession notice (93 I-22); cells whose merge is
+non-idempotent across sources (`CounterCell`) MUST hand state over by
+restore/transform instead. The landed fallback is silent — the candidate
+emits under a fresh sourceId with no supersession signal — and diverges from
+this decided rule.
+
 ## Port-level buffering: the traffic-light primitive (implemented)
 
 `cell.membrane.TrafficLightCell` (promoted from test code in M3.4 — a real
@@ -106,6 +133,24 @@ statement, not new machinery: the same `Buffering` capture — invocations
 parked in order with their contexts — is the primitive behind **both**
 port-level suspension (this cell) and location-level parking (the
 `LocationRegistry`). Suspension is one behavior at two granularities.
+
+A third use of the same primitive is decided, unimplemented (93 I-26): the
+**pre-activation parking window**. "Link time" splits into *admission*
+(structural — descriptor, cardinality, policy; binding from construction)
+and *activation* (behavioral — the served handler). Traffic admitted before
+the handler is installed MUST park in this same `Buffering` capture, in
+order with contexts, and replay on activation before any post-activation
+send lands — to the message path, a cold-admitted-but-unactivated cell is
+identical to a suspended one. Eager cells (10/15, C-7) are the
+zero-length-window case.
+
+⚠ GAP (G-53): cross-port couplings (Symport/Antiport, 11) can wait forever
+when one coupled port never fires for a wave, and the fate of a
+half-completed coupled transaction caught in a promotion-swap buffering
+window is undefined. Proposal: a timeout/veto/abort policy for stalled
+couplings that composes with no-message-loss and the drain protocol, plus
+ordering semantics for coupled transactions across a buffered swap window
+(93 I-10/I-11).
 
 ## Exit criterion (M3) — met
 

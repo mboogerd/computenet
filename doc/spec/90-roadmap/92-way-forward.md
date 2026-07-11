@@ -375,6 +375,217 @@ block-list churn, a mid-run snapshot/restore twin, and a hosted late
 joiner served by catch-up — with a retraction-blind control fold that
 must diverge.*
 
+## Milestone 12+ — Post-M11 sequencing ⚠ PROPOSED, NOT COMMITTED
+
+> **Status**: proposal only. Milestones 1–11 above are *records* of landed
+> work; everything below is a *plan*, derived from the 93 feature-interaction
+> analysis (I-1..I-28), its gap sweep (G-34..G-62), and the four
+> code-vs-decided-design conflicts (C-9..C-12). Argue with it before building
+> against it. Ordering rationale: substrate first — everything downstream
+> rides bounded flow control, a metadata plane that crosses the wire, and the
+> wave-completeness machinery (M12); recovery/identity next because the four
+> conflicts live there and every hardening story presumes non-aliasing epochs
+> (M13); then hardening of the landed replication/evolution machinery (M14);
+> then structure/authority (M15) — promotion *authority* deliberately waits
+> for the membrane/policy layer it is gated by; the economic layer last (M16)
+> because every earlier interest-driven deferral points at it. Every G-nn
+> below is carried inline in the referenced spec files; sources cite the 93
+> challenges that produced it.
+
+## Milestone 12 — Substrate: flow control + the wire-crossing metadata plane (proposed)
+
+*Goal: the two load-bearing substrates every later milestone rides — bounded
+intakes with a saturation signal, and generic protocols that cross the wire —
+plus the wave-completeness machinery (pull, baselines, edge events, frontier
+progress) that makes glitch-freedom true off the happy path.*
+
+1. M12.1 — descriptor/lint sweep (G-60): one KSP pass extending the M5.6
+   exclusive-bit scan — protocol descriptors + registry, effect-boundary
+   flag, `@Key`, magnitude/idempotentMerge, Eager, determinism, pull-safety,
+   and fallback-tier bits, with compile-fail lints for the associated
+   violations (93 I-1/I-5/I-6/I-7/I-8/I-15/I-16/I-17/I-26/I-27). The enabler
+   for everything below.
+2. M12.2 — bounded intakes + backpressure (G-34): three-state
+   OPEN/SATURATED/CLOSED intake word; saturated sends dispatched by payload
+   class (mergeable coalesce, exclusive park at sender, management exempt);
+   `SaturationSignal` upstream on the metadata plane; visible-dead-letter
+   park-overflow default (93 I-12/I-15/I-9/I-19/I-26).
+3. M12.3 — protocol plane crosses the wire (G-35) + transitive propagation
+   (G-36): PORT_PROTOCOL frame path with reverse-channel realization and
+   cross-peer capability negotiation; one hop-by-hop re-emission rule for
+   metadata notices with loop prevention (93 I-1/I-4/I-17/I-9 and
+   I-1/I-4/I-9/I-16/I-18).
+4. M12.4 — state-request pull (G-37) + catch-up baseline semantics (G-38):
+   `RequestState(replyTo, since)` answered by ordinary state-as-delta, keyed
+   on a per-link liveness epoch; catch-up as a topology-versioned BASELINE
+   excluded from wave completeness, glitch-freedom resuming at the first
+   post-install-complete wave (93 I-16/I-1 and I-24/I-16).
+5. M12.5 — topology EdgeEvents (G-39): in-band EdgeOpen/EdgeClose markers
+   with per-source floors, downstream source-set delta propagation with a
+   liveness proof, bridged frame ordering, the JoinBarrier coordinator
+   (93 I-13/I-14).
+6. M12.6 — frontier stall/progress (G-40): per-source per-edge watermarks,
+   Progress absorb-acks at a defined quiescence boundary, typed
+   `Stall(reason, recoverable)` with WAIT | DEGRADE | RE-SCOPE per-edge
+   policies (93 I-18).
+
+*Proposed exit criterion: a generative harness where a glitch-free join over
+a bridged, saturating, churning topology — links added/removed mid-wave, a
+late joiner arriving mid-wave, an absorbing effective-only-silent arm, a
+suspended remote arm — converges under 100 seeds with zero silent loss
+(every overflow a visible dead letter), and cross-host attention convergence
+under frame reorder/duplication proves the protocol plane's wire crossing;
+control runs (unbounded intake; no Progress watermark, so WAIT stalls
+forever) proving the harness detects what it guards against.*
+
+## Milestone 13 — Recovery + identity: epochs, re-baseline, the four conflicts (proposed)
+
+*Goal: restart, replay, and merge re-emission stop aliasing — the four
+code-vs-decided-design conflicts (C-9..C-12) are fixed, and source epochs get
+their hygiene story.*
+
+1. M13.1 — restart-rebaseline (G-43), **fixing C-12**: RESTART becomes
+   restore-freshest-checkpoint + fresh source epoch + generation-stamped
+   ReBaseline supersession, replacing the landed spawn-checkpoint restore
+   that keeps emitting under the same outlet sourceId/counter;
+   supersede-vs-remove precedence, bounded re-baseline cost, poison-write
+   escape, the deadLetter→requestState recovery cell
+   (93 I-22/I-2/I-7/I-18/I-19/I-25).
+2. M13.2 — source-epoch hygiene (G-42), **fixing C-10**: reclamation of
+   provably-superseded epochs riding G-25 checkpoints, frontier GC for
+   orphaned partial waves, migration payload carrying the outlet counter
+   high-water, journal-derived generations; the origination-at-merge rule
+   lands — a replica re-emitting an effective post-merge delta mints a fresh
+   wave, replacing `SetCell.applyRemote`'s transparent re-emission under the
+   incoming wave (93 I-14/I-22/I-3/I-7).
+3. M13.3 — durability replay residuals (G-59), **fixing C-9**: determinism
+   marker/lint, output-mode journaling for spontaneously-emitting sources,
+   and the Effectful processed-frontier so journal replay stops re-driving
+   effectful sinks un-suppressed (93 I-7).
+4. M13.4 — exclusive-payload discharge, **fixing C-11**: `Shadow.spawn`'s
+   NoOp proxies become discharging sinks — `take()` Owned, `release()`
+   Leased — instead of silently dropping exclusive payloads (93 I-20; the
+   fuller crash-contract and tap design follows in M14.3).
+5. M13.5 — cycle-guard realization (G-41): the admission/well-formedness
+   half (≥1 head per elementary cycle, cross-host detection or an explicit
+   hop-guard-only stance, calibrated hop bounds, feedback-join snapshots)
+   plus the head's generation-bump under RESTART and swap-on-live-cycle —
+   the item stitching this milestone to M12's topology substrate; weak-tier
+   fixpoint convergence stays open under G-19 (93 I-5/I-6/I-17/I-22).
+
+*Proposed exit criterion: a kill/restart harness where a graph containing an
+effectful sink, a replicated set, an exclusive pipeline, and a headed cycle
+survives repeated crash-recovery and per-cell RESTART under 100 seeds with
+no double-fired effect, no resurrected removed element, no double count, and
+no aliased wave or tag; control runs (aliasing restart; replay-blind
+effectful sink) diverging on every seed.*
+
+## Milestone 14 — Distribution hardening: replication + evolution machinery (proposed)
+
+*Goal: the landed replication (M7/M10) and evolution (M9) machinery gets its
+liveness, failure, and transaction stories.*
+
+1. M14.1 — leader election + failover (G-44): opt-in epoch-claim election
+   folded from the membership index, a failure-detection window that is not
+   a second heartbeat protocol, the witness-set unpark rule for SAFETY_PARK,
+   an application-level reconciliation hook for fenced divergent writes
+   (93 I-25/I-2/I-3/I-8).
+2. M14.2 — replication mesh hardening (G-45): the bounded-gossip-hop
+   reconciliation argument with a membership-churn harness, graceful
+   last-replica handoff to durable storage, a departed-stream rule for
+   cross-replica convergence invariants (93 I-3).
+3. M14.3 — exclusive payloads off the happy path: the crash/dead-letter
+   contract (G-46: at-most-once statement, DeadLetter envelope —
+   freeze/serialize/redact) and observation taps (G-47: KSP
+   Borrowed-projections, attach-forward-only, `Shadow.forkExclusive`)
+   (93 I-7/I-22/I-12 and I-20).
+4. M14.4 — reverse-topology index (G-48): inbound/outbound links per full
+   ref including bridged links, serving promotion swap sets, SCC closure for
+   observation-membrane cuts, and instancesOf orchestration
+   (93 I-2/I-11/I-17).
+5. M14.5 — promotion transaction hardening (G-49) + GraphSpec remote apply
+   (G-51): PRECHECK/non-vetoing-commit discipline, contract-version guard,
+   source continuity vs announced fresh-epoch fallback, rollback retention
+   window; partial-apply semantics, structured ApplyReport, eager cold
+   pre-validation (93 I-11/I-27/I-21 and I-21/I-26).
+
+*Proposed exit criterion: a leader-churn + promotion harness — a
+single-writer replicated cell survives leader kill and re-election under
+partition (parked writes never lost, fenced divergence surfaced to the
+reconciliation hook), and a remote promotion swap either commits fully or
+rolls back to the retained incumbent with the ApplyReport saying which —
+100 seeds, with control runs (no fencing accepts split-brain writes; silent
+partial apply) proving detection.*
+
+## Milestone 15 — Structure + authority: membranes, boundaries, partitions, placement (proposed)
+
+*Goal: the composition story becomes real — membranes with a policy
+vocabulary, the first keyed partitioned cell (the G-24 trigger armed since
+M11), and an engine that decides where cells land.*
+
+1. M15.1 — membrane realization (G-52) + coupling liveness (G-53):
+   KSP-generated Mediate proxies, DSL lowering, exposed-alias resolution
+   across the wire, nested/transitive exposure, Remint interplay; a
+   timeout/veto/abort policy for stalled Symport/Antiport couplings
+   composing with drain and the swap window (93 I-10 and I-10/I-11).
+2. M15.2 — boundary authority + disclosure (G-54): ProjectionId transform
+   language, exposed refs and taps as revocable capabilities (revocation
+   tears down live links), management-plane authority across bridges,
+   hop-composition rules, an at-rest encryption stance
+   (93 I-28/I-10/I-20/I-17).
+3. M15.3 — cold-activation split enforcement (G-55): structural-only vs
+   stateful onLink declaration, deferred admission surfaced across the wire,
+   KSP-checked Eager capability, dropped-protocol observability, typed
+   remote-spawn rejections (93 I-26/I-15).
+4. M15.4 — partitioned cell (G-56) + logical rendezvous (G-57): the G-24
+   build — routing-epoch consistency under concurrent migration,
+   repartition-window bounds, supervision-follows-placement, per-shard
+   leader routing, scatter-gather range reads, per-key attention routing;
+   plus the instance-selection policy over instancesOf and the instanceId
+   collision discipline (93 I-8/I-19/I-9 and I-2/I-21).
+5. M15.5 — promotion policy + authority (G-50): the serializable
+   PromotionPolicy artifact (windows, criteria, differential comparison),
+   registration/trigger authority gated by the membrane/policy layer —
+   hence sequenced after M15.1/M15.2 — canary staging, partitioned rolling
+   promotion (93 I-21/I-17/I-27).
+6. M15.6 — placement engine (G-61): color-aware co-hosting from
+   CellDescriptor.color, GraphSpec placement constraints, multi-host replay
+   routing, spawn redirection (the M8.1 remainder) as its enforcement hook,
+   membrane co-location cost policy (93 I-15/I-11/I-19).
+
+*Proposed exit criterion: a membrane-wrapped partitioned keyed dataset
+spanning peers where external clients resolve only exposed aliases (interior
+refs never leak; revoking a capability tears down its live link), a
+repartition racing an organelle migration loses nothing, a policy-gated
+canary promotion of one shard's cell is promoted or aborted by its declared
+criterion, and a wrong-color spawn is redirected by the placement engine —
+100 seeds, with control runs (leaked interior resolution; criterion-blind
+promotion) proving detection.*
+
+## Milestone 16 — Economics + attention hardening (proposed)
+
+*Goal: interest gets a budget — the economic layer every earlier
+interest-driven deferral points at, plus the attention protocol's remaining
+realization details.*
+
+1. M16.1 — attention protocol hardening (G-58): per-emitter version
+   minting/wraparound and migration collision-freedom, frontier state across
+   migrate/relink, deadlineHint min-fold, the retraction × atomic-park race
+   via the NonSuspendable veto, policy-window calibration, monitor band
+   pinning vs the stride floor (93 I-4/I-9).
+2. M16.2 — economic layer (G-62): the G-6 residual on the G-28 quota walk —
+   replica spawn-vs-subscribe, migration-toward-attention, partition
+   split/merge and resharding triggers, per-Principal attention budgets with
+   a concrete cost to mint an identity (the Sybil economics)
+   (93 I-3/I-9/I-19/I-8/I-28).
+
+*Proposed exit criterion: an economically-governed session where replicas
+spawn where sustained attention and budget justify them and quiesce when
+either decays, a hot partition splits and a cold pair merges under the
+declared triggers, and a Principal claiming maximal attention cannot summon
+more computation than its budget bounds — 100 seeds, with a budget-blind
+control run exhibiting the resource capture the layer prevents.*
+
 ## Working agreements (process, immediate)
 
 - **Specs lead code**: changes to semantics update the relevant spec file in

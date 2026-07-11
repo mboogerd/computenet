@@ -1,15 +1,17 @@
 # 34 — Scheduling and Attention-Driven Execution
 
-> **Status**: Implemented (M6): decisions below are code
-> **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol)
+> **Status**: Implemented (M6): decisions 1–4 below are code; decisions 5–6 and
+> additions marked "(decided in 93 I-n)" are decided design, unimplemented
+> **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol); 93 (I-4, I-9, I-16, I-18, I-28)
 > **Implementation**: `cell.attention.AttentionSupport`/`AttentionBand` over generic-protocol
 > sub-channels (`cell.port.Protocols`, G-13 minimal); host mapping in `ManagedHost` +
 > `AttentionPolicy` (band dispatch, stride floor, NONE-window park/replay);
 > `GlitchFreeCell.WaveMode` WAIT/DEGRADE. Verified: `AttentionGenerativeTest`
 > (100 seeds + starvation control), `GlitchFreeSuspensionTest`.
 > Remaining: attention does not cross the wire (bridged links carry no
-> protocol endpoints — revisit with replication, 42); notices are single-hop
-> (a join sees only direct upstream parks, not transitive ones).
+> protocol endpoints — G-35 below; revisit with replication, 42); notices are
+> single-hop (a join sees only direct upstream parks, not transitive ones —
+> G-36 below).
 
 ## Principle
 
@@ -40,8 +42,9 @@ Minimal attention model compatible with the above:
   message; emitted by sinks (UIs, subscriptions, invariant monitors).
 - Each cell/port aggregates downstream attention (default: max; sum for
   load-signaling variants) and re-emits upstream on change — itself
-  incremental dataflow (attention updates are deltas; magnitude throttling
-  applies to attention itself to prevent oscillation storms).
+  incremental dataflow (an attention update carries a *current-level
+  snapshot*, not a delta — the band change is the increment; magnitude
+  throttling applies to attention itself to prevent oscillation storms).
 - Hosts map attention to concrete resources:
   - 0 for longer than a policy window → suspend (33);
   - >0 on a suspended subgraph → resume;
@@ -49,7 +52,19 @@ Minimal attention model compatible with the above:
     management > router > data bands with per-attention data bands);
   - persistent high attention + remote hotspot → migration candidate (40/42).
 
-## Decisions (M6 planning; formerly "open questions")
+⚠ GAP (G-35): generic protocols (`PORT_PROTOCOL`) cannot cross the wire and
+peers cannot negotiate or version each other's protocol capability sets —
+attention, saturation, state-request, and taps all stop at a bridge.
+Proposal: bridge egress/ingress gain a `PORT_PROTOCOL` frame path (one
+WireFrame type variant, a direction tag, a reverse-channel realization for
+upstream protocols over the reverse bridge path a cross-host link already
+maintains); the link's negotiated protocolCapabilities generalizes to
+cross-peer negotiation with a versioned ProtocolId↔contractId mapping and
+downstream-only capability sets for shadow taps; verified by a generative
+frame-reorder/duplication harness (cross-host attention convergence as the
+first case) (93 I-1/I-4/I-17/I-9).
+
+## Decisions (1–4 from M6 planning, formerly "open questions"; 5–6 decided in 93)
 
 1. **Aggregation is programmable per cell, damped by quantization.**
    Aggregation is a per-cell strategy (`AttentionAggregator` on
@@ -72,13 +87,49 @@ Minimal attention model compatible with the above:
    non-monotone strategies (sum, decay) from re-exciting cycles. A sink that
    loses interest emits level 0 or unlinks (unlink already shrinks the link
    set).
+
+   The algebra beneath the fold
+   (decided in [93 I-4](../90-roadmap/93-feature-interactions.md),
+   unimplemented): attention is **per-link last-writer-wins level state**,
+   not a delta stream. An aggregating cell/port holds one level slot per
+   direct downstream link plus a *self* slot (`setSelf` — sinks and monitors
+   pin intrinsic interest there); an `AttentionUpdate(level, version,
+   deadlineHint?)` carries the emitter's *current* aggregate level with a
+   per-emitter monotonic `version`, and a receiver MUST apply it iff the
+   version exceeds the slot's stored one. The idempotency law is structural:
+   duplicate delivery on one link is absorbed by LWW, while genuine fan-out
+   to two distinct consumers is two slots, counted by design (`sum` counts
+   both — load semantics; `max` collapses them — priority semantics); the
+   fold is commutative and associative, so arrival order never matters.
+   Retraction is slot removal: `onUnlink` drops that link's slot and
+   re-folds the remainder, and an in-flight update for a removed link is
+   dropped (no slot to key it) — the attention frontier is the current
+   downstream link set, topology part of the aggregate exactly as in the
+   glitch-free frontier (22).
+
+   ⚠ GAP (G-58): the per-link LWW attention algebra leaves realization
+   details open — version minting and wraparound, frontier state across
+   migrate/relink, deadlineHint folding, retraction racing suspension-region
+   atomicity, policy-window calibration, and band pinning for hard monitors.
+   Proposal: pin the per-emitter monotonic version's minting scope,
+   wraparound, and migration collision-freedom; decide
+   frontier-as-migratable-snapshot-state vs rebuild-by-re-announce and its
+   trigger boundary; a min/earliest fold for deadlineHint distinct from the
+   level fold; settle the retraction × atomic-park race via the
+   veto/NonSuspendable contagion; calibrate policyWindowSteps against graph
+   depth; and decide whether hard real-time monitors may pin above LOW
+   composing with the stride floor (93 I-4/I-9).
 2. **Fairness floor = park-not-drop + a deterministic service stride.**
    Two floors, one per resource lever:
    - *Suspension floor*: attention-driven suspension uses the same
      park-and-replay buffering as 33 — a quiesced subgraph loses latency,
      never messages. Suspension requires band NONE sustained for a policy
      window (measured in host scheduling steps, not wall time, so the
-     simulated host stays deterministic).
+     simulated host stays deterministic). Recovery on resume
+     (decided in 93 I-16, unimplemented): a resumed subgraph MUST recover by
+     park-replay when its buffer is intact, and by a state pull only when
+     the buffer was dropped — never both; buffer survival (the registry's
+     park-vs-drop distinction, a per-link liveness epoch) selects the arm.
    - *Queue floor*: within the data region of the host queue, bands map to
      priorities, but after `stride` consecutive dequeues of
      higher-band tasks the host MUST service the oldest queued lower-band
@@ -109,6 +160,104 @@ Minimal attention model compatible with the above:
    catch-up (21). No new kernel mechanism: regions are a link-graph walk,
    the veto is a marker interface, and a notice is an ordinary
    generic-protocol message.
+
+   The notice generalizes (decided in 93 I-18, unimplemented):
+   the shipped suspended/resumed pair becomes a typed `Stall(reason,
+   recoverable)` / `Resume` frontier-event family covering suspension,
+   supervision RESTART, dead-letter, and exactly-once loss; a join disposes
+   per edge keyed on recoverability — **WAIT** (the default, park-not-drop)
+   or **DEGRADE** for recoverable stalls (suspended, restarting), and
+   **RE-SCOPE** (advance past the lost wave, evaluate over the reduced set,
+   and surface a `GlitchViolation`) as the only admissible disposition for
+   terminal ones (dead-lettered, lost).
+
+   ⚠ GAP (G-40): a glitch-free join cannot distinguish an
+   effective-only-silent arm from a dead one — wave completeness blocks
+   forever on absorbing, suspended, restarting, or dead-lettered frontier
+   edges. Proposal: per-source per-edge watermarks advanced by real deltas,
+   by metadata-plane Progress absorb-acks emitted at a precisely defined
+   quiescence boundary, or by later waves (monotone close); typed
+   Stall(reason, recoverable) markers with per-edge WAIT | DEGRADE |
+   RE-SCOPE policies keyed on recoverability; pin the DEGRADE correctness
+   contract (how downstream distinguishes a degraded emission), calibrate
+   the backstop deadline against frontier depth, and build the generative
+   completeness harness (93 I-18).
+
+   ⚠ GAP (G-36): all metadata-plane notices are single-hop (M6) — attention
+   retraction, upstream disinterest, Stall/Progress, and state-request pulls
+   do not propagate through absorbing or stateless intermediaries to distant
+   joins or remote producers. Proposal: one hop-by-hop re-emission rule for
+   metadata-plane notices with loop prevention and the band-quantization
+   interaction pinned per protocol — attention levels and transitive
+   retraction across damped hops, disinterest quiescing remote producer
+   cones, stall/progress watermarks reaching deep joins, and requestState
+   forwarding through stateless cells (93 I-1/I-4/I-9/I-16/I-18).
 4. **Economic layer** (peers advertising willingness to compute for others'
    interest) — still deferred to 40/42; the band protocol above is
    forward-compatible (levels are floats, bands are a local mapping).
+
+   ⚠ GAP (G-62): every interest-driven policy defers to an economic layer
+   that does not exist — replica spawn-vs-subscribe,
+   migration-toward-attention, partition-host split/merge, resharding
+   triggers, and per-Principal attention budgets (the Sybil economics).
+   Proposal: an
+   attention/quota-driven economic layer (the G-6 residual, on the G-28
+   quota walk) deciding when to spawn a local replica vs subscribe remotely
+   and where replicas live, migration candidacy under persistent high
+   attention with remote hotspots, partition split/merge and bulk-rebalance
+   triggering by load/size/attention, and per-Principal resource budgets
+   bounding authenticated interest claims with a concrete cost to mint an
+   identity (93 I-3/I-9/I-19/I-8/I-28).
+
+5. **One authority lattice; attention advises, the host disposes**
+   (decided in 93 I-9, unimplemented). Decisions 2–3 compose under a single
+   enforcement precedence at the intake seam, highest wins: **explicit
+   management operations** (drain/migrate/resume/despawn/supervise, the
+   promotion swap — band 0, always-open inlet, unconditional; attention and
+   every veto govern *automatic* suspension only) > **admission/
+   backpressure** (a closed or full data intake refuses regardless of band;
+   the sender parks and re-resolves, 33) > **the suspension gate** (NONE
+   sustained for the policy window, unless vetoed) > **attention banding**
+   (sub-priorities within the data region only — a band can never lift a
+   task to or above the router/management bands; the stride floor refines
+   it) > **`(priority, sequence)` FIFO**. Attention *proposes* (a band, a
+   suspend-eligibility); the host *disposes*, honoring the higher
+   authorities first — enforcement stays strictly local per host (P4). The
+   suspension window is a state machine, **edge-triggered on the NONE
+   transition**: a never-attended region starts no window (a subgraph under
+   construction is held by a builder lease until its spec completes);
+   renewed attention *during* the window cancels the pending suspend
+   (hysteresis); renewal *after* the drain commits does not tear the drain —
+   the region parks, then resume is emergent exactly as decision 3 states.
+   And every keep-awake duty MUST be expressed as `setSelf` attention or a
+   veto (`NonSuspendable`, held lease, construction lease, management
+   activity) — never a bespoke scheduler exception; an active invariant
+   monitor pins at LOW (yielding to real HIGH work under the stride floor),
+   never HIGH; promotion, shadows, partitions, fusion, and construction are
+   placements in this lattice, not exceptions to it.
+
+   ⚠ GAP (G-56): PartitionedCell's adopted design (G-24, trigger armed)
+   leaves its distribution edges open — routing-table epoch consistency
+   under concurrent organelle migration, repartition-window buffering
+   bounds, bulk-rebalance atomicity, supervision-travels-with-placement,
+   per-shard replica targeting, range queries, and per-key attention
+   routing. Proposal: generative wire tests for the stale-epoch re-route
+   racing registry re-resolution and for migrate-during-repartition
+   (ownership and placement maps changing near-simultaneously); a
+   buffering-bound analysis for long state transfers under quotas and
+   backpressure; a supervision-follows-placement API replacing
+   composite-local re-apply discipline; router targeting rules when shards
+   replicate (leader per shard); a scatter-gather range-read protocol over
+   the state-request substrate; and the attention-routing proxy forwarding
+   interest per key (93 I-8/I-19/I-9).
+
+6. **Attention is a request, not an entitlement**
+   (decided in 93 I-28, unimplemented). The answer to "an attacker claiming
+   attention could summon computation": a membrane MUST be able to attenuate
+   remotely-asserted interest — a per-protocol ceiling clamps the asserted
+   level on the per-link LWW slot (`slot.level = min(asserted, ceiling)`;
+   the fold and band-gating are untouched), a per-`Principal` rate bounds
+   update frequency, and a `minAuth` floor refuses updates from
+   insufficiently authenticated peers; sustained remote-driven resource
+   claims are charged to the claiming `Principal`'s budget via the G-28
+   host-hierarchy quota walk. Decided, not built.

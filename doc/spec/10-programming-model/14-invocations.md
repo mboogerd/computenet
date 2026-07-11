@@ -58,6 +58,17 @@ The same invocation takes the cheapest possible path (P2):
 `PORT_MANAGEMENT` (operations on the port object itself) — keep this split; it
 is the wire-level reflection of the data/management contract split (12).
 
+A third dispatch class is decided design, unimplemented (decided in
+[93 I-1](../90-roadmap/93-feature-interactions.md)): `Type` MUST gain
+`PORT_PROTOCOL` for framework-owned generic protocols (attention,
+state-request, link-management) riding an established link as a metadata
+plane, and dispatch becomes a three-way branch — `PORT_API` → the data path
+(unchanged), `PORT_MANAGEMENT` → the port's management API, `PORT_PROTOCOL` →
+`ProtocolSupport.deliver(protocolId, link, msg)`, one map lookup beside the
+existing type branch. Protocol invocations are management-class: null
+`MessageContext`, own ordering lane, never the data FIFO. The shipped enum
+remains the two variants above.
+
 ## The Link-and-Lease model
 
 Five primitive operations define delegation and cache-invalidation semantics:
@@ -89,7 +100,11 @@ Semantics (normative):
   performed on next use. Cost of behavior change is proportional to the number
   of re-definitions, not the number of messages (P2).
 - Chains of delegation MUST flatten on resolution (resolve to the final
-  implementation, not a chain of forwarders).
+  implementation, not a chain of forwarders). This rule governs `delegate`
+  chains only: a membrane's Mediate crossing (10/11) is `serve(proxy)` — a
+  real cell on the per-message path, identical in kind to the red
+  Traffic-Light below — so mediation leaves the flatten rule untouched
+  (decided in 93 I-10).
 
 The Traffic-Light cell demonstrates the idiom: `setRed()` → serve a
 `Buffering` proxy (park invocations); `setGreen()` → replay buffer, then

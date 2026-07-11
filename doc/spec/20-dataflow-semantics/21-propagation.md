@@ -1,7 +1,7 @@
 # 21 — Propagation: Push/Pull, Incremental/Complete
 
-> **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up implemented; on-demand pull protocol unbuilt)
-> **Sources**: ADR 1 (§1, §2, §4), ADR — Cellular Software Development Process (incremental dataflow layer)
+> **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up implemented; on-demand pull, catch-up baseline, RESTART re-baseline, and the cycle-head model decided in 93, unimplemented)
+> **Sources**: ADR 1 (§1, §2, §4), ADR — Cellular Software Development Process (incremental dataflow layer); 93 resolutions I-5, I-6, I-16, I-22, I-24, I-28
 > **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains); catch-up via `LinkSupport.onLinked`
 
 ## Push (default, implemented)
@@ -60,17 +60,111 @@ follows. No snapshot type exists — a snapshot *is* a delta, satisfying the
 deterministic-application rule above. Observed-remove tags (24) make the
 catch-up idempotent against replayed or duplicated live deltas. Validated:
 a late joiner is indistinguishable from an early joiner at idle, 100 seeds,
-with a control run proving the harness detects a missed prefix. The catch-up
-emission is currently unwaved (glitch-free consumers pass it through); wave
-alignment of snapshots waits for the request protocol below.
+with a control run proving the harness detects a missed prefix. Across a
+membrane, the catch-up unicast MUST pass the boundary's disclosure filter
+(40/43) — **filtered, not forked** (decided in
+[93 I-28](../90-roadmap/93-feature-interactions.md)): because a snapshot is
+a delta, one disclosure transform covers the catch-up and the live stream
+uniformly.
+
+**Catch-up is a baseline, not a wave input** (decided in 93 I-24,
+unimplemented). The landed emission is unwaved and glitch-free consumers
+pass it through — which admits a mid-wave late-join glitch (G-38 below). A
+multi-source fold has no representable wave under per-source waves (20/22),
+so a snapshot is never stamped "with the wave it represents". Instead,
+catch-up is a **topology-versioned baseline**: stamped with the
+producer-outlet wave (FIFO/sequencing, per the I-16 reply rule below) plus
+a nullable `MessageContext.baseline: TagFrontier` — a merge-tag frontier
+for dedup and incremental pull, never a wave position (tags and waves stay
+separate uses of one clock shape, 20/22) — causally anchored at the stamped
+link-install event (20/22 §Topology versioning), and **never admitted to
+any wave-completeness set**. A glitch-free consumer installs the baseline
+as arm state (deduping by tag union, 24) and resumes evaluation at the
+first wave that completes over the post-install topology; the
+install→first-complete-wave window gets convergence, not simultaneity,
+exactly as any topology change does (G-20).
+
+⚠ GAP (G-38): a multi-source catch-up snapshot has no single wave id under
+per-source waves, and unwaved pass-through lets a mid-wave late joiner
+glitch — 20/22 §Interaction's "stamped with the wave it represents" is
+unsatisfiable as written. *Proposal*: catch-up state-as-delta is a
+topology-versioned BASELINE (nullable `MessageContext.baseline`) causally
+anchored to the link-install event and excluded from wave-completeness;
+glitch-freedom resumes at the first wave complete over the post-install
+topology; tag frontiers are valid only for per-source-monotone families
+(full-state fallback otherwise); extend the diamond/late-join harnesses
+with mid-wave late-join, quiet-upstream transition-window,
+incremental-since, and multi-arm simultaneous-join cases (93 I-24/I-16).
+
+⚠ GAP (G-39): link/unlink are null-context management ops with no stamp in
+the wave domain — glitch-free consumers cannot know from which wave a
+new/removed edge counts, source-set changes do not propagate downstream,
+and EdgeEvents/floors have no wire form. *Proposal*: in-band
+EdgeOpen/EdgeClose markers injected into the affected link's own FIFO
+carrying a per-source flushed-high-water floor; design the floor
+representation and retention/compaction horizon, hop-by-hop downstream
+source-set delta propagation with a liveness proof (an upstream cut must
+not strand a waiting join), bridged EdgeEvent frame types ordered against
+data across disconnect/park/replay, the floors×cycles×merge-tag
+interaction, and the explicit topology-serializing coordinator
+(JoinBarrier) cell that doubles as the diamond-over-replica escape hatch
+(93 I-13/I-14).
 
 ⚠ GAP (G-18, residual): **on-demand pull** — a consumer asking for a
-recompute or state *without* relinking. *Proposal* (compatible with the
-invocation model — pull is not a new mechanism): a generic **state-request
-protocol** on the multiplex port (12, G-13): `RequestState(replyTo)`
-traveling upstream, answered by a state-as-delta on the requester's inlet.
-Recomputation-on-demand for derived cells = re-emission of current derived
-state, never re-execution of history.
+recompute or state *without* relinking. The shape is decided (93 I-16) but
+not built, and it is not a new mechanism: a management-class
+**`StateRequest(replyTo, since: TagFrontier?)`** on the link's metadata
+plane (12, G-13) — null context, no `Owned`/`Leased`, bypasses data-path
+parking, idempotent — travels upstream; the reply is ordinary data, a
+**single-wave state-as-delta** stamped with one fresh
+`Timestamp(producerOutletSourceId, N)` and emitted on `outlet.at(replyTo)`
+(`since = null` ⇒ full state-from-empty; `since` present ⇒ only tags beyond
+the frontier per source; cells without a per-source-monotonic tag clock
+fall back to full state). Per-link FIFO (30/31) makes the reply one
+contiguous unit ahead of subsequent live waves. The trigger is
+subscriber-side, gated by a per-link **liveness epoch** (incremented on
+drop, unchanged across park), three rows: fresh link ⇒ pull;
+parked→replayed ⇒ no pull (replay is exact); dropped→re-resolved ⇒
+incremental pull with the subscriber's frontier. Producer-side `onLinked`
+push (above) is retained purely as the co-hosted fast path — correctness no
+longer depends on which side observes the install. Pull requires `Stateful`
+and is single-hop by default; recomputation-on-demand for derived cells =
+re-emission of current derived state, never re-execution of history.
+
+⚠ GAP (G-37): on-demand pull (the G-18 residual) has a decided shape but no
+concrete design — descriptor, reply routing to a specific requester,
+buffer-survival detection, pull storms on mesh heal, and pull-safety for
+non-idempotent/effectful cells are unspecified. *Proposal*:
+`RequestState(replyTo, since)` on the metadata plane answered by an
+ordinary state-as-delta single wave, issued by the subscriber exactly when
+a link goes live history-incomplete (fresh link → pull; parked-and-replayed
+→ none; dropped-and-re-resolved → incremental pull with a `TagFrontier`
+under a stated per-source-monotonic tag invariant); add the per-link
+liveness epoch for park-vs-drop detection, a mesh-reconnect
+coalescing/debounce policy, and a pull-serves-copy-only rule for
+non-idempotent cells (93 I-16/I-1).
+
+**RESTART re-baselines over this same path** (decided in 93 I-22,
+unimplemented). RESTART is *restore + re-baseline*, never a bare local
+rollback: the host restores the **freshest** available checkpoint (durable
+recovery, imported baseline, pull-merge from mesh/upstream, or the local
+`Stateful` checkpoint — spawn-time state only in the degenerate
+non-durable, non-replicated, upstream-less case), mints a fresh per-epoch
+outlet `sourceId` (93 I-14 S1 — post-restart tags and waves alias nothing
+pre-crash), and reconciles downstream through the catch-up path before
+resuming live traffic: a `ReBaseline` carrying state-as-delta-from-empty,
+the dead epochs' `sourceId`s (`supersedes`), and a mode —
+**push-authoritative** (`supersede = true`, single-writer roots: a
+convergent consumer drops un-reasserted tags from superseded sources,
+merges the state by tag union, and thereafter rejects deltas from those
+dead lanes) or **pull-merge** (derived/replicated cells: ordinary
+idempotent catch-up via `requestState`/mesh anti-entropy, no retraction).
+This re-establishes deterministic application and effective-only emission
+downstream after a producer reverts. The landed RESTART (30/31 rule 5,
+M3.5) is exactly the bare local rollback the decision forbids — spawn-time
+checkpoint, same `sourceId` with a rolled-back counter (tag/wave aliasing
+possible), no downstream reconciliation (conflict C-12, recorded at 30/31
+and 20/22).
 
 ## Fusion and the critical path
 
@@ -80,17 +174,81 @@ Per P2, propagation MUST NOT introduce avoidable hops:
   (delegation flattening, 10/14, removes pass-through cells entirely).
 - Backpressure stalls and context switches are minimized by fusing co-hosted
   work; the host queue is the only asynchronous boundary (30/31).
+- The one decided exception: a `CycleHead`'s re-origination is a fusion
+  barrier — it enqueues even co-hosted (see §Cycles; decided in 93 I-6).
 
 ## Cycles
 
-Graphs MAY contain cycles (feedback loops, UI↔model sync, learning).
-Divergence is prevented by **magnitude-based throttling**: a cycle continues
-only while deltas remain significant.
+Graphs MAY contain cycles (feedback loops, UI↔model sync, learning). The
+cycle model is decided (93 I-5/I-6), unimplemented:
 
-⚠ GAP (G-19): magnitude/throttling is unspecified — no delta-magnitude
-interface, no threshold policy, no guarantee cycles quiesce. *Proposal*:
-require delta types used in cycles to implement `Magnitude { fun size(): Double }`;
-a cycle-participating cell declares a quiescence threshold; below it, it
-absorbs instead of emitting. Fixpoint semantics (and interaction with
-glitch-freedom timestamps in cycles) is an open research item — flagged, not
-resolved, by this spec.
+- **Re-origination at declared heads** (93 I-5). Every cycle MUST declare at
+  least one **`CycleHead`** with a **`feedbackInput`** — a feedback inlet
+  declared distinctly from ordinary wave-joining inlets. Feedback is
+  **absorbed into loop state, not joined**: the incoming wave terminates at
+  the head (it never enters the head's glitch-free completeness condition),
+  and the head mints a **fresh** `Timestamp(headSourceId, ++counter)` for
+  the next iteration — the one precisely-located exception to transparent
+  flow (20/22 rule 2). Iteration = wave: no `(sourceId, counter)` traverses
+  any cell twice, so glitch-free cells inside loops need no re-entry
+  detection, and "the topology version iteration *N* sees" is simply the
+  edge set feeding wave *t_N* (20/22 §Topology versioning). **Fixpoint =
+  the state after the terminating sequence of head-minted waves settles.**
+- **Two-tier quiescence** (93 I-6), keyed on KSP-verified descriptor bits
+  (`magnitude`, `idempotentMerge` — read at link time, never reflection):
+  - *Strong (structural) tier* — idempotent-merge deltas (tag-union,
+    pointwise-max, 24) quiesce **by construction, threshold-free**:
+    effective-only emission (rule 2 above) derives an empty delta from a
+    lap carrying no new tag information, and empty deltas are not emitted.
+    Gossip-mesh quiescence (40/42) is this tier's structural special case,
+    not a second mechanism.
+  - *Weak (best-effort) tier* — `Magnitude`-only deltas
+    (`size(): Double`, ≥ 0, `0.0` ⇔ no effective change) get a
+    per-feedback-inlet `quiescence` threshold as a divergence *damper*, not
+    a proof; termination for this tier rests on the hop guard alone.
+- **The throttle gates re-origination, never fan-out**: the
+  absorb/re-originate decision is made at the head's `feedbackInput` on the
+  *returning* lap — "absorb without **re-originating**", refining the
+  earlier "absorb instead of emitting". The head's outlet broadcast is
+  never gated, so no external subscriber is silenced by cycle throttling.
+- **Hop guard**: `MessageContext.hop` increments per transparent-flow hop,
+  is reset to 0 by head re-origination, and is never part of the wave join
+  key; exceeding a host-configured bound dead-letters the invocation as a
+  `CycleError`. In a correctly-headed graph it never fires; it is the
+  backstop for headless loops and cross-host cycles no link-time check can
+  see.
+- **Admission and payloads**: a `connect` closing a locally-visible cycle
+  is `Rejected` unless the cycle contains a head (`CycleWithoutHead`) and
+  every data edge is throttle-capable (`CycleRequiresMagnitude`); `Leased`
+  is forbidden on cycle edges (`CycleRejectsLeased`, 20/23); `Owned` is
+  permitted — absorption *is* the single consumption (`take()` into loop
+  state).
+- **A `CycleHead` is a fusion barrier** (§Fusion): re-origination MUST
+  enqueue on the host queue even co-hosted, bounding stack depth to O(1)
+  per lap and serializing laps through the queue.
+
+The honest guarantee: **bounded-lap termination for every admitted cycle**
+(structural quiescence for the strong tier; the hop-guard dead-letter as
+the hard backstop otherwise); **fixpoint convergence only for the strong
+tier** — the weak tier converges only if its loop map is contractive
+w.r.t. `size()`, which the framework does not verify. Quiescence is
+lap-based, not time-based: no timers, no virtual-time dependency.
+
+⚠ GAP (G-19, residual): weak-tier fixpoint convergence — a *meaningful*
+fixpoint for non-idempotent (numeric) loops — remains an open research
+item; the decided structure guarantees termination, not convergence, for
+that tier.
+
+⚠ GAP (G-41): the adopted CycleHead/threshold structure leaves admission
+and well-formedness holes — cross-host cycles are invisible to link-time
+checks, multi-head/nested/multi-tier cycles have no stated rule, hop
+bounds are uncalibrated magic numbers, and head behavior under
+RESTART/promotion is unpinned. *Proposal*: distributed cross-host cycle
+detection (or an explicit hop-guard-only stance) tied to
+peering/announcements; a ≥1-head-per-elementary-cycle well-formedness rule
+with detection over the cycle basis; a multi-tier mix admission policy;
+hop-bound calibration against loop diameter; feedback-join
+consistent-snapshot semantics; membrane-scoped lap quiescence; plus
+generation-bump (RESTART) and swap-on-live-cycle behavior at a head —
+weak-tier fixpoint convergence itself stays open under G-19
+(93 I-5/I-6/I-17/I-22).

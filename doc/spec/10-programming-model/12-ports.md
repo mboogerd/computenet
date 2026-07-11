@@ -1,6 +1,6 @@
 # 12 — Ports
 
-> **Status**: Specified (core); multiplex and cardinality enforcement partial
+> **Status**: Specified (core); multiplex and cardinality enforcement partial (metadata plane, link roles, effect axis, and descriptor bits decided in [93](../90-roadmap/93-feature-interactions.md), unimplemented)
 > **Sources**: ADR — Computelet Kernel, ADR — Task Connectivity, ADR — Anatomy of Cellular Programs, ADR 3
 > **Implementation**: `civictech.cell.port.*` (Port, Inlet, Outlet, FanInlet, FanOutlet, OneToOnePort, Serve, Use, Subscribe, LinkTo, LinkFrom, delegates)
 
@@ -37,8 +37,18 @@ future (see 30/31) — never on data-path contracts.
 every port contract, the flag rides the generated `ContractDescriptor`, and
 the KSP processor **fails compilation** when a data contract (management =
 false) declares a non-Unit return — push-only is enforced, not advised.
-Effect classification for shadow mode is the `Effectful` cell marker (52,
-G-32), orthogonal to the contract flag.
+Effect classification for shadow mode is today the `Effectful` cell marker
+(52, G-32), orthogonal to the contract flag. `@Contract(effect = true)` is a
+**third classification axis** (decided in 93 I-17, unimplemented): it marks a
+world-touching boundary contract (e.g. `DbWriter.persist`), emitted by the
+same KSP scan as `management`. Shadow suppression MUST cut at
+`effect = true` boundary contracts — never at a cell's data inlets — so
+interior cells keep emitting the derived deltas a judge needs; this amends
+the landed cell-granularity rule (G-32's NoOp-serve of every fan-in inlet of
+an `Effectful` cell as the only suppression mode). The `Effectful` cell
+marker is retained as the coarse fallback for opaque, non-portable I/O
+inside served logic: such a cell is replaced wholesale in shadow mode and
+terminates judgeability downstream of itself.
 
 ## The Inlet/Outlet duality
 
@@ -83,9 +93,23 @@ Port implementations encode cardinality:
 
 Rules (normative):
 
-1. Cardinality MUST be enforced at link time, not send time (P2, P5).
+1. Cardinality MUST be enforced at **structural admission**, never send time
+   (P2, P5). "Link time" decomposes into *admission* — structural, reading
+   only the port's descriptor (contract, cardinality, exclusive bit,
+   policies), binding from construction in any lifecycle phase — and
+   *activation*, behavioral, gated on the cell's handler establishment
+   (decided in 93 I-26; the refinement matches the shipped descriptor-driven
+   enforcement).
 2. Fan-out MUST be rejected at link time when the contract's payload types
-   carry exclusive ownership (`Owned`, `Leased`) — see 20/23.
+   carry exclusive ownership (`Owned`, `Leased`) — see 20/23. This refusal
+   binds **Consume** links only (decided in 93 I-20, unimplemented): a
+   downstream attachment is either a *Consume* link (receives the declared
+   payload form, bears the consume-once/release obligation, counted by the
+   exclusive funnel) or an *Observe* link / tap (receives a KSP-generated
+   `Borrowed` projection valid only for the emitting invocation, never
+   counted). `FanOutlet.tap(observer)` — equivalently a
+   `LinkRole { Consume, Observe }` on the 10/13 handshake — is the decided
+   surface.
 3. Multi-producer inlets are permitted only where the cell declares merge
    semantics (e.g. `UnionSetCell` ref-counting) — "unions may explicitly
    allow multiple producers".
@@ -96,6 +120,47 @@ capacity instead of throwing, and per-port `onLink`/policies can reject.
 Ownership-based cardinality landed in M5.6: `FanOutlet` reads the generated
 exclusive bit and refuses a second subscriber on `Owned`/`Leased`-carrying
 contracts — rule 2 above is enforced, 20/23.)*
+
+A NoOp-served shadow inlet whose contract carries `Owned`/`Leased` MUST be a
+*discharging* sink — `Owned` → `take()`-and-drop, `Leased` → `release()` —
+generated from the same exclusive bit (decided in 93 I-20); the landed
+shadow proxy drops such payloads undischarged (conflict C-11, recorded at
+50/52 and 20/23).
+
+Cardinality is per-instance and per-link — never a cross-replica-set budget
+(decided in 93 I-25, replication machinery unimplemented). For a replicated
+single-writer cell, "one writer" is a **role**: exactly one leader instance
+serves the write inlet (an ordinary `FanInlet`; the host's single-consumer
+queue is the serialization point) while followers serve a command-forward
+delegate. Where the payload carries `Owned`/`Leased`, the leader instance
+holds the one counterpart — the exclusive bit rejects a second writer link
+at admission, on the leader, per instance.
+
+The exclusive bit's KSP scan is decided to widen (decided in 93 I-6 and
+I-8, unimplemented). The same contract scan also emits, on
+`MethodDescriptor`: `magnitude` (a delta parameter type implements
+`Magnitude`) and `idempotentMerge` (the delta type is `Replicable` with an
+idempotent merge), read at link time for cycle admission (21, G-19) — cycle
+throttling gates re-origination at the head's inbound feedback edge, so a
+`FanOutlet` broadcast is never throttled; and `keyIndex` (`@Key` on one
+parameter of a data-contract method; -1 = key-less), the routing slot for
+partitioned cells (24), with a lint that **fails compilation** on a method
+that is both key-less (broadcast) and exclusive — one `Owned` cannot move
+to N organelles.
+
+⚠ GAP (G-60): A dozen adopted mechanisms hang on undesigned KSP descriptor
+bits and lints: protocol descriptors + registry, the
+ownership-free/idempotence protocol lint, color, the effect-boundary flag
+with opaque-effect detection, `@Key`, magnitude/idempotentMerge bits,
+`size()` well-formedness, Eager, determinism, pull-safety, and
+fallback-tier markers. Proposal: One descriptor-generation sweep extending
+the M5.6 exclusive-bit scan: emit the per-type/per-contract bits into
+`CellDescriptor`/`ContractDescriptor`/`ProtocolDescriptor` with stable
+cross-peer ids, and fail compilation on the associated violations
+(Owned/Leased in generic-protocol contracts, non-null-context expectations,
+broadcast-keyed exclusives, opaque I/O outside effect boundaries, non-eager
+constructor handlers, catch-up fallback on non-idempotent cells)
+(93 I-1/I-5/I-6/I-7/I-8/I-15/I-16/I-17/I-26/I-27).
 
 ## Multiplexed ports and generic protocols
 
@@ -108,10 +173,49 @@ composable handlers.
 port sub-channels keyed by well-known `ProtocolId`s, sharing the port's
 existing links (which now carry in-process endpoint objects); one map lookup
 per delivery (P2), handlers outside cell logic. Attention (34) and suspension
-notices ride it. Remaining: full multiplex *data* sub-ports (several data
-protocols on one link/queue slot), the state-request protocol (21, G-18
-residual), and wire transport for generic protocols (bridged links have no
-endpoint objects).
+notices ride it. The full shape is recorded (decided in 93 I-1,
+unimplemented): the **link is the unit of every data concern** — contract
+identity, cardinality, ownership/SPSC, handshake, policy, and the data FIFO
+lane. A link carries exactly one primary data contract; a second data
+contract between the same two cells is a second link — data sub-ports are
+rejected. Generic protocols are a bounded, framework-owned **metadata
+plane**: a third dispatch class `PORT_PROTOCOL` beside
+`PORT_MANAGEMENT`/`PORT_API`, with a generated `ProtocolDescriptor` per
+well-known protocol (direction, priority band, its own per-link ordering
+lane, and protocol-intrinsic cardinality — FanInMerge or FanOutBroadcast,
+independent of the link's) and a per-link `protocolCapabilities` set (the
+intersection of both ports' declared support) negotiated at the ordinary
+10/13 handshake. Protocol invocations carry null `MessageContext`, ride the
+always-open inlet (bypassing data-path parking, 30/33), MUST be idempotent
+and reorder/duplication-tolerant, and MUST NOT declare `Owned`/`Leased`
+payloads. Wire transport is designed, not implemented: one `WireFrame` type
+variant tagged with direction, upstream protocols riding the reverse bridge
+path a cross-host link already maintains (G-35 below).
+
+⚠ GAP (G-35): Generic protocols (`PORT_PROTOCOL`) cannot cross the wire and
+peers cannot negotiate or version each other's protocol capability sets —
+attention, saturation, state-request, and taps all stop at a bridge.
+Proposal: Bridge egress/ingress gain a `PORT_PROTOCOL` frame path (one
+`WireFrame` type variant, direction tag, reverse-channel realization for
+upstream protocols over the reverse bridge path a cross-host link already
+maintains); the link's negotiated `protocolCapabilities` generalizes to
+cross-peer negotiation with a versioned ProtocolId↔contractId mapping and
+downstream-only capability sets for shadow taps; verified by a generative
+frame-reorder/duplication harness (cross-host attention convergence as the
+first case) (93 I-1/I-4/I-17/I-9).
+
+⚠ GAP (G-37): On-demand pull (the G-18 residual) has a decided shape but no
+concrete design: descriptor, reply routing to a specific requester,
+buffer-survival detection, pull storms on mesh heal, and pull-safety for
+non-idempotent/effectful cells are unspecified. Proposal:
+`RequestState(replyTo, since)` on the metadata plane answered by an
+ordinary state-as-delta single wave, issued by the subscriber exactly when
+a link goes live history-incomplete (fresh link → pull; parked-and-replayed
+→ none; dropped-and-re-resolved → incremental pull with a `TagFrontier`
+under a stated per-source-monotonic tag invariant); add the per-link
+liveness epoch for park-vs-drop detection, a mesh-reconnect
+coalescing/debounce policy, and a pull-serves-copy-only rule for
+non-idempotent cells (93 I-16/I-1).
 
 ## Directionality of generic protocols
 
@@ -119,6 +223,24 @@ Directionality exists so generic protocols know how to propagate without
 inversion: e.g. attention flows **upstream** (consumer → producer) along links
 whose data flows downstream. Every link therefore knows its data direction,
 and each generic protocol declares whether it travels with or against it.
+
+Upstream protocols share one termination discipline (decided in 93 I-23,
+rule R6, unimplemented): a per-traversal epoch plus a visited-edge set
+bounds every flood (each edge expands at most once per epoch), and a
+per-protocol terminal predicate ends it — FRONTIER terminates at sources,
+glitch-free cells, and opaque membranes; STATE_REQUEST (21) at the nearest
+stateful cell that can serve state-as-delta; multi-hop ATTENTION (34) at a
+source or a band-quantization damper.
+
+⚠ GAP (G-36): All metadata-plane notices are single-hop (M6): attention
+retraction, upstream disinterest, Stall/Progress, and state-request pulls
+do not propagate through absorbing or stateless intermediaries to distant
+joins or remote producers. Proposal: One hop-by-hop re-emission rule for
+metadata-plane notices with loop prevention and the band-quantization
+interaction pinned per protocol — attention levels and transitive
+retraction across damped hops, disinterest quiescing remote producer cones,
+stall/progress watermarks reaching deep joins, and requestState forwarding
+through stateless cells (93 I-1/I-4/I-9/I-16/I-18).
 
 ## What ports are not
 
