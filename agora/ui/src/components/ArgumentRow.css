@@ -1,0 +1,79 @@
+.arg-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+.arg-row__claim {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.arg-row__claim:hover {
+  border-color: color-mix(in srgb, var(--text) 25%, var(--hairline));
+}
+
+.arg-row__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* the edge chip — the "edges are arguable" affordance, must read as clickable */
+.arg-row__chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0 0.55rem;
+  border-radius: var(--radius);
+  border: 1px dashed var(--edge-muted);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+}
+
+.arg-row__chip.is-support {
+  border-style: solid;
+}
+
+.arg-row__chip:hover {
+  border-color: var(--text-secondary);
+}
+
+.arg-row__chip.is-attack:hover,
+.arg-row__chip.is-attack.is-selected {
+  border-color: var(--reject-strong);
+}
+
+.arg-row__chip.is-support:hover,
+.arg-row__chip.is-support.is-selected {
+  border-color: var(--accept-strong);
+}
+
+.arg-row__claim.is-selected,
+.arg-row__chip.is-selected {
+  outline: 2px solid color-mix(in srgb, var(--accept-strong) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.arg-row__challenges {
+  font-size: 10px;
+  white-space: nowrap;
+}

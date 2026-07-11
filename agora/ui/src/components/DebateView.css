@@ -1,0 +1,106 @@
+.debate {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 0;
+}
+
+.debate__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.debate__bar-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.focal-picker {
+  flex: 1;
+  max-width: 46ch;
+  padding: 0.4rem 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  font: inherit;
+}
+
+.debate__focal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--accept-strong);
+  border-radius: var(--radius);
+  font-size: 1.05rem;
+  font-weight: 550;
+}
+
+.debate__focal-text {
+  min-width: 0;
+}
+
+.debate__cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+.debate-col {
+  min-width: 0;
+  padding: 0.5rem 0.75rem 0.75rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+.debate-col--attack {
+  border-top: 3px solid var(--reject-strong);
+}
+
+.debate-col--support {
+  border-top: 3px solid var(--accept-strong);
+}
+
+.debate-col__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.3rem 0 0.5rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.debate-col__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4em;
+  height: 1.4em;
+  padding: 0 0.35em;
+  border-radius: 999px;
+  background: var(--hairline);
+  font-size: 0.9em;
+}
+
+.debate-col__empty,
+.debate__empty {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+@media (max-width: 720px) {
+  .debate__cols {
+    grid-template-columns: 1fr;
+  }
+}

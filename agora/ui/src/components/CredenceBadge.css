@@ -1,0 +1,31 @@
+.credence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-tabular);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.credence-badge--sm {
+  font-size: 11px;
+  gap: 0.25rem;
+}
+
+.credence-badge__swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--hairline);
+  flex: none;
+}
+
+.credence-badge--sm .credence-badge__swatch {
+  width: 11px;
+  height: 11px;
+}
+
+.credence-badge__swatch--contested {
+  background-image: var(--contested-texture) !important;
+}
