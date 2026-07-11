@@ -13,7 +13,8 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    "resolveJsonModule": true
   },
   "include": ["src", "test", "e2e"]
 }

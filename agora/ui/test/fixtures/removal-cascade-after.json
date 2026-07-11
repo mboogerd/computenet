@@ -1,0 +1,14 @@
+[
+    {
+        "ref": "51d6c4e0-c7a0-49cd-9b27-b055695960c9",
+        "kind": "CLAIM",
+        "text": "Nuclear power should expand",
+        "credence": 0.5
+    },
+    {
+        "ref": "19e3395b-67bf-4336-9e3a-31aca8f3681c",
+        "kind": "CLAIM",
+        "text": "Finland built a deep repository",
+        "credence": 0.5
+    }
+]

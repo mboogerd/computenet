@@ -1,0 +1,36 @@
+[
+    {
+        "ref": "51d6c4e0-c7a0-49cd-9b27-b055695960c9",
+        "kind": "CLAIM",
+        "text": "Nuclear power should expand",
+        "credence": 0.40625
+    },
+    {
+        "ref": "c96fbf6a-2811-4ea5-87ab-26afa0b265f9",
+        "kind": "CLAIM",
+        "text": "Waste storage is unsolved",
+        "credence": 0.5
+    },
+    {
+        "ref": "79a10692-3d8d-41d9-bff7-98cac6dda020",
+        "kind": "EDGE",
+        "polarity": "ATTACK",
+        "source": "c96fbf6a-2811-4ea5-87ab-26afa0b265f9",
+        "target": "51d6c4e0-c7a0-49cd-9b27-b055695960c9",
+        "credence": 0.375
+    },
+    {
+        "ref": "19e3395b-67bf-4336-9e3a-31aca8f3681c",
+        "kind": "CLAIM",
+        "text": "Finland built a deep repository",
+        "credence": 0.5
+    },
+    {
+        "ref": "aa0d4738-2875-47d2-8d07-9c2ff4f0871a",
+        "kind": "EDGE",
+        "polarity": "ATTACK",
+        "source": "19e3395b-67bf-4336-9e3a-31aca8f3681c",
+        "target": "79a10692-3d8d-41d9-bff7-98cac6dda020",
+        "credence": 0.5
+    }
+]
