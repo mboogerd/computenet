@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { Polarity } from '../api/types';
 import { createClaim, createEdge, remove } from '../api/commands';
-import { graph, nodes, nodeOf, structuralVersion, selection, setSelection } from '../solid/graph';
+import { graph, nodes, nodeOf, structuralVersion, selection, setSelection, notify } from '../solid/graph';
 import { labelOf } from '../util/label';
 import CredenceBadge from './CredenceBadge';
 import StanceSlider from './StanceSlider';
@@ -46,6 +46,7 @@ export default function DetailPanel() {
       setText('');
     } catch (e) {
       setErr((e as Error).message);
+      notify(`Could not create argument: ${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
@@ -58,7 +59,7 @@ export default function DetailPanel() {
       await remove(r);
       setSelection(null);
     } catch (e) {
-      setErr((e as Error).message);
+      notify(`Could not remove: ${(e as Error).message}`);
     }
   }
 

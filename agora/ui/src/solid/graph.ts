@@ -25,6 +25,8 @@ const [mode, setMode] = createSignal<Mode>('debate');
 const [focal, setFocal] = createSignal<Ref | null>(null);
 const [ticker, setTicker] = createSignal<{ ref: Ref; t: number; drift: number }[]>([]);
 const [pulses, setPulses] = createStore<Record<Ref, number>>({});
+const [toasts, setToasts] = createSignal<{ id: number; msg: string }[]>([]);
+let toastId = 0;
 
 export {
   nodes,
@@ -39,7 +41,15 @@ export {
   setFocal,
   ticker,
   pulses,
+  toasts,
 };
+
+/** A transient error/info toast (spec §7 command errors). */
+export function notify(msg: string): void {
+  const id = ++toastId;
+  setToasts((t) => [...t, { id, msg }]);
+  setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+}
 
 export function nodeOf(ref: Ref | null | undefined): NodeRec | undefined {
   return ref ? nodes[ref] : undefined;

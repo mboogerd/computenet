@@ -28,6 +28,14 @@
   flex: 1;
 }
 
+.conn-banner {
+  padding: 0.4rem 1.25rem;
+  background: color-mix(in srgb, var(--reject-strong) 18%, var(--surface));
+  border-bottom: 1px solid color-mix(in srgb, var(--reject-strong) 40%, var(--hairline));
+  color: var(--text);
+  font-size: 12px;
+}
+
 .app-body {
   display: flex;
   flex: 1;

@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js';
 import { createClaim } from '../api/commands';
+import { notify } from '../solid/graph';
 import './AddClaim.css';
 
 export default function AddClaim() {
@@ -15,7 +16,7 @@ export default function AddClaim() {
       await createClaim(t);
       setText('');
     } catch (err) {
-      console.error('create claim failed', err);
+      notify(`Could not add claim: ${(err as Error).message}`);
     } finally {
       setBusy(false);
     }

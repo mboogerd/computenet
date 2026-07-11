@@ -30,6 +30,9 @@
 }
 
 .debate__focal {
+  width: 100%;
+  text-align: left;
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -41,6 +44,17 @@
   border-radius: var(--radius);
   font-size: 1.05rem;
   font-weight: 550;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.debate__focal:hover {
+  border-color: color-mix(in srgb, var(--text) 25%, var(--hairline));
+}
+
+.debate__focal.is-selected {
+  outline: 2px solid color-mix(in srgb, var(--accept-strong) 60%, transparent);
+  outline-offset: 1px;
 }
 
 .debate__focal-text {

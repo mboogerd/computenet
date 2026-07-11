@@ -2,18 +2,23 @@ import { onMount, createEffect, Show } from 'solid-js';
 import {
   connect,
   graph,
+  nodes,
   structuralVersion,
   focal,
   setFocal,
   mode,
   setMode,
   ready,
+  conn,
 } from './solid/graph';
 import DebateView from './components/DebateView';
 import GraphCanvas from './components/GraphCanvas';
 import DetailPanel from './components/DetailPanel';
 import AddClaim from './components/AddClaim';
 import ActivityTicker from './components/ActivityTicker';
+import StatusPip from './components/StatusPip';
+import Toasts from './components/Toasts';
+import EmptyState from './components/EmptyState';
 import Legend from './components/Legend';
 import { theme, motion, toggleTheme, toggleMotion, initPrefs } from './solid/prefs';
 import './app.css';
@@ -43,11 +48,14 @@ export default function App() {
     }
   });
 
+  const isEmpty = () => Object.keys(nodes).length === 0;
+
   return (
     <div class="app">
       <header class="app-header">
         <h1>agora</h1>
         <span class="app-tagline">argue, attack the argument, or attack the attack</span>
+        <StatusPip />
         <div class="app-header__spacer" />
         <ActivityTicker />
         <div class="mode-toggle" role="tablist">
@@ -58,33 +66,34 @@ export default function App() {
             Map
           </button>
         </div>
-        <button
-          class="icon-btn"
-          title="Toggle light / dark"
-          onClick={toggleTheme}
-        >
+        <button class="icon-btn" title="Toggle light / dark" onClick={toggleTheme}>
           {theme() === 'dark' ? '☀ Light' : '☾ Dark'}
         </button>
-        <button
-          class="icon-btn"
-          title="Toggle animations"
-          onClick={toggleMotion}
-        >
+        <button class="icon-btn" title="Toggle animations" onClick={toggleMotion}>
           {motion() ? 'Motion on' : 'Motion off'}
         </button>
         <AddClaim />
       </header>
+
+      <Show when={conn() === 'reconnecting'}>
+        <div class="conn-banner">Connection lost — reconnecting…</div>
+      </Show>
+
       <div class="app-body">
         <main class="app-content">
           <Show when={ready()} fallback={<p class="app-placeholder">Connecting…</p>}>
-            <Show when={mode() === 'map'} fallback={<DebateView />}>
-              <GraphCanvas />
+            <Show when={!isEmpty()} fallback={<EmptyState />}>
+              <Show when={mode() === 'map'} fallback={<DebateView />}>
+                <GraphCanvas />
+              </Show>
             </Show>
           </Show>
           <Legend />
         </main>
         <DetailPanel />
       </div>
+
+      <Toasts />
     </div>
   );
 }

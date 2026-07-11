@@ -1,5 +1,5 @@
 import { createMemo, Show } from 'solid-js';
-import { graph, nodes, structuralVersion, focal } from '../solid/graph';
+import { graph, nodes, structuralVersion, focal, selection, setSelection } from '../solid/graph';
 import { debateRows } from '../layout/debate';
 import FocalClaimsPicker from './FocalClaimsPicker';
 import DebateColumn from './DebateColumn';
@@ -35,10 +35,15 @@ export default function DebateView() {
       >
         {(fn) => (
           <>
-            <div class="debate__focal">
+            <button
+              class="debate__focal"
+              classList={{ 'is-selected': selection() === fn().ref }}
+              onClick={() => setSelection(fn().ref)}
+              title="Open this claim to set a stance or add an argument"
+            >
               <span class="debate__focal-text">{labelOf(fn())}</span>
               <CredenceBadge credence={fn().credence} />
-            </div>
+            </button>
             <div class="debate__cols">
               <DebateColumn title="Attack" polarity="ATTACK" rows={rows().attack} />
               <DebateColumn title="Support" polarity="SUPPORT" rows={rows().support} />

@@ -13,6 +13,8 @@ export class SseClient {
   private es?: EventSource;
   private resyncPending = false;
   private hadError = false;
+  private gotFirst = false;
+  private fallbackTimer?: ReturnType<typeof setTimeout>;
   private stateFn?: (s: ConnState) => void;
 
   constructor(private url = '/events') {}
@@ -26,12 +28,26 @@ export class SseClient {
     const es = new EventSource(this.url);
     this.es = es;
 
+    // Degraded fallback: if no SSE frame arrives within 5s, pull /graph once
+    // so the app still paints. SSE keeps trying in the background.
+    this.fallbackTimer = setTimeout(async () => {
+      if (this.gotFirst) return;
+      try {
+        const r = await fetch('/graph');
+        if (r.ok && !this.gotFirst) onSnapshot((await r.json()) as NodeDto[], false);
+      } catch {
+        /* SSE will keep retrying */
+      }
+    }, 5000);
+
     es.onopen = () => {
       if (this.hadError) this.resyncPending = true; // next message is a catch-up
       this.hadError = false;
       this.set('live');
     };
     es.onmessage = (e) => {
+      this.gotFirst = true;
+      clearTimeout(this.fallbackTimer);
       const dtos = JSON.parse(e.data) as NodeDto[];
       const resync = this.resyncPending;
       this.resyncPending = false;
@@ -44,6 +60,7 @@ export class SseClient {
   }
 
   stop(): void {
+    clearTimeout(this.fallbackTimer);
     this.es?.close();
     this.es = undefined;
   }

@@ -2,6 +2,7 @@ import { Show } from 'solid-js';
 import type { Ref } from '../api/types';
 import { setStance } from '../api/commands';
 import { localStance, setLocalStance } from '../solid/stance';
+import { notify } from '../solid/graph';
 import './StanceSlider.css';
 
 /** Continuous stance input (spec §6). Bound to the DEVICE-LOCAL "your stance"
@@ -12,7 +13,7 @@ export default function StanceSlider(props: { nodeRef: Ref }) {
 
   const commit = (v: number | null) => {
     setLocalStance(props.nodeRef, v);
-    void setStance(props.nodeRef, v).catch((e) => console.error('stance failed', e));
+    void setStance(props.nodeRef, v).catch((e) => notify(`Stance failed: ${(e as Error).message}`));
   };
 
   return (

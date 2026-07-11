@@ -1,0 +1,35 @@
+.status-pip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.status-pip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--edge-muted);
+  flex: none;
+}
+
+.status-pip.is-live .status-pip__dot {
+  background: #3aa657;
+}
+
+.status-pip.is-connecting .status-pip__dot {
+  background: var(--status-amber);
+}
+
+.status-pip.is-reconnecting .status-pip__dot {
+  background: var(--reject-strong);
+  animation: agora-blink 1s steps(2, start) infinite;
+}
+
+@keyframes agora-blink {
+  50% {
+    opacity: 0.3;
+  }
+}
