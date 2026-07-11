@@ -8,6 +8,7 @@ RUN apt-get update \
     && npm install --global "@openai/codex@${CODEX_VERSION}"
 
 ENV CODEX_HOME=/codex-home
+COPY result.schema.json /result.schema.json
 WORKDIR /workspace
 
 ENTRYPOINT ["codex", "exec"]

@@ -3,8 +3,8 @@
 This runs each `Wn.n` heading in the implementation plan as its own ephemeral,
 headless Codex container. Waves are sequential; a wave uses at most three workers.
 The host creates worktrees, commits successful edits, rebases, and fast-forwards
-`main`. Containers receive one writable worktree, a read-only view of the main
-checkout (needed by Git worktree metadata), and read-only Codex authentication.
+`main`. Containers receive one writable worktree and read-only Codex authentication;
+Git metadata and the main checkout are deliberately not mounted.
 Completion is accepted only after the structured worker result says `completed`,
 there is a non-empty diff, the plan itself is unchanged, and `./gradlew test` passes
 in a network-disabled validation container.

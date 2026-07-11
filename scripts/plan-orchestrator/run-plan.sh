@@ -135,7 +135,7 @@ run_agent() {
   local -a codex_args=(
     --dangerously-bypass-approvals-and-sandbox
     --dangerously-bypass-hook-trust
-    --ignore-user-config --ephemeral --json --color never
+    --ignore-user-config --skip-git-repo-check --ephemeral --json --color never
     --output-schema /result.schema.json
     --output-last-message /workspace/.codex-result.json
   )
@@ -145,10 +145,8 @@ run_agent() {
     --cpus "${WORKER_CPUS:-4}" \
     --memory "${WORKER_MEMORY:-8g}" \
     --mount "type=bind,src=$worktree,dst=/workspace" \
-    --mount "type=bind,src=$ROOT,dst=$ROOT,readonly" \
     --mount "type=volume,src=computenet-gradle-cache,dst=/root/.gradle" \
     --mount "type=bind,src=$HOME/.codex/auth.json,dst=/codex-home/auth.json,readonly" \
-    --mount "type=bind,src=$ROOT/scripts/plan-orchestrator/result.schema.json,dst=/result.schema.json,readonly" \
     "$IMAGE" "${codex_args[@]}" - <"$prompt_file" >"$log" 2>&1
   cp "$worktree/.codex-result.json" "$result"
   rm -f "$worktree/.codex-result.json"
@@ -218,15 +216,17 @@ root_cause_report() {
   } >"$prompt"
   docker run --rm \
     --network bridge --cpus "${WORKER_CPUS:-4}" --memory "${WORKER_MEMORY:-8g}" \
-    --mount "type=bind,src=$worktree,dst=/workspace,readonly" \
-    --mount "type=bind,src=$ROOT,dst=$ROOT,readonly" \
-    --mount "type=bind,src=$STATE_DIR,dst=/orchestrator" \
+    --mount "type=bind,src=$worktree,dst=/workspace" \
     --mount "type=bind,src=$HOME/.codex/auth.json,dst=/codex-home/auth.json,readonly" \
     "$IMAGE" --dangerously-bypass-approvals-and-sandbox --ignore-user-config \
-    --ephemeral --color never --output-last-message "/orchestrator/root-cause-$id.md" - <"$prompt" \
+    --skip-git-repo-check --ephemeral --color never \
+    --output-last-message /workspace/.codex-root-cause.md - <"$prompt" \
     >"$LOG_DIR/$id-root-cause.log" 2>&1 || true
-  # The container cannot write the host report through a read-only worktree, so
-  # fall back to a deterministic evidence summary if no model report is emitted.
+  if [[ -s "$worktree/.codex-root-cause.md" ]]; then
+    cp "$worktree/.codex-root-cause.md" "$report"
+    rm -f "$worktree/.codex-root-cause.md"
+  fi
+  # Fall back to a deterministic evidence summary if no model report is emitted.
   if [[ ! -s "$report" ]]; then
     {
       echo "# Root-cause report: $id"
