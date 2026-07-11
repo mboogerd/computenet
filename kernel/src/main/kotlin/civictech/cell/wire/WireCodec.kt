@@ -23,6 +23,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.plus
 import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
 import java.util.UUID
@@ -84,6 +85,12 @@ object WireCodec {
                 @Suppress("UNCHECKED_CAST")
                 subclass(Borrowed::class, Borrowed.serializer(polyAny) as KSerializer<Borrowed<*>>)
             }
+        }.let { kernelModule ->
+            // app-contributed delta serializers (M17): ServiceLoader-discovered,
+            // mirroring ContractRegistry's ContractModule discovery (C-5);
+            // `plus` fails fast if a contribution collides with a kernel type
+            java.util.ServiceLoader.load(WireSerializers::class.java, WireSerializers::class.java.classLoader)
+                .fold(kernelModule) { acc, contribution -> acc + contribution.module }
         }
         allowStructuredMapKeys = true // polymorphic delta keys encode as [k, v] arrays
         useArrayPolymorphism = true // ["SerialName", value] — works for primitive args too

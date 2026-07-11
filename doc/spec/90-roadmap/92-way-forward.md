@@ -586,6 +586,45 @@ declared triggers, and a Principal claiming maximal attention cannot summon
 more computation than its budget bounds — 100 seeds, with a budget-blind
 control run exhibiting the resource capture the layer prevents.*
 
+## Milestone 17 — First application: argumentation graphs (`:agora`) ✅ DONE
+
+*Goal: a real product on the abstraction — collaborative argumentation
+graphs where every claim's credence in [0,1] follows recursively from
+per-user stances and attack/support edges, and **the relation itself is a
+cell**: an edge is a claim with its own stances, incoming edges, and
+credence, so attacks-on-attacks (and edge-on-edge generally) are first-class
+— the non-naive encoding. Executed out of sequence ahead of M12–M16: it
+needs only two small kernel deltas and is itself the motivating consumer
+(and empirical probe) for the M13.5 cycle-guard work.*
+
+1. ~~M17.1 — kernel: magnitude-band dispatch (34 decision 7) — `cell.data.Magnitude`
+   (the exact I-6 contract), opt-in `AttentionPolicy.magnitudeBands`, effective
+   band = `max(interest, staged urgency)` with boost lifetime = the pending
+   queue; order byte-identical when off (`MagnitudeSchedulingTest`).~~
+2. ~~M17.2 — kernel: the wire codec's polymorphic registry opens to
+   applications — ServiceLoader-discovered `cell.wire.WireSerializers`
+   contributions (the ContractModule pattern), so app delta types are
+   journal/wire-capable (41).~~
+3. ~~M17.3 — semantics + cells: pure DF-QuAD-style `GradualSemantics` (clamped
+   base = the contraction guard), `ClaimCell`/`EdgeCell` recompute-on-delta
+   with exact effective-only emission (no outlet ε-gate — I-6 rejects it);
+   cycle handling is the app-side approximation of the decided head model:
+   the topology-owning service designates each cycle-closing edge a head and
+   thresholds its inbound feedback inlet (21 §Cycles).~~
+4. ~~M17.4 — service + API: routed wiring throughout (fused DSL links would
+   bypass the scheduler that magnitude banding rides), cascade removal with
+   explicit retraction deltas, JDK HttpServer + SSE, durable via structure
+   log + host journal + checkpoint compaction (replay-stable refs).~~
+
+*Exit criterion — met: `AgoraExitTest` — 100 seeds, random claim/edge/stance/
+removal churn including edge-on-edge and cycle-closing edges, incremental
+credences equal a batch Gauss-Seidel fixpoint of the same semantics (exact on
+DAG seeds, head-threshold-bounded on cyclic ones), with a retraction-blind
+reference that must diverge; plus `CycleQuiescenceTest` (step-budgeted
+quiescence + the headless FP-resolution probe), `MagnitudePriorityTest`
+(dramatic changes outrun staged-earlier micro-changes, FIFO when off), and
+`DurabilityTest` (kill -9 recovery through codec-contributed app deltas).*
+
 ## Working agreements (process, immediate)
 
 - **Specs lead code**: changes to semantics update the relevant spec file in

@@ -15,6 +15,7 @@ include(":gen-test")
 include(":kernel")
 include(":wire")
 include(":demo")
+include(":agora")
 
 rootProject.name = "computenet"
 

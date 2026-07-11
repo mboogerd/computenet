@@ -180,7 +180,16 @@ Per P2, propagation MUST NOT introduce avoidable hops:
 ## Cycles
 
 Graphs MAY contain cycles (feedback loops, UI↔model sync, learning). The
-cycle model is decided (93 I-5/I-6), unimplemented:
+cycle model is decided (93 I-5/I-6), unimplemented — except the `Magnitude`
+interface itself, which landed with M17 (`cell.data.Magnitude`, the exact
+I-6 contract) as the carrier for magnitude-band dispatch (34 decision 7);
+the head/feedback/hop-guard/admission machinery below remains unbuilt.
+The first weak-tier consumer is the `:agora` argumentation app (M17): it
+approximates the head model in application code — its topology-owning
+service designates each cycle-closing edge a head and puts the `quiescence`
+threshold on that edge's inbound feedback inlet, gating re-origination and
+never the outbound broadcast — and its step-budgeted 100-seed exit test is
+the empirical probe for weak-tier quiescence (G-19 residual):
 
 - **Re-origination at declared heads** (93 I-5). Every cycle MUST declare at
   least one **`CycleHead`** with a **`feedbackInput`** — a feedback inlet

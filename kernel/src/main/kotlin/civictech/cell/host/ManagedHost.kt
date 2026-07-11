@@ -23,6 +23,7 @@ import civictech.cell.attention.SuspensionNotice
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.durability.Journal
 import civictech.cell.wire.WireCodec
+import civictech.cell.data.Magnitude
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
@@ -127,6 +128,14 @@ open class ManagedHost(
 
     /** Attention-parked traffic (spec 34 decision 2): parked, never dropped. */
     private val attentionParked = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
+
+    /**
+     * Magnitude-band boost (spec 34, M17): per cell, the band its largest
+     * staged [Magnitude] payload maps to under the policy's `magnitudeBands`.
+     * Lifetime is the pending queue — cleared when it drains (or parks), so a
+     * despawned cell's entry drains out through ordinary dead-letter dispatch.
+     */
+    private val magnitudeBoost = mutableMapOf<CellRef, AttentionBand>()
 
     /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
     private fun clearSupervision(cellRef: CellRef) {
@@ -277,9 +286,14 @@ open class ManagedHost(
         val cellRef = hostedInvocation.cellRef
         attentionParked[cellRef]?.let {
             it += hostedInvocation // parked cells accumulate in arrival order
-            return
+            return // no boost: magnitude is urgency, interest owns park/resume
         }
         dataQueues.getOrPut(cellRef) { ArrayDeque() }.addLast(++dataSequence to hostedInvocation)
+        attention?.magnitudeBands?.let { bands ->
+            hostedInvocation.invocation.args.filterIsInstance<Magnitude>()
+                .maxOfOrNull { it.size() }
+                ?.let { magnitudeBoost.merge(cellRef, bands(it), ::maxOf) }
+        }
     }
 
     private fun bandOf(cellRef: CellRef): AttentionBand = when {
@@ -298,7 +312,13 @@ open class ManagedHost(
         val next: HostedPortInvocation? = synchronized(dataLock) {
             if (dataQueues.isEmpty()) return
             dispatchStep++
-            val bands = dataQueues.keys.associateWith { bandOf(it) }
+            // effective band = interest ⊔ staged urgency (spec 34, M17): the
+            // boost is a data-region sub-priority — it can never lift a task
+            // above the router/management bands, and the stride floor below
+            // bounds what it can starve
+            val bands = dataQueues.keys.associateWith {
+                maxOf(bandOf(it), magnitudeBoost[it] ?: AttentionBand.NONE)
+            }
             bands.forEach { (cellRef, band) ->
                 if (band > AttentionBand.NONE) lastAttended[cellRef] = dispatchStep
             }
@@ -325,7 +345,10 @@ open class ManagedHost(
                 // a vetoed cell keeps running, it does not strand its queue
                 val queue = dataQueues.getValue(pick)
                 val head = queue.removeFirst().second
-                if (queue.isEmpty()) dataQueues.remove(pick)
+                if (queue.isEmpty()) {
+                    dataQueues.remove(pick)
+                    magnitudeBoost.remove(pick) // boost lifetime = the pending queue
+                }
                 head
             }
         }
@@ -406,6 +429,7 @@ open class ManagedHost(
     private fun parkForAttention(cellRef: CellRef) {
         synchronized(dataLock) {
             val queue = dataQueues.remove(cellRef) ?: ArrayDeque()
+            magnitudeBoost.remove(cellRef) // re-staged on unpark replay
             attentionParked[cellRef] = queue.map { it.second }.toMutableList()
         }
         cells[cellRef]?.let { notifyDownstream(it, SuspensionNotice.Suspended) }

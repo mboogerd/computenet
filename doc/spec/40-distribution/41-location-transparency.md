@@ -45,7 +45,13 @@ direct call → queue hop → serialized send.
    Deviation from the original commitment: a uniform polymorphic codec
    replaced per-method generated codec bindings — one codec covers all
    contracts including generic ones; generate bindings only if profiling
-   demands.)*
+   demands.)* The codec's polymorphic registry is open to applications
+   (M17): `cell.wire.WireSerializers` contributions are
+   ServiceLoader-discovered and folded into the codec at construction —
+   same discovery pattern as `ContractRegistry`'s `ContractModule` (C-5) —
+   so app-defined delta types are journal- and wire-capable without kernel
+   edits (first consumer: `:agora`; collisions with kernel types fail
+   codec construction fast).
 2. **Generated proxies** (KSP/Poet) replace JDK dynamic proxies at boundaries:
    KMP-compatible, reflection-free, and the natural place to emit port
    metadata (contract ids, ownership flags 20/23, color 30/32).

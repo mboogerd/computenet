@@ -1,13 +1,16 @@
 # 34 — Scheduling and Attention-Driven Execution
 
-> **Status**: Implemented (M6): decisions 1–4 below are code; decisions 5–6 and
-> additions marked "(decided in 93 I-n)" are decided design, unimplemented
-> **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol); 93 (I-4, I-9, I-16, I-18, I-28)
+> **Status**: Implemented (M6): decisions 1–4 below are code; decision 7 is code
+> (M17); decisions 5–6 and additions marked "(decided in 93 I-n)" are decided
+> design, unimplemented
+> **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol); 93 (I-4, I-6, I-9, I-16, I-18, I-28)
 > **Implementation**: `cell.attention.AttentionSupport`/`AttentionBand` over generic-protocol
 > sub-channels (`cell.port.Protocols`, G-13 minimal); host mapping in `ManagedHost` +
 > `AttentionPolicy` (band dispatch, stride floor, NONE-window park/replay);
+> magnitude-band dispatch in `ManagedHost.stage/dispatchOne` over `cell.data.Magnitude`
+> (opt-in via `AttentionPolicy.magnitudeBands`, M17);
 > `GlitchFreeCell.WaveMode` WAIT/DEGRADE. Verified: `AttentionGenerativeTest`
-> (100 seeds + starvation control), `GlitchFreeSuspensionTest`.
+> (100 seeds + starvation control), `GlitchFreeSuspensionTest`, `MagnitudeSchedulingTest`.
 > Remaining: attention does not cross the wire (bridged links carry no
 > protocol endpoints — G-35 below; revisit with replication, 42); notices are
 > single-hop (a join sees only direct upstream parks, not transitive ones —
@@ -64,7 +67,7 @@ downstream-only capability sets for shadow taps; verified by a generative
 frame-reorder/duplication harness (cross-host attention convergence as the
 first case) (93 I-1/I-4/I-17/I-9).
 
-## Decisions (1–4 from M6 planning, formerly "open questions"; 5–6 decided in 93)
+## Decisions (1–4 from M6 planning, formerly "open questions"; 5–6 decided in 93; 7 implemented in M17)
 
 1. **Aggregation is programmable per cell, damped by quantization.**
    Aggregation is a per-cell strategy (`AttentionAggregator` on
@@ -261,3 +264,30 @@ first case) (93 I-1/I-4/I-17/I-9).
    insufficiently authenticated peers; sustained remote-driven resource
    claims are charged to the claiming `Principal`'s budget via the G-28
    host-hierarchy quota walk. Decided, not built.
+
+7. **Magnitude joins interest at the dispatch max** (implemented, M17).
+   Data urgency is the dual of subscriber interest: interest flows upstream
+   over the metadata plane, magnitude rides *with* the data (a
+   `cell.data.Magnitude` payload declares `size(): Double`, ≥ 0, `0.0` ⇔ no
+   effective change — the I-6 contract). Opt-in via
+   `AttentionPolicy.magnitudeBands: ((Double) -> AttentionBand)?`
+   (null = off, order byte-identical to pre-M17): at staging the host folds
+   the largest `Magnitude` among a cell's queued payloads to a band; at
+   dispatch the cell's effective band is
+   `max(attention band, pending-magnitude band)`. Placement in the decision-5
+   authority lattice: a **sub-priority within the data region only** — it can
+   never lift a task to or above the router/management bands, the stride
+   floor bounds what it can starve, a boosted cell cannot attention-park
+   (its effective band is above NONE), and an already-parked cell stays
+   parked (magnitude is urgency; interest owns park/resume — boost is not
+   folded into parked queues and is re-derived on unpark replay). Boost
+   lifetime is the pending queue: cleared when the queue drains or parks, so
+   no state outlives the traffic that justified it. Boosting the whole queue
+   rather than one message is deliberate — per-cell FIFO is inviolable
+   (spec 31), so the big message cannot overtake its own queue anyway; band
+   selection reorders *cells*, never messages. Detection is a runtime
+   `is`-check, advisory and P5-safe (a payload without `Magnitude` simply
+   gets no boost); the KSP `magnitude` descriptor bit (G-60) can replace the
+   check without an API change. Deterministic: bands derive from staged data
+   only — verified single-threaded in `MagnitudeSchedulingTest` (kernel) and
+   end-to-end in agora's `MagnitudePriorityTest` (M17).
