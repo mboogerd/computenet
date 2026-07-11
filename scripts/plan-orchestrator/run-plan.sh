@@ -214,7 +214,7 @@ root_cause_report() {
       cat "$result"
     done
   } >"$prompt"
-  docker run --rm \
+  docker run --rm --interactive \
     --network bridge --cpus "${WORKER_CPUS:-4}" --memory "${WORKER_MEMORY:-8g}" \
     --mount "type=bind,src=$worktree,dst=/workspace" \
     --mount "type=bind,src=$HOME/.codex/auth.json,dst=/codex-home/auth.json,readonly" \
