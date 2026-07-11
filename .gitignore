@@ -42,3 +42,6 @@ bin/
 .DS_Store
 # Claude Code session worktrees
 .claude/
+
+# Headless plan orchestrator runtime state (logs, prompts, worktrees metadata)
+.codex-orchestrator/
