@@ -63,6 +63,9 @@ are consolidated in [90-roadmap/91-gap-analysis.md](90-roadmap/91-gap-analysis.m
 ### 90 — Roadmap
 - [91-gap-analysis.md](90-roadmap/91-gap-analysis.md) — every `⚠ GAP` / `⚠ CONFLICT`, consolidated with proposals
 - [92-way-forward.md](90-roadmap/92-way-forward.md) — proposed milestones from current code to the vision
+- [93-feature-interactions.md](90-roadmap/93-feature-interactions.md) — the pairwise feature-interaction analysis: 351-pair matrix, 28 resolved design challenges
+- [94-implementation-plan.md](90-roadmap/94-implementation-plan.md) — ticket-shaped work items for all decided-but-unimplemented design, in parallelizable waves
+- [95-research-plan.md](90-roadmap/95-research-plan.md) — open questions with proposed solution and research directions
 
 ## ADR → spec map
 
