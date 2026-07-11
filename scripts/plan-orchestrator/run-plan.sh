@@ -140,7 +140,7 @@ run_agent() {
     --output-last-message /workspace/.codex-result.json
   )
   [[ -n "$MODEL" ]] && codex_args+=(--model "$MODEL")
-  docker run --rm \
+  docker run --rm --interactive \
     --network bridge \
     --cpus "${WORKER_CPUS:-4}" \
     --memory "${WORKER_MEMORY:-8g}" \
@@ -154,7 +154,7 @@ run_agent() {
 
 validate_worktree() {
   local worktree=$1 log=$2
-  docker run --rm \
+  docker run --rm --interactive \
     --network none \
     --cpus "${WORKER_CPUS:-4}" \
     --memory "${WORKER_MEMORY:-8g}" \
