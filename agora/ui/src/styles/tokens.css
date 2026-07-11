@@ -1,0 +1,103 @@
+/* Design tokens — agora-ui-design-spec.md §5.
+   Light values in :root; dark values applied both by an explicit
+   [data-theme="dark"] toggle and by the OS preference (unless overridden).
+   The two "leaning" credence bands are the strong pole at 45% over the
+   surface (color-mix), so they follow their pole automatically per theme. */
+
+:root {
+  color-scheme: light dark;
+
+  /* chrome */
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --text: #0b0b0b;
+  --text-secondary: #52514e;
+  --hairline: rgba(11, 11, 11, 0.1);
+
+  /* semantic accents */
+  --edge-muted: #898781;
+  --status-amber: #fab219;
+
+  /* credence poles */
+  --reject-strong: #e34948;
+  --accept-strong: #2a78d6;
+  --contested: #f0efec;
+
+  /* credence bands (leaning = pole @ 45% over surface) */
+  --band-reject-strong: var(--reject-strong);
+  --band-reject-lean: color-mix(in srgb, var(--reject-strong) 45%, var(--surface));
+  --band-contested: var(--contested);
+  --band-accept-lean: color-mix(in srgb, var(--accept-strong) 45%, var(--surface));
+  --band-accept-strong: var(--accept-strong);
+
+  /* contested band carries a CVD-safe hairline texture, not just flat gray */
+  --contested-texture: repeating-linear-gradient(
+    45deg,
+    transparent 0,
+    transparent 3px,
+    var(--hairline) 3px,
+    var(--hairline) 4px
+  );
+
+  --radius: 8px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-tabular: ui-monospace, "SF Mono", "Segoe UI Mono", monospace;
+}
+
+/* Dark tokens — explicit toggle wins over the OS preference below. */
+:root[data-theme="dark"] {
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --text: #ffffff;
+  --text-secondary: #c3c2b7;
+  --hairline: rgba(255, 255, 255, 0.1);
+  --reject-strong: #e66767;
+  --accept-strong: #3987e5;
+  --contested: #383835;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --text: #ffffff;
+    --text-secondary: #c3c2b7;
+    --hairline: rgba(255, 255, 255, 0.1);
+    --reject-strong: #e66767;
+    --accept-strong: #3987e5;
+    --contested: #383835;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--page);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Honor the reduce-motion toggle (a [data-motion="off"] on :root, WP5) and
+   the OS preference. */
+:root[data-motion="off"] *,
+:root[data-motion="off"] *::before,
+:root[data-motion="off"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

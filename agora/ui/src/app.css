@@ -1,0 +1,38 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 650;
+}
+
+.app-tagline {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.app-main {
+  flex: 1;
+  min-height: 0;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.app-placeholder {
+  color: var(--text-secondary);
+  margin: 0;
+}
