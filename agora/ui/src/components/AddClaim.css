@@ -1,0 +1,29 @@
+.add-claim {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.add-claim__input {
+  width: 22ch;
+  padding: 0.35rem 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  font: inherit;
+}
+
+.add-claim__btn {
+  padding: 0.35rem 0.8rem;
+  background: var(--accept-strong);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font: inherit;
+  cursor: pointer;
+}
+
+.add-claim__btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

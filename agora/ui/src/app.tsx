@@ -1,6 +1,8 @@
 import { onMount, createEffect, Show } from 'solid-js';
 import { connect, graph, structuralVersion, focal, setFocal, ready } from './solid/graph';
 import DebateView from './components/DebateView';
+import DetailPanel from './components/DetailPanel';
+import AddClaim from './components/AddClaim';
 import Legend from './components/Legend';
 import './app.css';
 
@@ -22,13 +24,18 @@ export default function App() {
       <header class="app-header">
         <h1>agora</h1>
         <span class="app-tagline">argue, attack the argument, or attack the attack</span>
+        <div class="app-header__spacer" />
+        <AddClaim />
       </header>
-      <main class="app-main">
-        <Show when={ready()} fallback={<p class="app-placeholder">Connecting…</p>}>
-          <DebateView />
-        </Show>
-        <Legend />
-      </main>
+      <div class="app-body">
+        <main class="app-content">
+          <Show when={ready()} fallback={<p class="app-placeholder">Connecting…</p>}>
+            <DebateView />
+          </Show>
+          <Legend />
+        </main>
+        <DetailPanel />
+      </div>
     </div>
   );
 }

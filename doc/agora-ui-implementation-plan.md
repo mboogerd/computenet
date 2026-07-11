@@ -265,6 +265,7 @@ Sequenced so something demoable exists by WP2. Every prompt below follows the gu
 8. **Long claim text breaks SVG labels** (clipped/overlapping text in Map mode). → *"hand-measure text and wrap `<text>` manually."* → `<foreignObject>` with fixed-width HTML cards (`line-clamp`), reusing the debate-mode ClaimNode markup.
 9. **SSE dead through the dev proxy** (works via curl on :8080, silent through Vite). → *"rewrite sync as polling."* → Proxy buffering/compression on `/events`; fix the proxy config (WP0), don't abandon SSE.
 10. **`/op` returns 400 "unknown action."** → *"debug the backend."* → The backend parses `k=v&k=v` form encoding only. Always send `URLSearchParams`, never a JSON body.
+11. **A component prop named `ref` silently doesn't arrive** (e.g. stance POSTs a malformed `id` → backend "UUID string too large"). → *"the value I'm passing is wrong."* → `ref` is a **reserved prop in Solid** (it's the element-ref binding), so `<Cmp ref={x}/>` never reaches `props.ref`. Name node-id props `nodeRef`/`target`, never `ref`. (Backend `UUID.fromString` throws "too large" for any string >36 chars, which is the tell that a bad/blank id got through.)
 
 ---
 
