@@ -43,6 +43,27 @@
   gap: 1rem;
 }
 
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.mode-toggle button {
+  padding: 0.35rem 0.8rem;
+  background: var(--surface);
+  color: var(--text-secondary);
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.mode-toggle button.active {
+  background: var(--accept-strong);
+  color: #fff;
+}
+
 .app-placeholder {
   color: var(--text-secondary);
   margin: 0;

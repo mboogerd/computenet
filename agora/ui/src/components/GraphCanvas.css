@@ -1,0 +1,106 @@
+.map {
+  position: relative;
+  flex: 1;
+  min-height: 480px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+  touch-action: none;
+  cursor: grab;
+}
+
+.map:active {
+  cursor: grabbing;
+}
+
+.map__scene {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.map__svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.map-junction {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.map-junction__head {
+  fill: var(--status-amber);
+  font-size: 11px;
+}
+
+.map-card {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  background: var(--page);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--edge-muted);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.map-card.is-selected {
+  outline: 2px solid color-mix(in srgb, var(--accept-strong) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.map-card__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.map-card__cred {
+  flex: none;
+  font-family: var(--font-tabular);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.map__fit {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  padding: 0.3rem 0.7rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.map__hint {
+  position: absolute;
+  bottom: 0.6rem;
+  left: 0.6rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.map__empty {
+  padding: 2rem;
+  color: var(--text-secondary);
+}
