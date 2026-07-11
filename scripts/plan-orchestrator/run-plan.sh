@@ -14,6 +14,7 @@ MAX_RECOVERY=${MAX_RECOVERY:-2}
 BASE_BRANCH=${BASE_BRANCH:-main}
 MODEL=${MODEL:-}
 VALIDATE_COMMAND=${VALIDATE_COMMAND:-./gradlew test}
+ALLOW_DIRTY_MAIN=${ALLOW_DIRTY_MAIN:-0}
 DRY_RUN=0
 ONLY_WAVE=
 
@@ -28,7 +29,7 @@ Usage: scripts/plan-orchestrator/run-plan.sh [options]
 
 Environment: IMAGE, CODEX_VERSION, MAX_PARALLEL (hard-capped at 3),
 MAX_RECOVERY (hard-capped at 2), MODEL, VALIDATE_COMMAND, BASE_BRANCH,
-STATE_DIR, WORKTREE_ROOT.
+STATE_DIR, WORKTREE_ROOT, ALLOW_DIRTY_MAIN (default 0).
 EOF
 }
 
@@ -106,7 +107,10 @@ for command in docker git jq; do
 done
 [[ -f "$HOME/.codex/auth.json" ]] || { echo "Missing Codex authentication: $HOME/.codex/auth.json" >&2; exit 2; }
 [[ $(git branch --show-current) == "$BASE_BRANCH" ]] || { echo "Checkout $BASE_BRANCH before running" >&2; exit 2; }
-[[ -z $(git status --porcelain) ]] || { echo "Main worktree must be clean" >&2; exit 2; }
+if [[ "$ALLOW_DIRTY_MAIN" != 1 && -n $(git status --porcelain) ]]; then
+  echo "Main worktree must be clean (or explicitly set ALLOW_DIRTY_MAIN=1)" >&2
+  exit 2
+fi
 
 docker build \
   --build-arg "CODEX_VERSION=${CODEX_VERSION:-0.144.0-alpha.4}" \

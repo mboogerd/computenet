@@ -27,6 +27,9 @@ Start on a clean `main` checkout with Docker running:
 scripts/plan-orchestrator/run-plan.sh
 ```
 
+If unrelated local changes are intentionally present, the safety check can be
+explicitly bypassed with `ALLOW_DIRTY_MAIN=1`; merges will still stop on conflicts.
+
 Useful controls:
 
 ```bash
