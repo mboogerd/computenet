@@ -132,6 +132,7 @@ EOF
 
 run_agent() {
   local id=$1 attempt=$2 worktree=$3 prompt_file=$4 log=$5 result=$6
+  local gradle_volume="computenet-gradle-${id//./-}"
   local -a codex_args=(
     --dangerously-bypass-approvals-and-sandbox
     --dangerously-bypass-hook-trust
@@ -145,7 +146,7 @@ run_agent() {
     --cpus "${WORKER_CPUS:-4}" \
     --memory "${WORKER_MEMORY:-8g}" \
     --mount "type=bind,src=$worktree,dst=/workspace" \
-    --mount "type=volume,src=computenet-gradle-cache,dst=/root/.gradle" \
+    --mount "type=volume,src=$gradle_volume,dst=/root/.gradle" \
     --mount "type=bind,src=$HOME/.codex/auth.json,dst=/codex-home/auth.json,readonly" \
     "$IMAGE" "${codex_args[@]}" - <"$prompt_file" >"$log" 2>&1
   cp "$worktree/.codex-result.json" "$result"
@@ -153,13 +154,14 @@ run_agent() {
 }
 
 validate_worktree() {
-  local worktree=$1 log=$2
-  docker run --rm --interactive \
-    --network none \
+  local id=$1 worktree=$2 log=$3
+  local gradle_volume="computenet-gradle-${id//./-}"
+  docker run --rm \
+    --network bridge \
     --cpus "${WORKER_CPUS:-4}" \
     --memory "${WORKER_MEMORY:-8g}" \
     --mount "type=bind,src=$worktree,dst=/workspace" \
-    --mount "type=volume,src=computenet-gradle-cache,dst=/root/.gradle" \
+    --mount "type=volume,src=$gradle_volume,dst=/root/.gradle" \
     --entrypoint /bin/bash "$IMAGE" -lc "$VALIDATE_COMMAND" >"$log" 2>&1
 }
 
@@ -168,11 +170,34 @@ worker() {
   local attempt prompt log result status plan_rel=${PLAN#"$ROOT/"}
   # Worktree registration mutates shared Git metadata, so serialize this small
   # host-only section while workers themselves remain parallel.
-  while ! mkdir "$STATE_DIR/git-metadata.lock" 2>/dev/null; do sleep 0.1; done
-  git worktree remove --force "$worktree" >/dev/null 2>&1 || true
-  git branch -D "$branch" >/dev/null 2>&1 || true
-  git worktree add -b "$branch" "$worktree" "$BASE_BRANCH" >/dev/null
-  rmdir "$STATE_DIR/git-metadata.lock"
+  if [[ ! -d "$worktree" || $(git -C "$worktree" branch --show-current 2>/dev/null || true) != "$branch" ]]; then
+    while ! mkdir "$STATE_DIR/git-metadata.lock" 2>/dev/null; do sleep 0.1; done
+    git worktree remove --force "$worktree" >/dev/null 2>&1 || true
+    git branch -D "$branch" >/dev/null 2>&1 || true
+    git worktree add -b "$branch" "$worktree" "$BASE_BRANCH" >/dev/null
+    rmdir "$STATE_DIR/git-metadata.lock"
+  else
+    echo "Resuming preserved worktree for $id"
+  fi
+
+  # Recover completed work from an interrupted runner without invoking another
+  # implementation agent or deleting its diff.
+  if [[ -n $(git -C "$worktree" status --porcelain) ]]; then
+    for ((attempt=MAX_RECOVERY; attempt>=0; attempt--)); do
+      result="$RESULT_DIR/$id-$attempt.json"
+      [[ -f "$result" ]] || continue
+      status=$(jq -r '.status // "blocked"' "$result" 2>/dev/null || echo blocked)
+      if [[ "$status" == completed \
+        && -z $(git -C "$worktree" diff --name-only -- "$plan_rel") ]] \
+        && validate_worktree "$id" "$worktree" "$LOG_DIR/$id-resume-validation.log"; then
+        git -C "$worktree" add -A
+        git -C "$worktree" commit -m "$id: $title" >/dev/null
+        printf 'ready\t%s\t%s\t%s\n' "$id" "$branch" "$worktree" >"$STATE_DIR/$id.status"
+        return 0
+      fi
+      break
+    done
+  fi
 
   for ((attempt=0; attempt<=MAX_RECOVERY; attempt++)); do
     prompt="$STATE_DIR/prompt-$id-$attempt.txt"
@@ -184,7 +209,7 @@ worker() {
       if [[ "$status" == completed \
         && -n $(git -C "$worktree" status --porcelain) \
         && -z $(git -C "$worktree" diff --name-only -- "$plan_rel") ]] \
-        && validate_worktree "$worktree" "$LOG_DIR/$id-$attempt-validation.log"; then
+        && validate_worktree "$id" "$worktree" "$LOG_DIR/$id-$attempt-validation.log"; then
         git -C "$worktree" add -A
         git -C "$worktree" commit -m "$id: $title" >/dev/null
         printf 'ready\t%s\t%s\t%s\n' "$id" "$branch" "$worktree" >"$STATE_DIR/$id.status"
@@ -263,7 +288,7 @@ EOF
       && [[ $(jq -r '.status // "blocked"' "$result") == completed ]] \
       && git -C "$worktree" diff --check \
       && ! git -C "$worktree" grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- . ':!*.md' \
-      && validate_worktree "$worktree" "$LOG_DIR/$id-merge-$attempt-validation.log"; then
+      && validate_worktree "$id" "$worktree" "$LOG_DIR/$id-merge-$attempt-validation.log"; then
       git -C "$worktree" add -A
       if GIT_EDITOR=true git -C "$worktree" rebase --continue; then
         git merge --ff-only "$branch"

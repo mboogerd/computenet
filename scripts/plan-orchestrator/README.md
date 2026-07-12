@@ -7,7 +7,9 @@ The host creates worktrees, commits successful edits, rebases, and fast-forwards
 Git metadata and the main checkout are deliberately not mounted.
 Completion is accepted only after the structured worker result says `completed`,
 there is a non-empty diff, the plan itself is unchanged, and `./gradlew test` passes
-in a network-disabled validation container.
+in a Java 21 validation container. Each work item has an isolated Gradle cache to
+avoid cross-worker lock contention. Preserved completed worktrees are resumed after
+an interrupted runner rather than deleted.
 
 The worker's `--dangerously-bypass-approvals-and-sandbox` is intentional: Docker is
 the outer sandbox. The Docker socket is not mounted. Network is enabled because
