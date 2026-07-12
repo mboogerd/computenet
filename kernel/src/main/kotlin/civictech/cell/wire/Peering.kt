@@ -23,6 +23,8 @@ import java.util.UUID
 @Contract(management = true)
 interface RegistryAnnounce {
     fun published(ref: CellRef)
+    fun linked(link: civictech.cell.host.TopologyLink)
+    fun unlinked(id: UUID)
 }
 
 /**
@@ -40,6 +42,8 @@ class RegistryMirrorCell(
     init {
         inlet.serve(object : RegistryAnnounce {
             override fun published(ref: CellRef) = registry.publish(ref, toPeer)
+            override fun linked(link: civictech.cell.host.TopologyLink) = registry.mirrorLink(link)
+            override fun unlinked(id: UUID) = registry.mirrorUnlink(id)
         })
     }
 }
@@ -127,7 +131,9 @@ object Peering {
         val announce = (HostedCellProxy.create(peerMirror, via, AnnounceInletProxy::class.java)
                 as AnnounceInletProxy).inlet.call
         val registration = side.registry.onLocalPublish { announce.published(it) }
+        val topologyRegistration = side.registry.onLocalTopology(announce::linked, announce::unlinked)
         side.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
-        return registration
+        side.registry.localLinks().forEach(announce::linked)
+        return AutoCloseable { registration.close(); topologyRegistration.close() }
     }
 }

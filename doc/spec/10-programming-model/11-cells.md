@@ -90,14 +90,12 @@ contract hash; the compatibility check lives on the *ports*:
 migration/promotion MUST reject a relink whose target lacks a matching
 `(portName, contractId)`. This is the membrane's evolution surface (below).
 
-⚠ GAP (G-48): no cross-host index enumerates all links pointing at a full
-ref, so promotion swaps cannot find their relink set, shadow cuts cannot
-compute SCC closure, and logical-level orchestration is O(everything).
-*Proposal*: a maintained cross-host reverse-topology index (inbound and
-outbound links per full ref, including bridged links) with defined
-maintenance/migration cost, serving the promotion swap set, SCC computation
-for observation-membrane cuts, and instancesOf-based orchestration
-(93 I-2/I-11/I-17).
+*(G-48 resolved, W1.6)*: `LocationRegistry.topology` maintains inbound and
+outbound links per full ref from successful handshake and idempotent unlink
+events. The same registry-announcement channel mirrors topology additions and
+retractions across peers without forwarding second-hand edges. Rare-path
+orchestrators enumerate a promotion candidate's complete incident link set via
+`TopologyIndex.swapSet(ref)` rather than scanning cells or ports.
 
 ⚠ GAP (G-57): a client holding only a `logicalId` has no defined
 instance-selection policy (nearest replica for reads, leader for writes,

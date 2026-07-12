@@ -20,6 +20,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class LocationRegistry {
 
+    val topology = TopologyIndex()
+
     sealed interface Location
     data class Local(val host: ManagedHost) : Location
     data class Remote(val sink: InvocationSink) : Location
@@ -36,6 +38,9 @@ class LocationRegistry {
 
     /** Fire after *any* publish (local or remote) — the replica-discovery seam (M7.2, spec 42). */
     private val onPublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
+    private val onLocalLink = java.util.concurrent.CopyOnWriteArrayList<(TopologyLink) -> Unit>()
+    private val onLocalUnlink = java.util.concurrent.CopyOnWriteArrayList<(java.util.UUID) -> Unit>()
+    private val localLinkIds = ConcurrentHashMap.newKeySet<java.util.UUID>()
 
     /** Returns a deregistration handle — reconnecting transports replace their announcement hook (M10.3). */
     fun onLocalPublish(listener: (CellRef) -> Unit): AutoCloseable {
@@ -45,6 +50,36 @@ class LocationRegistry {
 
     fun onPublish(listener: (CellRef) -> Unit) {
         onPublish += listener
+    }
+
+    fun onLocalTopology(linked: (TopologyLink) -> Unit, unlinked: (java.util.UUID) -> Unit): AutoCloseable {
+        onLocalLink += linked
+        onLocalUnlink += unlinked
+        return AutoCloseable { onLocalLink -= linked; onLocalUnlink -= unlinked }
+    }
+
+    fun localLinks(): Set<TopologyLink> = topology.all().filterTo(mutableSetOf()) { it.id in localLinkIds }
+
+    internal fun link(link: TopologyLink) {
+        localLinkIds += link.id
+        topology.linked(link)
+        onLocalLink.forEach { notifyLink(it, link) }
+    }
+
+    internal fun unlink(id: java.util.UUID) {
+        localLinkIds -= id
+        topology.unlinked(id)
+        onLocalUnlink.forEach { listener -> runCatching { listener(id) } }
+    }
+
+    /** Announcement-fed remote edge; deliberately does not re-announce. */
+    fun mirrorLink(link: TopologyLink) = topology.linked(link)
+    fun mirrorUnlink(id: java.util.UUID) = topology.unlinked(id)
+
+    private fun notifyLink(listener: (TopologyLink) -> Unit, link: TopologyLink) {
+        try { listener(link) } catch (e: Exception) {
+            System.err.println("[LocationRegistry] topology hook failed for ${link.id}: $e")
+        }
     }
 
     /** Every published ref sharing [logicalId] — replicas, local and remote (spec 42). */

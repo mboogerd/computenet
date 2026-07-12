@@ -23,6 +23,9 @@ interface Link {
 
     /** Idempotent: detaches both sides and fires the target port's onUnlink once. */
     fun unlink()
+
+    /** Infrastructure lifecycle observer; invoked once after a successful detach. */
+    fun onUnlink(listener: (Link) -> Unit) {}
 }
 
 sealed interface LinkResult {
@@ -186,10 +189,17 @@ internal class PortLink(
 ) : Link {
     override val id: UUID = UUID.randomUUID()
     private var active = true
+    private val unlinkListeners = mutableListOf<(Link) -> Unit>()
+
+    override fun onUnlink(listener: (Link) -> Unit) {
+        if (active) unlinkListeners += listener else listener(this)
+    }
 
     override fun unlink() {
         if (!active) return
         active = false
         doUnlink(this)
+        unlinkListeners.toList().forEach { it(this) }
+        unlinkListeners.clear()
     }
 }

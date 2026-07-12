@@ -81,14 +81,11 @@ direct call → queue hop → serialized send.
    proxies for `Remote` refs; local refs on other hosts remain that host's
    business. Remote publishes never re-announce, so mirrored registries
    cannot loop.)*
-   ⚠ GAP (G-48): no cross-host index enumerates all links pointing at a
-   full ref, so promotion swaps cannot find their relink set, shadow cuts
-   cannot compute SCC closure, and logical-level orchestration is
-   O(everything). Proposal: a maintained cross-host reverse-topology index
-   (inbound and outbound links per full ref, including bridged links) with
-   defined maintenance/migration cost, serving the promotion swap set, SCC
-   computation for observation-membrane cuts, and instancesOf-based
-   orchestration (93 I-2/I-11/I-17).
+   *(G-48 resolved, W1.6)*: `LocationRegistry.topology` indexes inbound and
+   outbound links by full ref. Successful handshakes add edges, idempotent
+   unlinks retract them, and peer registry announcements mirror both events
+   without forwarding second-hand edges. Promotion obtains its swap set with
+   `TopologyIndex.swapSet(ref)` rather than a registry-wide scan.
    ⚠ GAP (G-57): a client holding only a logicalId has no defined
    instance-selection policy (nearest replica for reads, leader for writes,
    active candidate during promotion), and instanceId minting has no stated

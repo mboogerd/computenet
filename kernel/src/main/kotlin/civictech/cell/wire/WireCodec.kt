@@ -12,6 +12,7 @@ import civictech.cell.data.ListDelta
 import civictech.cell.data.MapDelta
 import civictech.cell.data.SetDelta
 import civictech.cell.port.PortRef
+import civictech.cell.host.TopologyLink
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.gen.wire.ContractRegistry
@@ -68,6 +69,7 @@ object WireCodec {
                 subclass(Timestamp::class)
                 subclass(CellRef::class)
                 subclass(PortRef::class)
+                subclass(TopologyLink::class)
                 subclass(MessageContext::class)
                 subclass(CounterDelta::class)
                 subclass(PnCounterDelta::class)

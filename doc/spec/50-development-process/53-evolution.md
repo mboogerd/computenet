@@ -106,14 +106,11 @@ membrane / promotion-policy cell; it holds the swap set: every link inbound
 to and outbound from the incumbent's full ref, enumerated from the
 membrane's containment record or a reverse-topology index.
 
-⚠ GAP (G-48): no cross-host index enumerates all links pointing at a full
-ref, so promotion swaps cannot find their relink set, shadow cuts cannot
-compute SCC closure, and logical-level orchestration is O(everything).
-*Proposal*: a maintained cross-host reverse-topology index (inbound and
-outbound links per full ref, including bridged links) with defined
-maintenance/migration cost, serving the promotion swap set, SCC computation
-for observation-membrane cuts, and `instancesOf`-based orchestration (93
-I-2/I-11/I-17).
+*(G-48 resolved, W1.6)*: the containing registry maintains inbound and
+outbound links per full ref from successful handshake and idempotent unlink
+events, with peer announcements mirroring remote edges. The coordinator reads
+the incumbent's complete incident set from `TopologyIndex.swapSet(ref)`; this
+enumeration is proportional to that swap set rather than to all cells or links.
 
 1. **PRECHECK** — no side effects, freely abortable. The candidate MUST
    present, for every rebindable link, a port with the same

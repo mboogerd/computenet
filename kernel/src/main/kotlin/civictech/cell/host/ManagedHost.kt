@@ -714,7 +714,17 @@ open class ManagedHost(
                     ?: throw IllegalArgumentException("Inlet not found or not linkable: $inletName on $to")
 
                 @Suppress("UNCHECKED_CAST")
-                return (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
+                val result = (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
+                if (result is LinkResult.Connected) {
+                    val edge = TopologyLink(
+                        result.link.id,
+                        result.link.from.copy(cell = from),
+                        result.link.to.copy(cell = to),
+                    )
+                    registry?.link(edge)
+                    result.link.onUnlink { registry?.unlink(it.id) }
+                }
+                return result
             }
 
             override fun connect(from: CellRef, outletName: String, to: Use<*>) {
