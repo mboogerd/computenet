@@ -11,4 +11,13 @@ package civictech.gen.wire
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
-annotation class Contract(val management: Boolean = false)
+annotation class Contract(
+    val management: Boolean = false,
+    /** Marks a world-touching boundary that shadow execution must suppress. */
+    val effect: Boolean = false,
+)
+
+/** Selects the single routing argument of a partitionable data invocation. */
+@Target(AnnotationTarget.VALUE_PARAMETER)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Key

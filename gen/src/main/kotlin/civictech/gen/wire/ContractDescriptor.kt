@@ -13,6 +13,12 @@ data class MethodDescriptor(
     val jvmDescriptor: String,
     /** Ownership slot (G-21): true when a parameter type carries exclusive ownership. */
     val exclusive: Boolean = false,
+    /** A parameter implements the cycle-throttling Magnitude contract. */
+    val magnitude: Boolean = false,
+    /** A parameter declares the idempotent Replicable merge class. */
+    val idempotentMerge: Boolean = false,
+    /** Index of the @Key argument, or -1 for an unkeyed/broadcast invocation. */
+    val keyIndex: Int = -1,
 )
 
 /** Wire identity of a contract: `contractId = StableHash.of(fqn)`. */
@@ -21,12 +27,20 @@ data class ContractDescriptor(
     val fqn: String,
     /** Management contracts may return/block; data contracts are push-only (spec 12). */
     val management: Boolean,
+    /** World-touching boundary contract (orthogonal to management/data). */
+    val effect: Boolean = false,
     val methods: List<MethodDescriptor>,
 )
+
+enum class CellColor { PURE, BLOCKING, SUSPENDING }
+
+/** Placement metadata for one concrete Cell implementation. */
+data class CellDescriptor(val fqn: String, val color: CellColor)
 
 /** Implemented by generated per-module tables; discovered via `ServiceLoader`. */
 interface ContractModule {
     val contracts: List<ContractDescriptor>
+    val cells: List<CellDescriptor> get() = emptyList()
 }
 
 /**

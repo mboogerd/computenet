@@ -1,13 +1,35 @@
 package civictech.cell.wire
 
+import civictech.cell.BlockingCell
+import civictech.cell.CellRef
+import civictech.cell.data.Magnitude
+import civictech.cell.data.Replicable
 import civictech.cell.data.SetOps
 import civictech.cell.proxy.Invocation
 import civictech.gen.wire.ContractRegistry
+import civictech.gen.wire.CellColor
+import civictech.gen.wire.Contract
+import civictech.gen.wire.Key
 import civictech.gen.wire.StableHash
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import java.util.UUID
+
+private data class SizedDelta(val value: Double) : Magnitude { override fun size() = value }
+private interface MergeDelta : Replicable<Any>
+private data class DeltaEnvelope<T>(val delta: T)
+
+@Contract(effect = true)
+private interface DescriptorBitsContract {
+    fun sized(@Key delta: DeltaEnvelope<SizedDelta>)
+    fun merged(@Key delta: DeltaEnvelope<MergeDelta>)
+}
+
+private class DescriptorBlockingCell(
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : BlockingCell
 
 /**
  * M5.1 (G-15 start, C-5): every kernel port contract has a generated
@@ -59,6 +81,19 @@ class ContractIdentityTest {
             .management shouldBe true
         ContractRegistry.contracts.first { it.fqn == "civictech.cell.data.SetOps" }
             .management shouldBe false
+    }
+
+    @Test
+    fun `cycle key effect and cell color bits ride generated descriptors`() {
+        val descriptor = ContractRegistry.descriptor(DescriptorBitsContract::class.java).shouldNotBeNull()
+        descriptor.effect shouldBe true
+        descriptor.methods.first { it.name == "sized" }.also {
+            it.magnitude shouldBe true
+            it.idempotentMerge shouldBe false
+            it.keyIndex shouldBe 0
+        }
+        descriptor.methods.first { it.name == "merged" }.idempotentMerge shouldBe true
+        ContractRegistry.cellDescriptor(DescriptorBlockingCell::class.java).shouldNotBeNull().color shouldBe CellColor.BLOCKING
     }
 
     @Test

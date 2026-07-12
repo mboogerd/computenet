@@ -15,24 +15,30 @@ object ContractRegistry {
     private val byId = ConcurrentHashMap<Long, ContractDescriptor>()
     private val byFqn = ConcurrentHashMap<String, ContractDescriptor>()
     private val byMethodKey = ConcurrentHashMap<String, Pair<ContractDescriptor, MethodDescriptor>>()
+    private val cellsByFqn = ConcurrentHashMap<String, CellDescriptor>()
 
     init {
         ServiceLoader.load(ContractModule::class.java, ContractModule::class.java.classLoader)
             .forEach(::register)
     }
 
-    fun register(module: ContractModule) = module.contracts.forEach { contract ->
-        byId[contract.contractId] = contract
-        byFqn[contract.fqn] = contract
-        contract.methods.forEach { method ->
-            byMethodKey["${contract.fqn}#${method.name}${method.jvmDescriptor}"] = contract to method
+    fun register(module: ContractModule) {
+        module.contracts.forEach { contract ->
+            byId[contract.contractId] = contract
+            byFqn[contract.fqn] = contract
+            contract.methods.forEach { method ->
+                byMethodKey["${contract.fqn}#${method.name}${method.jvmDescriptor}"] = contract to method
+            }
         }
+        module.cells.forEach { cellsByFqn[it.fqn] = it }
     }
 
     fun contract(contractId: Long): ContractDescriptor? = byId[contractId]
 
     /** The descriptor of a contract interface, if `@Contract`-annotated and registered. */
     fun descriptor(clazz: Class<*>): ContractDescriptor? = byFqn[clazz.name.replace('$', '.')]
+
+    fun cellDescriptor(clazz: Class<*>): CellDescriptor? = cellsByFqn[clazz.name.replace('$', '.')]
 
     fun method(contractId: Long, methodId: Long): MethodDescriptor? =
         byId[contractId]?.methods?.find { it.methodId == methodId }
@@ -45,6 +51,7 @@ object ContractRegistry {
     }
 
     val contracts: Collection<ContractDescriptor> get() = byId.values
+    val cells: Collection<CellDescriptor> get() = cellsByFqn.values
 }
 
 /**

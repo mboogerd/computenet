@@ -19,6 +19,7 @@ import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.broadcast
 import civictech.gen.wire.Contract
 import civictech.gen.wire.ContractRegistry
+import civictech.gen.wire.Key
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -27,7 +28,7 @@ import java.util.*
 
 @Contract
 interface OwnedPush {
-    fun push(buffer: Owned<String>)
+    fun push(@Key buffer: Owned<String>)
 }
 
 @Contract
@@ -37,7 +38,7 @@ interface FrozenPush {
 
 @Contract
 interface LeasedPush {
-    fun push(buffer: Leased<String>)
+    fun push(@Key buffer: Leased<String>)
 }
 
 /**
@@ -52,6 +53,7 @@ class OwnershipTest {
     @Test
     fun `the generated metadata carries the ownership bit`() {
         ContractRegistry.descriptor(OwnedPush::class.java)!!.methods.single().exclusive shouldBe true
+        ContractRegistry.descriptor(OwnedPush::class.java)!!.methods.single().keyIndex shouldBe 0
         ContractRegistry.descriptor(LeasedPush::class.java)!!.methods.single().exclusive shouldBe true
         ContractRegistry.descriptor(FrozenPush::class.java)!!.methods.single().exclusive shouldBe false
     }

@@ -11,4 +11,10 @@ dependencies {
     implementation(kotlin("reflect"))
 
     testImplementation(kotlin("test"))
+    testImplementation(libs.kotlin.compile.testing)
+    testImplementation(libs.kotlin.compile.testing.ksp)
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
