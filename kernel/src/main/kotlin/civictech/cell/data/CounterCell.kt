@@ -11,6 +11,7 @@ import civictech.cell.port.registerPort
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
+import civictech.cell.host.MergeablePayload
 
 @Contract
 interface CounterOps {
@@ -21,8 +22,9 @@ interface CounterOps {
 /** Commutative by construction: merging is addition, any arrival order converges (G-23). */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("CounterDelta")
-data class CounterDelta(val amount: Long) : Serializable {
+data class CounterDelta(val amount: Long) : Serializable, MergeablePayload {
     fun merge(other: CounterDelta): CounterDelta = CounterDelta(amount + other.amount)
+    override fun mergeWith(other: MergeablePayload): MergeablePayload = merge(other as CounterDelta)
 }
 
 interface CounterApi {

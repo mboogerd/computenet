@@ -61,6 +61,8 @@ open class ManagedHost(
      * Recovery: rebuild the graph (spawn the same cells), then [recoverFrom].
      */
     private val journal: Journal? = null,
+    /** Opt-in data intake bound; management invocations remain exempt. */
+    private val intakeBound: IntakeBound? = null,
 ) : Host {
 
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
@@ -89,14 +91,28 @@ open class ManagedHost(
      * Management stays open (a closed host must remain administrable).
      */
     @Volatile
-    private var intakeOpen = true
+    private var intakeState = IntakeState.OPEN
+
+    private val lowWaterListeners = mutableListOf<() -> Unit>()
+
+    val currentIntakeState: IntakeState get() = intakeState
+
+    internal fun onIntakeAvailable(listener: () -> Unit) {
+        val runNow = synchronized(dataLock) {
+            if (intakeState == IntakeState.SATURATED) {
+                lowWaterListeners += listener
+                false
+            } else true
+        }
+        if (runNow) listener()
+    }
 
     internal fun closeIntake() {
-        intakeOpen = false
+        intakeState = IntakeState.CLOSED
     }
 
     internal fun openIntake() {
-        intakeOpen = true
+        intakeState = IntakeState.OPEN
     }
 
     private enum class State { RUNNING, DRAINING, DRAINED }
@@ -216,15 +232,62 @@ open class ManagedHost(
     private var recovering = false
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
-        if (!intakeOpen) throw IntakeClosedException(ref)
+        val isManagement = hostedInvocation.type == HostedPortInvocation.Type.PORT_MANAGEMENT
+        if (!isManagement && intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
+        if (!isManagement) {
+            synchronized(dataLock) {
+                if (intakeState == IntakeState.SATURATED) {
+                    if (intakeBound?.policy == SaturationPolicy.Coalesce && coalesce(hostedInvocation)) {
+                        // Coalescing is acceptance, not loss: retain every original
+                        // in the WAL so recovery may replay the equivalent sequence.
+                        if (!recovering) journal?.append(journalFrame(hostedInvocation))
+                        return
+                    }
+                    throw IntakeSaturatedException(ref)
+                }
+            }
+        }
         // write-ahead (M10.1): the intake is the single funnel, so journal
         // order = acceptance order = per-cell FIFO on replay
         if (!recovering) journal?.append(journalFrame(hostedInvocation))
         // stage at SEND time (not dispatch time) so a backlog can form and band
         // selection has something to choose between; one dispatcher task per
         // message keeps message count <= task count (a task may find nothing)
-        synchronized(dataLock) { stage(hostedInvocation) }
+        synchronized(dataLock) {
+            stage(hostedInvocation)
+            intakeBound?.let { bound ->
+                if (!isManagement && dataQueuedCount() >= bound.highWater) {
+                    intakeState = IntakeState.SATURATED
+                }
+            }
+        }
         enqueue(20) { dispatchOne() }
+    }
+
+    private fun dataQueuedCount(): Int = dataQueues.values.sumOf { queue ->
+        queue.count { (_, invocation) -> invocation.type != HostedPortInvocation.Type.PORT_MANAGEMENT }
+    }
+
+    /** Caller holds dataLock. Same source+wave slot preserves wave identity and source FIFO. */
+    private fun coalesce(incoming: HostedPortInvocation): Boolean {
+        val payload = incoming.invocation.args.singleOrNull() as? MergeablePayload ?: return false
+        val context = incoming.invocation.context ?: return false
+        val queue = dataQueues[incoming.cellRef] ?: return false
+        val index = queue.indexOfLast { (_, old) ->
+            old.portName == incoming.portName &&
+                old.invocation.methodId == incoming.invocation.methodId &&
+                old.invocation.context?.timestamp == context.timestamp &&
+                old.invocation.context?.sourcePort == context.sourcePort &&
+                old.invocation.args.singleOrNull() is MergeablePayload
+        }
+        if (index < 0) return false
+        val entries = queue.toMutableList()
+        val (sequence, old) = entries[index]
+        val merged = (old.invocation.args.single() as MergeablePayload).mergeWith(payload)
+        entries[index] = sequence to old.copy(invocation = old.invocation.copy(args = listOf(merged)))
+        queue.clear()
+        queue.addAll(entries)
+        return true
     }
 
     /**
@@ -309,6 +372,7 @@ open class ManagedHost(
      */
     private suspend fun dispatchOne() {
         var toPark: Set<CellRef>? = null
+        var listeners: List<() -> Unit> = emptyList()
         val next: HostedPortInvocation? = synchronized(dataLock) {
             if (dataQueues.isEmpty()) return
             dispatchStep++
@@ -349,9 +413,17 @@ open class ManagedHost(
                     dataQueues.remove(pick)
                     magnitudeBoost.remove(pick) // boost lifetime = the pending queue
                 }
+                intakeBound?.let { bound ->
+                    if (intakeState == IntakeState.SATURATED && dataQueuedCount() <= bound.lowWater) {
+                        intakeState = IntakeState.OPEN
+                        listeners = lowWaterListeners.toList()
+                        lowWaterListeners.clear()
+                    }
+                }
                 head
             }
         }
+        listeners.forEach { it() }
         toPark?.forEach { parkForAttention(it) }
         next?.let { deliver(it) }
     }
@@ -682,7 +754,7 @@ open class ManagedHost(
         })
 
         routerInlet.serve(Proxy.fromClass(HostRoutingApi::class.java) { _, method, args ->
-            if (!intakeOpen) throw IntakeClosedException(ref)
+            if (intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
             val invocation = Invocation.of(method, args).withTarget(internalHostRoutingApi)
             enqueue(10) { invocation.invoke() }
             null

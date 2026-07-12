@@ -8,6 +8,7 @@ import civictech.cell.port.*
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
+import civictech.cell.host.MergeablePayload
 
 @Contract
 interface SetOps<E> {
@@ -27,9 +28,12 @@ interface SetOps<E> {
 data class SetDelta<E>(
     val adds: Map<E, Set<Timestamp>> = emptyMap(),
     val dels: Map<E, Set<Timestamp>> = emptyMap(),
-) : Serializable {
+) : Serializable, MergeablePayload {
     fun merge(other: SetDelta<E>): SetDelta<E> =
         SetDelta(mergeTags(adds, other.adds), mergeTags(dels, other.dels))
+
+    @Suppress("UNCHECKED_CAST")
+    override fun mergeWith(other: MergeablePayload): MergeablePayload = merge(other as SetDelta<E>)
 
     companion object {
         private fun <E> mergeTags(

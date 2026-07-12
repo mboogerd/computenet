@@ -77,6 +77,11 @@ class LocationRegistry {
             // re-check under the per-ref lock so a concurrent publish can't strand this invocation
             if (send(locations[invocation.cellRef], invocation)) return
             queue.add(invocation)
+            // Register after parking as well as on the failed offer. If the
+            // target crossed low-water between those operations, runNow
+            // replays the newly parked tail instead of stranding it.
+            val expected = locations[invocation.cellRef]
+            (expected as? Local)?.host?.onIntakeAvailable { replay(invocation.cellRef, expected) }
         }
     }
 
@@ -84,6 +89,9 @@ class LocationRegistry {
         is Local -> try {
             location.host.enqueueHostedInvocation(invocation)
             true
+        } catch (_: IntakeSaturatedException) {
+            location.host.onIntakeAvailable { replay(invocation.cellRef, location) }
+            false
         } catch (_: IntakeClosedException) {
             false
         }
@@ -99,6 +107,17 @@ class LocationRegistry {
         }
 
         null -> false
+    }
+
+    private fun replay(ref: CellRef, expected: Location) {
+        val queue = parked[ref] ?: return
+        synchronized(queue) {
+            if (locations[ref] != expected) return
+            while (queue.isNotEmpty()) {
+                if (!send(expected, queue.first())) return
+                queue.removeAt(0)
+            }
+        }
     }
 
     /**
