@@ -65,6 +65,11 @@ GRADLE_USER_HOME=$PWD/.gradle-home ./gradlew test --console=plain
   contract.
 - Implementers are **Sonnet**; failed tickets escalate to **Opus** in the same
   worktree with full failure context.
+- **GOTCHA: `.codex-orchestrator/` is gitignored** → it does NOT exist in fresh
+  `plan/Wn.m` worktrees. Never point a subagent at `.codex-orchestrator/items/*`;
+  **embed the full ticket text inline in the dispatch prompt**. The tracked
+  `doc/spec/` tree and `AGENTS.md` ARE present in every worktree for detail.
+  (Read the item briefs from the primary checkout when composing prompts.)
 
 ## Prior run history (Codex-in-Docker)
 
