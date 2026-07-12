@@ -270,6 +270,7 @@ integrate_item() {
     git merge --ff-only "$branch"
     git worktree remove "$worktree"
     git branch -d "$branch" >/dev/null
+    printf 'merged\t%s\t%s\n' "$id" "$(git rev-parse "$BASE_BRANCH")" >"$STATE_DIR/$id.status"
     return 0
   fi
 
@@ -294,6 +295,7 @@ EOF
         git merge --ff-only "$branch"
         git worktree remove "$worktree"
         git branch -d "$branch" >/dev/null
+        printf 'merged\t%s\t%s\n' "$id" "$(git rev-parse "$BASE_BRANCH")" >"$STATE_DIR/$id.status"
         return 0
       fi
     fi
@@ -303,13 +305,45 @@ EOF
   return 1
 }
 
+process_item() {
+  local id=$1 title=$2 state= branch= worktree= rc=0
+
+  # A completed item from an interrupted invocation is durable in main and must
+  # never be regenerated merely because its old worktree was removed.
+  if [[ -n $(git log "$BASE_BRANCH" --grep="^$id:" -1 --format=%H) ]]; then
+    printf 'merged\t%s\t%s\n' "$id" "$(git rev-parse "$BASE_BRANCH")" >"$STATE_DIR/$id.status"
+    echo "$id is already merged"
+    return 0
+  fi
+
+  if [[ -f "$STATE_DIR/$id.status" ]]; then
+    IFS=$'\t' read -r state _ branch worktree <"$STATE_DIR/$id.status"
+  fi
+  if [[ "$state" != ready || ! -d "$worktree" ]]; then
+    worker "$id" "$title" || {
+      [[ -f "$STATE_DIR/$id.status" ]] && IFS=$'\t' read -r state _ branch worktree <"$STATE_DIR/$id.status"
+      [[ -n "$worktree" ]] && root_cause_report "$id" "$worktree"
+      return 1
+    }
+    IFS=$'\t' read -r state _ branch worktree <"$STATE_DIR/$id.status"
+  else
+    echo "Using ready branch for $id"
+  fi
+
+  # Workers stay parallel, but main-branch integration is serialized and happens
+  # immediately after each item becomes ready.
+  while ! mkdir "$STATE_DIR/integration.lock" 2>/dev/null; do sleep 0.1; done
+  integrate_item "$id" "$branch" "$worktree" || rc=$?
+  rmdir "$STATE_DIR/integration.lock"
+  return "$rc"
+}
+
 run_wave() {
   local wave=$1 id title pid failed=0
-  local -a batch_ids=() batch_titles=() batch_pids=()
+  local -a batch_pids=()
   echo "Starting wave $wave"
   while IFS=$'\t' read -r id title; do
-    batch_ids+=("$id"); batch_titles+=("$title")
-    worker "$id" "$title" &
+    process_item "$id" "$title" &
     batch_pids+=("$!")
     if ((${#batch_pids[@]} == MAX_PARALLEL)); then
       for pid in "${batch_pids[@]}"; do wait "$pid" || failed=1; done
@@ -319,19 +353,9 @@ run_wave() {
   for pid in "${batch_pids[@]}"; do wait "$pid" || failed=1; done
 
   if ((failed)); then
-    for id in "${batch_ids[@]}"; do
-      [[ -f "$STATE_DIR/$id.status" ]] || continue
-      read -r state _ _ worktree < <(tr '\t' ' ' <"$STATE_DIR/$id.status")
-      [[ "$state" == failed ]] && root_cause_report "$id" "$worktree"
-    done
     echo "Wave $wave failed; no later wave will start" >&2
     return 1
   fi
-
-  for id in "${batch_ids[@]}"; do
-    IFS=$'\t' read -r state _ branch worktree <"$STATE_DIR/$id.status"
-    integrate_item "$id" "$branch" "$worktree" || return 1
-  done
   echo "Wave $wave complete"
 }
 

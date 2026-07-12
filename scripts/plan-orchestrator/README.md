@@ -5,6 +5,10 @@ headless Codex container. Waves are sequential; a wave uses at most three worker
 The host creates worktrees, commits successful edits, rebases, and fast-forwards
 `main`. Containers receive one writable worktree and read-only Codex authentication;
 Git metadata and the main checkout are deliberately not mounted.
+
+Each item is rebased and fast-forwarded into `main` as soon as it becomes ready;
+integration is serialized while other workers in the same wave may continue. A
+failed item prevents the next wave but does not hold back successful wave peers.
 Completion is accepted only after the structured worker result says `completed`,
 there is a non-empty diff, the plan itself is unchanged, and `./gradlew test` passes
 in a Java 21 validation container. Each work item has an isolated Gradle cache to
