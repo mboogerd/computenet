@@ -93,6 +93,7 @@ open class ManagedHost(
      */
     @Volatile
     private var intakeState = IntakeState.OPEN
+    private var saturationOrigin: Pair<CellRef, String>? = null
 
     private val lowWaterListeners = mutableListOf<() -> Unit>()
 
@@ -267,7 +268,11 @@ open class ManagedHost(
             stage(hostedInvocation)
             intakeBound?.let { bound ->
                 if (!isManagement && dataQueuedCount() >= bound.highWater) {
-                    intakeState = IntakeState.SATURATED
+                    if (intakeState != IntakeState.SATURATED) {
+                        intakeState = IntakeState.SATURATED
+                        saturationOrigin = hostedInvocation.cellRef to hostedInvocation.portName
+                        announceSaturation(true)
+                    }
                 }
             }
         }
@@ -426,6 +431,8 @@ open class ManagedHost(
                 intakeBound?.let { bound ->
                     if (intakeState == IntakeState.SATURATED && dataQueuedCount() <= bound.lowWater) {
                         intakeState = IntakeState.OPEN
+                        announceSaturation(false)
+                        saturationOrigin = null
                         listeners = lowWaterListeners.toList()
                         lowWaterListeners.clear()
                     }
@@ -436,6 +443,21 @@ open class ManagedHost(
         listeners.forEach { it() }
         toPark?.forEach { parkForAttention(it) }
         next?.let { deliver(it) }
+    }
+
+    /** Emits the host intake state on every inbound data edge; G-36 relays it producer-ward. */
+    private fun announceSaturation(asserted: Boolean) {
+        val (cellRef, portName) = saturationOrigin ?: return
+        val port = cells[cellRef]?.let { PortRegistry.of(it)[portName] } as? Linked ?: return
+        port.linking.links.forEach { link ->
+            if (link.toPort === port) {
+                Protocols.sendUpstream(
+                    link,
+                    Protocols.Saturation,
+                    SaturationSignal((port as Port).ref, asserted),
+                )
+            }
+        }
     }
 
     /**
@@ -650,6 +672,12 @@ open class ManagedHost(
                     cell.parentHost = this@ManagedHost
                 }
                 cells[cell.ref] = cell
+                ProtocolSupport.bind(cell)
+                PortRegistry.of(cell).names().forEach { name ->
+                    PortRegistry.of(cell)[name]?.let { port ->
+                        ProtocolSupport.of(port).relay(Protocols.Saturation)
+                    }
+                }
                 cell.onActivate(ctx)
                 // spawn-time checkpoint: what a RESTART supervision restores (G-26)
                 if (cell is Stateful) checkpoints[cell.ref] = cell.snapshot()

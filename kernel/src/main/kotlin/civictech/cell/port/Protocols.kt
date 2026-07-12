@@ -1,6 +1,9 @@
 package civictech.cell.port
 
+import civictech.gen.wire.ProtocolDirection
+import civictech.gen.wire.ProtocolRegistry
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 
 /** Id of a generic protocol stacked on a data link (spec 12, G-13 minimal). */
 data class ProtocolId(val name: String)
@@ -20,6 +23,9 @@ object Protocols {
 
     /** spec 20/22: topology changes ordered with the data carried by a link. */
     val TopologyOrder = ProtocolId("topology-order")
+
+    /** spec 32/34: retractable intake backpressure, traveling upstream. */
+    val Saturation = ProtocolId("saturation")
 
     /** Deliver [message] to the link's producer-side port (against data flow). */
     fun sendUpstream(link: Link, id: ProtocolId, message: Any) {
@@ -45,15 +51,51 @@ object Protocols {
  * threaded production host. Endpoint objects are in-process only — generic
  * protocols do not cross the wire yet (bridged links have null endpoints).
  */
-class ProtocolSupport {
+class ProtocolSupport private constructor(private val port: Port) {
     private val handlers = mutableMapOf<ProtocolId, (Link, Any) -> Unit>()
+    private val relays = mutableMapOf<ProtocolId, (Any) -> Boolean>()
+    @Volatile private var owner: Any? = null
 
     fun handle(id: ProtocolId, handler: (Link, Any) -> Unit) {
         handlers[id] = handler
     }
 
+    /**
+     * Enables descriptor-directed, hop-by-hop propagation for [id].  The
+     * predicate is evaluated after local delivery; true makes this owner a
+     * protocol terminal.  Traversals carry their own epoch and immutable
+     * visited-edge set, so cycles and duplicate paths expand each edge at
+     * most once without entering the data-wave context domain (G-36).
+     */
+    fun relay(id: ProtocolId, terminal: (Any) -> Boolean = { false }) {
+        requireNotNull(ProtocolRegistry.protocol(id.name)) { "unknown protocol ${id.name}" }
+        relays[id] = terminal
+    }
+
     fun deliver(id: ProtocolId, link: Link, message: Any) {
-        handlers[id]?.invoke(link, message)
+        val traversal = (message as? ProtocolTraversal)
+            ?: ProtocolTraversal(UUID.randomUUID(), ConcurrentHashMap.newKeySet(), message)
+        if (!traversal.visitedEdges.add(link.id)) return
+        handlers[id]?.invoke(link, traversal.payload)
+
+        val terminal = relays[id] ?: return
+        if (terminal(traversal.payload)) return
+        val descriptor = requireNotNull(ProtocolRegistry.protocol(id.name))
+        val cell = owner ?: return
+        PortRegistry.of(cell).names().forEach { name ->
+            val linkedPort = PortRegistry.of(cell)[name] as? Linked ?: return@forEach
+            linkedPort.linking.links.forEach { next ->
+                if (next.id in traversal.visitedEdges) return@forEach
+                when (descriptor.direction) {
+                    ProtocolDirection.UPSTREAM -> if (next.toPort === linkedPort) {
+                        send(next, id, traversal, upstream = true)
+                    }
+                    ProtocolDirection.DOWNSTREAM -> if (next.fromPort === linkedPort) {
+                        send(next, id, traversal, upstream = false)
+                    }
+                }
+            }
+        }
     }
 
     fun handles(id: ProtocolId): Boolean = id in handlers
@@ -62,9 +104,27 @@ class ProtocolSupport {
         // ponytail: JVM-global weak map, same pattern as PortRegistry
         private val registries = Collections.synchronizedMap(WeakHashMap<Port, ProtocolSupport>())
 
-        fun of(port: Port): ProtocolSupport = registries.getOrPut(port) { ProtocolSupport() }
+        fun of(port: Port): ProtocolSupport = registries.getOrPut(port) { ProtocolSupport(port) }
+
+        /** Associates every currently registered port with its owning cell. */
+        fun bind(owner: Any) {
+            val ports = PortRegistry.of(owner)
+            ports.names().forEach { name -> ports[name]?.let { of(it).owner = owner } }
+        }
+
+        private fun send(link: Link, id: ProtocolId, traversal: ProtocolTraversal, upstream: Boolean) {
+            if (upstream) Protocols.sendUpstream(link, id, traversal)
+            else Protocols.sendDownstream(link, id, traversal)
+        }
     }
 }
+
+/** Metadata-only traversal state; deliberately unrelated to MessageContext. */
+private data class ProtocolTraversal(
+    val epoch: UUID,
+    val visitedEdges: MutableSet<UUID>,
+    val payload: Any,
+)
 
 /** In-band logical-edge lifecycle markers (wire representation is W3.2). */
 sealed interface EdgeEvent

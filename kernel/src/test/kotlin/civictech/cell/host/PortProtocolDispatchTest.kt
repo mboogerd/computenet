@@ -4,6 +4,7 @@ import civictech.cell.HostTest
 import civictech.cell.attention.Attention
 import civictech.cell.attention.AttentionProtocol
 import civictech.cell.attention.SuspensionProtocol
+import civictech.cell.host.SaturationProtocol
 import civictech.cell.port.Link
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
@@ -31,6 +32,11 @@ class PortProtocolDispatchTest {
         suspension.contractId shouldBe civictech.gen.wire.ContractRegistry.descriptor(SuspensionProtocol::class.java)!!.contractId
         suspension.direction shouldBe ProtocolDirection.DOWNSTREAM
         suspension.cardinality shouldBe ProtocolCardinality.FAN_OUT_BROADCAST
+
+        val saturation = ProtocolRegistry.protocol(Protocols.Saturation.name)!!
+        saturation.contractId shouldBe civictech.gen.wire.ContractRegistry.descriptor(SaturationProtocol::class.java)!!.contractId
+        saturation.direction shouldBe ProtocolDirection.UPSTREAM
+        saturation.cardinality shouldBe ProtocolCardinality.FAN_IN_MERGE
     }
 
     @Test

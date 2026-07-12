@@ -8,7 +8,11 @@ import civictech.cell.Timestamp
 import civictech.cell.data.CounterDelta
 import civictech.cell.data.Propagate
 import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
+import civictech.cell.port.ProtocolSupport
+import civictech.cell.port.Protocols
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
@@ -18,6 +22,14 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 
 class SaturationTest {
+    private class RelayStage(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<CounterDelta>>())
+        val outlet = registerPort("outlet", FanOutlet.create<Propagate<CounterDelta>>())
+        init { inlet.serve(object : Propagate<CounterDelta> {
+            override fun propagate(value: CounterDelta) = outlet.call.propagate(value)
+        }) }
+    }
+
     private class DeltaSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val received = mutableListOf<Long>()
         val inlet = registerPort("inlet", FanInlet.create<Propagate<CounterDelta>>())
@@ -117,5 +129,34 @@ class SaturationTest {
         registry.parkedFor(sink.ref).size shouldBe 1
         controller.runToIdle()
         sink.received shouldBe listOf(1, 2)
+    }
+
+    @Test
+    fun `high and low water emit transitive saturation assertion and retraction`() {
+        val controller = SimulationController(0)
+        val host = ManagedHost(
+            scheduler = controller.scheduler(),
+            intakeBound = IntakeBound(2, 0, SaturationPolicy.Coalesce),
+        )
+        val source = RelayStage()
+        val middle = RelayStage()
+        val sink = DeltaSink()
+        host.managementInlet.call.spawn(source)
+        host.managementInlet.call.spawn(middle)
+        host.managementInlet.call.spawn(sink)
+        source.outlet.linkTo(middle.inlet as LinkFrom<Propagate<CounterDelta>>)
+        middle.outlet.linkTo(sink.inlet as LinkFrom<Propagate<CounterDelta>>)
+        val notices = mutableListOf<SaturationSignal>()
+        ProtocolSupport.of(source.outlet).handle(Protocols.Saturation) { _, message ->
+            notices += message as SaturationSignal
+        }
+        val context = MessageContext(Timestamp(UUID.randomUUID(), 1), source.outlet.ref)
+
+        host.enqueueHostedInvocation(deltaInvocation(sink.ref, 1, context))
+        host.enqueueHostedInvocation(deltaInvocation(sink.ref, 2, context))
+        notices.map { it.asserted } shouldBe listOf(true)
+
+        controller.runToIdle()
+        notices.map { it.asserted } shouldBe listOf(true, false)
     }
 }
