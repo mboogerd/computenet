@@ -1,11 +1,13 @@
 package civictech.cell.data
 
 import civictech.cell.Timestamp
+import civictech.cell.MessageContext
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.buffering
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.*
@@ -73,5 +75,26 @@ class SetCellTest {
 
         cell.inlet.call.remove(42)
         assertTrue(invocationBuffer.isEmpty())
+    }
+
+    @Test
+    fun `SetCell remote merge re-originates its wave and preserves tags verbatim`() {
+        val cell = SetCell<Int>()
+        val emissions = mutableListOf<Invocation>()
+        cell.outlet.subscribe(Use.fixed(buffering<Propagate<SetDelta<Int>>>(emissions), PortRef.generate()))
+        val incomingTag = tag(7)
+        val incoming = SetDelta(adds = mapOf(1 to setOf(incomingTag)))
+        val incomingContext = MessageContext(Timestamp(UUID.randomUUID(), 41), PortRef.generate())
+        val propagate = Propagate::class.java.getMethod("propagate", Any::class.java)
+
+        Invocation.of(propagate, arrayOf(incoming), incomingContext).invoke(cell.deltaInlet.call)
+
+        val emission = emissions.single()
+        assertEquals(cell.outlet.ref.id, emission.context!!.timestamp.sourceId)
+        assertEquals(cell.outlet.ref, emission.context!!.sourcePort)
+        assertEquals(incoming, emission.args.single())
+        @Suppress("UNCHECKED_CAST")
+        val emitted = emission.args.single() as SetDelta<Int>
+        assertSame(incomingTag, emitted.adds.getValue(1).single())
     }
 }

@@ -94,7 +94,7 @@ class PnCounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         if (newIncs.isEmpty() && newDecs.isEmpty()) return // echo terminates here
         incs += newIncs
         decs += newDecs
-        outlet.call.propagate(PnCounterDelta(newIncs, newDecs))
+        outlet.originate { propagate(PnCounterDelta(newIncs, newDecs)) }
     }
 
     init {

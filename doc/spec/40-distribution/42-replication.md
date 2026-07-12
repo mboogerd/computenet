@@ -121,11 +121,6 @@ it is decided design, none of it is code.
   the mesh cycle — closing this file's former open item on reusing wave
   context or OR-set ids as causal metadata.
 
-  ⚠ CONFLICT (C-10): shipped `SetCell.applyRemote` re-emits gossip deltas
-  under the incoming wave (`FanOutlet`'s transparent-flow rule), preserving a
-  gossiped delta's wave id across replica hops — contradicting the decided
-  origination-at-merge rule: a replica re-emitting an effective post-merge
-  delta mints a fresh wave (93 I-14 Rule S4).
 - **Exclusive payloads are pipeline currency, never shared-state currency**
   (decided in 93 I-20): a replicated cell with an `Owned`/`Leased` data inlet
   (20/23) consumes its own local exclusive inputs to advance local state;

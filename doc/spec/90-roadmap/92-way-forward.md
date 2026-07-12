@@ -451,7 +451,7 @@ their hygiene story.*
    supersede-vs-remove precedence, bounded re-baseline cost, poison-write
    escape, the deadLetter→requestState recovery cell
    (93 I-22/I-2/I-7/I-18/I-19/I-25).
-2. M13.2 — source-epoch hygiene (G-42), **fixing C-10**: reclamation of
+2. M13.2 — source-epoch hygiene (G-42): reclamation of
    provably-superseded epochs riding G-25 checkpoints, frontier GC for
    orphaned partial waves, migration payload carrying the outlet counter
    high-water, journal-derived generations; the origination-at-merge rule

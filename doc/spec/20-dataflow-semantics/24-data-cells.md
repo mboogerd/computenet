@@ -309,9 +309,7 @@ They are decided design (93 I-14, I-22, I-27), unimplemented.
   durable host MAY persist the counter high-water purely to preserve wave
   continuity, never as a correctness dependency. The wave-side complement
   (93 I-14 Rule S4) — a `Replicable` cell's post-merge re-emission
-  *originates* a fresh wave per replica, convergence riding the tags — is
-  contradicted by shipped `SetCell.applyRemote`, which re-emits under the
-  incoming wave (⚠ CONFLICT C-10, recorded in 22 and 40/42).
+  *originates* a fresh wave per replica, convergence riding the tags.
 - **Generational supersede** (decided in 93 I-22). RESTART is decided as
   restore-the-freshest-checkpoint plus a generation-stamped `ReBaseline`
   notice over the ordinary catch-up path — never a bare local rollback. The

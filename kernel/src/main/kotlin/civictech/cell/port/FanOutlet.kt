@@ -50,6 +50,14 @@ class FanOutlet<Api : Any>(
         null
     }
 
+    /**
+     * Emit at a declared origination boundary even when called reactively.
+     * The normal stamping path then mints a fresh wave from this outlet.
+     */
+    fun originate(block: Api.() -> Unit) {
+        CurrentContext.with(null) { call.block() }
+    }
+
     override fun at(portRef: PortRef): Api {
         return Proxy.delegating(clazz) {
             subscriptions[portRef]?.call ?: Proxy.noop(clazz)

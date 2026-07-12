@@ -5001,7 +5001,6 @@ Open questions I could not fully close within the fixed decisions:
 > Existing gaps touched: G-20, G-8, G-23 · Confidence: high
 > Spec drift (judged at `a69186a`): 9/9 member pairs partially addressed by M6–M9 while the analysis ran — see §3.1
 > Landed state at `0c09a32` (M11): **PARTIAL** — The wave half as recorded rules: S1/S2 (emission-epoch minting; sourceId per (outlet, epoch) of an instance, never logicalId), the ReBaseline supersession notice for fresh epochs superseding live lanes, S4's origination boundary at Replicable merge re-emiss…
-> ⚠ Divergence with landed code: Rule S4 — a Replicable cell's post-merge re-emission is a wave ORIGINATION point — is contradicted by shipped code: SetCell.applyRemote re-emits through FanOutlet under the delivered invocation's context (FanOutlet's documented rule: 'a reactive call keeps …
 > Reconciled after cross-check: Rule S1 gains the drain-captured adoption clause (T0/T1 promotion preserved-epoch); Rule S5 visibility now conditional on the epoch guard.
 
 #### 1. Challenge restatement

@@ -89,11 +89,6 @@ source ids.
   merge tags, not wave alignment, so no source id circulates around the
   gossip mesh.
 
-  ⚠ CONFLICT (C-10): shipped `SetCell.applyRemote` re-emits gossip deltas
-  under the incoming wave (transparent flow), contradicting the decided
-  origination-at-merge rule — a replica re-emitting an effective post-merge
-  delta mints a fresh wave (93 I-14 Rule S4).
-
 - **The frontier quantifies over physical sources (Rule S5)**: glitch-free
   completeness buffers per `(sourceId, counter)` and quantifies over
   outlet-epoch sources, never logical cells. A logical upstream with several

@@ -110,7 +110,7 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         if (newAdds.isEmpty() && newDels.isEmpty()) return // echo terminates here
         newAdds.forEach { (e, tags) -> adds.getOrPut(e) { mutableSetOf() } += tags }
         newDels.forEach { (e, tags) -> dels.getOrPut(e) { mutableSetOf() } += tags }
-        outlet.call.propagate(SetDelta(newAdds, newDels))
+        outlet.originate { propagate(SetDelta(newAdds, newDels)) }
     }
 
     init {
