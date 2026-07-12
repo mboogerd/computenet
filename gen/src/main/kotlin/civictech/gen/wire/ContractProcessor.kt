@@ -129,6 +129,29 @@ class ContractProcessor(
             add("⇤)")
         }
 
+        val protocolTable = buildCodeBlock {
+            add("listOf(\n⇥")
+            contracts.forEach { contract ->
+                val protocol = contract.getAnnotationsByType(Protocol::class).firstOrNull() ?: return@forEach
+                val fqn = contract.qualifiedName!!.asString()
+                val management = contract.getAnnotationsByType(Contract::class).first().management
+                if (!management) logger.error("protocol contract $fqn must be management-class (spec 12)", contract)
+                contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
+                    val returns = fn.returnType?.resolve()?.declaration?.qualifiedName?.asString()
+                    if (returns != null && returns != "kotlin.Unit")
+                        logger.error("protocol contract $fqn#${fn.simpleName.asString()} must be push-only", fn)
+                    if (fn.parameters.any { carriesExclusive(it.type.resolve()) })
+                        logger.error("protocol contract $fqn#${fn.simpleName.asString()} must not carry Owned/Leased", fn)
+                }
+                add("%T(%S, %LL, %T.%L, %L, %S, %T.%L),\n",
+                    ProtocolDescriptor::class.asClassName(), protocol.id, StableHash.of(fqn),
+                    ProtocolDirection::class.asClassName(), protocol.direction.name,
+                    protocol.band, protocol.lane,
+                    ProtocolCardinality::class.asClassName(), protocol.cardinality.name)
+            }
+            add("⇤)")
+        }
+
         val moduleType = TypeSpec.classBuilder(moduleName)
             .addSuperinterface(ContractModule::class.asClassName())
             .addProperty(
@@ -154,6 +177,10 @@ class ContractProcessor(
                     }
                     add("⇤)")
                 }).build()
+            )
+            .addProperty(
+                PropertySpec.builder("protocols", LIST.parameterizedBy(ProtocolDescriptor::class.asClassName()), KModifier.OVERRIDE)
+                    .initializer(protocolTable).build()
             )
             .build()
 

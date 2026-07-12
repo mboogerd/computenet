@@ -5,6 +5,10 @@ import civictech.cell.port.Linked
 import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.ProtocolSupport
+import civictech.gen.wire.Contract
+import civictech.gen.wire.Protocol
+import civictech.gen.wire.ProtocolCardinality
+import civictech.gen.wire.ProtocolDirection
 import civictech.cell.port.Protocols
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -18,11 +22,19 @@ import kotlin.math.pow
  */
 data class Attention(val level: Float)
 
+@Contract(management = true)
+@Protocol("attention", ProtocolDirection.UPSTREAM, band = 0, lane = "attention", cardinality = ProtocolCardinality.FAN_IN_MERGE)
+fun interface AttentionProtocol { fun attention(message: Attention) }
+
 /** Host notices about parked/replayed cells, traveling downstream (34 decision 3). */
 sealed interface SuspensionNotice {
     data object Suspended : SuspensionNotice
     data object Resumed : SuspensionNotice
 }
+
+@Contract(management = true)
+@Protocol("suspension", ProtocolDirection.DOWNSTREAM, band = 0, lane = "suspension", cardinality = ProtocolCardinality.FAN_OUT_BROADCAST)
+fun interface SuspensionProtocol { fun suspension(message: SuspensionNotice) }
 
 /**
  * Marker (spec 34 decision 3, session delta 3): a cell that must never be

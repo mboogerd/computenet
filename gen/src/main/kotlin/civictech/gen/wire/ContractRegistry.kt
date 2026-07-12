@@ -54,6 +54,27 @@ object ContractRegistry {
     val cells: Collection<CellDescriptor> get() = cellsByFqn.values
 }
 
+/** Runtime index of the generated, bounded metadata-protocol descriptors. */
+object ProtocolRegistry {
+    private val byId = ConcurrentHashMap<String, ProtocolDescriptor>()
+    private val byContractId = ConcurrentHashMap<Long, ProtocolDescriptor>()
+
+    init {
+        ServiceLoader.load(ContractModule::class.java, ContractModule::class.java.classLoader)
+            .flatMap { it.protocols }
+            .forEach(::register)
+    }
+
+    fun register(descriptor: ProtocolDescriptor) {
+        byId[descriptor.protocolId] = descriptor
+        byContractId[descriptor.contractId] = descriptor
+    }
+
+    fun protocol(id: String): ProtocolDescriptor? = byId[id]
+    fun protocol(contractId: Long): ProtocolDescriptor? = byContractId[contractId]
+    val protocols: Collection<ProtocolDescriptor> get() = byId.values
+}
+
 /**
  * JVM method descriptors from reflection — must produce exactly what KSP's
  * `mapToJvmSignature` produces at generation time, or [ContractRegistry.idsOf]

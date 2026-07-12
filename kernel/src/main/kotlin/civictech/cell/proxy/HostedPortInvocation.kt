@@ -1,6 +1,8 @@
 package civictech.cell.proxy
 
 import civictech.cell.CellRef
+import civictech.cell.port.Link
+import civictech.cell.port.ProtocolId
 
 /**
  * An invocation on a port of a hosted cell.
@@ -10,6 +12,10 @@ data class HostedPortInvocation(
     val portName: String,
     val type: Type,
     val invocation: Invocation,
+    /** In-process metadata-plane envelope. Wire realization is W3.2. */
+    val protocolId: ProtocolId? = null,
+    val protocolLink: Link? = null,
+    val protocolMessage: Any? = null,
     /**
      * Transport identity of the delivery (G-29 phase 1, M8.2): stamped by a
      * bridge ingress, never serialized into frames — the receiving transport
@@ -26,6 +32,9 @@ data class HostedPortInvocation(
         /**
          * Method call on the Port's functional API (e.g. provide(data) for a Consumer).
          */
-        PORT_API
+        PORT_API,
+
+        /** Framework metadata delivered through ProtocolSupport, never through the data API. */
+        PORT_PROTOCOL
     }
 }

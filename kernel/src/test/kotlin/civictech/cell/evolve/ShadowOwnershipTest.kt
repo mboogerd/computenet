@@ -11,6 +11,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.gen.wire.Contract
+import civictech.gen.wire.Key
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -18,12 +19,12 @@ import java.util.UUID
 
 @Contract
 interface ShadowOwnedPush {
-    fun push(value: Owned<String>)
+    fun push(@Key value: Owned<String>)
 }
 
 @Contract
 interface ShadowLeasedPush {
-    fun push(value: Leased<String>)
+    fun push(@Key value: Leased<String>)
 }
 
 /** W1.2 / C-11: shadow suppression remains the sole consumer of exclusives. */

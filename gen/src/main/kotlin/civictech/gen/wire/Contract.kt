@@ -21,3 +21,17 @@ annotation class Contract(
 @Target(AnnotationTarget.VALUE_PARAMETER)
 @Retention(AnnotationRetention.RUNTIME)
 annotation class Key
+
+/** Marks a bounded framework metadata protocol carried beside a port's data contract. */
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Protocol(
+    val id: String,
+    val direction: ProtocolDirection,
+    val band: Int,
+    val lane: String,
+    val cardinality: ProtocolCardinality,
+)
+
+enum class ProtocolDirection { UPSTREAM, DOWNSTREAM }
+enum class ProtocolCardinality { FAN_IN_MERGE, FAN_OUT_BROADCAST }

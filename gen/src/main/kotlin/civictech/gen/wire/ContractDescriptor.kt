@@ -37,10 +37,20 @@ enum class CellColor { PURE, BLOCKING, SUSPENDING }
 /** Placement metadata for one concrete Cell implementation. */
 data class CellDescriptor(val fqn: String, val color: CellColor)
 
+data class ProtocolDescriptor(
+    val protocolId: String,
+    val contractId: Long,
+    val direction: ProtocolDirection,
+    val band: Int,
+    val lane: String,
+    val cardinality: ProtocolCardinality,
+)
+
 /** Implemented by generated per-module tables; discovered via `ServiceLoader`. */
 interface ContractModule {
     val contracts: List<ContractDescriptor>
     val cells: List<CellDescriptor> get() = emptyList()
+    val protocols: List<ProtocolDescriptor> get() = emptyList()
 }
 
 /**

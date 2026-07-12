@@ -27,6 +27,7 @@ import civictech.cell.data.Magnitude
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.gen.wire.ProtocolRegistry
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
 import java.util.*
@@ -232,6 +233,15 @@ open class ManagedHost(
     private var recovering = false
 
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
+        if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
+            require(hostedInvocation.invocation.context == null) { "protocol invocations must carry null MessageContext" }
+            val id = requireNotNull(hostedInvocation.protocolId) { "PORT_PROTOCOL requires protocolId" }
+            val descriptor = requireNotNull(ProtocolRegistry.protocol(id.name)) { "unknown protocol ${id.name}" }
+            // The metadata plane remains available while data intake is closed or
+            // saturated and uses the protocol's scheduler band, not data staging.
+            scheduler.submit(descriptor.band) { deliver(hostedInvocation) }
+            return
+        }
         val isManagement = hostedInvocation.type == HostedPortInvocation.Type.PORT_MANAGEMENT
         if (!isManagement && intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
         if (!isManagement) {
@@ -528,10 +538,14 @@ open class ManagedHost(
 
     private suspend fun deliver(hostedInvocation: HostedPortInvocation) {
         val cellRef = hostedInvocation.cellRef
-        // a SUSPEND-ed cell's traffic parks per-cell until resume(ref) replays it
-        suspendedCells[cellRef]?.let {
-            it += hostedInvocation
-            return
+        // A supervised cell parks only its data/ordinary management traffic.
+        // Metadata protocols remain on the always-open plane: resume and
+        // catch-up protocols must not deadlock behind what they unpark.
+        if (hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
+            suspendedCells[cellRef]?.let {
+                it += hostedInvocation
+                return
+            }
         }
         val cell = cells[cellRef] ?: return deadLetter(
             null, "unknown cell $cellRef", hostedInvocation
@@ -542,6 +556,12 @@ open class ManagedHost(
 
         try {
             when (hostedInvocation.type) {
+                HostedPortInvocation.Type.PORT_PROTOCOL -> {
+                    val id = requireNotNull(hostedInvocation.protocolId)
+                    val link = requireNotNull(hostedInvocation.protocolLink)
+                    ProtocolSupport.of(port).deliver(id, link, hostedInvocation.protocolMessage as Any)
+                }
+
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
                     // the transport identity of the delivery is ambient for the
                     // handshake running inside (G-29 phase 1, M8.2)
