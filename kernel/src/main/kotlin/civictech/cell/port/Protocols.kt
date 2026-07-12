@@ -18,6 +18,9 @@ object Protocols {
     /** spec 34 decision 3: hosts announce parked/replayed cells downstream. */
     val Suspension = ProtocolId("suspension")
 
+    /** spec 20/22: topology changes ordered with the data carried by a link. */
+    val TopologyOrder = ProtocolId("topology-order")
+
     /** Deliver [message] to the link's producer-side port (against data flow). */
     fun sendUpstream(link: Link, id: ProtocolId, message: Any) {
         link.fromPort?.let { ProtocolSupport.of(it).deliver(id, link, message) }
@@ -53,6 +56,8 @@ class ProtocolSupport {
         handlers[id]?.invoke(link, message)
     }
 
+    fun handles(id: ProtocolId): Boolean = id in handlers
+
     companion object {
         // ponytail: JVM-global weak map, same pattern as PortRegistry
         private val registries = Collections.synchronizedMap(WeakHashMap<Port, ProtocolSupport>())
@@ -60,3 +65,10 @@ class ProtocolSupport {
         fun of(port: Port): ProtocolSupport = registries.getOrPut(port) { ProtocolSupport() }
     }
 }
+
+/** In-band logical-edge lifecycle markers (wire representation is W3.2). */
+sealed interface EdgeEvent
+
+data object EdgeOpen : EdgeEvent
+
+data object EdgeClose : EdgeEvent

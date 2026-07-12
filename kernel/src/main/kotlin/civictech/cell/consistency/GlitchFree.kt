@@ -7,7 +7,9 @@ import civictech.cell.Timestamp
 import civictech.cell.attention.SuspensionNotice
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.PortRef
+import civictech.cell.port.EdgeClose
+import civictech.cell.port.EdgeOpen
+import civictech.cell.port.Link
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
 import civictech.cell.port.registerPort
@@ -20,8 +22,7 @@ import java.util.*
  * until the wave's edge set is complete, then replays the wave's invocations to
  * [outlet] as one consistent group, each under its own context.
  *
- * The completeness frontier is the inlet's current link set — recomputed on every
- * check, so link/unlink adapts the condition (topology is part of completeness).
+ * The completeness frontier is folded from in-band EdgeOpen/EdgeClose markers.
  * Wave order is per-source counter order; per-link FIFO (spec 31) makes wave
  * completion monotone per source.
  *
@@ -48,54 +49,77 @@ class GlitchFreeCell<Api : Any>(
     val inlet = registerPort("inlet", FanInlet(clazz))
     val outlet = registerPort("outlet", FanOutlet(clazz))
 
-    private val pending = LinkedHashMap<Timestamp, LinkedHashMap<PortRef, Invocation>>()
+    private val pending = LinkedHashMap<Timestamp, LinkedHashMap<UUID, Invocation>>()
+
+    private data class EdgeState(
+        val link: Link,
+        val floors: Map<UUID, Long>,
+        var open: Boolean = true,
+    )
+
+    private val edges = LinkedHashMap<UUID, EdgeState>()
 
     /** Edges announced suspended by their host (DEGRADE only). */
-    private val suspendedEdges = mutableSetOf<PortRef>()
+    private val suspendedEdges = mutableSetOf<UUID>()
 
     /** Highest flushed wave per source: replayed stragglers pass through, never re-buffer. */
     private val flushedHighWater = mutableMapOf<UUID, Long>()
 
     init {
+        ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
+            when (event) {
+                EdgeOpen -> edges[link.id] = EdgeState(link, flushedHighWater.toMap())
+                EdgeClose -> edges[link.id]?.open = false
+                else -> return@handle
+            }
+            flushReady()
+        }
         inlet.serve(Proxy.fromClass(clazz) { _, method, args ->
             val ctx = CurrentContext.get()
             if (ctx == null) {
                 Invocation.of(method, args).invoke(outlet.call)
-            } else if (ctx.timestamp.counter <= (flushedHighWater[ctx.timestamp.sourceId] ?: Long.MIN_VALUE)) {
-                // a wave that already completed without this edge (DEGRADE +
-                // resume replay): emit late rather than buffer forever —
-                // catch-up semantics, spec 21
-                Invocation.of(method, args, ctx).invoke(outlet.call)
             } else {
-                pending.getOrPut(ctx.timestamp) { LinkedHashMap() }[ctx.sourcePort] =
-                    Invocation.of(method, args, ctx)
-                flushReady()
+                val edge = edges.values.singleOrNull { it.open && it.link.from == ctx.sourcePort }
+                    ?: return@fromClass null
+                val floor = edge.floors[ctx.timestamp.sourceId] ?: Long.MIN_VALUE
+                if (ctx.timestamp.counter <= floor) return@fromClass null
+                if (ctx.timestamp.counter <= (flushedHighWater[ctx.timestamp.sourceId] ?: Long.MIN_VALUE)) {
+                    // a wave that already completed without this edge (DEGRADE +
+                    // resume replay): emit late rather than buffer forever —
+                    // catch-up semantics, spec 21
+                    Invocation.of(method, args, ctx).invoke(outlet.call)
+                } else {
+                    pending.getOrPut(ctx.timestamp) { LinkedHashMap() }[edge.link.id] =
+                        Invocation.of(method, args, ctx)
+                    flushReady()
+                }
             }
             null
         })
-        inlet.linking.onUnlink = { flushReady() } // shrinking the edge set may complete waves
         if (mode == WaveMode.DEGRADE) {
             ProtocolSupport.of(inlet).handle(Protocols.Suspension) { link, notice ->
                 when (notice) {
                     SuspensionNotice.Suspended -> {
-                        suspendedEdges += link.from
+                        suspendedEdges += link.id
                         flushReady() // shrinking the frontier may complete waves
                     }
 
-                    SuspensionNotice.Resumed -> suspendedEdges -= link.from
+                    SuspensionNotice.Resumed -> suspendedEdges -= link.id
                 }
             }
         }
     }
 
-    private fun expectedEdges(): Set<PortRef> =
-        inlet.linking.links.map { it.from }.toSet() - suspendedEdges
+    private fun expectedEdges(timestamp: Timestamp): Set<UUID> = edges.values
+        .asSequence()
+        .filter { it.open && it.link.id !in suspendedEdges }
+        .filter { (it.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter }
+        .map { it.link.id }
+        .toSet()
 
     private fun flushReady() {
-        val expected = expectedEdges()
-        if (expected.isEmpty()) return
         val ready = pending.keys
-            .filter { pending.getValue(it).keys.containsAll(expected) }
+            .filter { pending.getValue(it).keys.containsAll(expectedEdges(it)) }
             .sortedWith(compareBy({ it.sourceId }, { it.counter }))
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue

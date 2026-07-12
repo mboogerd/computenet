@@ -157,6 +157,14 @@ internal fun <Api> handshake(
 
     val sourceLinking = (portOut as? Linked)?.linking
     val link = PortLink(portOut.ref, targetRef, portOut, target as? Port) { link ->
+        // The close is terminal on the link's in-process protocol/data FIFO:
+        // announce it while both endpoints are still reachable, then detach.
+        link.toPort?.let { port ->
+            val protocols = ProtocolSupport.of(port)
+            if (protocols.handles(Protocols.TopologyOrder)) {
+                protocols.deliver(Protocols.TopologyOrder, link, EdgeClose)
+            }
+        }
         uninstall(link)
         sourceLinking?.remove(link)
         support.remove(link)
@@ -169,6 +177,14 @@ internal fun <Api> handshake(
             install()
             support.register(link)
             sourceLinking?.register(link)
+            // Only topology-interested consumers pay for edge markers.  Open
+            // precedes onLinked catch-up and every subsequent data invocation.
+            link.toPort?.let { port ->
+                val protocols = ProtocolSupport.of(port)
+                if (protocols.handles(Protocols.TopologyOrder)) {
+                    protocols.deliver(Protocols.TopologyOrder, link, EdgeOpen)
+                }
+            }
             support.onLinked(link)
             sourceLinking?.onLinked?.invoke(link)
             support.onLinkedListeners.forEach { it(link) }
