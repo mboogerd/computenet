@@ -10,6 +10,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.proxy.Proxy
+import civictech.gen.wire.ContractRegistry
 import java.io.Serializable
 
 /**
@@ -63,10 +64,17 @@ object Shadow {
             val port = ports[name]
             if (port is FanInlet<*>) {
                 @Suppress("UNCHECKED_CAST")
-                (port as FanInlet<Any>).serve(Proxy.noop(port.clazz as Class<Any>))
+                (port as FanInlet<Any>).serve(suppressionProxy(port.clazz as Class<Any>))
             }
         }
     }
+
+    private fun <T : Any> suppressionProxy(clazz: Class<T>): T =
+        if (ContractRegistry.descriptor(clazz)?.methods?.any { it.exclusive } == true) {
+            Proxy.discharging(clazz)
+        } else {
+            Proxy.noop(clazz)
+        }
 }
 
 /**

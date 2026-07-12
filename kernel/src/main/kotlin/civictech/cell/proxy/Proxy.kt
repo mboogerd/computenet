@@ -1,5 +1,9 @@
 package civictech.cell.proxy
 
+import civictech.cell.Leased
+import civictech.cell.Owned
+import civictech.gen.wire.ContractRegistry
+import civictech.gen.wire.JvmDescriptors
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Proxy
@@ -61,5 +65,34 @@ object Proxy {
      */
     fun <T : Any> noop(clazz: Class<T>): T {
         return fromClass(clazz) { _, _, _ -> null }
+    }
+
+    /** Create a sink which discharges methods marked exclusive by generated metadata. */
+    fun <T : Any> discharging(clazz: Class<T>): T {
+        val descriptor = requireNotNull(ContractRegistry.descriptor(clazz)) {
+            "A discharging proxy requires a generated contract descriptor for ${clazz.name}"
+        }
+        val exclusiveMethods = descriptor.methods.filter { it.exclusive }.mapTo(mutableSetOf()) {
+            it.name to it.jvmDescriptor
+        }
+        return fromClass(clazz) { _, method, args ->
+            if ((method.name to JvmDescriptors.of(method)) in exclusiveMethods) {
+                args.orEmpty().forEach(::discharge)
+            }
+            null
+        }
+    }
+
+    private fun discharge(value: Any?) {
+        when (value) {
+            is Owned<*> -> value.take()
+            is Leased<*> -> value.release()
+            is Map<*, *> -> value.forEach { (key, item) ->
+                discharge(key)
+                discharge(item)
+            }
+            is Iterable<*> -> value.forEach(::discharge)
+            is Array<*> -> value.forEach(::discharge)
+        }
     }
 }

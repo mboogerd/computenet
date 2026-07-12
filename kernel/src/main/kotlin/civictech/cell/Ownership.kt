@@ -54,4 +54,13 @@ class Owned<T : Any>(private val value: T) {
  * freeze or copy first. Pooling itself is G-21 phase 3, deliberately
  * unbuilt until profiling demands it.
  */
-class Leased<T : Any>(val value: T)
+class Leased<T : Any>(val value: T, private val returnToPool: (T) -> Unit = {}) {
+    private var released = false
+
+    /** Return this value to its pool; a lease obligation is discharged exactly once. */
+    fun release() {
+        check(!released) { "Leased value already released" }
+        released = true
+        returnToPool(value)
+    }
+}
