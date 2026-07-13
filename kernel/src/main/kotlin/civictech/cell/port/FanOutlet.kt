@@ -23,7 +23,16 @@ class FanOutlet<Api : Any>(
 
     override val linking = LinkSupport()
 
-    private val subscriptions: MutableMap<PortRef, Use<Api>> = mutableMapOf()
+    /** Consume-role attachments: SPSC-checked, receive the declared payload form. */
+    private val consumers: MutableMap<PortRef, Use<Api>> = mutableMapOf()
+
+    /**
+     * Observe-role attachments — taps (spec 20/23 §Taps, G-47): uncounted by
+     * the SPSC funnel, always admitted regardless of the exclusive bit. Fire
+     * before consumers on emit ("taps-fire-first").
+     */
+    private val taps: MutableMap<PortRef, Use<Api>> = mutableMapOf()
+
     private val waveCounter = AtomicLong()
 
     /**
@@ -39,15 +48,21 @@ class FanOutlet<Api : Any>(
             ?: MessageContext(Timestamp(ref.id, waveCounter.incrementAndGet()), ref)
         CurrentContext.with(ctx) {
             // snapshot: link/unlink during a wave must not fail the broadcast
-            subscriptions.values.toList().forEach { target ->
-                try {
-                    method.invoke(target.call, *(args ?: emptyArray()))
-                } catch (e: java.lang.reflect.InvocationTargetException) {
-                    throw e.targetException
-                }
-            }
+            // Taps fire first, in emission order (spec 20/23 "taps-fire-first"),
+            // then consumers — no tap view can alias the buffer once a consumer
+            // mutates or moves it.
+            taps.values.toList().forEach { target -> invoke(target, method, args) }
+            consumers.values.toList().forEach { target -> invoke(target, method, args) }
         }
         null
+    }
+
+    private fun invoke(target: Use<Api>, method: java.lang.reflect.Method, args: Array<out Any?>?) {
+        try {
+            method.invoke(target.call, *(args ?: emptyArray()))
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.targetException
+        }
     }
 
     /**
@@ -60,22 +75,42 @@ class FanOutlet<Api : Any>(
 
     override fun at(portRef: PortRef): Api {
         return Proxy.delegating(clazz) {
-            subscriptions[portRef]?.call ?: Proxy.noop(clazz)
+            consumers[portRef]?.call ?: taps[portRef]?.call ?: Proxy.noop(clazz)
         }
     }
 
     override fun subscribe(port: Use<Api>) {
         // every attach path funnels here: handshake installs, Use.fixed links,
-        // cross-host and bridge links alike — "rejectable everywhere"
-        check(!(exclusive && subscriptions.isNotEmpty() && port.ref !in subscriptions)) {
+        // cross-host and bridge links alike — "rejectable everywhere". SPSC
+        // (spec 23) counts Consume links only — taps are a separate, always-
+        // admitted funnel (see [tap]).
+        check(!(exclusive && consumers.isNotEmpty() && port.ref !in consumers)) {
             "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; a second subscriber is not allowed"
         }
-        subscriptions += port.ref to port
+        consumers += port.ref to port
+    }
+
+    /**
+     * Observe-role attachment (spec 20/23 §Taps, 10/12 §Cardinality rule 2
+     * extension, G-47): an uncounted read-only tap, always admitted
+     * regardless of the exclusive bit. Fires before the sole consumer on
+     * emit, receiving the same invocation — taps are expected to read
+     * exclusive payloads via [civictech.cell.Owned.borrow] /
+     * [civictech.cell.Leased.borrow], never [civictech.cell.Owned.take] /
+     * [civictech.cell.Leased.release].
+     */
+    fun tap(port: Use<Api>) {
+        taps += port.ref to port
+    }
+
+    /** Detaches a tap previously installed with [tap]. Idempotent. */
+    fun untap(portRef: PortRef) {
+        taps.remove(portRef)
     }
 
     /** Source-side rejection for the handshake path (mirrors Outlet's cardinality style). */
     override fun linkTo(linkFrom: LinkFrom<Api>): LinkResult {
-        if (exclusive && subscriptions.isNotEmpty()) {
+        if (exclusive && consumers.isNotEmpty()) {
             return LinkResult.Rejected(
                 "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; outlet already has a subscriber"
             )
@@ -84,7 +119,8 @@ class FanOutlet<Api : Any>(
     }
 
     override fun unsubscribe(portRef: PortRef) {
-        subscriptions.remove(portRef)
+        consumers.remove(portRef)
+        taps.remove(portRef)
     }
 
     override fun linkFrom(portOut: LinkTo<Api>): LinkResult = handshake(

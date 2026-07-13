@@ -39,6 +39,14 @@ class Owned<T : Any>(private val value: T) {
         return value
     }
 
+    /**
+     * Read-only, temporary snapshot view for taps (spec 23 §Taps): does not
+     * consume, does not require or check the consume-once state, and never
+     * competes with the sole consumer's [take]. Valid only for the emitting
+     * invocation — never retained, mutated, or released.
+     */
+    fun borrow(): Borrowed<T> = Borrowed(value)
+
     /** The typical fan-out path: consume, republish immutable. */
     fun freeze(): Frozen<T> = Frozen(take())
 
@@ -63,4 +71,11 @@ class Leased<T : Any>(val value: T, private val returnToPool: (T) -> Unit = {}) 
         released = true
         returnToPool(value)
     }
+
+    /**
+     * Read-only, temporary snapshot view for taps (spec 23 §Taps): does not
+     * release the lease and never competes with the sole consumer's
+     * [release]. Valid only for the emitting invocation.
+     */
+    fun borrow(): Borrowed<T> = Borrowed(value)
 }

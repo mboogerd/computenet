@@ -45,7 +45,20 @@ data class LinkRequest(
     val to: PortRef,
     /** Identity slot from day one (G-14); verification is future work (G-29). */
     val identity: Identity? = null,
+    /** Consume vs Observe (spec 20/23 §Taps, 10/12 §Cardinality rule 2). */
+    val role: LinkRole = LinkRole.Consume,
 )
+
+/**
+ * The role a downstream attachment plays on a link's handshake (spec 20/23
+ * §Taps; 10/12 §Cardinality rule 2 extension): a **Consume** link receives
+ * the outlet's declared contract form and bears the consume-once/release
+ * obligation, counted by the SPSC funnel; an **Observe** link (a tap)
+ * receives a read-only `Borrowed` projection, valid only for the emitting
+ * invocation, and is never counted — always admitted regardless of the
+ * exclusive bit.
+ */
+enum class LinkRole { Consume, Observe }
 
 /** Marker only in M2 — a real identity model is G-29. */
 interface Identity
@@ -148,12 +161,13 @@ internal fun <Api> handshake(
     portOut: LinkTo<Api>,
     target: Linked,
     targetRef: PortRef,
+    role: LinkRole = LinkRole.Consume,
     install: () -> Unit,
     uninstall: (Link) -> Unit,
 ): LinkResult {
     val support = target.linking
     // identity rides the delivery (M8.2): bridged requests carry their peer
-    support.reject(LinkRequest(portOut.ref, targetRef, CurrentPeer.get()))?.let { return it }
+    support.reject(LinkRequest(portOut.ref, targetRef, CurrentPeer.get(), role))?.let { return it }
 
     val sourceLinking = (portOut as? Linked)?.linking
     val link = PortLink(portOut.ref, targetRef, portOut, target as? Port) { link ->
