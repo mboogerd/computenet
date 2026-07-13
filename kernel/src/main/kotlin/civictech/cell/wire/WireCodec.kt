@@ -11,6 +11,7 @@ import civictech.cell.data.PnCounterDelta
 import civictech.cell.data.ListDelta
 import civictech.cell.data.MapDelta
 import civictech.cell.data.SetDelta
+import civictech.cell.replication.Stamped
 import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolId
 import civictech.cell.attention.Attention
@@ -111,6 +112,9 @@ object WireCodec {
                 subclass(MapDelta::class, MapDelta.serializer(polyAny, polyAny) as KSerializer<MapDelta<*, *>>)
                 @Suppress("UNCHECKED_CAST")
                 subclass(ListDelta::class, ListDelta.serializer(polyAny) as KSerializer<ListDelta<*>>)
+                // single-writer leader→follower log unit (spec 42 §Single-writer replication, W4.3)
+                @Suppress("UNCHECKED_CAST")
+                subclass(Stamped::class, Stamped.serializer(polyAny) as KSerializer<Stamped<*>>)
                 // ownership wrappers (spec 23): Owned moves, Frozen/Borrowed copy; Leased never crosses
                 @Suppress("UNCHECKED_CAST")
                 subclass(Owned::class, Owned.serializer(polyAny) as KSerializer<Owned<*>>)
