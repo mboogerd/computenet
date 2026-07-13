@@ -113,16 +113,28 @@ All Wave-2 workers ran as **synchronous** Sonnet subagents (3 concurrent per bat
 TDD, isolated Gradle homes; no Opus escalation needed. One rebase conflict (W2.7) was
 resolved inline by the host.
 
-### Wave 3 — in progress
-Batching splits the two `evo` tickets (W3.5, W3.6) across batches. All deps merged.
+### Wave 3 — COMPLETE (all merged; authoritative clean gate green @ f789092)
+| Ticket | Title | Merged | Notes |
+|--------|-------|--------|-------|
+| W3.1 | CycleHead & two-tier quiescence (G-41) | e0da3dd | |
+| W3.2 | Wire phase: protocols + edge events cross machines (G-35B, G-39B) | 8978731 | additive WireFrame fields. |
+| W3.5 | Promotion transaction hardening (G-49) | 5c01125 | |
+| W3.3 | Gossip-mesh hardening (G-45) | 4c6f8e1 | added peer unpublish announce. |
+| W3.4 | Membranes: Flatten/Mediate exposure (G-52) | 4f9031b | unblocked W4.1, W4.2. |
+| W3.6 | GraphSpec identity & remote application (G-51 core) | f789092 | |
+
+No Opus escalation needed; all rebases auto-merged (no manual conflict this wave).
+
+### Wave 4 — in progress
+All deps merged. Batching splits the two membrane tickets (W4.1, W4.2) across batches.
 | Ticket | Title | Area | Batch | Status |
 |--------|-------|------|-------|--------|
-| W3.1 | CycleHead & two-tier quiescence (G-41, G-19 guard) | data+link | A | pending |
-| W3.2 | Wire phase: protocols + edge events cross machines (G-35B, G-39B) | wire | A | pending |
-| W3.5 | Promotion transaction hardening (G-49) | evo | A | pending |
-| W3.3 | Gossip-mesh hardening (G-45) | repl | B | pending |
-| W3.4 | Membranes: Flatten/Mediate exposure (G-52) | membrane | B | pending (unblocks W4.1, W4.2) |
-| W3.6 | GraphSpec identity & remote application (G-51 core) | evo | B | pending |
+| W4.1 | BoundaryPolicy: the three seams (G-54) | membrane | A | pending |
+| W4.3 | Single-writer replication core (G-44 core) | repl | A | pending |
+| W4.6 | Reflection-free KMP proxies (C-5 completion) | gen | A | pending |
+| W4.2 | PartitionedCell (G-56, realizes G-24) | data+membrane | B | pending |
+| W4.4 | Promotion policy as data (G-50) | evo | B | pending |
+| W4.5 | Attention realization details (G-58 core) | sched | B | pending |
 
 ### Wave 4 — not started
 W4.1–W4.6 (`.codex-orchestrator/items/W4.*.md`).
