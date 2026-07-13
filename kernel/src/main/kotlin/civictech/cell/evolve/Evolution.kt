@@ -106,12 +106,21 @@ object Promotion {
     ) {
         gate.controlInlet.call.setRed()
 
+        val from = outlet(incumbent, outletName)
+
         if (candidate is StateMigrating && incumbent is Stateful) {
             candidate.importFrom(incumbent.snapshot())
         }
 
-        val from = outlet(incumbent, outletName)
         val to = outlet(candidate, outletName)
+        if (candidate is StateMigrating && incumbent is Stateful) {
+            // preserved-epoch adoption (spec 20/22 §Source identity, 93 I-11/I-27
+            // default): the state transfer carries the outlet's (sourceId,
+            // highWater) inside this buffered swap window too, so the candidate
+            // continues the same source lane — wave-invisible, no ReBaseline,
+            // the glitch-free frontier stays intact (G-42/G-43).
+            to.adoptWaveState(from.waveState())
+        }
         downstream.forEach { use ->
             from.unsubscribe(use.ref)
             @Suppress("UNCHECKED_CAST")

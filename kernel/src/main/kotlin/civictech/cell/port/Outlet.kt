@@ -2,9 +2,12 @@ package civictech.cell.port
 
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
+import civictech.cell.PendingReBaseline
+import civictech.cell.ReBaselineNotice
 import civictech.cell.Timestamp
 import civictech.cell.proxy.Proxy
 import civictech.cell.proxy.noop
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -29,16 +32,63 @@ class Outlet<Api : Any>(
     private var subscribedPortApi: Use<Api> = Use.fixed(unicastFactory())
     private val waveCounter = AtomicLong()
 
+    /**
+     * This outlet's current emission epoch (spec 20/22 §Source identity: a
+     * "source" is one outlet during one emission epoch — never the port
+     * identity itself). Fresh at construction (cold start mints a fresh
+     * epoch by default); [adoptWaveState] overrides it for a
+     * preserved-epoch continuation, [mintFreshEpoch] rotates it forward.
+     */
+    @Volatile
+    private var sourceId: UUID = UUID.randomUUID()
+
     // Emission stamps the wave context — see FanOutlet for the rules.
     override val call: Api = Proxy.fromClass(clazz) { _, method, args ->
         val ctx = CurrentContext.get()?.copy(sourcePort = ref)
-            ?: MessageContext(Timestamp(ref.id, waveCounter.incrementAndGet()), ref)
+            ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get())
         CurrentContext.with(ctx) {
             try {
                 method.invoke(subscribedPortApi.call, *(args ?: emptyArray()))
             } catch (e: java.lang.reflect.InvocationTargetException) {
                 throw e.targetException
             }
+        }
+    }
+
+    /** Current `(sourceId, highWater)` (spec 20/22, 93 I-14 Rule S1) — the unit a preserved-epoch transfer moves wholesale. */
+    fun waveState(): OutletWaveState = OutletWaveState(sourceId, waveCounter.get())
+
+    /**
+     * Preserved-epoch adoption (suspend/resume, migration, promotion state
+     * transfer): this outlet continues the given source lane instead of its
+     * own — invisible to downstream completeness, no `ReBaseline` (93 I-11).
+     */
+    fun adoptWaveState(state: OutletWaveState) {
+        sourceId = state.sourceId
+        waveCounter.set(state.highWater)
+    }
+
+    /**
+     * Mints a fresh emission epoch (cold start default; RESTART, replica/
+     * candidate spawn, and fallback promotion swaps call this explicitly) and
+     * returns the superseded `sourceId` (spec 93 I-14 Rule S1).
+     */
+    fun mintFreshEpoch(): UUID {
+        val superseded = sourceId
+        sourceId = UUID.randomUUID()
+        waveCounter.set(0)
+        return superseded
+    }
+
+    /**
+     * Emits [block] as a RESTART re-baseline (spec 93 I-22 R2): a fresh
+     * origination — the ordinary spontaneous-emission path — flagged with
+     * [ReBaselineNotice] so the receiving [MessageContext] carries it.
+     */
+    fun reBaseline(supersedes: Set<UUID>, supersede: Boolean, block: Api.() -> Unit) {
+        val notice = ReBaselineNotice(supersedes, supersede)
+        CurrentContext.with(null) {
+            PendingReBaseline.with(notice) { call.block() }
         }
     }
 

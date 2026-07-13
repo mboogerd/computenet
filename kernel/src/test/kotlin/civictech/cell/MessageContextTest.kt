@@ -40,7 +40,9 @@ class MessageContextTest {
         source.emit(3)
 
         val timestamps = invocations.map { it.context!!.timestamp }
-        timestamps.map { it.sourceId }.toSet() shouldBe setOf(source.outlet.ref.id)
+        // spec 20/22 §Source identity: sourceId is the outlet's emission
+        // epoch (fresh at construction), never the port identity
+        timestamps.map { it.sourceId }.toSet() shouldBe setOf(source.outlet.waveState().sourceId)
         timestamps.map { it.counter } shouldBe listOf(1L, 2L, 3L)
         invocations.forEach { it.context!!.sourcePort shouldBe source.outlet.ref }
     }
@@ -63,7 +65,7 @@ class MessageContextTest {
 
         invocations.size shouldBe 1
         val ctx = invocations[0].context.shouldNotBeNull()
-        ctx.timestamp shouldBe Timestamp(source.outlet.ref.id, 1L)   // origin wave, unchanged
+        ctx.timestamp shouldBe Timestamp(source.outlet.waveState().sourceId, 1L)   // origin wave, unchanged
         ctx.sourcePort shouldBe mapper2.outlet.ref                    // last hop's port
         invocations[0].args[0] shouldBe 22
     }
@@ -95,7 +97,7 @@ class MessageContextTest {
 
         val ctxA = fromA.single().context.shouldNotBeNull()
         val ctxB = fromB.single().context.shouldNotBeNull()
-        ctxB.timestamp.sourceId shouldBe b.outlet.ref.id
+        ctxB.timestamp.sourceId shouldBe b.outlet.waveState().sourceId
         ctxB.timestamp shouldNotBe ctxA.timestamp
     }
 
@@ -118,7 +120,7 @@ class MessageContextTest {
 
         collector.contexts.size shouldBe 1
         val ctx = collector.contexts[0].shouldNotBeNull()
-        ctx.timestamp shouldBe Timestamp(source.outlet.ref.id, 1L)
+        ctx.timestamp shouldBe Timestamp(source.outlet.waveState().sourceId, 1L)
     }
 
     interface CollectorInterface {

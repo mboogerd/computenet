@@ -25,7 +25,9 @@ class PnCounterCellTest {
         Invocation.of(propagate, arrayOf(incoming), incomingContext).invoke(cell.deltaInlet.call)
 
         val emission = emissions.single()
-        assertEquals(cell.outlet.ref.id, emission.context!!.timestamp.sourceId)
+        // spec 20/22 §Source identity: sourceId is the outlet's emission
+        // epoch, minted fresh at construction — never the port identity
+        assertEquals(cell.outlet.waveState().sourceId, emission.context!!.timestamp.sourceId)
         assertEquals(cell.outlet.ref, emission.context!!.sourcePort)
         assertEquals(incoming, emission.args.single())
         val emitted = emission.args.single() as PnCounterDelta

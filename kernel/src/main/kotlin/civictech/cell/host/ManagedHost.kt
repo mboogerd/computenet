@@ -11,6 +11,7 @@ import civictech.cell.CellRef
 import civictech.cell.ErrorReporting
 import civictech.cell.Leased
 import civictech.cell.Owned
+import civictech.cell.ReBaselineEmitting
 import civictech.cell.Redacted
 import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
@@ -133,6 +134,18 @@ open class ManagedHost(
     private val checkpoints = mutableMapOf<CellRef, Serializable>()
     private val suspendedCells = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
 
+    /**
+     * Host-held per-instance recovery generation (spec 00/03 glossary
+     * "Generation"; 93 I-22 R1): never on the wire, outside the `Stateful`
+     * checkpoint, bumped on every RESTART *before* reactivation so a
+     * checkpoint restore can never roll it back. Its only observable role is
+     * seeding the dead-lane `supersedes` set on the RESTART re-baseline.
+     */
+    private val generations = mutableMapOf<CellRef, Long>()
+
+    /** This instance's current recovery generation (0 = never restarted). */
+    fun generationOf(ref: CellRef): Long = generations[ref] ?: 0L
+
     /** Park/crash accounting (G-46): observability for exclusive payloads off the happy path. */
     private val deadLetterCount = AtomicLong()
     private val parkedDrainedOnTeardownCount = AtomicLong()
@@ -175,6 +188,7 @@ open class ManagedHost(
     private fun clearSupervision(cellRef: CellRef) {
         policies.remove(cellRef)
         checkpoints.remove(cellRef)
+        generations.remove(cellRef)
         suspendedCells.remove(cellRef)?.forEach {
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while suspended", it)
@@ -659,9 +673,27 @@ open class ManagedHost(
                     // state-restore, never input-replay (spec 23 R6): the failing
                     // invocation (and any Owned/Leased it carried) is not re-driven
                     restartCount.incrementAndGet()
+                    // R1 (93 I-22): bump the host-held generation before reactivation —
+                    // a checkpoint restore can never roll it back
+                    generations[cellRef] = generationOf(cellRef) + 1
                     cell.onDeactivate(ctx)
+                    // R1/S1 (spec 20/22, 93 I-14): fresh emission epoch per outlet —
+                    // post-restart tags and waves alias nothing pre-crash. Collect the
+                    // superseded source ids to seed the ReBaseline.supersedes list.
+                    val supersedes = PortRegistry.of(cell).names().mapNotNull { name ->
+                        when (val port = PortRegistry.of(cell)[name]) {
+                            is FanOutlet<*> -> port.mintFreshEpoch()
+                            is Outlet<*> -> port.mintFreshEpoch()
+                            else -> null
+                        }
+                    }.toSet()
                     cell.onActivate(ctx)
+                    // R3 (93 I-22): restore-the-freshest-available checkpoint — the
+                    // spawn-time local checkpoint is the degenerate non-durable case
                     checkpoints[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }
+                    // R2/R4 (93 I-22): RESTART completes with a re-baseline over the
+                    // ordinary catch-up path — push-authoritative for a single-writer root
+                    if (cell is ReBaselineEmitting) cell.reBaseline(supersedes, supersede = true)
                 }
                 SupervisionPolicy.SUSPEND -> suspendedCells[cellRef] = mutableListOf()
             }
