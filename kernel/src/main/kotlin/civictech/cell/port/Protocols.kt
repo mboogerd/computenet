@@ -1,5 +1,8 @@
 package civictech.cell.port
 
+import civictech.gen.wire.Contract
+import civictech.gen.wire.Protocol
+import civictech.gen.wire.ProtocolCardinality
 import civictech.gen.wire.ProtocolDirection
 import civictech.gen.wire.ProtocolRegistry
 import java.util.*
@@ -7,6 +10,20 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Id of a generic protocol stacked on a data link (spec 12, G-13 minimal). */
 data class ProtocolId(val name: String)
+
+/**
+ * Contract-backed identity for `TopologyOrder` (spec 41 point 4, G-39 phase
+ * B): edge events travel downstream, broadcast to every subscriber — giving
+ * `ProtocolRegistry` a real descriptor (band/lane/direction/contractId) so
+ * `PORT_PROTOCOL` host dispatch and cross-peer capability negotiation treat
+ * `EdgeOpen`/`EdgeClose` uniformly with attention/suspension/etc, rather than
+ * only the direct in-process `ProtocolSupport.deliver` path handshake() uses.
+ */
+@Contract(management = true)
+@Protocol("topology-order", ProtocolDirection.DOWNSTREAM, band = 0, lane = "topology-order", cardinality = ProtocolCardinality.FAN_OUT_BROADCAST)
+fun interface TopologyOrderProtocol {
+    fun edgeEvent(message: EdgeEvent)
+}
 
 /**
  * Well-known generic protocols and their direction relative to data flow
@@ -33,14 +50,33 @@ object Protocols {
     /** spec 20/21 §Pull, G-18 residual, decided in 93 I-16: on-demand state pull. */
     val StateRequest = ProtocolId("state-request")
 
-    /** Deliver [message] to the link's producer-side port (against data flow). */
+    /**
+     * Deliver [message] to the link's producer-side port (against data
+     * flow). When no local port is reachable (a bridged link, spec 41
+     * point 4), falls back to [Link.protocolBridge] when the peer has
+     * negotiated support for [id] (G-35 phase B) — the reverse bridge path
+     * a cross-host link already maintains for re-resolution. [TopologyOrder]
+     * always crosses: EdgeOpen/EdgeClose are their own decided WireFrame
+     * event type (G-39 phase B), not subject to G-35's contract-backed
+     * capability negotiation (they have no `ProtocolRegistry` descriptor).
+     */
     fun sendUpstream(link: Link, id: ProtocolId, message: Any) {
-        link.fromPort?.let { ProtocolSupport.of(it).deliver(id, link, message) }
+        val port = link.fromPort
+        if (port != null) {
+            ProtocolSupport.of(port).deliver(id, link, message)
+        } else if (id == TopologyOrder || id in link.protocolCapabilities) {
+            link.protocolBridge?.send(id, message, upstream = true)
+        }
     }
 
-    /** Deliver [message] to the link's consumer-side port (with data flow). */
+    /** Deliver [message] to the link's consumer-side port (with data flow); see [sendUpstream]. */
     fun sendDownstream(link: Link, id: ProtocolId, message: Any) {
-        link.toPort?.let { ProtocolSupport.of(it).deliver(id, link, message) }
+        val port = link.toPort
+        if (port != null) {
+            ProtocolSupport.of(port).deliver(id, link, message)
+        } else if (id == TopologyOrder || id in link.protocolCapabilities) {
+            link.protocolBridge?.send(id, message, upstream = false)
+        }
     }
 }
 
@@ -132,9 +168,14 @@ private data class ProtocolTraversal(
     val payload: Any,
 )
 
-/** In-band logical-edge lifecycle markers (wire representation is W3.2). */
+/** In-band logical-edge lifecycle markers (spec 41 point 4, G-39 phase B: wire-crossing PORT_PROTOCOL frames). */
+@kotlinx.serialization.Serializable
 sealed interface EdgeEvent
 
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("EdgeOpen")
 data object EdgeOpen : EdgeEvent
 
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("EdgeClose")
 data object EdgeClose : EdgeEvent

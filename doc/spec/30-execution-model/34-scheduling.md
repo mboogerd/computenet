@@ -11,10 +11,9 @@
 > (opt-in via `AttentionPolicy.magnitudeBands`, M17);
 > `GlitchFreeCell.WaveMode` WAIT/DEGRADE. Verified: `AttentionGenerativeTest`
 > (100 seeds + starvation control), `GlitchFreeSuspensionTest`, `MagnitudeSchedulingTest`.
-> Remaining: attention does not cross the wire (bridged links carry no
-> protocol endpoints — G-35 below; revisit with replication, 42); notices are
-> single-hop (a join sees only direct upstream parks, not transitive ones —
-> G-36 below).
+> Remaining: notices are single-hop (a join sees only direct upstream
+> parks, not transitive ones — G-36 below). Attention crossing the wire is
+> resolved (G-35, W3.2, see below and 41 point 4).
 
 ## Principle
 
@@ -55,17 +54,17 @@ Minimal attention model compatible with the above:
     management > router > data bands with per-attention data bands);
   - persistent high attention + remote hotspot → migration candidate (40/42).
 
-⚠ GAP (G-35): generic protocols (`PORT_PROTOCOL`) cannot cross the wire and
-peers cannot negotiate or version each other's protocol capability sets —
-attention, saturation, state-request, and taps all stop at a bridge.
-Proposal: bridge egress/ingress gain a `PORT_PROTOCOL` frame path (one
-WireFrame type variant, a direction tag, a reverse-channel realization for
-upstream protocols over the reverse bridge path a cross-host link already
-maintains); the link's negotiated protocolCapabilities generalizes to
-cross-peer negotiation with a versioned ProtocolId↔contractId mapping and
-downstream-only capability sets for shadow taps; verified by a generative
-frame-reorder/duplication harness (cross-host attention convergence as the
-first case) (93 I-1/I-4/I-17/I-9).
+*(G-35 resolved, W3.2)*: bridge egress/ingress gained a `PORT_PROTOCOL`
+frame path (additive `WireFrame` fields, no new type variant needed) with a
+reverse-channel realization for upstream protocols over the reverse bridge
+path a cross-host link already maintains (`Link.protocolBridge`,
+`cell.wire.WireEdgeLink`); the link's negotiated `protocolCapabilities`
+carries the peer's protocol-id set, defaulting to every protocol this
+process's `ProtocolRegistry` knows. Verified by `ProtocolBridgeTest`
+(cross-host attention convergence, EdgeOpen/EdgeClose ordering, unlink
+mid-stream); a generative frame-reorder/duplication harness and a fully
+versioned ProtocolId↔contractId negotiation handshake remain open follow-up
+(93 I-1/I-4/I-17/I-9).
 
 ## Decisions (1–4 from M6 planning, formerly "open questions"; 5–6 decided in 93; 7 implemented in M17)
 

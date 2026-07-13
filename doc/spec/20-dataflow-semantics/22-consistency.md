@@ -232,14 +232,16 @@ wave-observable via `ReBaseline` (§Source identity above; 93 I-14/I-22).
 
 ⚠ GAP (G-39): link/unlink are null-context management ops with no stamp in
 the wave domain — glitch-free consumers cannot know from which wave a
-new/removed edge counts, source-set changes do not propagate downstream, and
-EdgeEvents/floors have no wire form. Proposal: in-band EdgeOpen/EdgeClose
-markers injected into the affected link's own FIFO carrying a per-source
-flushed-high-water floor; design the floor representation and
-retention/compaction horizon, hop-by-hop downstream source-set delta
-propagation with a liveness proof (an upstream cut must not strand a waiting
-join), bridged EdgeEvent frame types ordered against data across
-disconnect/park/replay, the floors×cycles×merge-tag interaction, and the
+new/removed edge counts, source-set changes do not propagate downstream.
+*(EdgeEvents/floors' wire form is resolved, W3.2: bridged EdgeEvent frame
+types — `PORT_PROTOCOL` frames on the `topology-order` protocol — are
+ordered against data across disconnect/park/replay by the same per-link
+FIFO the bridge already gives ordinary sends; see 41 point 4.)* Proposal: in-band
+EdgeOpen/EdgeClose markers injected into the affected link's own FIFO
+carrying a per-source flushed-high-water floor; design the floor
+representation and retention/compaction horizon, hop-by-hop downstream
+source-set delta propagation with a liveness proof (an upstream cut must not
+strand a waiting join), the floors×cycles×merge-tag interaction, and the
 explicit topology-serializing coordinator (JoinBarrier) cell that doubles as
 the diamond-over-replica escape hatch (93 I-13/I-14).
 

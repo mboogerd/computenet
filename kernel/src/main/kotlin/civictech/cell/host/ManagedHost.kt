@@ -724,7 +724,23 @@ open class ManagedHost(
                 HostedPortInvocation.Type.PORT_PROTOCOL -> {
                     val id = requireNotNull(hostedInvocation.protocolId)
                     val link = requireNotNull(hostedInvocation.protocolLink)
-                    ProtocolSupport.of(port).deliver(id, link, hostedInvocation.protocolMessage as Any)
+                    // A wire-originated link (G-35 phase B, `WireEdgeLink`)
+                    // carries no local Port object yet — decode only knows
+                    // ids/refs. Patch in this delivery's real local endpoint
+                    // so identity-gated handlers (Attention.wire(),
+                    // GlitchFreeCell) see the same port they'd see from an
+                    // in-process link, while the rest (protocolBridge,
+                    // capabilities) still comes from the wire-constructed
+                    // link for further hops. Other Link implementations
+                    // (in-process, including hand-built test doubles) pass
+                    // through unchanged.
+                    val directed = if (link !is civictech.cell.wire.WireEdgeLink || link.fromPort === port || link.toPort === port) {
+                        link
+                    } else {
+                        val descriptor = ProtocolRegistry.protocol(id.name)
+                        DirectedProtocolLink(link, port, localIsFrom = descriptor?.direction == civictech.gen.wire.ProtocolDirection.UPSTREAM)
+                    }
+                    ProtocolSupport.of(port).deliver(id, directed, hostedInvocation.protocolMessage as Any)
                 }
 
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
@@ -1055,4 +1071,20 @@ open class ManagedHost(
         }
         return false
     }
+}
+
+/**
+ * Overlays a delivery's real local [Port] onto a wire-reconstructed [base]
+ * link (spec 41 point 4, G-35 phase B) so identity-gated protocol handlers
+ * (`Attention.wire()`, `GlitchFreeCell`) treat it exactly like an in-process
+ * link. Everything else — [protocolBridge]/[protocolCapabilities] for the
+ * next hop — still comes from [base].
+ */
+private class DirectedProtocolLink(
+    private val base: Link,
+    private val localPort: Port,
+    localIsFrom: Boolean,
+) : Link by base {
+    override val fromPort: Port? = if (localIsFrom) localPort else null
+    override val toPort: Port? = if (!localIsFrom) localPort else null
 }

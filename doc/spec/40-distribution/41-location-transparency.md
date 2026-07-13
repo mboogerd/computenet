@@ -1,8 +1,8 @@
 # 41 — Location Transparency
 
-> **Status**: Implemented (M5) — in-process transparency and the wire layer; generated boundary proxies (point 2) remain interim JDK proxies; wire forms for generic protocols, EdgeEvents, and remote construction are decided design (93), unimplemented
+> **Status**: Implemented (M5, W3.2) — in-process transparency, the wire layer, and generic-protocol/EdgeEvent wire crossing; generated boundary proxies (point 2) remain interim JDK proxies; remote construction is still decided design (93), unimplemented
 > **Sources**: ADR 3, ADR — Task Connectivity (§4)
-> **Implementation**: `cell.proxy.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; `gen.wire.ContractProcessor` + `ContractRegistry`; `cell.wire` (WireCodec, bridge cells, Peering); `:wire` (WebSocket transport)
+> **Implementation**: `cell.proxy.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; `gen.wire.ContractProcessor` + `ContractRegistry`; `cell.wire` (WireCodec, bridge cells, Peering, `WireEdgeLink`); `:wire` (WebSocket transport)
 
 ## Requirement
 
@@ -160,35 +160,41 @@ direct call → queue hop → serialized send.
    (upstream) protocol MUST travel the reverse bridge path the link already
    maintains for re-resolution. No new bridge type — this closes 12's
    "bridged links have no endpoint objects" note by decision.
-   ⚠ GAP (G-35): generic protocols (PORT_PROTOCOL) cannot cross the wire
-   and peers cannot negotiate or version each other's protocol capability
-   sets — attention, saturation, state-request, and taps all stop at a
-   bridge. Proposal: bridge egress/ingress gain a PORT_PROTOCOL frame path
-   (one WireFrame type variant, direction tag, reverse-channel realization
-   for upstream protocols over the reverse bridge path a cross-host link
-   already maintains); the link's negotiated protocolCapabilities
-   generalizes to cross-peer negotiation with a versioned
-   ProtocolId↔contractId mapping and downstream-only capability sets for
-   shadow taps; verified by a generative frame-reorder/duplication harness
-   (cross-host attention convergence as the first case)
-   (93 I-1/I-4/I-17/I-9).
-   Topology edge events cross the bridge likewise (decided in 93 I-13,
-   unimplemented): `EdgeOpen`/`EdgeClose` (20/22) become a `WireFrame`
-   event type — ordinary frames on their link's bridge channel that MUST
-   inherit per-link FIFO ordering against data frames over the wire; on
-   disconnect `unpublishRemotes` parks senders and reconnect replays in
-   order, so that ordering survives park/replay — no synchronous handshake
-   reply is required (10/13).
+   *(G-35 resolved, W3.2)*: bridge egress/ingress are protocol-aware — a
+   `PORT_PROTOCOL` invocation encodes additively onto `WireFrame`
+   (`protocolId`/`protocolMessage`/`edge`, no version bump) and decodes into
+   a `WireEdgeLink` (`cell.wire`) carrying stable per-side link identity, so
+   `Attention.linkLevels`/`GlitchFreeCell.edges` bookkeeping behaves as it
+   would for an in-process link; `ManagedHost` overlays the delivery's real
+   local `Port` onto the reconstructed link so identity-gated handlers see
+   it exactly as they would in-process. Upstream protocols travel the
+   reverse bridge path via `Link.protocolBridge`, realized by whichever
+   `InvocationSink` the receiving `BridgeIngressCell` was given as its reply
+   sink (typically the peer-facing `LocationRegistry::deliver`, or the
+   mirror-direction bridge egress) — "the reverse bridge path a cross-host
+   link already maintains for re-resolution". `Link.protocolCapabilities`
+   carries the negotiated set (`bridgeTo`/`bridgeFrom` default to every
+   protocol this process's `ProtocolRegistry` knows); a full runtime
+   negotiation handshake and a versioned ProtocolId↔contractId mapping
+   remain open follow-up beyond this ticket's default-capability set.
+   Topology edge events cross the bridge likewise (decided in 93 I-13):
+   `EdgeOpen`/`EdgeClose` (20/22) travel as ordinary `PORT_PROTOCOL` frames
+   on the `topology-order` protocol (now contract-backed, `TopologyOrderProtocol`,
+   so `ProtocolRegistry`/host dispatch treat it uniformly with
+   attention/suspension/etc.), inheriting per-link FIFO ordering against
+   data frames over the same bridge channel — no synchronous handshake
+   reply is required (10/13). The floor/retention/JoinBarrier residual of
+   G-39 (below) is unaffected by this phase.
    ⚠ GAP (G-39): link/unlink are null-context management ops with no stamp
    in the wave domain — glitch-free consumers cannot know from which wave a
-   new/removed edge counts, source-set changes do not propagate downstream,
-   and EdgeEvents/floors have no wire form. Proposal: in-band
-   EdgeOpen/EdgeClose markers injected into the affected link's own FIFO
-   carrying a per-source flushed-high-water floor; design the floor
-   representation and retention/compaction horizon, hop-by-hop downstream
-   source-set delta propagation with a liveness proof (an upstream cut must
-   not strand a waiting join), bridged EdgeEvent frame types ordered
-   against data across disconnect/park/replay, the floors×cycles×merge-tag
+   new/removed edge counts, source-set changes do not propagate downstream.
+   *(the wire-crossing sliver — bridged EdgeEvent frame types ordered
+   against data across disconnect/park/replay — is resolved, W3.2, per the
+   paragraph above)*. Proposal: in-band EdgeOpen/EdgeClose markers injected
+   into the affected link's own FIFO carrying a per-source flushed-high-water
+   floor; design the floor representation and retention/compaction horizon,
+   hop-by-hop downstream source-set delta propagation with a liveness proof
+   (an upstream cut must not strand a waiting join), the floors×cycles×merge-tag
    interaction, and the explicit topology-serializing coordinator
    (JoinBarrier) cell that doubles as the diamond-over-replica escape hatch
    (93 I-13/I-14).

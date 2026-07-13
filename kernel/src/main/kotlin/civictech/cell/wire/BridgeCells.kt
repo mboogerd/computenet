@@ -8,6 +8,7 @@ import civictech.cell.data.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PeerId
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.ProtocolId
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
@@ -58,6 +59,17 @@ class BridgeIngressCell(
      * hosting host dead-letters it, so rejection is observable topology.
      */
     private val admit: (PeerId?) -> Boolean = { true },
+    /**
+     * Reverse-direction sink for upstream protocol replies over a
+     * wire-reconstructed [WireEdgeLink] (spec 41 point 4, G-35 phase B) —
+     * "the reverse bridge path a cross-host link already maintains for
+     * re-resolution". Defaults to [deliverTo] itself: when that is a
+     * `LocationRegistry::deliver`, re-resolution already reaches the
+     * originating peer for any ref it mirrors.
+     */
+    private val replySink: InvocationSink = deliverTo,
+    /** This side's negotiated protocol-id set (G-35 phase B); see [defaultProtocolCapabilities]. */
+    private val protocolCapabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
 ) : Cell {
     val inlet = registerPort("inlet", FanInlet.create<Propagate<ByteArray>>())
 
@@ -65,7 +77,14 @@ class BridgeIngressCell(
         inlet.serve(object : Propagate<ByteArray> {
             override fun propagate(value: ByteArray) {
                 check(admit(peer)) { "frame from $peer refused: not on the allowlist (spec 43)" }
-                deliverTo.deliver(WireCodec.decode(value).copy(peer = peer))
+                val decoded = WireCodec.decode(value)
+                val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
+                    val edge = decoded.protocolLink as WireEdgeLink
+                    decoded.copy(protocolLink = edge.withBridge(replySink, protocolCapabilities), peer = peer)
+                } else {
+                    decoded.copy(peer = peer)
+                }
+                deliverTo.deliver(withPeer)
             }
         })
     }

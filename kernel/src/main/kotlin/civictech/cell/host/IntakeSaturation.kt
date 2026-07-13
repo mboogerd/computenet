@@ -23,6 +23,8 @@ data class IntakeBound(
 enum class SaturationPolicy { Coalesce, Park }
 
 /** Retractable upstream notice; W2.3 supplies its transitive transport. */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("SaturationSignal")
 data class SaturationSignal(val portRef: PortRef, val asserted: Boolean) : java.io.Serializable
 
 @Contract(management = true)

@@ -21,11 +21,33 @@ interface Link {
     val fromPort: Port? get() = null
     val toPort: Port? get() = null
 
+    /**
+     * Peer-negotiated protocol ids reachable across this link when its
+     * counterpart is not a local [Port] object (spec 41 point 4, G-35 phase
+     * B). Empty for ordinary in-process links, whose [ProtocolSupport] relay
+     * already reaches every locally-registered handler directly.
+     */
+    val protocolCapabilities: Set<ProtocolId> get() = emptySet()
+
+    /**
+     * Wire realization of a protocol send when [fromPort]/[toPort] is null
+     * (G-35 phase B): bridged links populate this so [Protocols] can route a
+     * message across the bridge instead of relaying through [ProtocolSupport]
+     * — a plain callback slot, so `cell.port` stays transport-neutral (no
+     * wire dependency lives here, only in whoever constructs the link).
+     */
+    val protocolBridge: ProtocolBridge? get() = null
+
     /** Idempotent: detaches both sides and fires the target port's onUnlink once. */
     fun unlink()
 
     /** Infrastructure lifecycle observer; invoked once after a successful detach. */
     fun onUnlink(listener: (Link) -> Unit) {}
+}
+
+/** See [Link.protocolBridge]. */
+fun interface ProtocolBridge {
+    fun send(id: ProtocolId, message: Any, upstream: Boolean)
 }
 
 sealed interface LinkResult {

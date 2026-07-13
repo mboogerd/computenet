@@ -20,6 +20,8 @@ import kotlin.math.pow
  * quantize. Kept a Float so a sum/load-signaling variant can be added
  * without a protocol change (34 decision 1).
  */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("Attention")
 data class Attention(val level: Float)
 
 @Contract(management = true)
@@ -34,6 +36,7 @@ fun interface AttentionProtocol { fun attention(message: Attention) }
  * wave, surface a GlitchViolation) is the only admissible disposition for
  * terminal ones.
  */
+@kotlinx.serialization.Serializable
 enum class StallReason(val recoverable: Boolean) {
     /** Attention-driven park (34 decision 3): park-not-drop, resumes emergently. */
     SUSPENDED(recoverable = true),
@@ -52,10 +55,16 @@ enum class StallReason(val recoverable: Boolean) {
  * downstream join rescue exactly the poisoned wave rather than every wave
  * pending on the edge.
  */
+@kotlinx.serialization.Serializable
 sealed interface StallNotice {
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Stall")
     data class Stall(val reason: StallReason, val timestamp: civictech.cell.Timestamp? = null) : StallNotice {
         val recoverable: Boolean get() = reason.recoverable
     }
+
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Resume")
     data object Resume : StallNotice
 }
 
@@ -70,7 +79,12 @@ fun interface SuspensionProtocol { fun suspension(message: StallNotice) }
  * second of the three watermark-advance mechanisms (delta, Progress, later
  * wave / monotone max).
  */
-data class Progress(val sourceId: UUID, val thru: Long)
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("Progress")
+data class Progress(
+    @kotlinx.serialization.Serializable(with = civictech.cell.wire.UuidSerializer::class) val sourceId: UUID,
+    val thru: Long,
+)
 
 @Contract(management = true)
 @Protocol("progress", ProtocolDirection.DOWNSTREAM, band = 0, lane = "progress", cardinality = ProtocolCardinality.FAN_OUT_BROADCAST)
