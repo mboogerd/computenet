@@ -937,6 +937,14 @@ open class ManagedHost(
                 parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
             }
 
+            override fun suspend(ref: CellRef) {
+                require(cells.containsKey(ref)) { "Cell not found: $ref" }
+                if (ref !in suspendedCells) {
+                    suspendedCells[ref] = mutableListOf()
+                    cells[ref]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
+                }
+            }
+
             override fun drainHost() {
                 // shutdown cascade (G-28, M8.1): children drain first — a child
                 // must not outlive (or keep accepting after) its parent

@@ -40,11 +40,27 @@ class Replication(private val registry: LocationRegistry) {
 
     private val localReplicas = mutableMapOf<UUID, MutableList<Replicable<*>>>()
 
+    /** The host each local replica was spawned on — needed to suspend/despawn it later (eviction). */
+    private val hostOf = mutableMapOf<CellRef, ManagedHost>()
+
+    /**
+     * Local replicas parked (spec 33) rather than despawned because no peer
+     * was reachable at eviction time (the suspend-when-partitioned gate,
+     * G-45). Cleared, and the replica resumed, on the next re-announce that
+     * makes a peer of the same logical id visible again (heal).
+     */
+    private val partitionSuspended = mutableSetOf<CellRef>()
+
     /** Established gossip links per (local replica → remote replica) pair. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
 
     init {
         registry.onPublish { ref -> linkOut(ref) }
+        // reconcile (spec 42, G-45): a peer's despawn/eviction removes it from
+        // replicasOf; drop the now-stale outbound gossip link rather than
+        // leaving it targeting a gone ref (no ack protocol — this is purely
+        // local bookkeeping, the routed proxy would otherwise just dead-letter)
+        registry.onUnpublish { ref -> linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) } }
     }
 
     /**
@@ -55,12 +71,68 @@ class Replication(private val registry: LocationRegistry) {
      */
     fun replicate(cell: Replicable<*>, host: ManagedHost) {
         localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
+        hostOf[cell.ref] = host
         host.managementInlet.call.spawn(cell)
         registry.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
     }
 
+    /**
+     * Evict [cell] from [host] — the decided gated drain+despawn (93 I-3,
+     * G-45's gate half; the *trigger* — sustained attention band NONE, 34,
+     * or manual — is wiring the economic layer owns, G-62, out of this
+     * ticket's scope).
+     *
+     * **Membership-gated**: [LocationRegistry.replicasOf] already drops a
+     * partitioned peer's `Remote` location (42 §Anti-entropy), so "no
+     * reachable peer" and "partitioned" are the same local observation. With
+     * none reachable this replica may hold unique un-gossiped state nobody
+     * else has a copy of — it MUST suspend (park), never despawn, and await
+     * heal; the next re-announce that grows `replicasOf` back above one
+     * resumes it automatically ([linkOut]).
+     *
+     * **Drain-gated** otherwise: [civictech.cell.host.HostManagementApi.suspend]
+     * first closes this replica's own intake so no further local write races
+     * the teardown (spec 33's drain, applied at cell instead of host
+     * granularity — every effective delta already streamed to peers as it
+     * was produced, so nothing buffered needs an extra flush), a final
+     * state-as-delta catch-up re-fires at one reachable peer's existing link
+     * (the same M10.1 re-announce hook [maybeLink] uses), then despawn
+     * unpublishes the ref — surviving peers' linkers simply stop targeting a
+     * ref no longer in `replicasOf` on their next announcement, no ack
+     * protocol.
+     *
+     * Returns `true` if the replica despawned, `false` if it suspended
+     * instead (no reachable peer).
+     */
+    fun evict(cell: Replicable<*>, host: ManagedHost): Boolean {
+        val reachablePeers = registry.replicasOf(cell.ref.id) - cell.ref
+        if (reachablePeers.isEmpty()) {
+            if (partitionSuspended.add(cell.ref)) host.managementInlet.call.suspend(cell.ref)
+            return false
+        }
+        host.managementInlet.call.suspend(cell.ref)
+        // final push-catch-up to one reachable peer (best-effort; idempotent either way)
+        linked.entries.firstOrNull { it.key.first == cell.ref }?.let { (_, linkedPair) ->
+            @Suppress("UNCHECKED_CAST")
+            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.onLinked(linkedPair.second)
+        }
+        host.managementInlet.call.despawn(cell.ref)
+        localReplicas[cell.ref.id]?.remove(cell)
+        hostOf.remove(cell.ref)
+        linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
+        partitionSuspended.remove(cell.ref)
+        return true
+    }
+
     private fun linkOut(newRef: CellRef) {
-        localReplicas[newRef.id]?.forEach { local -> maybeLink(local, newRef) }
+        localReplicas[newRef.id]?.forEach { local ->
+            maybeLink(local, newRef)
+            // heal (G-45): a newly visible peer un-partitions a locally suspended replica
+            if (local.ref in partitionSuspended && (registry.replicasOf(local.ref.id) - local.ref).isNotEmpty()) {
+                partitionSuspended -= local.ref
+                hostOf[local.ref]?.managementInlet?.call?.resume(local.ref)
+            }
+        }
     }
 
     private fun maybeLink(local: Replicable<*>, other: CellRef) {

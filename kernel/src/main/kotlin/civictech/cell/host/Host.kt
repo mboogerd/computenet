@@ -44,6 +44,19 @@ interface HostManagementApi {
     fun resume(ref: CellRef)
 
     /**
+     * Suspends (parks) a hosted cell directly — the same per-cell intake
+     * closure [SupervisionPolicy.SUSPEND] applies on a failure, requested
+     * on purpose instead of triggered by one. Idempotent. Ordinary data/
+     * management traffic parks in arrival order until [resume]; management-
+     * class protocol traffic (catch-up, resume itself) stays on the always-
+     * open plane. The gossip-mesh eviction gate uses this to suspend a
+     * replica that finds itself partitioned from every peer (42, G-45):
+     * unique un-gossiped state must not be despawned away, only parked
+     * pending heal.
+     */
+    fun suspend(ref: CellRef)
+
+    /**
      * Drains this host (spec 33 steps 1–3): intake closes immediately (new
      * sends fail fast and park at the registry), everything already accepted
      * is processed, then cells are deactivated and [civictech.cell.Stateful]

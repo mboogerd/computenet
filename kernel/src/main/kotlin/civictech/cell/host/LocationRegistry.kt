@@ -38,6 +38,12 @@ class LocationRegistry {
 
     /** Fire after *any* publish (local or remote) — the replica-discovery seam (M7.2, spec 42). */
     private val onPublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
+
+    /** Fire after a *local* unpublish — the eviction-announcement seam (spec 42, G-45). */
+    private val onLocalUnpublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
+
+    /** Fire after *any* unpublish (local or mirrored) — lets a linker (`Replication`) drop stale gossip links. */
+    private val onUnpublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
     private val onLocalLink = java.util.concurrent.CopyOnWriteArrayList<(TopologyLink) -> Unit>()
     private val onLocalUnlink = java.util.concurrent.CopyOnWriteArrayList<(java.util.UUID) -> Unit>()
     private val localLinkIds = ConcurrentHashMap.newKeySet<java.util.UUID>()
@@ -50,6 +56,16 @@ class LocationRegistry {
 
     fun onPublish(listener: (CellRef) -> Unit) {
         onPublish += listener
+    }
+
+    /** Returns a deregistration handle — mirrors [onLocalPublish]'s reconnect contract. */
+    fun onLocalUnpublish(listener: (CellRef) -> Unit): AutoCloseable {
+        onLocalUnpublish += listener
+        return AutoCloseable { onLocalUnpublish -= listener }
+    }
+
+    fun onUnpublish(listener: (CellRef) -> Unit) {
+        onUnpublish += listener
     }
 
     fun onLocalTopology(linked: (TopologyLink) -> Unit, unlinked: (java.util.UUID) -> Unit): AutoCloseable {
@@ -195,9 +211,25 @@ class LocationRegistry {
         }
     }
 
-    /** Remove [ref]'s location; subsequent deliveries park until the next [publish]. */
+    /**
+     * Remove [ref]'s location; subsequent deliveries park until the next
+     * [publish]. Always called on the ref's own host (a despawn/migrate is a
+     * local event), so a removed [Local] location also announces — the
+     * eviction-gate seam (spec 42, G-45's "peers' linkers reconcile"): a
+     * peer's `RegistryMirrorCell` relays this onward so remote registries
+     * drop their stale mirror too ([mirrorUnpublish]).
+     */
     fun unpublish(ref: CellRef) {
+        val wasLocal = locations[ref] is Local
         locations.remove(ref)
+        if (wasLocal) onLocalUnpublish.forEach { notify(it, ref) }
+        onUnpublish.forEach { notify(it, ref) }
+    }
+
+    /** Announcement-fed remote unpublish; deliberately does not re-announce (mirrors [mirrorLink]). */
+    fun mirrorUnpublish(ref: CellRef) {
+        locations.remove(ref)
+        onUnpublish.forEach { notify(it, ref) }
     }
 
     /**

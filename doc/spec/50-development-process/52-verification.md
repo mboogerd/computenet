@@ -1,8 +1,8 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9; the Effectful processed-frontier, W2.6 — live *continuous* production shadowing still awaits a long-running runtime; observation membrane, exclusive-payload discharge + taps, monitor bands, and replica-convergence invariants are design decided in 93, unimplemented)
+> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9; the Effectful processed-frontier, W2.6 — live *continuous* production shadowing still awaits a long-running runtime; the replica-convergence invariant harness with its departed-stream rule, W3.3; observation membrane, exclusive-payload discharge + taps, and monitor bands remain design decided in 93, unimplemented)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
-> **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); seeded harness = `cell.host.SimulationController`
+> **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); `cell.verify.ReplicaConvergence` (replica-convergence invariant harness); seeded harness = `cell.host.SimulationController`
 
 ## Philosophy
 
@@ -35,25 +35,33 @@ feed the same machinery: an `ErrorReporting` cell's `errorOutlet` (31) links
 straight into an invariant cell.
 
 *(Replica convergence — decided in
-[93 I-3](../90-roadmap/93-feature-interactions.md), unimplemented)*: a
-convergence invariant over a replicated cell attaches by the same rule. It
-MUST link to **each replica's** delta outlet — replicas enumerated via
-`replicasOf(id)` (42) — fold the per-replica streams independently, and
-assert the folds agree at quiescence. Each link fires the ordinary
-idempotent catch-up, so the anti-entropy catch-up doubles as the invariant's
-late-join feed; no merged global view is needed. Replicas of one `logicalId`
-are the special case of the harness's cross-view convergence assertion where
-the views share a `logicalId`.
+[93 I-3](../90-roadmap/93-feature-interactions.md), **built W3.3**:
+`cell.verify.ReplicaConvergence`)*: a convergence invariant over a
+replicated cell attaches by the same rule. It links to **each replica's**
+delta outlet — replicas enumerated via `replicasOf(id)` (42) — folds the
+per-replica streams independently, and asserts the folds agree at
+quiescence. An in-process harness attaches straight to a local replica's own
+outlet (no proxy hop needed to read it); a same-process `Replicable` re-emits
+every effective local mutation, including merged-in remote deltas, on that
+outlet, so the fold reconstructs exactly the replica's converged local
+state. Each link fires the ordinary idempotent catch-up, so the anti-entropy
+catch-up doubles as the invariant's late-join feed; no merged global view is
+needed. Replicas of one `logicalId` are the special case of the harness's
+cross-view convergence assertion where the views share a `logicalId`.
+**Departed-stream rule** (G-45): a replica evicted mid-run (42's gated
+despawn) drops out of `replicasOf(id)` — `ReplicaConvergence.converged()`
+only requires agreement among replicas still counted as live membership, so
+an orderly departure no longer false-positives a divergence against the
+departed replica's frozen last fold.
 
-⚠ GAP (G-45): the gossip-mesh skeleton lacks its liveness and churn
-arguments — membership-churn reconvergence is unproven, shutdown of the last
-connected replica is unpoliced, and convergence invariants can
-false-positive on replicas that legitimately depart mid-run. *Proposal*:
+⚠ GAP (G-45, narrowed W3.3): the gossip-mesh skeleton still lacks its
+liveness/churn **argument** — membership-churn reconvergence is unproven —
+and graceful last-replica handoff to durable storage is undesigned (42's
+gate half and this section's departed-stream rule are built). *Proposal*:
 state the bounded-gossip-hop reconciliation argument (duplicate/stale mesh
-links safe by tag idempotence) with a generative membership-churn harness;
-define graceful last-replica handoff to durable storage (G-25) vs accidental
-deletion; give cross-replica convergence invariants a departed-stream rule
-(93 I-3).
+links safe by tag idempotence) with a generative membership-churn harness
+(R1, 95); define graceful last-replica handoff to durable storage (G-25) vs
+accidental deletion.
 
 *(Generative graph harness, M4.6 — G-31 complete)*: seeded random pipelines
 from the data-cell vocabulary are emitted as `GraphSpec`s (51) — built on one

@@ -3,11 +3,15 @@
 > **Status**: Implemented for the mergeable set family (M7); single-writer leader/follower design decided, unimplemented (§Single-writer replication); keyed structures open
 > **Sources**: ADR 0 (§5, §6), ADR 1 (§11, §12), ADR — Cellular Software Development Process (runtime characteristics)
 > **Implementation**: `cell.replication.Replication` (symmetric gossip-mesh
-> linker over registry announcements), `SetCell.deltaInlet` + tombstoned
-> OR-set state, `LocationRegistry.onPublish`/`replicasOf`, multi-peer
-> `Peering` with `Loopback.partition()/heal()`. Verified:
+> linker over registry announcements, plus its eviction gate —
+> `Replication.evict`, W3.3), `SetCell.deltaInlet` + tombstoned
+> OR-set state, `LocationRegistry.onPublish`/`replicasOf`/`onUnpublish`,
+> multi-peer `Peering` with `Loopback.partition()/heal()` and
+> `RegistryAnnounce.unpublished` reconciliation, `cell.verify.ReplicaConvergence`
+> (the replica-convergence invariant harness, 50/52). Verified:
 > `ReplicationTest`, `ReplicatedSessionTest` (3 peers, 100 seeds,
-> partition+heal, divergence control)
+> partition+heal, divergence control; plus a 3-peer partition/heal/evict
+> case under the convergence harness)
 
 ## Principles (fixed)
 
@@ -137,16 +141,21 @@ it is decided design, none of it is code.
   replicas admit on any host; the filter bites only if a marked
   blocking/suspending cell is ever made replicable, in which case all its
   replica hosts must match its single marker color.
-- **Eviction is a gated drain+despawn** (decided in 93 I-3): membership-gated
-  and drain-gated, no ack protocol. If no peer in `replicasOf(id) − {local}`
-  is reachable, the replica MUST suspend (park) rather than evict — it may
-  hold unique un-gossiped state; await heal. Otherwise: drain (33) closes
-  intake and flushes the delta outlet to surviving peers (in-flight deltas to
-  a momentarily closed peer park-and-replay), optionally pushes a final
-  state-as-delta catch-up (21) to one reachable peer, then despawns ⇒
-  unpublish ⇒ peers' linkers reconcile. The trigger (sustained attention band
-  NONE, 34 — or manual) is wiring; when to fire it stays with the economic
-  layer (G-62).
+- **Eviction is a gated drain+despawn** (decided in 93 I-3, **built W3.3**:
+  `Replication.evict`): membership-gated and drain-gated, no ack protocol. If
+  no peer in `replicasOf(id) − {local}` is reachable, the replica MUST
+  suspend (park, `HostManagementApi.suspend`) rather than evict — it may hold
+  unique un-gossiped state; await heal (a later re-announce that grows
+  `replicasOf` back above one resumes it automatically). Otherwise: intake
+  closes (spec 33's drain, applied at cell instead of host granularity —
+  every effective delta already streamed to peers as it was produced, so
+  nothing buffered needs an extra flush; in-flight deltas to a momentarily
+  closed peer still park-and-replay as usual), a final state-as-delta
+  catch-up (21) re-fires at one reachable peer's existing link, then
+  despawns ⇒ unpublish ⇒ `RegistryAnnounce.unpublished` tells peers, whose
+  linkers reconcile by dropping the now-stale outbound gossip link. The
+  trigger (sustained attention band NONE, 34 — or manual) is wiring; when to
+  fire it stays with the economic layer (G-62).
 - **Integrity among untrusting replicas** (decided in 93 I-28): a boundary MAY
   declare `RequireSigned` for inbound replica gossip; ingress then verifies a
   signature over (contract, method, payload, minting peer, per-source counter)
@@ -157,14 +166,17 @@ it is decided design, none of it is code.
   never per logical cell. No ack, no round-trip: replication keeps "no second
   sync protocol" (policy vocabulary: 40/43).
 
-⚠ GAP (G-45): the gossip-mesh skeleton lacks its liveness and churn arguments
-— membership-churn reconvergence is unproven, shutdown of the last connected
-replica is unpoliced, and convergence invariants can false-positive on
-replicas that legitimately depart mid-run. Proposal: state the
-bounded-gossip-hop reconciliation argument (duplicate/stale mesh links safe by
-tag idempotence) with a generative membership-churn harness; define graceful
-last-replica handoff to durable storage (G-25) vs accidental deletion; and
-give cross-replica convergence invariants a departed-stream rule (93 I-3).
+⚠ GAP (G-45, narrowed W3.3): the gossip-mesh skeleton still lacks its
+liveness/churn **argument** — membership-churn reconvergence is unproven —
+and graceful last-replica handoff to durable storage is undesigned. The gate
+half is built (above: suspend-when-partitioned, drain-gated despawn, peer
+reconciliation) and the convergence-invariant harness now carries a
+departed-stream rule (`cell.verify.ReplicaConvergence`, 50/52), so a
+replica's orderly departure no longer false-positives a live divergence.
+Proposal: state the bounded-gossip-hop reconciliation argument
+(duplicate/stale mesh links safe by tag idempotence) with a generative
+membership-churn harness (R1, 95); define graceful
+last-replica handoff to durable storage (G-25) vs accidental deletion.
 
 ## Single-writer replication (decided in 93 I-25, not built)
 

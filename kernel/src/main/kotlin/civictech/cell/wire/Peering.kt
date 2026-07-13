@@ -25,6 +25,13 @@ interface RegistryAnnounce {
     fun published(ref: CellRef)
     fun linked(link: civictech.cell.host.TopologyLink)
     fun unlinked(id: UUID)
+
+    /**
+     * A local ref despawned/migrated away (spec 42, G-45's eviction gate):
+     * the peer drops its stale [LocationRegistry.Remote] mirror so a linker
+     * (`Replication`) reconciles — no ack, no round trip.
+     */
+    fun unpublished(ref: CellRef)
 }
 
 /**
@@ -44,6 +51,7 @@ class RegistryMirrorCell(
             override fun published(ref: CellRef) = registry.publish(ref, toPeer)
             override fun linked(link: civictech.cell.host.TopologyLink) = registry.mirrorLink(link)
             override fun unlinked(id: UUID) = registry.mirrorUnlink(id)
+            override fun unpublished(ref: CellRef) = registry.mirrorUnpublish(ref)
         })
     }
 }
@@ -131,9 +139,10 @@ object Peering {
         val announce = (HostedCellProxy.create(peerMirror, via, AnnounceInletProxy::class.java)
                 as AnnounceInletProxy).inlet.call
         val registration = side.registry.onLocalPublish { announce.published(it) }
+        val unpublishRegistration = side.registry.onLocalUnpublish { announce.unpublished(it) }
         val topologyRegistration = side.registry.onLocalTopology(announce::linked, announce::unlinked)
         side.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
         side.registry.localLinks().forEach(announce::linked)
-        return AutoCloseable { registration.close(); topologyRegistration.close() }
+        return AutoCloseable { registration.close(); unpublishRegistration.close(); topologyRegistration.close() }
     }
 }
