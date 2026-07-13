@@ -97,20 +97,32 @@ Legend: pending · in-progress · gate-green · merged · escalated(opus) · blo
 ### Wave 1 — merged
 W1.1–W1.7 all merged (prior run).
 
-### Wave 2
-| Ticket | Title | Status | Branch | Notes |
-|--------|-------|--------|--------|-------|
-| W2.1 | Source epochs, generations & ReBaseline (G-42+G-43, C-12) | in-progress | plan/W2.1 | context+host. Sonnet. |
-| W2.2 | StateRequest pull + catch-up baseline (G-37+G-38, G-18) | blocked | plan/W2.2 | blocked by W2.1 (shared MessageContext epoch/baseline fields). |
-| W2.3 | Transitive metadata notices (G-36) | merged | — | prior run @ 89a0a5a. |
-| W2.4 | Taps: Observe-role links (G-47) | in-progress | plan/W2.4 | own. Sonnet. Depends W1.3 (merged). |
-| W2.5 | Exclusive payloads off the happy path (G-46) | in-progress | plan/W2.5 | own+host. Sonnet. |
-| W2.6 | Effectful processed-frontier (G-59, C-9) | pending | plan/W2.6 | host. |
-| W2.7 | Completeness watermark + typed Stall family (G-40) | pending | plan/W2.7 | glitchfree. Depends W1.7+W2.3 (merged); stub single-hop first. |
-| W2.8 | Admission vs activation enforcement (G-55) | pending | plan/W2.8 | link. |
+### Wave 2 — COMPLETE (all merged; authoritative clean gate green @ 12f13d0)
+| Ticket | Title | Merged commit | Notes |
+|--------|-------|--------|-------|
+| W2.1 | Source epochs, generations & ReBaseline (G-42+G-43, C-12) | 1cb3e08 | |
+| W2.2 | StateRequest pull + catch-up baseline (G-37+G-38, G-18) | 12f13d0 | added `baseline` beside W2.1's epoch fields in MessageContext. |
+| W2.3 | Transitive metadata notices (G-36) | 89a0a5a | prior run. |
+| W2.4 | Taps: Observe-role links (G-47) | 08bc281 | |
+| W2.5 | Exclusive payloads off the happy path (G-46) | 9cd6218 | |
+| W2.6 | Effectful processed-frontier (G-59, C-9) | 7f25320 | edited doc/spec to close C-9. |
+| W2.7 | Completeness watermark + typed Stall family (G-40) | ac0f647 | ManagedHost RESTART-branch conflict resolved inline (reBaseline+Resume coexist). |
+| W2.8 | Admission vs activation enforcement (G-55) | 27b245b | FanInlet now parks cold sends instead of throwing. |
 
-### Wave 3 — not started
-W3.1–W3.6 (`.codex-orchestrator/items/W3.*.md`).
+All Wave-2 workers ran as **synchronous** Sonnet subagents (3 concurrent per batch),
+TDD, isolated Gradle homes; no Opus escalation needed. One rebase conflict (W2.7) was
+resolved inline by the host.
+
+### Wave 3 — in progress
+Batching splits the two `evo` tickets (W3.5, W3.6) across batches. All deps merged.
+| Ticket | Title | Area | Batch | Status |
+|--------|-------|------|-------|--------|
+| W3.1 | CycleHead & two-tier quiescence (G-41, G-19 guard) | data+link | A | pending |
+| W3.2 | Wire phase: protocols + edge events cross machines (G-35B, G-39B) | wire | A | pending |
+| W3.5 | Promotion transaction hardening (G-49) | evo | A | pending |
+| W3.3 | Gossip-mesh hardening (G-45) | repl | B | pending |
+| W3.4 | Membranes: Flatten/Mediate exposure (G-52) | membrane | B | pending (unblocks W4.1, W4.2) |
+| W3.6 | GraphSpec identity & remote application (G-51 core) | evo | B | pending |
 
 ### Wave 4 — not started
 W4.1–W4.6 (`.codex-orchestrator/items/W4.*.md`).
