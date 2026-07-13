@@ -87,6 +87,15 @@ open class ManagedHost(
     private val journal: Journal? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
     private val intakeBound: IntakeBound? = null,
+    /**
+     * Host-configured hop bound (spec 20/22 §MessageContext, 21 §Cycles hop
+     * guard, 93 I-5): a data invocation whose [civictech.cell.MessageContext.hop]
+     * exceeds this is dead-lettered as a [civictech.cell.port.CycleError]
+     * instead of staged — the backstop for headless loops and cross-host
+     * cycles no link-time check can see. In a correctly-headed graph it never
+     * fires.
+     */
+    private val hopBound: Int = 64,
 ) : Host {
 
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
@@ -107,7 +116,14 @@ open class ManagedHost(
     val color: HostColor get() = scheduler.color
 
     private val cells = mutableMapOf<CellRef, Cell>()
-    private val ctx = object : CellContext {}
+    private val ctx = object : CellContext {
+        // CycleHead fusion barrier (spec 21 §Fusion, 93 I-6): route
+        // re-origination through the real host queue instead of the default
+        // inline call.
+        override fun enqueueBarrier(block: () -> Unit) {
+            enqueue(20) { block() }
+        }
+    }
 
     /**
      * Closable intake (spec 33, G-5): while closed, data and router sends fail
@@ -329,6 +345,21 @@ open class ManagedHost(
             return
         }
         val isManagement = hostedInvocation.type == HostedPortInvocation.Type.PORT_MANAGEMENT
+        if (!isManagement) {
+            // Hop guard (spec 20/22 §MessageContext, 21 §Cycles, 93 I-5): the
+            // backstop for headless loops and cross-host cycles no link-time
+            // check can see. A correctly-headed graph never trips this — hop
+            // resets to 0 at every CycleHead re-origination.
+            val hop = hostedInvocation.invocation.context?.hop
+            if (hop != null && hop > hopBound) {
+                deadLetter(
+                    CycleError("hop bound $hopBound exceeded (hop=$hop) — undeclared or cross-host cycle (spec 21 §Cycles)"),
+                    "cycle hop guard tripped",
+                    hostedInvocation,
+                )
+                return
+            }
+        }
         if (!isManagement && intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
         if (!isManagement) {
             synchronized(dataLock) {
@@ -840,6 +871,11 @@ open class ManagedHost(
                 PortRegistry.of(cell).names().forEach { name ->
                     PortRegistry.of(cell)[name]?.let { port ->
                         ProtocolSupport.of(port).relay(Protocols.Saturation)
+                        // CycleHead fusion barrier (spec 21 §Fusion, 93 I-6):
+                        // route every FeedbackInlet's re-origination through
+                        // this host's real queue, port-generic, no cell-
+                        // specific wiring needed (mirrors AttentionSupport).
+                        if (port is FeedbackInlet<*>) port.barrier = { ctx.enqueueBarrier(it) }
                     }
                 }
                 cell.onActivate(ctx)
@@ -926,6 +962,21 @@ open class ManagedHost(
                 val inlet = findPort(toCell, inletName) as? LinkFrom<*>
                     ?: throw IllegalArgumentException("Inlet not found or not linkable: $inletName on $to")
 
+                // Cycle admission (spec 10/13 `CycleWithoutHead`, 20/21 §Cycles,
+                // 93 I-5): a connect that would close a cycle wholly visible to
+                // this host's topology index is rejected unless the closing
+                // inlet is a declared CycleHead (a FeedbackInlet). Cross-host
+                // cycles are not locally visible here; they fall to the runtime
+                // hop guard (20/22) instead.
+                registry?.topology?.let { topology ->
+                    if (inlet !is FeedbackInlet<*> && wouldCloseCycle(topology, from, to)) {
+                        return LinkResult.Rejected(
+                            "CycleWithoutHead: connecting $from.$outletName -> $to.$inletName would close a " +
+                                "locally-visible cycle with no declared CycleHead (spec 10/13, 20/21 §Cycles)"
+                        )
+                    }
+                }
+
                 @Suppress("UNCHECKED_CAST")
                 val result = (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
                 if (result is LinkResult.Connected) {
@@ -985,4 +1036,23 @@ open class ManagedHost(
     }
 
     private fun findPort(cell: Cell, name: String): Port? = PortRegistry.of(cell)[name]
+
+    /**
+     * Would a `from -> to` edge close a cycle already visible in [topology]?
+     * True exactly when [to] can already reach [from] by following existing
+     * outbound edges (spec 10/13 rare-path cycle walk; P2 permits expensive
+     * linking).
+     */
+    private fun wouldCloseCycle(topology: TopologyIndex, from: CellRef, to: CellRef): Boolean {
+        if (from == to) return true
+        val visited = mutableSetOf<CellRef>()
+        val stack = ArrayDeque<CellRef>().apply { add(to) }
+        while (stack.isNotEmpty()) {
+            val current = stack.removeLast()
+            if (!visited.add(current)) continue
+            if (current == from) return true
+            topology.outbound(current).forEach { link -> link.to.cell?.let(stack::add) }
+        }
+        return false
+    }
 }

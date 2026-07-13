@@ -38,3 +38,11 @@ inline fun <reified T : Any> output() = output(T::class.java)
  * Declares a [FanOutlet] for the cell with a specific class.
  */
 fun <T : Any> output(clazz: Class<T>) = PortDelegateProvider { FanOutlet(clazz) }
+
+/**
+ * Declares a [FeedbackInlet] for the cell — the absorbing terminus of a
+ * cycle-closing edge (spec 21 §Cycles, 93 I-5/I-6). See [FeedbackInlet] and
+ * [CycleHead].
+ */
+fun <D : Any> feedbackInlet(quiescence: Double = 0.0, onLap: (D) -> Unit) =
+    PortDelegateProvider { FeedbackInlet(quiescence = quiescence, onLap = onLap) }

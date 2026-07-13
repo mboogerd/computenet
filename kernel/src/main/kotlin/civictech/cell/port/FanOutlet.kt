@@ -58,7 +58,7 @@ class FanOutlet<Api : Any>(
         ContractRegistry.descriptor(clazz)?.methods?.any { it.exclusive } == true
 
     override val call: Api = Proxy.fromClass(clazz) { _, method, args ->
-        val ctx = CurrentContext.get()?.copy(sourcePort = ref)
+        val ctx = CurrentContext.get()?.let { it.copy(sourcePort = ref, hop = it.hop + 1) }
             ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get())
         CurrentContext.with(ctx) {
             // snapshot: link/unlink during a wave must not fail the broadcast

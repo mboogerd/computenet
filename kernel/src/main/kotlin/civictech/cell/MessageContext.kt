@@ -37,6 +37,14 @@ data class Timestamp(
  * dedup/incremental-pull currency — never a wave position. A glitch-free
  * consumer installs it as arm state and MUST NOT admit it to any
  * wave-completeness set.
+ *
+ * [hop] (spec 20/22 §MessageContext rule 2, 93 I-5): incremented on every
+ * transparent-flow hop, reset to 0 by cycle-head re-origination
+ * ([civictech.cell.port.FeedbackInlet]) — a pure divergence guard, never
+ * part of the wave join key. A host dead-letters an invocation whose hop
+ * exceeds its configured bound as a
+ * [civictech.cell.port.CycleError] — the backstop for headless loops and
+ * cross-host cycles no link-time check can see.
  */
 @kotlinx.serialization.Serializable
 @SerialName("MessageContext")
@@ -45,6 +53,7 @@ data class MessageContext(
     val sourcePort: PortRef,
     val reBaseline: ReBaselineNotice? = null,
     val baseline: TagFrontier? = null,
+    val hop: Int = 0,
 ) : Serializable
 
 /**

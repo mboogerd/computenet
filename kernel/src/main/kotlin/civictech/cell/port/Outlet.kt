@@ -44,7 +44,7 @@ class Outlet<Api : Any>(
 
     // Emission stamps the wave context — see FanOutlet for the rules.
     override val call: Api = Proxy.fromClass(clazz) { _, method, args ->
-        val ctx = CurrentContext.get()?.copy(sourcePort = ref)
+        val ctx = CurrentContext.get()?.let { it.copy(sourcePort = ref, hop = it.hop + 1) }
             ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get())
         CurrentContext.with(ctx) {
             try {
