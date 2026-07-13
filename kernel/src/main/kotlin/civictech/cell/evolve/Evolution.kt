@@ -117,6 +117,13 @@ object Promotion {
     /**
      * Promote [candidate] over [incumbent] behind [gate], despawning the
      * retired incumbent from [host] only after a successful COMMIT.
+     *
+     * [judge], when supplied, is the declarative replacement for an
+     * imperative caller-side check (spec 53 "Judgment is declarative
+     * policy", G-50): PRECHECK consults [PromotionJudge.verdict] first and
+     * aborts — incumbent completely untouched — unless it is
+     * [PromotionVerdict.Accept]. A `null` judge preserves the prior
+     * behavior (the caller judges by hand, as in the pre-G-50 tests).
      */
     fun <T : Any> promote(
         host: ManagedHost,
@@ -125,11 +132,22 @@ object Promotion {
         candidate: Cell,
         outletName: String,
         downstream: List<Use<*>>,
+        judge: PromotionJudge? = null,
     ) {
         // 1. PRECHECK — no side effects, freely abortable. Admission is
         // decided strictly before the window, so mid-swap rejection cannot
         // occur: everything checked here is settled before the gate ever
         // turns red.
+        if (judge != null) {
+            when (val verdict = judge.verdict()) {
+                is PromotionVerdict.Accept -> {}
+                is PromotionVerdict.Pending -> throw PromotionAborted(
+                    "PRECHECK",
+                    "promotion policy's observation window is not yet filled (verdict: Pending)",
+                )
+                is PromotionVerdict.Reject -> throw PromotionAborted("PRECHECK", verdict.reason)
+            }
+        }
         val from = outlet(incumbent, outletName)
         val to = outlet(candidate, outletName)
         if (from.clazz != to.clazz) {

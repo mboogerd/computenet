@@ -78,6 +78,18 @@ class FeedbackInlet<D : Any>(
     private val headSourceId: UUID = UUID.randomUUID()
     private val headCounter = AtomicLong()
 
+    /**
+     * The promotion-gate probe (spec 53 §Cycle promotion gates on quiescence,
+     * G-19/G-50): whether the most recently absorbed delta's [Magnitude]
+     * fell at/under [quiescence]. `null` means no G-19 throttling is in
+     * effect yet — either no delta has been observed, or the observed
+     * payload wasn't [Magnitude]-typed — and per 53 "without G-19
+     * throttling, cycle promotion is deferred, not attempted", callers MUST
+     * treat `null` the same as `false`, never as vacuously quiescent.
+     */
+    var lastQuiescent: Boolean? = null
+        private set
+
     override val call: Consumer<D> = object : Consumer<D> {
         override fun provide(input: D) {
             if (input is Leased<*>) {
@@ -85,7 +97,9 @@ class FeedbackInlet<D : Any>(
                     "CycleRejectsLeased: Leased is forbidden on cycle edges (spec 20/23, 93 I-6); freeze() or copy first"
                 )
             }
-            val effective = (input as? Magnitude)?.let { it.size() > quiescence } ?: true
+            val magnitude = input as? Magnitude
+            lastQuiescent = magnitude?.let { it.size() <= quiescence }
+            val effective = magnitude?.let { it.size() > quiescence } ?: true
             if (!effective) return // weak tier: absorbed, not re-originated
             barrier {
                 val fresh = MessageContext(Timestamp(headSourceId, headCounter.incrementAndGet()), ref)

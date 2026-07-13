@@ -115,17 +115,20 @@ there is no fourth subsystem:
    recovery: no ack, no version vector, no second sync protocol. The counter
    defeats replay; signing is per-emitting-peer, never per-logical-cell.
 
-⚠ GAP (G-50): promotion is mechanically complete but has no declarative
-policy or authority story — judge criteria, observation windows, differential
-no-worse-than comparison, who may register or trigger a swap, canary staging,
-and multi-partition rollout orchestration are open. Proposal: a
-PromotionPolicy as a serializable artifact beside the candidate GraphSpec
-(ObservationWindow, SatisfactionCriterion grammar, differential comparison
-over partial violation orders) so a promotion is fully described by spec +
-policy; registration/trigger authority gated by the membrane/policy layer
-under federated governance; a small-blast-radius canary staged-promotion path
-for unshadowable closed-loop candidates; and an ordering/monitoring/abort
-policy for partitioned rolling promotion (93 I-21/I-17/I-27).
+*(G-50 policy half resolved, W4.4)*: `PromotionPolicy` (spec 53
+§Judgment is declarative policy) is a serializable artifact — observation
+window, satisfaction criterion, differential no-worse-than comparison, and
+cycle-promotion-gates-on-quiescence are all judged declaratively by
+`PromotionJudge`, consulted by `Promotion.promote` at PRECHECK.
+
+⚠ GAP (G-50 residual): who may register or trigger a swap is still ungated —
+no authority check runs before `Promotion.promote` is called — and canary
+staging plus multi-partition rollout orchestration are unbuilt. Proposal
+(unchanged): registration/trigger authority gated by the membrane/policy
+layer under federated governance; a small-blast-radius canary
+staged-promotion path for unshadowable closed-loop candidates; and an
+ordering/monitoring/abort policy for partitioned rolling promotion (93
+I-21/I-17/I-27) — M15.5 in the roadmap.
 
 **Attention is a request, not an entitlement.** A remote attention assertion
 is subject to `protocolAuthority[ATTENTION]`: clamped to `ceiling`,

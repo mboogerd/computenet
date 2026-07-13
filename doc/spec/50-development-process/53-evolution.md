@@ -265,15 +265,26 @@ Promotion authority is a membrane/policy concern (43): who may inject cells,
 approve privileged links, or trigger promotion in a runtime — per-runtime
 policy, from single-developer (today) to federated governance (vision).
 
-⚠ GAP (G-50): promotion is mechanically complete but has no declarative
-policy or authority story: judge criteria, observation windows, differential
-no-worse-than comparison, who may register or trigger a swap, canary
-staging, and multi-partition rollout orchestration are open. *Proposal*:
-`PromotionPolicy` as a serializable artifact beside the candidate GraphSpec
-(`ObservationWindow`, `SatisfactionCriterion` grammar, differential
-comparison over partial violation orders) so a promotion is fully described
-by spec + policy; registration/trigger authority gated by the
-membrane/policy layer under federated governance; a small-blast-radius
+*(G-50 policy half resolved, W4.4)*: `civictech.cell.evolve.PromotionPolicy`
+is the serializable artifact (`gates`, `ObservationWindow` measured in
+observed waves, `SatisfactionCriterion` with the strict zero-violations
+default, `judge`, optional `baseline`), evaluated by `PromotionJudge` —
+`Promotion.promote`'s `judge` parameter consults it during PRECHECK and
+aborts (incumbent untouched) unless the verdict is `Accept`. Differential
+shadow: `baseline = true` additionally requires the candidate's observed
+violation count to be no worse than the incumbent's over the same window.
+Cycle promotion gates on quiescence: a `PromotionJudge` constructed with a
+`cycleHead` defers (never accepts) until `FeedbackInlet.lastQuiescent ==
+true`; `null` (no delta observed yet, or a non-`Magnitude` payload — no
+confirmed G-19 throttling) is treated as not-yet-quiescent, matching "without
+G-19 throttling, cycle promotion is deferred, not attempted."
+
+⚠ GAP (G-50 residual): the *authority* half is still open — who may
+register or trigger a swap is ungated (any caller can construct a
+`PromotionJudge`/policy and call `Promotion.promote`), and canary staging
+plus multi-partition rolling-promotion orchestration are unbuilt. *Proposal*
+(unchanged): registration/trigger authority gated by the membrane/policy
+layer under federated governance (see §Trust boundary); a small-blast-radius
 canary staged-promotion path for unshadowable closed-loop candidates; and an
 ordering/monitoring/abort policy for partitioned rolling promotion (93
-I-21/I-17/I-27).
+I-21/I-17/I-27) — M15.5 in the roadmap.
