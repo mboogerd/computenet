@@ -65,6 +65,11 @@ GRADLE_USER_HOME=$PWD/.gradle-home ./gradlew test --console=plain
   contract.
 - Implementers are **Sonnet**; failed tickets escalate to **Opus** in the same
   worktree with full failure context.
+- **Background subagents are unreliable here**: the first W2.1/W2.4/W2.5 batch,
+  launched with `run_in_background`, all died with "no progress for 600s (stream
+  watchdog did not recover)" having written nothing. Switched to **synchronous
+  subagents** (dispatched together in one turn so they still run concurrently,
+  but without the background stream watchdog). Same worktrees reused.
 - **GOTCHA: `.codex-orchestrator/` is gitignored** → it does NOT exist in fresh
   `plan/Wn.m` worktrees. Never point a subagent at `.codex-orchestrator/items/*`;
   **embed the full ticket text inline in the dispatch prompt**. The tracked
