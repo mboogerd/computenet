@@ -26,6 +26,8 @@ import civictech.cell.attention.NonSuspendable
 import civictech.cell.attention.SuspensionNotice
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.durability.Journal
+import civictech.cell.evolve.Effectful
+import civictech.cell.Timestamp
 import civictech.cell.wire.WireCodec
 import civictech.cell.data.Magnitude
 import civictech.cell.data.Propagate
@@ -40,6 +42,21 @@ import java.util.concurrent.atomic.AtomicLong
 
 private const val RECORD_FRAME: Byte = 1
 private const val RECORD_CHECKPOINT: Byte = 2
+private const val RECORD_FRONTIER: Byte = 3
+
+/**
+ * Durable record of an [Effectful] inlet's processed-frontier advance (G-59,
+ * fixes C-9; spec 20/24, 30/31, 50/52 "Effectful recovery"): the last applied
+ * `(sourceId, counter)` for one `(cellRef, portName)`.
+ */
+private data class FrontierRecord(val cellRef: CellRef, val portName: String, val timestamp: Timestamp) :
+    Serializable
+
+/** Checkpoint payload (M10.2, extended G-59): cell state plus the processed-frontier, atomically together. */
+private data class CheckpointRecord(
+    val state: Map<CellRef, Serializable>,
+    val frontier: Map<Pair<CellRef, String>, Map<UUID, Long>>,
+) : Serializable
 
 /**
  * A Host that manages the lifecycle and connectivity of [Cell]s.
@@ -128,6 +145,15 @@ open class ManagedHost(
 
     /** Snapshots captured by the last drain (spec 33 step 3; starts G-25). */
     private val snapshots = mutableMapOf<CellRef, Serializable>()
+
+    /**
+     * Processed-frontier (G-59, fixes C-9; spec 20/24, 30/31, 50/52): per
+     * [Effectful] inlet `(cellRef, portName)`, the last applied `Timestamp`
+     * per source — durable via [FrontierRecord]/[CheckpointRecord] so both
+     * journal replay and post-recovery live re-delivery dedupe an
+     * already-acted invocation instead of re-firing it.
+     */
+    private val processedFrontier = mutableMapOf<Pair<CellRef, String>, MutableMap<UUID, Long>>()
 
     /** Supervision (G-26): per-cell failure policies, spawn-time checkpoints, and suspended-cell parking. */
     private val policies = mutableMapOf<CellRef, SupervisionPolicy>()
@@ -380,6 +406,7 @@ open class ManagedHost(
                     )
 
                     RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
+                    RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
                     else -> error("unknown journal record type ${record[0]}")
                 }
             }
@@ -391,30 +418,56 @@ open class ManagedHost(
     private fun journalFrame(hostedInvocation: HostedPortInvocation): ByteArray =
         byteArrayOf(RECORD_FRAME) + WireCodec.encode(hostedInvocation)
 
+    private fun journalFrontier(record: FrontierRecord): ByteArray {
+        val blob = ByteArrayOutputStream()
+            .also { ObjectOutputStream(it).use { out -> out.writeObject(record) } }
+            .toByteArray()
+        return byteArrayOf(RECORD_FRONTIER) + blob
+    }
+
     /**
-     * Checkpoint (M10.2): capture every `Stateful` cell's snapshot as one
-     * record and compact the journal down to it — replay after a checkpoint
-     * is restore + tail. Runs on the management band so it can't interleave
-     * with a dispatching cell.
+     * Checkpoint (M10.2, extended G-59): capture every `Stateful` cell's
+     * snapshot AND the processed-frontier as one record, and compact the
+     * journal down to it — replay after a checkpoint is restore + tail. Runs
+     * on the management band so it can't interleave with a dispatching cell.
      */
     fun checkpoint(journal: Journal) {
         enqueueAwaiting(0) {
             val state = HashMap<CellRef, Serializable>()
             cells.forEach { (cellRef, cell) -> if (cell is Stateful) state[cellRef] = cell.snapshot() }
+            val frontier = processedFrontier.mapValues { HashMap(it.value) as Map<UUID, Long> }
             val blob = ByteArrayOutputStream()
-                .also { ObjectOutputStream(it).use { out -> out.writeObject(state) } }
+                .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()
             journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob))
         }
     }
 
     private fun restoreCheckpoint(blob: ByteArray) {
-        @Suppress("UNCHECKED_CAST")
-        val state = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as Map<CellRef, Serializable>
-        state.forEach { (cellRef, snapshot) ->
+        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as CheckpointRecord
+        record.state.forEach { (cellRef, snapshot) ->
             (cells[cellRef] as? Stateful)?.restore(snapshot)
                 ?: deadLetter(null, "checkpoint state for $cellRef but no Stateful cell — graph rebuilt differently?")
         }
+        record.frontier.forEach { (key, sources) -> processedFrontier.getOrPut(key) { mutableMapOf() } += sources }
+    }
+
+    private fun restoreFrontier(blob: ByteArray) {
+        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as FrontierRecord
+        advanceFrontier(record.cellRef, record.portName, record.timestamp)
+    }
+
+    /**
+     * Effectful processed-frontier (G-59, fixes C-9): true iff [timestamp]
+     * (from a specific source) is at or behind the last applied counter for
+     * this `(cellRef, portName)` — an effect-boundary replay to suppress.
+     */
+    private fun alreadyProcessed(cellRef: CellRef, portName: String, timestamp: Timestamp): Boolean =
+        (processedFrontier[cellRef to portName]?.get(timestamp.sourceId) ?: -1L) >= timestamp.counter
+
+    /** Advances the frontier in memory. Callers decide whether to also durably journal it. */
+    private fun advanceFrontier(cellRef: CellRef, portName: String, timestamp: Timestamp) {
+        processedFrontier.getOrPut(cellRef to portName) { mutableMapOf() }[timestamp.sourceId] = timestamp.counter
     }
 
     /** Callers hold [dataLock]: append to the target cell's FIFO (or its attention park). */
@@ -657,8 +710,24 @@ open class ManagedHost(
 
                 HostedPortInvocation.Type.PORT_API -> {
                     if (port is Use<*>) {
-                        // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
-                        hostedInvocation.invocation.invokeSuspending(port.call)
+                        // Effectful processed-frontier (G-59, fixes C-9): an
+                        // effect-boundary inlet's replay (journal replay or a
+                        // post-recovery live re-delivery) at/behind the last
+                        // applied (sourceId, counter) is suppressed-emission —
+                        // the sink already acted on it, so it does not act again.
+                        val timestamp = hostedInvocation.invocation.context?.timestamp
+                        if (cell is Effectful && timestamp != null &&
+                            alreadyProcessed(cellRef, hostedInvocation.portName, timestamp)
+                        ) {
+                            // suppressed: already-acted, dropped rather than re-acted
+                        } else {
+                            // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
+                            hostedInvocation.invocation.invokeSuspending(port.call)
+                            if (cell is Effectful && timestamp != null) {
+                                advanceFrontier(cellRef, hostedInvocation.portName, timestamp)
+                                journal?.append(journalFrontier(FrontierRecord(cellRef, hostedInvocation.portName, timestamp)))
+                            }
+                        }
                     }
                 }
             }

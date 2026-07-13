@@ -97,12 +97,13 @@ suppression) so recovery never re-transmits; the landed `recoverFrom`
 replays frames through the ordinary decode path with un-suppressed emission
 (the recovering flag only prevents re-journaling), made safe for *state* by
 replay-stable identity (ref-derived tags/PN slots, tag counter in
-snapshots) + idempotent merges + anti-entropy/catch-up dedup.
-
-⚠ CONFLICT (C-9): M10 journal replay re-drives effectful sinks
-un-suppressed (replay-stable identity makes state safe, not effects),
-contradicting the decided `Effectful` processed-frontier suppression
-(93 I-7).
+snapshots) + idempotent merges + anti-entropy/catch-up dedup. `Effectful`
+sinks *(G-59 resolved in part, W2.6, closes C-9)* are the one case
+un-suppressed emission is not safe for: an `Effectful` inlet now journals a
+processed-frontier — the last applied `(sourceId, counter)` per inlet — and
+both `recoverFrom` replay and post-recovery live delivery consult it,
+suppressing (dropping as already-acted) an invocation at or behind the
+frontier instead of re-driving the sink.
 
 ⚠ GAP (G-59): the M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells — wall-clock/random logic,

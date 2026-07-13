@@ -1,6 +1,6 @@
 # 52 — Verification: Invariants over Examples
 
-> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9 — live *continuous* production shadowing still awaits a long-running runtime; observation membrane, exclusive-payload discharge + taps, monitor bands, replica-convergence invariants, and the Effectful processed-frontier are design decided in 93, unimplemented)
+> **Status**: Implemented (invariants-as-cells + kotest adapter + generative graph harness; shadow machinery M9; the Effectful processed-frontier, W2.6 — live *continuous* production shadowing still awaits a long-running runtime; observation membrane, exclusive-payload discharge + taps, monitor bands, and replica-convergence invariants are design decided in 93, unimplemented)
 > **Sources**: ADR — Cellular Software Development Process (testing philosophy, live invariants)
 > **Implementation**: `cell.verify.InvariantCell`/`Violation`; `checkInvariants` kotest adapter (test sources); seeded harness = `cell.host.SimulationController`
 
@@ -157,18 +157,18 @@ tolerating observation gaps; an *active* monitor (liveness, security) emits
 LOW, yielding to real HIGH work under the stride floor (30/34). A monitor
 MUST NOT pin HIGH.
 
-*(Effectful recovery — decided in 93 I-7, unimplemented)*: the `Effectful`
-marker connects to durability. An `Effectful` sink SHOULD journal a
-**processed-frontier** — a durable record of the tags/waves it has already
-acted on — so both journal replay and post-recovery live re-delivery are
-*deduped* (dropped as already-processed) rather than re-acted. Divergence,
-recorded: the I-7 resolution's linchpin was replay with outlets NoOp-served
-(this section's suppression mechanism) so recovery never re-transmits; the
-landed M10 design instead replays intake frames with emission
-**un-suppressed** (the recovering flag only prevents re-journaling), made
-safe for *state* by replay-stable identity + idempotent merges + catch-up
-dedup — which is exactly what leaves effectful sinks exposed on replay
-(conflict C-9, recorded at 30/31 and 20/24). The processed-frontier is the
+*(Effectful recovery — decided in 93 I-7; processed-frontier implemented,
+W2.6, closes C-9)*: the `Effectful` marker connects to durability. An
+`Effectful` sink journals a **processed-frontier** — per inlet, the last
+applied `(sourceId, counter)` — so both journal replay and post-recovery
+live re-delivery are *deduped* (dropped as already-processed) rather than
+re-acted. Divergence, recorded: the I-7 resolution's linchpin was replay
+with outlets NoOp-served (this section's suppression mechanism) so recovery
+never re-transmits; the landed M10 design instead replays intake frames
+with emission un-suppressed by default (the recovering flag only prevents
+re-journaling), made safe for *state* by replay-stable identity + idempotent
+merges + catch-up dedup, and safe for *effects* specifically by the
+processed-frontier check at the `Effectful` inlet — the frontier is the
 decided closure for that case.
 
 ⚠ GAP (G-59): the M10 journal replays intake frames, which is sound only

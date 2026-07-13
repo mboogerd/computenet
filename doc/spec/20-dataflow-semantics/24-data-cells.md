@@ -404,22 +404,20 @@ Random identity + replay = resurrected removals and double counts
 journal segmentation/rotation and the disk-overflow mailbox (33) — the
 first workload where one fsync'd file hurts.
 
-⚠ CONFLICT (C-9): M10 journal replay re-drives effectful sinks
-un-suppressed (replay-stable identity makes *state* safe), contradicting
-the decided `Effectful` processed-frontier suppression (93 I-7).
-
 **Boundary of the landed mechanism** (decided in 93 I-7): un-suppressed
 replay through the ordinary decode path is safe exactly for the
 replay-stable idempotent vocabulary above — ref-derived identities,
 idempotent merges, and anti-entropy/catch-up dedup absorb the
-re-emissions. For non-idempotent emissions and for `Effectful` sinks the
-decided remedy — suppressed-emission replay (outlets NoOp-served, G-32) or
-a durable processed-frontier that drops post-recovery re-delivery as
-already-acted — is design, not code. The decided journal classification
-also diverges from the landed tee: 93 I-7 journals only `PORT_API` data
-plus topology events, while the shipped journal appends every intake frame
-(management included) and does not journal topology at all — the graph is
-rebuilt out-of-band before `recoverFrom`.
+re-emissions. For `Effectful` sinks *(G-59 resolved, W2.6, closes C-9)*: an
+`Effectful` inlet journals a processed-frontier — the last applied
+`(sourceId, counter)` per inlet — consulted by both `recoverFrom` replay and
+post-recovery live delivery; an invocation at or behind the frontier is
+suppressed-emission (dropped as already-acted) instead of re-driving the
+sink. The decided journal classification still diverges from the landed
+tee: 93 I-7 journals only `PORT_API` data plus topology events, while the
+shipped journal appends every intake frame (management included) and does
+not journal topology at all — the graph is rebuilt out-of-band before
+`recoverFrom`.
 
 ⚠ GAP (G-59): The M10 journal replays intake frames, which is sound only
 for deterministic, input-driven cells: wall-clock/random logic,
