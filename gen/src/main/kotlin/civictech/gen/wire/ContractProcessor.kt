@@ -2,6 +2,7 @@ package civictech.gen.wire
 
 import com.google.devtools.ksp.KspExperimental
 import com.google.devtools.ksp.getAnnotationsByType
+import com.google.devtools.ksp.getVisibility
 import com.google.devtools.ksp.processing.CodeGenerator
 import com.google.devtools.ksp.processing.Dependencies
 import com.google.devtools.ksp.processing.KSPLogger
@@ -12,15 +13,28 @@ import com.google.devtools.ksp.processing.SymbolProcessorProvider
 import com.google.devtools.ksp.symbol.ClassKind
 import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSType
+import com.squareup.kotlinpoet.ANY
+import com.squareup.kotlinpoet.ClassName
+import com.squareup.kotlinpoet.CodeBlock
 import com.squareup.kotlinpoet.FileSpec
+import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.LIST
+import com.squareup.kotlinpoet.MAP
+import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
+import com.squareup.kotlinpoet.STAR
 import com.squareup.kotlinpoet.TypeSpec
+import com.squareup.kotlinpoet.UNIT
 import com.squareup.kotlinpoet.asClassName
 import com.squareup.kotlinpoet.buildCodeBlock
 import com.squareup.kotlinpoet.ParameterizedTypeName.Companion.parameterizedBy
+import com.squareup.kotlinpoet.ksp.toClassName
+import com.squareup.kotlinpoet.ksp.toTypeName
+import com.squareup.kotlinpoet.ksp.toTypeParameterResolver
+import com.squareup.kotlinpoet.ksp.toTypeVariableName
 import com.squareup.kotlinpoet.ksp.writeTo
 
 class ContractProcessorProvider : SymbolProcessorProvider {
@@ -200,7 +214,165 @@ class ContractProcessor(
             .bufferedWriter()
             .use { it.write("$GENERATED_PACKAGE.$moduleName\n") }
 
+        // C-5 completion (W4.6, spec 10/14 §Reflection budget): one KSP-generated
+        // proxy class per contract, replacing java.lang.reflect.Proxy.newProxyInstance
+        // for in-process cell API dispatch. Each generated class still dispatches
+        // through the existing java.lang.reflect.InvocationHandler shape, so every
+        // Proxy/Buffering/Broadcast/NoOp/Throwing/Callback call site is untouched —
+        // only proxy *construction* moves from runtime bytecode generation to an
+        // ahead-of-time-compiled class.
+        // Proxy generation needs to *reference* the contract type (and its
+        // method signatures) from generated code, unlike the reflective
+        // descriptor table above — so file-private/local test fixtures (not
+        // real cell API surface) are skipped here; they still get ordinary
+        // ContractDescriptor entries.
+        val proxyableContracts = contracts.filter {
+            it.getVisibility() != com.google.devtools.ksp.symbol.Visibility.PRIVATE &&
+                it.getVisibility() != com.google.devtools.ksp.symbol.Visibility.LOCAL
+        }
+
+        if (proxyableContracts.isNotEmpty()) {
+            val proxyEntries = proxyableContracts.map { contract -> generateProxyClass(contract, resolver, sources) }
+
+            val proxyModuleName = "ProxyTable_" + java.lang.Long.toHexString(moduleHash)
+            val factoriesInit = buildCodeBlock {
+                add("mapOf(\n⇥")
+                proxyEntries.forEach { (contractClassName, _, constructedType) ->
+                    add("%T::class.java·to·{·h·:·%T·->·%T(h)·},\n", contractClassName, INVOCATION_HANDLER, constructedType)
+                }
+                add("⇤)")
+            }
+            val proxyModuleType = TypeSpec.classBuilder(proxyModuleName)
+                .addSuperinterface(PROXY_MODULE)
+                .addProperty(
+                    PropertySpec.builder(
+                        "factories",
+                        MAP.parameterizedBy(CLASS_STAR, PROXY_CONSTRUCTOR),
+                        KModifier.OVERRIDE,
+                    ).initializer(factoriesInit).build()
+                )
+                .build()
+
+            FileSpec.builder(GENERATED_PACKAGE, proxyModuleName)
+                .addType(proxyModuleType)
+                .build()
+                .writeTo(codeGenerator, sources)
+
+            codeGenerator.createNewFileByPath(sources, "META-INF/services/civictech.gen.wire.ProxyModule", "")
+                .bufferedWriter()
+                .use { it.write("$GENERATED_PACKAGE.$proxyModuleName\n") }
+        }
+
         return emptyList()
+    }
+
+    /**
+     * Emits one proxy class implementing [contract], dispatching every abstract
+     * method through the [InvocationHandler] passed to its constructor — the
+     * same shape `java.lang.reflect.Proxy.newProxyInstance` provided, minus the
+     * runtime bytecode generation. Returns the contract's raw [ClassName] paired
+     * with the generated proxy's [ClassName] for the factory table entry.
+     */
+    @OptIn(KspExperimental::class)
+    private fun generateProxyClass(
+        contract: KSClassDeclaration,
+        resolver: Resolver,
+        sources: Dependencies,
+    ): Triple<ClassName, ClassName, com.squareup.kotlinpoet.TypeName> {
+        val fqn = contract.qualifiedName!!.asString()
+        val contractClassName = contract.toClassName()
+        val classTypeParamResolver = contract.typeParameters.toTypeParameterResolver()
+        val classTypeVars = contract.typeParameters.map { it.toTypeVariableName(classTypeParamResolver) }
+        val contractType = if (classTypeVars.isEmpty()) contractClassName else contractClassName.parameterizedBy(classTypeVars)
+        // Erased witness type arguments (the constructor never references T, so
+        // nothing constrains inference at the call site — supply each type
+        // variable's own upper bound explicitly instead).
+        val witnessTypeArgs = classTypeVars.map { it.bounds.firstOrNull() ?: ANY.copy(nullable = true) }
+
+        val proxyName = contract.simpleName.asString() + "_Proxy_" + java.lang.Long.toHexString(StableHash.of(fqn))
+        val proxyClassName = ClassName(GENERATED_PACKAGE, proxyName)
+
+        val methods = contract.getAllFunctions().filter { it.isAbstract }
+            .map { fn ->
+                val name = fn.simpleName.asString()
+                val jvmDescriptor = resolver.mapToJvmSignature(fn) ?: error("no JVM signature for $fqn#$name")
+                Triple(fn, name, jvmDescriptor)
+            }
+            .sortedWith(compareBy({ it.second }, { it.third }))
+
+        val methodProps = mutableListOf<PropertySpec>()
+        val funSpecs = mutableListOf<FunSpec>()
+
+        methods.forEachIndexed { index, (fn, name, jvmDescriptor) ->
+            val methodPropName = "M$index"
+            methodProps += PropertySpec.builder(methodPropName, METHOD, KModifier.PRIVATE)
+                .initializer(
+                    "TARGET.methods.first·{·it.name·==·%S·&&·%T.of(it)·==·%S·}",
+                    name, JvmDescriptors::class.asClassName(), jvmDescriptor,
+                )
+                .build()
+
+            val fnTypeParamResolver = fn.typeParameters.toTypeParameterResolver(classTypeParamResolver)
+            val fnTypeVars = fn.typeParameters.map { it.toTypeVariableName(fnTypeParamResolver) }
+            val params = fn.parameters.mapIndexed { i, p ->
+                ParameterSpec.builder(p.name?.asString() ?: "arg$i", p.type.toTypeName(fnTypeParamResolver)).build()
+            }
+            val returnType = fn.returnType?.toTypeName(fnTypeParamResolver) ?: UNIT
+            // Explicit `Any?` witness: `arrayOf` needs a materializable element
+            // type, and the parameter type may be an unreified class/method type
+            // variable (T, E, ...) — erased anyway once past the InvocationHandler.
+            val argsExpr = if (params.isEmpty()) "null" else params.joinToString(", ", "arrayOf<Any?>(", ")") { it.name }
+
+            val body = if (returnType == UNIT) {
+                CodeBlock.of("handler.invoke(this,·%L,·%L)\n", methodPropName, argsExpr)
+            } else {
+                CodeBlock.of(
+                    "@Suppress(\"UNCHECKED_CAST\")\nreturn handler.invoke(this,·%L,·%L)·as·%T\n",
+                    methodPropName, argsExpr, returnType,
+                )
+            }
+
+            funSpecs += FunSpec.builder(name)
+                .addModifiers(KModifier.OVERRIDE)
+                .addTypeVariables(fnTypeVars)
+                .addParameters(params)
+                .returns(returnType)
+                .addCode(body)
+                .build()
+        }
+
+        val companion = TypeSpec.companionObjectBuilder()
+            .addProperty(
+                PropertySpec.builder("TARGET", CLASS_STAR, KModifier.PRIVATE)
+                    .initializer("%T::class.java", contractClassName)
+                    .build()
+            )
+            .addProperties(methodProps)
+            .build()
+
+        val proxyType = TypeSpec.classBuilder(proxyName)
+            .addTypeVariables(classTypeVars)
+            .addSuperinterface(contractType)
+            .primaryConstructor(
+                FunSpec.constructorBuilder().addParameter("handler", INVOCATION_HANDLER).build()
+            )
+            .addProperty(
+                PropertySpec.builder("handler", INVOCATION_HANDLER, KModifier.PRIVATE)
+                    .initializer("handler")
+                    .build()
+            )
+            .addFunctions(funSpecs)
+            .addType(companion)
+            .build()
+
+        FileSpec.builder(GENERATED_PACKAGE, proxyName)
+            .addType(proxyType)
+            .build()
+            .writeTo(codeGenerator, sources)
+
+        val constructedType: com.squareup.kotlinpoet.TypeName =
+            if (witnessTypeArgs.isEmpty()) proxyClassName else proxyClassName.parameterizedBy(witnessTypeArgs)
+        return Triple(contractClassName, proxyClassName, constructedType)
     }
 
     /** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
@@ -240,5 +412,12 @@ class ContractProcessor(
         const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
         const val BLOCKING_MARKER = "civictech.cell.BlockingCell"
         const val SUSPENDING_MARKER = "civictech.cell.SuspendingCell"
+
+        // Proxy generation (W4.6, C-5 completion)
+        val INVOCATION_HANDLER: ClassName = ClassName("java.lang.reflect", "InvocationHandler")
+        val METHOD: ClassName = ClassName("java.lang.reflect", "Method")
+        val CLASS_STAR = ClassName("java.lang", "Class").parameterizedBy(STAR)
+        val PROXY_MODULE: ClassName = ClassName("civictech.gen.wire", "ProxyModule")
+        val PROXY_CONSTRUCTOR: ClassName = ClassName("civictech.gen.wire", "ProxyConstructor")
     }
 }

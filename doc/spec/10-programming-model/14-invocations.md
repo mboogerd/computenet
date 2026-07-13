@@ -133,18 +133,28 @@ the source port, so delegation presents the correct new port.)*
 
 ## Reflection budget
 
-⚠ CONFLICT (C-5): `Proxy.fromClass` uses JDK dynamic proxies. ADR 3 forbids
-reflection artifacts **in the serialized form** and prefers KSP/Poet
+**Resolved (C-5, W4.6)**: `Proxy.fromClass` used JDK dynamic proxies. ADR 3
+forbids reflection artifacts **in the serialized form** and prefers KSP/Poet
 generation for KMP compatibility and speed.
-**Resolution**: reflection is acceptable *inside a JVM process* as the interim
-mechanism; the serialized form MUST use stable method ids (name + signature
-hash or ordinal from generated tables). KSP-generated proxies (extending the
-`gen` module) replace dynamic proxies where profiling or KMP demands it.
+**Resolution**: the serialized form MUST use stable method ids (name +
+signature hash or ordinal from generated tables). Every `@Contract` interface
+now gets a KSP-generated proxy class (extending the `gen` module's
+`ContractProcessor`), so in-process cell API dispatch no longer needs
+`java.lang.reflect.Proxy.newProxyInstance` — `civictech.gen.wire.ProxyRegistry`
+resolves the ahead-of-time-compiled proxy class for a `@Contract` interface,
+falling back to a runtime dynamic proxy only for interfaces outside the
+`@Contract` surface (the cross-host structural navigation proxies
+`HostedCellProxy`/`HostProxy` walk arbitrary `Cell`/`Port` resource types —
+tier 2/3 dispatch, not a fixed method-dispatch contract).
 
 *(M5.1: the stable ids exist. `@Contract`-annotated port interfaces get
 KSP-generated `ContractDescriptor` tables — `contractId = hash(FQN)`,
 `methodId = hash(FQN#name + erased JVM signature)`, FNV-1a 64 — collected via
 ServiceLoader into `gen.wire.ContractRegistry`. `Invocation.of` resolves and
 carries `contractId`/`methodId` at capture; the M5.2 wire form serializes only
-those ids. In-process dispatch stays reflective by resolution above; dynamic
-proxies remain until profiling/KMP demands otherwise.)*
+those ids. W4.6: each `@Contract` interface also gets a generated proxy class
+dispatching through the same `InvocationHandler` shape the existing proxy
+behaviors (`Buffering`, `Broadcast`, `NoOp`, `Throwing`, `Callback`, ...)
+already used, registered via `gen.wire.ProxyRegistry` — in-process dispatch
+for the `@Contract` surface is reflection-free at proxy *construction* time;
+`Invocation.invoke`'s per-call dispatch remains a reflective `Method.invoke`.)*

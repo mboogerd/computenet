@@ -4,6 +4,7 @@ import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.gen.wire.ContractRegistry
 import civictech.gen.wire.JvmDescriptors
+import civictech.gen.wire.ProxyRegistry
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Proxy
@@ -22,12 +23,32 @@ object Proxy {
         return fromClass(clazz, proxyType)
     }
 
+    /**
+     * Constructs an instance of [clazz] dispatching every method through
+     * [invocationHandler] — the shape `Buffering`, `Broadcast`, `NoOp`,
+     * `Throwing`, `Callback`, `HostProxy`, `MediateProxy`, and every port
+     * (`Outlet`, `Inlet`, `FanOutlet`, `FanInlet`, ...) already build on.
+     *
+     * C-5 completion (W4.6, spec 10/14 §Reflection budget): every `@Contract`
+     * interface has a KSP-generated proxy class (`gen.wire.ContractProcessor`)
+     * registered in [ProxyRegistry] — the ahead-of-time-compiled replacement
+     * for `java.lang.reflect.Proxy.newProxyInstance`, used first. The runtime
+     * dynamic-proxy fallback below is retained only for interfaces outside the
+     * `@Contract` surface — the cross-host structural navigation proxies
+     * `HostedCellProxy`/`HostProxy` walk over ad hoc `Cell`/`Port` resource
+     * types (tier 2/3 dispatch, spec 10/14 §Dispatch tiers), which are not
+     * fixed method-dispatch contracts KSP can generate ahead of time.
+     */
     @Suppress("UNCHECKED_CAST")
     fun <T> fromClass(clazz: Class<out Any>, invocationHandler: InvocationHandler): T {
-        return if (clazz.isInterface) {
-            Proxy.newProxyInstance(clazz.classLoader, arrayOf(clazz), invocationHandler) as T
-        } else {
+        if (!clazz.isInterface) {
             throw IllegalArgumentException("Only interfaces can be represented. $clazz is not an interface")
+        }
+        val generated = ProxyRegistry.factory(clazz)
+        return if (generated != null) {
+            generated(invocationHandler) as T
+        } else {
+            Proxy.newProxyInstance(clazz.classLoader, arrayOf(clazz), invocationHandler) as T
         }
     }
 
