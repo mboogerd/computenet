@@ -255,7 +255,8 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(): (ProtocolId, 
             if (next > limit) return@filter null
         }
         if (id == Protocols.Attention && authority.ceiling != null && message is Attention) {
-            return@filter Attention(minOf(message.level, authority.ceiling.level))
+            // preserve the emitter's version: this is the same LWW update, only clamped
+            return@filter Attention(minOf(message.level, authority.ceiling.level), message.version)
         }
         message
     }

@@ -109,18 +109,26 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    downstream link set, topology part of the aggregate exactly as in the
    glitch-free frontier (22).
 
-   ⚠ GAP (G-58): the per-link LWW attention algebra leaves realization
-   details open — version minting and wraparound, frontier state across
-   migrate/relink, deadlineHint folding, retraction racing suspension-region
-   atomicity, policy-window calibration, and band pinning for hard monitors.
-   Proposal: pin the per-emitter monotonic version's minting scope,
-   wraparound, and migration collision-freedom; decide
-   frontier-as-migratable-snapshot-state vs rebuild-by-re-announce and its
-   trigger boundary; a min/earliest fold for deadlineHint distinct from the
-   level fold; settle the retraction × atomic-park race via the
-   veto/NonSuspendable contagion; calibrate policyWindowSteps against graph
-   depth; and decide whether hard real-time monitors may pin above LOW
-   composing with the stride floor (93 I-4/I-9).
+   *(G-58 core resolved, W4.5)*: the per-emitter monotonic `version`
+   (`AttentionSupport.VersionMinter`) is minted once per outgoing update and
+   compared wraparound-safely (signed-difference, the classic sequence-number
+   trick — correct across a `Long` overflow); the per-link slot algebra
+   (`AttentionFrontier`) applies an incoming update iff its version is newer,
+   absorbing duplicate/stale delivery (idempotency) while a genuinely later
+   version supersedes; `onUnlink` retracts and garbage-collects the slot,
+   re-folding the remainder; the decay aggregator's `cadenceTicks` knob
+   quantizes decay recompute into discrete tick buckets (choosing values is
+   research, 95 §R6 — the knob itself is not).
+
+   ⚠ GAP (G-58, residual): frontier state across migrate/relink,
+   deadlineHint folding, retraction racing suspension-region atomicity,
+   policy-window calibration, and band pinning for hard monitors remain
+   open. Proposal: decide frontier-as-migratable-snapshot-state vs
+   rebuild-by-re-announce and its trigger boundary; a min/earliest fold for
+   deadlineHint distinct from the level fold; settle the retraction × atomic-
+   park race via the veto/NonSuspendable contagion; calibrate
+   policyWindowSteps against graph depth; and decide whether hard real-time
+   monitors may pin above LOW composing with the stride floor (93 I-4/I-9).
 2. **Fairness floor = park-not-drop + a deterministic service stride.**
    Two floors, one per resource lever:
    - *Suspension floor*: attention-driven suspension uses the same

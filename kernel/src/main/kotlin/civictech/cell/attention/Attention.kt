@@ -16,13 +16,17 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.pow
 
 /**
- * Attention protocol message (spec 34): a raw level travels; receivers
- * quantize. Kept a Float so a sum/load-signaling variant can be added
- * without a protocol change (34 decision 1).
+ * Attention protocol message (spec 34; 93 I-4 Candidate C, G-58 core): a raw
+ * *current* level travels, not a delta; receivers quantize. [version] is a
+ * per-emitter monotonic LWW discriminator (93 I-4 rule 2) — a payload field,
+ * not a `MessageContext` wave — so a receiver applies an update iff its
+ * version exceeds the stored one for that link ([AttentionFrontier]).
+ * Defaulted for wire/source compatibility with pre-G-58 callers; a fresh
+ * slot (no prior version) always accepts regardless of the value received.
  */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("Attention")
-data class Attention(val level: Float)
+data class Attention(val level: Float, val version: Long = 0L)
 
 @Contract(management = true)
 @Protocol("attention", ProtocolDirection.UPSTREAM, band = 0, lane = "attention", cardinality = ProtocolCardinality.FAN_IN_MERGE)
@@ -98,6 +102,71 @@ fun interface ProgressProtocol { fun progress(message: Progress) }
 interface NonSuspendable
 
 /**
+ * Per-emitter monotonic version minter (93 I-4 rule 2, G-58 core): every
+ * outgoing [Attention] update from one aggregating cell is stamped with a
+ * strictly increasing version from this minter. Wraparound is a non-event —
+ * [Long] overflow wraps silently to [Long.MIN_VALUE], and [isNewer]'s
+ * signed-difference comparison (the classic TCP sequence-number trick) stays
+ * correct across the wrap, as long as fewer than 2^63 updates separate two
+ * compared versions.
+ */
+class VersionMinter(start: Long = 0L) {
+    private val current = java.util.concurrent.atomic.AtomicLong(start)
+
+    /** Mints and returns the next version, strictly newer than every prior one. */
+    fun next(): Long = current.incrementAndGet()
+
+    companion object {
+        /** Wraparound-safe "is [candidate] newer than [stored]" (93 I-4 rule 2). */
+        fun isNewer(candidate: Long, stored: Long): Boolean = candidate - stored > 0
+    }
+}
+
+/**
+ * Per-link LWW slot algebra (93 I-4 Candidate C, G-58 core): one level+version
+ * slot per direct downstream link, keyed by link id ("`LinkId` is the local
+ * identity of the link the update arrived on"). [onUpdate] is the idempotency
+ * law — applies iff the incoming version is newer than the slot's stored one
+ * (or no slot yet exists), so a duplicate/stale redelivery on one link is
+ * absorbed while a genuinely later version supersedes; the fold over the
+ * resulting slot multiset ([levels]) is therefore commutative and
+ * associative, order-independent. [onUnlink] is retraction: slot removal —
+ * "the attention frontier is the current downstream link set" — garbage
+ * collecting the link's contribution; any subsequent in-flight update for a
+ * removed link keys a fresh slot rather than resurrecting the retracted one.
+ */
+class AttentionFrontier {
+    private data class Slot(val level: Float, val version: Long)
+
+    private val slots = ConcurrentHashMap<UUID, Slot>()
+
+    /** Current per-link levels for the aggregator's fold. */
+    val levels: Collection<Float> get() = slots.values.map { it.level }
+
+    /** Frontier membership: does this link currently hold a slot? */
+    fun contains(link: UUID): Boolean = slots.containsKey(link)
+
+    /**
+     * LWW apply (93 I-4 rule 2): applies iff [version] is newer than the
+     * slot's stored version, or no slot exists yet. Returns `true` iff the
+     * slot changed, so callers only re-fold on a genuine change.
+     */
+    fun onUpdate(link: UUID, level: Float, version: Long): Boolean {
+        var applied = false
+        slots.compute(link) { _, existing ->
+            if (existing == null || VersionMinter.isNewer(version, existing.version)) {
+                applied = true
+                Slot(level, version)
+            } else existing
+        }
+        return applied
+    }
+
+    /** Retraction (93 I-4 rule 3): removes the slot. Returns `true` iff one existed. */
+    fun onUnlink(link: UUID): Boolean = slots.remove(link) != null
+}
+
+/**
  * Quantized attention (spec 34 decision 1). Ordinal order is scheduling
  * order: NONE < LOW < NORMAL < HIGH. [level] is the representative value a
  * cell re-emits upstream, so damping composes across hops.
@@ -144,11 +213,19 @@ fun interface AttentionAggregator {
          * quantization still floors sub-band jitter. Re-evaluated on signals
          * and on explicit [AttentionSupport.refresh] — hosts/harnesses own the
          * refresh cadence (the dispatch hot path does not poll).
+         *
+         * [cadenceTicks] is the decay cadence knob (G-58 core, 95 §R6 —
+         * choosing a value is research; the knob itself is not): elapsed
+         * ticks are floored to the nearest [cadenceTicks] boundary before the
+         * half-life exponent is computed, so decay advances in discrete
+         * steps rather than continuously with every `refresh` call. Default
+         * `1` (advance every tick) preserves prior behavior exactly.
          */
-        fun decay(halfLifeTicks: Long, base: AttentionAggregator = Max) =
+        fun decay(halfLifeTicks: Long, cadenceTicks: Long = 1, base: AttentionAggregator = Max) =
             AttentionAggregator { own, down, ticks ->
                 base.aggregate(own, down, ticks)?.let {
-                    it * 0.5f.pow(ticks.toFloat() / halfLifeTicks.toFloat())
+                    val steps = (ticks / cadenceTicks) * cadenceTicks
+                    it * 0.5f.pow(steps.toFloat() / halfLifeTicks.toFloat())
                 }
             }
     }
@@ -199,8 +276,11 @@ class AttentionSupport private constructor(private val owner: Any) {
     @Volatile
     private var ownLevel: Float? = null
 
-    /** Latest level reported per downstream link (link id → level). */
-    private val linkLevels = ConcurrentHashMap<UUID, Float>()
+    /** Per-link LWW slot state (93 I-4 Candidate C, G-58 core): see [AttentionFrontier]. */
+    private val frontier = AttentionFrontier()
+
+    /** Mints this cell's own outgoing [Attention.version] sequence (G-58 core). */
+    private val versionMinter = VersionMinter()
 
     private val listeners = CopyOnWriteArrayList<(AttentionBand) -> Unit>()
 
@@ -231,7 +311,7 @@ class AttentionSupport private constructor(private val owner: Any) {
     }
 
     private fun recompute() {
-        val level = aggregator.aggregate(ownLevel, linkLevels.values, ticks() - lastSignalTick)
+        val level = aggregator.aggregate(ownLevel, frontier.levels, ticks() - lastSignalTick)
         val newBand = level?.let(AttentionBand::quantize) ?: AttentionBand.NORMAL
         if (newBand == band) return // damping: intra-band jitter stops here
         band = newBand
@@ -239,12 +319,13 @@ class AttentionSupport private constructor(private val owner: Any) {
         emitUpstream(newBand)
     }
 
-    /** Push the current band up every inbound link (consumer → producer). */
+    /** Push the current band up every inbound link (consumer → producer), minting a fresh version. */
     private fun emitUpstream(band: AttentionBand) {
+        val update = Attention(band.level, versionMinter.next())
         forEachLinkedPort { port ->
             port.linking.links.forEach { link ->
                 if (link.toPort === port) {
-                    Protocols.sendUpstream(link, Protocols.Attention, Attention(band.level))
+                    Protocols.sendUpstream(link, Protocols.Attention, update)
                 }
             }
         }
@@ -255,18 +336,21 @@ class AttentionSupport private constructor(private val owner: Any) {
             // outlet face: downstream subscribers report their band here
             ProtocolSupport.of(port as Port).handle(Protocols.Attention) { link, message ->
                 if (link.fromPort === port) {
-                    linkLevels[link.id] = (message as Attention).level
-                    signal()
+                    val update = message as Attention
+                    // idempotency law (93 I-4 rule 2): a duplicate/stale version is
+                    // absorbed by the LWW slot and must not trigger a re-signal.
+                    if (frontier.onUpdate(link.id, update.level, update.version)) signal()
                 }
             }
             port.linking.onUnlinkListeners += { link ->
-                if (link.fromPort === port && linkLevels.remove(link.id) != null) signal()
-                // inbound links leaving need no action: the upstream side drops its level
+                // retraction (93 I-4 rule 3): slot removal GCs the link's contribution
+                // and re-folds the remainder; inbound links leaving need no action here.
+                if (link.fromPort === port && frontier.onUnlink(link.id)) signal()
             }
             // inlet face: a fresh inbound link learns our current band at once
             port.linking.onLinkedListeners += { link ->
                 if (link.toPort === port) {
-                    Protocols.sendUpstream(link, Protocols.Attention, Attention(band.level))
+                    Protocols.sendUpstream(link, Protocols.Attention, Attention(band.level, versionMinter.next()))
                 }
             }
         }
