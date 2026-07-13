@@ -3,15 +3,20 @@ package civictech.cell.port
 import civictech.cell.Consumer
 import civictech.cell.port.PortRef
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertThrows
 import kotlin.test.assertEquals
 
 class FanInletTest {
 
     @Test
-    fun `using an uninitialized port throws`() {
+    fun `using an uninitialized port parks and replays in order on serve (G-55)`() {
         val port = FanInlet.create<Consumer<String>>()
-        assertThrows<IllegalStateException> { port.call.provide("fail") }
+        port.call.provide("parked-1")
+        port.call.provide("parked-2")
+
+        val (consumer, buffer) = Consumer.buffering<String>()
+        port.serve(consumer)
+
+        assertEquals(listOf("parked-1", "parked-2"), buffer)
     }
 
     @Test
@@ -34,11 +39,16 @@ class FanInletTest {
     }
 
     @Test
-    fun `using a delegated uninitialized port throws`() {
+    fun `using a delegated uninitialized port parks and replays once the delegate serves (G-55)`() {
         val port1 = FanInlet.create<Consumer<String>>()
         val port2 = FanInlet.create<Consumer<String>>()
         port1.delegate(port2)
-        assertThrows<IllegalStateException> { port1.call.provide("fail") }
+        port1.call.provide("parked")
+
+        val (consumer, buffer) = Consumer.buffering<String>()
+        port2.serve(consumer)
+
+        assertEquals(listOf("parked"), buffer)
     }
 
     @Test
