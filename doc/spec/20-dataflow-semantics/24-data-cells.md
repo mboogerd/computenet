@@ -443,16 +443,12 @@ redaction rule for non-serializable payloads — mergeable parked traffic is
 already covered end-to-end by the M10 journal + anti-entropy pair
 (93 I-7/I-22/I-12).
 
-⚠ GAP (G-54): Boundary policy vocabulary beyond peer allowlists is
-undesigned: disclosure projections, capability hand-out/revocation for
-exposed ports and taps, management-plane authority for remote graph
-mutation, multi-hop trust composition, and encryption at rest. Proposal: a
-registered, serialization-friendly ProjectionId transform language with
-stated composition across nested/transitive membranes; exposed refs and
-taps as revocable capabilities where revocation tears down live links
-rather than only refusing new ones (tap attachment governed by the same
-promotion/link authority membrane); an authority model for who may drive
-PORT_MANAGEMENT (spawn/connect/despawn/swap) and attach observers across a
-bridge; hop-composition rules for disclosure/integrity when a peer relays
-disclosed state; and an at-rest encryption stance for durable journals and
-parked/overflow state (93 I-28/I-10/I-20/I-17).
+G-54 core is landed (W4.1): `BoundaryPolicy.disclosure` filters a data
+cell's emitted deltas — catch-up and live uniformly — once exposed through
+a `mediateOutlet()` membrane crossing (40/43, 20/21 §Pull). Residual, still
+open: capability hand-out/revocation for exposed ports and taps (tearing
+down *live* links, not just refusing new ones); management-plane authority
+for remote graph mutation across a bridge; composition of disclosure/
+integrity across nested/transitive membranes and multi-hop relays; and an
+at-rest encryption stance for durable journals and parked/overflow state
+(93 I-28 §8).

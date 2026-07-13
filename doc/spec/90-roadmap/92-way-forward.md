@@ -528,11 +528,13 @@ M11), and an engine that decides where cells land.*
    across the wire, nested/transitive exposure, Remint interplay; a
    timeout/veto/abort policy for stalled Symport/Antiport couplings
    composing with drain and the swap window (93 I-10 and I-10/I-11).
-2. M15.2 — boundary authority + disclosure (G-54): ProjectionId transform
-   language, exposed refs and taps as revocable capabilities (revocation
-   tears down live links), management-plane authority across bridges,
-   hop-composition rules, an at-rest encryption stance
-   (93 I-28/I-10/I-20/I-17).
+2. M15.2 — boundary authority + disclosure, residual (G-54's core —
+   `BoundaryPolicy`, the three seams, attention clamping, uniform disclosure
+   filtering, `RequireSigned` — landed W4.1): exposed refs and taps as
+   revocable capabilities (revocation tears down live links), management-
+   plane authority across bridges, hop-composition rules for disclosure/
+   integrity across nested/transitive membranes, an at-rest encryption
+   stance (93 I-28 §8).
 3. M15.3 — cold-activation split enforcement (G-55): structural-only vs
    stateful onLink declaration, deferred admission surfaced across the wire,
    KSP-checked Eager capability, dropped-protocol observability, typed

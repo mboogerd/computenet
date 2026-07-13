@@ -1,8 +1,8 @@
 # 43 — Security, Privacy, and Trust
 
-> **Status**: Partial (posture fixed; boundary-policy design decided in [93 I-28](../90-roadmap/93-feature-interactions.md), unimplemented; authentication strength and at-rest encryption open)
+> **Status**: Partial (posture fixed; boundary-policy design decided in [93 I-28](../90-roadmap/93-feature-interactions.md) and landed for in-process membranes (W4.1); authentication strength and at-rest encryption open)
 > **Sources**: ADR 0 (§6), ADR 1 (§13), ADR — Anatomy of Cellular Programs (membranes as authority), ADR — Cellular Software Development Process (security model)
-> **Implementation**: G-29 phase 1 only — `PeerId` stamping (`LinkRequest.identity`), `allowPeers(...)` link policy, ingress admission gate (`Peering.Side.allow` / `WsTransport`); verified by `TrustBoundaryTest`. The `BoundaryPolicy` model below has no code.
+> **Implementation**: G-29 phase 1 — `PeerId` stamping (`LinkRequest.identity`), `allowPeers(...)` link policy, ingress admission gate (`Peering.Side.allow` / `WsTransport`); verified by `TrustBoundaryTest`. W4.1 (G-54 core): `civictech.cell.membrane.BoundaryPolicy` (`Principal`/`AuthLevel`, the five predicates) bound to a `CompositeCell` `Exposure`; the three seams — `mediate()`'s `linkAuthority` (seam 2), `mediateOutlet()`'s `disclosureFilter`/`ProtocolSupport.inboundFilter` (seam 3 outbound/protocol), and `MediateProxy`'s `RequireSigned` verify-at-ingress (seam 3 inbound) — with `AuthLevel.TransportVouched` the only identity strength available (phase-2 keys/DIDs remain research, 95 §R7); verified by `BoundaryPolicyTest`/`MediateProxyIntegrityTest`. The wire-crossing bridge does not yet consult a `BoundaryPolicy` (still G-29 phase 1's `allowPeers`); disclosure-projection composition across hops, capability revocation, cross-membrane management authority, and encryption at rest remain open (93 I-28 §8).
 
 ## Posture
 
@@ -156,19 +156,18 @@ predicates (`integrity`, high-`minAuth` protocol authority) that
 transport-vouched identity cannot safely satisfy. Encryption in transit
 stays transport configuration (wss://); encryption at rest remains open.
 
-⚠ GAP (G-54): boundary policy vocabulary beyond peer allowlists is
-undesigned — disclosure projections, capability hand-out/revocation for
-exposed ports and taps, management-plane authority for remote graph
-mutation, multi-hop trust composition, and encryption at rest. Proposal: a
-registered, serialization-friendly ProjectionId transform language with
-stated composition across nested/transitive membranes; exposed refs and taps
-as revocable capabilities where revocation tears down live links rather than
-only refusing new ones (tap attachment governed by the same promotion/link
-authority membrane); an authority model for who may drive PORT_MANAGEMENT
-(spawn/connect/despawn/swap) and attach observers across a bridge;
-hop-composition rules for disclosure/integrity when a peer relays disclosed
-state; and an at-rest encryption stance for durable journals and
-parked/overflow state (93 I-28/I-10/I-20/I-17).
+G-54 core is landed (W4.1): the `BoundaryPolicy` vocabulary (admission,
+linkAuthority, protocolAuthority, disclosure, integrity) attached to a
+`CompositeCell` `Exposure`, evaluated at the three seams, with a registered
+`ProjectionId → Projection` transform for `disclosure` and `RequireSigned`
+verify-at-ingress for `integrity` (`AuthLevel.TransportVouched` only — real
+key/DID strength stays research, 95 §R7). Residual, still open: capability
+hand-out/revocation for exposed ports and taps (tearing down *live* links,
+not just refusing new ones); management-plane authority for remote graph
+mutation across a bridge (who may drive `PORT_MANAGEMENT`); composition of
+`disclosure`/`integrity` across nested/transitive membranes and multi-hop
+relays; and an at-rest encryption stance for durable journals and
+parked/overflow state (93 I-28 §8).
 
 ## Sequencing
 

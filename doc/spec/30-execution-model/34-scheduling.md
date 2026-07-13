@@ -262,7 +262,11 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    update frequency, and a `minAuth` floor refuses updates from
    insufficiently authenticated peers; sustained remote-driven resource
    claims are charged to the claiming `Principal`'s budget via the G-28
-   host-hierarchy quota walk. Decided, not built.
+   host-hierarchy quota walk. The `minAuth`/`ceiling`/rate clamp is built
+   (W4.1, `BoundaryPolicy.protocolAuthority` at a `mediateOutlet()`
+   crossing — a *local* assertion is exempt, per 93 I-28 §4.2); the
+   per-`Principal` G-28 quota charge for sustained remote-driven resource
+   claims remains open (G-62).
 
 7. **Magnitude joins interest at the dispatch max** (implemented, M17).
    Data urgency is the dual of subscriber interest: interest flows upstream

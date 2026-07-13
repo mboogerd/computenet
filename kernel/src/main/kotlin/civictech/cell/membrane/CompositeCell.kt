@@ -2,8 +2,14 @@ package civictech.cell.membrane
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.attention.Attention
 import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.Linked
 import civictech.cell.port.Port
+import civictech.cell.port.ProtocolId
+import civictech.cell.port.ProtocolSupport
+import civictech.cell.port.Protocols
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.Proxy
 import java.util.UUID
@@ -44,6 +50,13 @@ data class Exposure(
     val organellePortName: String,
     val mode: SurfaceMode,
     val waveScope: WaveScope = WaveScope.PRESERVE,
+    /**
+     * Identity-keyed predicates evaluated at the three seams this boundary
+     * already owns (spec 40/43 "BoundaryPolicy", decided 93 I-28, W4.1/G-54).
+     * Absent a declared policy, every predicate defaults open and this
+     * exposure behaves exactly as before this ticket (P7/P6).
+     */
+    val policy: BoundaryPolicy = BoundaryPolicy(),
 )
 
 /**
@@ -84,9 +97,19 @@ abstract class CompositeCell(
      * organelle port). This is `delegate`'s O(1) collapse (10/14): the
      * composite is not on the per-message path at all.
      */
-    protected fun <P : Port> flatten(externalName: String, organellePortName: String, port: P): P {
+    protected fun <P : Port> flatten(
+        externalName: String,
+        organellePortName: String,
+        port: P,
+        policy: BoundaryPolicy = BoundaryPolicy(),
+    ): P {
         require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
-        exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.FLATTEN)
+        require(!policy.forcesMediate) {
+            "Exposure $externalName declares a flow-time predicate (protocolAuthority/disclosure/integrity); " +
+                "it MUST use mediate()/mediateOutlet(), not flatten() (spec 10/11 \"Boundary policy\")"
+        }
+        installLinkAuthority(port, policy)
+        exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.FLATTEN, policy = policy)
         return registerPort(externalName, port)
     }
 
@@ -98,22 +121,142 @@ abstract class CompositeCell(
      * [organelleInlet] — budget/cardinality is counted at this proxy's own
      * external face (10/11), distinct from the organelle's.
      *
+     * [policy]'s seam-2 `linkAuthority` runs at this exposed port's `onLink`;
+     * seam-3 `integrity` (`PORT_API` inbound, spec 40/43) is enforced by the
+     * [MediateProxy] before delivery to [organelleInlet] — e.g. exposing a
+     * `deltaInlet` with `BoundaryPolicy(integrity = IntegrityPolicy.RequireSigned)`
+     * for untrusting-but-cooperating replica gossip (decided 93 I-28).
+     *
      * KSP-generating this proxy from a declarative membrane annotation is
      * G-52's residual (50/51); this is the hand-written realization the
      * ticket ships instead. Coupling gates (Symport/Antiport) are not
      * wired here (G-53, research-gated liveness) — this proxy is a
-     * transparent forward only.
+     * transparent forward only, beyond the [policy] it now evaluates.
      */
     protected fun <Api : Any> mediate(
         externalName: String,
         organellePortName: String,
         organelleInlet: FanInlet<Api>,
         waveScope: WaveScope = WaveScope.PRESERVE,
+        policy: BoundaryPolicy = BoundaryPolicy(),
     ): FanInlet<Api> {
         require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
         val exposed = FanInlet(organelleInlet.clazz)
-        exposed.serve(Proxy.fromClass(organelleInlet.clazz, MediateProxy(organelleInlet.call)))
-        exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, waveScope)
+        exposed.serve(
+            Proxy.fromClass(
+                organelleInlet.clazz,
+                MediateProxy(organelleInlet.call, policy.integrity),
+            ),
+        )
+        installLinkAuthority(exposed, policy)
+        exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, waveScope, policy)
         return registerPort(externalName, exposed)
+    }
+
+    /**
+     * Mediate-exposes [organelleOutlet] under [externalName]: the exposed
+     * port IS the organelle's own outlet object — flatten's O(1) reuse — so
+     * the existing per-link `onLinked` catch-up (20/21 §Pull) keeps firing
+     * per real external subscriber without a duplicated proxy re-deriving
+     * organelle state generically (a genuinely separate outlet proxy would
+     * only ever see ONE `onLinked` firing, at its own subscription time, and
+     * so cannot re-run catch-up per later external subscriber — G-52
+     * residual: a KSP-generated dedicated outlet proxy is the eventual
+     * cardinality-isolated realization). What makes this Mediate rather than
+     * Flatten is the installed [BoundaryPolicy]:
+     *
+     * - `disclosure` installs [FanOutlet.disclosureFilter] — one filter over
+     *   BOTH the `onLinked` catch-up unicast and the live broadcast (20/21
+     *   §Pull, decided 93 I-28: "a snapshot IS a delta").
+     * - `protocolAuthority[Protocols.Attention].ceiling` clamps an asserted
+     *   attention level via [ProtocolSupport.inboundFilter] before this
+     *   outlet's own attention handling sees it (30/34 decision 6:
+     *   `slot.level = min(asserted, ceiling)`, fold/band-gating untouched).
+     *
+     * `linkAuthority` is NOT wired here: the target-side handshake (10/13)
+     * always runs on whichever port is being linked *to*, which for a
+     * consumer subscribing to an exposed outlet is the CONSUMER's own inlet
+     * (external, outside this membrane) — the existing [handshake]/
+     * [LinkSupport] mechanism has no admission hook on the producing side
+     * beyond SPSC exclusivity. Seam 2 is fully realized by [mediate]
+     * (organelle inlet exposures), where the exposed port genuinely is the
+     * handshake target.
+     */
+    protected fun <Api : Any> mediateOutlet(
+        externalName: String,
+        organellePortName: String,
+        organelleOutlet: FanOutlet<Api>,
+        waveScope: WaveScope = WaveScope.PRESERVE,
+        policy: BoundaryPolicy,
+    ): FanOutlet<Api> {
+        require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
+        require(policy.forcesMediate) {
+            "mediateOutlet($externalName) requires a flow-time predicate " +
+                "(protocolAuthority/disclosure/integrity); use flatten() for an open outlet"
+        }
+        organelleOutlet.disclosureFilter = policy.disclosure.asDeltaFilter()
+        if (policy.protocolAuthority.isNotEmpty()) {
+            ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter()
+        }
+        exposureMapMutable[externalName] =
+            Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, waveScope, policy)
+        return registerPort(externalName, organelleOutlet)
+    }
+
+    private fun installLinkAuthority(port: Port, policy: BoundaryPolicy) {
+        if (policy.linkAuthority.isEmpty()) return
+        (port as? Linked)?.linking?.policies?.addAll(policy.linkAuthority)
+    }
+}
+
+/**
+ * [DisclosurePolicy] as a [FanOutlet.disclosureFilter] (spec 40/43 seam 3):
+ * `Full` is the identity filter; `Deny` suppresses every emission; `Project`
+ * runs the registered transform over the emitted delta argument (the first
+ * argument, by the "one delta-carrying method" convention data-cell contracts
+ * follow), suppressing the emission if the projection itself returns null.
+ */
+private fun DisclosurePolicy.asDeltaFilter(): (Array<out Any?>) -> Array<out Any?>? = filter@{ args ->
+    when (this) {
+        is DisclosurePolicy.Full -> args
+        is DisclosurePolicy.Deny -> null
+        is DisclosurePolicy.Project -> {
+            val delta = args.firstOrNull() ?: return@filter args
+            val projected = ProjectionRegistry.resolve(id).apply(delta) ?: return@filter null
+            arrayOf(projected, *args.drop(1).toTypedArray())
+        }
+    }
+}
+
+/**
+ * [BoundaryPolicy.protocolAuthority] as a [ProtocolSupport.inboundFilter]
+ * (spec 40/43 seam 3, 30/34 decision 6): refuses a [Principal] below
+ * `minAuth`, clamps a *remotely*-asserted [Attention] level to `ceiling`
+ * (`slot.level = min(asserted, ceiling)`), and throttles a [Principal] over
+ * `ratePerWindow`. A protocol with no declared [ProtocolAuthority] passes
+ * through unchanged (default open, P7). [Principal.LocalTrusted] is always a
+ * no-op — "attention is a request, not an entitlement" answers *remotely*-
+ * asserted interest (30/34 decision 6); the fast in-host path pays nothing
+ * and assumes nothing (93 I-28 §4.2, "Local crossings carry `LocalTrusted`
+ * and every predicate is a no-op").
+ */
+private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(): (ProtocolId, Any) -> Any? {
+    val counts = java.util.concurrent.ConcurrentHashMap<Pair<ProtocolId, Principal>, Int>()
+    return filter@{ id, message ->
+        val authority = this[id] ?: return@filter message
+        val principal = currentPrincipal()
+        if (principal == Principal.LocalTrusted) return@filter message
+        val peer = principal as Principal.Peer
+        if (peer.auth < authority.minAuth) return@filter null
+        authority.ratePerWindow?.let { limit ->
+            val key = id to principal
+            val next = (counts[key] ?: 0) + 1
+            counts[key] = next
+            if (next > limit) return@filter null
+        }
+        if (id == Protocols.Attention && authority.ceiling != null && message is Attention) {
+            return@filter Attention(minOf(message.level, authority.ceiling.level))
+        }
+        message
     }
 }

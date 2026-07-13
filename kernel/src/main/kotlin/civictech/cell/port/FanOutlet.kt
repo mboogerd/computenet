@@ -40,6 +40,20 @@ class FanOutlet<Api : Any>(
     private val waveCounter = AtomicLong()
 
     /**
+     * Disclosure filter (spec 40/43 seam 3, decided 93 I-28, 20/21 §Pull,
+     * W4.1): applied uniformly to every `PORT_API` emission this outlet
+     * makes, whether a broadcast [call] (live stream) or a single-target
+     * [at] delivery (the `onLinked` catch-up baseline / on-demand pull
+     * reply) — "a snapshot IS a delta, one filter covers both", filtered not
+     * forked. Returning null suppresses that particular delivery entirely.
+     * Identity by default — zero cost, today's behavior, byte-for-byte
+     * (P2/P6): only a Mediate exposure that declares a non-`Full`
+     * `disclosure` policy installs a non-identity filter here.
+     */
+    @Volatile
+    var disclosureFilter: (Array<out Any?>) -> Array<out Any?>? = { it }
+
+    /**
      * This outlet's current emission epoch (spec 20/22 §Source identity: a
      * "source" is one outlet during one emission epoch — never the port
      * identity itself). Fresh at construction (cold start mints a fresh
@@ -72,8 +86,9 @@ class FanOutlet<Api : Any>(
     }
 
     private fun invoke(target: Use<Api>, method: java.lang.reflect.Method, args: Array<out Any?>?) {
+        val filtered = disclosureFilter(args ?: emptyArray()) ?: return
         try {
-            method.invoke(target.call, *(args ?: emptyArray()))
+            method.invoke(target.call, *filtered)
         } catch (e: java.lang.reflect.InvocationTargetException) {
             throw e.targetException
         }
@@ -140,8 +155,18 @@ class FanOutlet<Api : Any>(
     }
 
     override fun at(portRef: PortRef): Api {
-        return Proxy.delegating(clazz) {
-            consumers[portRef]?.call ?: taps[portRef]?.call ?: Proxy.noop(clazz)
+        // The catch-up/pull-reply path (baselineTo): routed through the same
+        // disclosureFilter as broadcast [invoke] so one filter covers both
+        // (spec 40/43 seam 3, 20/21 §Pull) — targeted delivery still bypasses
+        // taps/consumers fan-out, unchanged.
+        return Proxy.fromClass(clazz) { _, method, args ->
+            val target = consumers[portRef]?.call ?: taps[portRef]?.call ?: Proxy.noop(clazz)
+            val filtered = disclosureFilter(args ?: emptyArray()) ?: return@fromClass null
+            try {
+                method.invoke(target, *filtered)
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw e.targetException
+            }
         }
     }
 

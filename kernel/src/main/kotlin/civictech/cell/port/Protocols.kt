@@ -98,6 +98,20 @@ class ProtocolSupport private constructor(private val port: Port) {
     private val relays = mutableMapOf<ProtocolId, (Any) -> Boolean>()
     @Volatile private var owner: Any? = null
 
+    /**
+     * Boundary-policy hook (spec 40/43 seam 3, decided 93 I-28, W4.1): applied
+     * to every arriving `PORT_PROTOCOL` message before this port's own local
+     * [handlers] see it — e.g. an attention `ceiling` clamp
+     * (`slot.level = min(asserted, ceiling)`, the fold/band-gating in
+     * [civictech.cell.attention.AttentionSupport] left untouched) or a
+     * `minAuth`/`ratePerWindow` refusal. Returning null dead-letters the
+     * message for local handling (relay to further hops, if any, still sees
+     * the original). Identity by default — zero cost, today's behavior,
+     * byte-for-byte (P2/P6).
+     */
+    @Volatile
+    var inboundFilter: (ProtocolId, Any) -> Any? = { _, message -> message }
+
     fun handle(id: ProtocolId, handler: (Link, Any) -> Unit) {
         handlers[id] = handler
     }
@@ -118,7 +132,7 @@ class ProtocolSupport private constructor(private val port: Port) {
         val traversal = (message as? ProtocolTraversal)
             ?: ProtocolTraversal(UUID.randomUUID(), ConcurrentHashMap.newKeySet(), message)
         if (!traversal.visitedEdges.add(link.id)) return
-        handlers[id]?.invoke(link, traversal.payload)
+        inboundFilter(id, traversal.payload)?.let { handlers[id]?.invoke(link, it) }
 
         val terminal = relays[id] ?: return
         if (terminal(traversal.payload)) return

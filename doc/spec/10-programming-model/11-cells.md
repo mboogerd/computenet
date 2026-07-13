@@ -213,14 +213,20 @@ coupled transaction caught in a promotion-swap buffering window is undefined.
 with no-message-loss and the drain protocol, plus ordering semantics for
 coupled transactions across a buffered swap window (93 I-10/I-11).
 
-**Boundary policy (decided in 93 I-28)**: an `Exposure` carries a
-`BoundaryPolicy` — identity-keyed predicates (admission, link authority,
-per-protocol authority, disclosure, integrity) evaluated at the three seams
-the boundary already owns: the peering hello, the link handshake, and flow
-time. Declaring any flow-time predicate (protocol authority, disclosure, or
-integrity) MUST force the exposure to Mediate; the Mediate proxy is the sole
-flow-time enforcement point. Absent a `BoundaryPolicy`, every predicate
-defaults open and the exposure Flattens — today's behavior, byte-for-byte.
+**Boundary policy (decided in 93 I-28, landed W4.1 — G-54 core)**: an
+`Exposure` carries a `BoundaryPolicy` — identity-keyed predicates (admission,
+link authority, per-protocol authority, disclosure, integrity) evaluated at
+the three seams the boundary already owns: the peering hello, the link
+handshake, and flow time. Declaring any flow-time predicate (protocol
+authority, disclosure, or integrity) MUST force the exposure to Mediate; the
+Mediate proxy is the sole flow-time enforcement point. Absent a
+`BoundaryPolicy`, every predicate defaults open and the exposure Flattens —
+today's behavior, byte-for-byte. Realized as `civictech.cell.membrane.
+BoundaryPolicy`/`CompositeCell.mediate`/`mediateOutlet`/`MediateProxy`
+(`kernel`); only `AuthLevel.TransportVouched` identity strength exists
+(phase-2 keys/DIDs remain research, 95 §R7), and the hand-written proxy
+(not yet KSP-generated, G-52) is the outlet-direction Mediate realization —
+see `BoundaryPolicyTest`.
 
 **Frontier queries at the boundary (decided in 93 I-23)**: a membrane answers
 an upstream frontier traversal per its surface mode — Flatten is transparent
