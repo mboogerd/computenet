@@ -18,8 +18,11 @@ object Protocols {
     /** spec 34: `Attention(level)` aggregated per cell, quantized to bands. */
     val Attention = ProtocolId("attention")
 
-    /** spec 34 decision 3: hosts announce parked/replayed cells downstream. */
+    /** spec 34 decision 3, 20/22 (G-40): typed Stall/Resume frontier events. */
     val Suspension = ProtocolId("suspension")
+
+    /** spec 20/22 (G-40): `Progress(sourceId, thru)` absorb-ack advancing a watermark. */
+    val Progress = ProtocolId("progress")
 
     /** spec 20/22: topology changes ordered with the data carried by a link. */
     val TopologyOrder = ProtocolId("topology-order")

@@ -23,7 +23,8 @@ import java.io.Serializable
 import civictech.cell.attention.AttentionBand
 import civictech.cell.attention.AttentionSupport
 import civictech.cell.attention.NonSuspendable
-import civictech.cell.attention.SuspensionNotice
+import civictech.cell.attention.StallNotice
+import civictech.cell.attention.StallReason
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
@@ -647,19 +648,19 @@ open class ManagedHost(
             magnitudeBoost.remove(cellRef) // re-staged on unpark replay
             attentionParked[cellRef] = queue.map { it.second }.toMutableList()
         }
-        cells[cellRef]?.let { notifyDownstream(it, SuspensionNotice.Suspended) }
+        cells[cellRef]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
     }
 
     private fun unparkForAttention(cellRef: CellRef) {
         val parked = synchronized(dataLock) {
             attentionParked.remove(cellRef)?.also { lastAttended[cellRef] = dispatchStep }
         } ?: return
-        cells[cellRef]?.let { notifyDownstream(it, SuspensionNotice.Resumed) }
+        cells[cellRef]?.let { notifyDownstream(it, StallNotice.Resume) }
         parked.forEach { enqueueHostedInvocation(it) }
     }
 
-    /** spec 34 decision 3: suspended/resumed notices travel downstream, with data. */
-    private fun notifyDownstream(cell: Cell, notice: SuspensionNotice) {
+    /** spec 34 decision 3, 20/22 (G-40): typed Stall/Resume notices travel downstream, with data. */
+    private fun notifyDownstream(cell: Cell, notice: StallNotice) {
         val ports = PortRegistry.of(cell)
         ports.names().forEach { name ->
             val port = ports[name] as? Linked ?: return@forEach
@@ -737,10 +738,21 @@ open class ManagedHost(
             // a declared error outlet additionally receives the failure as data
             (cell as? ErrorReporting)?.errorOutlet?.call?.propagate(CellError(cellRef, e, hostedInvocation))
             when (policies[cellRef] ?: SupervisionPolicy.PROPAGATE) {
-                SupervisionPolicy.PROPAGATE -> {}
+                SupervisionPolicy.PROPAGATE ->
+                    // 30/31 rule 5 (93 I-18): a dead-letter on a glitch-free frontier
+                    // edge additionally emits Stall(DEAD_LETTERED) — the contribution
+                    // for this wave is gone, so the join RE-SCOPEs past it rather than
+                    // waiting forever or silently degrading. The wave the failing
+                    // invocation was processing rides along so the join can rescue
+                    // exactly that wave, not every wave pending on the edge.
+                    notifyDownstream(
+                        cell,
+                        StallNotice.Stall(StallReason.DEAD_LETTERED, hostedInvocation.invocation.context?.timestamp),
+                    )
                 SupervisionPolicy.RESTART -> {
                     // state-restore, never input-replay (spec 23 R6): the failing
                     // invocation (and any Owned/Leased it carried) is not re-driven
+                    notifyDownstream(cell, StallNotice.Stall(StallReason.RESTARTING))
                     restartCount.incrementAndGet()
                     // R1 (93 I-22): bump the host-held generation before reactivation —
                     // a checkpoint restore can never roll it back
@@ -763,8 +775,12 @@ open class ManagedHost(
                     // R2/R4 (93 I-22): RESTART completes with a re-baseline over the
                     // ordinary catch-up path — push-authoritative for a single-writer root
                     if (cell is ReBaselineEmitting) cell.reBaseline(supersedes, supersede = true)
+                    notifyDownstream(cell, StallNotice.Resume)
                 }
-                SupervisionPolicy.SUSPEND -> suspendedCells[cellRef] = mutableListOf()
+                SupervisionPolicy.SUSPEND -> {
+                    suspendedCells[cellRef] = mutableListOf()
+                    notifyDownstream(cell, StallNotice.Stall(StallReason.SUSPENDED))
+                }
             }
         }
     }
@@ -864,6 +880,7 @@ open class ManagedHost(
             override fun resume(ref: CellRef) {
                 val parked = suspendedCells.remove(ref)
                     ?: throw IllegalArgumentException("Cell not suspended: $ref")
+                cells[ref]?.let { notifyDownstream(it, StallNotice.Resume) }
                 // re-enqueue at data priority: replay order = park order (sequence tiebreaker)
                 parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
             }
