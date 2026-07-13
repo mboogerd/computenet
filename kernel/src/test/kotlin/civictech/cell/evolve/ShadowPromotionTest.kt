@@ -16,6 +16,7 @@ import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import civictech.cell.data.Propagate
 import civictech.cell.port.PortRef
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
@@ -82,6 +83,16 @@ class ShadowPromotionTest {
 
         override fun importFrom(prior: Serializable) {
             repr = "sum=${prior as Long}" // v1's Long → v2's string form (G-33)
+        }
+    }
+
+    /** A candidate whose state transfer always fails — used to force a mid-COMMIT rollback. */
+    class FailingSummerV2(override val ref: CellRef) : Cell, StateMigrating {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+        val outlet = registerPort("outlet", FanOutlet.create<Consumer<Long>>())
+
+        override fun importFrom(prior: Serializable) {
+            throw IllegalStateException("candidate state transfer boom")
         }
     }
 
@@ -175,7 +186,7 @@ class ShadowPromotionTest {
                 if (n == promoteAt) {
                     violations.shouldBeEmpty() // the promotion gate: judge approves
                     Promotion.promote(
-                        gate, incumbent, candidate, "outlet",
+                        host, gate, incumbent, candidate, "outlet",
                         downstream = listOf(view.inlet, prodNotifier.inlet),
                     )
                 }
@@ -209,5 +220,51 @@ class ShadowPromotionTest {
         val run = Run(seed = 1, promoteAt = null, suppressShadowEffects = false)
         run.drive(20, promoteAt = null)
         run.shadowNotifier.fired shouldBeGreaterThan 0 // the harness detects duplicated effects
+    }
+
+    /**
+     * G-49: a mid-COMMIT failure (the candidate's state transfer throws)
+     * MUST roll back to the retained incumbent — same swap, reversed — not
+     * leave the membrane half-swapped or the incumbent despawned.
+     */
+    @Test
+    fun `a mid-commit failure rolls back to the retained incumbent`() {
+        val controller = SimulationController(seed = 7)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val logicalId = UUID.randomUUID()
+        val source = SourceCell(consumerInt)
+        val gate = TrafficLightCell.create<Consumer<Int>>()
+        val incumbent = SummerV1(CellRef(logicalId, instanceId = 0))
+        val candidate = FailingSummerV2(CellRef(logicalId, instanceId = 1))
+        val view = CollectorCell()
+
+        listOf(source, gate, incumbent, view).forEach { host.managementInlet.call.spawn(it) }
+        host.managementInlet.call.spawn(candidate)
+        controller.runToIdle()
+
+        val routedGate = (HostedCellProxy.create(gate.ref, host, GateProxy::class.java)
+                as GateProxy).dataInlet.call
+        source.outlet.subscribe(Use.fixed(routedGate, PortRef.generate()))
+        gate.dataOutlet.subscribe(incumbent.inlet as Use<Consumer<Int>>)
+        incumbent.outlet.subscribe(view.inlet as Use<Consumer<Long>>)
+        gate.controlInlet.call.setGreen()
+
+        source.emit(1)
+        controller.runToIdle()
+        view.received shouldBe listOf(1L)
+
+        shouldThrow<Promotion.PromotionAborted> {
+            Promotion.promote(
+                host, gate, incumbent, candidate, "outlet",
+                downstream = listOf(view.inlet),
+            )
+        }
+
+        // the incumbent is retained: still linked, still hosted, still live —
+        // the gate is green again onto it, exactly as before the attempt.
+        source.emit(2)
+        controller.runToIdle()
+        view.received shouldBe listOf(1L, 3L) // incumbent kept summing: 1, then 1+2
     }
 }

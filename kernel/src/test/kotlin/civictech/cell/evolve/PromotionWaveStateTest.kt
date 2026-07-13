@@ -115,7 +115,7 @@ class PromotionWaveStateTest {
         preHighWater shouldBe 2L
 
         Promotion.promote(
-            gate, incumbent, candidate, "outlet",
+            host, gate, incumbent, candidate, "outlet",
             downstream = listOf(union.inlet),
         )
         // Promotion.promote only relinks the outlet (downstream) side; the

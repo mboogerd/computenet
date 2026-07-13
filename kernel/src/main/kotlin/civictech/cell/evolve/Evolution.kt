@@ -2,6 +2,7 @@ package civictech.cell.evolve
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.host.ManagedHost
 import civictech.cell.membrane.TrafficLightApi
@@ -78,70 +79,167 @@ object Shadow {
 }
 
 /**
- * Promotion as a link swap (spec 53, M9.3): buffer → transfer state →
- * relink → replay. Every step is an existing kernel primitive — traffic
- * light (33), snapshot (G-25), subscribe/unsubscribe (13) — orchestrated,
- * not invented. Rollback is the same call with old and new exchanged.
+ * Promotion as the four-phase swap transaction (spec 53 §The promotion swap,
+ * decided 93 I-11, G-49): PRECHECK (no side effects, freely abortable) →
+ * PREPARE (red, drain) → COMMIT (non-vetoing state handoff + relink) →
+ * RETIRE (despawn). Every step is an existing kernel primitive — traffic
+ * light (33), snapshot (G-25), subscribe/unsubscribe (13), despawn (15) —
+ * orchestrated, not invented. The incumbent is retained hot with its links
+ * until COMMIT fully succeeds: a mid-COMMIT failure reverses any partial
+ * relinks and re-greens onto the incumbent unchanged ("same swap, reversed").
+ * Rollback *after* a successful promotion (post-RETIRE) is a fresh swap in
+ * the reverse direction — not this function's concern.
  */
 object Promotion {
 
     /**
-     * Promote [candidate] over [incumbent] behind [gate]:
-     * 1. red — upstream traffic parks in the gate (zero loss, spec 33);
-     * 2. state — if the candidate is [StateMigrating] and the incumbent
-     *    [Stateful], the exported state transfers (G-33); otherwise the
-     *    candidate keeps what shadowing taught it / catches up on relink;
-     * 3. relink — [downstream]s move from the incumbent's [outletName] to the
-     *    candidate's; the incumbent's gate subscription drops so replay
-     *    reaches only the promoted instance (callers despawn it at leisure);
-     * 4. green — the gate replays the parked window and removes itself from
-     *    the path.
+     * Declares that this cell's downstream merge is non-idempotent under a
+     * source-identity change (spec 53 §Three handoff tiers: e.g. a running
+     * counter). The T2 catch-up fallback mints a fresh source and replays
+     * catch-up state, which would double-count the incumbent's
+     * already-delivered contribution for such a cell — so a candidate
+     * declaring this MUST supply a T0/T1 state transfer ([StateMigrating]
+     * over a [Stateful] incumbent, or matching snapshot schemas); PRECHECK
+     * refuses the promotion outright rather than falling back to T2.
+     */
+    interface NonIdempotentCatchUp
+
+    /**
+     * A promotion phase failed. PRECHECK failures leave the incumbent
+     * completely untouched (nothing was attempted). COMMIT failures leave
+     * the incumbent retained and re-linked — the swap was rolled back and
+     * the gate is green again onto the incumbent, exactly as if promotion
+     * had never been called.
+     */
+    class PromotionAborted(phase: String, message: String, cause: Throwable? = null) :
+        RuntimeException("promotion aborted at $phase: $message", cause)
+
+    /**
+     * Promote [candidate] over [incumbent] behind [gate], despawning the
+     * retired incumbent from [host] only after a successful COMMIT.
      */
     fun <T : Any> promote(
+        host: ManagedHost,
         gate: TrafficLightApi<T>,
         incumbent: Cell,
         candidate: Cell,
         outletName: String,
         downstream: List<Use<*>>,
     ) {
+        // 1. PRECHECK — no side effects, freely abortable. Admission is
+        // decided strictly before the window, so mid-swap rejection cannot
+        // occur: everything checked here is settled before the gate ever
+        // turns red.
+        val from = outlet(incumbent, outletName)
+        val to = outlet(candidate, outletName)
+        if (from.clazz != to.clazz) {
+            throw PromotionAborted(
+                "PRECHECK",
+                "candidate outlet '$outletName' contract ${to.clazz.name} " +
+                    "does not match incumbent's ${from.clazz.name} (structural port sameness, 93 I-2)",
+            )
+        }
+        val migrates = candidate is StateMigrating && incumbent is Stateful
+        if (!migrates && candidate is NonIdempotentCatchUp) {
+            throw PromotionAborted(
+                "PRECHECK",
+                "candidate declares NonIdempotentCatchUp with no T0/T1 state transfer available; " +
+                    "the T2 catch-up fallback would double-count the incumbent's already-delivered " +
+                    "contribution under a fresh source (spec 53 §Three handoff tiers)",
+            )
+        }
+
+        // 2. PREPARE — the membrane goes red: inbound faces serve a
+        // Buffering proxy, all coupled inlets parking together in one
+        // window. After this the incumbent quiesces hot; no incumbent wave
+        // is in flight.
         gate.controlInlet.call.setRed()
 
-        val from = outlet(incumbent, outletName)
+        var droppedIncumbentFromGate = false
+        val relinked = mutableListOf<Use<Any>>()
+        try {
+            // 3. COMMIT — non-vetoing: the admission decision was PRECHECK's,
+            // so nothing here may newly reject; a thrown exception here is an
+            // infrastructure fault, not a veto, and triggers rollback below.
+            if (migrates) {
+                (candidate as StateMigrating).importFrom((incumbent as Stateful).snapshot())
+                // preserved-epoch adoption (spec 20/22 §Source identity, 93
+                // I-11/I-27 default): the state transfer carries the
+                // outlet's (sourceId, highWater) inside this buffered swap
+                // window too, so the candidate continues the same source
+                // lane — wave-invisible, no ReBaseline, the glitch-free
+                // frontier stays intact (G-42/G-43). T0/T1.
+                to.adoptWaveState(from.waveState())
+            } else {
+                // T2 (catch-up fallback): the fresh epoch MUST NOT be silent
+                // (93 I-22) — the candidate re-emits its shadow-taught state
+                // as an ordinary catch-up delta flagged with the superseded
+                // sourceId, making the succession wave-observable rather
+                // than a silent fresh-source reset. Refused above for
+                // NonIdempotentCatchUp candidates.
+                val superseded = to.mintFreshEpoch()
+                if (candidate is ReBaselineEmitting) {
+                    candidate.reBaseline(setOf(superseded), supersede = true)
+                }
+            }
 
-        if (candidate is StateMigrating && incumbent is Stateful) {
-            candidate.importFrom(incumbent.snapshot())
+            downstream.forEach { use ->
+                from.unsubscribe(use.ref)
+                @Suppress("UNCHECKED_CAST")
+                (to as FanOutlet<Any>).subscribe(use as Use<Any>)
+                @Suppress("UNCHECKED_CAST")
+                relinked += use as Use<Any>
+            }
+
+            // retire the incumbent from the live path: the gate's replay and
+            // all future traffic reach the candidate only
+            dropIncumbentFromGate(gate, incumbent)
+            droppedIncumbentFromGate = true
+
+            // 4a. green: replay the parked window and remove the gate from
+            // the per-message path.
+            gate.controlInlet.call.setGreen()
+        } catch (e: Exception) {
+            // Rollback: "same swap, reversed" — the incumbent was retained
+            // hot with its links throughout, so undo whatever COMMIT managed
+            // to do, in reverse order, and re-green onto it. Buffered
+            // traffic always has a home; the in-window case needs no journal.
+            if (droppedIncumbentFromGate) restoreIncumbentToGate(gate, incumbent)
+            relinked.asReversed().forEach { use ->
+                @Suppress("UNCHECKED_CAST")
+                (to as FanOutlet<Any>).unsubscribe(use.ref)
+                @Suppress("UNCHECKED_CAST")
+                (from as FanOutlet<Any>).subscribe(use)
+            }
+            gate.controlInlet.call.setGreen()
+            throw PromotionAborted("COMMIT", e.message ?: e.toString(), e)
         }
 
-        val to = outlet(candidate, outletName)
-        if (candidate is StateMigrating && incumbent is Stateful) {
-            // preserved-epoch adoption (spec 20/22 §Source identity, 93 I-11/I-27
-            // default): the state transfer carries the outlet's (sourceId,
-            // highWater) inside this buffered swap window too, so the candidate
-            // continues the same source lane — wave-invisible, no ReBaseline,
-            // the glitch-free frontier stays intact (G-42/G-43).
-            to.adoptWaveState(from.waveState())
-        }
-        downstream.forEach { use ->
-            from.unsubscribe(use.ref)
-            @Suppress("UNCHECKED_CAST")
-            (to as FanOutlet<Any>).subscribe(use as Use<Any>)
-        }
-        // retire the incumbent from the live path: the gate's replay and all
-        // future traffic reach the candidate only
-        incumbentGateSubscription(gate, incumbent)
-
-        gate.controlInlet.call.setGreen()
+        // 4b. RETIRE — despawn the incumbent (15). Only now is it gone; a
+        // rollback can no longer reach it, so this runs strictly after the
+        // swap that could still fail is fully behind us.
+        host.managementInlet.call.despawn(incumbent.ref)
     }
 
     private fun outlet(cell: Cell, name: String): FanOutlet<*> =
         PortRegistry.of(cell)[name] as? FanOutlet<*>
             ?: error("no fan-out outlet '$name' on ${cell.ref}")
 
-    private fun <T : Any> incumbentGateSubscription(gate: TrafficLightApi<T>, incumbent: Cell) {
+    private fun <T : Any> dropIncumbentFromGate(gate: TrafficLightApi<T>, incumbent: Cell) {
         val ports = PortRegistry.of(incumbent)
         ports.names().forEach { name ->
             (ports[name] as? FanInlet<*>)?.let { inlet ->
                 (gate.dataOutlet as FanOutlet<*>).unsubscribe(inlet.ref)
+            }
+        }
+    }
+
+    private fun <T : Any> restoreIncumbentToGate(gate: TrafficLightApi<T>, incumbent: Cell) {
+        val ports = PortRegistry.of(incumbent)
+        ports.names().forEach { name ->
+            (ports[name] as? FanInlet<*>)?.let { inlet ->
+                @Suppress("UNCHECKED_CAST")
+                (gate.dataOutlet as FanOutlet<T>).subscribe(inlet as Use<T>)
             }
         }
     }

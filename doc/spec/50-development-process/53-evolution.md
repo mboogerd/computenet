@@ -232,20 +232,32 @@ unit are per organelle — per partition, never the whole composite (a
 whole-composite atomic transaction would be the distributed barrier P4
 forbids); mixed-version partitions coexist safely under the invariance line.
 
-⚠ GAP (G-49): the two-phase swap + state-transform design is by-convention
-at its load-bearing spots: non-vetoing commit, contract-schema identity
-across builds, source continuity under representation change, fallback
-soundness, hidden-state cells, coupled-flow windows, and
-rollback-after-retire. *Proposal*: KSP-distinguish admission policies
-(PRECHECK) from setup-only commit hooks; a contract-version discipline
-guarding `importFrom` `schemaVersion` against same-FQN hash collisions; pin
-sourceId adoption vs fresh-source reset when a candidate changes delta
-representation (drain-convergence fallback otherwise); a fallback-tier
-soundness marker refusing catch-up for non-idempotent cells; an explicit
-non-promotable declaration for hidden-state cells; a retention window for
-the retired incumbent's export snapshot with rollback-by-journal-reversal
-semantics pinned against this file and 24; and a transform-correctness
-generative harness (93 I-11/I-27/I-21).
+*(G-49 resolved for the swap transaction, W3.5)*: `Promotion.promote` is the
+four-phase protocol as an explicit state machine, not by convention. PRECHECK
+validates structural port sameness on the swap outlet and — when no T0/T1
+state transfer is available — refuses the promotion outright for a candidate
+declaring `Promotion.NonIdempotentCatchUp` (the fallback-tier soundness
+marker), all before the gate ever turns red. PREPARE reds the gate. COMMIT is
+non-vetoing (an exception there is an infrastructure fault, not admission,
+and triggers rollback rather than a veto) and runs the T0/T1 state handoff
+(`importFrom` + `adoptWaveState`) or the T2 fallback (`mintFreshEpoch` +
+`ReBaselineEmitting.reBaseline`, wave-observable per 93 I-22) before relinking
+downstream and dropping the incumbent from the gate. The incumbent stays
+retained and linked until COMMIT fully succeeds: a mid-COMMIT failure
+(`Promotion.PromotionAborted`) reverses every completed relink, restores the
+incumbent's gate subscription, and re-greens onto it unchanged — the same
+swap, reversed, exactly as spec'd. RETIRE (`despawn`) runs strictly after,
+so a rollback can never race it. Verified in `ShadowPromotionTest` (mid-commit
+failure → retained-incumbent rollback) and `PromotionWaveStateTest` (T0/T1
+epoch preservation).
+
+Still by-convention, not built: a contract-version discipline guarding
+`importFrom` `schemaVersion` against same-FQN hash collisions; an explicit
+non-promotable declaration for hidden-state cells; a retention window for the
+retired incumbent's export snapshot with rollback-*after*-retire
+journal-reversal semantics (today's rollback only covers the in-window,
+pre-RETIRE case); and a transform-correctness generative harness (93
+I-11/I-27/I-21). Coupled-flow windows during a buffered swap remain G-53.
 
 ## Trust boundary
 
