@@ -54,6 +54,33 @@ GRADLE_USER_HOME=$PWD/.gradle-home ./gradlew test --console=plain
 
 **Baseline**: `main` @ `89a0a5a` is green (`BUILD SUCCESSFUL`, full `./gradlew test`).
 
+### Test timeout discipline (mandatory for every test run)
+
+A dataflow runtime can genuinely deadlock (park/replay, drain-counting, glitch-free
+frontier, cyclic feedback), so **no test run may be able to hang indefinitely**.
+macOS has no `timeout`/`gtimeout`, so wrap every gradle test invocation in a
+watchdog that captures a thread dump before killing, and use `--no-daemon` so no
+work survives in a detached daemon:
+
+```bash
+run_gated() {  # run_gated <seconds> <gradle args...>
+  local secs=$1; shift
+  ./gradlew "$@" --no-daemon --console=plain > "$LOG" 2>&1 & local g=$!
+  for i in $(seq 1 "$secs"); do kill -0 "$g" 2>/dev/null || return 0; sleep 1; done
+  local j; j=$(pgrep -f 'GradleWrapperMain' | head -1)
+  [ -n "$j" ] && jstack "$j" > "$DUMP" 2>&1          # thread dump BEFORE killing
+  pkill -9 -f 'GradleWrapperMain'; kill -9 "$g" 2>/dev/null
+  return 124   # timed out
+}
+```
+
+Caps: narrow class run ≤ 180s, full `./gradlew test` gate ≤ 300s (the suite
+normally finishes in ~10–30s, so either cap is a deadlock backstop, not a budget).
+A run that hits the cap is a **ticket failure**: keep the thread dump and escalate
+to an Opus subagent with the ticket, diff, test, and dump. Also kill leftover
+`:agora:run`/daemon JVMs between waves (`pkill -f GradleDaemon`, `pkill -f AgoraApp`)
+— a stale long-running app JVM looks exactly like a hung test.
+
 ## Capability constraints (important)
 
 - **No Docker for Claude subagents.** The Agent tool can only isolate subagents
