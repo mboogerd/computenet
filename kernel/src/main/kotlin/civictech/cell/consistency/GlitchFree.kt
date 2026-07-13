@@ -17,6 +17,7 @@ import civictech.cell.port.EdgeOpen
 import civictech.cell.port.Link
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
+import civictech.cell.port.StateRequest
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
@@ -96,7 +97,17 @@ class GlitchFreeCell<Api : Any>(
     init {
         ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
             when (event) {
-                EdgeOpen -> edges[link.id] = EdgeState(link, flushedHighWater.toMap())
+                EdgeOpen -> {
+                    edges[link.id] = EdgeState(link, flushedHighWater.toMap())
+                    // On-demand pull (spec 20/21 §Pull, G-18 residual, decided
+                    // in 93 I-16): a fresh link issues a StateRequest so a
+                    // subscriber-side subscription is caught up without
+                    // depending on which side observes the install — the
+                    // producer's own onLinked push (spec 21, G-22) remains
+                    // the co-hosted fast path; idempotence (observed-remove
+                    // tags, 24) makes racing both harmless.
+                    Protocols.sendUpstream(link, Protocols.StateRequest, StateRequest(link.to, since = null))
+                }
                 EdgeClose -> edges[link.id]?.open = false
                 else -> return@handle
             }
@@ -106,6 +117,13 @@ class GlitchFreeCell<Api : Any>(
             val ctx = CurrentContext.get()
             if (ctx == null) {
                 Invocation.of(method, args).invoke(outlet.call)
+            } else if (ctx.baseline != null) {
+                // Catch-up baseline (spec 20/21 §Pull, 20/22 §Interaction,
+                // decided in 93 I-24): a topology-versioned state-as-delta,
+                // never a wave position — install as arm state immediately,
+                // never buffered, never touching floors/watermark/pending,
+                // so it is excluded from every wave-completeness set.
+                Invocation.of(method, args, ctx).invoke(outlet.call)
             } else {
                 val edge = edges.values.singleOrNull { it.open && it.link.from == ctx.sourcePort }
                     ?: return@fromClass null

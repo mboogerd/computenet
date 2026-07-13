@@ -29,6 +29,14 @@ data class Timestamp(
  * an ordinary catch-up delta carrying a supersede bit and the dead epochs'
  * source ids, transparently forwarded like any other context field, never a
  * new wire type.
+ *
+ * [baseline] is non-null exactly on a catch-up baseline emission (spec 20/21
+ * §Pull, 20/22 §Interaction, decided in 93 I-24): a topology-versioned
+ * state-as-delta reply to a `StateRequest` pull, causally anchored at the
+ * stamped link-install event and carrying a merge-tag [TagFrontier] for
+ * dedup/incremental-pull currency — never a wave position. A glitch-free
+ * consumer installs it as arm state and MUST NOT admit it to any
+ * wave-completeness set.
  */
 @kotlinx.serialization.Serializable
 @SerialName("MessageContext")
@@ -36,6 +44,23 @@ data class MessageContext(
     val timestamp: Timestamp,
     val sourcePort: PortRef,
     val reBaseline: ReBaselineNotice? = null,
+    val baseline: TagFrontier? = null,
+) : Serializable
+
+/**
+ * Merge-tag frontier (spec 20/21 §Pull, 20/22 §Interaction, decided in 93
+ * I-24): the highest tag counter observed per tag source — dedup/
+ * incremental-pull currency, never a wave position (tags and waves stay
+ * separate uses of one clock shape). Carried non-null on
+ * [MessageContext.baseline] to mark a catch-up baseline delta, and as
+ * `StateRequest.since` for incremental pull; valid only for
+ * per-source-monotone tag families (full-state fallback otherwise, `since =
+ * null`).
+ */
+@kotlinx.serialization.Serializable
+@SerialName("TagFrontier")
+data class TagFrontier(
+    val perSource: Map<@kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID, Long>,
 ) : Serializable
 
 /**

@@ -139,18 +139,16 @@ direct call → queue hop → serialized send.
    exactly like a closed local intake — park, never drop — and bytes the
    dying socket already swallowed are recovered end-to-end by catch-up
    re-firing on every (re)announce (42).)*
-   ⚠ GAP (G-37): on-demand pull (the G-18 residual) has a decided shape but
-   no concrete design — descriptor, reply routing to a specific requester,
-   buffer-survival detection, pull storms on mesh heal, and pull-safety for
-   non-idempotent/effectful cells are unspecified. Proposal:
-   `RequestState(replyTo, since)` on the metadata plane answered by an
-   ordinary state-as-delta single wave, issued by the subscriber exactly
-   when a link goes live history-incomplete (fresh link → pull;
-   parked-and-replayed → none; dropped-and-re-resolved → incremental pull
-   with a TagFrontier under a stated per-source-monotonic tag invariant);
-   add the per-link liveness epoch for park-vs-drop detection, a
-   mesh-reconnect coalescing/debounce policy, and a pull-serves-copy-only
-   rule for non-idempotent cells (93 I-16/I-1).
+   **On-demand pull** *(implemented, W2.2 — closes the G-18 residual)*:
+   `StateRequest(replyTo, since)` on the metadata plane (`civictech.cell.port`)
+   answered by an ordinary state-as-delta single wave, issued by the
+   subscriber (`GlitchFreeCell`) on every fresh `EdgeOpen`. Buffer-survival
+   detection, pull-storm coalescing on mesh heal, a per-link liveness epoch
+   distinguishing a fresh link from a dropped-and-re-resolved one (today's
+   implementation always pulls full state on reconnect rather than
+   incrementally), and a pull-serves-copy-only rule for non-idempotent
+   cells remain open follow-up work beyond this ticket's single-hop
+   `Stateful` scope (93 I-16/I-1).
    Generic protocols cross the bridge the same way — decided design,
    unimplemented (decided in
    [93 I-1](../90-roadmap/93-feature-interactions.md)): `PORT_PROTOCOL`

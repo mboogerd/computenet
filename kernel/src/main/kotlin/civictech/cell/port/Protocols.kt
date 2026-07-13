@@ -30,6 +30,9 @@ object Protocols {
     /** spec 32/34: retractable intake backpressure, traveling upstream. */
     val Saturation = ProtocolId("saturation")
 
+    /** spec 20/21 §Pull, G-18 residual, decided in 93 I-16: on-demand state pull. */
+    val StateRequest = ProtocolId("state-request")
+
     /** Deliver [message] to the link's producer-side port (against data flow). */
     fun sendUpstream(link: Link, id: ProtocolId, message: Any) {
         link.fromPort?.let { ProtocolSupport.of(it).deliver(id, link, message) }

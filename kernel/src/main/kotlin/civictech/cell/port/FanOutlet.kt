@@ -4,6 +4,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.PendingReBaseline
 import civictech.cell.ReBaselineNotice
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.proxy.Proxy
 import civictech.gen.wire.ContractRegistry
@@ -121,6 +122,21 @@ class FanOutlet<Api : Any>(
         CurrentContext.with(null) {
             PendingReBaseline.with(notice) { call.block() }
         }
+    }
+
+    /**
+     * Emits [block] as a catch-up baseline (spec 20/21 §Pull, 20/22
+     * §Interaction, decided in 93 I-24) to a single requester [replyTo]: a
+     * fresh wave from this outlet's own counter (FIFO/sequencing, the I-16
+     * reply rule) whose context carries [frontier] as
+     * [MessageContext.baseline] — excluded from every wave-completeness set,
+     * a glitch-free consumer installs it as arm state instead of buffering
+     * it. Delivered only to [replyTo] via [at], never broadcast to every
+     * subscriber.
+     */
+    fun baselineTo(replyTo: PortRef, frontier: TagFrontier, block: Api.() -> Unit) {
+        val ctx = MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, baseline = frontier)
+        CurrentContext.with(ctx) { at(replyTo).block() }
     }
 
     override fun at(portRef: PortRef): Api {

@@ -1,6 +1,6 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the source-epoch, cycle-head, edge-marker, watermark, and catch-up-baseline rules below are decided design (93), unimplemented
+> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext), 93 (feature-interaction resolutions I-1/4/5/11/13/14/18/23/24)
 > **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.Outlet`/`FanOutlet`, `cell.consistency.GlitchFreeCell`
 
@@ -272,29 +272,22 @@ the diamond-over-replica escape hatch (93 I-13/I-14).
 - **Suspension/migration (30/33)**: buffered waves survive because buffering
   happens at ports (Buffering proxy) and context rides inside invocations.
 - **Pull/late-join (21)**: a catch-up snapshot is *not* stamped with the
-  wave it represents — a multi-source fold has no representable wave, and
-  the shipped catch-up emission is unwaved (21 §Pull). Decided rule (93
-  I-24, unimplemented): a catch-up state-as-delta is a **baseline** — marked
-  by the nullable `MessageContext.baseline: TagFrontier?` field, a merge-tag
-  frontier carried for dedup and incremental pull, never a wave position —
-  causally anchored at the link-install topology event. A glitch-free
-  consumer MUST install a baseline as arm state and MUST NOT admit it to any
-  wave-completeness set; evaluation over the new arm resumes at the first
-  wave that completes over the post-install topology. The
-  install→first-complete-wave window gets convergence, not simultaneity
-  (G-20), exactly as any topology change does.
-
-  ⚠ GAP (G-38): a multi-source catch-up snapshot has no single wave id under
-  per-source waves, and unwaved pass-through lets a mid-wave late joiner
-  glitch — the retracted "stamped with the wave it represents" claim was
-  unsatisfiable as written. Proposal: catch-up state-as-delta is a
-  topology-versioned BASELINE (nullable MessageContext.baseline) causally
-  anchored to the link-install event and excluded from wave-completeness;
-  glitch-freedom resumes at the first wave complete over the post-install
-  topology; tag frontiers are valid only for per-source-monotone families
-  (full-state fallback otherwise); extend the diamond/late-join harnesses
-  with mid-wave late-join, quiet-upstream transition-window,
-  incremental-since, and multi-arm simultaneous-join cases (93 I-24/I-16).
+  wave it represents — a multi-source fold has no representable wave.
+  *(Implemented, W2.2 — decided in 93 I-24)*: a catch-up state-as-delta is a
+  **baseline** — marked by the nullable `MessageContext.baseline:
+  TagFrontier?` field, a merge-tag frontier carried for dedup and
+  incremental pull, never a wave position — causally anchored at the
+  link-install topology event. A glitch-free consumer installs a baseline as
+  arm state and never admits it to any wave-completeness set
+  (`GlitchFreeCell` forwards it immediately, bypassing floors/watermark/
+  pending); evaluation over the new arm resumes at the first wave that
+  completes over the post-install topology. The install→first-complete-wave
+  window gets convergence, not simultaneity (G-20), exactly as any topology
+  change does. Tag frontiers are valid only for per-source-monotone
+  families (full-state fallback otherwise, `since = null`); the
+  quiet-upstream transition-window and multi-arm simultaneous-join
+  generative harness extensions named in the original proposal remain
+  follow-up work beyond this ticket's `StatePullTest` coverage.
 - **Causal merge tags (24)**: observed-remove set tags reuse the `Timestamp`
   type but are minted cell-locally, *not* taken from the current wave —
   OR-set correctness needs a tag unique per add instance, and a wave id

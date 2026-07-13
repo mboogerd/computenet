@@ -3,6 +3,7 @@ package civictech.cell.data
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.port.*
 import civictech.gen.wire.Contract
@@ -117,6 +118,22 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         outlet.originate { propagate(SetDelta(newAdds, newDels)) }
     }
 
+    /** Highest tag counter observed per tag source (spec 20/21 §Pull, 93 I-24). */
+    private fun currentFrontier(): TagFrontier {
+        val frontier = mutableMapOf<UUID, Long>()
+        (adds.values.asSequence() + dels.values.asSequence()).flatten().forEach { tag ->
+            frontier.merge(tag.sourceId, tag.counter, ::maxOf)
+        }
+        return TagFrontier(frontier)
+    }
+
+    /** Only the tags a [since] frontier has not yet observed; unfiltered when [since] is null. */
+    private fun sinceFilter(source: Map<E, MutableSet<Timestamp>>, since: TagFrontier?): Map<E, Set<Timestamp>> =
+        source.mapValues { (_, tags) ->
+            if (since == null) tags.toSet()
+            else tags.filterTo(mutableSetOf()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+        }.filterValues { it.isNotEmpty() }
+
     init {
         inlet.serve(inletApi)
         deltaInlet.serve(object : Propagate<SetDelta<E>> {
@@ -133,6 +150,19 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
                         dels = dels.mapValues { it.value.toSet() },
                     )
                 )
+            }
+        }
+        // on-demand pull (spec 20/21 §Pull, G-18 residual, decided in 93
+        // I-16/I-24): a single-wave state-as-delta reply, stamped as a catch-
+        // up baseline (MessageContext.baseline) and delivered only to the
+        // requester — never broadcast, never admitted to wave completeness.
+        ProtocolSupport.of(outlet).handle(Protocols.StateRequest) { _, message ->
+            val request = message as StateRequest
+            val addsOut = sinceFilter(adds, request.since)
+            val delsOut = sinceFilter(dels, request.since)
+            if (addsOut.isEmpty() && delsOut.isEmpty()) return@handle
+            outlet.baselineTo(request.replyTo, currentFrontier()) {
+                propagate(SetDelta(addsOut, delsOut))
             }
         }
     }

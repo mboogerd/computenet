@@ -1,8 +1,8 @@
 # 21 — Propagation: Push/Pull, Incremental/Complete
 
-> **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up implemented; on-demand pull, catch-up baseline, RESTART re-baseline, and the cycle-head model decided in 93, unimplemented)
+> **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up, on-demand pull, and the catch-up baseline implemented; RESTART re-baseline and the cycle-head model decided in 93, unimplemented)
 > **Sources**: ADR 1 (§1, §2, §4), ADR — Cellular Software Development Process (incremental dataflow layer); 93 resolutions I-5, I-6, I-16, I-22, I-24, I-28
-> **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains); catch-up via `LinkSupport.onLinked`
+> **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains); catch-up via `LinkSupport.onLinked`; on-demand pull via `StateRequestProtocol`/`FanOutlet.baselineTo` (`civictech.cell.port`), catch-up baseline via `MessageContext.baseline`/`TagFrontier` and `GlitchFreeCell`'s baseline branch (W2.2)
 
 ## Push (default, implemented)
 
@@ -67,34 +67,23 @@ membrane, the catch-up unicast MUST pass the boundary's disclosure filter
 a delta, one disclosure transform covers the catch-up and the live stream
 uniformly.
 
-**Catch-up is a baseline, not a wave input** (decided in 93 I-24,
-unimplemented). The landed emission is unwaved and glitch-free consumers
-pass it through — which admits a mid-wave late-join glitch (G-38 below). A
-multi-source fold has no representable wave under per-source waves (20/22),
-so a snapshot is never stamped "with the wave it represents". Instead,
-catch-up is a **topology-versioned baseline**: stamped with the
-producer-outlet wave (FIFO/sequencing, per the I-16 reply rule below) plus
-a nullable `MessageContext.baseline: TagFrontier` — a merge-tag frontier
-for dedup and incremental pull, never a wave position (tags and waves stay
-separate uses of one clock shape, 20/22) — causally anchored at the stamped
-link-install event (20/22 §Topology versioning), and **never admitted to
-any wave-completeness set**. A glitch-free consumer installs the baseline
-as arm state (deduping by tag union, 24) and resumes evaluation at the
-first wave that completes over the post-install topology; the
-install→first-complete-wave window gets convergence, not simultaneity,
-exactly as any topology change does (G-20).
-
-⚠ GAP (G-38): a multi-source catch-up snapshot has no single wave id under
-per-source waves, and unwaved pass-through lets a mid-wave late joiner
-glitch — 20/22 §Interaction's "stamped with the wave it represents" is
-unsatisfiable as written. *Proposal*: catch-up state-as-delta is a
-topology-versioned BASELINE (nullable `MessageContext.baseline`) causally
-anchored to the link-install event and excluded from wave-completeness;
-glitch-freedom resumes at the first wave complete over the post-install
-topology; tag frontiers are valid only for per-source-monotone families
-(full-state fallback otherwise); extend the diamond/late-join harnesses
-with mid-wave late-join, quiet-upstream transition-window,
-incremental-since, and multi-arm simultaneous-join cases (93 I-24/I-16).
+**Catch-up is a baseline, not a wave input** *(implemented, W2.2 — decided
+in 93 I-24)*. A multi-source fold has no representable wave under
+per-source waves (20/22), so a snapshot is never stamped "with the wave it
+represents". Instead, catch-up is a **topology-versioned baseline**:
+stamped with the producer-outlet wave (FIFO/sequencing, per the I-16 reply
+rule below) plus a nullable `MessageContext.baseline: TagFrontier` — a
+merge-tag frontier for dedup and incremental pull, never a wave position
+(tags and waves stay separate uses of one clock shape, 20/22) — causally
+anchored at the stamped link-install event (20/22 §Topology versioning),
+and **never admitted to any wave-completeness set**. A glitch-free consumer
+installs the baseline as arm state (deduping by tag union, 24) and resumes
+evaluation at the first wave that completes over the post-install topology;
+the install→first-complete-wave window gets convergence, not simultaneity,
+exactly as any topology change does (G-20). *(`MessageContext.baseline`/
+`TagFrontier` (`civictech.cell`); `GlitchFreeCell`'s baseline branch forwards
+it immediately, bypassing floors/watermark/pending — never buffered, never
+counted toward completeness.)*
 
 ⚠ GAP (G-39): link/unlink are null-context management ops with no stamp in
 the wave domain — glitch-free consumers cannot know from which wave a
@@ -110,39 +99,36 @@ interaction, and the explicit topology-serializing coordinator
 (JoinBarrier) cell that doubles as the diamond-over-replica escape hatch
 (93 I-13/I-14).
 
-⚠ GAP (G-18, residual): **on-demand pull** — a consumer asking for a
-recompute or state *without* relinking. The shape is decided (93 I-16) but
-not built, and it is not a new mechanism: a management-class
+**On-demand pull** *(implemented, W2.2 — closes the G-18 residual, decided
+in 93 I-16)*: a consumer asking for a recompute or state *without*
+relinking. Not a new mechanism: a management-class
 **`StateRequest(replyTo, since: TagFrontier?)`** on the link's metadata
 plane (12, G-13) — null context, no `Owned`/`Leased`, bypasses data-path
 parking, idempotent — travels upstream; the reply is ordinary data, a
 **single-wave state-as-delta** stamped with one fresh
-`Timestamp(producerOutletSourceId, N)` and emitted on `outlet.at(replyTo)`
-(`since = null` ⇒ full state-from-empty; `since` present ⇒ only tags beyond
-the frontier per source; cells without a per-source-monotonic tag clock
-fall back to full state). Per-link FIFO (30/31) makes the reply one
-contiguous unit ahead of subsequent live waves. The trigger is
-subscriber-side, gated by a per-link **liveness epoch** (incremented on
-drop, unchanged across park), three rows: fresh link ⇒ pull;
-parked→replayed ⇒ no pull (replay is exact); dropped→re-resolved ⇒
-incremental pull with the subscriber's frontier. Producer-side `onLinked`
-push (above) is retained purely as the co-hosted fast path — correctness no
-longer depends on which side observes the install. Pull requires `Stateful`
-and is single-hop by default; recomputation-on-demand for derived cells =
-re-emission of current derived state, never re-execution of history.
+`Timestamp(producerOutletSourceId, N)` and delivered only to the requester
+via `FanOutlet.baselineTo`/`outlet.at(replyTo)` (`since = null` ⇒ full
+state-from-empty; `since` present ⇒ only tags beyond the frontier per
+source; cells without a per-source-monotonic tag clock fall back to full
+state). Per-link FIFO (30/31) makes the reply one contiguous unit ahead of
+subsequent live waves. The shipped trigger is subscriber-side: `GlitchFreeCell`
+issues a `StateRequest(since = null)` on every fresh `EdgeOpen`, which by
+construction never re-fires across a park/replay (the link object survives
+a park) — satisfying the fresh-link-⇒-pull and parked→replayed-⇒-no-pull
+rows. Producer-side `onLinked` push (above) is retained purely as the
+co-hosted fast path — correctness no longer depends on which side observes
+the install; the two races harmlessly (observed-remove tags dedupe, 24).
+Pull requires `Stateful` and is single-hop by default; recomputation-on-demand
+for derived cells = re-emission of current derived state, never
+re-execution of history.
 
-⚠ GAP (G-37): on-demand pull (the G-18 residual) has a decided shape but no
-concrete design — descriptor, reply routing to a specific requester,
-buffer-survival detection, pull storms on mesh heal, and pull-safety for
-non-idempotent/effectful cells are unspecified. *Proposal*:
-`RequestState(replyTo, since)` on the metadata plane answered by an
-ordinary state-as-delta single wave, issued by the subscriber exactly when
-a link goes live history-incomplete (fresh link → pull; parked-and-replayed
-→ none; dropped-and-re-resolved → incremental pull with a `TagFrontier`
-under a stated per-source-monotonic tag invariant); add the per-link
-liveness epoch for park-vs-drop detection, a mesh-reconnect
-coalescing/debounce policy, and a pull-serves-copy-only rule for
-non-idempotent cells (93 I-16/I-1).
+*Residual, not gap-tracked*: the dropped→re-resolved row still issues a
+full pull rather than an incremental one (no per-link **liveness epoch**
+distinguishes a fresh link from a re-resolved one yet — always correct,
+merely not minimal); buffer-survival detection, pull-storm coalescing on
+mesh heal, and a pull-serves-copy-only rule for non-idempotent/effectful
+cells remain open per the original G-37 proposal (93 I-16/I-1) and are
+follow-up work, not required by W2.2's single-hop `Stateful` scope.
 
 **RESTART re-baselines over this same path** (decided in 93 I-22,
 unimplemented). RESTART is *restore + re-baseline*, never a bare local
