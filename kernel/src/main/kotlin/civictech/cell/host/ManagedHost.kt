@@ -9,6 +9,9 @@ import civictech.cell.CellContext
 import civictech.cell.CellError
 import civictech.cell.CellRef
 import civictech.cell.ErrorReporting
+import civictech.cell.Leased
+import civictech.cell.Owned
+import civictech.cell.Redacted
 import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
 import java.io.ByteArrayInputStream
@@ -32,6 +35,7 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
 import java.util.*
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicLong
 
 private const val RECORD_FRAME: Byte = 1
 private const val RECORD_CHECKPOINT: Byte = 2
@@ -129,6 +133,18 @@ open class ManagedHost(
     private val checkpoints = mutableMapOf<CellRef, Serializable>()
     private val suspendedCells = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
 
+    /** Park/crash accounting (G-46): observability for exclusive payloads off the happy path. */
+    private val deadLetterCount = AtomicLong()
+    private val parkedDrainedOnTeardownCount = AtomicLong()
+    private val restartCount = AtomicLong()
+
+    /** Snapshot of this host's supervision counters (G-46). */
+    fun supervisionAccounting(): SupervisionAccounting = SupervisionAccounting(
+        deadLetters = deadLetterCount.get(),
+        parkedDrainedOnTeardown = parkedDrainedOnTeardownCount.get(),
+        restarts = restartCount.get(),
+    )
+
     /**
      * Data plane (spec 34, M6.3): messages stage in per-cell FIFO queues; each
      * staged message submits one dispatcher task at data priority, and each
@@ -160,9 +176,11 @@ open class ManagedHost(
         policies.remove(cellRef)
         checkpoints.remove(cellRef)
         suspendedCells.remove(cellRef)?.forEach {
+            parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
         synchronized(dataLock) { attentionParked.remove(cellRef) }?.forEach {
+            parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", it)
         }
     }
@@ -204,7 +222,33 @@ open class ManagedHost(
 
     private fun deadLetter(cause: Throwable?, description: String, invocation: HostedPortInvocation? = null) {
         System.err.println("[ManagedHost ${ref.id}] dead letter: $description" + (cause?.let { " ($it)" } ?: ""))
-        deadLetterOutlet.call.propagate(DeadLetter(ref, cause, description, invocation))
+        deadLetterCount.incrementAndGet()
+        deadLetterOutlet.call.propagate(DeadLetter(ref, cause, description, invocation?.let(::sanitizeForDeadLetter)))
+    }
+
+    /**
+     * Dead-letter capture applies the boundary rules (spec 23 R8, G-46): the
+     * dead-letter outlet is a fan-out, so a live [Owned]/[Leased] reference
+     * MUST NOT enter it. `Owned` degenerates to move-by-serialize — frozen,
+     * exactly as at the bridge egress — and `Leased` is released and stands
+     * in as a [Redacted] marker; the outlet only ever fans `Frozen`/redacted/
+     * ordinary values, never a live exclusive handle. A wrapper the failing
+     * invocation had already taken/released before throwing has nothing left
+     * to capture; it is redacted with no value rather than crashing capture.
+     */
+    private fun sanitizeForDeadLetter(hostedInvocation: HostedPortInvocation): HostedPortInvocation {
+        val args = hostedInvocation.invocation.args
+        if (args.none { it is Owned<*> || it is Leased<*> }) return hostedInvocation
+        val sanitized = args.map { arg ->
+            when (arg) {
+                is Owned<*> -> runCatching { arg.freeze() }
+                    .getOrElse { Redacted("Owned payload already consumed before capture") }
+                is Leased<*> -> Redacted("Leased payload released at dead-letter capture")
+                    .also { runCatching { arg.release() } }
+                else -> arg
+            }
+        }
+        return hostedInvocation.copy(invocation = hostedInvocation.invocation.copy(args = sanitized))
     }
 
     private fun enqueue(priority: Int, action: suspend () -> Any?) {
@@ -612,6 +656,9 @@ open class ManagedHost(
             when (policies[cellRef] ?: SupervisionPolicy.PROPAGATE) {
                 SupervisionPolicy.PROPAGATE -> {}
                 SupervisionPolicy.RESTART -> {
+                    // state-restore, never input-replay (spec 23 R6): the failing
+                    // invocation (and any Owned/Leased it carried) is not re-driven
+                    restartCount.incrementAndGet()
                     cell.onDeactivate(ctx)
                     cell.onActivate(ctx)
                     checkpoints[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }

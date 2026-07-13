@@ -79,3 +79,14 @@ class Leased<T : Any>(val value: T, private val returnToPool: (T) -> Unit = {}) 
      */
     fun borrow(): Borrowed<T> = Borrowed(value)
 }
+
+/**
+ * Stand-in for an exclusive payload that degenerated off the happy path
+ * (spec 23 R8, G-46): the dead-letter outlet is a fan-out, so a live
+ * [Owned]/[Leased] reference MUST NOT enter it. `Owned` freezes instead
+ * (see [Owned.freeze]); `Leased` releases and is represented by this
+ * redacted marker — the outlet fans this, never the released value.
+ */
+@Serializable
+@SerialName("Redacted")
+class Redacted(val reason: String)
