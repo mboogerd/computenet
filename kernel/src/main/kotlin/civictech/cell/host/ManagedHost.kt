@@ -30,6 +30,9 @@ import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.Timestamp
 import civictech.cell.wire.WireCodec
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.IdentityBinding
+import civictech.cell.graph.requireBoundRef
 import civictech.cell.data.Magnitude
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
@@ -116,6 +119,10 @@ open class ManagedHost(
     val color: HostColor get() = scheduler.color
 
     private val cells = mutableMapOf<CellRef, Cell>()
+
+    /** `spawnBound`'s recorded `parent` association (93 I-21 §4.3): bookkeeping only —
+     * membrane/exposure enforcement over this is G-9, unbuilt. */
+    private val cellParents = mutableMapOf<CellRef, CellRef>()
     private val ctx = object : CellContext {
         // CycleHead fusion barrier (spec 21 §Fusion, 93 I-6): route
         // re-origination through the real host queue instead of the default
@@ -913,6 +920,25 @@ open class ManagedHost(
                 return cell.ref
             }
 
+            override fun spawnBound(factory: CellFactory, identity: IdentityBinding, parent: CellRef?): CellRef {
+                // organelle nesting (G-28's parent field, 93 I-21 §4.3): recorded
+                // for introspection; membrane/exposure enforcement is G-9 (unbuilt,
+                // out of this ticket's scope) — a non-null parent is bookkept only.
+                val ref = identity.resolve()
+                val cell = factory.create(ref)
+                requireBoundRef("spawnBound", identity, ref, cell.ref)
+                return try {
+                    spawn(cell).also { spawnedRef -> if (parent != null) cellParents[spawnedRef] = parent }
+                } catch (e: Exception) {
+                    // G-51: per-step rejections surface as dead letters on the
+                    // target host — this is what makes re-applying an `Exact`
+                    // spawn of a live ref an *idempotent, observed* no-op rather
+                    // than a silent drop or a crash of the whole apply.
+                    deadLetter(e, "spawnBound rejected: $ref (${e.message})")
+                    throw e
+                }
+            }
+
             override fun <T : Any> lookup(ref: CellRef, clazz: Class<T>): T? {
                 return this@ManagedHost.lookup(ref, clazz)
             }
@@ -1037,8 +1063,15 @@ open class ManagedHost(
 
         managementInlet.serve(Proxy.fromClass(HostManagementApi::class.java) { _, method, args ->
             val invocation = Invocation.of(method, args).withTarget(internalApi)
-            if (method.name.startsWith("spawn")) {
+            if (method.name == "spawn") {
                 enqueueAwaiting(0) { internalApi.spawn(args!![0] as Cell) }
+            } else if (method.name == "spawnBound") {
+                // the wire-crossing form (93 I-21 §4.4): awaited here because
+                // there is no real socket boundary to cross in-process, but the
+                // caller-facing degrade-to-async behavior lives in
+                // GraphSpec.applyRemote, which never lets a rejection here
+                // abort the whole apply or surface as a synchronous reply.
+                enqueueAwaiting(0) { invocation.invoke() }
             } else if (method.name.startsWith("lookup")) {
                 @Suppress("UNCHECKED_CAST")
                 enqueueAwaiting(0) { internalApi.lookup(args!![0] as CellRef, args[1] as Class<Any>) }

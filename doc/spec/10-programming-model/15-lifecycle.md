@@ -64,15 +64,15 @@ COLD  --spawn(cell)-->  HOT  --suspend-->  SUSPENDED  --resume-->  HOT
   spawn (decided in 93 I-26). (This is the intended DSL semantics; the DSL
   itself is future work — 50/51.)
 
-⚠ GAP (G-51): GraphSpec application to remote hosts has undefined failure
-semantics — partial apply leaves an unknown graph, per-step reporting has no
-contract, and structural validation timing (build vs replay) is unstated.
-Proposal: define partial-apply behavior (compensate by unlinking the
-successful prefix vs leave-and-report) composing with idempotent re-apply via
-Exact and the G-16 guard; a structured per-step `ApplyReport` outlet the
-applier can link before target cells exist; and eager cold structural
-pre-validation (cardinality/ownership/contract) with a defined error surface
-for an invalid spec (93 I-21/I-26).
+*(G-51 core resolved, W3.6)*: `GraphSpec.applyRemote` gives remote application a
+defined failure contract — partial-apply, always leave-and-report. Rejected
+steps (including an `Exact` re-apply of a live ref, hitting the ordinary
+live-ref spawn guard) dead-letter on the target host and fold into a returned
+`ApplyReport`; the applier never sees a synchronous throw and remaining steps
+still apply. Open, research-gated (95 §R4): compensating rollback of the
+successful prefix (partial-apply *atomicity*), a dataflow-linkable
+`ApplyReport` outlet (today it is a direct return value), and eager cold
+structural pre-validation (cardinality/ownership/contract) ahead of replay.
 
 ## Normative rules
 

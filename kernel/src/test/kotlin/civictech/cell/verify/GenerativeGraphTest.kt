@@ -110,15 +110,15 @@ class GenerativeGraphTest {
         fun buildView(host: ManagedHost): Pair<GraphSpec, Map<String, CellRef>> {
             val refs = mutableMapOf<String, CellRef>()
             val spec = graph(host.managementInlet) {
-                var tail = spawn("union") { UnionSetCell<String>() }
+                var tail = spawn("union") { ref -> UnionSetCell<String>(ref = ref) }
                 refs[tail.name] = tail.ref
                 filterIdxs.forEachIndexed { i, idx ->
-                    val filter = spawn("filter$i") { FilterCell<String> { s -> PREDICATES[idx](s) } }
+                    val filter = spawn("filter$i") { ref -> FilterCell<String>(ref = ref) { s -> PREDICATES[idx](s) } }
                     tail linkTo filter
                     refs[filter.name] = filter.ref
                     tail = filter
                 }
-                val count = spawn("count") { CountCell<String>() }
+                val count = spawn("count") { ref -> CountCell<String>(ref = ref) }
                 tail linkTo count
                 refs[count.name] = count.ref
             }

@@ -2,6 +2,8 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.graph.CellFactory
+import civictech.cell.graph.IdentityBinding
 import civictech.cell.port.LinkResult
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
@@ -19,6 +21,24 @@ interface HostManagementApi {
      * The cell acts as its own specification.
      */
     fun spawn(cell: Cell): CellRef
+
+    /**
+     * The wire-crossing construction form (50/51 §Graph construction DSL,
+     * 93 I-21 §4.4): [spawn] takes a *live* [Cell] and MUST stay local-only —
+     * a live cell never crosses the wire. `spawnBound` instead ships a
+     * [CellFactory] (already [java.io.Serializable]) plus an [IdentityBinding]
+     * choosing *which* [CellRef] the host mints/materializes, and an optional
+     * [parent] for organelle nesting (G-28). The host resolves the binding to
+     * a concrete ref, hands it to the factory, and admits the result through
+     * the same admission path [spawn] uses — so re-`Exact`-spawning a live
+     * ref hits the ordinary live-ref spawn guard and rejects loudly
+     * (idempotent re-apply for free, G-51).
+     */
+    fun spawnBound(
+        factory: CellFactory,
+        identity: IdentityBinding = IdentityBinding.FreshLogical,
+        parent: CellRef? = null,
+    ): CellRef
 
     /**
      * Returns a managed reference to the API of a hosted cell.

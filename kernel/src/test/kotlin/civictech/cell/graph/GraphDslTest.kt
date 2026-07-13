@@ -40,10 +40,10 @@ class GraphDslTest {
     private fun pipelineSpec(host: ManagedHost): Pair<GraphSpec, Map<String, civictech.cell.CellRef>> {
         val handles = mutableMapOf<String, civictech.cell.CellRef>()
         val spec = graph(host.managementInlet) {
-            val a = spawn("writerA") { SetCell<String>() }
-            val b = spawn("writerB") { SetCell<String>() }
-            val union = spawn("union") { UnionSetCell<String>() }
-            val count = spawn("count") { CountCell<String>() }
+            val a = spawn("writerA") { ref -> SetCell<String>(ref = ref) }
+            val b = spawn("writerB") { ref -> SetCell<String>(ref = ref) }
+            val union = spawn("union") { ref -> UnionSetCell<String>(ref = ref) }
+            val count = spawn("count") { ref -> CountCell<String>(ref = ref) }
             a linkTo union
             b linkTo union
             union linkTo count

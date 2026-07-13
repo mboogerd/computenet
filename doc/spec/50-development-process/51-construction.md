@@ -1,11 +1,12 @@
 # 51 — Constructing Cellular Programs
 
-> **Status**: Partial (cell authoring + graph DSL exist; step-vocabulary /
-> identity-binding / placement extensions decided in
+> **Status**: Partial (cell authoring + graph DSL exist; `SpawnStep`
+> identity/parent/factory and `spawnBound` remote application built (W3.6,
+> G-51 core); `UnlinkStep` and placement/membrane extensions decided in
 > [93](../90-roadmap/93-feature-interactions.md), unimplemented;
 > codegen/tooling exploratory)
 > **Sources**: ADR — Cellular Software Development Process, ADR — Task Definitions, ADR 3 (codegen)
-> **Implementation**: hand-written cells + host API; `cell.graph` DSL (`graph`/`GraphSpec`); KSP seed (`gen`); no scaffolding
+> **Implementation**: hand-written cells + host API; `cell.graph` DSL (`graph`/`GraphSpec`, `IdentityBinding`, `HostManagementApi.spawnBound`, `GraphSpec.applyRemote`/`ApplyReport`); KSP seed (`gen`); no scaffolding
 
 ## Authoring a cell today (normative pattern)
 
@@ -62,20 +63,23 @@ invocations. Operator combinators (`handle.map { }` — Task Definitions'
 cold/hot operators) stay unbuilt until a caller needs more than
 spawn-and-link.
 
-The step vocabulary's decided extension (decided in 93 I-21, unbuilt):
-steps are `SpawnStep(localName, factory, identity, parent)`, `ConnectStep`,
-and `UnlinkStep` (`Link.unlink()` as a recorded step). `identity` is an
-`IdentityBinding` choosing which ref the host mints — `FreshLogical`
+The step vocabulary's decided extension (decided in 93 I-21; `SpawnStep`'s
+identity/parent/factory parameters built W3.6, `UnlinkStep` still unbuilt):
+steps are `SpawnStep(handle, factory, identity, parent)`, `ConnectStep`,
+and `UnlinkStep` (`Link.unlink()` as a recorded step — unbuilt). `identity` is
+an `IdentityBinding` choosing which ref the host mints — `FreshLogical`
 (default: the shipped replay-as-new-graph behavior, so "replay mints fresh
 cells and refs" stays true by default), `NewInstanceOf(logicalId)` (fresh
 instanceId under a given logicalId — a candidate version, 53, or a
 deliberately seeded replica), or `Exact(ref)` (deterministic tests,
 migration targets; re-applying an `Exact` spawn of a live ref hits the G-16
 live-ref spawn guard → `Rejected`, giving idempotent re-apply for free).
-`parent` lowers to the parent-aware spawn already recorded at spawn (G-28);
-selective exposure stays a property of the container's type (G-9), never a
-step. The litmus: **the DSL gains parameters, not verbs** — every step MUST
-lower to a management invocation the host already accepts.
+`parent` lowers to the parent-aware spawn already recorded at spawn (G-28) —
+today recorded as a bookkept association on `spawnBound`, not yet enforced
+by a membrane (that enforcement is G-9, unbuilt); selective exposure stays a
+property of the container's type (G-9), never a step. The litmus: **the DSL
+gains parameters, not verbs** — every step MUST lower to a management
+invocation the host already accepts.
 
 ⚠ GAP (G-57): a client holding only a logicalId has no defined
 instance-selection policy (nearest replica for reads, leader for writes,
@@ -88,26 +92,33 @@ refs; and a stated birthday-bound argument for random instanceId minting,
 with caller-chosen ids in deterministic tests, covering construction-time
 `NewInstanceOf` minting across hosts (93 I-2/I-21).
 
-Across the wire, `spawn(cell)` is local-only; the decided wire form is
-`spawnBound(factory, identity, parent)` — the factory is already
-`Serializable`, so `applyTo(remoteInlet)` sends factories and the remote
-host constructs locally, returning `Deferred<CellRef>` (40/41 point 5).
-Loud failure is synchronous only where construction is co-located with the
-target host; remote application MUST degrade to asynchronous rejection
-reporting (dead letters on the target host, optionally per-step results
-over an ordinary dataflow link folded into an `ApplyReport`), never a
-synchronous cross-wire reply (decided in 93 I-21). The "fail construction
-loudly" claim above is thereby scoped to co-located construction.
+Across the wire, `spawn(cell)` is local-only; the wire form is
+`spawnBound(factory, identity, parent)` (built W3.6) — the factory is
+already `Serializable`, so `GraphSpec.applyRemote(remoteInlet)` sends
+factories and the remote host constructs locally. Loud failure is
+synchronous only where construction is co-located with the target host
+(`applyTo`, unchanged); remote application (`applyRemote`) degrades to
+asynchronous rejection reporting: dead letters on the target host, folded
+into a returned `ApplyReport`, never a synchronous cross-wire reply (decided
+in 93 I-21). The "fail construction loudly" claim above is thereby scoped to
+co-located construction. *Simplification, documented*: `applyRemote` returns
+its `ApplyReport` directly rather than wrapping it in a `Deferred` — there is
+no real socket transport in-process to await, so the synchronous-return-vs-
+Deferred distinction collapses; a genuine cross-process wire layer (still
+unbuilt — no module today bridges `HostManagementApi` over an actual
+transport) would need the `Deferred<CellRef>`/`Deferred<ApplyReport>`
+wrapping `40/41` point 5 describes.
 
-⚠ GAP (G-51): GraphSpec application to remote hosts has undefined failure
-semantics — partial apply leaves an unknown graph, per-step reporting has
-no contract, and structural validation timing (build vs replay) is
-unstated. *Proposal*: define partial-apply behavior (compensate by
-unlinking the successful prefix vs leave-and-report) composing with
-idempotent re-apply via `Exact` and the G-16 guard; a structured per-step
-`ApplyReport` outlet the applier can link before target cells exist; and
-eager cold structural pre-validation (cardinality/ownership/contract) with
-a defined error surface for an invalid spec (93 I-21/I-26).
+*(G-51 core resolved, W3.6)*: partial-apply is defined as always
+**leave-and-report** — a rejected step (including idempotent re-apply via
+`Exact` hitting the G-16 guard) dead-letters and is skipped; every other step
+still applies, folded into the returned `ApplyReport`. Open, research-gated
+(95 §R4): compensating rollback of the successful prefix (partial-apply
+*atomicity*); a structured per-step `ApplyReport` *outlet* the applier can
+link before target cells exist (today `ApplyReport` is a direct return
+value, not a dataflow-subscribable port); and eager cold structural
+pre-validation (cardinality/ownership/contract) with a defined error surface
+for an invalid spec (93 I-21/I-26).
 
 Replay is placement: each spawn step is validated at the target host's
 spawn-admission gate, the cell's color being derivable from its factory

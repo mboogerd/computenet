@@ -6,32 +6,130 @@ import civictech.cell.host.HostManagementApi
 import civictech.cell.port.LinkResult
 import civictech.cell.port.Use
 import java.io.Serializable
+import java.util.UUID
+import kotlin.random.Random
 
 /**
- * Creates the cell for one spawn step. Serializable so a recorded [GraphSpec]
- * is graphs-as-data (G-30): keep captured values serializable.
+ * Creates the cell for one spawn step, ref-aware (93 I-21 §4.1): the host (or,
+ * for co-located replay, the applier) resolves an [IdentityBinding] to a
+ * concrete [CellRef] *before* construction and hands it in, so the built
+ * [Cell] always carries the ref the binding chose. Serializable so a recorded
+ * [GraphSpec] is graphs-as-data (G-30) and the factory is the wire-crossing
+ * construction form — a live cell never crosses the wire, only this.
  */
 fun interface CellFactory : Serializable {
-    fun create(): Cell
+    fun create(ref: CellRef): Cell
+}
+
+/**
+ * Which [CellRef] a spawn step should produce (93 I-21 §4.1/4.2) — not a new
+ * construction semantic, a choice of ref: `spawn` already takes a cell
+ * carrying *some* ref; the binding only chooses *which* one.
+ */
+sealed interface IdentityBinding : Serializable {
+    /** Mint a fresh `(logicalId, instanceId)` — the shipped replay-as-new-graph default. */
+    data object FreshLogical : IdentityBinding
+
+    /** Mint a fresh instanceId under a given logicalId — identity-preserving spawn
+     * (a candidate version, or a deliberately seeded replica). */
+    data class NewInstanceOf(val logicalId: UUID) : IdentityBinding
+
+    /** Materialize a specific full ref — deterministic tests, migration targets, and
+     * idempotent re-apply: re-applying an `Exact` spawn of a live ref hits the
+     * live-ref spawn guard and rejects loudly (G-51). */
+    data class Exact(val ref: CellRef) : IdentityBinding
+
+    /**
+     * Resolves this binding to a concrete [CellRef]. Shared by [ManagedHost][civictech.cell.host.ManagedHost]'s
+     * `spawnBound` (host-side, for the wire form) and [GraphSpec.applyTo] (client-side, for
+     * the co-located/local replay path) so both mint refs identically.
+     *
+     * instanceId minting for [NewInstanceOf] is a random `Long` — the same
+     * birthday-bound argument G-57 already accepts for instanceId minting;
+     * a caller-chosen collision discipline across hosts remains that gap's
+     * open follow-up, not this ticket's.
+     */
+    fun resolve(): CellRef = when (this) {
+        FreshLogical -> CellRef(UUID.randomUUID())
+        is NewInstanceOf -> CellRef(logicalId, Random.nextLong())
+        is Exact -> ref
+    }
 }
 
 sealed interface GraphStep : Serializable
 
-data class SpawnStep(val handle: String, val factory: CellFactory) : GraphStep
+data class SpawnStep(
+    val handle: String,
+    val factory: CellFactory,
+    val identity: IdentityBinding = IdentityBinding.FreshLogical,
+    /** Spec-local handle of the parent, resolved to a [CellRef] at apply time
+     * (organelle nesting, G-28) — never a step of its own (93 I-21 §4.3). */
+    val parent: String? = null,
+) : GraphStep
 
 data class ConnectStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
 
 /**
+ * Enforces that a spawned [Cell] carries the ref its [IdentityBinding] chose —
+ * but only when the binding made an *explicit* choice ([IdentityBinding.NewInstanceOf]/
+ * [IdentityBinding.Exact]): a factory ignoring the resolved ref there would silently
+ * defeat identity-preserving spawn and the `Exact` idempotent-reject guard (93 I-21
+ * §4.2). [IdentityBinding.FreshLogical] does not enforce this — "any fresh ref will
+ * do" — so pre-existing zero-arg-style factories (`{ SetCell<String>() }`, which
+ * mint their own default random ref) keep working unchanged.
+ */
+internal fun requireBoundRef(handle: String, identity: IdentityBinding, resolved: CellRef, built: CellRef) {
+    if (identity == IdentityBinding.FreshLogical) return
+    require(built == resolved) {
+        "spawn step '$handle': factory must construct a cell with ref $resolved " +
+            "(built $built) — identity binding $identity chooses the ref (93 I-21 §4.2)"
+    }
+}
+
+/** The outcome of one [GraphStep] applied by [GraphSpec.applyRemote]. */
+sealed interface StepResult : Serializable {
+    data class Applied(val ref: CellRef?) : StepResult
+    data class Rejected(val reason: String) : StepResult
+}
+
+/**
+ * The eventual fold of a remote [GraphSpec] application (93 I-21 §4.4, G-51):
+ * a structured per-step result an applier can inspect after [GraphSpec.applyRemote]
+ * returns, keyed by the step's spec-local handle (spawn steps) or
+ * `"from.outlet->to.inlet"` (connect steps).
+ */
+data class ApplyReport(val results: Map<String, StepResult>) : Serializable {
+    val allApplied: Boolean get() = results.values.all { it is StepResult.Applied }
+}
+
+/**
  * A graph as data: an ordered step list, each lowering to a host-management
  * invocation — nothing the spec does is beyond `spawn`/`connect` (51). Replay
- * onto any host creates fresh cells (fresh refs) with the same topology.
+ * onto any host creates fresh cells (fresh refs) with the same topology by
+ * default ([IdentityBinding.FreshLogical]); an explicit binding preserves or
+ * targets a specific identity instead.
  */
 data class GraphSpec(val steps: List<GraphStep>) : Serializable {
+
+    /**
+     * Local, co-located replay (51 §Graph construction DSL): synchronous loud
+     * failure, unchanged — the first rejected `connect` throws, and a `spawn`
+     * whose resolved ref is already live throws too (the ordinary live-ref
+     * spawn guard). Every step's [IdentityBinding] is resolved by the applier
+     * before construction, so the wire-crossing factory shape is used
+     * uniformly whether the target is local or (via [applyRemote]) remote.
+     */
     fun applyTo(host: Use<HostManagementApi>): Map<String, CellRef> {
         val refs = mutableMapOf<String, CellRef>()
         steps.forEach { step ->
             when (step) {
-                is SpawnStep -> refs[step.handle] = host.call.spawn(step.factory.create())
+                is SpawnStep -> {
+                    val ref = step.identity.resolve()
+                    val cell = step.factory.create(ref)
+                    requireBoundRef(step.handle, step.identity, ref, cell.ref)
+                    refs[step.handle] = host.call.spawn(cell)
+                }
+
                 is ConnectStep -> {
                     val result = host.call.connect(
                         refs.getValue(step.from), step.outlet,
@@ -45,6 +143,61 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
             }
         }
         return refs
+    }
+
+    /**
+     * Remote application (93 I-21 §4.4, G-51): every spawn step ships through
+     * [HostManagementApi.spawnBound] — the factory-based wire form, never a
+     * live [Cell]. Loud failure degrades from synchronous to asynchronous:
+     * a rejected step does **not** abort the apply or throw to the caller —
+     * "never a synchronous cross-wire reply" — it dead-letters on the target
+     * host (observable via its `deadLetterOutlet`) and is folded into the
+     * returned [ApplyReport] instead. Remaining steps still apply — this is
+     * the decided **partial + report** semantics; compensating rollback of
+     * the successful prefix (full partial-apply *atomicity*) is explicitly
+     * research-gated (95 §R4) and is NOT implemented here.
+     */
+    fun applyRemote(host: Use<HostManagementApi>): ApplyReport {
+        val refs = mutableMapOf<String, CellRef>()
+        val results = mutableMapOf<String, StepResult>()
+        steps.forEach { step ->
+            when (step) {
+                is SpawnStep -> {
+                    val parentRef = step.parent?.let { refs[it] }
+                    try {
+                        val ref = host.call.spawnBound(step.factory, step.identity, parentRef)
+                        refs[step.handle] = ref
+                        results[step.handle] = StepResult.Applied(ref)
+                    } catch (e: Exception) {
+                        // dead-lettered on the target host already (ManagedHost.spawnBound);
+                        // here we only fold the outcome into the report, never rethrow —
+                        // the wire form never surfaces a synchronous cross-wire reply.
+                        results[step.handle] = StepResult.Rejected(e.message ?: e.toString())
+                    }
+                }
+
+                is ConnectStep -> {
+                    val key = "${step.from}.${step.outlet}->${step.to}.${step.inlet}"
+                    val from = refs[step.from]
+                    val to = refs[step.to]
+                    if (from == null || to == null) {
+                        results[key] = StepResult.Rejected(
+                            "endpoint not constructed: '${step.from}' or '${step.to}' was rejected/missing",
+                        )
+                    } else {
+                        try {
+                            when (val result = host.call.connect(from, step.outlet, to, step.inlet)) {
+                                is LinkResult.Rejected -> results[key] = StepResult.Rejected(result.reason)
+                                else -> results[key] = StepResult.Applied(null)
+                            }
+                        } catch (e: Exception) {
+                            results[key] = StepResult.Rejected(e.message ?: e.toString())
+                        }
+                    }
+                }
+            }
+        }
+        return ApplyReport(results)
     }
 }
 
@@ -66,10 +219,23 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
     private val steps = mutableListOf<GraphStep>()
     private val names = mutableSetOf<String>()
 
-    fun spawn(name: String, factory: CellFactory): CellHandle {
+    /**
+     * @param identity which [CellRef] the spawned cell should carry (default: fresh).
+     * @param parent the already-spawned handle this cell nests under (organelle
+     *   nesting, G-28) — recorded on the step, not enforced by the DSL layer.
+     */
+    fun spawn(
+        name: String,
+        identity: IdentityBinding = IdentityBinding.FreshLogical,
+        parent: CellHandle? = null,
+        factory: CellFactory,
+    ): CellHandle {
         require(names.add(name)) { "duplicate handle '$name'" }
-        steps += SpawnStep(name, factory)
-        return CellHandle(name, host.call.spawn(factory.create()), this)
+        val ref = identity.resolve()
+        val cell = factory.create(ref)
+        requireBoundRef(name, identity, ref, cell.ref)
+        steps += SpawnStep(name, factory, identity, parent?.name)
+        return CellHandle(name, host.call.spawn(cell), this)
     }
 
     fun connect(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
