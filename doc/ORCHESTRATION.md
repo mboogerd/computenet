@@ -125,16 +125,28 @@ resolved inline by the host.
 
 No Opus escalation needed; all rebases auto-merged (no manual conflict this wave).
 
-### Wave 4 — in progress
-All deps merged. Batching splits the two membrane tickets (W4.1, W4.2) across batches.
-| Ticket | Title | Area | Batch | Status |
-|--------|-------|------|-------|--------|
-| W4.1 | BoundaryPolicy: the three seams (G-54) | membrane | A | pending |
-| W4.3 | Single-writer replication core (G-44 core) | repl | A | pending |
-| W4.6 | Reflection-free KMP proxies (C-5 completion) | gen | A | pending |
-| W4.2 | PartitionedCell (G-56, realizes G-24) | data+membrane | B | pending |
-| W4.4 | Promotion policy as data (G-50) | evo | B | pending |
-| W4.5 | Attention realization details (G-58 core) | sched | B | pending |
+### Wave 4 — COMPLETE (all merged; authoritative clean gate green @ aa47579)
+| Ticket | Title | Merged | Notes |
+|--------|-------|--------|-------|
+| W4.1 | BoundaryPolicy: the three seams (G-54) | a7658c3 | |
+| W4.3 | Single-writer replication core (G-44 core) | 46ec0cc | manual/orchestrated failover only. |
+| W4.6 | Reflection-free KMP proxies (C-5 completion) | 9f5cd52 | KSP proxies replace JDK dynamic; merged first so peers gate against it. |
+| W4.2 | PartitionedCell (G-56, realizes G-24) | dc23b3c | sharded==unsharded over 100 seeds. |
+| W4.4 | Promotion policy as data (G-50) | 5df6cb5 | |
+| W4.5 | Attention realization details (G-58 core) | aa47579 | |
+
+No Opus escalation needed; all rebases auto-merged (no manual conflict this wave).
+
+## DONE — all waves merged into `main` @ aa47579
+
+Waves 2, 3, 4 complete: 19 tickets landed this run (W2.3 was pre-merged). Every
+merge passed an independent full `./gradlew test` gate; three authoritative
+`clean test` gates (one per wave) all green. One inline conflict resolution total
+(W2.7, ManagedHost RESTART arm); no Opus escalation was required. All implementers
+ran as synchronous Sonnet subagents, 3 concurrent per batch, TDD.
+
+Stale prior-run codex worktrees under the system temp dir (`codex/plan-W2.*`) were
+left untouched and unused.
 
 ### Wave 4 — not started
 W4.1–W4.6 (`.codex-orchestrator/items/W4.*.md`).
