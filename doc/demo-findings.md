@@ -50,6 +50,23 @@ re-implements remove-old-then-add.
 **Proposed shape**: either a keyed-upsert set source (`KeyedSetCell<K, E>` where adding
 under an existing key retracts the previous element) or `GroupByCell` over map streams.
 
+## F-5 — Edge-of-graph view composition is not glitch-free
+
+**Observation**: `:demo:skillmatch`'s UI folds four independent outlets (matches,
+match-counts, required-counts, gap) into one state snapshot. The views update
+asynchronously, so a snapshot can be momentarily inconsistent — the server test
+first observed a state where a match was counted (`matched: 1`) while the gap view
+still listed that same skill as uncovered. Tests must await joint conditions, and
+the UI can flash contradictory panels.
+**Why it's a gap**: not a kernel bug — this is exactly what `GlitchFreeCell` exists
+for — but there is no ergonomic way to apply glitch-freedom at the *observation
+edge* (a hub folding N outlets). Each demo hand-rolls per-view folds with no wave
+alignment, so the strongest consistency machinery in the kernel is unused where
+apps actually read state.
+**Proposed shape**: a glitch-free multi-inlet hub/collector idiom (or a
+`GlitchFree`-wrapped composite view cell) that delivers wave-aligned snapshots to
+the app edge; possibly just a documented recipe over the existing `GlitchFreeCell`.
+
 ## F-4 — Fixed intersect chains: topology evolution not exercised
 
 **Observation**: `:demo:slotfinder` hard-wires three participants because adding a
