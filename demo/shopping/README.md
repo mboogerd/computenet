@@ -7,7 +7,7 @@ filter/count chain ([spec 51](../doc/spec/50-development-process/51-construction
 fronted by the JDK's built-in HTTP server with one static page and SSE.
 
 ```
-./gradlew :demo:run     # then open http://localhost:8080 in two tabs
+./gradlew :demo:shopping:run     # then open http://localhost:8080 in two tabs
 ```
 
 Each browser tab is a user (random id in sessionStorage). Two tabs converge
@@ -19,8 +19,8 @@ edits order-independent — and a freshly opened tab is populated immediately.
 The same app spans two JVMs over the real wire ([spec 41](../doc/spec/40-distribution/41-location-transparency.md)):
 
 ```
-./gradlew :demo:run --args="8080 --listen 9090"                 # peer 1
-./gradlew :demo:run --args="8081 --peer ws://localhost:9090"    # peer 2
+./gradlew :demo:shopping:run --args="8080 --listen 9090"                 # peer 1
+./gradlew :demo:shopping:run --args="8081 --peer ws://localhost:9090"    # peer 2
 ```
 
 Open tabs against either port — edits cross the WebSocket as serialized

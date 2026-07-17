@@ -9,7 +9,7 @@ Implements [`doc/agora-ui-design-spec.md`](../../doc/agora-ui-design-spec.md); s
 The backend and the UI run as two processes; Vite proxies `/graph`, `/events`, `/op` to `:8080`.
 
 ```
-./gradlew :agora:run          # terminal 1 — backend on :8080 (add --args="8080 --journal /tmp/agora" to persist)
+./gradlew :demo:agora:run          # terminal 1 — backend on :8080 (add --args="8080 --journal /tmp/agora" to persist)
 cd agora/ui && npm install     # first time
 npm run dev                    # terminal 2 — UI on :5173
 ```

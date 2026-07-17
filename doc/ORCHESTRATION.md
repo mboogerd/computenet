@@ -40,7 +40,7 @@ Java toolchain 21, Gradle wrapper. Full suite is **fast (~30s)**.
 # narrowest first
 ./gradlew :kernel:test --tests 'fully.qualified.TestName'
 ./gradlew :gen:test :gen-test:test
-./gradlew :wire:test :demo:test :agora:test
+./gradlew :wire:test :demo:shopping:test :demo:agora:test
 # full repository gate (the merge gate)
 ./gradlew test --console=plain
 ```
@@ -78,7 +78,7 @@ Caps: narrow class run ≤ 180s, full `./gradlew test` gate ≤ 300s (the suite
 normally finishes in ~10–30s, so either cap is a deadlock backstop, not a budget).
 A run that hits the cap is a **ticket failure**: keep the thread dump and escalate
 to an Opus subagent with the ticket, diff, test, and dump. Also kill leftover
-`:agora:run`/daemon JVMs between waves (`pkill -f GradleDaemon`, `pkill -f AgoraApp`)
+`:demo:agora:run`/daemon JVMs between waves (`pkill -f GradleDaemon`, `pkill -f AgoraApp`)
 — a stale long-running app JVM looks exactly like a hung test.
 
 ## Capability constraints (important)

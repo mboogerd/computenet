@@ -58,8 +58,8 @@ bypass the scheduler, and magnitude scheduling needs every hop staged.
 ## Run
 
 ```
-./gradlew :agora:run                                  # volatile, port 8080
-./gradlew :agora:run --args="8090 --journal /tmp/agora"   # kill -9 safe
+./gradlew :demo:agora:run                                  # volatile, port 8080
+./gradlew :demo:agora:run --args="8090 --journal /tmp/agora"   # kill -9 safe
 ```
 
 - `GET /` — minimal debug UI (create claims/edges, set stances, live SSE bars)

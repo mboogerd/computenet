@@ -2,7 +2,7 @@
 
 Sequences the build of the reactive frontend specified in [`agora-ui-design-spec.md`](agora-ui-design-spec.md) (read that first). Written to be executed **one work package at a time by Claude Opus**, per the routing and prompt discipline in [`frontend-research/workflow.md`](frontend-research/workflow.md) and [`frontend-research/prompting-guide.md`](frontend-research/prompting-guide.md). Each work package in §5 is a paste-able Opus prompt.
 
-**Stack (decided):** SolidJS + Vite + TypeScript. Standalone app in `agora/ui/`, dev-proxied to the running backend. Testing: Vitest on the pure core, one Playwright smoke.
+**Stack (decided):** SolidJS + Vite + TypeScript. Standalone app in `demo/agora/ui/`, dev-proxied to the running backend. Testing: Vitest on the pure core, one Playwright smoke.
 
 **Backend (ground truth, verified against [`AgoraApp.kt`](../agora/src/main/kotlin/civictech/agora/AgoraApp.kt)):** `GET /graph` → `NodeDto[]`; `GET /events` → SSE that pushes the *full* `NodeDto[]` on every change and once immediately on (re)connect; `POST /op` form-encoded (`action=claim|edge|stance|remove`). No auth, no topics, no history, no per-user stance readback, no delta push.
 
@@ -40,7 +40,7 @@ agora/ui/
   e2e/smoke.spec.ts     # Playwright, WP6 only
 ```
 
-**Location:** `agora/ui/` (module-adjacent, matches the repo's dir-per-module convention). **Not wired into Gradle.** The repo has zero node tooling; adding gradle-node-plugin taxes every backend build for a demo UI's benefit. Dev loop = `./gradlew :agora:run` (terminal 1) + `npm run dev` (terminal 2). Eventual production serving = a ~20-line static-file handler in `AgoraApp` behind a `--ui <dir>` flag pointed at `ui/dist` — noted here, **not a v1 work package**.
+**Location:** `demo/agora/ui/` (module-adjacent, matches the repo's dir-per-module convention). **Not wired into Gradle.** The repo has zero node tooling; adding gradle-node-plugin taxes every backend build for a demo UI's benefit. Dev loop = `./gradlew :demo:agora:run` (terminal 1) + `npm run dev` (terminal 2). Eventual production serving = a ~20-line static-file handler in `AgoraApp` behind a `--ui <dir>` flag pointed at `ui/dist` — noted here, **not a v1 work package**.
 
 **Dependencies — strict.** Runtime: `solid-js`, nothing else. Dev: `vite`, `vite-plugin-solid`, `typescript`, `vitest`, `jsdom` (for component tests if any), `@playwright/test` (WP6 only). **Rejected, with reasons:**
 - `d3-zoom` / `d3-selection` — one gesture set (wheel/drag/pinch/fit) is ~70 lines of pointer-event handling; d3 drags in its own selection + event-ownership model that fights Solid.
@@ -204,7 +204,7 @@ export function layoutMap(nodes, incoming, outgoing, focal: Ref):
 Sequenced so something demoable exists by WP2. Every prompt below follows the guide's 5-part shape (context / goal / boundaries / output / verification) and names its effort level. Feed the relevant §6 failure-pattern rules into each prompt. **Fable** is reserved for the two design-heavy packages (WP1 review, WP4 layout); everything else is routine Opus.
 
 ### WP0 — Scaffold + design tokens · Opus, `medium`
-- **Context:** Standing up the agora frontend (SolidJS + Vite + TS) in `agora/ui/`, dev-proxied to the backend on :8080. No frontend tooling exists in the repo yet.
+- **Context:** Standing up the agora frontend (SolidJS + Vite + TS) in `demo/agora/ui/`, dev-proxied to the backend on :8080. No frontend tooling exists in the repo yet.
 - **Goal:** A themed, empty app shell that boots, proxies the three backend routes, and runs the test runner. `tokens.css` encodes the full spec §5 palette: 5 credence bands (both leaning bands = strong pole @45% over surface), light+dark chrome, contested-band hairline texture, status amber, muted edge gray. A static `Legend` component renders the color/shape key. `vitest` runs (one trivial passing test).
 - **Boundaries:** No graph logic, no SSE, no components beyond the shell + Legend. Don't wire into Gradle. Don't add any dependency beyond the listed set.
 - **Output:** `package.json`, `vite.config.ts` (with the `/graph|/events|/op` proxy, compression disabled on `/events`), `tsconfig.json`, `index.html`, `src/main.tsx`, `src/app.tsx`, `src/styles/tokens.css`, `src/components/Legend.tsx`, one `test/*.test.ts`.

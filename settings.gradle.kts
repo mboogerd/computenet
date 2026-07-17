@@ -14,8 +14,11 @@ include(":gen-test")
 
 include(":kernel")
 include(":wire")
-include(":demo")
-include(":agora")
+include(":demo:shopping")
+include(":demo:agora")
+include(":demo:slotfinder")
+include(":demo:skillmatch")
+include(":demo:tiering")
 
 rootProject.name = "computenet"
 

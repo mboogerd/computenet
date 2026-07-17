@@ -43,9 +43,16 @@ explicitly asks for documentation maintenance.
   this module's tests, so generator failures may surface indirectly.
 - `wire/`: the concrete WebSocket transport. Keep transport dependencies out of
   `kernel`; transport-neutral semantics stay behind the kernel bridge API.
-- `demo/`: executable and multi-JVM integration/convergence tests.
-- `agora/`: a representative application and higher-level semantic/invariant
-  tests; use it to detect accidental API or behavior regressions.
+- `demo/`: aggregate container of demo applications, each a leaf sub-module:
+  - `demo/shopping/` (`:demo:shopping`): the collaborative shopping list;
+    executable and multi-JVM integration/convergence tests.
+  - `demo/agora/` (`:demo:agora`): the argumentation-graph application and
+    higher-level semantic/invariant tests; use it to detect accidental API or
+    behavior regressions.
+  - `demo/slotfinder/`, `demo/skillmatch/`, `demo/tiering/`: incremental
+    dataflow demos (set intersection, joins, score fusion) whose purpose is to
+    showcase the operator suite and surface kernel gaps into
+    `doc/demo-findings.md`.
 - `doc/spec/`: normative design, organized as foundations (`00`), programming
   model (`10`), dataflow semantics (`20`), execution (`30`), distribution (`40`),
   development/evolution (`50`), and roadmap (`90`).
@@ -101,8 +108,8 @@ Typical commands:
 ./gradlew :kernel:test --tests 'fully.qualified.TestName'
 ./gradlew :gen:test :gen-test:test
 ./gradlew :wire:test
-./gradlew :demo:test
-./gradlew :agora:test
+./gradlew :demo:shopping:test
+./gradlew :demo:agora:test
 ./gradlew test
 ```
 
