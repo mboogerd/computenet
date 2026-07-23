@@ -34,8 +34,29 @@ data class ContractDescriptor(
 
 enum class CellColor { PURE, BLOCKING, SUSPENDING }
 
+enum class PortDirection { IN, OUT }
+
+/**
+ * One declared port of a cell (the G-60 port-metadata slot). The name equals
+ * the property name, which equals the registry key (G-17). Ownership /
+ * management / exclusivity bits are NOT duplicated here — join [contractId]
+ * into the contract table at runtime.
+ */
+data class PortDescriptor(
+    val name: String,
+    val direction: PortDirection,
+    /** Raw port Api interface, e.g. `civictech.cell.data.Propagate`. */
+    val contractFqn: String,
+    /** `StableHash.of(contractFqn)` — joins to [ContractDescriptor.contractId]. */
+    val contractId: Long,
+)
+
 /** Placement metadata for one concrete Cell implementation. */
-data class CellDescriptor(val fqn: String, val color: CellColor)
+data class CellDescriptor(
+    val fqn: String,
+    val color: CellColor,
+    val ports: List<PortDescriptor> = emptyList(),
+)
 
 data class ProtocolDescriptor(
     val protocolId: String,

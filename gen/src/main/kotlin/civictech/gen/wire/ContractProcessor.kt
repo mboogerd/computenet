@@ -26,6 +26,7 @@ import com.squareup.kotlinpoet.MAP
 import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.STAR
+import com.squareup.kotlinpoet.STRING
 import com.squareup.kotlinpoet.TypeSpec
 import com.squareup.kotlinpoet.UNIT
 import com.squareup.kotlinpoet.asClassName
@@ -79,6 +80,7 @@ class ContractProcessor(
             (contracts.map { "contract:${it.qualifiedName!!.asString()}" } +
                     cells.map { "cell:${it.qualifiedName!!.asString()}" }).joinToString(",")
         )
+        val cellPorts: Map<KSClassDeclaration, List<ScannedPort>> = cells.associateWith(::scanPorts)
         val moduleName = "ContractTable_" + java.lang.Long.toHexString(moduleHash)
         logger.info("ContractProcessor: ${contracts.size} contracts -> $GENERATED_PACKAGE.$moduleName")
 
@@ -187,7 +189,24 @@ class ContractProcessor(
                             isSubtype(cell.asStarProjectedType(), BLOCKING_MARKER) -> CellColor.BLOCKING
                             else -> CellColor.PURE
                         }
-                        add("%T(fqn·=·%S, color·=·%T.%L),\n", CellDescriptor::class, fqn, CellColor::class, color.name)
+                        val ports = cellPorts[cell].orEmpty()
+                        if (ports.isEmpty()) {
+                            add("%T(fqn·=·%S, color·=·%T.%L),\n", CellDescriptor::class, fqn, CellColor::class, color.name)
+                        } else {
+                            add(
+                                "%T(fqn·=·%S, color·=·%T.%L, ports·=·listOf(\n⇥",
+                                CellDescriptor::class, fqn, CellColor::class, color.name,
+                            )
+                            ports.forEach { p ->
+                                add(
+                                    "%T(%S, %T.%L, %S, %LL),\n",
+                                    PortDescriptor::class.asClassName(), p.name,
+                                    PortDirection::class.asClassName(), p.direction.name,
+                                    p.contractFqn, StableHash.of(p.contractFqn),
+                                )
+                            }
+                            add("⇤)),\n")
+                        }
                     }
                     add("⇤)")
                 }).build()
@@ -263,7 +282,108 @@ class ContractProcessor(
                 .use { it.write("$GENERATED_PACKAGE.$proxyModuleName\n") }
         }
 
+        // Typed port ids (typed graph wiring, ref-only path): one `<CellName>Ports`
+        // object per public top-level cell with scannable ports — name constants +
+        // phantom-typed InletId/OutletId accessors. Generics survive erasure by
+        // re-introducing the cell's type parameters as function type parameters.
+        cells.filter {
+            it.getVisibility() != com.google.devtools.ksp.symbol.Visibility.PRIVATE &&
+                it.getVisibility() != com.google.devtools.ksp.symbol.Visibility.LOCAL &&
+                it.parentDeclaration == null // nested cells: simple-name collisions, skipped in v1
+        }.forEach { cell ->
+            val ports = cellPorts[cell].orEmpty()
+            if (ports.isNotEmpty()) generatePortsObject(cell, ports, sources)
+        }
+
         return emptyList()
+    }
+
+    private data class ScannedPort(
+        val name: String,
+        val direction: PortDirection,
+        val apiType: com.google.devtools.ksp.symbol.KSType,
+        val contractFqn: String,
+    )
+
+    /**
+     * Declared ports of a cell, by property scan (own + inherited). Direction
+     * classifies by the CONCRETE port class only — the role projections
+     * (`Use`/`Serve`/`Subscribe`) are used inconsistently across Api
+     * interfaces and cannot encode direction reliably.
+     */
+    private fun scanPorts(cell: KSClassDeclaration): List<ScannedPort> =
+        cell.getAllProperties().mapNotNull { prop ->
+            // private backing ports (e.g. a port registered under a public
+            // interface-property's name) are not the cell's public surface
+            if (prop.getVisibility() == com.google.devtools.ksp.symbol.Visibility.PRIVATE) return@mapNotNull null
+            val type = runCatching { prop.type.resolve() }.getOrNull()
+                ?.takeUnless { it.isError } ?: return@mapNotNull null
+            val direction = when {
+                isSubtype(type, FAN_INLET) || isSubtype(type, INLET) -> PortDirection.IN
+                isSubtype(type, FAN_OUTLET) || isSubtype(type, OUTLET) -> PortDirection.OUT
+                isSubtype(type, FEEDBACK_INLET) -> {
+                    // its type argument is a payload, not a port Api contract
+                    logger.info("port ${cell.simpleName.asString()}.${prop.simpleName.asString()}: FeedbackInlet skipped (no Api contract)", prop)
+                    return@mapNotNull null
+                }
+
+                else -> return@mapNotNull null
+            }
+            val api = type.arguments.firstOrNull()?.type?.resolve()?.takeUnless { it.isError }
+            val apiFqn = api?.declaration?.qualifiedName?.asString()
+            if (api == null || apiFqn == null) {
+                logger.warn(
+                    "port ${cell.simpleName.asString()}.${prop.simpleName.asString()}: unresolvable Api type — skipped",
+                    prop,
+                )
+                return@mapNotNull null
+            }
+            ScannedPort(prop.simpleName.asString(), direction, api, apiFqn)
+        }.toList()
+
+    /** One `<CellName>Ports` object: name constants + typed InletId/OutletId accessors. */
+    private fun generatePortsObject(cell: KSClassDeclaration, ports: List<ScannedPort>, sources: Dependencies) {
+        val pkg = cell.packageName.asString()
+        val objName = cell.simpleName.asString() + "Ports"
+        val typeParamResolver = cell.typeParameters.toTypeParameterResolver()
+        val cellTypeVars = cell.typeParameters.map { it.toTypeVariableName(typeParamResolver) }
+
+        val builder = TypeSpec.objectBuilder(objName)
+            .addKdoc(
+                "Typed port ids of [%L] — generated; names mirror the port properties (G-17).",
+                cell.qualifiedName!!.asString(),
+            )
+        ports.forEach { p ->
+            val nameConst = p.name.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").uppercase()
+            builder.addProperty(
+                PropertySpec.builder(nameConst, STRING, KModifier.CONST).initializer("%S", p.name).build()
+            )
+            val idClass = if (p.direction == PortDirection.IN) INLET_ID else OUTLET_ID
+            val apiTypeName = try {
+                p.apiType.toTypeName(typeParamResolver)
+            } catch (e: Exception) {
+                logger.warn("port ${cell.simpleName.asString()}.${p.name}: Api type not expressible — accessor skipped", cell)
+                return@forEach
+            }
+            val idType = idClass.parameterizedBy(apiTypeName)
+            if (cellTypeVars.isEmpty()) {
+                builder.addProperty(
+                    PropertySpec.builder(p.name, idType).initializer("%T(%L)", idClass, nameConst).build()
+                )
+            } else {
+                builder.addFunction(
+                    FunSpec.builder(p.name)
+                        .addTypeVariables(cellTypeVars)
+                        .returns(idType)
+                        .addStatement("return %T(%L)", idClass, nameConst)
+                        .build()
+                )
+            }
+        }
+        FileSpec.builder(pkg, objName)
+            .addType(builder.build())
+            .build()
+            .writeTo(codeGenerator, sources)
     }
 
     /**
@@ -408,6 +528,15 @@ class ContractProcessor(
         val EXCLUSIVE_MARKERS = setOf("civictech.cell.Owned", "civictech.cell.Leased")
         const val KEY_ANNOTATION = "civictech.gen.wire.Key"
         const val CELL_MARKER = "civictech.cell.Cell"
+
+        // Port scan (typed port ids + PortDescriptor emission)
+        const val FAN_INLET = "civictech.cell.port.FanInlet"
+        const val INLET = "civictech.cell.port.Inlet"
+        const val FEEDBACK_INLET = "civictech.cell.port.FeedbackInlet"
+        const val FAN_OUTLET = "civictech.cell.port.FanOutlet"
+        const val OUTLET = "civictech.cell.port.Outlet"
+        val INLET_ID: ClassName = ClassName("civictech.cell.graph", "InletId")
+        val OUTLET_ID: ClassName = ClassName("civictech.cell.graph", "OutletId")
         const val MAGNITUDE_MARKER = "civictech.cell.data.Magnitude"
         const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
         const val BLOCKING_MARKER = "civictech.cell.BlockingCell"

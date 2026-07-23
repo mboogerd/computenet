@@ -4,6 +4,7 @@ import com.tschuchort.compiletesting.KotlinCompilation
 import com.tschuchort.compiletesting.JvmCompilationResult
 import com.tschuchort.compiletesting.SourceFile
 import com.tschuchort.compiletesting.configureKsp
+import com.tschuchort.compiletesting.kspSourcesDir
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -176,6 +177,102 @@ class ContractProcessorTest {
         greet.invoke(instance, "world")
 
         assertEquals(listOf("greet(world)"), calls)
+    }
+
+    // Minimal kernel stubs for the port scan (gen cannot depend on kernel).
+    private val portStubs = """
+        package civictech.cell
+        interface Cell
+        """.trimIndent()
+    private val portClassStubs = """
+        package civictech.cell.port
+        class FanInlet<Api : Any>
+        class FanOutlet<Api : Any>
+        """.trimIndent()
+    private val graphStubs = """
+        package civictech.cell.graph
+        class InletId<Api>(val name: String)
+        class OutletId<Api>(val name: String)
+        """.trimIndent()
+
+    @Test
+    fun `generic cell gets a Ports object with type-parameterized accessors and port descriptors`() {
+        val (compilation, result) = compileKeepingSources(
+            portStubs, portClassStubs, graphStubs,
+            """
+            package example
+            import civictech.cell.Cell
+            import civictech.cell.port.FanInlet
+            import civictech.cell.port.FanOutlet
+
+            interface Ops<E> { fun add(e: E) }
+            class BagCell<E> : Cell {
+                val inlet: FanInlet<Ops<E>> = FanInlet()
+                val outlet: FanOutlet<Ops<E>> = FanOutlet()
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val generated = generatedSource(compilation, "BagCellPorts.kt")
+        assertTrue("const val INLET: String = \"inlet\"" in generated, generated)
+        assertTrue("public fun <E> inlet(): InletId<Ops<E>> = InletId(INLET)" in generated, generated)
+        assertTrue("public fun <E> outlet(): OutletId<Ops<E>> = OutletId(OUTLET)" in generated, generated)
+
+        val table = generatedSource(compilation, "ContractTable_")
+        assertTrue("PortDescriptor(\"inlet\", PortDirection.IN, \"example.Ops\"" in table, table)
+        assertTrue("PortDescriptor(\"outlet\", PortDirection.OUT, \"example.Ops\"" in table, table)
+    }
+
+    @Test
+    fun `non-generic cell gets val port ids and private cell gets descriptors only`() {
+        val (compilation, result) = compileKeepingSources(
+            portStubs, portClassStubs, graphStubs,
+            """
+            package example
+            import civictech.cell.Cell
+            import civictech.cell.port.FanInlet
+
+            interface Ops { fun ping() }
+            class PlainCell : Cell {
+                val inlet: FanInlet<Ops> = FanInlet()
+            }
+            private class HiddenCell : Cell {
+                val inlet: FanInlet<Ops> = FanInlet()
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val generated = generatedSource(compilation, "PlainCellPorts.kt")
+        assertTrue("public val inlet: InletId<Ops> = InletId(INLET)" in generated, generated)
+        assertTrue(generatedSources(compilation).none { it.name == "HiddenCellPorts.kt" })
+        val table = generatedSource(compilation, "ContractTable_")
+        assertTrue("example.HiddenCell" in table, table) // descriptor rows still emitted
+    }
+
+    private fun generatedSources(compilation: KotlinCompilation) =
+        compilation.kspSourcesDir.walkTopDown().filter { it.isFile }.toList()
+
+    private fun generatedSource(compilation: KotlinCompilation, nameFragment: String): String =
+        generatedSources(compilation)
+            .firstOrNull { it.name.contains(nameFragment.removeSuffix(".kt")) }
+            ?.readText()
+            ?: error(
+                "no generated source matching '$nameFragment' among:\n" +
+                    generatedSources(compilation).joinToString("\n") { it.path }
+            )
+
+    private fun compileKeepingSources(vararg source: String): Pair<KotlinCompilation, JvmCompilationResult> {
+        val compilation = KotlinCompilation().apply {
+            sources = source.mapIndexed { index, text -> SourceFile.kotlin("Source$index.kt", text) }
+            inheritClassPath = true
+            messageOutputStream = System.out
+            configureKsp(useKsp2 = true) {
+                symbolProcessorProviders += ContractProcessorProvider()
+            }
+        }
+        return compilation to compilation.compile()
     }
 
     private fun compile(vararg source: String): JvmCompilationResult =
