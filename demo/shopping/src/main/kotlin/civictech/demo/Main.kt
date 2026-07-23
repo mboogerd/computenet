@@ -17,7 +17,7 @@ import civictech.cell.host.link
 import civictech.cell.host.observe
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.proxy.RoutedPropagate
 import civictech.cell.wire.Peering
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
@@ -35,10 +35,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 interface SetInletProxy {
     val inlet: Use<SetOps<String>>
-}
-
-interface DeltaInletProxy {
-    val inlet: Use<Propagate<SetDelta<String>>>
 }
 
 class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
@@ -183,7 +179,7 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         usersFile?.takeIf { it.exists() }?.readLines()?.filter { it.isNotBlank() } ?: emptyList()
 
     private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
-        (HostedCellProxy.create(ref, registry, DeltaInletProxy::class.java) as DeltaInletProxy).inlet.call
+        RoutedPropagate(ref, "inlet", registry::deliver)
 
     private fun handleOp(exchange: HttpExchange) {
         val params = exchange.requestBody.readBytes().decodeToString()
