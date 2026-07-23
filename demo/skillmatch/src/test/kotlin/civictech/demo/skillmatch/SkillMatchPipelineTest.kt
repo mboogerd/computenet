@@ -4,10 +4,10 @@ import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetView
+import civictech.cell.graph.lookup
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
-import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -21,26 +21,6 @@ import java.util.Random
  * recompute from the final input sets on every seed.
  */
 class SkillMatchPipelineTest {
-
-    interface MatchOutletProxy {
-        val outlet: Subscribe<Propagate<SetDelta<Match>>>
-    }
-
-    interface GapOutletProxy {
-        val outlet: Subscribe<Propagate<SetDelta<JobSkill>>>
-    }
-
-    interface PairCountOutletProxy {
-        val outlet: Subscribe<Propagate<MapDelta<CandidateJob, Long>>>
-    }
-
-    interface JobCountOutletProxy {
-        val outlet: Subscribe<Propagate<MapDelta<String, Long>>>
-    }
-
-    interface SkillCountOutletProxy {
-        val outlet: Subscribe<Propagate<MapDelta<String, Long>>>
-    }
 
     @Test
     fun `incremental equals batch recompute on every seed`() {
@@ -60,21 +40,21 @@ class SkillMatchPipelineTest {
             val supply = mutableMapOf<String, Long>()
             val demand = mutableMapOf<String, Long>()
 
-            host.lookup<MatchOutletProxy>(refs.matches)!!.outlet.subscribe(
+            host.lookup(refs.matches)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<Match>> {
                     override fun propagate(value: SetDelta<Match>) {
                         matches.apply(value)
                     }
                 }, PortRef.generate())
             )
-            host.lookup<GapOutletProxy>(refs.gap)!!.outlet.subscribe(
+            host.lookup(refs.gap)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<JobSkill>> {
                     override fun propagate(value: SetDelta<JobSkill>) {
                         gap.apply(value)
                     }
                 }, PortRef.generate())
             )
-            host.lookup<PairCountOutletProxy>(refs.matchCounts)!!.outlet.subscribe(
+            host.lookup(refs.matchCounts)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<CandidateJob, Long>> {
                     override fun propagate(value: MapDelta<CandidateJob, Long>) {
                         matchCounts.putAll(value.puts)
@@ -82,7 +62,7 @@ class SkillMatchPipelineTest {
                     }
                 }, PortRef.generate())
             )
-            host.lookup<JobCountOutletProxy>(refs.required)!!.outlet.subscribe(
+            host.lookup(refs.required)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<String, Long>> {
                     override fun propagate(value: MapDelta<String, Long>) {
                         required.putAll(value.puts)
@@ -91,7 +71,7 @@ class SkillMatchPipelineTest {
                 }, PortRef.generate())
             )
 
-            host.lookup<SkillCountOutletProxy>(refs.supply)!!.outlet.subscribe(
+            host.lookup(refs.supply)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<String, Long>> {
                     override fun propagate(value: MapDelta<String, Long>) {
                         supply.putAll(value.puts)
@@ -99,7 +79,7 @@ class SkillMatchPipelineTest {
                     }
                 }, PortRef.generate())
             )
-            host.lookup<SkillCountOutletProxy>(refs.demand)!!.outlet.subscribe(
+            host.lookup(refs.demand)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<String, Long>> {
                     override fun propagate(value: MapDelta<String, Long>) {
                         demand.putAll(value.puts)
@@ -108,8 +88,8 @@ class SkillMatchPipelineTest {
                 }, PortRef.generate())
             )
 
-            val candOps = host.lookup<CandidateInletProxy>(refs.candSkills)!!.inlet.call
-            val jobOps = host.lookup<JobInletProxy>(refs.jobSkills)!!.inlet.call
+            val candOps = host.lookup(refs.candSkills)!!.inlet.call
+            val jobOps = host.lookup(refs.jobSkills)!!.inlet.call
 
             val rnd = Random(seed)
             val heldCand = mutableSetOf<CandidateSkill>()

@@ -2,17 +2,22 @@ package civictech.demo.skillmatch
 
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
+import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
+import civictech.cell.data.JoinSetApi
 import civictech.cell.data.JoinSetCell
 import civictech.cell.data.MapHubCell
+import civictech.cell.data.SemiJoinApi
 import civictech.cell.data.SemiJoinCell
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetHubCell
-import civictech.cell.data.SetOps
+import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
+import civictech.cell.graph.lookup
+import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.Use
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
@@ -54,18 +59,18 @@ data class CandidateJob(val candidate: String, val job: String) : Serializable, 
  */
 object SkillPipeline {
     data class Refs(
-        val candSkills: CellRef,
-        val jobSkills: CellRef,
-        val matches: CellRef,
-        val matchCounts: CellRef,
-        val required: CellRef,
-        val gap: CellRef,
-        val supply: CellRef,
-        val demand: CellRef,
+        val candSkills: TypedRef<SetApi<CandidateSkill>>,
+        val jobSkills: TypedRef<SetApi<JobSkill>>,
+        val matches: TypedRef<JoinSetApi<CandidateSkill, JobSkill, Match>>,
+        val matchCounts: TypedRef<GroupByApi<Match, CandidateJob, Long>>,
+        val required: TypedRef<GroupByApi<JobSkill, String, Long>>,
+        val gap: TypedRef<SemiJoinApi<JobSkill, CandidateSkill>>,
+        val supply: TypedRef<GroupByApi<CandidateSkill, String, Long>>,
+        val demand: TypedRef<GroupByApi<JobSkill, String, Long>>,
     )
 
     fun build(host: ManagedHost): Refs {
-        val refs = mutableMapOf<String, CellRef>()
+        lateinit var refs: Refs
         graph(host.managementInlet) {
             val cand = spawn("candSkills") { SetCell<CandidateSkill>() }
             val jobs = spawn("jobSkills") { SetCell<JobSkill>() }
@@ -109,28 +114,19 @@ object SkillPipeline {
             connect(cand, "outlet", gap, "right")
             connect(cand, "outlet", supply, "inlet")
             connect(jobs, "outlet", demand, "inlet")
-            listOf(cand, jobs, matches, matchCounts, required, gap, supply, demand)
-                .forEach { refs[it.name] = it.ref }
+            refs = Refs(
+                candSkills = cand.refAs(),
+                jobSkills = jobs.refAs(),
+                matches = matches.refAs(),
+                matchCounts = matchCounts.refAs(),
+                required = required.refAs(),
+                gap = gap.refAs(),
+                supply = supply.refAs(),
+                demand = demand.refAs(),
+            )
         }
-        return Refs(
-            candSkills = refs.getValue("candSkills"),
-            jobSkills = refs.getValue("jobSkills"),
-            matches = refs.getValue("matches"),
-            matchCounts = refs.getValue("matchCounts"),
-            required = refs.getValue("required"),
-            gap = refs.getValue("gap"),
-            supply = refs.getValue("supply"),
-            demand = refs.getValue("demand"),
-        )
+        return refs
     }
-}
-
-interface CandidateInletProxy {
-    val inlet: Use<SetOps<CandidateSkill>>
-}
-
-interface JobInletProxy {
-    val inlet: Use<SetOps<JobSkill>>
 }
 
 class SkillMatchApp(port: Int = 8080) {
@@ -138,8 +134,8 @@ class SkillMatchApp(port: Int = 8080) {
     private val host = ManagedHost(registry = registry)
     private val manage = host.managementInlet.call
     private val refs = SkillPipeline.build(host)
-    private val candOps = host.lookup<CandidateInletProxy>(refs.candSkills)!!.inlet.call
-    private val jobOps = host.lookup<JobInletProxy>(refs.jobSkills)!!.inlet.call
+    private val candOps = host.lookup(refs.candSkills)!!.inlet.call
+    private val jobOps = host.lookup(refs.jobSkills)!!.inlet.call
 
     private val state = Object()
     private var candSkills: Set<CandidateSkill> = emptySet()
@@ -169,14 +165,14 @@ class SkillMatchApp(port: Int = 8080) {
             manage.connect(ref, "outlet", hub.ref, "inlet")
         }
 
-        setHub<CandidateSkill>(refs.candSkills) { candSkills = it }
-        setHub<JobSkill>(refs.jobSkills) { jobSkills = it }
-        setHub<Match>(refs.matches) { matches = it }
-        setHub<JobSkill>(refs.gap) { gap = it }
-        mapHub<CandidateJob, Long>(refs.matchCounts) { matchCounts = it }
-        mapHub<String, Long>(refs.required) { required = it }
-        mapHub<String, Long>(refs.supply) { supply = it }
-        mapHub<String, Long>(refs.demand) { demand = it }
+        setHub<CandidateSkill>(refs.candSkills.ref) { candSkills = it }
+        setHub<JobSkill>(refs.jobSkills.ref) { jobSkills = it }
+        setHub<Match>(refs.matches.ref) { matches = it }
+        setHub<JobSkill>(refs.gap.ref) { gap = it }
+        mapHub<CandidateJob, Long>(refs.matchCounts.ref) { matchCounts = it }
+        mapHub<String, Long>(refs.required.ref) { required = it }
+        mapHub<String, Long>(refs.supply.ref) { supply = it }
+        mapHub<String, Long>(refs.demand.ref) { demand = it }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
