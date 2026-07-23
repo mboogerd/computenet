@@ -20,7 +20,6 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
-import java.io.OutputStream
 import java.io.Serializable
 import java.net.InetSocketAddress
 import java.net.URLDecoder
@@ -158,7 +157,7 @@ class SlotFinderApp(port: Int = 8080) {
     private val state = Object()
     private val slots = mutableMapOf<String, Set<Slot>>() // participant + stage name → membership
     private var byDay: Map<String, Long> = emptyMap()
-    private val clients = CopyOnWriteArrayList<OutputStream>()
+    private val clients = CopyOnWriteArrayList<HttpExchange>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
 
@@ -210,9 +209,8 @@ class SlotFinderApp(port: Int = 8080) {
         exchange.responseHeaders.add("Content-Type", "text/event-stream")
         exchange.responseHeaders.add("Cache-Control", "no-cache")
         exchange.sendResponseHeaders(200, 0)
-        val out = exchange.responseBody
-        clients += out
-        send(out, stateJson()) // a fresh tab catches up immediately
+        clients += exchange
+        send(exchange, stateJson()) // a fresh tab catches up immediately
     }
 
     private fun broadcast() {
@@ -220,12 +218,19 @@ class SlotFinderApp(port: Int = 8080) {
         clients.forEach { send(it, json) }
     }
 
-    private fun send(out: OutputStream, json: String) {
+    // One user op fans out through 7 hubs, each on its own scheduler thread, each calling
+    // broadcast(); those writes must not interleave on a shared stream, and a failed write must
+    // close the exchange so the browser's EventSource sees the close and reconnects (rather than
+    // sitting OPEN forever on a half-dead stream). Lock per-exchange; drop-and-close on failure.
+    private fun send(ex: HttpExchange, json: String) {
         try {
-            out.write("data: $json\n\n".toByteArray())
-            out.flush()
+            synchronized(ex) {
+                ex.responseBody.write("data: $json\n\n".toByteArray())
+                ex.responseBody.flush()
+            }
         } catch (_: Exception) {
-            clients -= out
+            clients -= ex
+            try { ex.close() } catch (_: Exception) {}
         }
     }
 
@@ -280,8 +285,12 @@ private val PAGE = """
   td button.on { background: var(--on); border-color: var(--on); color: #fff; }
   td button.hit { outline: 2px solid var(--hit); outline-offset: -1px; }
   .chips { display: flex; flex-wrap: wrap; gap: .3rem; min-height: 1.6rem; }
-  .chip { background: #ecfdf5; color: var(--hit); border: 1px solid #a7f3d0; border-radius: 999px; padding: .1rem .55rem; font-size: .75rem; }
+  .chip { background: #ecfdf5; color: var(--hit); border: 1px solid #a7f3d0; border-radius: 999px; padding: .1rem .55rem; font-size: .75rem; cursor: pointer; }
   .chip.pair { background: #eff6ff; color: var(--on); border-color: #bfdbfe; }
+  #result { font-size: .9rem; color: var(--dim); margin: .1rem 0 1rem; }
+  #result b { color: var(--hit); }
+  @keyframes flash { 30% { box-shadow: 0 0 0 3px var(--hit); } }
+  td button.flash { animation: flash .9s ease; }
   .bars { display: flex; gap: .6rem; align-items: flex-end; height: 90px; }
   .bar { display: flex; flex-direction: column; align-items: center; gap: .2rem; font-size: .7rem; color: var(--dim); }
   .bar div { width: 30px; background: var(--hit); border-radius: 4px 4px 0 0; min-height: 2px; }
@@ -289,6 +298,7 @@ private val PAGE = """
 </head>
 <body>
 <h1>Meeting-slot finder <small>every panel is a live incremental view — no recompute</small></h1>
+<p id="result">—</p>
 <div class="row" id="grids"></div>
 <div class="row">
   <div class="card"><h2>alice ∩ bob</h2><div class="chips" id="pair"></div></div>
@@ -330,7 +340,13 @@ function chips(id, slots, cls) {
   const el = document.getElementById(id); el.innerHTML = '';
   for (const s of slots) {
     const c = document.createElement('span'); c.className = 'chip ' + (cls || '');
-    c.textContent = s; el.appendChild(c);
+    c.textContent = s;
+    c.title = 'trace this slot back to who picked it';
+    c.onclick = () => USERS.forEach(u => {         // flash the slot across all three input grids
+      const b = document.getElementById(u + '-' + s);
+      if (b) { b.classList.remove('flash'); void b.offsetWidth; b.classList.add('flash'); }
+    });
+    el.appendChild(c);
   }
 }
 function render() {
@@ -345,6 +361,10 @@ function render() {
   chips('pair', state.pair || [], 'pair');
   chips('common', state.common || []);
   chips('filtered', state.filtered || []);
+  const f = state.filtered || [], r = document.getElementById('result');
+  r.innerHTML = f.length
+    ? '<b>' + f.length + '</b> business-hours slot' + (f.length > 1 ? 's' : '') + ' work for everyone — ' + f.join(', ')
+    : 'no business-hours slot works for all three yet';
   const bars = document.getElementById('byDay'); bars.innerHTML = '';
   const max = Math.max(1, ...Object.values(state.byDay || {}));
   for (const d of DAYS) {
@@ -354,7 +374,16 @@ function render() {
     bar.appendChild(fill); bar.append(d + ' · ' + n); bars.appendChild(bar);
   }
 }
-new EventSource('/events').onmessage = e => { state = JSON.parse(e.data); render(); };
+const apply = s => { state = s; render(); };
+function connect() {
+  const es = new EventSource('/events');
+  es.onmessage = e => apply(JSON.parse(e.data));
+  es.onerror = () => { es.close(); setTimeout(connect, 1000); }; // reconnect + re-catch-up
+}
+connect();
+// Safety net: /state serves the already-computed views (no dataflow recompute), so a periodic
+// resync guarantees the UI can never sit on stale data if a stream ever stalls silently.
+setInterval(() => fetch('/state').then(r => r.json()).then(apply).catch(() => {}), 8000);
 </script>
 </body>
 </html>

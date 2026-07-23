@@ -291,9 +291,15 @@ class SkillMatchApp(port: Int = 8080) {
     }
 
     private fun send(out: OutputStream, json: String) {
+        // per-stream lock: a connect-time send (HTTP thread) and a concurrent
+        // broadcast (scheduler thread) both write this same OutputStream, and
+        // java.io streams aren't thread-safe — interleaved frames would corrupt
+        // the SSE and silently freeze the client.
         try {
-            out.write("data: $json\n\n".toByteArray())
-            out.flush()
+            synchronized(out) {
+                out.write("data: $json\n\n".toByteArray())
+                out.flush()
+            }
         } catch (_: Exception) {
             clients -= out
         }

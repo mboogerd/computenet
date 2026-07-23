@@ -187,8 +187,14 @@ class TieringApp(port: Int = 8080) {
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
     // OR-set removal needs the old element, so re-tiering keeps an
-    // (agent,item) → Valuation index purely to issue removals (finding F-3)
+    // (agent,item) → Valuation index purely to issue removals (finding F-3).
+    // These are the app's *authoritative* write-side record, maintained
+    // synchronously in the op handlers. The `valuations`/`prefs` fields above
+    // are the async read model (folded off the SSE hubs); cascades must use
+    // THESE indices, never the read model, or a signal added just before an
+    // unitem is missed and ghosts the removed item onto the board.
     private val currentValuation = mutableMapOf<Pair<String, String>, Valuation>()
+    private val livePrefs = mutableSetOf<Pref>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
 
@@ -241,12 +247,16 @@ class TieringApp(port: Int = 8080) {
             "unitem" -> {
                 val item = name("name") ?: return exchange.respond(400, "missing name")
                 itemOps.remove(item)
-                // cascade the item's own signals so it doesn't haunt the board
+                // cascade the item's own signals so it doesn't haunt the board.
+                // Drive from the authoritative write-side indices, not the async
+                // read model, so a signal added moments earlier is never missed.
                 synchronized(state) {
-                    valuations.filter { it.item == item }.forEach {
-                        valOps.remove(it); currentValuation.remove(it.agent to item)
+                    currentValuation.keys.filter { it.second == item }.toList().forEach { key ->
+                        currentValuation.remove(key)?.let { valOps.remove(it) }
                     }
-                    prefs.filter { it.winner == item || it.loser == item }.forEach { prefOps.remove(it) }
+                    livePrefs.filter { it.winner == item || it.loser == item }.forEach {
+                        livePrefs -= it; prefOps.remove(it)
+                    }
                 }
             }
 
@@ -271,7 +281,10 @@ class TieringApp(port: Int = 8080) {
                 val loser = name("loser") ?: return exchange.respond(400, "missing loser")
                 if (winner == loser) return exchange.respond(400, "winner and loser must differ")
                 val p = Pref(agent, winner, loser)
-                if (params["action"] == "pref") prefOps.add(p) else prefOps.remove(p)
+                synchronized(state) {
+                    if (params["action"] == "pref") { livePrefs += p; prefOps.add(p) }
+                    else { livePrefs -= p; prefOps.remove(p) }
+                }
             }
 
             else -> return exchange.respond(400, "unknown action")
@@ -295,8 +308,12 @@ class TieringApp(port: Int = 8080) {
 
     private fun send(out: OutputStream, json: String) {
         try {
-            out.write("data: $json\n\n".toByteArray())
-            out.flush()
+            // per-stream lock: concurrent broadcasts (hubs fire on virtual
+            // threads) must not interleave bytes into one SSE frame
+            synchronized(out) {
+                out.write("data: $json\n\n".toByteArray())
+                out.flush()
+            }
         } catch (_: Exception) {
             clients -= out
         }
