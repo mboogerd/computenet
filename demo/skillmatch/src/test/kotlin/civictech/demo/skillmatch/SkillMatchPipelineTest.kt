@@ -3,6 +3,7 @@ package civictech.demo.skillmatch
 import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetDelta
+import civictech.cell.data.SetView
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
@@ -52,8 +53,8 @@ class SkillMatchPipelineTest {
             val host = ManagedHost(scheduler = controller.scheduler())
             val refs = SkillPipeline.build(host)
 
-            val matches = SetFold<Match>()
-            val gap = SetFold<JobSkill>()
+            val matches = SetView<Match>()
+            val gap = SetView<JobSkill>()
             val matchCounts = mutableMapOf<CandidateJob, Long>()
             val required = mutableMapOf<String, Long>()
             val supply = mutableMapOf<String, Long>()
@@ -61,12 +62,16 @@ class SkillMatchPipelineTest {
 
             host.lookup<MatchOutletProxy>(refs.matches)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<Match>> {
-                    override fun propagate(value: SetDelta<Match>) = matches.apply(value)
+                    override fun propagate(value: SetDelta<Match>) {
+                        matches.apply(value)
+                    }
                 }, PortRef.generate())
             )
             host.lookup<GapOutletProxy>(refs.gap)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<JobSkill>> {
-                    override fun propagate(value: SetDelta<JobSkill>) = gap.apply(value)
+                    override fun propagate(value: SetDelta<JobSkill>) {
+                        gap.apply(value)
+                    }
                 }, PortRef.generate())
             )
             host.lookup<PairCountOutletProxy>(refs.matchCounts)!!.outlet.subscribe(

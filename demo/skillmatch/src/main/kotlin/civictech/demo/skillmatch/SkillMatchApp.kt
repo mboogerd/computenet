@@ -1,30 +1,24 @@
 package civictech.demo.skillmatch
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.JoinSetCell
-import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.data.MapHubCell
 import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
+import civictech.cell.data.SetHubCell
 import civictech.cell.data.SetOps
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
 import java.io.Serializable
 import java.net.InetSocketAddress
 import java.net.URLDecoder
-import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -137,61 +131,6 @@ interface CandidateInletProxy {
 
 interface JobInletProxy {
     val inlet: Use<SetOps<JobSkill>>
-}
-
-/** Folds tagged set deltas into current membership, any element type. */
-class SetFold<E> {
-    private val live = mutableMapOf<E, MutableSet<Timestamp>>()
-
-    fun apply(delta: SetDelta<E>) {
-        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
-        delta.dels.forEach { (e, tags) ->
-            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
-        }
-    }
-
-    fun current(): Set<E> = live.keys.toSet()
-}
-
-/** A hub cell folding one derived set stream into app state. */
-class SetHubCell<E>(
-    private val onUpdate: (Set<E>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val fold = SetFold<E>()
-
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<E>>>))
-
-    init {
-        inlet.serve(object : Propagate<SetDelta<E>> {
-            override fun propagate(value: SetDelta<E>) {
-                fold.apply(value)
-                onUpdate(fold.current())
-            }
-        })
-    }
-}
-
-/** A hub cell folding one MapDelta stream into app state. */
-class MapHubCell<K, V>(
-    private val onUpdate: (Map<K, V>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val entries = mutableMapOf<K, V>()
-
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<K, V>>>))
-
-    init {
-        inlet.serve(object : Propagate<MapDelta<K, V>> {
-            override fun propagate(value: MapDelta<K, V>) {
-                entries.putAll(value.puts)
-                value.removals.forEach { entries.remove(it) }
-                onUpdate(entries.toMap())
-            }
-        })
-    }
 }
 
 class SkillMatchApp(port: Int = 8080) {
