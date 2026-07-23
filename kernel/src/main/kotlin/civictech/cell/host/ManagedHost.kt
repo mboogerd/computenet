@@ -901,6 +901,19 @@ open class ManagedHost(
                         if (port is FeedbackInlet<*>) port.barrier = { ctx.enqueueBarrier(it) }
                     }
                 }
+                // generated descriptors are authoritative: if the processor saw
+                // this cell's ports, every declared port must be registered under
+                // its property name — the KSP-unlintable half of G-17, enforced
+                // here. Subset check: dynamic extra ports stay legal.
+                civictech.gen.wire.ContractRegistry.cellDescriptor(cell.javaClass)
+                    ?.ports?.takeIf { it.isNotEmpty() }?.let { declared ->
+                        val registered = PortRegistry.of(cell).names()
+                        val missing = declared.map { it.name }.filterNot { it in registered }
+                        require(missing.isEmpty()) {
+                            "cell ${cell.javaClass.name}: descriptor declares ports $missing not found in " +
+                                "registry $registered — registerPort's name must equal the property name (G-17)"
+                        }
+                    }
                 cell.onActivate(ctx)
                 // spawn-time checkpoint: what a RESTART supervision restores (G-26)
                 if (cell is Stateful) checkpoints[cell.ref] = cell.snapshot()

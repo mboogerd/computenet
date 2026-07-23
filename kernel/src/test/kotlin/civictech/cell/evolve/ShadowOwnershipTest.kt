@@ -39,8 +39,8 @@ class ShadowOwnershipTest {
     }
 
     private class ShadowSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Effectful {
-        val ownedInlet = registerPort("owned", FanInlet.create<ShadowOwnedPush>())
-        val leasedInlet = registerPort("leased", FanInlet.create<ShadowLeasedPush>())
+        val ownedInlet = registerPort("ownedInlet", FanInlet.create<ShadowOwnedPush>())
+        val leasedInlet = registerPort("leasedInlet", FanInlet.create<ShadowLeasedPush>())
         var effects = 0
 
         init {
