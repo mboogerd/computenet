@@ -382,6 +382,8 @@ private val PAGE = """
   .itemrow b { min-width: 5.5rem; }
   .pick button { width: 1.7rem; height: 1.5rem; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: .7rem; border-radius: 4px; }
   .pick button.mine { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .itemrow .del { margin-left: .5rem; border: none; background: none; color: var(--dim); cursor: pointer; font-size: 1rem; line-height: 1; }
+  .itemrow .del:hover { color: #dc2626; }
   .prefline { font-size: .85rem; margin: .2rem 0; }
   .prefline button { border: none; background: none; color: var(--dim); cursor: pointer; }
   table { border-collapse: collapse; font-size: .8rem; width: 100%; }
@@ -469,7 +471,11 @@ function render() {
       btn.onclick = () => op({ action: 'tier', agent: me(), item, tier: t });
       pick.appendChild(btn);
     }
-    div.appendChild(pick); rate.appendChild(div);
+    div.appendChild(pick);
+    const del = document.createElement('button');
+    del.textContent = '×'; del.className = 'del'; del.title = 'remove item (retracts it and its signals globally)';
+    del.onclick = () => op({ action: 'unitem', name: item });
+    div.appendChild(del); rate.appendChild(div);
   }
 
   for (const sel of [winner, loser]) {
