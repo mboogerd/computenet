@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
+import civictech.cell.data.CombineLatestCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.JoinSetCell
 import civictech.cell.data.MapDelta
@@ -36,9 +37,10 @@ import java.util.concurrent.CopyOnWriteArrayList
  * want it). All views are incremental — adding or removing one skill flows one
  * delta through join/groupBy/antijoin.
  *
- * Qualification (matched == required) and the market (supply vs demand) are both
- * computed in the hub because the kernel has no per-key combine operator over
- * two MapDelta streams — recorded as finding F-1 in doc/demo-findings.md.
+ * The market (supply vs demand) is a real incremental CombineLatestCell — an
+ * outer per-key combine of the two count streams. Qualification (matched ==
+ * required) is still computed in the hub, recorded as finding F-1 in
+ * doc/demo-findings.md.
  */
 data class CandidateSkill(val candidate: String, val skill: String) : Serializable
 
@@ -50,6 +52,8 @@ data class CandidateJob(val candidate: String, val job: String) : Serializable, 
     override fun compareTo(other: CandidateJob) =
         compareValuesBy(this, other, { it.candidate }, { it.job })
 }
+
+data class MarketEntry(val supply: Long, val demand: Long, val scarce: Boolean) : Serializable
 
 /**
  * The dataflow pipeline, shared verbatim by the app and the seeded test:
@@ -68,6 +72,7 @@ object SkillPipeline {
         val gap: CellRef,
         val supply: CellRef,
         val demand: CellRef,
+        val market: CellRef,
     )
 
     fun build(host: ManagedHost): Refs {
@@ -107,6 +112,17 @@ object SkillPipeline {
             val demand = spawn("demand") {
                 GroupByCell(keyFn = { js: JobSkill -> js.skill }, aggregator = Aggregators.count<JobSkill>())
             }
+            // market = per-key outer combine of supply vs demand, a real
+            // incremental cell (CombineLatestCell) rather than an edge union.
+            val market = spawn("market") {
+                CombineLatestCell<String, Long, Long, MarketEntry>(
+                    combine = { _, s, d ->
+                        val sv = s ?: 0L
+                        val dv = d ?: 0L
+                        MarketEntry(sv, dv, dv > sv)
+                    },
+                )
+            }
             connect(cand, "outlet", matches, "left")
             connect(jobs, "outlet", matches, "right")
             connect(matches, "outlet", matchCounts, "inlet")
@@ -115,7 +131,9 @@ object SkillPipeline {
             connect(cand, "outlet", gap, "right")
             connect(cand, "outlet", supply, "inlet")
             connect(jobs, "outlet", demand, "inlet")
-            listOf(cand, jobs, matches, matchCounts, required, gap, supply, demand)
+            connect(supply, "outlet", market, "left")
+            connect(demand, "outlet", market, "right")
+            listOf(cand, jobs, matches, matchCounts, required, gap, supply, demand, market)
                 .forEach { refs[it.name] = it.ref }
         }
         return Refs(
@@ -127,6 +145,7 @@ object SkillPipeline {
             gap = refs.getValue("gap"),
             supply = refs.getValue("supply"),
             demand = refs.getValue("demand"),
+            market = refs.getValue("market"),
         )
     }
 }
@@ -209,8 +228,7 @@ class SkillMatchApp(port: Int = 8080) {
     private var matchCounts: Map<CandidateJob, Long> = emptyMap()
     private var required: Map<String, Long> = emptyMap()
     private var gap: Set<JobSkill> = emptySet()
-    private var supply: Map<String, Long> = emptyMap()
-    private var demand: Map<String, Long> = emptyMap()
+    private var market: Map<String, MarketEntry> = emptyMap()
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
@@ -236,8 +254,7 @@ class SkillMatchApp(port: Int = 8080) {
         setHub<JobSkill>(refs.gap) { gap = it }
         mapHub<CandidateJob, Long>(refs.matchCounts) { matchCounts = it }
         mapHub<String, Long>(refs.required) { required = it }
-        mapHub<String, Long>(refs.supply) { supply = it }
-        mapHub<String, Long>(refs.demand) { demand = it }
+        mapHub<String, MarketEntry>(refs.market) { market = it }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
@@ -325,19 +342,19 @@ class SkillMatchApp(port: Int = 8080) {
             .joinToString(",", "[", "]") {
                 """{"candidate":${esc(it.candidate)},"job":${esc(it.job)},"skill":${esc(it.skill)}}"""
             }
-        // market = per-skill supply vs demand, another edge combine of two
-        // MapDelta streams (kernel gap F-1). A skill demanded by more jobs than
-        // candidates supply it is under-supplied; demand with zero supply is
-        // exactly the gap, generalized to counts.
-        val market = (supply.keys + demand.keys).sorted().joinToString(",", "[", "]") { skill ->
-            val s = supply[skill] ?: 0L
-            val d = demand[skill] ?: 0L
-            """{"skill":${esc(skill)},"supply":$s,"demand":$d,"scarce":${d > s}}"""
+        // market = per-skill supply vs demand, now a real incremental
+        // CombineLatestCell (outer combine of the two count streams) folded into
+        // `market`. A skill demanded by more jobs than candidates supply it is
+        // under-supplied; demand with zero supply is exactly the gap, generalized
+        // to counts.
+        val marketJson = market.keys.sorted().joinToString(",", "[", "]") { skill ->
+            val e = market.getValue(skill)
+            """{"skill":${esc(skill)},"supply":${e.supply},"demand":${e.demand},"scarce":${e.scarce}}"""
         }
 
         """{"candidates":${grouped(candSkills.map { it.candidate to it.skill })},""" +
                 """"jobs":${grouped(jobSkills.map { it.job to it.skill })},""" +
-                """"matches":$matchList,"progress":$progress,"gap":$gaps,"market":$market}"""
+                """"matches":$matchList,"progress":$progress,"gap":$gaps,"market":$marketJson}"""
     }
 
     private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
