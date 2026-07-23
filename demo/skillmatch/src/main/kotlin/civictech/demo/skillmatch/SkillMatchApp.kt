@@ -1,24 +1,21 @@
 package civictech.demo.skillmatch
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
 import civictech.cell.data.CombineLatestCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.JoinSetCell
-import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.data.LookupJoinCell
 import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.FanInlet
+import civictech.cell.host.ObservationSink
+import civictech.cell.host.View
+import civictech.cell.host.observe
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
@@ -39,8 +36,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  *
  * The market (supply vs demand) is a real incremental CombineLatestCell — an
  * outer per-key combine of the two count streams. Qualification (matched ==
- * required) is still computed in the hub, recorded as finding F-1 in
- * doc/demo-findings.md.
+ * required) is a real incremental LookupJoinCell — a foreign-key/dimension join
+ * of the per-pair match counts against the per-job required counts (closing the
+ * former hub-edge computation, finding F-1 in doc/demo-findings.md).
  */
 data class CandidateSkill(val candidate: String, val skill: String) : Serializable
 
@@ -54,6 +52,8 @@ data class CandidateJob(val candidate: String, val job: String) : Serializable, 
 }
 
 data class MarketEntry(val supply: Long, val demand: Long, val scarce: Boolean) : Serializable
+
+data class QualEntry(val matched: Long, val required: Long, val qualified: Boolean) : Serializable
 
 /**
  * The dataflow pipeline, shared verbatim by the app and the seeded test:
@@ -69,6 +69,7 @@ object SkillPipeline {
         val matches: CellRef,
         val matchCounts: CellRef,
         val required: CellRef,
+        val qualification: CellRef,
         val gap: CellRef,
         val supply: CellRef,
         val demand: CellRef,
@@ -95,6 +96,20 @@ object SkillPipeline {
             }
             val required = spawn("required") {
                 GroupByCell(keyFn = { js: JobSkill -> js.job }, aggregator = Aggregators.count<JobSkill>())
+            }
+            // qualification = incremental foreign-key join: each (candidate,job)
+            // fact enriched with its job's required-skill count (dimension via
+            // fk = job), qualified iff the match count equals a positive
+            // requirement. Reactive on both sides — a change to a job's required
+            // count re-emits every pair for that job.
+            val qualification = spawn("qualification") {
+                LookupJoinCell<CandidateJob, Long, String, Long, QualEntry>(
+                    fk = { it.job },
+                    combine = { _, matched, need ->
+                        val nd = need ?: 0L
+                        QualEntry(matched, nd, matched == nd && nd > 0L)
+                    },
+                )
             }
             val gap = spawn("gap") {
                 SemiJoinCell(
@@ -127,13 +142,15 @@ object SkillPipeline {
             connect(jobs, "outlet", matches, "right")
             connect(matches, "outlet", matchCounts, "inlet")
             connect(jobs, "outlet", required, "inlet")
+            connect(matchCounts, "outlet", qualification, "fact")
+            connect(required, "outlet", qualification, "dimension")
             connect(jobs, "outlet", gap, "left")
             connect(cand, "outlet", gap, "right")
             connect(cand, "outlet", supply, "inlet")
             connect(jobs, "outlet", demand, "inlet")
             connect(supply, "outlet", market, "left")
             connect(demand, "outlet", market, "right")
-            listOf(cand, jobs, matches, matchCounts, required, gap, supply, demand, market)
+            listOf(cand, jobs, matches, matchCounts, required, qualification, gap, supply, demand, market)
                 .forEach { refs[it.name] = it.ref }
         }
         return Refs(
@@ -142,6 +159,7 @@ object SkillPipeline {
             matches = refs.getValue("matches"),
             matchCounts = refs.getValue("matchCounts"),
             required = refs.getValue("required"),
+            qualification = refs.getValue("qualification"),
             gap = refs.getValue("gap"),
             supply = refs.getValue("supply"),
             demand = refs.getValue("demand"),
@@ -158,77 +176,32 @@ interface JobInletProxy {
     val inlet: Use<SetOps<JobSkill>>
 }
 
-/** Folds tagged set deltas into current membership, any element type. */
-class SetFold<E> {
-    private val live = mutableMapOf<E, MutableSet<Timestamp>>()
-
-    fun apply(delta: SetDelta<E>) {
-        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
-        delta.dels.forEach { (e, tags) ->
-            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
-        }
-    }
-
-    fun current(): Set<E> = live.keys.toSet()
-}
-
-/** A hub cell folding one derived set stream into app state. */
-class SetHubCell<E>(
-    private val onUpdate: (Set<E>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val fold = SetFold<E>()
-
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<E>>>))
-
-    init {
-        inlet.serve(object : Propagate<SetDelta<E>> {
-            override fun propagate(value: SetDelta<E>) {
-                fold.apply(value)
-                onUpdate(fold.current())
-            }
-        })
-    }
-}
-
-/** A hub cell folding one MapDelta stream into app state. */
-class MapHubCell<K, V>(
-    private val onUpdate: (Map<K, V>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val entries = mutableMapOf<K, V>()
-
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<K, V>>>))
-
-    init {
-        inlet.serve(object : Propagate<MapDelta<K, V>> {
-            override fun propagate(value: MapDelta<K, V>) {
-                entries.putAll(value.puts)
-                value.removals.forEach { entries.remove(it) }
-                onUpdate(entries.toMap())
-            }
-        })
-    }
-}
-
 class SkillMatchApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
-    private val manage = host.managementInlet.call
     private val refs = SkillPipeline.build(host)
     private val candOps = host.lookup<CandidateInletProxy>(refs.candSkills)!!.inlet.call
     private val jobOps = host.lookup<JobInletProxy>(refs.jobSkills)!!.inlet.call
 
-    private val state = Object()
-    private var candSkills: Set<CandidateSkill> = emptySet()
-    private var jobSkills: Set<JobSkill> = emptySet()
-    private var matches: Set<Match> = emptySet()
-    private var matchCounts: Map<CandidateJob, Long> = emptyMap()
-    private var required: Map<String, Long> = emptyMap()
-    private var gap: Set<JobSkill> = emptySet()
-    private var market: Map<String, MarketEntry> = emptyMap()
+    // Observation sinks: each folds one pipeline outlet's delta stream into a
+    // thread-safe, immutable materialized snapshot (the host observation sink).
+    // `observe(...)` spawns+connects the sink cell immediately; `current()` is a
+    // consistent snapshot readable from any thread, so `stateJson()` needs no
+    // external monitor. The `broadcast()` onChange listener is wired in `init`,
+    // once `clients`/`server` exist (see below).
+    private val candSkills: ObservationSink<Set<CandidateSkill>> =
+        host.observe(refs.candSkills, View.set<CandidateSkill>())
+    private val jobSkills: ObservationSink<Set<JobSkill>> =
+        host.observe(refs.jobSkills, View.set<JobSkill>())
+    private val matches: ObservationSink<Set<Match>> =
+        host.observe(refs.matches, View.set<Match>())
+    private val gap: ObservationSink<Set<JobSkill>> =
+        host.observe(refs.gap, View.set<JobSkill>())
+    private val qualification: ObservationSink<Map<CandidateJob, QualEntry>> =
+        host.observe(refs.qualification, View.map<CandidateJob, QualEntry>())
+    private val market: ObservationSink<Map<String, MarketEntry>> =
+        host.observe(refs.market, View.map<String, MarketEntry>())
+
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
@@ -236,31 +209,18 @@ class SkillMatchApp(port: Int = 8080) {
     val boundPort: Int get() = server.address.port
 
     init {
-        fun <E> setHub(ref: CellRef, sink: (Set<E>) -> Unit) {
-            val hub = SetHubCell<E>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-
-        fun <K, V> mapHub(ref: CellRef, sink: (Map<K, V>) -> Unit) {
-            val hub = MapHubCell<K, V>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-
-        setHub<CandidateSkill>(refs.candSkills) { candSkills = it }
-        setHub<JobSkill>(refs.jobSkills) { jobSkills = it }
-        setHub<Match>(refs.matches) { matches = it }
-        setHub<JobSkill>(refs.gap) { gap = it }
-        mapHub<CandidateJob, Long>(refs.matchCounts) { matchCounts = it }
-        mapHub<String, Long>(refs.required) { required = it }
-        mapHub<String, MarketEntry>(refs.market) { market = it }
-
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
         server.createContext("/op") { handleOp(it) }
         server.createContext("/events") { handleEvents(it) }
         server.executor = null
+
+        // Wire broadcast now that the SSE machinery exists. onChange fires once
+        // immediately (late-join catch-up with current state) then on every
+        // settled effective change; no SSE clients are connected yet during
+        // construction, so the catch-up broadcast is a no-op.
+        listOf(candSkills, jobSkills, matches, gap, qualification, market)
+            .forEach { sink -> sink.onChange { broadcast() } }
     }
 
     private fun handleOp(exchange: HttpExchange) {
@@ -322,7 +282,7 @@ class SkillMatchApp(port: Int = 8080) {
         }
     }
 
-    private fun stateJson(): String = synchronized(state) {
+    private fun stateJson(): String {
         fun esc(s: String) = "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
         fun grouped(pairs: List<Pair<String, String>>): String =
             pairs.groupBy({ it.first }, { it.second }).toSortedMap()
@@ -330,15 +290,17 @@ class SkillMatchApp(port: Int = 8080) {
                     "${esc(owner)}:${skills.sorted().joinToString(",", "[", "]") { esc(it) }}"
                 }
 
-        // qualification = per-key comparison of two folded MapDelta streams
-        // (kernel gap F-1: no combine-latest cell — computed at the edge)
-        val progress = matchCounts.entries.sortedBy { it.key }.joinToString(",", "[", "]") { (cj, matched) ->
-            val need = required[cj.job] ?: 0L
-            """{"candidate":${esc(cj.candidate)},"job":${esc(cj.job)},"matched":$matched,"required":$need,"qualified":${matched == need && need > 0L}}"""
+        // qualification = incremental foreign-key join (LookupJoinCell): each
+        // (candidate,job) fact enriched with its job's required-skill count,
+        // folded into `qualification`. Replaces the former edge computation
+        // (kernel gap F-1 — now closed by the join cell).
+        val qualNow = qualification.current()
+        val progress = qualNow.entries.sortedBy { it.key }.joinToString(",", "[", "]") { (cj, e) ->
+            """{"candidate":${esc(cj.candidate)},"job":${esc(cj.job)},"matched":${e.matched},"required":${e.required},"qualified":${e.qualified}}"""
         }
-        val gaps = gap.sortedWith(compareBy({ it.job }, { it.skill }))
+        val gaps = gap.current().sortedWith(compareBy({ it.job }, { it.skill }))
             .joinToString(",", "[", "]") { """{"job":${esc(it.job)},"skill":${esc(it.skill)}}""" }
-        val matchList = matches.sortedWith(compareBy({ it.candidate }, { it.job }, { it.skill }))
+        val matchList = matches.current().sortedWith(compareBy({ it.candidate }, { it.job }, { it.skill }))
             .joinToString(",", "[", "]") {
                 """{"candidate":${esc(it.candidate)},"job":${esc(it.job)},"skill":${esc(it.skill)}}"""
             }
@@ -347,13 +309,14 @@ class SkillMatchApp(port: Int = 8080) {
         // `market`. A skill demanded by more jobs than candidates supply it is
         // under-supplied; demand with zero supply is exactly the gap, generalized
         // to counts.
-        val marketJson = market.keys.sorted().joinToString(",", "[", "]") { skill ->
-            val e = market.getValue(skill)
+        val marketNow = market.current()
+        val marketJson = marketNow.keys.sorted().joinToString(",", "[", "]") { skill ->
+            val e = marketNow.getValue(skill)
             """{"skill":${esc(skill)},"supply":${e.supply},"demand":${e.demand},"scarce":${e.scarce}}"""
         }
 
-        """{"candidates":${grouped(candSkills.map { it.candidate to it.skill })},""" +
-                """"jobs":${grouped(jobSkills.map { it.job to it.skill })},""" +
+        return """{"candidates":${grouped(candSkills.current().map { it.candidate to it.skill })},""" +
+                """"jobs":${grouped(jobSkills.current().map { it.job to it.skill })},""" +
                 """"matches":$matchList,"progress":$progress,"gap":$gaps,"market":$marketJson}"""
     }
 
