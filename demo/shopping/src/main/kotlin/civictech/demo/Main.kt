@@ -13,6 +13,7 @@ import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.View
+import civictech.cell.host.link
 import civictech.cell.host.observe
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo
@@ -111,8 +112,8 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         // out of the intersection, so it neither shows a ★ nor inflates the count.
         val wantedCell = IntersectSetCell<String>()
         manage.spawn(wantedCell)
-        manage.connect(itemsUnion.ref, "outlet", wantedCell.ref, "left")
-        manage.connect(votesUnion.ref, "outlet", wantedCell.ref, "right")
+        manage.link(itemsUnion.outlet, wantedCell.left)
+        manage.link(votesUnion.outlet, wantedCell.right)
         host.observe(wantedCell.ref, View.set<String>()) {
             synchronized(state) { wanted = it; voteCount = it.size.toLong() }; broadcast()
         }
