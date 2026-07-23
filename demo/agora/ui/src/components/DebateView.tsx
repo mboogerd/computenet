@@ -1,5 +1,14 @@
 import { createMemo, Show } from 'solid-js';
-import { graph, nodes, structuralVersion, focal, selection, setSelection } from '../solid/graph';
+import {
+  graph,
+  nodes,
+  structuralVersion,
+  focal,
+  selection,
+  setSelection,
+  debateSort,
+  setDebateSort,
+} from '../solid/graph';
 import { debateRows } from '../layout/debate';
 import FocalClaimsPicker from './FocalClaimsPicker';
 import DebateColumn from './DebateColumn';
@@ -15,7 +24,7 @@ export default function DebateView() {
     structuralVersion();
     const f = focal();
     if (!f || !graph.get(f)) return { support: [], attack: [] };
-    return debateRows(graph, f);
+    return debateRows(graph, f, debateSort());
   });
   const focalNode = () => {
     const f = focal();
@@ -27,6 +36,26 @@ export default function DebateView() {
       <div class="debate__bar">
         <label class="debate__bar-label">Focal claim</label>
         <FocalClaimsPicker />
+        <div class="debate__bar-spacer" />
+        <div
+          class="debate__sort"
+          role="group"
+          title="How to rank arguments. Effective pull = the link's own credence × its source claim's credence — the strength it actually exerts here."
+        >
+          <span class="debate__sort-label">Rank by</span>
+          <button
+            classList={{ active: debateSort() === 'link' }}
+            onClick={() => setDebateSort('link')}
+          >
+            Link strength
+          </button>
+          <button
+            classList={{ active: debateSort() === 'effective' }}
+            onClick={() => setDebateSort('effective')}
+          >
+            Effective pull
+          </button>
+        </div>
       </div>
 
       <Show

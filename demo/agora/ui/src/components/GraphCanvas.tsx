@@ -77,11 +77,17 @@ export default function GraphCanvas() {
     const l = layout();
     if (!l || !mapEl || !l.width) return;
     const rect = mapEl.getBoundingClientRect();
+    // On first paint the flex chain may not have sized the map yet (rect ~0),
+    // which would fit to a near-zero scale — leave the view untouched; the
+    // rAF-scheduled callers below re-run fit once layout has settled.
+    if (rect.width < 1 || rect.height < 1) return;
     const k = Math.min(1, Math.min(rect.width / l.width, rect.height / l.height));
     setView({ k, x: (rect.width - l.width * k) / 2, y: 24 });
   };
 
-  onMount(() => queueMicrotask(fit));
+  // rAF, not queueMicrotask: a microtask runs before the browser's layout pass,
+  // so getBoundingClientRect() would read a stale/zero size on first mount.
+  onMount(() => requestAnimationFrame(fit));
   // re-fit when the focal (hence the whole layout) changes
   let lastFocal: string | null = null;
   createEffect(() => {
@@ -89,7 +95,7 @@ export default function GraphCanvas() {
     structuralVersion();
     if (f !== lastFocal) {
       lastFocal = f;
-      queueMicrotask(fit);
+      requestAnimationFrame(fit);
     }
   });
 
@@ -143,7 +149,16 @@ export default function GraphCanvas() {
                   </marker>
                 </defs>
 
-                <For each={l().segments}>
+                <For
+                  each={l().segments.filter((s) => {
+                    // Drop segments touching an unreachable node — those vertices
+                    // never leave the origin, so their lines/markers would pile
+                    // up at the scene's top-left corner.
+                    const f = l().vertices.get(s.from);
+                    const t = l().vertices.get(s.to);
+                    return f && t && f.depth !== -1 && t.depth !== -1;
+                  })}
+                >
                   {(seg) => {
                     const f = l().vertices.get(seg.from)!;
                     const t = l().vertices.get(seg.to)!;
@@ -177,7 +192,9 @@ export default function GraphCanvas() {
                   }}
                 </For>
 
-                <For each={[...l().vertices.values()].filter((v) => v.kind === 'EDGE')}>
+                <For
+                  each={[...l().vertices.values()].filter((v) => v.kind === 'EDGE' && v.depth !== -1)}
+                >
                   {(v) => {
                     const rec = () => nodes[v.ref];
                     const band = () => (rec() ? bandFor(rec()!.credence) : 'contested');
@@ -220,7 +237,9 @@ export default function GraphCanvas() {
                 </For>
               </svg>
 
-              <For each={[...l().vertices.values()].filter((v) => v.kind === 'CLAIM')}>
+              <For
+                each={[...l().vertices.values()].filter((v) => v.kind === 'CLAIM' && v.depth !== -1)}
+              >
                 {(v) => {
                   const rec = () => nodes[v.ref];
                   const band = () => (rec() ? bandFor(rec()!.credence) : 'contested');

@@ -49,6 +49,13 @@ identity) are tracked in the design spec §9.
 
 ## Notes
 
+- **Debate ranking** (design spec §3 sort caveat): the pro/con columns can rank by
+  **link strength** (the edge's own credence, the v1 default) or by **effective pull**
+  = `credence(edge) × credence(source)` — the strength the edge actually exerts on the
+  focal claim, so a strong link from a discredited source can't outrank a moderate link
+  from a solid one. Toggle in the debate bar; the choice persists in `localStorage`.
+  Effective mode annotates each row with its `… pull` value. Row *order* still recomputes
+  only on structural/sort change (not per vote), so live credence ticks restyle in place.
 - `/op` is form-encoded (`k=v&k=v`) — commands always use `URLSearchParams`, never JSON.
 - The credence "leaning" bands are their strong pole at 45% opacity via `color-mix` (tokens.css),
   visually confirmed in light and dark.

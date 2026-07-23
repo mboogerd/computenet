@@ -1,8 +1,8 @@
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import CredenceBadge from './CredenceBadge';
-import { graph, nodes, structuralVersion, selection, setSelection } from '../solid/graph';
+import { graph, nodes, structuralVersion, selection, setSelection, debateSort } from '../solid/graph';
 import { pulsing } from '../solid/hot';
-import { debateRows, type ArgRow } from '../layout/debate';
+import { debateRows, effectivePull, type ArgRow } from '../layout/debate';
 import { labelOf } from '../util/label';
 import './ArgumentRow.css';
 
@@ -26,8 +26,11 @@ export default function ArgumentRow(props: { row: ArgRow; depth?: number }) {
   const children = createMemo<ArgRow[]>(() => {
     if (!expanded()) return [];
     structuralVersion();
-    const r = debateRows(graph, props.row.source.ref);
-    return [...r.attack, ...r.support].sort((a, b) => b.edge.credence - a.edge.credence);
+    const r = debateRows(graph, props.row.source.ref, debateSort());
+    // Nested replies aren't split into columns, so merge and re-rank by the
+    // same metric the top level uses.
+    const key = debateSort() === 'effective' ? effectivePull : (x: ArgRow) => x.edge.credence;
+    return [...r.attack, ...r.support].sort((a, b) => key(b) - key(a));
   });
 
   return (
@@ -58,6 +61,14 @@ export default function ArgumentRow(props: { row: ArgRow; depth?: number }) {
             </span>
           </Show>
         </button>
+        <Show when={debateSort() === 'effective'}>
+          <span
+            class="arg-row__pull"
+            title="Effective pull = link credence × source credence"
+          >
+            {(edge().credence * source().credence).toFixed(2)} pull
+          </span>
+        </Show>
       </div>
 
       <Show when={depth() < MAX_DEPTH && replyCount() > 0}>

@@ -18,6 +18,40 @@
   letter-spacing: 0.04em;
 }
 
+.debate__bar-spacer {
+  flex: 1;
+}
+
+.debate__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.debate__sort-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.debate__sort > button {
+  padding: 0.3rem 0.6rem;
+  background: var(--surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.debate__sort > button.active {
+  background: var(--accept-strong);
+  border-color: var(--accept-strong);
+  color: #fff;
+}
+
 .focal-picker {
   flex: 1;
   max-width: 46ch;

@@ -48,6 +48,26 @@ describe('debateRows', () => {
     expect(rows.attack[0].challenges).toBe(1); // e2 challenges e1
   });
 
+  it('effective-pull sort ranks by credence(edge) × credence(source), not edge alone', () => {
+    const store = new GraphStore();
+    store.applySnapshot(
+      [
+        dto('A', 'CLAIM', { text: 'focal' }),
+        // strong link (0.9) from a discredited source (0.2) -> pull 0.18
+        dto('weak', 'CLAIM', { credence: 0.2 }),
+        dto('eWeak', 'EDGE', { polarity: 'SUPPORT', source: 'weak', target: 'A', credence: 0.9 }),
+        // moderate link (0.6) from a solid source (0.9) -> pull 0.54
+        dto('solid', 'CLAIM', { credence: 0.9 }),
+        dto('eSolid', 'EDGE', { polarity: 'SUPPORT', source: 'solid', target: 'A', credence: 0.6 }),
+      ],
+      { now: 0 },
+    );
+    // by link credence: the strong-but-discredited edge wins
+    expect(debateRows(store, 'A', 'link').support.map((r) => r.edge.ref)).toEqual(['eWeak', 'eSolid']);
+    // by effective pull: the solid source's edge wins (0.54 > 0.18)
+    expect(debateRows(store, 'A', 'effective').support.map((r) => r.edge.ref)).toEqual(['eSolid', 'eWeak']);
+  });
+
   it('returns empty columns for an unknown or edgeless focal', () => {
     const store = new GraphStore();
     store.applySnapshot([dto('A', 'CLAIM')], { now: 0 });

@@ -5,6 +5,7 @@ import { History } from '../sync/history';
 import { SseClient } from '../sync/sse';
 import type { ConnState } from '../sync/sse';
 import type { Delta, NodeRec, Ref } from '../api/types';
+import type { DebateSort } from '../layout/debate';
 
 export type Mode = 'debate' | 'map';
 
@@ -23,6 +24,9 @@ const [ready, setReady] = createSignal(false);
 const [selection, setSelection] = createSignal<Ref | null>(null);
 const [mode, setMode] = createSignal<Mode>('debate');
 const [focal, setFocal] = createSignal<Ref | null>(null);
+const [debateSort, _setDebateSort] = createSignal<DebateSort>(
+  (localStorage.getItem('agora.debateSort') as DebateSort) ?? 'link',
+);
 const [ticker, setTicker] = createSignal<{ ref: Ref; t: number; drift: number }[]>([]);
 const [pulses, setPulses] = createStore<Record<Ref, number>>({});
 const [toasts, setToasts] = createSignal<{ id: number; msg: string }[]>([]);
@@ -39,10 +43,17 @@ export {
   setMode,
   focal,
   setFocal,
+  debateSort,
   ticker,
   pulses,
   toasts,
 };
+
+/** Persisted so the chosen ranking survives a reload, like theme/motion. */
+export function setDebateSort(s: DebateSort): void {
+  localStorage.setItem('agora.debateSort', s);
+  _setDebateSort(s);
+}
 
 /** A transient error/info toast (spec §7 command errors). */
 export function notify(msg: string): void {
