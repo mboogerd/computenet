@@ -37,6 +37,10 @@ class SkillMatchPipelineTest {
         val outlet: Subscribe<Propagate<MapDelta<String, Long>>>
     }
 
+    interface SkillCountOutletProxy {
+        val outlet: Subscribe<Propagate<MapDelta<String, Long>>>
+    }
+
     @Test
     fun `incremental equals batch recompute on every seed`() {
         val candidates = listOf("ada", "bo", "cy")
@@ -52,6 +56,8 @@ class SkillMatchPipelineTest {
             val gap = SetFold<JobSkill>()
             val matchCounts = mutableMapOf<CandidateJob, Long>()
             val required = mutableMapOf<String, Long>()
+            val supply = mutableMapOf<String, Long>()
+            val demand = mutableMapOf<String, Long>()
 
             host.lookup<MatchOutletProxy>(refs.matches)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<Match>> {
@@ -76,6 +82,23 @@ class SkillMatchPipelineTest {
                     override fun propagate(value: MapDelta<String, Long>) {
                         required.putAll(value.puts)
                         value.removals.forEach { required.remove(it) }
+                    }
+                }, PortRef.generate())
+            )
+
+            host.lookup<SkillCountOutletProxy>(refs.supply)!!.outlet.subscribe(
+                Use.fixed(object : Propagate<MapDelta<String, Long>> {
+                    override fun propagate(value: MapDelta<String, Long>) {
+                        supply.putAll(value.puts)
+                        value.removals.forEach { supply.remove(it) }
+                    }
+                }, PortRef.generate())
+            )
+            host.lookup<SkillCountOutletProxy>(refs.demand)!!.outlet.subscribe(
+                Use.fixed(object : Propagate<MapDelta<String, Long>> {
+                    override fun propagate(value: MapDelta<String, Long>) {
+                        demand.putAll(value.puts)
+                        value.removals.forEach { demand.remove(it) }
                     }
                 }, PortRef.generate())
             )
@@ -115,11 +138,15 @@ class SkillMatchPipelineTest {
             val batchRequired = heldJob.groupBy { it.job }.mapValues { it.value.size.toLong() }
             val candSkillSet = heldCand.map { it.skill }.toSet()
             val batchGap = heldJob.filter { it.skill !in candSkillSet }.toSet()
+            val batchSupply = heldCand.groupBy { it.skill }.mapValues { it.value.size.toLong() }
+            val batchDemand = heldJob.groupBy { it.skill }.mapValues { it.value.size.toLong() }
 
             assertEquals(batchMatches, matches.current(), "seed=$seed matches diverged")
             assertEquals(batchMatchCounts, matchCounts.toMap(), "seed=$seed matchCounts diverged")
             assertEquals(batchRequired, required.toMap(), "seed=$seed required diverged")
             assertEquals(batchGap, gap.current(), "seed=$seed gap diverged")
+            assertEquals(batchSupply, supply.toMap(), "seed=$seed supply diverged")
+            assertEquals(batchDemand, demand.toMap(), "seed=$seed demand diverged")
 
             // qualified derived both ways (the hub-side comparison, F-1)
             val incQualified = matchCounts.filter { (cj, n) -> required[cj.job] == n }.keys

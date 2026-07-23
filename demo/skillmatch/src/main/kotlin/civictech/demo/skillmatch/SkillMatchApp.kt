@@ -31,12 +31,14 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Skill matching: candidates declare skills, jobs declare required skills.
  * A relational equi-join yields per-skill matches; grouped counts against the
  * jobs' required counts yield qualification; a negated semijoin yields the
- * skills gap (required skills no candidate has). All views are incremental —
- * adding or removing one skill flows one delta through join/groupBy/antijoin.
+ * skills gap (required skills no candidate has); two more grouped counts yield
+ * the per-skill market (supply = candidates who have it, demand = jobs that
+ * want it). All views are incremental — adding or removing one skill flows one
+ * delta through join/groupBy/antijoin.
  *
- * Qualification itself (matched == required) is computed in the hub because
- * the kernel has no per-key combine operator over two MapDelta streams —
- * recorded as finding F-1 in doc/demo-findings.md.
+ * Qualification (matched == required) and the market (supply vs demand) are both
+ * computed in the hub because the kernel has no per-key combine operator over
+ * two MapDelta streams — recorded as finding F-1 in doc/demo-findings.md.
  */
 data class CandidateSkill(val candidate: String, val skill: String) : Serializable
 
@@ -64,6 +66,8 @@ object SkillPipeline {
         val matchCounts: CellRef,
         val required: CellRef,
         val gap: CellRef,
+        val supply: CellRef,
+        val demand: CellRef,
     )
 
     fun build(host: ManagedHost): Refs {
@@ -94,13 +98,25 @@ object SkillPipeline {
                     negated = true,
                 )
             }
+            // market view: per-skill supply (candidates who have it) and demand
+            // (jobs that require it), each an incremental count over the same
+            // set outlets that already feed the join.
+            val supply = spawn("supply") {
+                GroupByCell(keyFn = { cs: CandidateSkill -> cs.skill }, aggregator = Aggregators.count<CandidateSkill>())
+            }
+            val demand = spawn("demand") {
+                GroupByCell(keyFn = { js: JobSkill -> js.skill }, aggregator = Aggregators.count<JobSkill>())
+            }
             connect(cand, "outlet", matches, "left")
             connect(jobs, "outlet", matches, "right")
             connect(matches, "outlet", matchCounts, "inlet")
             connect(jobs, "outlet", required, "inlet")
             connect(jobs, "outlet", gap, "left")
             connect(cand, "outlet", gap, "right")
-            listOf(cand, jobs, matches, matchCounts, required, gap).forEach { refs[it.name] = it.ref }
+            connect(cand, "outlet", supply, "inlet")
+            connect(jobs, "outlet", demand, "inlet")
+            listOf(cand, jobs, matches, matchCounts, required, gap, supply, demand)
+                .forEach { refs[it.name] = it.ref }
         }
         return Refs(
             candSkills = refs.getValue("candSkills"),
@@ -109,6 +125,8 @@ object SkillPipeline {
             matchCounts = refs.getValue("matchCounts"),
             required = refs.getValue("required"),
             gap = refs.getValue("gap"),
+            supply = refs.getValue("supply"),
+            demand = refs.getValue("demand"),
         )
     }
 }
@@ -191,6 +209,8 @@ class SkillMatchApp(port: Int = 8080) {
     private var matchCounts: Map<CandidateJob, Long> = emptyMap()
     private var required: Map<String, Long> = emptyMap()
     private var gap: Set<JobSkill> = emptySet()
+    private var supply: Map<String, Long> = emptyMap()
+    private var demand: Map<String, Long> = emptyMap()
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
@@ -216,6 +236,8 @@ class SkillMatchApp(port: Int = 8080) {
         setHub<JobSkill>(refs.gap) { gap = it }
         mapHub<CandidateJob, Long>(refs.matchCounts) { matchCounts = it }
         mapHub<String, Long>(refs.required) { required = it }
+        mapHub<String, Long>(refs.supply) { supply = it }
+        mapHub<String, Long>(refs.demand) { demand = it }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
@@ -297,10 +319,19 @@ class SkillMatchApp(port: Int = 8080) {
             .joinToString(",", "[", "]") {
                 """{"candidate":${esc(it.candidate)},"job":${esc(it.job)},"skill":${esc(it.skill)}}"""
             }
+        // market = per-skill supply vs demand, another edge combine of two
+        // MapDelta streams (kernel gap F-1). A skill demanded by more jobs than
+        // candidates supply it is under-supplied; demand with zero supply is
+        // exactly the gap, generalized to counts.
+        val market = (supply.keys + demand.keys).sorted().joinToString(",", "[", "]") { skill ->
+            val s = supply[skill] ?: 0L
+            val d = demand[skill] ?: 0L
+            """{"skill":${esc(skill)},"supply":$s,"demand":$d,"scarce":${d > s}}"""
+        }
 
         """{"candidates":${grouped(candSkills.map { it.candidate to it.skill })},""" +
                 """"jobs":${grouped(jobSkills.map { it.job to it.skill })},""" +
-                """"matches":$matchList,"progress":$progress,"gap":$gaps}"""
+                """"matches":$matchList,"progress":$progress,"gap":$gaps,"market":$market}"""
     }
 
     private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
@@ -350,6 +381,11 @@ private val PAGE = """
   .prog .meter div { height: 100%; background: var(--amber); }
   .prog.ok .meter div { background: var(--green); }
   .badge { font-size: .7rem; border-radius: 999px; padding: .1rem .5rem; background: #ecfdf5; color: var(--green); border: 1px solid #a7f3d0; }
+  .mkt { display: flex; align-items: center; gap: .5rem; margin: .25rem 0; font-size: .9rem; }
+  .mkt .name { flex: 0 0 8rem; }
+  .mkt .nums { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .mkt.scarce .name { color: var(--red); font-weight: 600; }
+  .mkt .tag { font-size: .7rem; border-radius: 999px; padding: .05rem .45rem; background: #fef2f2; color: var(--red); border: 1px solid #fecaca; }
 </style>
 </head>
 <body>
@@ -370,6 +406,9 @@ private val PAGE = """
   <div class="card"><h2>Qualification (matched / required)</h2><div id="progress"></div></div>
   <div class="card"><h2>Matches (candidate ⋈ job on skill)</h2><div id="matches"></div></div>
   <div class="card"><h2>Skills gap (required, nobody has)</h2><div id="gap"></div></div>
+</div>
+<div class="row">
+  <div class="card"><h2>Skill market (supply vs demand)</h2><div id="market"></div></div>
 </div>
 <script>
 const op = body => fetch('/op', { method: 'POST',
@@ -417,6 +456,17 @@ new EventSource('/events').onmessage = e => {
   owners('jobs', s.jobs, 'unjskill', 'job');
   chips('matches', s.matches, 'match', m => m.candidate + ' ⋈ ' + m.job + ' · ' + m.skill);
   chips('gap', s.gap, 'gapchip', g => g.job + ': ' + g.skill);
+  const mkt = document.getElementById('market'); mkt.innerHTML = '';
+  for (const m of s.market) {
+    const div = document.createElement('div');
+    div.className = 'mkt' + (m.scarce ? ' scarce' : '');
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = m.skill;
+    const nums = document.createElement('span'); nums.className = 'nums';
+    nums.textContent = m.supply + ' have · ' + m.demand + ' want';
+    div.append(name, nums);
+    if (m.scarce) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'under-supplied'; div.appendChild(t); }
+    mkt.appendChild(div);
+  }
   const el = document.getElementById('progress'); el.innerHTML = '';
   for (const p of s.progress) {
     const div = document.createElement('div');
