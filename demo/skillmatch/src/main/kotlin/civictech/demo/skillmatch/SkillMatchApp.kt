@@ -79,77 +79,82 @@ object SkillPipeline {
     fun build(host: ManagedHost): Refs {
         val refs = mutableMapOf<String, CellRef>()
         graph(host.managementInlet) {
-            val cand = spawn("candSkills") { SetCell<CandidateSkill>() }
-            val jobs = spawn("jobSkills") { SetCell<JobSkill>() }
-            val matches = spawn("matches") {
-                JoinSetCell(
-                    leftKey = { cs: CandidateSkill -> cs.skill },
-                    rightKey = { js: JobSkill -> js.skill },
-                    combine = { cs: CandidateSkill, js: JobSkill -> Match(cs.candidate, js.job, cs.skill) },
-                )
-            }
-            val matchCounts = spawn("matchCounts") {
-                GroupByCell(
-                    keyFn = { m: Match -> CandidateJob(m.candidate, m.job) },
-                    aggregator = Aggregators.count<Match>(),
-                )
-            }
-            val required = spawn("required") {
+            // Capture each cell instance so its typed ports can be linked below
+            // (spawn returns a CellHandle, not the cell); the handle vals still
+            // populate `refs`. `link` recovers each port's owner handle from the
+            // builder index, so the recorded connects are byte-identical to the
+            // former stringly-typed connect(...) calls.
+            val candCell = SetCell<CandidateSkill>()
+            val cand = spawn("candSkills") { candCell }
+            val jobsCell = SetCell<JobSkill>()
+            val jobs = spawn("jobSkills") { jobsCell }
+            val matchesCell = JoinSetCell(
+                leftKey = { cs: CandidateSkill -> cs.skill },
+                rightKey = { js: JobSkill -> js.skill },
+                combine = { cs: CandidateSkill, js: JobSkill -> Match(cs.candidate, js.job, cs.skill) },
+            )
+            val matches = spawn("matches") { matchesCell }
+            val matchCountsCell = GroupByCell(
+                keyFn = { m: Match -> CandidateJob(m.candidate, m.job) },
+                aggregator = Aggregators.count<Match>(),
+            )
+            val matchCounts = spawn("matchCounts") { matchCountsCell }
+            val requiredCell =
                 GroupByCell(keyFn = { js: JobSkill -> js.job }, aggregator = Aggregators.count<JobSkill>())
-            }
+            val required = spawn("required") { requiredCell }
             // qualification = incremental foreign-key join: each (candidate,job)
             // fact enriched with its job's required-skill count (dimension via
             // fk = job), qualified iff the match count equals a positive
             // requirement. Reactive on both sides — a change to a job's required
             // count re-emits every pair for that job.
-            val qualification = spawn("qualification") {
-                LookupJoinCell<CandidateJob, Long, String, Long, QualEntry>(
-                    fk = { it.job },
-                    combine = { _, matched, need ->
-                        val nd = need ?: 0L
-                        QualEntry(matched, nd, matched == nd && nd > 0L)
-                    },
-                )
-            }
-            val gap = spawn("gap") {
-                SemiJoinCell(
-                    leftKey = { js: JobSkill -> js.skill },
-                    rightKey = { cs: CandidateSkill -> cs.skill },
-                    negated = true,
-                )
-            }
+            val qualificationCell = LookupJoinCell<CandidateJob, Long, String, Long, QualEntry>(
+                fk = { it.job },
+                combine = { _, matched, need ->
+                    val nd = need ?: 0L
+                    QualEntry(matched, nd, matched == nd && nd > 0L)
+                },
+            )
+            val qualification = spawn("qualification") { qualificationCell }
+            val gapCell = SemiJoinCell(
+                leftKey = { js: JobSkill -> js.skill },
+                rightKey = { cs: CandidateSkill -> cs.skill },
+                negated = true,
+            )
+            val gap = spawn("gap") { gapCell }
             // market view: per-skill supply (candidates who have it) and demand
             // (jobs that require it), each an incremental count over the same
             // set outlets that already feed the join.
-            val supply = spawn("supply") {
+            val supplyCell =
                 GroupByCell(keyFn = { cs: CandidateSkill -> cs.skill }, aggregator = Aggregators.count<CandidateSkill>())
-            }
-            val demand = spawn("demand") {
+            val supply = spawn("supply") { supplyCell }
+            val demandCell =
                 GroupByCell(keyFn = { js: JobSkill -> js.skill }, aggregator = Aggregators.count<JobSkill>())
-            }
+            val demand = spawn("demand") { demandCell }
             // market = per-key outer combine of supply vs demand, a real
             // incremental cell (CombineLatestCell) rather than an edge union.
-            val market = spawn("market") {
-                CombineLatestCell<String, Long, Long, MarketEntry>(
-                    combine = { _, s, d ->
-                        val sv = s ?: 0L
-                        val dv = d ?: 0L
-                        MarketEntry(sv, dv, dv > sv)
-                    },
-                )
-            }
-            connect(cand, "outlet", matches, "left")
-            connect(jobs, "outlet", matches, "right")
-            connect(matches, "outlet", matchCounts, "inlet")
-            connect(jobs, "outlet", required, "inlet")
-            connect(matchCounts, "outlet", qualification, "fact")
-            connect(required, "outlet", qualification, "dimension")
-            connect(jobs, "outlet", gap, "left")
-            connect(cand, "outlet", gap, "right")
-            connect(cand, "outlet", supply, "inlet")
-            connect(jobs, "outlet", demand, "inlet")
-            connect(supply, "outlet", market, "left")
-            connect(demand, "outlet", market, "right")
+            val marketCell = CombineLatestCell<String, Long, Long, MarketEntry>(
+                combine = { _, s, d ->
+                    val sv = s ?: 0L
+                    val dv = d ?: 0L
+                    MarketEntry(sv, dv, dv > sv)
+                },
+            )
+            val market = spawn("market") { marketCell }
+            // Typed, compile-checked wiring: each link's out/inn must share the
+            // same Api payload type, so a mismatch or wrong-direction wiring is a
+            // compile error rather than a runtime reject.
+            link(candCell.outlet, matchesCell.left)
+            link(jobsCell.outlet, matchesCell.right)
+            link(matchesCell.outlet, matchCountsCell.inlet)
+            link(jobsCell.outlet, requiredCell.inlet)
+            link(matchCountsCell.outlet, qualificationCell.fact)
+            link(requiredCell.outlet, qualificationCell.dimension)
+            link(jobsCell.outlet, gapCell.left)
+            link(candCell.outlet, gapCell.right)
+            link(candCell.outlet, supplyCell.inlet)
+            link(jobsCell.outlet, demandCell.inlet)
+            link(supplyCell.outlet, marketCell.left)
+            link(demandCell.outlet, marketCell.right)
             listOf(cand, jobs, matches, matchCounts, required, qualification, gap, supply, demand, market)
                 .forEach { refs[it.name] = it.ref }
         }
