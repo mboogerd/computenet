@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
+import civictech.cell.data.CombineLatestCell
 import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.KeyedSetCell
@@ -33,8 +34,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  * and relative pairwise preferences ("x beats y"); both fold into one global
  * S–F tier board, incrementally re-tiered on any change. Score fusion +
  * fixed thresholds live in [Tiering]; the two signal averages are ordinary
- * GroupBy cells; combining them per key is [FuseCell] — the app-level
- * prototype for the missing kernel combine-latest operator (F-1/F-2).
+ * GroupBy cells; combining them per key is the kernel
+ * [CombineLatestCell] — the outer per-key combine this demo prototyped
+ * (F-1/F-2), wired with `combine = Tiering.fuse`.
  */
 data class Valuation(val agent: String, val item: String, val score: Long) : Serializable
 
@@ -52,7 +54,7 @@ data class Contribution(val item: String, val agent: String, val opponent: Strin
  *
  *   vals  (KeyedSetCell<(agent,item), Valuation>) ─► tierAvg (GroupBy item, avg score)  ─► fuse.left
  *   prefs (SetCell<Pref>) ─► contribs (flatMap ±1) ─► prefAvg (GroupBy item, avg sign) ─► fuse.right
- *   fuse (FuseCell) ─► MapDelta<item, Tiered>
+ *   fuse (CombineLatestCell, combine = Tiering.fuse) ─► MapDelta<item, Tiered>
  */
 object TierPipeline {
     data class Refs(
@@ -84,7 +86,7 @@ object TierPipeline {
             val prefAvg = spawn("prefAvg") {
                 GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = Aggregators.avgOf { c: Contribution -> c.sign })
             }
-            val fused = spawn("fused") { FuseCell() }
+            val fused = spawn("fused") { CombineLatestCell<String, Double, Double, Tiered>(combine = { _, t, p -> Tiering.fuse(t, p) }) }
             connect(vals, "outlet", tierAvg, "inlet")
             connect(prefs, "outlet", contribs, "inlet")
             connect(contribs, "outlet", prefAvg, "inlet")
