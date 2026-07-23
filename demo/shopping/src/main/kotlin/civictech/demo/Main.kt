@@ -7,18 +7,21 @@ import civictech.cell.data.FilterCell
 import civictech.cell.data.CountCell
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.Propagate
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
+import civictech.cell.data.SetHubApi
 import civictech.cell.data.SetHubCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.data.onEach
 import civictech.cell.durability.FileJournal
+import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
+import civictech.cell.graph.lookup
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
-import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.port.streamTo
 import civictech.cell.proxy.HostedCellProxy
@@ -47,14 +50,6 @@ private class CounterHubCell(
     init {
         inlet.onEach { total += it.amount; onUpdate(total) }
     }
-}
-
-interface SetInletProxy {
-    val inlet: Use<SetOps<String>>
-}
-
-interface DeltaInletProxy {
-    val inlet: Use<Propagate<SetDelta<String>>>
 }
 
 class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
@@ -157,9 +152,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             // peer replays the full history in order and converges.
             val chained = mapOf(
                 unionRef("items", peerRole) to
-                        (itemsUnion to itemsUnion.outlet.streamTo(routedDelta(unionRef("items", peerRole)))),
+                        (itemsUnion to itemsUnion.outlet.streamTo(routedDelta(TypedRef(unionRef("items", peerRole))))),
                 unionRef("votes", peerRole) to
-                        (votesUnion to votesUnion.outlet.streamTo(routedDelta(unionRef("votes", peerRole)))),
+                        (votesUnion to votesUnion.outlet.streamTo(routedDelta(TypedRef(unionRef("votes", peerRole))))),
             )
             // Anti-entropy on (re)announce (M10.4): a returning peer may have
             // missed deltas its dying socket swallowed — re-fire the catch-up
@@ -196,11 +191,11 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
                 val voteCell = SetCell<String>(CellRef(UUID.nameUUIDFromBytes("demo-writer:votes:$user@$myRole".toByteArray())))
                 manage.spawn(itemCell)
                 manage.spawn(voteCell)
-                itemCell.outlet.streamTo(routedDelta(itemsUnion.ref))
-                voteCell.outlet.streamTo(routedDelta(votesUnion.ref))
+                itemCell.outlet.streamTo(routedDelta(TypedRef(itemsUnion.ref)))
+                voteCell.outlet.streamTo(routedDelta(TypedRef(votesUnion.ref)))
                 usersFile?.takeIf { user !in knownUsers() }?.appendText(user + "\n")
-                val itemApi = host.lookup<SetInletProxy>(itemCell.ref)!!.inlet.call
-                val voteApi = host.lookup<SetInletProxy>(voteCell.ref)!!.inlet.call
+                val itemApi = host.lookup(TypedRef<SetApi<String>>(itemCell.ref))!!.inlet.call
+                val voteApi = host.lookup(TypedRef<SetApi<String>>(voteCell.ref))!!.inlet.call
                 itemApi to voteApi
             }
         }
@@ -208,8 +203,14 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     private fun knownUsers(): List<String> =
         usersFile?.takeIf { it.exists() }?.readLines()?.filter { it.isNotBlank() } ?: emptyList()
 
-    private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
-        (HostedCellProxy.create(ref, registry, DeltaInletProxy::class.java) as DeltaInletProxy).inlet.call
+    // The union's own api types its inlet as Serve (producer side, no `call`),
+    // so the typed ref is minted against SetHubApi — the kernel interface whose
+    // shape (`inlet: Use<Propagate<SetDelta<E>>>`) matches the port being
+    // navigated. Registry-resolving proxy (not host.lookup): sends to a peer's
+    // not-yet-announced union must park and replay on publication (spec 33).
+    @Suppress("UNCHECKED_CAST")
+    private fun routedDelta(tref: TypedRef<SetHubApi<String>>): Propagate<SetDelta<String>> =
+        (HostedCellProxy.create(tref.ref, registry, SetHubApi::class.java) as SetHubApi<String>).inlet.call
 
     private fun handleOp(exchange: HttpExchange) {
         val params = exchange.requestBody.readBytes().decodeToString()
