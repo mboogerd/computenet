@@ -60,29 +60,36 @@ object SlotPipeline {
     )
 
     fun build(host: ManagedHost): Refs {
-        val refs = mutableMapOf<String, CellRef>()
+        // Cells are held as instances so the pipeline can be wired with the
+        // kernel's compile-checked link(a.outlet, b.inlet): a payload-type or
+        // direction mismatch is now a Kotlin compile error, not a runtime surprise.
+        val sources = PARTICIPANTS.associateWith { SetCell<Slot>() }
+        val common = QuorumSetCell<Slot>(threshold = { n -> n })
+        val nearMiss = QuorumSetCell<Slot>(threshold = { n -> n - 1 })
+        val filtered = FilterCell<Slot> { it.hour in Slot.BUSINESS_HOURS }
+        val byDay = GroupByCell(keyFn = { s: Slot -> s.day }, aggregator = Aggregators.count<Slot>())
+
         graph(host.managementInlet) {
-            val sources = PARTICIPANTS.associateWith { spawn(it) { SetCell<Slot>() } }
-            val common = spawn("common") { QuorumSetCell<Slot>(threshold = { n -> n }) }
-            val nearMiss = spawn("nearMiss") { QuorumSetCell<Slot>(threshold = { n -> n - 1 }) }
-            val filtered = spawn("filtered") { FilterCell<Slot> { it.hour in Slot.BUSINESS_HOURS } }
-            val byDay = spawn("byDay") {
-                GroupByCell(keyFn = { s: Slot -> s.day }, aggregator = Aggregators.count<Slot>())
-            }
+            sources.forEach { (name, cell) -> spawn(name) { cell } }
+            spawn("common") { common }
+            spawn("nearMiss") { nearMiss }
+            spawn("filtered") { filtered }
+            spawn("byDay") { byDay }
+
             PARTICIPANTS.forEach { p ->
-                connect(sources.getValue(p), "outlet", common, "inlet")
-                connect(sources.getValue(p), "outlet", nearMiss, "inlet")
+                val source = sources.getValue(p)
+                link(source.outlet, common.inlet)   // fan-in: many sources → one quorum inlet
+                link(source.outlet, nearMiss.inlet)
             }
-            connect(common, "outlet", filtered, "inlet")
-            connect(filtered, "outlet", byDay, "inlet")
-            (sources.values + listOf(common, nearMiss, filtered, byDay)).forEach { refs[it.name] = it.ref }
+            link(common.outlet, filtered.inlet)
+            link(filtered.outlet, byDay.inlet)
         }
         return Refs(
-            participants = PARTICIPANTS.associateWith { refs.getValue(it) },
-            common = refs.getValue("common"),
-            nearMiss = refs.getValue("nearMiss"),
-            filtered = refs.getValue("filtered"),
-            byDay = refs.getValue("byDay"),
+            participants = sources.mapValues { (_, cell) -> cell.ref },
+            common = common.ref,
+            nearMiss = nearMiss.ref,
+            filtered = filtered.ref,
+            byDay = byDay.ref,
         )
     }
 }
