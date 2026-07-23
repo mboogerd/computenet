@@ -1,18 +1,23 @@
 package civictech.demo.slotfinder
 
-import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.FilterCell
+import civictech.cell.data.FilterSetApi
+import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
+import civictech.cell.data.IntersectSetApi
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.MapHubCell
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetHubCell
 import civictech.cell.data.SetOps
+import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
+import civictech.cell.graph.lookup
+import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.Use
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.Serializable
@@ -49,15 +54,15 @@ val PARTICIPANTS = listOf("alice", "bob", "carol")
  */
 object SlotPipeline {
     data class Refs(
-        val participants: Map<String, CellRef>,
-        val pairAB: CellRef,
-        val common: CellRef,
-        val filtered: CellRef,
-        val byDay: CellRef,
+        val participants: Map<String, TypedRef<SetApi<Slot>>>,
+        val pairAB: TypedRef<IntersectSetApi<Slot>>,
+        val common: TypedRef<IntersectSetApi<Slot>>,
+        val filtered: TypedRef<FilterSetApi<Slot>>,
+        val byDay: TypedRef<GroupByApi<Slot, String, Long>>,
     )
 
     fun build(host: ManagedHost): Refs {
-        val refs = mutableMapOf<String, CellRef>()
+        lateinit var refs: Refs
         graph(host.managementInlet) {
             val sources = PARTICIPANTS.associateWith { spawn(it) { SetCell<Slot>() } }
             val pairAB = spawn("pairAB") { IntersectSetCell<Slot>() }
@@ -72,20 +77,16 @@ object SlotPipeline {
             connect(sources.getValue("carol"), "outlet", common, "right")
             connect(common, "outlet", filtered, "inlet")
             connect(filtered, "outlet", byDay, "inlet")
-            (sources.values + listOf(pairAB, common, filtered, byDay)).forEach { refs[it.name] = it.ref }
+            refs = Refs(
+                participants = sources.mapValues { it.value.refAs<SetApi<Slot>>() },
+                pairAB = pairAB.refAs(),
+                common = common.refAs(),
+                filtered = filtered.refAs(),
+                byDay = byDay.refAs(),
+            )
         }
-        return Refs(
-            participants = PARTICIPANTS.associateWith { refs.getValue(it) },
-            pairAB = refs.getValue("pairAB"),
-            common = refs.getValue("common"),
-            filtered = refs.getValue("filtered"),
-            byDay = refs.getValue("byDay"),
-        )
+        return refs
     }
-}
-
-interface SlotInletProxy {
-    val inlet: Use<SetOps<Slot>>
 }
 
 class SlotFinderApp(port: Int = 8080) {
@@ -93,8 +94,8 @@ class SlotFinderApp(port: Int = 8080) {
     private val host = ManagedHost(registry = registry)
     private val manage = host.managementInlet.call
     private val refs = SlotPipeline.build(host)
-    private val writers: Map<String, SetOps<Slot>> = refs.participants.mapValues { (_, ref) ->
-        host.lookup<SlotInletProxy>(ref)!!.inlet.call
+    private val writers: Map<String, SetOps<Slot>> = refs.participants.mapValues { (_, tref) ->
+        host.lookup(tref)!!.inlet.call
     }
 
     private val state = Object()
@@ -107,8 +108,8 @@ class SlotFinderApp(port: Int = 8080) {
     val boundPort: Int get() = server.address.port
 
     init {
-        val observed = refs.participants + mapOf(
-            "pair" to refs.pairAB, "common" to refs.common, "filtered" to refs.filtered,
+        val observed = refs.participants.mapValues { it.value.ref } + mapOf(
+            "pair" to refs.pairAB.ref, "common" to refs.common.ref, "filtered" to refs.filtered.ref,
         )
         observed.forEach { (name, ref) ->
             val hub = SetHubCell<Slot>({ synchronized(state) { slots[name] = it }; broadcast() })
@@ -117,7 +118,7 @@ class SlotFinderApp(port: Int = 8080) {
         }
         val dayHub = MapHubCell<String, Long>({ synchronized(state) { byDay = it }; broadcast() })
         manage.spawn(dayHub)
-        manage.connect(refs.byDay, "outlet", dayHub.ref, "inlet")
+        manage.connect(refs.byDay.ref, "outlet", dayHub.ref, "inlet")
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }

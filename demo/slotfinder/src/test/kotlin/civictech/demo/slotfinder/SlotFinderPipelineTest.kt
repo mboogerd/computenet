@@ -4,10 +4,10 @@ import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetView
+import civictech.cell.graph.lookup
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
-import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -21,14 +21,6 @@ import java.util.Random
  */
 class SlotFinderPipelineTest {
 
-    interface SlotOutletProxy {
-        val outlet: Subscribe<Propagate<SetDelta<Slot>>>
-    }
-
-    interface DayOutletProxy {
-        val outlet: Subscribe<Propagate<MapDelta<String, Long>>>
-    }
-
     @Test
     fun `incremental equals batch recompute on every seed`() {
         for (seed in 0L until 10L) {
@@ -39,21 +31,21 @@ class SlotFinderPipelineTest {
             val common = SetView<Slot>()
             val filtered = SetView<Slot>()
             val byDay = mutableMapOf<String, Long>()
-            host.lookup<SlotOutletProxy>(refs.common)!!.outlet.subscribe(
+            host.lookup(refs.common)!!.outlet.subscribe(
                 Use.fixed(Propagate<SetDelta<Slot>> { common.apply(it) }, PortRef.generate())
             )
-            host.lookup<SlotOutletProxy>(refs.filtered)!!.outlet.subscribe(
+            host.lookup(refs.filtered)!!.outlet.subscribe(
                 Use.fixed(Propagate<SetDelta<Slot>> { filtered.apply(it) }, PortRef.generate())
             )
-            host.lookup<DayOutletProxy>(refs.byDay)!!.outlet.subscribe(
+            host.lookup(refs.byDay)!!.outlet.subscribe(
                 Use.fixed(Propagate<MapDelta<String, Long>> { delta ->
                     byDay.putAll(delta.puts)
                     delta.removals.forEach { byDay.remove(it) }
                 }, PortRef.generate())
             )
 
-            val writers = refs.participants.mapValues { (_, ref) ->
-                host.lookup<SlotInletProxy>(ref)!!.inlet.call
+            val writers = refs.participants.mapValues { (_, tref) ->
+                host.lookup(tref)!!.inlet.call
             }
 
             val rnd = Random(seed)
