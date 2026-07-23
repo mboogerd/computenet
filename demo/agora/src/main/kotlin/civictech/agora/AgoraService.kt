@@ -8,15 +8,8 @@ import civictech.cell.data.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.Link
-import civictech.cell.port.Use
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.HostedCellProxy
-
-/** Routed-write surfaces: property names MUST match the registered port names. */
-interface StanceInletProxy { val stanceInlet: Use<Propagate<StanceDelta>> }
-interface InfluenceInletProxy { val influenceInlet: Use<Propagate<InfluenceDelta>> }
-interface SourceInletProxy { val sourceInlet: Use<Propagate<CredenceUpdate>> }
-interface HubInletProxy { val inlet: Use<Propagate<CredenceUpdate>> }
+import civictech.cell.proxy.inlet
 
 /**
  * Graph management shared by the HTTP layer and the tests. Cells stay
@@ -227,16 +220,16 @@ class AgoraService(
     }
 
     private fun routedHub(): Propagate<CredenceUpdate> =
-        (HostedCellProxy.create(hub.ref, registry, HubInletProxy::class.java) as HubInletProxy).inlet.call
+        registry.inlet(hub.ref, "inlet")
 
     private fun routedSource(edge: CellRef): Propagate<CredenceUpdate> =
-        (HostedCellProxy.create(edge, registry, SourceInletProxy::class.java) as SourceInletProxy).sourceInlet.call
+        registry.inlet(edge, "sourceInlet")
 
     private fun routedInfluence(target: CellRef): Propagate<InfluenceDelta> =
-        (HostedCellProxy.create(target, registry, InfluenceInletProxy::class.java) as InfluenceInletProxy).influenceInlet.call
+        registry.inlet(target, "influenceInlet")
 
     private fun routedStance(id: CellRef): Propagate<StanceDelta> =
-        (HostedCellProxy.create(id, registry, StanceInletProxy::class.java) as StanceInletProxy).stanceInlet.call
+        registry.inlet(id, "stanceInlet")
 
     companion object {
         /**
