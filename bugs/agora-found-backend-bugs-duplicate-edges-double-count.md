@@ -1,7 +1,9 @@
 # agora backend bug — duplicate edges compound influence (credence inflation)
 
+**Status**: **Fixed** 2026-07-23 (demo app layer — see Resolution).
 **Severity**: High (integrity — a single actor can drive any node's credence to the clamp)
-**Component**: `demo/agora` — `civictech.agora.AgoraService.createEdge`
+**Component**: `demo/agora` — `civictech.agora.AgoraApp.handleOp` (product policy) over
+`AgoraService`.
 **Found**: 2026-07-23, via direct `POST /op` probing on a fresh journaled instance.
 
 ## Observation
@@ -79,7 +81,25 @@ focused test asserting a second identical `createEdge` returns the first ref and
 does not move the target's credence. Guard belongs server-side (the API is directly
 callable); the frontend can additionally hide the redundant affordance.
 
+## Resolution (2026-07-23)
+
+Fixed at the **product boundary**, not in the engine. The cellular engine
+deliberately permits parallel edges (each is a distinct argument instance that
+DF-QuAD sums, and `AgoraExitTest` relies on incremental == batch for exactly this),
+so uniqueness is an application policy, not an engine invariant.
+
+- `AgoraService.findEdge(source, target, polarity)` looks up an existing relation.
+- `AgoraApp.handleOp` (`action=edge`) now returns that existing edge's ref
+  (idempotent, HTTP 200) instead of spawning a second cell. Stances on the shared
+  edge are where its strength accrues — re-posting the relation no longer stacks
+  influence.
+- Opposite-polarity edges between the same pair remain distinct (genuinely
+  different assertions).
+
+Verified live (`E1 == E2`, edge count stays 1) and by
+`AgoraServerTest.rejects self-edges and de-duplicates identical relations`.
+
 ## Related
 
-- See `agora-found-backend-bugs-self-edges-allowed.md` — the sibling missing guard
-  in the same `createEdge` validation block.
+- See `agora-found-backend-bugs-self-edges-allowed.md` — sibling guard fixed in the
+  same `handleOp` change.

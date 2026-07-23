@@ -1,7 +1,9 @@
 # agora backend bug — self-edges allowed (a claim can argue about itself)
 
+**Status**: **Fixed** 2026-07-23 (demo app layer — see Resolution).
 **Severity**: Medium (logical coherence + self-referential credence manipulation)
-**Component**: `demo/agora` — `civictech.agora.AgoraService.createEdge`
+**Component**: `demo/agora` — `civictech.agora.AgoraApp.handleOp` (product policy) over
+`AgoraService`.
 **Found**: 2026-07-23, via direct `POST /op` probing on a fresh journaled instance.
 
 ## Observation
@@ -56,17 +58,25 @@ No `require(source != target)`. The self-loop then flows through the normal
 head/quiescence path, which is why it settles at a plausible-looking but
 unjustified value.
 
-## Solution direction
+## Solution direction (original)
 
-Add a single guard at the top of `createEdge`:
+A `require(source != target)` guard in `createEdge` would work, *but* the engine's
+own cycle tests deliberately use self-loops as the simplest cycle probe
+(`CycleQuiescenceTest`'s self-cycle; `AgoraExitTest`'s cyclic seeds), so the guard
+must not live in the engine.
 
-```kotlin
-require(source != target) { "an edge cannot connect a node to itself" }
-```
+## Resolution (2026-07-23)
 
-Cheap, at the trust boundary, and it also spares the cycle-head logic a degenerate
-case. Add a focused test asserting `createEdge(x, x, …)` throws
-`IllegalArgumentException` (surfaced as 400 by `AgoraApp.handleOp`).
+Fixed at the **product boundary**: `AgoraApp.handleOp` (`action=edge`) rejects
+`source == target` with a 400 (`"an edge cannot connect a node to itself"`).
+`AgoraService.createEdge` stays self-loop-capable, so the cycle/quiescence tests
+that construct self-loops directly via the service are unaffected, and pre-fix
+journals still replay. The agora UI never produces self-edges anyway (arguing
+against an argument always introduces a *new* claim as the source), so this is
+defense-in-depth at the one surface — the raw HTTP API — that could.
+
+Verified live (self-edge → 400) and by
+`AgoraServerTest.rejects self-edges and de-duplicates identical relations`.
 
 ## Related
 

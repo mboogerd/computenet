@@ -40,6 +40,73 @@ class AgoraServerTest {
         assertTrue(false, "condition not reached before deadline; state: ${credences(base)}")
     }
 
+    private fun HttpClient.ref(base: String, body: String): String {
+        val response = post(base, body)
+        assertEquals(200, response.statusCode(), response.body())
+        return Json.parseToJsonElement(response.body()).jsonObject["ref"]!!.jsonPrimitive.content
+    }
+
+    @Test
+    fun `rejects self-edges and de-duplicates identical relations`() {
+        val app = AgoraApp(port = 0).start()
+        try {
+            val client = HttpClient.newHttpClient()
+            val base = "http://localhost:${app.boundPort}"
+
+            val a = client.ref(base, "action=claim&text=a")
+            val b = client.ref(base, "action=claim&text=b")
+
+            // a node cannot argue about itself
+            val self = client.post(base, "action=edge&source=$a&target=$a&polarity=support")
+            assertEquals(400, self.statusCode())
+            assertTrue("itself" in self.body(), self.body())
+
+            // re-asserting an identical relation returns the SAME edge (idempotent),
+            // so influence is never stacked by re-posting
+            val e1 = client.ref(base, "action=edge&source=$b&target=$a&polarity=support")
+            val e2 = client.ref(base, "action=edge&source=$b&target=$a&polarity=support")
+            assertEquals(e1, e2, "duplicate relation must resolve to the existing edge")
+            assertEquals(
+                1,
+                client.credences(base).keys.count { it != a && it != b },
+                "only one edge node should exist",
+            )
+
+            // opposite polarity is a genuinely different assertion — still allowed
+            val e3 = client.ref(base, "action=edge&source=$b&target=$a&polarity=attack")
+            assertTrue(e3 != e1, "opposite polarity is a distinct edge")
+
+            // invalid polarity is a clean 400, not a leaked enum exception
+            val badPol = client.post(base, "action=edge&source=$a&target=$b&polarity=maybe")
+            assertEquals(400, badPol.statusCode())
+            assertTrue("No enum constant" !in badPol.body(), "leaked internals: ${badPol.body()}")
+        } finally {
+            app.stop()
+        }
+    }
+
+    @Test
+    fun `command errors stay clean (no leaked internals)`() {
+        val app = AgoraApp(port = 0).start()
+        try {
+            val client = HttpClient.newHttpClient()
+            val base = "http://localhost:${app.boundPort}"
+            val a = client.ref(base, "action=claim&text=a")
+
+            val badStance = client.post(base, "action=stance&id=$a&user=u&value=abc")
+            assertEquals(400, badStance.statusCode())
+            assertTrue("number" in badStance.body(), badStance.body())
+            assertTrue("For input string" !in badStance.body(), "leaked exception: ${badStance.body()}")
+
+            val bogus = "00000000-0000-0000-0000-000000000000"
+            val badTarget = client.post(base, "action=edge&source=$a&target=$bogus&polarity=support")
+            assertEquals(400, badTarget.statusCode())
+            assertTrue("CellRef(" !in badTarget.body(), "leaked CellRef repr: ${badTarget.body()}")
+        } finally {
+            app.stop()
+        }
+    }
+
     @Test
     fun `attack lowers a claim, attacking the attack restores it`() {
         val app = AgoraApp(port = 0).start()

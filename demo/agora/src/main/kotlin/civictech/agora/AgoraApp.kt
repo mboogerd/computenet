@@ -107,16 +107,31 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
                 "edge" -> {
                     val source = ref("source") ?: return exchange.respond(400, "missing source")
                     val target = ref("target") ?: return exchange.respond(400, "missing target")
-                    val polarity = params["polarity"]?.uppercase()?.let { Polarity.valueOf(it) }
-                        ?: return exchange.respond(400, "missing polarity")
-                    val edge = service.createEdge(source, target, polarity)
+                    if (source == target)
+                        return exchange.respond(400, "an edge cannot connect a node to itself")
+                    val polarity = params["polarity"]?.uppercase()
+                        ?.let { runCatching { Polarity.valueOf(it) }.getOrNull() }
+                        ?: return exchange.respond(400, "polarity must be ATTACK or SUPPORT")
+                    // A relation is one fact: re-asserting an identical
+                    // (source, target, polarity) edge returns the existing one
+                    // instead of stacking a second influence path (which would
+                    // let a client inflate credence by re-posting). Stances on
+                    // the shared edge are where its strength actually accrues.
+                    val edge = service.findEdge(source, target, polarity)
+                        ?: service.createEdge(source, target, polarity)
                     exchange.respond(200, """{"ref":"${edge.id}"}""", "application/json")
                 }
 
                 "stance" -> {
                     val id = ref("id") ?: return exchange.respond(400, "missing id")
                     val user = params["user"] ?: return exchange.respond(400, "missing user")
-                    service.setStance(id, user, params["value"]?.takeIf { it.isNotBlank() }?.toDouble())
+                    // Blank value clears the stance; anything non-numeric is a
+                    // clean 400 rather than a leaked NumberFormatException.
+                    val raw = params["value"]?.takeIf { it.isNotBlank() }
+                    val value = if (raw == null) null
+                        else raw.toDoubleOrNull()
+                            ?: return exchange.respond(400, "stance must be a number between 0 and 1")
+                    service.setStance(id, user, value)
                     exchange.respond(200, "ok")
                 }
 

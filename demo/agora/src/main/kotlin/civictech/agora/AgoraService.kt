@@ -133,8 +133,8 @@ class AgoraService(
         polarity: Polarity,
         ref: CellRef = CellRef(java.util.UUID.randomUUID()),
     ): CellRef {
-        require(source in nodes) { "unknown source $source" }
-        require(target in nodes) { "unknown target $target" }
+        require(source in nodes) { "unknown source ${source.id}" }
+        require(target in nodes) { "unknown target ${target.id}" }
         val head = reaches(from = target, to = source)
         val edge = EdgeCell(polarity, ref, semantics, quiescence = if (head) quiescence else 0.0)
             .also { it.catchUp = !replaying }
@@ -149,8 +149,8 @@ class AgoraService(
     }
 
     fun setStance(id: CellRef, user: String, value: Double?) {
-        require(id in nodes) { "unknown claim $id" }
-        value?.let { require(it in 0.0..1.0) { "stance out of range: $it" } }
+        require(id in nodes) { "unknown node ${id.id}" }
+        value?.let { require(it in 0.0..1.0) { "stance must be between 0 and 1 (was $it)" } }
         routedStance(id).propagate(StanceDelta(user, value))
     }
 
@@ -161,7 +161,7 @@ class AgoraService(
      * influence at any surviving target, then despawns.
      */
     fun remove(id: CellRef) {
-        require(id in nodes) { "unknown claim $id" }
+        require(id in nodes) { "unknown node ${id.id}" }
         val doomed = mutableSetOf(id)
         var grew = true
         while (grew) {
@@ -195,6 +195,19 @@ class AgoraService(
     }
 
     fun nodeInfo(id: CellRef): NodeInfo? = nodes[id]
+
+    /**
+     * The existing edge with exactly this `(source, target, polarity)`, if any.
+     * The engine deliberately permits parallel edges and self-loops (both are
+     * valid constructs the cycle/DF-QuAD tests exercise directly), so relation
+     * uniqueness is a *product-surface* policy the HTTP layer applies via this
+     * lookup — not an invariant enforced in [createEdge].
+     */
+    fun findEdge(source: CellRef, target: CellRef, polarity: Polarity): CellRef? =
+        nodes.entries.firstOrNull { (_, info) ->
+            info.kind == Kind.EDGE &&
+                info.source == source && info.target == target && info.polarity == polarity
+        }?.key
 
     /** DFS along the influence-flow direction: claim → edges sourced at it → their targets. */
     private fun reaches(from: CellRef, to: CellRef): Boolean {

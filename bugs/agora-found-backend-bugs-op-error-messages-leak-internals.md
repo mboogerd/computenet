@@ -1,5 +1,6 @@
 # agora backend bug — /op 400 bodies leak internal representations
 
+**Status**: **Fixed** 2026-07-23 (see Resolution).
 **Severity**: Low (cosmetic / DX; these strings are shown verbatim to end users)
 **Component**: `demo/agora` — `civictech.agora.AgoraService` require-messages +
 `AgoraApp.handleOp` error passthrough.
@@ -46,3 +47,15 @@ provider exception text should not be part of the contract the UI displays.
 
 Purely a message-hygiene change; no behavior/wire-format impact. Nice to pair with
 the two `createEdge` validation fixes since it touches the same error surface.
+
+## Resolution (2026-07-23)
+
+- `AgoraService` require-messages now interpolate `source.id` / `target.id` / `id.id`
+  (the UUID the client sent) instead of the full `CellRef(… instanceId=…)` repr;
+  the stance-range message reads "stance must be between 0 and 1 (was X)".
+- `AgoraApp.handleOp` parses the stance value with `toDoubleOrNull()` and returns
+  "stance must be a number between 0 and 1" on non-numeric input (no leaked
+  `NumberFormatException`), and parses polarity with `runCatching { … }.getOrNull()`
+  returning "polarity must be ATTACK or SUPPORT" (no leaked "No enum constant …").
+
+Verified live and by `AgoraServerTest.command errors stay clean (no leaked internals)`.
