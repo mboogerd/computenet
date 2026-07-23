@@ -8,8 +8,8 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
-import civictech.cell.durability.FileJournal
 import civictech.cell.graph.graph
+import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.View
@@ -48,10 +48,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
     // Durability (M10.4): the app host write-ahead journals every routed
     // invocation; on restart the same directory replays it — kill -9 safe.
-    private val journal = journalDir?.let { FileJournal(java.io.File(it, "host.journal")) }
-    private val usersFile = journalDir?.let { java.io.File(it, "users.txt") }
-
-    private val host = ManagedHost(registry = registry, journal = journal)
+    // The WAL file is minted via the KeyedCells helper so it matches exactly
+    // what writerCells.recover() replays.
+    private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
     private val manage = host.managementInlet.call
 
     // union refs are role-derived so each peer can address its counterpart's
@@ -76,7 +75,22 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
     private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
     private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
-    private val writers = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
+
+    // Per-user writers: one durable, dynamically-keyed family (M10.4). Compound
+    // keys "$user:items"/"$user:votes" pack both writers into a single family so
+    // they share one journalDir without colliding on the `keys` file or double-
+    // running recoverFrom (a single family, not two). The factory does the
+    // streamTo wiring, so recover() re-establishes it for every known key.
+    private val writerApi = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
+    private val writerCells = KeyedCells<String>(
+        host = host,
+        journalDir = journalDir,
+        namespace = "demo-writer@$myRole",
+        factory = { key, ref ->
+            val union = if (key.endsWith(":items")) itemsUnion else votesUnion
+            SetCell<String>(ref).also { it.outlet.streamTo(routedDelta(union.ref)) }
+        },
+    )
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
 
@@ -140,10 +154,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             }
         }
 
-        if (journal != null) {
-            knownUsers().forEach { writerFor(it) } // graph first: replayed ops need their cells
-            host.recoverFrom(journal)
-        }
+        // recover() pre-spawns every known writer (the factory rewires streamTo)
+        // then replays the shared WAL exactly once — the one correct ordering.
+        if (journalDir != null) writerCells.recover()
 
         server.createContext("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/op") { exchange -> handleOp(exchange) }
@@ -153,30 +166,22 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
     /**
      * Per-user writer cells, created on first op — every browser tab is a user.
-     * Refs are user-derived and the union links are registry-routed (M10.4):
-     * deterministic identity + routed (journaled) deltas are what make a
-     * journal replay reconstruct the same graph state after kill -9. Recovery
-     * pre-spawns writers for every user in [usersFile], so replayed ops run
-     * through the same cells and re-mint the same replay-stable tags.
+     * The [writerCells] family mints the deterministic ref, lazily spawns, and
+     * durably logs each compound key; the factory wires the union streamTo. This
+     * caches the inlet API pair per user (M10.4): deterministic identity + routed
+     * (journaled) deltas are what make a journal replay reconstruct the same
+     * graph state after kill -9.
      */
     private fun writerFor(user: String): Pair<SetOps<String>, SetOps<String>> =
-        synchronized(writers) {
-            writers.getOrPut(user) {
-                val itemCell = SetCell<String>(CellRef(UUID.nameUUIDFromBytes("demo-writer:items:$user@$myRole".toByteArray())))
-                val voteCell = SetCell<String>(CellRef(UUID.nameUUIDFromBytes("demo-writer:votes:$user@$myRole".toByteArray())))
-                manage.spawn(itemCell)
-                manage.spawn(voteCell)
-                itemCell.outlet.streamTo(routedDelta(itemsUnion.ref))
-                voteCell.outlet.streamTo(routedDelta(votesUnion.ref))
-                usersFile?.takeIf { user !in knownUsers() }?.appendText(user + "\n")
+        synchronized(writerApi) {
+            writerApi.getOrPut(user) {
+                val itemCell = writerCells.getOrSpawn("$user:items")
+                val voteCell = writerCells.getOrSpawn("$user:votes")
                 val itemApi = host.lookup<SetInletProxy>(itemCell.ref)!!.inlet.call
                 val voteApi = host.lookup<SetInletProxy>(voteCell.ref)!!.inlet.call
                 itemApi to voteApi
             }
         }
-
-    private fun knownUsers(): List<String> =
-        usersFile?.takeIf { it.exists() }?.readLines()?.filter { it.isNotBlank() } ?: emptyList()
 
     private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
         RoutedPropagate(ref, "inlet", registry::deliver)
