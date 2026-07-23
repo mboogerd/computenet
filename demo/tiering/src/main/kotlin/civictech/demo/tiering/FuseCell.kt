@@ -4,11 +4,14 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.data.MapDelta
+import civictech.cell.data.MapDiffPublisher
 import civictech.cell.data.Propagate
+import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -74,57 +77,32 @@ interface FuseApi {
  * `CombineLatestCell`.
  */
 class FuseCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : FuseApi, Cell, Stateful {
-    @Suppress("UNCHECKED_CAST")
     override val left =
-        registerPort("left", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<String, Double>>>))
+        registerPort("left", FanInlet.create<Propagate<MapDelta<String, Double>>>())
 
-    @Suppress("UNCHECKED_CAST")
     override val right =
-        registerPort("right", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<String, Double>>>))
+        registerPort("right", FanInlet.create<Propagate<MapDelta<String, Double>>>())
 
-    @Suppress("UNCHECKED_CAST")
     override val outlet =
-        registerPort("outlet", FanOutlet(Propagate::class.java as Class<Propagate<MapDelta<String, Tiered>>>))
+        registerPort("outlet", FanOutlet.create<Propagate<MapDelta<String, Tiered>>>())
 
     private val tierAvg = mutableMapOf<String, Double>()
     private val prefAvg = mutableMapOf<String, Double>()
-    private val published = mutableMapOf<String, Tiered>()
+    private val publisher = MapDiffPublisher<String, Tiered>()
 
     init {
-        left.serve(handler(tierAvg))
-        right.serve(handler(prefAvg))
+        left.onEach { fold(tierAvg, it) }
+        right.onEach { fold(prefAvg, it) }
         // late-join catch-up (G-22): current tiers as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (published.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(published.toMap(), emptySet()))
-            }
-        }
+        outlet.catchUpOnLinked { publisher.catchUpDelta() }
     }
 
-    private fun handler(side: MutableMap<String, Double>) = object : Propagate<MapDelta<String, Double>> {
-        override fun propagate(value: MapDelta<String, Double>) {
-            side.putAll(value.puts)
-            value.removals.forEach { side.remove(it) }
-
-            val puts = mutableMapOf<String, Tiered>()
-            val removals = mutableSetOf<String>()
-            (value.puts.keys + value.removals).forEach { item ->
-                val next = Tiering.fuse(tierAvg[item], prefAvg[item])
-                val prev = published[item]
-                when {
-                    next == null && prev != null -> {
-                        published.remove(item); removals += item
-                    }
-
-                    next != null && next != prev -> {
-                        published[item] = next; puts[item] = next
-                    }
-                }
-            }
-            if (puts.isNotEmpty() || removals.isNotEmpty()) {
-                outlet.call.propagate(MapDelta(puts, removals))
-            }
-        }
+    private fun fold(side: MutableMap<String, Double>, value: MapDelta<String, Double>) {
+        side.putAll(value.puts)
+        value.removals.forEach { side.remove(it) }
+        publisher.publish(value.puts.keys + value.removals) { item ->
+            Tiering.fuse(tierAvg[item], prefAvg[item])
+        }?.let { outlet.call.propagate(it) }
     }
 
     override fun snapshot(): Serializable = arrayListOf(HashMap(tierAvg), HashMap(prefAvg))
@@ -134,9 +112,10 @@ class FuseCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : FuseApi
         val (t, p) = state as ArrayList<HashMap<String, Double>>
         tierAvg.clear(); tierAvg.putAll(t)
         prefAvg.clear(); prefAvg.putAll(p)
-        published.clear()
+        val fused = mutableMapOf<String, Tiered>()
         (tierAvg.keys + prefAvg.keys).forEach { item ->
-            Tiering.fuse(tierAvg[item], prefAvg[item])?.let { published[item] = it }
+            Tiering.fuse(tierAvg[item], prefAvg[item])?.let { fused[item] = it }
         }
+        publisher.reset(fused)
     }
 }

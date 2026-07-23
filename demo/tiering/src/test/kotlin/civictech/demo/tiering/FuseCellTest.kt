@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
+import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
@@ -33,16 +34,10 @@ class FuseCellTest {
         val arrivals: MutableList<MapDelta<String, Tiered>> = mutableListOf(),
         override val ref: CellRef = CellRef(UUID.randomUUID()),
     ) : Cell {
-        @Suppress("UNCHECKED_CAST")
-        val inlet =
-            registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<String, Tiered>>>))
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<String, Tiered>>>())
 
         init {
-            inlet.serve(object : Propagate<MapDelta<String, Tiered>> {
-                override fun propagate(value: MapDelta<String, Tiered>) {
-                    arrivals += value
-                }
-            })
+            inlet.onEach { arrivals += it }
         }
     }
 
