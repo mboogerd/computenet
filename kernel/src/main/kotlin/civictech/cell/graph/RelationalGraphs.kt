@@ -31,13 +31,15 @@ fun <A, B, K, C> GraphBuilder.leftJoin(
     }
     val nullCompleted = spawn("$name-null") { FlatMapSetCell(f = { a: A -> listOf(combine(a, null)) }) }
     val merged = spawn(name) { UnionSetCell<C>() }
+    // inputs are untyped handles (any cell with an "outlet") — string form stays
     connect(left, "outlet", matched, "left")
     connect(right, "outlet", matched, "right")
     connect(left, "outlet", unmatched, "left")
     connect(right, "outlet", unmatched, "right")
-    connect(unmatched, "outlet", nullCompleted, "inlet")
-    connect(matched, "outlet", merged, "inlet")
-    connect(nullCompleted, "outlet", merged, "inlet")
+    // internal edges are typed: payload mismatch here is a compile error
+    link(unmatched.cell.outlet, nullCompleted.cell.inlet)
+    link(matched.cell.outlet, merged.cell.inlet)
+    link(nullCompleted.cell.outlet, merged.cell.inlet)
     return merged
 }
 
@@ -82,10 +84,10 @@ fun <A, B, K, C> GraphBuilder.fullJoin(
     connect(right, "outlet", leftOnly, "right")
     connect(right, "outlet", rightOnly, "left")
     connect(left, "outlet", rightOnly, "right")
-    connect(leftOnly, "outlet", leftNull, "inlet")
-    connect(rightOnly, "outlet", rightNull, "inlet")
-    connect(matched, "outlet", merged, "inlet")
-    connect(leftNull, "outlet", merged, "inlet")
-    connect(rightNull, "outlet", merged, "inlet")
+    link(leftOnly.cell.outlet, leftNull.cell.inlet)
+    link(rightOnly.cell.outlet, rightNull.cell.inlet)
+    link(matched.cell.outlet, merged.cell.inlet)
+    link(leftNull.cell.outlet, merged.cell.inlet)
+    link(rightNull.cell.outlet, merged.cell.inlet)
     return merged
 }

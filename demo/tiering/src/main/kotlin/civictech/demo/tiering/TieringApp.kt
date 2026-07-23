@@ -78,11 +78,11 @@ object TierPipeline {
                 GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = Aggregators.avgOf { c: Contribution -> c.sign })
             }
             val fused = spawn("fused") { FuseCell() }
-            connect(vals, "outlet", tierAvg, "inlet")
-            connect(prefs, "outlet", contribs, "inlet")
-            connect(contribs, "outlet", prefAvg, "inlet")
-            connect(tierAvg, "outlet", fused, "left")
-            connect(prefAvg, "outlet", fused, "right")
+            link(vals.cell.outlet, tierAvg.cell.inlet)
+            link(prefs.cell.outlet, contribs.cell.inlet)
+            link(contribs.cell.outlet, prefAvg.cell.inlet)
+            link(tierAvg.cell.outlet, fused.cell.left)
+            link(prefAvg.cell.outlet, fused.cell.right)
             listOf(items, vals, prefs, tierAvg, prefAvg, fused).forEach { refs[it.name] = it.ref }
         }
         return Refs(
