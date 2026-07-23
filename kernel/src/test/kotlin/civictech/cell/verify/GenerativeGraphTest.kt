@@ -11,6 +11,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.data.tagFold
+import civictech.cell.graph.CellHandle
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.graph
 import civictech.cell.data.SetDelta
@@ -110,7 +111,7 @@ class GenerativeGraphTest {
         fun buildView(host: ManagedHost): Pair<GraphSpec, Map<String, CellRef>> {
             val refs = mutableMapOf<String, CellRef>()
             val spec = graph(host.managementInlet) {
-                var tail = spawn("union") { ref -> UnionSetCell<String>(ref = ref) }
+                var tail: CellHandle = spawn("union") { ref -> UnionSetCell<String>(ref = ref) }
                 refs[tail.name] = tail.ref
                 filterIdxs.forEachIndexed { i, idx ->
                     val filter = spawn("filter$i") { ref -> FilterCell<String>(ref = ref) { s -> PREDICATES[idx](s) } }

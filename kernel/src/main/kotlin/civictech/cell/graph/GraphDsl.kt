@@ -3,7 +3,12 @@ package civictech.cell.graph
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.host.HostManagementApi
+import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkResult
+import civictech.cell.port.Port
+import civictech.cell.port.PortRegistry
+import civictech.cell.port.Serve
+import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import java.io.Serializable
 import java.util.UUID
@@ -19,6 +24,11 @@ import kotlin.random.Random
  */
 fun interface CellFactory : Serializable {
     fun create(ref: CellRef): Cell
+}
+
+/** [CellFactory] that remembers the concrete cell type — SAM-compatible with every existing `spawn { … }` lambda. */
+fun interface TypedCellFactory<C : Cell> : CellFactory {
+    override fun create(ref: CellRef): C
 }
 
 /**
@@ -201,14 +211,26 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
     }
 }
 
-class CellHandle internal constructor(
+open class CellHandle internal constructor(
     val name: String,
     val ref: CellRef,
-    private val builder: GraphBuilder,
+    internal val builder: GraphBuilder,
 ) {
     /** Default-port link: `writer linkTo union` connects "outlet" → "inlet". */
     infix fun linkTo(target: CellHandle) = builder.connect(this, "outlet", target, "inlet")
 }
+
+/**
+ * A [CellHandle] that keeps the locally-built instance — typed port access
+ * for [GraphBuilder.link]. Local-apply only; a remote spawn has no instance
+ * on this side.
+ */
+class TypedCellHandle<C : Cell> internal constructor(
+    name: String,
+    ref: CellRef,
+    builder: GraphBuilder,
+    val cell: C,
+) : CellHandle(name, ref, builder)
 
 /**
  * A thin veneer over the host protocol (G-30): every builder operation both
@@ -218,24 +240,26 @@ class CellHandle internal constructor(
 class GraphBuilder internal constructor(private val host: Use<HostManagementApi>) {
     private val steps = mutableListOf<GraphStep>()
     private val names = mutableSetOf<String>()
+    private val handles = mutableMapOf<CellRef, CellHandle>()
 
     /**
      * @param identity which [CellRef] the spawned cell should carry (default: fresh).
      * @param parent the already-spawned handle this cell nests under (organelle
      *   nesting, G-28) — recorded on the step, not enforced by the DSL layer.
      */
-    fun spawn(
+    fun <C : Cell> spawn(
         name: String,
         identity: IdentityBinding = IdentityBinding.FreshLogical,
         parent: CellHandle? = null,
-        factory: CellFactory,
-    ): CellHandle {
+        factory: TypedCellFactory<C>,
+    ): TypedCellHandle<C> {
         require(names.add(name)) { "duplicate handle '$name'" }
         val ref = identity.resolve()
         val cell = factory.create(ref)
         requireBoundRef(name, identity, ref, cell.ref)
         steps += SpawnStep(name, factory, identity, parent?.name)
-        return CellHandle(name, host.call.spawn(cell), this)
+        return TypedCellHandle(name, host.call.spawn(cell), this, cell)
+            .also { handles[it.ref] = it }
     }
 
     fun connect(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
@@ -246,7 +270,39 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         steps += ConnectStep(from.name, outlet, to.name, inlet)
     }
 
+    /**
+     * Typed port wiring (P5): payload mismatch or inlet-to-inlet is a compile
+     * error. Lowers to the exact string [connect] — same applied link, same
+     * recorded [ConnectStep]. Three target overloads because [FanInlet]
+     * implements both [Use] and [Serve]: the FanInlet overload is the most
+     * specific and resolves what would otherwise be ambiguous.
+     */
+    fun <Api : Any> link(from: Subscribe<Api>, to: FanInlet<Api>) = linkPorts(from, to)
+    fun <Api : Any> link(from: Subscribe<Api>, to: Serve<Api>) = linkPorts(from, to)
+    fun <Api : Any> link(from: Subscribe<Api>, to: Use<Api>) = linkPorts(from, to)
+
+    private fun linkPorts(from: Port, to: Port) {
+        val f = requireNotNull(PortRegistry.addressOf(from)) { "link: outlet is not a registered port of a cell" }
+        val t = requireNotNull(PortRegistry.addressOf(to)) { "link: inlet is not a registered port of a cell" }
+        val fromHandle = requireNotNull(handles[f.cell]) { "link: cell ${f.cell} was not spawned in this graph builder" }
+        val toHandle = requireNotNull(handles[t.cell]) { "link: cell ${t.cell} was not spawned in this graph builder" }
+        connect(fromHandle, f.name, toHandle, t.name)
+    }
+
     internal fun spec() = GraphSpec(steps.toList())
+}
+
+/**
+ * Typed live wiring outside the DSL: recovers the `(ref, portName)` strings
+ * from the port objects and issues the ordinary management [HostManagementApi.connect].
+ */
+fun <Api : Any> Use<HostManagementApi>.link(from: Subscribe<Api>, to: FanInlet<Api>): LinkResult = linkLive(from, to)
+fun <Api : Any> Use<HostManagementApi>.link(from: Subscribe<Api>, to: Serve<Api>): LinkResult = linkLive(from, to)
+
+private fun Use<HostManagementApi>.linkLive(from: Port, to: Port): LinkResult {
+    val f = requireNotNull(PortRegistry.addressOf(from)) { "link: outlet is not a registered port of a cell" }
+    val t = requireNotNull(PortRegistry.addressOf(to)) { "link: inlet is not a registered port of a cell" }
+    return call.connect(f.cell, f.name, t.cell, t.name)
 }
 
 /** Builds a graph on [host] and returns its replayable [GraphSpec]. */
