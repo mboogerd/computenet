@@ -3,15 +3,18 @@ package civictech.demo.tiering
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.FlatMapSetCell
+import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.MapHubCell
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetHubCell
-import civictech.cell.data.SetOps
+import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
+import civictech.cell.graph.lookup
+import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.Use
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
@@ -49,16 +52,16 @@ data class Contribution(val item: String, val agent: String, val opponent: Strin
  */
 object TierPipeline {
     data class Refs(
-        val items: CellRef,
-        val vals: CellRef,
-        val prefs: CellRef,
-        val tierAvg: CellRef,
-        val prefAvg: CellRef,
-        val fused: CellRef,
+        val items: TypedRef<SetApi<String>>,
+        val vals: TypedRef<SetApi<Valuation>>,
+        val prefs: TypedRef<SetApi<Pref>>,
+        val tierAvg: TypedRef<GroupByApi<Valuation, String, Double>>,
+        val prefAvg: TypedRef<GroupByApi<Contribution, String, Double>>,
+        val fused: TypedRef<FuseApi>,
     )
 
     fun build(host: ManagedHost): Refs {
-        val refs = mutableMapOf<String, CellRef>()
+        lateinit var built: Refs
         graph(host.managementInlet) {
             val items = spawn("items") { SetCell<String>() }
             val vals = spawn("vals") { SetCell<Valuation>() }
@@ -83,29 +86,17 @@ object TierPipeline {
             link(contribs.cell.outlet, prefAvg.cell.inlet)
             link(tierAvg.cell.outlet, fused.cell.left)
             link(prefAvg.cell.outlet, fused.cell.right)
-            listOf(items, vals, prefs, tierAvg, prefAvg, fused).forEach { refs[it.name] = it.ref }
+            built = Refs(
+                items = items.refAs(),
+                vals = vals.refAs(),
+                prefs = prefs.refAs(),
+                tierAvg = tierAvg.refAs(),
+                prefAvg = prefAvg.refAs(),
+                fused = fused.refAs(),
+            )
         }
-        return Refs(
-            items = refs.getValue("items"),
-            vals = refs.getValue("vals"),
-            prefs = refs.getValue("prefs"),
-            tierAvg = refs.getValue("tierAvg"),
-            prefAvg = refs.getValue("prefAvg"),
-            fused = refs.getValue("fused"),
-        )
+        return built
     }
-}
-
-interface ItemInletProxy {
-    val inlet: Use<SetOps<String>>
-}
-
-interface ValuationInletProxy {
-    val inlet: Use<SetOps<Valuation>>
-}
-
-interface PrefInletProxy {
-    val inlet: Use<SetOps<Pref>>
 }
 
 class TieringApp(port: Int = 8080) {
@@ -113,9 +104,9 @@ class TieringApp(port: Int = 8080) {
     private val host = ManagedHost(registry = registry)
     private val manage = host.managementInlet.call
     private val refs = TierPipeline.build(host)
-    private val itemOps = host.lookup<ItemInletProxy>(refs.items)!!.inlet.call
-    private val valOps = host.lookup<ValuationInletProxy>(refs.vals)!!.inlet.call
-    private val prefOps = host.lookup<PrefInletProxy>(refs.prefs)!!.inlet.call
+    private val itemOps = host.lookup(refs.items)!!.inlet.call
+    private val valOps = host.lookup(refs.vals)!!.inlet.call
+    private val prefOps = host.lookup(refs.prefs)!!.inlet.call
 
     private val state = Object()
     private var items: Set<String> = emptySet()
@@ -153,12 +144,12 @@ class TieringApp(port: Int = 8080) {
             manage.connect(ref, "outlet", hub.ref, "inlet")
         }
 
-        setHub<String>(refs.items) { items = it }
-        setHub<Valuation>(refs.vals) { valuations = it }
-        setHub<Pref>(refs.prefs) { prefs = it }
-        mapHub<String, Double>(refs.tierAvg) { tierAvg = it }
-        mapHub<String, Double>(refs.prefAvg) { prefAvg = it }
-        mapHub<String, Tiered>(refs.fused) { fused = it }
+        setHub<String>(refs.items.ref) { items = it }
+        setHub<Valuation>(refs.vals.ref) { valuations = it }
+        setHub<Pref>(refs.prefs.ref) { prefs = it }
+        mapHub<String, Double>(refs.tierAvg.ref) { tierAvg = it }
+        mapHub<String, Double>(refs.prefAvg.ref) { prefAvg = it }
+        mapHub<String, Tiered>(refs.fused.ref) { fused = it }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }

@@ -2,10 +2,10 @@ package civictech.demo.tiering
 
 import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
+import civictech.cell.graph.lookup
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
-import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -20,10 +20,6 @@ import java.util.Random
  */
 class TieringPipelineTest {
 
-    interface FusedOutletProxy {
-        val outlet: Subscribe<Propagate<MapDelta<String, Tiered>>>
-    }
-
     @Test
     fun `incremental equals batch recompute on every seed`() {
         val agents = listOf("ada", "bo", "cy")
@@ -35,7 +31,7 @@ class TieringPipelineTest {
             val refs = TierPipeline.build(host)
 
             val fused = mutableMapOf<String, Tiered>()
-            host.lookup<FusedOutletProxy>(refs.fused)!!.outlet.subscribe(
+            host.lookup(refs.fused)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<String, Tiered>> {
                     override fun propagate(value: MapDelta<String, Tiered>) {
                         fused.putAll(value.puts)
@@ -44,8 +40,8 @@ class TieringPipelineTest {
                 }, PortRef.generate())
             )
 
-            val valOps = host.lookup<ValuationInletProxy>(refs.vals)!!.inlet.call
-            val prefOps = host.lookup<PrefInletProxy>(refs.prefs)!!.inlet.call
+            val valOps = host.lookup(refs.vals)!!.inlet.call
+            val prefOps = host.lookup(refs.prefs)!!.inlet.call
 
             val rnd = Random(seed)
             val heldVals = mutableMapOf<Pair<String, String>, Valuation>() // (agent,item) → current
