@@ -1,5 +1,9 @@
 # Typed port links: replace `(ref, "string")` connect pairs
 
+> **Status: IMPLEMENTED** — `GraphBuilder.link(outlet, inlet)` + standalone
+> `Use<HostManagementApi>.link` (instance path), lowering to the identical
+> `ConnectStep`; see `kernel/.../graph/GraphDsl.kt` and `TypedLinkTest`.
+
 ## Origin
 Wiring the new intersect view in `demo/shopping` meant writing:
 ```

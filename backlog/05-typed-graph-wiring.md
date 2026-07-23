@@ -1,5 +1,10 @@
 # Typed port wiring — make `connect` type-checked instead of stringly-typed
 
+> **Status: IMPLEMENTED** — typed `spawn`/`TypedCellHandle` + `link` (instance
+> path) and KSP-generated `<Cell>Ports` InletId/OutletId objects with typed
+> `connect` overloads (ref-only path); `FanInlet.create<>()`/delegates replace
+> the raw-Class casts repo-wide.
+
 ## Origin
 
 Building the tiering pipeline reads like this today
