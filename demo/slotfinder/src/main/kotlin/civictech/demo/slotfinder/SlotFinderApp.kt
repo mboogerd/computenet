@@ -6,9 +6,9 @@ import civictech.cell.data.Aggregators
 import civictech.cell.data.CountView
 import civictech.cell.data.FilterCell
 import civictech.cell.data.GroupByCell
-import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
+import civictech.cell.data.QuorumSetCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
@@ -31,7 +31,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Meeting-slot finder: three participants each maintain a set of available
  * time slots; the common slots, the business-hours subset, and per-day counts
  * are all *incremental* views — toggling one slot flows one delta through
- * intersect → filter → groupBy, never a recompute. Every intermediate stage
+ * quorum → filter → groupBy, never a recompute. Every intermediate stage
  * is observable in the UI; that is the demo.
  */
 data class Slot(val day: String, val hour: Int) : Serializable {
@@ -48,17 +48,21 @@ val PARTICIPANTS = listOf("alice", "bob", "carol")
 
 /**
  * The dataflow pipeline, shared verbatim by the app and the seeded
- * incremental-vs-batch test:
+ * incremental-vs-batch test. Every participant fans into one `QuorumSetCell`
+ * inlet; the quorum threshold reads the live-source count `n`, so `common`
+ * (∩, `{ n -> n }`) and `nearMiss` (all-but-one, `{ n -> n - 1 }`) are the same
+ * fan-in under two thresholds — no chained binary intersects, any participant
+ * count:
  *
  *   alice ─┐
- *   bob   ─┴► pairAB (∩) ─┐
- *   carol ─────────────────┴► common (∩) ─► filtered (business hours) ─► byDay (count)
+ *   bob   ─┼─► common   (quorum n)     ─► filtered (business hours) ─► byDay (count)
+ *   carol ─┴─► nearMiss (quorum n − 1)
  */
 object SlotPipeline {
     data class Refs(
         val participants: Map<String, CellRef>,
-        val pairAB: CellRef,
         val common: CellRef,
+        val nearMiss: CellRef,
         val filtered: CellRef,
         val byDay: CellRef,
     )
@@ -67,24 +71,24 @@ object SlotPipeline {
         val refs = mutableMapOf<String, CellRef>()
         graph(host.managementInlet) {
             val sources = PARTICIPANTS.associateWith { spawn(it) { SetCell<Slot>() } }
-            val pairAB = spawn("pairAB") { IntersectSetCell<Slot>() }
-            val common = spawn("common") { IntersectSetCell<Slot>() }
+            val common = spawn("common") { QuorumSetCell<Slot>(threshold = { n -> n }) }
+            val nearMiss = spawn("nearMiss") { QuorumSetCell<Slot>(threshold = { n -> n - 1 }) }
             val filtered = spawn("filtered") { FilterCell<Slot> { it.hour in Slot.BUSINESS_HOURS } }
             val byDay = spawn("byDay") {
                 GroupByCell(keyFn = { s: Slot -> s.day }, aggregator = Aggregators.count<Slot>())
             }
-            connect(sources.getValue("alice"), "outlet", pairAB, "left")
-            connect(sources.getValue("bob"), "outlet", pairAB, "right")
-            connect(pairAB, "outlet", common, "left")
-            connect(sources.getValue("carol"), "outlet", common, "right")
+            PARTICIPANTS.forEach { p ->
+                connect(sources.getValue(p), "outlet", common, "inlet")
+                connect(sources.getValue(p), "outlet", nearMiss, "inlet")
+            }
             connect(common, "outlet", filtered, "inlet")
             connect(filtered, "outlet", byDay, "inlet")
-            (sources.values + listOf(pairAB, common, filtered, byDay)).forEach { refs[it.name] = it.ref }
+            (sources.values + listOf(common, nearMiss, filtered, byDay)).forEach { refs[it.name] = it.ref }
         }
         return Refs(
             participants = PARTICIPANTS.associateWith { refs.getValue(it) },
-            pairAB = refs.getValue("pairAB"),
             common = refs.getValue("common"),
+            nearMiss = refs.getValue("nearMiss"),
             filtered = refs.getValue("filtered"),
             byDay = refs.getValue("byDay"),
         )
@@ -149,7 +153,7 @@ class SlotFinderApp(port: Int = 8080) {
 
     init {
         val observed = refs.participants + mapOf(
-            "pair" to refs.pairAB, "common" to refs.common, "filtered" to refs.filtered,
+            "nearMiss" to refs.nearMiss, "common" to refs.common, "filtered" to refs.filtered,
         )
         observed.forEach { (name, ref) ->
             val hub = SlotHubCell({ synchronized(state) { slots[name] = it }; broadcast() })
@@ -223,7 +227,7 @@ class SlotFinderApp(port: Int = 8080) {
             (values ?: emptySet()).sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
                 .joinToString(",", "[", "]") { "\"$it\"" }
 
-        val sets = (PARTICIPANTS + listOf("pair", "common", "filtered"))
+        val sets = (PARTICIPANTS + listOf("nearMiss", "common", "filtered"))
             .joinToString(",") { "\"$it\":${arr(slots[it])}" }
         val counts = Slot.DAYS.filter { it in byDay }
             .joinToString(",", "{", "}") { "\"$it\":${byDay.getValue(it)}" }
@@ -270,7 +274,7 @@ private val PAGE = """
   td button.hit { outline: 2px solid var(--hit); outline-offset: -1px; }
   .chips { display: flex; flex-wrap: wrap; gap: .3rem; min-height: 1.6rem; }
   .chip { background: #ecfdf5; color: var(--hit); border: 1px solid #a7f3d0; border-radius: 999px; padding: .1rem .55rem; font-size: .75rem; cursor: pointer; }
-  .chip.pair { background: #eff6ff; color: var(--on); border-color: #bfdbfe; }
+  .chip.near { background: #eff6ff; color: var(--on); border-color: #bfdbfe; }
   #result { font-size: .9rem; color: var(--dim); margin: .1rem 0 1rem; }
   #result b { color: var(--hit); }
   @keyframes flash { 30% { box-shadow: 0 0 0 3px var(--hit); } }
@@ -285,7 +289,7 @@ private val PAGE = """
 <p id="result">—</p>
 <div class="row" id="grids"></div>
 <div class="row">
-  <div class="card"><h2>alice ∩ bob</h2><div class="chips" id="pair"></div></div>
+  <div class="card"><h2>near-miss — everyone but one</h2><div class="chips" id="nearMiss"></div></div>
   <div class="card"><h2>common (all three)</h2><div class="chips" id="common"></div></div>
   <div class="card"><h2>business hours (9–17)</h2><div class="chips" id="filtered"></div></div>
   <div class="card"><h2>options per day</h2><div class="bars" id="byDay"></div></div>
@@ -342,7 +346,11 @@ function render() {
       b.classList.toggle('hit', common.has(d + '-' + h));
     }
   }
-  chips('pair', state.pair || [], 'pair');
+  // near-miss ≥ n-1 already contains the fully-common slots; show only the
+  // "if one more person freed up" delta — a display-only set difference over
+  // the two already-materialized views, not a dataflow recompute.
+  const commonSet = new Set(state.common || []);
+  chips('nearMiss', (state.nearMiss || []).filter(s => !commonSet.has(s)), 'near');
   chips('common', state.common || []);
   chips('filtered', state.filtered || []);
   const f = state.filtered || [], r = document.getElementById('result');
