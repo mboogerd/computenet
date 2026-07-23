@@ -2,8 +2,8 @@ package civictech.demo.slotfinder
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
+import civictech.cell.data.CountView
 import civictech.cell.data.FilterCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.IntersectSetCell
@@ -12,6 +12,7 @@ import civictech.cell.data.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
+import civictech.cell.data.SetView
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -94,33 +95,18 @@ interface SlotInletProxy {
     val inlet: Use<SetOps<Slot>>
 }
 
-/** Folds tagged slot deltas into current membership (the demo-side tag fold). */
-class SlotMembership {
-    private val live = mutableMapOf<Slot, MutableSet<Timestamp>>()
-
-    fun apply(delta: SetDelta<Slot>) {
-        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
-        delta.dels.forEach { (e, tags) ->
-            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
-        }
-    }
-
-    fun current(): Set<Slot> = live.keys.toSet()
-}
-
 /** A hub cell: folds one derived slot stream and pushes app state to SSE clients. */
 private class SlotHubCell(
     private val onUpdate: (Set<Slot>) -> Unit,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
 ) : Cell {
-    private val membership = SlotMembership()
+    private val membership = SetView<Slot>()
     val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Slot>>>())
 
     init {
         inlet.serve(object : Propagate<SetDelta<Slot>> {
             override fun propagate(value: SetDelta<Slot>) {
-                membership.apply(value)
-                onUpdate(membership.current())
+                if (membership.apply(value)) onUpdate(membership.current())
             }
         })
     }
@@ -131,15 +117,13 @@ private class DayCountHubCell(
     private val onUpdate: (Map<String, Long>) -> Unit,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
 ) : Cell {
-    private val counts = mutableMapOf<String, Long>()
+    private val counts = CountView<String>()
     val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<String, Long>>>())
 
     init {
         inlet.serve(object : Propagate<MapDelta<String, Long>> {
             override fun propagate(value: MapDelta<String, Long>) {
-                counts.putAll(value.puts)
-                value.removals.forEach { counts.remove(it) }
-                onUpdate(counts.toMap())
+                if (counts.apply(value)) onUpdate(counts.current())
             }
         })
     }

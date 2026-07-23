@@ -3,6 +3,7 @@ package civictech.demo.slotfinder
 import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetDelta
+import civictech.cell.data.SetView
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
@@ -35,17 +36,17 @@ class SlotFinderPipelineTest {
             val host = ManagedHost(scheduler = controller.scheduler())
             val refs = SlotPipeline.build(host)
 
-            val common = SlotMembership()
-            val filtered = SlotMembership()
+            val common = SetView<Slot>()
+            val filtered = SetView<Slot>()
             val byDay = mutableMapOf<String, Long>()
             host.lookup<SlotOutletProxy>(refs.common)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<Slot>> {
-                    override fun propagate(value: SetDelta<Slot>) = common.apply(value)
+                    override fun propagate(value: SetDelta<Slot>) { common.apply(value) }
                 }, PortRef.generate())
             )
             host.lookup<SlotOutletProxy>(refs.filtered)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<Slot>> {
-                    override fun propagate(value: SetDelta<Slot>) = filtered.apply(value)
+                    override fun propagate(value: SetDelta<Slot>) { filtered.apply(value) }
                 }, PortRef.generate())
             )
             host.lookup<DayOutletProxy>(refs.byDay)!!.outlet.subscribe(
