@@ -7,11 +7,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="${HOME}/.cache/computenet-preview"
 
 "$ROOT/gradlew" -p "$ROOT" :demo:agora:installDist :demo:shopping:installDist \
-  :demo:slotfinder:installDist :demo:skillmatch:installDist :demo:tiering:installDist --console=plain -q
+  :demo:slotfinder:installDist :demo:skillmatch:installDist :demo:tiering:installDist \
+  :demo:backlog-triage:installDist --console=plain -q
 
 mkdir -p "$STAGE"
-for app in agora shopping slotfinder skillmatch tiering; do
+for app in agora shopping slotfinder skillmatch tiering backlog-triage; do
   rm -rf "$STAGE/$app"
   cp -R "$ROOT/demo/$app/build/install/$app" "$STAGE/$app"
 done
-echo "staged: $STAGE/{agora,shopping,slotfinder,skillmatch,tiering}"
+
+# backlog-triage seeds from markdown files; the preview runner can't read the
+# repo, so stage the seed corpus alongside the app.
+rm -rf "$STAGE/backlog-seed"
+cp -R "$ROOT/backlog" "$STAGE/backlog-seed"
+
+echo "staged: $STAGE/{agora,shopping,slotfinder,skillmatch,tiering,backlog-triage}"
