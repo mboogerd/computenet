@@ -164,7 +164,9 @@ class TriageServerTest {
             // the write-side pref index recovered too: ada's reverse vote
             // still replaces her journalled original instead of stacking
             post(base, "/prefer", """{"agent":"ada","winner":"beta","loser":"alpha"}""")
-            json = await(base) { """"id":"alpha","title":"Alpha","score":0.0000""" in it }
+            // poll the full condition (as above): score and the wins/losses
+            // stats are independent folds and can be momentarily torn (F-5)
+            json = await(base) { """"id":"alpha","title":"Alpha","score":0.0000,"wins":1,"losses":1""" in it }
             assertTrue(""""id":"alpha","title":"Alpha","score":0.0000,"wins":1,"losses":1""" in json, json)
         } finally {
             second.stop()
