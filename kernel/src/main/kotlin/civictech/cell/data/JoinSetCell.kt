@@ -8,6 +8,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -79,13 +80,14 @@ class JoinSetCell<A, B, K, C>(
             }
         })
         // late-join catch-up (G-22): advertised pairs folded under combine
-        outlet.linking.onLinked = { link ->
-            if (!minted.isEmpty) {
+        outlet.catchUpOnLinked {
+            if (minted.isEmpty) null
+            else {
                 val adds = mutableMapOf<C, MutableSet<Timestamp>>()
                 minted.entries.forEach { (pair, tag) ->
                     adds.getOrPut(combine(pair.first, pair.second)) { mutableSetOf() } += tag
                 }
-                outlet.at(link.to).propagate(SetDelta(adds = adds))
+                SetDelta(adds = adds)
             }
         }
     }

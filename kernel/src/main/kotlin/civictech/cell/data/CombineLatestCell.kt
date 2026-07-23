@@ -7,6 +7,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -66,11 +67,7 @@ class CombineLatestCell<K, V, W, R>(
             }
         })
         // late-join catch-up (G-22): the current combined map as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (emitted.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(emitted.toMap(), emptySet()))
-            }
-        }
+        outlet.catchUpOnLinked { if (emitted.isEmpty()) null else MapDelta(emitted.toMap(), emptySet()) }
     }
 
     // combine over the current latest-value pair; a key absent from both sides is

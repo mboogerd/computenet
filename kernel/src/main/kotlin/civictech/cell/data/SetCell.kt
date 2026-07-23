@@ -142,15 +142,12 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         // late-join catch-up (G-22) — and replica initial sync / anti-entropy
         // (M7.4): full tag state as one delta-from-empty, tombstones included,
         // to just the new subscriber; idempotence makes replays harmless
-        outlet.linking.onLinked = { link ->
-            if (adds.isNotEmpty() || dels.isNotEmpty()) {
-                outlet.at(link.to).propagate(
-                    SetDelta(
-                        adds = adds.mapValues { it.value.toSet() },
-                        dels = dels.mapValues { it.value.toSet() },
-                    )
-                )
-            }
+        outlet.catchUpOnLinked {
+            if (adds.isEmpty() && dels.isEmpty()) null
+            else SetDelta(
+                adds = adds.mapValues { it.value.toSet() },
+                dels = dels.mapValues { it.value.toSet() },
+            )
         }
         // on-demand pull (spec 20/21 §Pull, G-18 residual, decided in 93
         // I-16/I-24): a single-wave state-as-delta reply, stamped as a catch-

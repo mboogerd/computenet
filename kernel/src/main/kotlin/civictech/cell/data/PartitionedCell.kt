@@ -6,6 +6,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.UUID
@@ -133,11 +134,7 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
             override fun propagate(value: SetDelta<E>) = route(value)
         })
         // late-join catch-up (G-22): the union view as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (merged.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(merged.toMap(), emptySet()))
-            }
-        }
+        outlet.catchUpOnLinked { if (merged.isEmpty()) null else MapDelta(merged.toMap(), emptySet()) }
     }
 
     /**

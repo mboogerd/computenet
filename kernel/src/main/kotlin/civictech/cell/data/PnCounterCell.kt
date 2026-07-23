@@ -106,10 +106,8 @@ class PnCounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         })
         // late-join catch-up (G-22) — and replica initial sync / anti-entropy
         // (M7.4): full per-source state as one delta; max-merge makes replays harmless
-        outlet.linking.onLinked = { link ->
-            if (incs.isNotEmpty() || decs.isNotEmpty()) {
-                outlet.at(link.to).propagate(PnCounterDelta(incs.toMap(), decs.toMap()))
-            }
+        outlet.catchUpOnLinked {
+            if (incs.isEmpty() && decs.isEmpty()) null else PnCounterDelta(incs.toMap(), decs.toMap())
         }
     }
 

@@ -7,6 +7,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -62,11 +63,8 @@ class JoinCell<K, V, W>(override val ref: CellRef = CellRef(UUID.randomUUID())) 
             }
         })
         // late-join catch-up (G-22): the current join as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            val joined = joined()
-            if (joined.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(joined, emptySet()))
-            }
+        outlet.catchUpOnLinked {
+            joined().takeIf { it.isNotEmpty() }?.let { MapDelta(it, emptySet()) }
         }
     }
 

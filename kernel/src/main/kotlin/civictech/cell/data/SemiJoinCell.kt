@@ -8,6 +8,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -80,9 +81,7 @@ class SemiJoinCell<A, B, K>(
             }
         })
         // late-join catch-up (G-22): the advertised output as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (!minted.isEmpty) outlet.at(link.to).propagate(minted.asDelta())
-        }
+        outlet.catchUpOnLinked { if (minted.isEmpty) null else minted.asDelta() }
     }
 
     private fun <R> index(into: MutableMap<K, MutableSet<R>>, key: K, row: R, live: Boolean) {

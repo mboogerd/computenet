@@ -97,11 +97,12 @@ class KeyedSetCell<K, E>(override val ref: CellRef = CellRef(UUID.randomUUID()))
         // late-join catch-up (G-22): all current elements as one delta-from-
         // empty. Two keys holding the same element union their add-tags, so the
         // late subscriber's fold agrees with the live one on membership.
-        outlet.linking.onLinked = { link ->
-            if (current.isNotEmpty()) {
+        outlet.catchUpOnLinked {
+            if (current.isEmpty()) null
+            else {
                 val adds = mutableMapOf<E, MutableSet<Timestamp>>()
                 current.values.forEach { adds.getOrPut(it.element) { mutableSetOf() } += it.tag }
-                outlet.at(link.to).propagate(SetDelta(adds = adds))
+                SetDelta(adds = adds)
             }
         }
     }

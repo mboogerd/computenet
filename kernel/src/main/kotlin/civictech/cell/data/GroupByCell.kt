@@ -7,6 +7,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -87,12 +88,9 @@ class GroupByCell<E, K, A, ACC : Serializable>(
             }
         })
         // late-join catch-up (G-22): current aggregates as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (groups.isNotEmpty()) {
-                outlet.at(link.to).propagate(
-                    MapDelta(groups.mapValues { aggregator.value(it.value.acc) }, emptySet())
-                )
-            }
+        outlet.catchUpOnLinked {
+            if (groups.isEmpty()) null
+            else MapDelta(groups.mapValues { aggregator.value(it.value.acc) }, emptySet())
         }
     }
 

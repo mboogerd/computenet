@@ -9,6 +9,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -51,9 +52,7 @@ class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
             }
         })
         // late-join catch-up (G-22): live tags as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (state.size > 0) outlet.at(link.to).propagate(state.asDelta())
-        }
+        outlet.catchUpOnLinked { if (state.size > 0) state.asDelta() else null }
     }
 
     override fun snapshot(): Serializable = state.snapshot()

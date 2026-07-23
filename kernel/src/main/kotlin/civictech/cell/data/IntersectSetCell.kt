@@ -8,6 +8,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -40,11 +41,7 @@ class IntersectSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())
         left.serve(handler(leftState))
         right.serve(handler(rightState))
         // late-join catch-up (G-22): the advertised intersection as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (advertised.isNotEmpty()) {
-                outlet.at(link.to).propagate(SetDelta(adds = advertised.toMap()))
-            }
-        }
+        outlet.catchUpOnLinked { if (advertised.isEmpty()) null else SetDelta(adds = advertised.toMap()) }
     }
 
     private fun handler(side: TagState<E>) = object : Propagate<SetDelta<E>> {

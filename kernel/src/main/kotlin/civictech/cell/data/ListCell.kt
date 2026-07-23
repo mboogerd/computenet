@@ -68,11 +68,7 @@ class ListCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : List
     init {
         inlet.serve(inletApi)
         // late-join catch-up (G-22): current contents as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (state.isNotEmpty()) {
-                outlet.at(link.to).propagate(ListDelta(adds = state.withIndex().toList()))
-            }
-        }
+        outlet.catchUpOnLinked { if (state.isEmpty()) null else ListDelta(adds = state.withIndex().toList()) }
     }
 
     override fun snapshot(): Serializable = ArrayList(state)

@@ -8,6 +8,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -57,11 +58,7 @@ class FlatMapSetCell<A, B>(
         })
         // late-join catch-up (G-22): output state is derived, so recompute it
         // from input state rather than keeping a second copy
-        outlet.linking.onLinked = { link ->
-            if (state.size > 0) {
-                outlet.at(link.to).propagate(SetDelta(adds = remap(state.asDelta().adds)))
-            }
-        }
+        outlet.catchUpOnLinked { if (state.size > 0) SetDelta(adds = remap(state.asDelta().adds)) else null }
     }
 
     override fun snapshot(): Serializable = state.snapshot()

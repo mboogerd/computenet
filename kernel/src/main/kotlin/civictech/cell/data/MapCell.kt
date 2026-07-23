@@ -53,11 +53,7 @@ class MapCell<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Ma
     init {
         inlet.serve(inletApi)
         // late-join catch-up (G-22): current entries as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (state.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(state.toMap(), emptySet()))
-            }
-        }
+        outlet.catchUpOnLinked { if (state.isEmpty()) null else MapDelta(state.toMap(), emptySet()) }
     }
 
     override fun snapshot(): Serializable = HashMap(state)

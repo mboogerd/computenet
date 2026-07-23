@@ -7,6 +7,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -38,9 +39,7 @@ class CountCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cou
             }
         })
         // late-join catch-up (G-22): current count as a delta-from-zero
-        outlet.linking.onLinked = { link ->
-            if (state.size > 0) outlet.at(link.to).propagate(CounterDelta(state.size.toLong()))
-        }
+        outlet.catchUpOnLinked { if (state.size > 0) CounterDelta(state.size.toLong()) else null }
     }
 
     override fun snapshot(): Serializable = state.snapshot()

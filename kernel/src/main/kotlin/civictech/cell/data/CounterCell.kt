@@ -7,6 +7,7 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import civictech.gen.wire.Contract
 import java.io.Serializable
@@ -51,9 +52,7 @@ class CounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Coun
     init {
         inlet.serve(inletApi)
         // late-join catch-up (G-22): current total as a delta-from-zero
-        outlet.linking.onLinked = { link ->
-            if (total != 0L) outlet.at(link.to).propagate(CounterDelta(total))
-        }
+        outlet.catchUpOnLinked { if (total != 0L) CounterDelta(total) else null }
     }
 
     override fun snapshot(): Serializable = total
