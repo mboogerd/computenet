@@ -1,8 +1,10 @@
 package civictech.demo.skillmatch
 
 import civictech.cell.data.MapDelta
+import civictech.cell.data.MapView
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetDelta
+import civictech.cell.data.SetView
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
@@ -52,36 +54,38 @@ class SkillMatchPipelineTest {
             val host = ManagedHost(scheduler = controller.scheduler())
             val refs = SkillPipeline.build(host)
 
-            val matches = SetFold<Match>()
-            val gap = SetFold<JobSkill>()
-            val matchCounts = mutableMapOf<CandidateJob, Long>()
-            val required = mutableMapOf<String, Long>()
-            val supply = mutableMapOf<String, Long>()
-            val demand = mutableMapOf<String, Long>()
+            val matches = SetView<Match>()
+            val gap = SetView<JobSkill>()
+            val matchCounts = MapView<CandidateJob, Long>()
+            val required = MapView<String, Long>()
+            val supply = MapView<String, Long>()
+            val demand = MapView<String, Long>()
 
             host.lookup<MatchOutletProxy>(refs.matches)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<Match>> {
-                    override fun propagate(value: SetDelta<Match>) = matches.apply(value)
+                    override fun propagate(value: SetDelta<Match>) {
+                        matches.apply(value)
+                    }
                 }, PortRef.generate())
             )
             host.lookup<GapOutletProxy>(refs.gap)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<SetDelta<JobSkill>> {
-                    override fun propagate(value: SetDelta<JobSkill>) = gap.apply(value)
+                    override fun propagate(value: SetDelta<JobSkill>) {
+                        gap.apply(value)
+                    }
                 }, PortRef.generate())
             )
             host.lookup<PairCountOutletProxy>(refs.matchCounts)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<CandidateJob, Long>> {
                     override fun propagate(value: MapDelta<CandidateJob, Long>) {
-                        matchCounts.putAll(value.puts)
-                        value.removals.forEach { matchCounts.remove(it) }
+                        matchCounts.apply(value)
                     }
                 }, PortRef.generate())
             )
             host.lookup<JobCountOutletProxy>(refs.required)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<String, Long>> {
                     override fun propagate(value: MapDelta<String, Long>) {
-                        required.putAll(value.puts)
-                        value.removals.forEach { required.remove(it) }
+                        required.apply(value)
                     }
                 }, PortRef.generate())
             )
@@ -89,16 +93,14 @@ class SkillMatchPipelineTest {
             host.lookup<SkillCountOutletProxy>(refs.supply)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<String, Long>> {
                     override fun propagate(value: MapDelta<String, Long>) {
-                        supply.putAll(value.puts)
-                        value.removals.forEach { supply.remove(it) }
+                        supply.apply(value)
                     }
                 }, PortRef.generate())
             )
             host.lookup<SkillCountOutletProxy>(refs.demand)!!.outlet.subscribe(
                 Use.fixed(object : Propagate<MapDelta<String, Long>> {
                     override fun propagate(value: MapDelta<String, Long>) {
-                        demand.putAll(value.puts)
-                        value.removals.forEach { demand.remove(it) }
+                        demand.apply(value)
                     }
                 }, PortRef.generate())
             )
@@ -142,14 +144,14 @@ class SkillMatchPipelineTest {
             val batchDemand = heldJob.groupBy { it.skill }.mapValues { it.value.size.toLong() }
 
             assertEquals(batchMatches, matches.current(), "seed=$seed matches diverged")
-            assertEquals(batchMatchCounts, matchCounts.toMap(), "seed=$seed matchCounts diverged")
-            assertEquals(batchRequired, required.toMap(), "seed=$seed required diverged")
+            assertEquals(batchMatchCounts, matchCounts.current(), "seed=$seed matchCounts diverged")
+            assertEquals(batchRequired, required.current(), "seed=$seed required diverged")
             assertEquals(batchGap, gap.current(), "seed=$seed gap diverged")
-            assertEquals(batchSupply, supply.toMap(), "seed=$seed supply diverged")
-            assertEquals(batchDemand, demand.toMap(), "seed=$seed demand diverged")
+            assertEquals(batchSupply, supply.current(), "seed=$seed supply diverged")
+            assertEquals(batchDemand, demand.current(), "seed=$seed demand diverged")
 
             // qualified derived both ways (the hub-side comparison, F-1)
-            val incQualified = matchCounts.filter { (cj, n) -> required[cj.job] == n }.keys
+            val incQualified = matchCounts.current().filter { (cj, n) -> required[cj.job] == n }.keys
             val batchQualified = batchMatchCounts.filter { (cj, n) -> batchRequired[cj.job] == n }.keys
             assertEquals(batchQualified, incQualified, "seed=$seed qualified diverged")
         }
