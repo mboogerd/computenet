@@ -6,6 +6,7 @@ import civictech.cell.Timestamp
 import civictech.cell.data.CounterDelta
 import civictech.cell.data.FilterCell
 import civictech.cell.data.CountCell
+import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
@@ -125,6 +126,7 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     private var items: Set<String> = emptySet()
     private var votes: Set<String> = emptySet()
     private var produce: Set<String> = emptySet()
+    private var wanted: Set<String> = emptySet()
     private var voteCount: Long = 0
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
@@ -160,6 +162,18 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         manage.connect(votesUnion.ref, "outlet", votesHub.ref, "inlet")
         manage.connect(refs.getValue("produce"), "outlet", produceHub.ref, "inlet")
         manage.connect(refs.getValue("count"), "outlet", countHub.ref, "inlet")
+
+        // Derived view: items ∩ votes — "still wanted" is the incremental
+        // intersection of two independently-mutating streams (the binary
+        // set operator the filter/count chain didn't yet show). Non-destructive:
+        // a vote for a removed item simply drops out of the intersection.
+        val wantedCell = IntersectSetCell<String>()
+        manage.spawn(wantedCell)
+        manage.connect(itemsUnion.ref, "outlet", wantedCell.ref, "left")
+        manage.connect(votesUnion.ref, "outlet", wantedCell.ref, "right")
+        val wantedHub = SetHubCell({ synchronized(state) { wanted = it }; broadcast() })
+        manage.spawn(wantedHub)
+        manage.connect(wantedCell.ref, "outlet", wantedHub.ref, "inlet")
 
         if (wire != null) {
             val bridgeHost = ManagedHost(registry = registry)
@@ -274,7 +288,7 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     private fun stateJson(): String = synchronized(state) {
         fun arr(values: Set<String>) =
             values.sorted().joinToString(",", "[", "]") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
-        """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"voteCount":$voteCount}"""
+        """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount}"""
     }
 
     private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
@@ -317,8 +331,9 @@ private val PAGE = """
 <meta charset="utf-8">
 <title>computenet — shared shopping list</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.3rem; } h2 { font-size: 1rem; color: #555; }
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem;
+         color-scheme: light dark; background: Canvas; color: CanvasText; }
+  h1 { font-size: 1.3rem; } h2 { font-size: 1rem; color: GrayText; }
   li { margin: .2rem 0; } button { margin-left: .5rem; }
   .voted { color: #b50; font-weight: bold; }
   #user { color: #888; font-size: .8rem; }
@@ -329,6 +344,8 @@ private val PAGE = """
 <form id="addForm"><input id="item" placeholder="new item" autofocus><button>Add</button></form>
 <h2>Items (<span id="voteCount">0</span> voted)</h2>
 <ul id="items"></ul>
+<h2>Still wanted (items &cap; votes)</h2>
+<ul id="wanted"></ul>
 <h2>A–M aisle (filtered view)</h2>
 <ul id="produce"></ul>
 <script>
@@ -363,6 +380,7 @@ new EventSource('/events').onmessage = e => {
     }
   };
   render('items', s.items, true);
+  render('wanted', s.wanted, false);
   render('produce', s.produce, false);
 };
 </script>

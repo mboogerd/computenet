@@ -3,7 +3,8 @@
 The M4 exit-criterion app ([spec 92](../doc/spec/90-roadmap/92-way-forward.md))
 with a face: a shared shopping list with votes, built purely from cells —
 per-user `SetCell` writers, `UnionSetCell` views, a DSL-built
-filter/count chain ([spec 51](../doc/spec/50-development-process/51-construction.md)) —
+filter/count chain plus an `items ∩ votes` "still wanted" intersection
+([spec 51](../doc/spec/50-development-process/51-construction.md)) —
 fronted by the JDK's built-in HTTP server with one static page and SSE.
 
 ```
