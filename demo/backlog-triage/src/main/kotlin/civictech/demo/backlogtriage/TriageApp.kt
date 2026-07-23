@@ -5,13 +5,15 @@ import civictech.cell.data.Aggregators
 import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.MapHubCell
+import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetHubCell
-import civictech.cell.data.SetOps
+import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
+import civictech.cell.graph.lookup
+import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.Use
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.Json
@@ -57,8 +59,8 @@ data class Contribution(val item: String, val agent: String, val opponent: Strin
 
 object TriagePipeline {
     data class Refs(
-        val features: CellRef,
-        val prefs: CellRef,
+        val features: TypedRef<SetApi<String>>,
+        val prefs: TypedRef<SetApi<Pref>>,
         val score: CellRef,
         val votes: CellRef,
         val ratings: Map<String, CellRef>,   // algo name → rating-cell ref ("elo", "bt", "trueskill", "meta")
@@ -66,9 +68,13 @@ object TriagePipeline {
 
     fun build(host: ManagedHost): Refs {
         val refs = mutableMapOf<String, CellRef>()
+        lateinit var featuresRef: TypedRef<SetApi<String>>
+        lateinit var prefsRef: TypedRef<SetApi<Pref>>
         graph(host.managementInlet) {
             val features = spawn("features") { SetCell<String>() }
             val prefs = spawn("prefs") { SetCell<Pref>() }
+            featuresRef = features.refAs()
+            prefsRef = prefs.refAs()
             val contribs = spawn("contribs") {
                 FlatMapSetCell(f = { p: Pref ->
                     listOf(
@@ -108,22 +114,14 @@ object TriagePipeline {
                 .forEach { refs[it.name] = it.ref }
         }
         return Refs(
-            features = refs.getValue("features"),
-            prefs = refs.getValue("prefs"),
+            features = featuresRef,
+            prefs = prefsRef,
             score = refs.getValue("score"),
             votes = refs.getValue("votes"),
             ratings = listOf("elo", "bt", "trueskill", "glicko", "wenglin", "wilson", "meta")
                 .associateWith { refs.getValue(it) },
         )
     }
-}
-
-interface FeatureInletProxy {
-    val inlet: Use<SetOps<String>>
-}
-
-interface PrefInletProxy {
-    val inlet: Use<SetOps<Pref>>
 }
 
 data class FeatureMeta(val title: String, val body: String)
@@ -135,8 +133,8 @@ class TriageApp(port: Int = 8080, private val journalPath: Path? = null) {
     private val host = ManagedHost(registry = registry)
     private val manage = host.managementInlet.call
     private val refs = TriagePipeline.build(host)
-    private val featureOps = host.lookup<FeatureInletProxy>(refs.features)!!.inlet.call
-    private val prefOps = host.lookup<PrefInletProxy>(refs.prefs)!!.inlet.call
+    private val featureOps = host.lookup(refs.features)!!.inlet.call
+    private val prefOps = host.lookup(refs.prefs)!!.inlet.call
 
     private val state = Object()
     // async read model, folded off the hub cells
@@ -181,8 +179,8 @@ class TriageApp(port: Int = 8080, private val journalPath: Path? = null) {
             manage.connect(ref, "outlet", hub.ref, "inlet")
         }
 
-        setHub<String>(refs.features) { features = it }
-        setHub<Pref>(refs.prefs) { prefs = it }
+        setHub<String>(refs.features.ref) { features = it }
+        setHub<Pref>(refs.prefs.ref) { prefs = it }
         mapHub<String, Double>(refs.score) { score = it }
         mapHub<String, Long>(refs.votes) { votes = it }
         refs.ratings.forEach { (algo, ref) ->
