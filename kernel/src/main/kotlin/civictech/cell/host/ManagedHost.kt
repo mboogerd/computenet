@@ -37,6 +37,7 @@ import civictech.cell.data.Magnitude
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.RoutedInletResolution
 import civictech.gen.wire.ProtocolRegistry
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
@@ -1093,6 +1094,27 @@ open class ManagedHost(
     }
 
     private fun findPort(cell: Cell, name: String): Port? = PortRegistry.of(cell)[name]
+
+    /**
+     * Routed-handle validation seam ([civictech.cell.proxy.inlet]): resolve a
+     * named inlet on a locally-hosted cell to the erased api class a `propagate`
+     * send would reach, or a typed reason it cannot. Uses the same private
+     * [findPort] the delivery path uses, so a routed handle validates against
+     * exactly the port a send lands on. The payload type argument is erased on
+     * the port and is deliberately not recoverable here — the wrapper class is.
+     */
+    fun resolveInlet(ref: CellRef, portName: String): RoutedInletResolution {
+        val cell = cells[ref] ?: return RoutedInletResolution.NoCell
+        val port = findPort(cell, portName)
+            ?: return RoutedInletResolution.NoPort(PortRegistry.of(cell).names())
+        if (port !is Use<*>) return RoutedInletResolution.NotUsable
+        val apiClass = when (port) {
+            is FanInlet<*> -> port.clazz
+            is Inlet<*> -> port.clazz
+            else -> null // e.g. FeedbackInlet carries no erased api class — skip the wrapper check
+        }
+        return RoutedInletResolution.Usable(apiClass)
+    }
 
     /**
      * Would a `from -> to` edge close a cycle already visible in [topology]?
