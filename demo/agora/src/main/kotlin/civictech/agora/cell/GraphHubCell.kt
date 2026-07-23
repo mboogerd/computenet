@@ -3,6 +3,7 @@ package civictech.agora.cell
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Propagate
+import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
 import java.util.*
@@ -24,12 +25,10 @@ class GraphHubCell(
     private val credences = ConcurrentHashMap<CellRef, Double>()
 
     init {
-        inlet.serve(object : Propagate<CredenceUpdate> {
-            override fun propagate(value: CredenceUpdate) {
-                credences[value.source] = value.credence
-                onUpdate(value.source, value.credence)
-            }
-        })
+        inlet.onEach { value ->
+            credences[value.source] = value.credence
+            onUpdate(value.source, value.credence)
+        }
     }
 
     fun credenceOf(ref: CellRef): Double? = credences[ref]

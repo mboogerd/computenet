@@ -4,8 +4,10 @@ import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import civictech.cell.CellRef
 import civictech.cell.data.Propagate
+import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -38,18 +40,16 @@ class EdgeCell(
     private var lastInfluence: Double = credence * sourceCredence
 
     init {
-        sourceInlet.serve(object : Propagate<CredenceUpdate> {
-            override fun propagate(value: CredenceUpdate) {
-                // cycle-head absorb gate: drift accumulates against the stored
-                // value, so total absorbed error stays below the threshold
-                if (quiescence > 0 && abs(value.credence - sourceCredence) < quiescence) return
-                sourceCredence = value.credence
-                emitInfluence()
-            }
-        })
+        sourceInlet.onEach { value ->
+            // cycle-head absorb gate: drift accumulates against the stored
+            // value, so total absorbed error stays below the threshold
+            if (quiescence > 0 && abs(value.credence - sourceCredence) < quiescence) return@onEach
+            sourceCredence = value.credence
+            emitInfluence()
+        }
         // a fresh target learns this edge's current influence at once
-        influenceOutlet.linking.onLinked = { link ->
-            if (catchUp) influenceOutlet.at(link.to).propagate(InfluenceDelta(ref, polarity, lastInfluence, size = 0.0))
+        influenceOutlet.catchUpOnLinked {
+            if (catchUp) InfluenceDelta(ref, polarity, lastInfluence, size = 0.0) else null
         }
     }
 

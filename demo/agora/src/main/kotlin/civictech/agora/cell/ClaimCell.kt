@@ -6,8 +6,10 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.data.Propagate
+import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
@@ -52,23 +54,19 @@ open class ClaimCell(
     var catchUp: Boolean = true
 
     init {
-        stanceInlet.serve(object : Propagate<StanceDelta> {
-            override fun propagate(value: StanceDelta) {
-                if (value.value == null) stances.remove(value.user) else stances[value.user] = value.value
-                recompute()
-            }
-        })
-        influenceInlet.serve(object : Propagate<InfluenceDelta> {
-            override fun propagate(value: InfluenceDelta) {
-                if (value.value == null) influences.remove(value.edge)
-                else influences[value.edge] = if (value.polarity == Polarity.SUPPORT) value.value else -value.value
-                recompute()
-            }
-        })
+        stanceInlet.onEach { value ->
+            if (value.value == null) stances.remove(value.user) else stances[value.user] = value.value
+            recompute()
+        }
+        influenceInlet.onEach { value ->
+            if (value.value == null) influences.remove(value.edge)
+            else influences[value.edge] = if (value.polarity == Polarity.SUPPORT) value.value else -value.value
+            recompute()
+        }
         // late-join catch-up (G-22): a fresh subscriber learns the current
         // credence at once — a baseline, so size = 0 (no urgency).
-        credenceOutlet.linking.onLinked = { link ->
-            if (catchUp) credenceOutlet.at(link.to).propagate(CredenceUpdate(ref, credence, size = 0.0))
+        credenceOutlet.catchUpOnLinked {
+            if (catchUp) CredenceUpdate(ref, credence, size = 0.0) else null
         }
     }
 
