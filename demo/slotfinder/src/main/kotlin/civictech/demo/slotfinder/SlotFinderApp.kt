@@ -1,29 +1,23 @@
 package civictech.demo.slotfinder
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
 import civictech.cell.data.FilterCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.IntersectSetCell
-import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.data.MapHubCell
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
+import civictech.cell.data.SetHubCell
 import civictech.cell.data.SetOps
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.Serializable
 import java.net.InetSocketAddress
 import java.net.URLDecoder
-import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -94,57 +88,6 @@ interface SlotInletProxy {
     val inlet: Use<SetOps<Slot>>
 }
 
-/** Folds tagged slot deltas into current membership (the demo-side tag fold). */
-class SlotMembership {
-    private val live = mutableMapOf<Slot, MutableSet<Timestamp>>()
-
-    fun apply(delta: SetDelta<Slot>) {
-        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
-        delta.dels.forEach { (e, tags) ->
-            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
-        }
-    }
-
-    fun current(): Set<Slot> = live.keys.toSet()
-}
-
-/** A hub cell: folds one derived slot stream and pushes app state to SSE clients. */
-private class SlotHubCell(
-    private val onUpdate: (Set<Slot>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val membership = SlotMembership()
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Slot>>>())
-
-    init {
-        inlet.serve(object : Propagate<SetDelta<Slot>> {
-            override fun propagate(value: SetDelta<Slot>) {
-                membership.apply(value)
-                onUpdate(membership.current())
-            }
-        })
-    }
-}
-
-/** A hub cell folding the per-day count MapDeltas. */
-private class DayCountHubCell(
-    private val onUpdate: (Map<String, Long>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val counts = mutableMapOf<String, Long>()
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<String, Long>>>())
-
-    init {
-        inlet.serve(object : Propagate<MapDelta<String, Long>> {
-            override fun propagate(value: MapDelta<String, Long>) {
-                counts.putAll(value.puts)
-                value.removals.forEach { counts.remove(it) }
-                onUpdate(counts.toMap())
-            }
-        })
-    }
-}
-
 class SlotFinderApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
@@ -168,11 +111,11 @@ class SlotFinderApp(port: Int = 8080) {
             "pair" to refs.pairAB, "common" to refs.common, "filtered" to refs.filtered,
         )
         observed.forEach { (name, ref) ->
-            val hub = SlotHubCell({ synchronized(state) { slots[name] = it }; broadcast() })
+            val hub = SetHubCell<Slot>({ synchronized(state) { slots[name] = it }; broadcast() })
             manage.spawn(hub)
             manage.connect(ref, "outlet", hub.ref, "inlet")
         }
-        val dayHub = DayCountHubCell({ synchronized(state) { byDay = it }; broadcast() })
+        val dayHub = MapHubCell<String, Long>({ synchronized(state) { byDay = it }; broadcast() })
         manage.spawn(dayHub)
         manage.connect(refs.byDay, "outlet", dayHub.ref, "inlet")
 
