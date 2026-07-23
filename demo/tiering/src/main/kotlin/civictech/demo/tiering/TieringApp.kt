@@ -9,7 +9,16 @@ import civictech.cell.data.MapHubCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetHubCell
+import civictech.cell.data.GroupByCellPorts
+import civictech.cell.data.MapDelta
+import civictech.cell.data.MapHubCellPorts
+import civictech.cell.data.Propagate
+import civictech.cell.data.SetCellPorts
+import civictech.cell.data.SetDelta
+import civictech.cell.data.SetHubCellPorts
+import civictech.cell.graph.OutletId
 import civictech.cell.graph.TypedRef
+import civictech.cell.graph.connect
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
@@ -132,24 +141,26 @@ class TieringApp(port: Int = 8080) {
     val boundPort: Int get() = server.address.port
 
     init {
-        fun <E> setHub(ref: CellRef, sink: (Set<E>) -> Unit) {
+        // ref-only typed wiring: generated Ports ids unify the payload type at
+        // compile time and lower to the same string connect
+        fun <E> setHub(ref: CellRef, outlet: OutletId<Propagate<SetDelta<E>>>, sink: (Set<E>) -> Unit) {
             val hub = SetHubCell<E>({ synchronized(state) { sink(it) }; broadcast() })
             manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
+            manage.connect(ref, outlet, hub.ref, SetHubCellPorts.inlet<E>())
         }
 
-        fun <K, V> mapHub(ref: CellRef, sink: (Map<K, V>) -> Unit) {
+        fun <K, V> mapHub(ref: CellRef, outlet: OutletId<Propagate<MapDelta<K, V>>>, sink: (Map<K, V>) -> Unit) {
             val hub = MapHubCell<K, V>({ synchronized(state) { sink(it) }; broadcast() })
             manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
+            manage.connect(ref, outlet, hub.ref, MapHubCellPorts.inlet<K, V>())
         }
 
-        setHub<String>(refs.items.ref) { items = it }
-        setHub<Valuation>(refs.vals.ref) { valuations = it }
-        setHub<Pref>(refs.prefs.ref) { prefs = it }
-        mapHub<String, Double>(refs.tierAvg.ref) { tierAvg = it }
-        mapHub<String, Double>(refs.prefAvg.ref) { prefAvg = it }
-        mapHub<String, Tiered>(refs.fused.ref) { fused = it }
+        setHub(refs.items.ref, SetCellPorts.outlet<String>()) { items = it }
+        setHub(refs.vals.ref, SetCellPorts.outlet<Valuation>()) { valuations = it }
+        setHub(refs.prefs.ref, SetCellPorts.outlet<Pref>()) { prefs = it }
+        mapHub(refs.tierAvg.ref, GroupByCellPorts.outlet<Valuation, String, Double, Serializable>()) { tierAvg = it }
+        mapHub(refs.prefAvg.ref, GroupByCellPorts.outlet<Contribution, String, Double, Serializable>()) { prefAvg = it }
+        mapHub(refs.fused.ref, FuseCellPorts.outlet) { fused = it }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
