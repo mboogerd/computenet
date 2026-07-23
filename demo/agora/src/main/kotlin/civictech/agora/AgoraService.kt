@@ -5,18 +5,11 @@ import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import civictech.cell.CellRef
 import civictech.cell.data.Propagate
-import civictech.cell.host.LocationRegistry
+import civictech.cell.graph.TypedRef
+import civictech.cell.graph.lookup
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.Link
-import civictech.cell.port.Use
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.HostedCellProxy
-
-/** Routed-write surfaces: property names MUST match the registered port names. */
-interface StanceInletProxy { val stanceInlet: Use<Propagate<StanceDelta>> }
-interface InfluenceInletProxy { val influenceInlet: Use<Propagate<InfluenceDelta>> }
-interface SourceInletProxy { val sourceInlet: Use<Propagate<CredenceUpdate>> }
-interface HubInletProxy { val inlet: Use<Propagate<CredenceUpdate>> }
 
 /**
  * Graph management shared by the HTTP layer and the tests. Cells stay
@@ -26,14 +19,13 @@ interface HubInletProxy { val inlet: Use<Propagate<CredenceUpdate>> }
  * contains at least one head, because any new cycle runs through the edge
  * that closed it).
  *
- * All wiring is **routed** through the host queue (`streamTo` + registry
- * proxies, the demo idiom) rather than DSL-linked: co-hosted DSL links fuse
+ * All wiring is **routed** through the host queue (`streamTo` + typed-ref
+ * lookups, the demo idiom) rather than DSL-linked: co-hosted DSL links fuse
  * into synchronous calls that bypass the scheduler, and magnitude-based
  * prioritization needs every hop staged.
  */
 class AgoraService(
     private val host: ManagedHost,
-    private val registry: LocationRegistry,
     private val semantics: GradualSemantics = DfQuad,
     /** Cycle-head absorb threshold (per feedback edge; heads only). */
     private val quiescence: Double = 1e-3,
@@ -224,16 +216,16 @@ class AgoraService(
     }
 
     private fun routedHub(): Propagate<CredenceUpdate> =
-        (HostedCellProxy.create(hub.ref, registry, HubInletProxy::class.java) as HubInletProxy).inlet.call
+        host.lookup(TypedRef<GraphHubApi>(hub.ref))!!.inlet.call
 
     private fun routedSource(edge: CellRef): Propagate<CredenceUpdate> =
-        (HostedCellProxy.create(edge, registry, SourceInletProxy::class.java) as SourceInletProxy).sourceInlet.call
+        host.lookup(TypedRef<EdgeApi>(edge))!!.sourceInlet.call
 
     private fun routedInfluence(target: CellRef): Propagate<InfluenceDelta> =
-        (HostedCellProxy.create(target, registry, InfluenceInletProxy::class.java) as InfluenceInletProxy).influenceInlet.call
+        host.lookup(TypedRef<ClaimApi>(target))!!.influenceInlet.call
 
     private fun routedStance(id: CellRef): Propagate<StanceDelta> =
-        (HostedCellProxy.create(id, registry, StanceInletProxy::class.java) as StanceInletProxy).stanceInlet.call
+        host.lookup(TypedRef<ClaimApi>(id))!!.stanceInlet.call
 
     companion object {
         /**

@@ -5,9 +5,18 @@ import civictech.cell.CellRef
 import civictech.cell.data.Propagate
 import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
+import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Routed-write surface of the hub, consumed via `TypedRef<GraphHubApi>` +
+ * `host.lookup`: property name MUST match the registered port name.
+ */
+interface GraphHubApi {
+    val inlet: Use<Propagate<CredenceUpdate>>
+}
 
 /**
  * Read-model hub (the demo `SetHubCell` idiom): folds every claim's credence
@@ -18,9 +27,9 @@ import java.util.concurrent.ConcurrentHashMap
 class GraphHubCell(
     private val onUpdate: (CellRef, Double) -> Unit = { _, _ -> },
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
+) : Cell, GraphHubApi {
 
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<CredenceUpdate>>())
+    override val inlet = registerPort("inlet", FanInlet.create<Propagate<CredenceUpdate>>())
 
     private val credences = ConcurrentHashMap<CellRef, Double>()
 

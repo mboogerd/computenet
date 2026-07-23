@@ -7,11 +7,20 @@ import civictech.cell.data.Propagate
 import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
 import kotlin.math.abs
+
+/**
+ * Routed-write surface of an edge, consumed via `TypedRef<EdgeApi>` +
+ * `host.lookup`: the claim surface plus the source-credence feed.
+ */
+interface EdgeApi : ClaimApi {
+    val sourceInlet: Use<Propagate<CredenceUpdate>>
+}
 
 /**
  * An edge is a claim — "source supports/attacks target" — with its own
@@ -31,9 +40,9 @@ class EdgeCell(
     ref: CellRef = CellRef(UUID.randomUUID()),
     semantics: GradualSemantics = DfQuad,
     val quiescence: Double = 0.0,
-) : ClaimCell(ref, semantics) {
+) : ClaimCell(ref, semantics), EdgeApi {
 
-    val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<CredenceUpdate>>())
+    override val sourceInlet = registerPort("sourceInlet", FanInlet.create<Propagate<CredenceUpdate>>())
     val influenceOutlet = registerPort("influenceOutlet", FanOutlet.create<Propagate<InfluenceDelta>>())
 
     private var sourceCredence: Double = credence // neutral until the source's catch-up arrives

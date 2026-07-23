@@ -36,7 +36,7 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
     val service = AgoraService(
-        host, registry,
+        host,
         structureLog = journalDir?.let { File(it, "graph.jsonl") },
         onCredence = { _, _ -> broadcast() },
     )

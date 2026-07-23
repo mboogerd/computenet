@@ -9,11 +9,21 @@ import civictech.cell.data.Propagate
 import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
 import kotlin.math.abs
+
+/**
+ * Routed-write surface of a claim, consumed via `TypedRef<ClaimApi>` +
+ * `host.lookup`: property names MUST match the registered port names.
+ */
+interface ClaimApi {
+    val stanceInlet: Use<Propagate<StanceDelta>>
+    val influenceInlet: Use<Propagate<InfluenceDelta>>
+}
 
 /**
  * A claim (argument) with a credence in [0,1]: a deterministic function of
@@ -26,10 +36,10 @@ import kotlin.math.abs
 open class ClaimCell(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
     protected val semantics: GradualSemantics = DfQuad,
-) : Cell, Stateful {
+) : Cell, Stateful, ClaimApi {
 
-    val stanceInlet = registerPort("stanceInlet", FanInlet.create<Propagate<StanceDelta>>())
-    val influenceInlet = registerPort("influenceInlet", FanInlet.create<Propagate<InfluenceDelta>>())
+    override val stanceInlet = registerPort("stanceInlet", FanInlet.create<Propagate<StanceDelta>>())
+    override val influenceInlet = registerPort("influenceInlet", FanInlet.create<Propagate<InfluenceDelta>>())
     val credenceOutlet = registerPort("credenceOutlet", FanOutlet.create<Propagate<CredenceUpdate>>())
 
     private val stances = HashMap<String, Double>()
