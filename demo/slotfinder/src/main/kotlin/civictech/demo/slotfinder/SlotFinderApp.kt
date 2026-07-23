@@ -1,30 +1,22 @@
 package civictech.demo.slotfinder
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
-import civictech.cell.data.CountView
 import civictech.cell.data.FilterCell
 import civictech.cell.data.GroupByCell
-import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
 import civictech.cell.data.QuorumSetCell
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
-import civictech.cell.data.SetView
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.FanInlet
+import civictech.cell.host.observeAll
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.Serializable
 import java.net.InetSocketAddress
 import java.net.URLDecoder
-import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -99,52 +91,25 @@ interface SlotInletProxy {
     val inlet: Use<SetOps<Slot>>
 }
 
-/** A hub cell: folds one derived slot stream and pushes app state to SSE clients. */
-private class SlotHubCell(
-    private val onUpdate: (Set<Slot>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val membership = SetView<Slot>()
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Slot>>>())
-
-    init {
-        inlet.serve(object : Propagate<SetDelta<Slot>> {
-            override fun propagate(value: SetDelta<Slot>) {
-                if (membership.apply(value)) onUpdate(membership.current())
-            }
-        })
-    }
-}
-
-/** A hub cell folding the per-day count MapDeltas. */
-private class DayCountHubCell(
-    private val onUpdate: (Map<String, Long>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val counts = CountView<String>()
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<String, Long>>>())
-
-    init {
-        inlet.serve(object : Propagate<MapDelta<String, Long>> {
-            override fun propagate(value: MapDelta<String, Long>) {
-                if (counts.apply(value)) onUpdate(counts.current())
-            }
-        })
-    }
-}
-
 class SlotFinderApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
-    private val manage = host.managementInlet.call
     private val refs = SlotPipeline.build(host)
     private val writers: Map<String, SetOps<Slot>> = refs.participants.mapValues { (_, ref) ->
         host.lookup<SlotInletProxy>(ref)!!.inlet.call
     }
 
-    private val state = Object()
-    private val slots = mutableMapOf<String, Set<Slot>>() // participant + stage name → membership
-    private var byDay: Map<String, Long> = emptyMap()
+    // The observation edge: one composite sink folds every observed outlet into a
+    // materialized, thread-safe snapshot with built-in late-join catch-up — no hand-rolled
+    // hub cells, no synchronized mutable snapshot.
+    private val view = host.observeAll {
+        PARTICIPANTS.forEach { set(it, refs.participants.getValue(it)) }
+        set("nearMiss", refs.nearMiss)
+        set("common", refs.common)
+        set("filtered", refs.filtered)
+        count("byDay", refs.byDay)
+    }
+
     private val clients = CopyOnWriteArrayList<HttpExchange>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
@@ -152,17 +117,7 @@ class SlotFinderApp(port: Int = 8080) {
     val boundPort: Int get() = server.address.port
 
     init {
-        val observed = refs.participants + mapOf(
-            "nearMiss" to refs.nearMiss, "common" to refs.common, "filtered" to refs.filtered,
-        )
-        observed.forEach { (name, ref) ->
-            val hub = SlotHubCell({ synchronized(state) { slots[name] = it }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-        val dayHub = DayCountHubCell({ synchronized(state) { byDay = it }; broadcast() })
-        manage.spawn(dayHub)
-        manage.connect(refs.byDay, "outlet", dayHub.ref, "inlet")
+        view.onChange { broadcast() }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
@@ -222,16 +177,24 @@ class SlotFinderApp(port: Int = 8080) {
         }
     }
 
-    private fun stateJson(): String = synchronized(state) {
-        fun arr(values: Set<Slot>?) =
-            (values ?: emptySet()).sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
+    private fun stateJson(): String {
+        val snapshot = view.current()
+
+        @Suppress("UNCHECKED_CAST")
+        fun slotsOf(name: String) = snapshot[name] as? Set<Slot> ?: emptySet()
+
+        @Suppress("UNCHECKED_CAST")
+        val byDay = snapshot["byDay"] as? Map<String, Long> ?: emptyMap()
+
+        fun arr(values: Set<Slot>) =
+            values.sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
                 .joinToString(",", "[", "]") { "\"$it\"" }
 
         val sets = (PARTICIPANTS + listOf("nearMiss", "common", "filtered"))
-            .joinToString(",") { "\"$it\":${arr(slots[it])}" }
+            .joinToString(",") { "\"$it\":${arr(slotsOf(it))}" }
         val counts = Slot.DAYS.filter { it in byDay }
             .joinToString(",", "{", "}") { "\"$it\":${byDay.getValue(it)}" }
-        """{$sets,"byDay":$counts}"""
+        return """{$sets,"byDay":$counts}"""
     }
 
     private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
