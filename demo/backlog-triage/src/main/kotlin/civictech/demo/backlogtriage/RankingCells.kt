@@ -4,10 +4,13 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
 import civictech.cell.data.MapDelta
+import civictech.cell.data.MapDiffPublisher
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetDelta
+import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.util.*
 import kotlin.math.abs
@@ -46,59 +49,38 @@ class RatingCell(
     private val epsilon: Double = 1e-9,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
 ) : Cell {
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<Pref>>>))
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Pref>>>())
 
-    @Suppress("UNCHECKED_CAST")
-    val outlet = registerPort("outlet", FanOutlet(Propagate::class.java as Class<Propagate<MapDelta<String, Double>>>))
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<String, Double>>>())
 
     private val live = mutableMapOf<Pref, MutableSet<Timestamp>>()
-    private val published = mutableMapOf<String, Double>()
+    private val ratings = MapDiffPublisher<String, Double>(changed = { a, b -> abs(a - b) > epsilon })
 
     init {
-        inlet.serve(object : Propagate<SetDelta<Pref>> {
-            override fun propagate(value: SetDelta<Pref>) {
-                value.adds.forEach { (p, tags) ->
-                    val t = live.getOrPut(p) { mutableSetOf() }
-                    val wasLive = t.isNotEmpty()
-                    t += tags
-                    if (!wasLive && t.isNotEmpty()) engine.add(p.winner, p.loser)
-                }
-                value.dels.forEach { (p, tags) ->
-                    val t = live[p] ?: return@forEach
-                    val wasLive = t.isNotEmpty()
-                    t -= tags
-                    if (wasLive && t.isEmpty()) {
-                        live.remove(p)
-                        engine.retract(p.winner, p.loser)
-                    }
-                }
-                publishDiff()
+        inlet.onEach { value ->
+            value.adds.forEach { (p, tags) ->
+                val t = live.getOrPut(p) { mutableSetOf() }
+                val wasLive = t.isNotEmpty()
+                t += tags
+                if (!wasLive && t.isNotEmpty()) engine.add(p.winner, p.loser)
             }
-        })
-        // late-join catch-up (G-22): current ratings as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (published.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(published.toMap(), emptySet()))
+            value.dels.forEach { (p, tags) ->
+                val t = live[p] ?: return@forEach
+                val wasLive = t.isNotEmpty()
+                t -= tags
+                if (wasLive && t.isEmpty()) {
+                    live.remove(p)
+                    engine.retract(p.winner, p.loser)
+                }
             }
+            publishDiff()
         }
+        // late-join catch-up (G-22): current ratings as a delta-from-empty
+        outlet.catchUpOnLinked { ratings.catchUpDelta() }
     }
 
     private fun publishDiff() {
-        val next = engine.ratings()
-        val puts = mutableMapOf<String, Double>()
-        next.forEach { (item, r) ->
-            val prev = published[item]
-            if (prev == null || abs(prev - r) > epsilon) {
-                published[item] = r
-                puts[item] = r
-            }
-        }
-        val removals = published.keys.filter { it !in next }.toSet()
-        removals.forEach { published.remove(it) }
-        if (puts.isNotEmpty() || removals.isNotEmpty()) {
-            outlet.call.propagate(MapDelta(puts, removals))
-        }
+        ratings.publishAll(engine.ratings())?.let { outlet.call.propagate(it) }
     }
 }
 
@@ -120,49 +102,28 @@ class MetaRankCell(
     private val epsilon: Double = 1e-9,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
 ) : Cell {
-    @Suppress("UNCHECKED_CAST")
-    val outlet = registerPort("outlet", FanOutlet(Propagate::class.java as Class<Propagate<MapDelta<String, Double>>>))
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<String, Double>>>())
 
     private val folded = LinkedHashMap<String, MutableMap<String, Double>>()
-    private val published = mutableMapOf<String, Double>()
+    private val publisher = MapDiffPublisher<String, Double>(changed = { a, b -> abs(a - b) > epsilon })
 
-    @Suppress("UNCHECKED_CAST")
     val inlets: Map<String, FanInlet<Propagate<MapDelta<String, Double>>>> = sources.associateWith { name ->
         val fold = mutableMapOf<String, Double>()
         folded[name] = fold
-        val port = registerPort(name, FanInlet(Propagate::class.java as Class<Propagate<MapDelta<String, Double>>>))
-        port.serve(object : Propagate<MapDelta<String, Double>> {
-            override fun propagate(value: MapDelta<String, Double>) {
-                fold.putAll(value.puts)
-                value.removals.forEach { fold.remove(it) }
-                publishDiff()
-            }
-        })
+        val port = registerPort(name, FanInlet.create<Propagate<MapDelta<String, Double>>>())
+        port.onEach { value ->
+            fold.putAll(value.puts)
+            value.removals.forEach { fold.remove(it) }
+            publishDiff()
+        }
         port
     }
 
     init {
-        outlet.linking.onLinked = { link ->
-            if (published.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(published.toMap(), emptySet()))
-            }
-        }
+        outlet.catchUpOnLinked { publisher.catchUpDelta() }
     }
 
     private fun publishDiff() {
-        val next = Borda.combine(folded.values.toList())
-        val puts = mutableMapOf<String, Double>()
-        next.forEach { (item, r) ->
-            val prev = published[item]
-            if (prev == null || abs(prev - r) > epsilon) {
-                published[item] = r
-                puts[item] = r
-            }
-        }
-        val removals = published.keys.filter { it !in next }.toSet()
-        removals.forEach { published.remove(it) }
-        if (puts.isNotEmpty() || removals.isNotEmpty()) {
-            outlet.call.propagate(MapDelta(puts, removals))
-        }
+        publisher.publishAll(Borda.combine(folded.values.toList()))?.let { outlet.call.propagate(it) }
     }
 }

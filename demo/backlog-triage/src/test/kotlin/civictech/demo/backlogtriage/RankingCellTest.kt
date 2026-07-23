@@ -6,6 +6,7 @@ import civictech.cell.Timestamp
 import civictech.cell.data.MapDelta
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetDelta
+import civictech.cell.data.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef
@@ -151,16 +152,10 @@ class RankingCellTest {
         val arrivals: MutableList<MapDelta<String, Double>> = mutableListOf(),
         override val ref: CellRef = CellRef(UUID.randomUUID()),
     ) : Cell {
-        @Suppress("UNCHECKED_CAST")
-        val inlet =
-            registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<String, Double>>>))
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<String, Double>>>())
 
         init {
-            inlet.serve(object : Propagate<MapDelta<String, Double>> {
-                override fun propagate(value: MapDelta<String, Double>) {
-                    arrivals += value
-                }
-            })
+            inlet.onEach { arrivals += it }
         }
     }
 }
