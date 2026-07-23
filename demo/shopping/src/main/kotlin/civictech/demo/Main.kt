@@ -1,11 +1,7 @@
 package civictech.demo
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
-import civictech.cell.data.CounterDelta
 import civictech.cell.data.FilterCell
-import civictech.cell.data.CountCell
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetCell
@@ -16,9 +12,9 @@ import civictech.cell.durability.FileJournal
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.FanInlet
+import civictech.cell.host.View
+import civictech.cell.host.observe
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
 import civictech.cell.port.streamTo
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.wire.Peering
@@ -35,55 +31,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 // The UI transport is still JDK httpserver + SSE pushing full state (an
 // incremental browser client is M6+ material); the *peer* transport is the
 // real M5 wire — WebSocket frames between symmetric JVMs.
-
-/** Folds tagged set deltas into current membership (the demo-side tag fold). */
-private class Membership {
-    private val live = mutableMapOf<String, MutableSet<Timestamp>>()
-
-    fun apply(delta: SetDelta<String>) {
-        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
-        delta.dels.forEach { (e, tags) ->
-            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
-        }
-    }
-
-    fun current(): Set<String> = live.keys.toSet()
-}
-
-/** A hub cell: folds one derived stream and pushes app state to SSE clients. */
-private class SetHubCell(
-    private val onUpdate: (Set<String>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val membership = Membership()
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
-
-    init {
-        inlet.serve(object : Propagate<SetDelta<String>> {
-            override fun propagate(value: SetDelta<String>) {
-                membership.apply(value)
-                onUpdate(membership.current())
-            }
-        })
-    }
-}
-
-private class CounterHubCell(
-    private val onUpdate: (Long) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private var total = 0L
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<CounterDelta>>())
-
-    init {
-        inlet.serve(object : Propagate<CounterDelta> {
-            override fun propagate(value: CounterDelta) {
-                total += value.amount
-                onUpdate(total)
-            }
-        })
-    }
-}
 
 interface SetInletProxy {
     val inlet: Use<SetOps<String>>
@@ -142,43 +89,33 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         manage.spawn(itemsUnion)
         manage.spawn(votesUnion)
 
-        // the derived views are DSL-built; hubs fold them into UI state
+        // the derived views are DSL-built; observation sinks fold them into UI state
         val refs = mutableMapOf<String, CellRef>()
         graph(host.managementInlet) {
             val produceCell = spawn("produce") { FilterCell<String> { s -> s.firstOrNull()?.lowercaseChar() in 'a'..'m' } }
-            val count = spawn("count") { CountCell<String>() }
             refs["produce"] = produceCell.ref
-            refs["count"] = count.ref
         }
         manage.connect(itemsUnion.ref, "outlet", refs.getValue("produce"), "inlet")
-        // `count` is fed by the items ∩ votes intersection wired below (not the
-        // raw votes union), so "N voted" counts listed items that carry a vote.
-        // A vote for a since-removed item is retained in the votes set but drops
-        // out of the intersection, so it neither shows a ★ nor inflates the count.
 
-        val itemsHub = SetHubCell({ synchronized(state) { items = it }; broadcast() })
-        val votesHub = SetHubCell({ synchronized(state) { votes = it }; broadcast() })
-        val produceHub = SetHubCell({ synchronized(state) { produce = it }; broadcast() })
-        val countHub = CounterHubCell({ synchronized(state) { voteCount = it }; broadcast() })
-        listOf(itemsHub, votesHub, produceHub, countHub).forEach { manage.spawn(it) }
-        manage.connect(itemsUnion.ref, "outlet", itemsHub.ref, "inlet")
-        manage.connect(votesUnion.ref, "outlet", votesHub.ref, "inlet")
-        manage.connect(refs.getValue("produce"), "outlet", produceHub.ref, "inlet")
-        manage.connect(refs.getValue("count"), "outlet", countHub.ref, "inlet")
+        host.observe(itemsUnion.ref, View.set<String>()) { synchronized(state) { items = it }; broadcast() }
+        host.observe(votesUnion.ref, View.set<String>()) { synchronized(state) { votes = it }; broadcast() }
+        host.observe(refs.getValue("produce"), View.set<String>()) { synchronized(state) { produce = it }; broadcast() }
 
         // Derived view: items ∩ votes — "still wanted" is the incremental
         // intersection of two independently-mutating streams (the binary
-        // set operator the filter/count chain didn't yet show). It feeds both
-        // the "Still wanted" list and the vote count, so both track votes for
-        // listed items only, without discarding the retained raw vote.
+        // set operator the filter chain didn't yet show). It feeds both the
+        // "Still wanted" list and the vote count, so both track votes for
+        // listed items only, without discarding the retained raw vote. The
+        // vote count is derived from the wanted set's size (|items ∩ votes|):
+        // a vote for a since-removed item stays in the raw votes set but drops
+        // out of the intersection, so it neither shows a ★ nor inflates the count.
         val wantedCell = IntersectSetCell<String>()
         manage.spawn(wantedCell)
         manage.connect(itemsUnion.ref, "outlet", wantedCell.ref, "left")
         manage.connect(votesUnion.ref, "outlet", wantedCell.ref, "right")
-        manage.connect(wantedCell.ref, "outlet", refs.getValue("count"), "inlet")
-        val wantedHub = SetHubCell({ synchronized(state) { wanted = it }; broadcast() })
-        manage.spawn(wantedHub)
-        manage.connect(wantedCell.ref, "outlet", wantedHub.ref, "inlet")
+        host.observe(wantedCell.ref, View.set<String>()) {
+            synchronized(state) { wanted = it; voteCount = it.size.toLong() }; broadcast()
+        }
 
         if (wire != null) {
             val bridgeHost = ManagedHost(registry = registry)
