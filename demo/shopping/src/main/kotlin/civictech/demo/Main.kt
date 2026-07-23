@@ -2,7 +2,6 @@ package civictech.demo
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
 import civictech.cell.data.CounterDelta
 import civictech.cell.data.FilterCell
 import civictech.cell.data.CountCell
@@ -10,8 +9,10 @@ import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
+import civictech.cell.data.SetHubCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
+import civictech.cell.data.onEach
 import civictech.cell.durability.FileJournal
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
@@ -36,38 +37,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 // incremental browser client is M6+ material); the *peer* transport is the
 // real M5 wire — WebSocket frames between symmetric JVMs.
 
-/** Folds tagged set deltas into current membership (the demo-side tag fold). */
-private class Membership {
-    private val live = mutableMapOf<String, MutableSet<Timestamp>>()
-
-    fun apply(delta: SetDelta<String>) {
-        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
-        delta.dels.forEach { (e, tags) ->
-            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
-        }
-    }
-
-    fun current(): Set<String> = live.keys.toSet()
-}
-
-/** A hub cell: folds one derived stream and pushes app state to SSE clients. */
-private class SetHubCell(
-    private val onUpdate: (Set<String>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val membership = Membership()
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
-
-    init {
-        inlet.serve(object : Propagate<SetDelta<String>> {
-            override fun propagate(value: SetDelta<String>) {
-                membership.apply(value)
-                onUpdate(membership.current())
-            }
-        })
-    }
-}
-
 private class CounterHubCell(
     private val onUpdate: (Long) -> Unit,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
@@ -76,12 +45,7 @@ private class CounterHubCell(
     val inlet = registerPort("inlet", FanInlet.create<Propagate<CounterDelta>>())
 
     init {
-        inlet.serve(object : Propagate<CounterDelta> {
-            override fun propagate(value: CounterDelta) {
-                total += value.amount
-                onUpdate(total)
-            }
-        })
+        inlet.onEach { total += it.amount; onUpdate(total) }
     }
 }
 
@@ -156,9 +120,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         // A vote for a since-removed item is retained in the votes set but drops
         // out of the intersection, so it neither shows a ★ nor inflates the count.
 
-        val itemsHub = SetHubCell({ synchronized(state) { items = it }; broadcast() })
-        val votesHub = SetHubCell({ synchronized(state) { votes = it }; broadcast() })
-        val produceHub = SetHubCell({ synchronized(state) { produce = it }; broadcast() })
+        val itemsHub = SetHubCell<String>({ synchronized(state) { items = it }; broadcast() })
+        val votesHub = SetHubCell<String>({ synchronized(state) { votes = it }; broadcast() })
+        val produceHub = SetHubCell<String>({ synchronized(state) { produce = it }; broadcast() })
         val countHub = CounterHubCell({ synchronized(state) { voteCount = it }; broadcast() })
         listOf(itemsHub, votesHub, produceHub, countHub).forEach { manage.spawn(it) }
         manage.connect(itemsUnion.ref, "outlet", itemsHub.ref, "inlet")
@@ -176,7 +140,7 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         manage.connect(itemsUnion.ref, "outlet", wantedCell.ref, "left")
         manage.connect(votesUnion.ref, "outlet", wantedCell.ref, "right")
         manage.connect(wantedCell.ref, "outlet", refs.getValue("count"), "inlet")
-        val wantedHub = SetHubCell({ synchronized(state) { wanted = it }; broadcast() })
+        val wantedHub = SetHubCell<String>({ synchronized(state) { wanted = it }; broadcast() })
         manage.spawn(wantedHub)
         manage.connect(wantedCell.ref, "outlet", wantedHub.ref, "inlet")
 
