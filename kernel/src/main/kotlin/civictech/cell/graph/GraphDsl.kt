@@ -4,7 +4,11 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.host.HostManagementApi
 import civictech.cell.port.LinkResult
+import civictech.cell.port.Port
+import civictech.cell.port.Serve
+import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
+import civictech.cell.port.identity
 import java.io.Serializable
 import java.util.UUID
 import kotlin.random.Random
@@ -219,6 +223,10 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
     private val steps = mutableListOf<GraphStep>()
     private val names = mutableSetOf<String>()
 
+    /** Spec-local handle by resolved [CellRef] — lets typed [link] recover the
+     * handle name a port's owner was spawned under (typed-port-links). */
+    private val handlesByRef = mutableMapOf<CellRef, CellHandle>()
+
     /**
      * @param identity which [CellRef] the spawned cell should carry (default: fresh).
      * @param parent the already-spawned handle this cell nests under (organelle
@@ -235,7 +243,7 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         val cell = factory.create(ref)
         requireBoundRef(name, identity, ref, cell.ref)
         steps += SpawnStep(name, factory, identity, parent?.name)
-        return CellHandle(name, host.call.spawn(cell), this)
+        return CellHandle(name, host.call.spawn(cell), this).also { handlesByRef[it.ref] = it }
     }
 
     fun connect(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
@@ -244,6 +252,36 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
             "link ${from.name}.$outlet → ${to.name}.$inlet rejected: ${(result as LinkResult.Rejected).reason}"
         }
         steps += ConnectStep(from.name, outlet, to.name, inlet)
+    }
+
+    /**
+     * Typed overload of [connect] (typed-port-links, 05): connects two typed
+     * port *objects*, recovering each port's `(ownerRef, name)` from its
+     * [PortIdentity] and lowering onto the exact same [connect] call — the
+     * recorded [ConnectStep] is byte-identical to the string form, so a graph
+     * built with [link] and one built with [connect] replay identically. The
+     * shared [Api] type parameter makes a payload mismatch or a wrong-direction
+     * wiring a compile error (see [civictech.cell.host.link]).
+     *
+     * Both ports must belong to cells [spawn]ed on this builder; a port whose
+     * owner is unknown here (or carries no identity) falls back to the string
+     * [connect].
+     */
+    fun <Api> link(out: Subscribe<Api>, inn: Serve<Api>) {
+        val from = out.requireHandle("outlet")
+        val to = inn.requireHandle("inlet")
+        connect(from.first, from.second, to.first, to.second)
+    }
+
+    private fun Port.requireHandle(role: String): Pair<CellHandle, String> {
+        val id = identity() ?: throw IllegalArgumentException(
+            "link: the $role port carries no (ownerRef, name) identity — use connect(handle, name, ...) instead",
+        )
+        val handle = handlesByRef[id.owner] ?: throw IllegalArgumentException(
+            "link: the $role port's owning cell ${id.owner} was not spawned on this builder — " +
+                "use connect(handle, name, ...) instead",
+        )
+        return handle to id.name
     }
 
     internal fun spec() = GraphSpec(steps.toList())
