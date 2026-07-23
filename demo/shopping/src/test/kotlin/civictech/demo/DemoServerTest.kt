@@ -61,8 +61,9 @@ class DemoServerTest {
             op("add", "milk")   // on the list, not yet wanted
             op("vote", "milk")  // now in items ∩ votes
 
-            // read the "wanted" field until milk shows up, then goes away on remove
+            // read data frames until one satisfies the predicate (whole "data:" line)
             val wanted = Regex(""""wanted":\[([^]]*)]""")
+            fun wantedOf(line: String) = wanted.find(line)?.groupValues?.get(1).orEmpty()
             fun await(pred: (String) -> Boolean, why: String) {
                 val events = client.send(
                     HttpRequest.newBuilder(URI("$base/events")).build(),
@@ -72,18 +73,16 @@ class DemoServerTest {
                 events.body().bufferedReader().use { reader ->
                     while (System.currentTimeMillis() < deadline) {
                         val line = reader.readLine() ?: break
-                        if (line.startsWith("data:")) {
-                            val w = wanted.find(line)?.groupValues?.get(1).orEmpty()
-                            if (pred(w)) return
-                        }
+                        if (line.startsWith("data:") && pred(line)) return
                     }
                 }
                 throw AssertionError(why)
             }
 
-            await({ "milk" in it }, "voted-and-listed item never entered the wanted view")
+            // voted + listed → in the intersection, and the count tracks it
+            await({ "milk" in wantedOf(it) && """"voteCount":1""" in it }, "voted-and-listed item never entered the wanted view / count")
             op("remove", "milk") // removed from the list → drops from the intersection
-            await({ "milk" !in it }, "removed item stayed in the wanted view")
+            await({ "milk" !in wantedOf(it) && """"voteCount":0""" in it }, "removed item stayed in the wanted view / count")
         } finally {
             app.stop()
         }

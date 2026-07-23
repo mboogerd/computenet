@@ -151,7 +151,10 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             refs["count"] = count.ref
         }
         manage.connect(itemsUnion.ref, "outlet", refs.getValue("produce"), "inlet")
-        manage.connect(votesUnion.ref, "outlet", refs.getValue("count"), "inlet")
+        // `count` is fed by the items ∩ votes intersection wired below (not the
+        // raw votes union), so "N voted" counts listed items that carry a vote.
+        // A vote for a since-removed item is retained in the votes set but drops
+        // out of the intersection, so it neither shows a ★ nor inflates the count.
 
         val itemsHub = SetHubCell({ synchronized(state) { items = it }; broadcast() })
         val votesHub = SetHubCell({ synchronized(state) { votes = it }; broadcast() })
@@ -165,12 +168,14 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
         // Derived view: items ∩ votes — "still wanted" is the incremental
         // intersection of two independently-mutating streams (the binary
-        // set operator the filter/count chain didn't yet show). Non-destructive:
-        // a vote for a removed item simply drops out of the intersection.
+        // set operator the filter/count chain didn't yet show). It feeds both
+        // the "Still wanted" list and the vote count, so both track votes for
+        // listed items only, without discarding the retained raw vote.
         val wantedCell = IntersectSetCell<String>()
         manage.spawn(wantedCell)
         manage.connect(itemsUnion.ref, "outlet", wantedCell.ref, "left")
         manage.connect(votesUnion.ref, "outlet", wantedCell.ref, "right")
+        manage.connect(wantedCell.ref, "outlet", refs.getValue("count"), "inlet")
         val wantedHub = SetHubCell({ synchronized(state) { wanted = it }; broadcast() })
         manage.spawn(wantedHub)
         manage.connect(wantedCell.ref, "outlet", wantedHub.ref, "inlet")
@@ -255,6 +260,12 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         val (itemOps, voteOps) = writerFor(user)
         when (params["action"]) {
             "add" -> itemOps.add(item)
+            // ponytail: remove is writer-local — it tombstones only this user's
+            // own add-tags, so an item added by another user survives until that
+            // user removes it too. This keeps the per-user writer identity that
+            // makes journal replay deterministic (M10.4). Upgrade path for
+            // shared removal: tombstone the element's currently-observed union
+            // tags across writers, not just the caller's.
             "remove" -> itemOps.remove(item)
             "vote" -> voteOps.add(item)
             else -> return exchange.respond(400, "unknown action")
@@ -271,6 +282,10 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         send(out, stateJson()) // a fresh tab catches up immediately
     }
 
+    // ponytail: fires once per hub update, so a single op can push a few frames
+    // whose four views are momentarily out of step (e.g. the filtered aisle
+    // updates one frame before the master list) before converging. Fine for the
+    // full-state SSE transport; coalescing to one frame per wave is M6+ material.
     private fun broadcast() {
         val json = stateJson()
         clients.forEach { send(it, json) }
