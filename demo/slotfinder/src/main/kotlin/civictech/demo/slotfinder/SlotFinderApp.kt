@@ -5,12 +5,10 @@ import civictech.cell.data.FilterCell
 import civictech.cell.data.FilterSetApi
 import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
-import civictech.cell.data.IntersectSetApi
-import civictech.cell.data.IntersectSetCell
-import civictech.cell.data.MapHubCell
+import civictech.cell.data.QuorumSetApi
+import civictech.cell.data.QuorumSetCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetHubCell
 import civictech.cell.data.SetOps
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
@@ -18,6 +16,7 @@ import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.observeAll
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.Serializable
@@ -29,7 +28,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Meeting-slot finder: three participants each maintain a set of available
  * time slots; the common slots, the business-hours subset, and per-day counts
  * are all *incremental* views — toggling one slot flows one delta through
- * intersect → filter → groupBy, never a recompute. Every intermediate stage
+ * quorum → filter → groupBy, never a recompute. Every intermediate stage
  * is observable in the UI; that is the demo.
  */
 data class Slot(val day: String, val hour: Int) : Serializable {
@@ -46,41 +45,56 @@ val PARTICIPANTS = listOf("alice", "bob", "carol")
 
 /**
  * The dataflow pipeline, shared verbatim by the app and the seeded
- * incremental-vs-batch test:
+ * incremental-vs-batch test. Every participant fans into one `QuorumSetCell`
+ * inlet; the quorum threshold reads the live-source count `n`, so `common`
+ * (∩, `{ n -> n }`) and `nearMiss` (all-but-one, `{ n -> n - 1 }`) are the same
+ * fan-in under two thresholds — no chained binary intersects, any participant
+ * count:
  *
  *   alice ─┐
- *   bob   ─┴► pairAB (∩) ─┐
- *   carol ─────────────────┴► common (∩) ─► filtered (business hours) ─► byDay (count)
+ *   bob   ─┼─► common   (quorum n)     ─► filtered (business hours) ─► byDay (count)
+ *   carol ─┴─► nearMiss (quorum n − 1)
  */
 object SlotPipeline {
     data class Refs(
         val participants: Map<String, TypedRef<SetApi<Slot>>>,
-        val pairAB: TypedRef<IntersectSetApi<Slot>>,
-        val common: TypedRef<IntersectSetApi<Slot>>,
+        val common: TypedRef<QuorumSetApi<Slot>>,
+        val nearMiss: TypedRef<QuorumSetApi<Slot>>,
         val filtered: TypedRef<FilterSetApi<Slot>>,
         val byDay: TypedRef<GroupByApi<Slot, String, Long>>,
     )
 
     fun build(host: ManagedHost): Refs {
         lateinit var refs: Refs
+        // Factories stay pure (replay-safe: each takes the resolved ref, captures
+        // no instance), while wiring stays compile-checked via the handles'
+        // link(a.cell.outlet, b.cell.inlet): a payload-type or direction
+        // mismatch is a Kotlin compile error, not a runtime surprise.
         graph(host.managementInlet) {
-            val sources = PARTICIPANTS.associateWith { spawn(it) { SetCell<Slot>() } }
-            val pairAB = spawn("pairAB") { IntersectSetCell<Slot>() }
-            val common = spawn("common") { IntersectSetCell<Slot>() }
-            val filtered = spawn("filtered") { FilterCell<Slot> { it.hour in Slot.BUSINESS_HOURS } }
-            val byDay = spawn("byDay") {
-                GroupByCell(keyFn = { s: Slot -> s.day }, aggregator = Aggregators.count<Slot>())
+            val sources = PARTICIPANTS.associateWith { name ->
+                spawn(name) { ref -> SetCell<Slot>(ref = ref) }
             }
-            connect(sources.getValue("alice"), "outlet", pairAB, "left")
-            connect(sources.getValue("bob"), "outlet", pairAB, "right")
-            connect(pairAB, "outlet", common, "left")
-            connect(sources.getValue("carol"), "outlet", common, "right")
-            connect(common, "outlet", filtered, "inlet")
-            connect(filtered, "outlet", byDay, "inlet")
+            val common = spawn("common") { ref -> QuorumSetCell<Slot>(ref = ref, threshold = { n -> n }) }
+            val nearMiss = spawn("nearMiss") { ref -> QuorumSetCell<Slot>(ref = ref, threshold = { n -> n - 1 }) }
+            val filtered = spawn("filtered") { ref ->
+                FilterCell<Slot>(ref = ref, predicate = { it.hour in Slot.BUSINESS_HOURS })
+            }
+            val byDay = spawn("byDay") { ref ->
+                GroupByCell(ref = ref, keyFn = { s: Slot -> s.day }, aggregator = Aggregators.count<Slot>())
+            }
+
+            PARTICIPANTS.forEach { p ->
+                val source = sources.getValue(p)
+                link(source.cell.outlet, common.cell.inlet)   // fan-in: many sources → one quorum inlet
+                link(source.cell.outlet, nearMiss.cell.inlet)
+            }
+            link(common.cell.outlet, filtered.cell.inlet)
+            link(filtered.cell.outlet, byDay.cell.inlet)
+
             refs = Refs(
                 participants = sources.mapValues { it.value.refAs<SetApi<Slot>>() },
-                pairAB = pairAB.refAs(),
                 common = common.refAs(),
+                nearMiss = nearMiss.refAs(),
                 filtered = filtered.refAs(),
                 byDay = byDay.refAs(),
             )
@@ -92,15 +106,22 @@ object SlotPipeline {
 class SlotFinderApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
-    private val manage = host.managementInlet.call
     private val refs = SlotPipeline.build(host)
     private val writers: Map<String, SetOps<Slot>> = refs.participants.mapValues { (_, tref) ->
         host.lookup(tref)!!.inlet.call
     }
 
-    private val state = Object()
-    private val slots = mutableMapOf<String, Set<Slot>>() // participant + stage name → membership
-    private var byDay: Map<String, Long> = emptyMap()
+    // The observation edge: one composite sink folds every observed outlet into a
+    // materialized, thread-safe snapshot with built-in late-join catch-up — no hand-rolled
+    // hub cells, no synchronized mutable snapshot.
+    private val view = host.observeAll {
+        PARTICIPANTS.forEach { set(it, refs.participants.getValue(it).ref) }
+        set("nearMiss", refs.nearMiss.ref)
+        set("common", refs.common.ref)
+        set("filtered", refs.filtered.ref)
+        count("byDay", refs.byDay.ref)
+    }
+
     private val clients = CopyOnWriteArrayList<HttpExchange>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
@@ -108,17 +129,7 @@ class SlotFinderApp(port: Int = 8080) {
     val boundPort: Int get() = server.address.port
 
     init {
-        val observed = refs.participants.mapValues { it.value.ref } + mapOf(
-            "pair" to refs.pairAB.ref, "common" to refs.common.ref, "filtered" to refs.filtered.ref,
-        )
-        observed.forEach { (name, ref) ->
-            val hub = SetHubCell<Slot>({ synchronized(state) { slots[name] = it }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-        val dayHub = MapHubCell<String, Long>({ synchronized(state) { byDay = it }; broadcast() })
-        manage.spawn(dayHub)
-        manage.connect(refs.byDay.ref, "outlet", dayHub.ref, "inlet")
+        view.onChange { broadcast() }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
@@ -178,16 +189,24 @@ class SlotFinderApp(port: Int = 8080) {
         }
     }
 
-    private fun stateJson(): String = synchronized(state) {
-        fun arr(values: Set<Slot>?) =
-            (values ?: emptySet()).sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
+    private fun stateJson(): String {
+        val snapshot = view.current()
+
+        @Suppress("UNCHECKED_CAST")
+        fun slotsOf(name: String) = snapshot[name] as? Set<Slot> ?: emptySet()
+
+        @Suppress("UNCHECKED_CAST")
+        val byDay = snapshot["byDay"] as? Map<String, Long> ?: emptyMap()
+
+        fun arr(values: Set<Slot>) =
+            values.sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
                 .joinToString(",", "[", "]") { "\"$it\"" }
 
-        val sets = (PARTICIPANTS + listOf("pair", "common", "filtered"))
-            .joinToString(",") { "\"$it\":${arr(slots[it])}" }
+        val sets = (PARTICIPANTS + listOf("nearMiss", "common", "filtered"))
+            .joinToString(",") { "\"$it\":${arr(slotsOf(it))}" }
         val counts = Slot.DAYS.filter { it in byDay }
             .joinToString(",", "{", "}") { "\"$it\":${byDay.getValue(it)}" }
-        """{$sets,"byDay":$counts}"""
+        return """{$sets,"byDay":$counts}"""
     }
 
     private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
@@ -230,7 +249,7 @@ private val PAGE = """
   td button.hit { outline: 2px solid var(--hit); outline-offset: -1px; }
   .chips { display: flex; flex-wrap: wrap; gap: .3rem; min-height: 1.6rem; }
   .chip { background: #ecfdf5; color: var(--hit); border: 1px solid #a7f3d0; border-radius: 999px; padding: .1rem .55rem; font-size: .75rem; cursor: pointer; }
-  .chip.pair { background: #eff6ff; color: var(--on); border-color: #bfdbfe; }
+  .chip.near { background: #eff6ff; color: var(--on); border-color: #bfdbfe; }
   #result { font-size: .9rem; color: var(--dim); margin: .1rem 0 1rem; }
   #result b { color: var(--hit); }
   @keyframes flash { 30% { box-shadow: 0 0 0 3px var(--hit); } }
@@ -245,7 +264,7 @@ private val PAGE = """
 <p id="result">—</p>
 <div class="row" id="grids"></div>
 <div class="row">
-  <div class="card"><h2>alice ∩ bob</h2><div class="chips" id="pair"></div></div>
+  <div class="card"><h2>near-miss — everyone but one</h2><div class="chips" id="nearMiss"></div></div>
   <div class="card"><h2>common (all three)</h2><div class="chips" id="common"></div></div>
   <div class="card"><h2>business hours (9–17)</h2><div class="chips" id="filtered"></div></div>
   <div class="card"><h2>options per day</h2><div class="bars" id="byDay"></div></div>
@@ -302,7 +321,11 @@ function render() {
       b.classList.toggle('hit', common.has(d + '-' + h));
     }
   }
-  chips('pair', state.pair || [], 'pair');
+  // near-miss ≥ n-1 already contains the fully-common slots; show only the
+  // "if one more person freed up" delta — a display-only set difference over
+  // the two already-materialized views, not a dataflow recompute.
+  const commonSet = new Set(state.common || []);
+  chips('nearMiss', (state.nearMiss || []).filter(s => !commonSet.has(s)), 'near');
   chips('common', state.common || []);
   chips('filtered', state.filtered || []);
   const f = state.filtered || [], r = document.getElementById('result');

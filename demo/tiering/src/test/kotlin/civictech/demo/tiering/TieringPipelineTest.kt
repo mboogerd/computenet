@@ -53,11 +53,12 @@ class TieringPipelineTest {
                     val key = agent to item
                     val old = heldVals[key]
                     if (old != null && rnd.nextInt(10) < 3) {
-                        valOps.remove(old); heldVals.remove(key)
+                        valOps.remove(key); heldVals.remove(key)
                     } else {
-                        old?.let { valOps.remove(it) }
+                        // KeyedSetCell owns retract-old: a re-put retracts the
+                        // previous valuation for this key by itself.
                         val v = Valuation(agent, item, rnd.nextInt(7).toLong())
-                        valOps.add(v); heldVals[key] = v
+                        valOps.put(key, v); heldVals[key] = v
                     }
                 } else { // preference churn
                     val winner = items[rnd.nextInt(items.size)]

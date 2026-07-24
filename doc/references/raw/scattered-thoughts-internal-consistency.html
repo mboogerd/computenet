@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta property="og:type" content="article">
+  
+      <meta property="og:title" content="Internal consistency in streaming systems" />
+      
+  
+  
+  
+      <meta property="og:url" content="https://www.scattered-thoughts.net/writing/internal-consistency-in-streaming-systems/" />
+  
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:site" content="@sc13ts">
+  <meta name="twitter:creator" content="@sc13ts">
+  
+      <title>Internal consistency in streaming systems</title>
+  
+  
+  
+      <link rel="canonical" href="https://www.scattered-thoughts.net/writing/internal-consistency-in-streaming-systems/" />
+  
+  <link rel="alternate" type="application/atom+xml" title="Scattered Thoughts" href="/atom.xml" />
+  <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon"/>
+  
+  <style>
+    progress,sub,sup{vertical-align:baseline}button,hr,input{overflow:visible}html{font-family:sans-serif;line-height:1.15;-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%}body{margin:0}figcaption,menu,article,aside,details,figure,footer,header,main,nav,section,summary{display:block}audio,canvas,progress,video{display:inline-block}audio:not([controls]){display:none;height:0}[hidden],template{display:none}a{background-color:rgba(0,0,0,0);-webkit-text-decoration-skip:objects}a:active,a:hover{outline-width:0}abbr[title]{border-bottom:none;text-decoration:underline;text-decoration:underline dotted}b,strong{font-weight:bolder}dfn{font-style:italic}h1{font-size:2em;margin:.67em 0}mark{background-color:#ff0;color:#000}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative}sub{bottom:-.25em}sup{top:-.5em}img{border-style:none}svg:not(:root){overflow:hidden}code,kbd,pre,samp{font-family:monospace,monospace;font-size:1em}figure{margin:1em 40px}hr{box-sizing:content-box;height:0}button,input,optgroup,select,textarea{font:inherit;margin:0}optgroup{font-weight:700}button,select{text-transform:none}[type=submit],[type=reset],button,html [type=button]{-webkit-appearance:button}[type=button]::-moz-focus-inner,[type=reset]::-moz-focus-inner,[type=submit]::-moz-focus-inner,button::-moz-focus-inner{border-style:none;padding:0}[type=button]:-moz-focusring,[type=reset]:-moz-focusring,[type=submit]:-moz-focusring,button:-moz-focusring{outline:ButtonText dotted 1px}fieldset{border:1px solid silver;margin:0 2px;padding:.35em .625em .75em}legend{box-sizing:border-box;color:inherit;display:table;max-width:100%;padding:0;white-space:normal}textarea{overflow:auto}[type=checkbox],[type=radio]{box-sizing:border-box;padding:0}[type=number]::-webkit-inner-spin-button,[type=number]::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}[type=search]::-webkit-search-cancel-button,[type=search]::-webkit-search-decoration{-webkit-appearance:none}::-webkit-input-placeholder{color:inherit;opacity:.54}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}
+    body{padding:32px;color:#333;background-color:#fff;font-family:Fira Sans,Georgia,serif;font-size:20px}.container{max-width:45em;margin:0 auto}body blockquote{border-left:2px solid #333 !important}html{font-size:1em;font-size-adjust:.5}h1,h2,h3{font-weight:800;font-family:Fira Sans,Helvetica,sans-serif}h1{text-align:center;font-size:2em}h2{text-align:center;font-size:1.2em}article h2{margin-top:4em}h3{text-align:center;font-size:1em;margin:0em}.links a,.links a:visited,nav a,nav a:visited{text-decoration:none;color:#333}a,a:visited,a:active{color:#008099}a:hover{color:#008099 !important}.links{text-align:center}blockquote{margin:0;padding:0px 10px 0px 10px;border-radius:5px}article img{margin-left:auto;margin-right:auto;max-width:100%;display:block}article>pre{padding:0 1em 0 1em;background-color:#fff !important}code{color:#61676c}code,pre{white-space:pre;overflow:visible;font-family:Fira Code,monospace}ul,ol{padding:0}ul{padding-left:30px;list-style:disc}ol{padding-left:30px;list-style:decimal}header{margin:2em 0 2em 0;text-align:center}footer{margin-top:4em;text-align:center;font-style:italic}iframe{width:560px;height:315px;display:block;margin:0 auto;padding-top:1em}article hr{width:7em;margin-top:3em;margin-bottom:3em;border:0;height:1px;background-image:linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,.75), rgba(0,0,0,0))}.spacer-1{padding:.5em}.sc13ts-button{border:none !important;border-radius:2rem !important;padding:1rem !important;text-decoration:none !important;background:#008099 !important;color:#fff !important}.sc13ts-button:hover{background:#00d5ff !important;color:#fff !important}.footnote-definition p{display:inline}li:has(span:target){border:solid #32cd32;padding:.5em}
+  </style>
+</head>
+
+<body>
+
+  <div style="padding: 2rem;"></div>
+
+  <div class="container">
+    
+
+<nav style="position: absolute; left: 1em; top: 1em;">
+  <a href="/" title="Home">
+   <svg version="1.1" id="Capa_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 width="2em" height="2em" viewBox="0 0 547.596 547.596" style="enable-background:new 0 0 547.596 547.596;"
+	 xml:space="preserve">
+<g>
+	<path d="M540.76,254.788L294.506,38.216c-11.475-10.098-30.064-10.098-41.386,0L6.943,254.788
+		c-11.475,10.098-8.415,18.284,6.885,18.284h75.964v221.773c0,12.087,9.945,22.108,22.108,22.108h92.947V371.067
+		c0-12.087,9.945-22.108,22.109-22.108h93.865c12.239,0,22.108,9.792,22.108,22.108v145.886h92.947
+		c12.24,0,22.108-9.945,22.108-22.108v-221.85h75.965C549.021,272.995,552.081,264.886,540.76,254.788z"/>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+<g>
+</g>
+</svg>
+  </a>
+</nav>
+
+<h1>Internal consistency in streaming systems</h1>
+
+
+<div style="text-align: center; margin-top: -1.8em; font-style: italic; font-weight: light; font-size: 0.7em;">Published 2021-04-17</div>
+
+
+
+<article>
+  <p><em>Disclaimer: I used to work for Materialize which is one of the systems being compared in this post.</em></p>
+<p>This post covers the internally consistent/inconsistent branch in my <a href="/writing/an-opinionated-map-of-incremental-and-streaming-systems">map of streaming systems</a>.</p>
+<p>The core message of this post is that intuitions from distributed key-value databases don't carry over well to systems which do complex computation. An eventually consistent key-value database might show you old values. An eventually consistent streaming system might show you outputs that are completely impossible for <em>any</em> set of inputs, and might never converge to a correct value as long as new inputs keep arriving.</p>
+<p>To regain the intuition from databases we also need <strong>internal consistency</strong> - a property I'll define below. I'll also cover a few classes of internal consistency failures and demonstrate how to reproduce these in the wild, using ksqldb and flink as examples of internally inconsistent systems and differential dataflow as an example of an internally consistent system.</p>
+<h3 id="running-example">Running example</h3>
+<p>To keep things concrete, I'll use the same simple example throughout. It's kind of contrived, but it's tough to find an example that demonstrates all the failure modes and is realistic but is still simple enough to walk through the event interleavings in a blog post. Bear with me.</p>
+<p>The input is a stream of 10m transactions, moving money between 10 distinct accounts. The amount of money moved is always $1, to make it easier to eyeball the scale of errors. The transactions contain 60 distinct timestamps (as if produced by some regular batch CDC) and can be out of order by up to 10 seconds.</p>
+<pre data-lang="python" style="background-color:#fafafa;color:#61676c;" class="language-python "><code class="language-python" data-lang="python"><span>random</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">seed</span><span>(</span><span style="color:#ff8f40;">42</span><span>)
+</span><span>max_id </span><span style="color:#ed9366;">= </span><span style="color:#ff8f40;">10000000
+</span><span>transactions </span><span style="color:#ed9366;">= </span><span>[]
+</span><span style="color:#fa6e32;">for </span><span style="color:#f07171;">id </span><span style="color:#fa6e32;">in </span><span style="color:#f07171;">range</span><span>(</span><span style="color:#ff8f40;">0</span><span style="color:#61676ccc;">,</span><span>max_id):
+</span><span>    second </span><span style="color:#ed9366;">= </span><span>((</span><span style="color:#ff8f40;">60 </span><span style="color:#ed9366;">* </span><span style="color:#f07171;">id</span><span>) </span><span style="color:#ed9366;">// </span><span>max_id)
+</span><span>    delay </span><span style="color:#ed9366;">= </span><span>random</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">uniform</span><span>(</span><span style="color:#ff8f40;">0</span><span style="color:#61676ccc;">, </span><span style="color:#ff8f40;">10</span><span>)
+</span><span>    row </span><span style="color:#ed9366;">= </span><span>json</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">dumps</span><span>({
+</span><span>        </span><span style="color:#86b300;">&#39;id&#39;</span><span style="color:#61676ccc;">: </span><span style="color:#f07171;">id</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;from_account&#39;</span><span style="color:#61676ccc;">: </span><span>random</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">randint</span><span>(</span><span style="color:#ff8f40;">0</span><span style="color:#61676ccc;">,</span><span style="color:#ff8f40;">9</span><span>)</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;to_account&#39;</span><span style="color:#61676ccc;">: </span><span>random</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">randint</span><span>(</span><span style="color:#ff8f40;">0</span><span style="color:#61676ccc;">,</span><span style="color:#ff8f40;">9</span><span>)</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;amount&#39;</span><span style="color:#61676ccc;">: </span><span style="color:#ff8f40;">1</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;ts&#39;</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">f</span><span style="color:#86b300;">&#39;2021-01-01 00:00:</span><span>{second</span><span style="color:#ff8f40;">:02d</span><span>}</span><span style="color:#86b300;">.000&#39;</span><span style="color:#61676ccc;">,
+</span><span>    })
+</span><span>    transactions</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">append</span><span>((second </span><span style="color:#ed9366;">+ </span><span>delay</span><span style="color:#61676ccc;">, </span><span style="color:#f07171;">id</span><span style="color:#61676ccc;">, </span><span>row))
+</span><span>transactions</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">sort</span><span>()
+</span><span style="color:#fa6e32;">for </span><span>(</span><span style="font-style:italic;color:#55b4d4;">_</span><span style="color:#61676ccc;">, </span><span style="color:#f07171;">id</span><span style="color:#61676ccc;">, </span><span>row) </span><span style="color:#fa6e32;">in </span><span>transactions:
+</span><span>    </span><span style="color:#f07171;">print</span><span>(</span><span style="color:#fa6e32;">f</span><span style="color:#86b300;">&#39;</span><span>{</span><span style="color:#f07171;">id</span><span>}</span><span style="color:#86b300;">|</span><span>{row}</span><span style="color:#86b300;">&#39;</span><span>)
+</span></code></pre>
+<p>For systems that support it, the transactions are read with a 5 second watermark to stress handling of late data.</p>
+<p>The calculation we want to do is very simple - just tracking the current balance of each account - but it stresses most of the failure modes I'll describe in the next section.</p>
+<pre data-lang="sql" style="background-color:#fafafa;color:#61676c;" class="language-sql "><code class="language-sql" data-lang="sql"><span style="color:#fa6e32;">CREATE VIEW </span><span>credits </span><span style="color:#f29718;">AS
+</span><span style="color:#fa6e32;">SELECT
+</span><span>    to_account </span><span style="color:#ed9366;">AS</span><span> account, 
+</span><span>    </span><span style="color:#f07171;">sum</span><span>(amount) </span><span style="color:#ed9366;">AS</span><span> credits
+</span><span style="color:#fa6e32;">FROM
+</span><span>    transactions
+</span><span style="color:#fa6e32;">GROUP BY
+</span><span>    to_account;
+</span><span>
+</span><span style="color:#fa6e32;">CREATE VIEW </span><span>debits </span><span style="color:#f29718;">AS
+</span><span style="color:#fa6e32;">SELECT
+</span><span>    from_account </span><span style="color:#ed9366;">AS</span><span> account, 
+</span><span>    </span><span style="color:#f07171;">sum</span><span>(amount) </span><span style="color:#ed9366;">AS</span><span> debits
+</span><span style="color:#fa6e32;">FROM
+</span><span>    transactions
+</span><span style="color:#fa6e32;">GROUP BY
+</span><span>    from_account;
+</span><span>
+</span><span style="color:#fa6e32;">CREATE VIEW </span><span>balance </span><span style="color:#f29718;">AS
+</span><span style="color:#fa6e32;">SELECT
+</span><span>    </span><span style="color:#ff8f40;">credits</span><span>.</span><span style="color:#ff8f40;">account </span><span style="color:#ed9366;">AS</span><span> account, 
+</span><span>    credits </span><span style="color:#ed9366;">-</span><span> debits </span><span style="color:#ed9366;">AS</span><span> balance
+</span><span style="color:#fa6e32;">FROM
+</span><span>    credits,
+</span><span>    debits
+</span><span style="color:#fa6e32;">WHERE
+</span><span>    </span><span style="color:#ff8f40;">credits</span><span>.</span><span style="color:#ff8f40;">account </span><span style="color:#ed9366;">= </span><span style="color:#ff8f40;">debits</span><span>.</span><span style="color:#ff8f40;">account</span><span>;
+</span></code></pre>
+<p>Outer joins and self joins are often hard to get right in a streaming setting, so let's include a (somewhat meaningless) query that tests both. Since both sides of the join have the same input, the output should never contain null values.</p>
+<pre data-lang="sql" style="background-color:#fafafa;color:#61676c;" class="language-sql "><code class="language-sql" data-lang="sql"><span style="color:#fa6e32;">CREATE VIEW </span><span>outer_join </span><span style="color:#f29718;">AS
+</span><span style="color:#fa6e32;">SELECT
+</span><span>    </span><span style="color:#ff8f40;">t1</span><span>.</span><span style="color:#ff8f40;">id </span><span style="color:#ed9366;">AS</span><span> id, 
+</span><span>    </span><span style="color:#ff8f40;">t2</span><span>.</span><span style="color:#ff8f40;">id </span><span style="color:#ed9366;">AS</span><span> other_id
+</span><span style="color:#fa6e32;">FROM
+</span><span>    (</span><span style="color:#fa6e32;">SELECT</span><span> id </span><span style="color:#fa6e32;">FROM</span><span> transactions) </span><span style="color:#ed9366;">AS</span><span> t1
+</span><span style="color:#fa6e32;">LEFT JOIN
+</span><span>    (</span><span style="color:#fa6e32;">SELECT</span><span> id </span><span style="color:#fa6e32;">FROM</span><span> transactions) </span><span style="color:#ed9366;">AS</span><span> t2
+</span><span>ON
+</span><span>    </span><span style="color:#ff8f40;">t1</span><span>.</span><span style="color:#ff8f40;">id </span><span style="color:#ed9366;">= </span><span style="color:#ff8f40;">t2</span><span>.</span><span style="color:#ff8f40;">id</span><span>;
+</span></code></pre>
+<p>Since money is only being moved around, never created or destroyed, the sum of all the balances should always be 0. This gives us a very clear invariant for detecting consistency violations.</p>
+<pre data-lang="sql" style="background-color:#fafafa;color:#61676c;" class="language-sql "><code class="language-sql" data-lang="sql"><span style="color:#fa6e32;">CREATE VIEW </span><span>total </span><span style="color:#f29718;">AS
+</span><span style="color:#fa6e32;">SELECT
+</span><span>    </span><span style="color:#f07171;">sum</span><span>(balance)
+</span><span style="color:#fa6e32;">FROM
+</span><span>    balance;
+</span></code></pre>
+<p>This is a very simplified version of code that I've written in a real system where we needed to ensure that no customer had found a series of actions that would create money eg by causing rounding in their favor. If the total was ever non-zero it would trigger an alert.</p>
+<p>One thing to note is that this query does not window any of its inputs, putting it firmly on the <a href="/writing/an-opinionated-map-of-incremental-and-streaming-systems#high-temporal-locality-vs-low-temporal-locality">low temporal locality</a> side of the map where consistency is more difficult to maintain.</p>
+<h3 id="consistency">Consistency</h3>
+<p>A system is <strong>eventually consistent</strong> if when we stop providing new inputs it eventually produces the correct output for the set of inputs provided so far.</p>
+<p>A system is <strong>internally consistent</strong> if <em>every</em> output is the correct output for some subset of the inputs provided so far.</p>
+<p>For our example, this means that it would be eventually consistent if <code>total</code> eventually becomes zero after processing all the inputs, and it would be internally consistent if it never outputs a non-zero value for <code>total</code>.</p>
+<p>In general, neither one of internal consistency and eventual consistency implies the other:</p>
+<ul>
+<li>Internal consistency allows the system to be have arbitrary processing delays. It also allows dropping input - this is not eventually consistent, but in many applications (eg analytics) it's not a big deal if some small percentage of the data is lost.</li>
+<li>Eventual consistency requires the output eventually becomes correct if inputs stop arriving, but allows the system to produce nonsense outputs as long as inputs are arriving. And if we always have new inputs then it never has to converge to a correct output.</li>
+</ul>
+<p>In practice, we usually want both internal consistency and some stronger form of eventual consistency that includes liveness guarantees. We want the system to produce correct outputs and we want some guarantee that every input will eventually be processed.</p>
+<p>Let's look at some of the ways we can fail to achieve this.</p>
+<h2 id="failure-modes">Failure modes</h2>
+<p>This is not an exhaustive summary of ways to violate internal consistency, just the main causes I've seen so far.</p>
+<h3 id="combining-streams-without-synchronization">Combining streams without synchronization</h3>
+<p>When combining multiple streams it's important to synchronize them so that the outputs of each reflect the same set of inputs.</p>
+<p>In our example, if the join between <code>credits</code> and <code>debits</code> is not synchronized then we could be calculating the balance using the current value of <code>credits</code> and the past value of <code>debits</code>, effectively creating money.</p>
+<p>This would be internally inconsistent but still eventually consistent - if we stopped adding new transactions the streams would eventually get back in sync again and total would return to 0. But if the input was unbounded and one stream was always ahead of the other then <code>total</code> would never return to 0.</p>
+<p>These mergings of streams appear in any sql query that uses the same table more than once, in self-referential calculations like argmax, and in graph traversals like followers-of-followers. They also appear in the best methods I know for <a href="/writing/materialize-decorrelation">compiling sql subqueries</a> into streaming operations.</p>
+<p>A very similar problem can occur when handling event-time joins over out-of-order data, where both input streams to the join need to be synchronized by event time. All of the systems below that suffer from synchronization failures will also suffer similar failures for event-time joins.</p>
+<h3 id="early-emission-from-non-monotonic-operators">Early emission from non-monotonic operators</h3>
+<p>Many streaming operators are <a href="https://citeseerx.ist.psu.edu/document?repid=rep1&amp;type=pdf&amp;doi=e0061ed55fc810306749b03b0648a06a49f630b9">logically monotonic</a> - receiving new inputs can only every cause them to emit new outputs. This makes life easy for eventual consistency.</p>
+<p>But some operators are non-monotonic - notably outer joins and aggregates. These require much more care.</p>
+<p>Let's look at the progress of a single transaction through the example above:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>insert transaction(42, 3, 7, 1, &#39;2021-01-01 00:00:11.000&#39;)
+</span></code></pre>
+<p>This transaction causes the total values for <code>credits</code> and <code>debits</code> to change.</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span>delete debits(3, 712)
+</span><span>insert debits(3, 713)
+</span><span>
+</span><span>delete credits(7, 422)
+</span><span>insert credits(7, 423)
+</span></code></pre>
+<p>In order to produce correct outputs, the aggregate for <code>total</code> needs to process the 4 events above atomically. If it processes them one by one, the output will be:</p>
+<pre style="background-color:#fafafa;color:#61676c;"><code><span># processing delete debits(3, 712)
+</span><span>delete total(0)
+</span><span>insert total(712)
+</span><span>
+</span><span># processing insert debits(3, 713)
+</span><span>delete total(712)
+</span><span>insert total(-1)
+</span><span>
+</span><span># processing delete credits(7, 422)
+</span><span>delete total(-1)
+</span><span>insert total(-423)
+</span><span>
+</span><span># processing insert credits(7, 423)
+</span><span>delete total(423)
+</span><span>insert total(0)
+</span></code></pre>
+<p>This leads to 3/4 of the output values being incorrect.</p>
+<p>To be internally consistent, <code>total</code> needs to wait until it's seen all the updates that correspond to the original transaction before emitting an output.</p>
+<h3 id="confusing-changes-with-corrections">Confusing changes with corrections</h3>
+<p>In the output above, <code>total</code> went through a series of intermediate values before returning to 0. None of these was a correct (or even possible) value for <code>total</code>, but this stream does not distinguish between changes to the correct value and corrections of intermediate outputs.</p>
+<p>For eventually consistent queries over the present value it's sufficient to just operate on the latest value. But for queries over the history of the value (eg "was this account balance ever negative") it's not possible to be even eventually consistent unless the stream of updates distinguishes intermediate outputs from correct outputs.</p>
+<p>Similarly, at the edge of the system it's not possible to take action on outputs if you don't know which ones are correct. You might email a warning to a customer for going overdrawn on their account, only to later find that this was just a transient inconsistency.</p>
+<p>To be internally consistent, there needs to be some way to determine when an output value is correct. This could be in the form of eg progress statements which tell you that the output for a given timestamp will no longer change.</p>
+<h3 id="inconsistent-rejections-in-watermarks">Inconsistent rejections in watermarks</h3>
+<p>This is more of an edge case, but unlike stream synchronization this class of failures can result in permanent inconsistency that can't be repaired without restarting the whole topology.</p>
+<p>In most systems inputs can arrive out of order. Some operations, especially windowed aggregates, need to see all of their inputs before they can deliver a canonical answer. To deal with this we can augment the input stream with <strong>watermarks</strong> - messages which say "you have now seen all inputs for time &lt;= T".</p>
+<p>In practice we often can't guarantee that we have actually seen all inputs, so these watermarks are just inserted after some reasonable cutoff time and we drop any messages that arrive after the watermark.</p>
+<p>This in itself does not violate internal consistency, because we're allowed to drop messages. But some streaming systems (notably kafka streams) insert watermarks in individual operators rather than at the edge of the system. This allows different operators to drop different subsets of the input if their stream-times advance differently. This can be caused by seeing different subsets of the input, by seeing the same inputs in a different order, or if some previous operator uses wall-clock timeouts instead of stream-time timeouts. When the output streams from those operators are compared or combined, inconsistency ensures.</p>
+<p>To be internally consistent, a streaming system can only reject inputs at the edge, so that all operators are working on data derived from the same set of upstream inputs.</p>
+<h2 id="systems-setup">Systems setup</h2>
+<p>Having looked at some theoretical failures, let's see how often they actually happen in practice.</p>
+<p>I tested a variety of popular streaming systems but in the end only a few could easily express the running example. Others lacked support for unwindowed aggregates and joins or, in the case of spark structured streaming, had severe restrictions on their use.</p>
+<h3 id="differential-dataflow-materialize">Differential dataflow / materialize</h3>
+<p>(differential dataflow v0.12.0 | <a href="https://github.com/jamii/streaming-consistency/tree/main/differential-dataflow">code</a>)</p>
+<p>(materialize v0.7.1 | <a href="https://github.com/jamii/streaming-consistency/tree/main/materialize">code</a>)</p>
+<p><a href="https://github.com/TimelyDataflow/differential-dataflow/">Differential dataflow</a> is a library for writing consistent dataflow programs. As you can see from the code, it's more of a toolkit for implementing streaming systems than something you would enjoy using directly.</p>
+<p>It offers time-varying tables with various relational operators. It tracks timestamps for each event and synchronizes joins by timestamp. Watermarks are required at the edge of the system and are used to control emission from non-monotonic operators.</p>
+<p>For the test, I read inputs from a file and write outputs to files. When reading inputs I arbitrarily chose to use 1000 transactions per batch. I also use a watermark trailing 5 seconds behind the latest input.</p>
+<p>The output from a differential dataflow collection contains a stream of inserts, deletes and watermarks.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> head</span><span style="color:#ff8f40;"> -n</span><span> 20 differential-dataflow/original-results/balance
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459195000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459196000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459197000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459198000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459199000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (0, 62) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (3,</span><span style="color:#ff8f40;"> -34</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (9, 95) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (4,</span><span style="color:#ff8f40;"> -133</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (6,</span><span style="color:#ff8f40;"> -3</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (8, 196) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (1,</span><span style="color:#ff8f40;"> -3</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (5,</span><span style="color:#ff8f40;"> -47</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (7,</span><span style="color:#ff8f40;"> -37</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (2,</span><span style="color:#ff8f40;"> -96</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459201000000000
+</span><span style="color:#f29718;">delete</span><span> 1x (0, 62) </span><span style="color:#f29718;">at</span><span> 1609459201000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (0, 214) </span><span style="color:#f29718;">at</span><span> 1609459201000000000
+</span><span style="color:#f29718;">insert</span><span> 1x (3,</span><span style="color:#ff8f40;"> -66</span><span>) </span><span style="color:#f29718;">at</span><span> 1609459201000000000
+</span></code></pre>
+<p>Once a watermark has passed for a given timestamp no more updates will be issued. This allows operators to work as soon as they receive input, while still tracking which outputs are consistent. For this test I call <code>consolidate</code> on the outputs, which accumulates and merges redundant updates until the watermark passes them, guaranteeing that it will only ever emit consistent updates.</p>
+<p>I've also included code for <a href="https://materialize.com/">materialize</a> which is built on top of differential dataflow and operates under the same consistency model, but adds a SQL interface and a range of sources and sinks which handle interaction with external systems, including assigning timestamps and watermarks.</p>
+<p>Materialize' current source/sink system is a placeholder, awaiting redesign into orthogonal sql operators. In the meantime the only source offering support for extracting event-time from arbitrary inputs is the <a href="https://web.archive.org/web/20220219220734/https://materialize.com/docs/connect/materialize-cdc/">CDC protocol</a>, which I was too lazy to emit. So instead I used a file source and did <a href="https://github.com/jamii/streaming-consistency/blob/12cd6384b14c7d2f5a2dfae0a47226e5e627ec01/materialize/views.sql#L13-L25">something hacky</a> with the experimental <a href="https://materialize.com/temporal-filters/">temporal filters</a> feature.</p>
+<p>This means that I can't use a watermark and so, unlike differential dataflow, no transactions are rejected for being late. Apart from that materialize behaves exactly like differential dataflow so I won't cover it separately in the results section.</p>
+<h3 id="kafka-streams-ksqldb">Kafka streams / ksqldb</h3>
+<p>(kafka streams v2.7.0 | <a href="https://github.com/jamii/streaming-consistency/tree/main/kafka-streams">code</a>)</p>
+<p>(ksqldb v0.15 | <a href="https://github.com/jamii/streaming-consistency/tree/main/ksqldb">code</a>)</p>
+<p><a href="https://kafka.apache.org/20/documentation/streams/developer-guide/dsl-api.html">Kafka streams</a> is exactly what is sounds like - a streaming system built around kafka. <a href="https://ksqldb.io/">Ksqldb</a> is built on top of kafka streams and adds support for a dialect of sql.</p>
+<p>Both offer streams of events and time-varying tables. Relational joins are available but only offer <a href="https://docs.confluent.io/platform/current/streams/architecture.html#flow-control-with-timestamps">best-effort synchronization</a> between streams. The best-effortness is controlled by a number of configuration variables, including <a href="https://docs.confluent.io/platform/current/streams/developer-guide/config-streams.html#optional-configuration-parameters">max.task.idle.ms</a> which is a wall-clock (!) timeout on how long a join operator will wait for matching input. The default value is 0 ms. The best explanation I can find for the actual join algorithm is in <a href="https://github.com/confluentinc/ksql/issues/5537#issuecomment-638366743">this issue</a>. If I understand correctly this means that joins are not eventually consistent - you can have a network hiccup, timeout one side of the join and then never emit those outputs.</p>
+<p>Neither tracks watermarks. The authors argue instead for a model of <a href="https://www.confluent.io/blog/watermarks-tables-event-time-dataflow-model/">continuous refinement</a>. This makes it impossible to know when it is safe to act on outputs, as they themselves noted when they later <a href="https://www.confluent.io/blog/kafka-streams-take-on-watermarks-and-triggers/">added the suppress operator</a>. The suppress operator allows manually suppressing early emissions from non-monotonic operators. It's similar to differential dataflow's consolidate, but since it lacks watermarks it can't guarantee that the output is consistent, only increase the odds. Being per-operator, suppress also exposes similar failure modes to those mentioned in the earlier section on inconsistent rejections in watermarks. There also doesn't appear to be a way to correctly suppress non-windowed outer joins because the output stream doesn't have access to the stream-times of both inputs to the join. The suppress operator is also not yet available in kafka streams.</p>
+<p>Unfortunately I haven't been able to convince kafka streams to produce any output for our running example (<a href="https://issues.apache.org/jira/browse/KAFKA-12594">KAFKA-12594</a>). People are using kafka streams in production so clearly something about my configuration or environment must be unusual. But after several weeks of effort, including conversations on the confluent slack and asking for help on the kafka mailing list, I've been unable to make any progress.</p>
+<p>To avoid whatever misconfiguration was plaguing my kakfa streams effort I'm using ksqldb via the docker image provided by confluent which includes zookeeper and kafka and reasonable default configurations for everything. This is what provides all the results below.</p>
+<p>The output is a series of key-value pairs. Where there are multiple updates for the same key, each update replaces the previous value. Deleted keys are represented by an update with a null value.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> head</span><span style="color:#ff8f40;"> -n</span><span> 20 ksqldb/original-results/balance
+</span><span style="color:#f29718;">CreateTime:1609459200000	</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-47.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-49.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-48.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-47.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-58.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000			</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-47.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-51.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-55.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-59.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-39.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-47.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-58.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-55.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-48.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-49.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-51.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-59.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000			</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-47.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000		</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-39.0}
+</span><span style="color:#f29718;">CreateTime:1609459200000	</span><span>{</span><span style="color:#86b300;">&quot;BALANCE&quot;</span><span>:-47.0}
+</span></code></pre>
+<p>Naturally the only option for ksqldb is to use kafka sources and sinks. I pipe the input transactions into <code>kafka-console-producer</code> and read from the sinks with <code>kafka-console-consumer</code>.</p>
+<h3 id="flink">Flink</h3>
+<p>(flink v1.12.2 | <a href="https://github.com/jamii/streaming-consistency/tree/main/flink-table">code</a>)</p>
+<p><a href="https://flink.apache.org/">Flink</a> is split into two apis - the <a href="https://ci.apache.org/projects/flink/flink-docs-release-1.12/dev/datastream_api.html">datastream api</a> is strongly focused on high-temporal-locality problems <del>and so can't express our running example</del> (EDIT see updates at end), whereas the <a href="https://ci.apache.org/projects/flink/flink-docs-release-1.12/dev/table/">table/sql api</a> offers time-varying tables with all the familiar relational operations.</p>
+<p>Like differential dataflow flink tracks event time and watermarks from the edge of the system, but unlike differential dataflow it doesn't use them for all operations. For much of the table api the situation appears to be the same as kafka streams' continual refinement model.</p>
+<p>The <a href="https://ci.apache.org/projects/flink/flink-docs-release-1.12/dev/table/connectors/filesystem.html">file source</a> appears to load the current contents of the file in a single batch and then ignore any future appends, so it's not usable for testing streaming behavior. Instead I used kafka for both sources and sinks, with the same setup as for ksqldb.
+I convert the outputs to streams before sinking to ensure all updates are captured. I also set a 5s trailing watermark on the transactions input.</p>
+<p>The output is a series of inserts and deletes for key-value pairs.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> head</span><span style="color:#ff8f40;"> -n</span><span> 20 flink-table/original-results/balance
+</span><span style="color:#f29718;">insert</span><span> 7,16.0
+</span><span style="color:#f29718;">insert</span><span> 6,10.0
+</span><span style="color:#f29718;">insert</span><span> 5,8.0
+</span><span style="color:#f29718;">insert</span><span> 4,6.0
+</span><span style="color:#f29718;">insert</span><span> 9,12.0
+</span><span style="color:#f29718;">delete</span><span> 7,16.0
+</span><span style="color:#f29718;">insert</span><span> 3,9.0
+</span><span style="color:#f29718;">insert</span><span> 7,17.0
+</span><span style="color:#f29718;">delete</span><span> 3,9.0
+</span><span style="color:#f29718;">delete</span><span> 5,8.0
+</span><span style="color:#f29718;">insert</span><span> 3,8.0
+</span><span style="color:#f29718;">insert</span><span> 5,9.0
+</span><span style="color:#f29718;">delete</span><span> 9,12.0
+</span><span style="color:#f29718;">delete</span><span> 4,6.0
+</span><span style="color:#f29718;">insert</span><span> 9,11.0
+</span><span style="color:#f29718;">insert</span><span> 4,7.0
+</span><span style="color:#f29718;">delete</span><span> 3,8.0
+</span><span style="color:#f29718;">delete</span><span> 9,11.0
+</span><span style="color:#f29718;">insert</span><span> 3,7.0
+</span><span style="color:#f29718;">insert</span><span> 9,12.0
+</span></code></pre>
+<h2 id="results">Results</h2>
+<h3 id="accepted-transactions">accepted_transactions</h3>
+<p>For each system I immediately dump the inputs back out to disk to see what made it in.</p>
+<p>I set up differential dataflow to reject any transactions that come after the 5s watermark, which is about 1/3rd of the dataset.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> differential-dataflow/original-results/accepted_transactions
+</span><span style="color:#f29718;">6401639</span><span> differential-dataflow/original-results/accepted_transactions
+</span></code></pre>
+<p>Flink also has a 5s trailing watermark, but it doesn't reject any inputs in non-windowed computations.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> flink-table/original-results/accepted_transactions
+</span><span style="color:#f29718;">10000000</span><span> flink-table/original-results/accepted_transactions
+</span></code></pre>
+<p>Ksqldb doesn't have watermarks at all.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> ksqldb/original-results/accepted_transactions
+</span><span style="color:#f29718;">10000000</span><span> ksqldb/original-results/accepted_transactions
+</span></code></pre>
+<p>When I was experimenting with kafka streams, I sometimes found missing rows in <code>accepted_transactions</code>. Hans-Peter Grahsl <a href="https://issues.apache.org/jira/browse/KAFKA-12608?focusedCommentId=17319951&amp;page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#comment-17319951">kindly explained</a> that this was because:</p>
+<ul>
+<li>When kafka streams writes back to kafka it uses the event time, if set, as the kafka log timestamp.</li>
+<li>My data generator used fixed timestamps which by this point were several months in the past.</li>
+<li>Unless explicitly specified kafka defaults to a 7 day retention period, leaving it free to non-deterministicly garbage collect the <code>accepted_transactions</code> topic.</li>
+</ul>
+<p>Explicitly setting an unlimited retention period resolved this.</p>
+<h3 id="outer-join">outer_join</h3>
+<p>The output of this view should never contain nulls because both sides have the same set of ids.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c </span><span style="color:#86b300;">&#39;\N&#39;</span><span> materialize/original-results/outer_join
+</span><span style="color:#f29718;">0
+</span></code></pre>
+<p>If we try this in flink it complains that the input tables contain an event-time column which must be used. There are two ways to resolve this.</p>
+<p>Drop the event-time column:</p>
+<pre data-lang="java" style="background-color:#fafafa;color:#61676c;" class="language-java "><code class="language-java" data-lang="java"><span>tEnv</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">executeSql</span><span>(</span><span style="font-style:italic;color:#55b4d4;">String</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">join</span><span>(</span><span style="color:#86b300;">&quot;</span><span style="color:#4cbf99;">\n</span><span style="color:#86b300;">&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;CREATE VIEW outer_join_without_time(id, other_id) AS&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;SELECT&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    t1.id, t2.id as other_id&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;FROM&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    (SELECT id FROM transactions) as t1&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;LEFT JOIN&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    (SELECT id FROM transactions) as t2&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;ON&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    t1.id = t2.id&quot;
+</span><span>))</span><span style="color:#61676ccc;">;
+</span><span style="color:#f29718;">sinkToKafka</span><span>(tEnv</span><span style="color:#61676ccc;">, </span><span style="color:#86b300;">&quot;outer_join_without_time&quot;</span><span>)</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<p>Or add the event-time column to the join constraint:</p>
+<pre data-lang="java" style="background-color:#fafafa;color:#61676c;" class="language-java "><code class="language-java" data-lang="java"><span>tEnv</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">executeSql</span><span>(</span><span style="font-style:italic;color:#55b4d4;">String</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">join</span><span>(</span><span style="color:#86b300;">&quot;</span><span style="color:#4cbf99;">\n</span><span style="color:#86b300;">&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;CREATE VIEW outer_join_with_time(id, other_id) AS&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;SELECT&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    t1.id, t2.id as other_id&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;FROM&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    transactions as t1&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;LEFT JOIN&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    transactions as t2&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;ON&quot;</span><span style="color:#61676ccc;">,
+</span><span>    </span><span style="color:#86b300;">&quot;    t1.id = t2.id AND t1.ts = t2.ts&quot;
+</span><span>))</span><span style="color:#61676ccc;">;
+</span><span style="color:#f29718;">sinkToKafka</span><span>(tEnv</span><span style="color:#61676ccc;">, </span><span style="color:#86b300;">&quot;outer_join_with_time&quot;</span><span>)</span><span style="color:#61676ccc;">;
+</span></code></pre>
+<p>The version without the event-time column behaves like I would expect from an eventually consistent system. Most keys initially appear with a null, which is then retracted and replaced by the correct value.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> tail flink-table/original-results/outer_join_without_time
+</span><span style="color:#f29718;">insert</span><span> 9956971,9956971
+</span><span style="color:#f29718;">insert</span><span> 9926009,null
+</span><span style="color:#f29718;">delete</span><span> 9926009,null
+</span><span style="color:#f29718;">insert</span><span> 9926009,9926009
+</span><span style="color:#f29718;">insert</span><span> 9878245,null
+</span><span style="color:#f29718;">delete</span><span> 9878245,null
+</span><span style="color:#f29718;">insert</span><span> 9878245,9878245
+</span><span style="color:#f29718;">insert</span><span> 9845139,null
+</span><span style="color:#f29718;">delete</span><span> 9845139,null
+</span><span style="color:#f29718;">insert</span><span> 9845139,9845139
+</span><span>
+</span><span style="color:#f29718;">$</span><span> grep insert flink-table/original-results/outer_join_without_time </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">grep</span><span style="color:#ff8f40;"> -c</span><span> null
+</span><span style="color:#f29718;">8552649
+</span><span>
+</span><span style="color:#f29718;">$</span><span> grep insert flink-table/original-results/outer_join_without_time </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">grep</span><span style="color:#ff8f40;"> -cv</span><span> null
+</span><span style="color:#f29718;">10000000
+</span></code></pre>
+<p>The version with the event-time column is surprising.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep insert flink-table/original-results/outer_join_with_time </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">grep</span><span style="color:#ff8f40;"> -c</span><span> null
+</span><span style="color:#f29718;">4439927
+</span><span>
+</span><span style="color:#f29718;">$</span><span> grep insert flink-table/original-results/outer_join_with_time </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">grep</span><span style="color:#ff8f40;"> -cv</span><span> null
+</span><span style="color:#f29718;">5560073
+</span><span>
+</span><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> delete flink-table/original-results/outer_join_with_time
+</span><span style="color:#f29718;">0
+</span></code></pre>
+<p>Many of the rows appear with a null that is never retracted. Lincoln Lee <a href="https://issues.apache.org/jira/browse/FLINK-22075?focusedCommentId=17318989&amp;page=com.atlassian.jira.plugin.system.issuetabpanels%3Acomment-tabpanel#comment-17318989">explains</a> that this is the expected behavior for rows which arrive after the watermark.</p>
+<p>I don't think this explanation is complete. The number of nulls varies between runs, even though the event-times are fixed, and never matches the number of rows which actually fall after the watermark. Perhaps there is some additional source of non-determinism in the join implementation?</p>
+<p>Ksqldb also has some interesting behavior. It doesn't allow obvious self-joins but we can trick it with a <a href="https://github.com/jamii/streaming-consistency/blob/12cd6384b14c7d2f5a2dfae0a47226e5e627ec01/ksqldb/views2.sql#L16-L19">single level of indirection</a> to see what happens. As expected, it emits some nulls and later replaces them.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> ksqldb/original-results/outer_join
+</span><span style="color:#f29718;">10084886</span><span> ksqldb/original-results/outer_join
+</span><span>
+</span><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> null ksqldb/original-results/outer_join
+</span><span style="color:#f29718;">36032
+</span></code></pre>
+<p>But these numbers don't add up. What's going on?</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -v</span><span> null ksqldb/original-results/outer_join </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;:&#39;</span><span style="color:#ff8f40;"> -f</span><span> 3 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">uniq</span><span style="color:#ff8f40;"> -c </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">tail
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;9991&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;99911&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;9992&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;99921&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;99923&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;9993&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;99931&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;99947&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;99950&quot;</span><span>}
+</span><span>      </span><span style="color:#f29718;">2 </span><span style="color:#86b300;">&quot;99988&quot;</span><span>}
+</span></code></pre>
+<p>Some of the rows are updated twice! This isn't actually wrong - the second update is just a noop. But I can't imagine what causes it.</p>
+<h3 id="credits-debits">credits / debits</h3>
+<p>There are 60 distinct timestamps and 10 accounts in the input data. That means that in a system that withholds output from non-monotonic operations like sum we should get 600 updates to <code>credits</code> and <code>debits</code>.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> insert differential-dataflow/original-results/credits
+</span><span style="color:#f29718;">600
+</span><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> insert differential-dataflow/original-results/debits
+</span><span style="color:#f29718;">600
+</span></code></pre>
+<p>Whereas flink updates the sum on every transaction.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> insert flink-table/original-results/credits
+</span><span style="color:#f29718;">10000000
+</span><span>
+</span><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> insert flink-table/original-results/debits
+</span><span style="color:#f29718;">10000000
+</span></code></pre>
+<p>Ksqldb doesn't wait for complete inputs either, but it seems to have some non-deterministic internal buffering that allows it to avoid emitting all the intermediate results.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> ksqldb/original-results/credits
+</span><span style="color:#f29718;">3450</span><span> ksqldb/original-results/credits
+</span><span>
+</span><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> ksqldb/original-results/debits
+</span><span style="color:#f29718;">3440</span><span> ksqldb/original-results/debits
+</span></code></pre>
+<p>This demonstrates that flink and ksqldb don't wait for all the inputs to arrive at a given timestamp before updating the sum, so they will be subject to the 'early emission from non-monotonic operators' failure mode.</p>
+<h3 id="balance">balance</h3>
+<p>Like <code>credits</code> and <code>debits</code> we would expect 600 updates to <code>balance</code> - 1 update for each of 60 distinct timestamps and 10 accounts.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> insert differential-dataflow/original-results/balance
+</span><span style="color:#f29718;">599
+</span></code></pre>
+<p>Except that it turns out that in one timestamp, for one account, the balance at the beginning and end of the timestamp was the same so differential dataflow doesn't emit an update.</p>
+<p>Flink is again prolific. We can see that it doesn't synchronize the two inputs to the join - almost every update in either <code>credits</code> or <code>debits</code> leads to an update in <code>balance</code>.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> insert flink-table/original-results/balance
+</span><span style="color:#f29718;">18999012
+</span></code></pre>
+<p>Ksqldb behaves similarly.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> ksqldb/original-results/balance
+</span><span style="color:#f29718;">6515</span><span> ksqldb/original-results/balance
+</span></code></pre>
+<p>This demonstrates that flink and ksqldb are emitting join results are inputs arrive and without coordination, so they will be subject to the 'combining streams without synchronization' failure mode.</p>
+<h3 id="total">total</h3>
+<p>The total is always 0, so differential dataflow has only a single insert at the first timestamp.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep insert differential-dataflow/original-results/total
+</span><span style="color:#f29718;">insert</span><span> 1x (()</span><span style="color:#f29718;">,</span><span> 0) </span><span style="color:#f29718;">at</span><span> 1609459200000000000
+</span></code></pre>
+<p>The remainder of the output is a series of progress reports. These tell downsteam consumers that all the inputs up to that point have been processed and there are no further changes. Otherwise it's impossible to tell the difference between "nothing changed" and "massive gc pause".</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> tail differential-dataflow/original-results/total
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459245000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459246000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459247000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459248000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459249000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459250000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459251000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459252000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459253000000000
+</span><span style="color:#f29718;">no</span><span> more updates with timestamp </span><span style="color:#ed9366;">&lt; </span><span style="color:#ff8f40;">1609459254000000000
+</span></code></pre>
+<p>Flink multiplies the outputs yet again, with almost every update of <code>balance</code> leading to two updates in <code>total</code> - another example of early emission from a non-monotonic operator.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c</span><span> insert flink-table/original-results/total
+</span><span style="color:#f29718;">37978385
+</span></code></pre>
+<p>As with the outer join, there was the option of either erasing the event-time column or propagating it through the calculation (I had to do this manually in a few places as eg <code>GROUP BY</code> hides the column). The results are very similar either way though.</p>
+<p>Only a tiny fraction of the updates are for the correct output.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -c </span><span style="color:#86b300;">&#39;insert 0.0&#39;</span><span> flink-table/original-results/total
+</span><span style="color:#f29718;">13325
+</span></code></pre>
+<p>The behavior over time is fascinating. This graph is for a single run, with one point for each output. But flink seems to oscillate rapidly between a number of stable attractors, creating the appearance of multiple lines overlaid on one another. I don't yet understand the reason for that.</p>
+<p><img src="/writing/internal-consistency-in-streaming-systems/flink-original-timeseries.png" alt="" /></p>
+<p>Also striking is that horizontal line just above 0. It's not an artifact. Here is a crude histogram.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep insert flink-table/original-results/total </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39; &#39;</span><span style="color:#ff8f40;"> -f</span><span> 2 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">uniq</span><span style="color:#ff8f40;"> -c </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">tail
+</span><span>  </span><span style="color:#f29718;">17302</span><span> 207.0
+</span><span>  </span><span style="color:#f29718;">17363</span><span> 149.0
+</span><span>  </span><span style="color:#f29718;">17380</span><span> 157.0
+</span><span>  </span><span style="color:#f29718;">17437</span><span> 158.0
+</span><span>  </span><span style="color:#f29718;">17564</span><span> 156.0
+</span><span>  </span><span style="color:#f29718;">17576</span><span> 151.0
+</span><span>  </span><span style="color:#f29718;">17702</span><span> 154.0
+</span><span>  </span><span style="color:#f29718;">17709</span><span> 153.0
+</span><span>  </span><span style="color:#f29718;">17802</span><span> 152.0
+</span><span style="color:#f29718;">10000767</span><span> 256.0
+</span></code></pre>
+<p>26.3% of the updates are the number 256! The actual number varies from run to run, but in each run there is always one single number which has a huge frequency spike compared to the others. I have no idea what causes this.</p>
+<p>The final output is correct though, so at least it is eventually consistent.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> tail flink-table/original-results/total
+</span><span style="color:#f29718;">delete</span><span> 659.0
+</span><span style="color:#f29718;">insert</span><span> 2.0
+</span><span style="color:#f29718;">delete</span><span> 2.0
+</span><span style="color:#f29718;">insert</span><span style="color:#ff8f40;"> -836</span><span>.0
+</span><span style="color:#f29718;">delete</span><span style="color:#ff8f40;"> -836</span><span>.0
+</span><span style="color:#f29718;">insert</span><span> 1.0
+</span><span style="color:#f29718;">delete</span><span> 1.0
+</span><span style="color:#f29718;">insert</span><span style="color:#ff8f40;"> -1755</span><span>.0
+</span><span style="color:#f29718;">delete</span><span style="color:#ff8f40;"> -1755</span><span>.0
+</span><span style="color:#f29718;">insert</span><span> 0.0
+</span></code></pre>
+<p>Ksqldb has less updates due to its earlier coalescing in <code>credits</code> and <code>debits</code>.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> wc</span><span style="color:#ff8f40;"> -l</span><span> ksqldb/original-results/total
+</span><span style="color:#f29718;">340</span><span> ksqldb/original-results/total
+</span></code></pre>
+<p>None of the outputs are correct until the last.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep</span><span style="color:#ff8f40;"> -F </span><span style="color:#86b300;">&#39;:0.0&#39;</span><span> ksqldb/original-results/total
+</span><span style="color:#f29718;">CreateTime:1609459259000</span><span>	foo	{</span><span style="color:#86b300;">&quot;KSQL_COL_1&quot;</span><span>:0.0}
+</span></code></pre>
+<p>The absolute error is even larger than flink. I'm not sure how much to read into that, given how much these outputs could depend on subtle details of timing.</p>
+<p><img src="/writing/internal-consistency-in-streaming-systems/ksqldb-original-timeseries.png" alt="" /></p>
+<p>The behavior for both flink and ksqldb is a result of the previous failures in <code>credits</code>, <code>debits</code> and <code>balance</code>, but also demonstrates 'confusing changes with corrections' because the incorrect outputs for total are not marked as such.</p>
+<h3 id="total-simplified-transactions">total (simplified transactions)</h3>
+<p>In both graphs the total error seems to be increasing over time. But this is probably because the absolute values in <code>balance</code> are increasing due to the random walk. To get a better picture of the dynamics I made a simplified dataset, where the transactions are all in time order and the transfers shuttle along the accounts in order.</p>
+<pre data-lang="python" style="background-color:#fafafa;color:#61676c;" class="language-python "><code class="language-python" data-lang="python"><span>random</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">seed</span><span>(</span><span style="color:#ff8f40;">42</span><span>)
+</span><span>max_id </span><span style="color:#ed9366;">= </span><span style="color:#ff8f40;">10000000
+</span><span style="color:#fa6e32;">for </span><span style="color:#f07171;">id </span><span style="color:#fa6e32;">in </span><span style="color:#f07171;">range</span><span>(</span><span style="color:#ff8f40;">0</span><span style="color:#61676ccc;">,</span><span>max_id):
+</span><span>    second </span><span style="color:#ed9366;">= </span><span>((</span><span style="color:#ff8f40;">60 </span><span style="color:#ed9366;">* </span><span style="color:#f07171;">id</span><span>) </span><span style="color:#ed9366;">// </span><span>max_id)
+</span><span>    from_account </span><span style="color:#ed9366;">= </span><span style="color:#f07171;">id </span><span style="color:#ed9366;">% </span><span style="color:#ff8f40;">10
+</span><span>    to_account </span><span style="color:#ed9366;">= </span><span>(from_account </span><span style="color:#ed9366;">+ </span><span style="color:#ff8f40;">1</span><span>) </span><span style="color:#ed9366;">% </span><span style="color:#ff8f40;">10
+</span><span>    row </span><span style="color:#ed9366;">= </span><span>json</span><span style="color:#ed9366;">.</span><span style="color:#f29718;">dumps</span><span>({
+</span><span>        </span><span style="color:#86b300;">&#39;id&#39;</span><span style="color:#61676ccc;">: </span><span style="color:#f07171;">id</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;from_account&#39;</span><span style="color:#61676ccc;">: </span><span>from_account</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;to_account&#39;</span><span style="color:#61676ccc;">: </span><span>to_account</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;amount&#39;</span><span style="color:#61676ccc;">: </span><span style="color:#ff8f40;">1</span><span style="color:#61676ccc;">,
+</span><span>        </span><span style="color:#86b300;">&#39;ts&#39;</span><span style="color:#61676ccc;">: </span><span style="color:#fa6e32;">f</span><span style="color:#86b300;">&#39;2021-01-01 00:00:</span><span>{second</span><span style="color:#ff8f40;">:02d</span><span>}</span><span style="color:#86b300;">.000&#39;</span><span style="color:#61676ccc;">,
+</span><span>    })
+</span><span>    </span><span style="color:#f07171;">print</span><span>(</span><span style="color:#fa6e32;">f</span><span style="color:#86b300;">&#39;</span><span>{</span><span style="color:#f07171;">id</span><span>}</span><span style="color:#86b300;">|</span><span>{row}</span><span style="color:#86b300;">&#39;</span><span>)
+</span></code></pre>
+<p>This means that at every point every account balance should be one of -1, 0, 1.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep insert differential-dataflow/simplified-results/balance </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;,&#39;</span><span style="color:#ff8f40;"> -f2 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;)&#39;</span><span style="color:#ff8f40;"> -f1 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">uniq</span><span style="color:#ff8f40;"> -c
+</span><span>     </span><span style="color:#f29718;">40</span><span style="color:#ff8f40;">  -1
+</span><span>     </span><span style="color:#f29718;">68</span><span>  0
+</span><span>     </span><span style="color:#f29718;">20</span><span>  1
+</span></code></pre>
+<p>Flink doesn't quite manage this.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> grep insert flink-table/simplified-results/balance </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;,&#39;</span><span style="color:#ff8f40;"> -f</span><span> 2 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">uniq</span><span style="color:#ff8f40;"> -c
+</span><span>    </span><span style="color:#f29718;">251</span><span style="color:#ff8f40;"> -1</span><span>.0
+</span><span> </span><span style="color:#f29718;">477011</span><span> 0.0
+</span><span style="color:#f29718;">4747211</span><span> 1.0
+</span><span style="color:#f29718;">4270870</span><span> 2.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 3.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 4.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 5.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 6.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 7.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 8.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 9.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 10.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 11.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 12.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 13.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 14.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 15.0
+</span><span>     </span><span style="color:#f29718;">37</span><span> 16.0
+</span><span> </span><span style="color:#f29718;">525131</span><span> 17.0
+</span><span style="color:#f29718;">5250971</span><span> 18.0
+</span><span style="color:#f29718;">4725867</span><span> 19.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 20.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 21.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 22.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 23.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 24.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 25.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 26.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 27.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 28.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 29.0
+</span><span>     </span><span style="color:#f29718;">18</span><span> 30.0
+</span><span>     </span><span style="color:#f29718;">84</span><span> 31.0
+</span><span>    </span><span style="color:#f29718;">682</span><span> 32.0
+</span><span>    </span><span style="color:#f29718;">606</span><span> 33.0
+</span></code></pre>
+<p>There is a clump around the correct answer, and a separate equally large clump around a completely wrong answer. I don't know why.</p>
+<p>The simplified dataset better shows off the stable attractors. Like the previous flink graph, this is a single run and there is one point per output. But all the outputs fall within one of three ranges and the points are so dense that they just look like horizontal bars. The exact bounds of the ranges vary from run to run, but I always see three of them.</p>
+<p><img src="/writing/internal-consistency-in-streaming-systems/flink-simplified-timeseries.png" alt="" /></p>
+<p>Ksqldb manages an impressively wide spread.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> cat ksqldb/simplified-results/balance </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;:&#39;</span><span style="color:#ff8f40;"> -f</span><span> 3 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;}&#39;</span><span style="color:#ff8f40;"> -f1 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">head
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135051.0
+</span><span style="color:#f29718;">-135050.0
+</span><span style="color:#f29718;">-135050.0
+</span><span>
+</span><span style="color:#f29718;">$</span><span> cat ksqldb/simplified-results/balance </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;:&#39;</span><span style="color:#ff8f40;"> -f</span><span> 3 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;}&#39;</span><span style="color:#ff8f40;"> -f1 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">tail
+</span><span style="color:#f29718;">2847.0
+</span><span style="color:#f29718;">2847.0
+</span><span style="color:#f29718;">2847.0
+</span><span style="color:#f29718;">2847.0
+</span><span style="color:#f29718;">2848.0
+</span><span style="color:#f29718;">2848.0
+</span><span style="color:#f29718;">2848.0
+</span><span style="color:#f29718;">2848.0
+</span><span style="color:#f29718;">2848.0
+</span><span style="color:#f29718;">2848.0
+</span></code></pre>
+<p>Where the original dataset caused oscillations, here the total takes a wild downwards dive.</p>
+<p><img src="/writing/internal-consistency-in-streaming-systems/ksqldb-simplified-timeseries.png" alt="" /></p>
+<p>It would be interesting to see if we ran this with a much larger dataset, say a few billion, would it continue its downwards dive or would the error level off somewhere?</p>
+<h2 id="thoughts">Thoughts</h2>
+<p>I've been aware of the theoretical failure modes for some time. My main takeaway from actually testing them in the wild is that not only are these failures easier to trigger than I expected, the resulting behavior is much more complex than I expected and that I can't currently predict or explain the dynamics. Every one of those graphs presents more questions than answers.</p>
+<h3 id="does-this-matter">Does this matter?</h3>
+<p>Historically, streaming systems were mostly used for high-temporal-locality problems like website analytics. These typically:</p>
+<ul>
+<li>have simple topologies, which limits the extent to which errors can multiply downstream</li>
+<li>window their inputs, which allows the output to settle once the window falls past the watermark, and also limits the extent to which errors can propagate into the future</li>
+<li>can often tolerate a bounded amount of error</li>
+<li>often have customers who can't detect errors anyway</li>
+</ul>
+<p>Eventual consistency works pretty well for these kinds of problems.</p>
+<p>But there is a movement now towards <a href="https://milinda.pathirage.org/kappa-architecture.com/">building entire application backends</a> using streaming systems, which are now growing low-temporal-locality operations like unwindowed joins and aggregates to accommodate this usecase. For these kinds of computations we've seen that:</p>
+<ul>
+<li>we might get outputs that are arbitrarily wrong, up to and including breaking program invariants</li>
+<li>the outputs might never converge to correctness</li>
+<li>even if some of the outputs are correct, we won't know which ones</li>
+<li>it is easy to reproduce these failures</li>
+</ul>
+<p>We need internal consistency to be able to produce reasonable outputs for these kinds of problems.</p>
+<p>We might also want to ask questions like "how many times did the balance for customer X go below 0", but these kinds of historical questions are impossible to answer in a system that doesn't distinguish correct outputs from incorrect outputs, or that emits only a subset of the changes that happened over time.</p>
+<p>Many systems also now offer support for declarative languages like SQL, which increases the distance between the developer and the underlying approximations. I challenge anyone to take, for example, <a href="https://github.com/dragansah/tpch-dbgen/blob/master/tpch-queries/11.sql">this TPC-H query</a> and put a bound on how large the errors can be in an internally inconsistent system.</p>
+<p>The effect is similar to undefined behavior in programming languages. In a streaming system that doesn't provide internal consistency almost any operation has the possibility to produce <a href="https://en.wikipedia.org/wiki/Undefined_behavior">nasal demons</a> in a way that is incredibly difficult to predict or to rule out through testing. Especially since it might depend on load, os scheduling decisions, network delays etc.</p>
+<p>I see a parallel in how eg google seems to be moving everything to being backed by <a href="https://cloud.google.com/spanner">spanner</a>, because reasoning about weaker consistency models at scale is just too difficult and too expensive. Internal consistency allows you to pretend that you're just operating a very fast batch system instead of having to reason about all the possible interleavings of updates through your streaming topology.</p>
+<h3 id="testing">Testing</h3>
+<p>The idea of streaming systems is to make it easy to work with unbounded input. But it doesn't appear that most systems actually test behavior under unbounded input - the vast majority of the tests I've looked at only test the final output after everything has settled. Even materialize, which is otherwise <a href="https://github.com/MaterializeInc/materialize/blob/main/doc/developer/guide-testing.md">pretty heavily tested</a>, does not have many tests which examine intermediate outputs.</p>
+<p>A major obstacle is that testing behavior under unbounded input requires specifying what that behavior should be. Many systems don't expect deterministic output and haven't defined the semantics of their operators sufficiently well to judge whether a particular test run is correct not. Internal consistency makes this easier - you can just compare the outputs at each timestamp to your favourite batch system.</p>
+<p>The difficulty of testing is compounded by the fact that many system recommend that their users run their own tests in a separate environment which might have different behavior (eg kafka streams recommends using <a href="https://kafka.apache.org/27/javadoc/org/apache/kafka/streams/TopologyTestDriver.html">TopologyTestDriver</a>). Instead, I'd strongly recommend both testing intermediate outputs in a staging environment and also figuring out some application-specific invariants that you can monitor in production to at least put a lower bound on the error rate.</p>
+<h3 id="latency">Latency</h3>
+<p>Based on experience with differential dataflow and materialize, I don't expect that guaranteeing internal consistency will have much impact on throughput or horizontal scaling. The amount of metadata that must be tracked is very small and can be amortized over large batches of updates.</p>
+<p>There is, however, a strong tradeoff between correctness and latency. A system that is willing to emit potentially incorrect results can emit outputs as soon as it computes them, whereas a consistent system has to wait until it's sure there are no more relevant inputs. The lower latency probably isn't helpful in cases where the potential error is large because if you want to actually act on the output you still need to wait until it's correct. But it means that attempting to add internal consistency to an existing system might see pushback because it makes it look worse in benchmarks that don't check the outputs.</p>
+<p>It's worth noting though that kafka streams' policy of continuous refinement doesn't allow it to dodge this tradeoff. In fact, the wall-clock timeouts actually make the tradeoff sharper - a system with watermarks can emit outputs as soon as it gets the watermark, whereas kafka streams always has to wait for the timeout. This probably explains why the default value of <code>max.task.idle.ms</code> is 0 - it would otherwise look terrible in benchmarks.</p>
+<p>Flink has systems for dealing with early emissions (<a href="https://ci.apache.org/projects/flink/flink-docs-stable/dev/stream/operators/windows.html#triggers">triggers</a>) and late-arriving data (<a href="https://ci.apache.org/projects/flink/flink-docs-stable/dev/stream/operators/windows.html#allowed-lateness">allowed lateness</a>). At the moment these open paths to inconsistency because they aren't distinguished from regular outputs, but this seems like something that is possible to implement in an internally consistent way.</p>
+<p>Frank McSherry recently demonstrated <a href="https://www.youtube.com/watch?v=0WijjN0LiZ4">using bitemporal timestamps</a> in differential dataflow. This effectively allows having multiple waves of watermarks, each of which generates an internally consistent set of outputs which can be distinguished from each other by the bitemporal part of their timestamp. This seems like a neat solution, but I haven't yet tested the performance impact of indexing bitemporal timestamps.</p>
+<p>If I was designing a system from scratch I'd be tempted to allow multiple waves of watermarks from the beginning - similar to flink's triggers but propagating through operators and controlling consistency like differential dataflow's watermarks. This would allow emitting early outputs and handling late inputs without risking internal inconsistency and without tackling the problem of indexing bitemporal timestamps.</p>
+<p>As a side point, it's noticeable in flink that many joins and aggregates often produce 2 output events for every input event. If we chain many of these operators together in a complex computation we might start thrashing on exponentially increasing numbers of updates. In deep graphs it may actually be faster overall to wait at each operator long enough to merge redundant updates.</p>
+<h3 id="what-to-do">What to do?</h3>
+<p>At minimum I'd like to see existing systems actually document what consistency guarantees they provide and explain the kinds of anomalies that could be observed. It was very difficult for me to determine this from the existing documentation and marketing. It's also pretty clear from conversations with other developers that a lot of people aren't aware that the outputs might be impossibly incorrect, not just out of date.</p>
+<p>We also need to better understand the range of possible behavior. Things I didn't even begin to explore here:</p>
+<ul>
+<li>What kinds of queries can produce incorrect outputs?</li>
+<li>How long do we have to wait to be sure that a given output is correct?</li>
+<li>How does the rate of inputs affect the number of incorrect outputs?</li>
+<li>What kind of bounds can we place on the size of errors?</li>
+<li>How is this affected by operating conditions eg if my system is working fine today, can I be sure it won't start emitting incorrect outputs tomorrow if the network has a hiccup or if I change the cpu scheduler?</li>
+</ul>
+<p>Ideally the behavior would be sufficiently well defined that it's possible to write tests that examine intermediate outputs, because those are the outputs that real deployments will experience. That doesn't necessarily mean going all the way to internal consistency - there may be room for looser consistency models that still provide useful constraints on behavior. But eventual consistency alone does not provide any useful constraints. It's fundamentally a property that talks about bounded inputs and so it's not informative for computations that can't be partitioned into a series of bounded inputs. We need better ways of describing these new systems.</p>
+<h2 id="updates">Updates</h2>
+<h3 id="flink-datastream-api">Flink datastream api</h3>
+<p>(flink v1.12.2 | <a href="https://github.com/jamii/streaming-consistency/tree/main/flink-datastream">code</a>)</p>
+<p>I was wrong about the expressiveness of the datastream api. I saw that the <a href="https://ci.apache.org/projects/flink/flink-docs-release-1.12/dev/stream/operators/#operators">provided operators</a> do not include unwindowed joins, do not have a notion of retractions (which prevents chaining aggregates) and are subject to the 'early emission from non-monotonic operators' failure mode. But Vasia Kalavri <a href="https://twitter.com/vkalavri/status/1383955259475730436">kindly demonstrated</a> how to implement the example in an internally consistent way by using <a href="https://ci.apache.org/projects/flink/flink-docs-release-1.12/dev/stream/operators/process_function.html">ProcessFunction</a> to build custom operators.</p>
+<pre data-lang="bash" style="background-color:#fafafa;color:#61676c;" class="language-bash "><code class="language-bash" data-lang="bash"><span style="color:#f29718;">$</span><span> cat flink-datastream/simplified-results/balance </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;,&#39;</span><span style="color:#ff8f40;"> -f</span><span> 3 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;)&#39;</span><span style="color:#ff8f40;"> -f1 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">uniq</span><span style="color:#ff8f40;"> -c
+</span><span>     </span><span style="color:#f29718;">60</span><span style="color:#ff8f40;"> -1</span><span>.0
+</span><span>    </span><span style="color:#f29718;">480</span><span> 0.0
+</span><span>     </span><span style="color:#f29718;">60</span><span> 1.0
+</span><span>     
+</span><span style="color:#f29718;">$</span><span> cat flink-datastream/simplified-results/total </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;,&#39;</span><span style="color:#ff8f40;"> -f</span><span> 3 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">cut</span><span style="color:#ff8f40;"> -d</span><span style="color:#86b300;">&#39;)&#39;</span><span style="color:#ff8f40;"> -f1 </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">sort</span><span style="color:#ff8f40;"> -h </span><span style="color:#ed9366;">| </span><span style="color:#f29718;">uniq</span><span style="color:#ff8f40;"> -c
+</span><span>     </span><span style="color:#f29718;">60</span><span> 0.0
+</span></code></pre>
+<p>The operators for <code>credits</code>, <code>debits</code> and <code>balance</code> accumulate the amount changed per key per timestamp and emit the accumulated value when the watermark passes each timestamp. The output is a stream of changes to the value, not the value itself, which avoids the need for a notion of retractions. If we wanted to see the actual value we'd need an additional sum to reassemble it.</p>
+<p>The balance calculation also makes use of the fact that the join in this example is contrived and can be replaced with a union. It seems <a href="https://ci.apache.org/projects/flink/flink-docs-release-1.12/dev/stream/operators/process_function.html#low-level-joins">possible</a> to implement a true join operator in a similar fashion though.</p>
+<p>I think the layering of apis is similar to differential:</p>
+<ul>
+<li>flink datastream api ~ timely dataflow</li>
+<li>flink table api ~ differential dataflow</li>
+</ul>
+<p>The lower layer handles communication, distribution, and tracks all the metadata needed to build consistent systems. The upper layer takes declarative programs that operate over time-varying collections and turns them into imperative programs that operate over streams of inserts and deletes. In this example, Vasia is effectively hand-compiling the example into streams.</p>
+<p>So, given that the datastream api gives you the tools to build consistent systems, I'm curious as to why the table api doesn't use them. Maybe consistency wasn't a priority when it was designed? Or maybe using the datastream api in this way has some performance impact? I'd love to hear from someone who was involved at the time.</p>
+<p><em>Thanks to Julia Evans and Dan Luu for review, Frank McSherry, Ruchir Khaitan and Brennan Vincent for help with differential dataflow and materialize, Matthias Sax for help with kafka streams, Aljoscha Krettek for help with flink, numerous folks on the kafka and flink bug trackers for patiently investigating various misfiled issues and Vasia Kalavri for adding the flink datastream example.</em></p>
+
+</article>
+
+<footer>
+  <hr>
+  <div class="spacer-1"></div>
+  <div>Maybe you should <a href="/resume">hire me?</a></div>
+  <div class="spacer-1"></div>
+<div><form
+  action="https://buttondown.email/api/emails/embed-subscribe/scattered-thoughts"
+  method="post"
+  target="popupwindow"
+  onsubmit="window.open('https://buttondown.email/scattered-thoughts', 'popupwindow')"
+>Get updates via <a href="/atom.xml">atom</a> or <input style="display: inline" type="email" name="email" id="bd-email" placeholder="email" /> <input style="display: inline; font-style: normal" type="submit" value="✉" /></form></div>
+  <div class="spacer-1"></div>
+  <div>Send comments to <a href="mailto:jamie@scattered-thoughts.net">jamie@scattered-thoughts.net</a></div>
+</footer>
+
+
+  </div>
+
+   
+
+</body>
+</html>

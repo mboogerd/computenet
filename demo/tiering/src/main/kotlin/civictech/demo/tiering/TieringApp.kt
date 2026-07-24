@@ -2,9 +2,15 @@ package civictech.demo.tiering
 
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
+import civictech.cell.data.CombineLatestCell
 import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
+import civictech.cell.data.CombineLatestApi
+import civictech.cell.data.CombineLatestCellPorts
+import civictech.cell.data.KeyedSetApi
+import civictech.cell.data.KeyedSetCell
+import civictech.cell.data.KeyedSetCellPorts
 import civictech.cell.data.MapHubCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -38,8 +44,9 @@ import java.util.concurrent.CopyOnWriteArrayList
  * and relative pairwise preferences ("x beats y"); both fold into one global
  * S–F tier board, incrementally re-tiered on any change. Score fusion +
  * fixed thresholds live in [Tiering]; the two signal averages are ordinary
- * GroupBy cells; combining them per key is [FuseCell] — the app-level
- * prototype for the missing kernel combine-latest operator (F-1/F-2).
+ * GroupBy cells; combining them per key is the kernel
+ * [CombineLatestCell] — the outer per-key combine this demo prototyped
+ * (F-1/F-2), wired with `combine = Tiering.fuse`.
  */
 data class Valuation(val agent: String, val item: String, val score: Long) : Serializable
 
@@ -55,25 +62,25 @@ data class Contribution(val item: String, val agent: String, val opponent: Strin
 /**
  * The dataflow pipeline, shared verbatim by the app and the seeded test:
  *
- *   vals  (SetCell<Valuation>) ─► tierAvg (GroupBy item, avg score)  ─► fuse.left
+ *   vals  (KeyedSetCell<(agent,item), Valuation>) ─► tierAvg (GroupBy item, avg score)  ─► fuse.left
  *   prefs (SetCell<Pref>) ─► contribs (flatMap ±1) ─► prefAvg (GroupBy item, avg sign) ─► fuse.right
- *   fuse (FuseCell) ─► MapDelta<item, Tiered>
+ *   fuse (CombineLatestCell, combine = Tiering.fuse) ─► MapDelta<item, Tiered>
  */
 object TierPipeline {
     data class Refs(
         val items: TypedRef<SetApi<String>>,
-        val vals: TypedRef<SetApi<Valuation>>,
+        val vals: TypedRef<KeyedSetApi<Pair<String, String>, Valuation>>,
         val prefs: TypedRef<SetApi<Pref>>,
         val tierAvg: TypedRef<GroupByApi<Valuation, String, Double>>,
         val prefAvg: TypedRef<GroupByApi<Contribution, String, Double>>,
-        val fused: TypedRef<FuseApi>,
+        val fused: TypedRef<CombineLatestApi<String, Double, Double, Tiered>>,
     )
 
     fun build(host: ManagedHost): Refs {
         lateinit var built: Refs
         graph(host.managementInlet) {
             val items = spawn("items") { SetCell<String>() }
-            val vals = spawn("vals") { SetCell<Valuation>() }
+            val vals = spawn("vals") { KeyedSetCell<Pair<String, String>, Valuation>() }
             val prefs = spawn("prefs") { SetCell<Pref>() }
             val contribs = spawn("contribs") {
                 FlatMapSetCell(f = { p: Pref ->
@@ -89,7 +96,7 @@ object TierPipeline {
             val prefAvg = spawn("prefAvg") {
                 GroupByCell(keyFn = { c: Contribution -> c.item }, aggregator = Aggregators.avgOf { c: Contribution -> c.sign })
             }
-            val fused = spawn("fused") { FuseCell() }
+            val fused = spawn("fused") { CombineLatestCell<String, Double, Double, Tiered>(combine = { _, t, p -> Tiering.fuse(t, p) }) }
             link(vals.cell.outlet, tierAvg.cell.inlet)
             link(prefs.cell.outlet, contribs.cell.inlet)
             link(contribs.cell.outlet, prefAvg.cell.inlet)
@@ -126,14 +133,15 @@ class TieringApp(port: Int = 8080) {
     private var fused: Map<String, Tiered> = emptyMap()
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
-    // OR-set removal needs the old element, so re-tiering keeps an
-    // (agent,item) → Valuation index purely to issue removals (finding F-3).
-    // These are the app's *authoritative* write-side record, maintained
+    // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
+    // keeps a Valuation-valued shadow index. This lightweight KEY set exists only
+    // so `unitem` can enumerate an item's valuation keys to cascade — the F-3
+    // residual. These are the app's *authoritative* write-side record, maintained
     // synchronously in the op handlers. The `valuations`/`prefs` fields above
     // are the async read model (folded off the SSE hubs); cascades must use
     // THESE indices, never the read model, or a signal added just before an
     // unitem is missed and ghosts the removed item onto the board.
-    private val currentValuation = mutableMapOf<Pair<String, String>, Valuation>()
+    private val liveValKeys = mutableSetOf<Pair<String, String>>()  // (agent,item) keys with a live valuation; authoritative write-side record for the unitem cascade
     private val livePrefs = mutableSetOf<Pref>()
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
@@ -156,11 +164,11 @@ class TieringApp(port: Int = 8080) {
         }
 
         setHub(refs.items.ref, SetCellPorts.outlet<String>()) { items = it }
-        setHub(refs.vals.ref, SetCellPorts.outlet<Valuation>()) { valuations = it }
+        setHub(refs.vals.ref, KeyedSetCellPorts.outlet<Pair<String, String>, Valuation>()) { valuations = it }
         setHub(refs.prefs.ref, SetCellPorts.outlet<Pref>()) { prefs = it }
         mapHub(refs.tierAvg.ref, GroupByCellPorts.outlet<Valuation, String, Double, Serializable>()) { tierAvg = it }
         mapHub(refs.prefAvg.ref, GroupByCellPorts.outlet<Contribution, String, Double, Serializable>()) { prefAvg = it }
-        mapHub(refs.fused.ref, FuseCellPorts.outlet) { fused = it }
+        mapHub(refs.fused.ref, CombineLatestCellPorts.outlet<String, Double, Double, Tiered>()) { fused = it }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
@@ -193,8 +201,8 @@ class TieringApp(port: Int = 8080) {
                 // Drive from the authoritative write-side indices, not the async
                 // read model, so a signal added moments earlier is never missed.
                 synchronized(state) {
-                    currentValuation.keys.filter { it.second == item }.toList().forEach { key ->
-                        currentValuation.remove(key)?.let { valOps.remove(it) }
+                    liveValKeys.filter { it.second == item }.forEach { key ->
+                        valOps.remove(key); liveValKeys -= key
                     }
                     livePrefs.filter { it.winner == item || it.loser == item }.forEach {
                         livePrefs -= it; prefOps.remove(it)
@@ -208,11 +216,12 @@ class TieringApp(port: Int = 8080) {
                 val tier = params["tier"]?.takeIf { it in Tiering.TIERS || it == "none" }
                     ?: return exchange.respond(400, "tier must be one of ${Tiering.TIERS} or none")
                 synchronized(state) {
-                    currentValuation.remove(agent to item)?.let { valOps.remove(it) }
                     if (tier != "none") {
-                        val v = Valuation(agent, item, Tiering.SCORE_OF.getValue(tier))
-                        currentValuation[agent to item] = v
-                        valOps.add(v)
+                        valOps.put(agent to item, Valuation(agent, item, Tiering.SCORE_OF.getValue(tier)))
+                        liveValKeys += agent to item
+                    } else {
+                        valOps.remove(agent to item)
+                        liveValKeys -= agent to item
                     }
                 }
             }

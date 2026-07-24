@@ -24,7 +24,7 @@ class Harness(
             civictech.cell.host.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS)
         } else null,
     )
-    val service = AgoraService(host, quiescence = quiescence, onCredence = onCredence)
+    val service = AgoraService(host, registry, quiescence = quiescence, onCredence = onCredence)
 
     /** Drain to idle under a hard step budget: quiescence is asserted, not hoped for. */
     fun runToIdle(budget: Int = 200_000): Int {

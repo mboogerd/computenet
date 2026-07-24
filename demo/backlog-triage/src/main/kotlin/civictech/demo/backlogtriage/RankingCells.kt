@@ -24,7 +24,8 @@ import kotlin.math.abs
  * rating changes as effective-only `MapDelta`s: a key is put only when its
  * rating actually moved, removed when it leaves the rated set.
  *
- * Deliberately app-level, in the FuseCell tradition. The pref stream defeats
+ * Deliberately app-level, in the discovered-requirement-prototype tradition
+ * (as tiering's FuseCell was before CombineLatestCell). The pref stream defeats
  * the kernel's per-key GroupBy aggregators for a different reason per
  * algorithm class:
  *

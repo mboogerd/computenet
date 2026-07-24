@@ -3,6 +3,7 @@ package civictech.agora
 import civictech.agora.BatchReference.NodeSpec
 import civictech.agora.cell.ClaimCell
 import civictech.agora.cell.Polarity
+import civictech.agora.cell.credenceOf
 import civictech.cell.CellRef
 import kotlin.math.abs
 import kotlin.random.Random

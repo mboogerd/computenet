@@ -1,5 +1,9 @@
 # OR-Map — a tagged, convergent map stream for multi-writer keys
 
+> **Absorbed into the roadmap**: scheduled as
+> [96 §E1](../doc/spec/90-roadmap/96-incremental-engines-plan.md) (design decided:
+> per-key dot map, LWW by dot order, reset-remove; acceptance = E1.2/E1.3/E1.6).
+
 ## Origin
 
 `MapDelta` is the framework's map-stream contract, but it carries a documented

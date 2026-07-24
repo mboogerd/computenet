@@ -1,30 +1,26 @@
 package civictech.demo
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.CounterDelta
 import civictech.cell.data.FilterCell
-import civictech.cell.data.CountCell
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
-import civictech.cell.data.SetHubApi
-import civictech.cell.data.SetHubCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
-import civictech.cell.data.onEach
-import civictech.cell.durability.FileJournal
+import civictech.cell.graph.TypedCellHandle
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
+import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.FanInlet
-import civictech.cell.port.registerPort
+import civictech.cell.host.View
+import civictech.cell.host.link
+import civictech.cell.host.observe
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.proxy.RoutedPropagate
 import civictech.cell.wire.Peering
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
@@ -40,18 +36,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 // incremental browser client is M6+ material); the *peer* transport is the
 // real M5 wire — WebSocket frames between symmetric JVMs.
 
-private class CounterHubCell(
-    private val onUpdate: (Long) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private var total = 0L
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<CounterDelta>>())
-
-    init {
-        inlet.onEach { total += it.amount; onUpdate(total) }
-    }
-}
-
 class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
     sealed interface Wire {
@@ -63,10 +47,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
     // Durability (M10.4): the app host write-ahead journals every routed
     // invocation; on restart the same directory replays it — kill -9 safe.
-    private val journal = journalDir?.let { FileJournal(java.io.File(it, "host.journal")) }
-    private val usersFile = journalDir?.let { java.io.File(it, "users.txt") }
-
-    private val host = ManagedHost(registry = registry, journal = journal)
+    // The WAL file is minted via the KeyedCells helper so it matches exactly
+    // what writerCells.recover() replays.
+    private val host = ManagedHost(registry = registry, journal = KeyedCells.hostJournal(journalDir))
     private val manage = host.managementInlet.call
 
     // union refs are role-derived so each peer can address its counterpart's
@@ -91,7 +74,22 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
     private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
     private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
-    private val writers = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
+
+    // Per-user writers: one durable, dynamically-keyed family (M10.4). Compound
+    // keys "$user:items"/"$user:votes" pack both writers into a single family so
+    // they share one journalDir without colliding on the `keys` file or double-
+    // running recoverFrom (a single family, not two). The factory does the
+    // streamTo wiring, so recover() re-establishes it for every known key.
+    private val writerApi = mutableMapOf<String, Pair<SetOps<String>, SetOps<String>>>()
+    private val writerCells = KeyedCells<String>(
+        host = host,
+        journalDir = journalDir,
+        namespace = "demo-writer@$myRole",
+        factory = { key, ref ->
+            val union = if (key.endsWith(":items")) itemsUnion else votesUnion
+            SetCell<String>(ref).also { it.outlet.streamTo(routedDelta(union.ref)) }
+        },
+    )
 
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
 
@@ -101,43 +99,38 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         manage.spawn(itemsUnion)
         manage.spawn(votesUnion)
 
-        // the derived views are DSL-built; hubs fold them into UI state
-        val refs = mutableMapOf<String, CellRef>()
+        // the derived views are DSL-built with pure { ref -> ... } factories
+        // (replay-safe GraphSpec — no live instance captured in a step);
+        // observation sinks fold them into UI state
+        var produceHandle: TypedCellHandle<FilterCell<String>>? = null
+        var wantedHandle: TypedCellHandle<IntersectSetCell<String>>? = null
         graph(host.managementInlet) {
-            val produceCell = spawn("produce") { FilterCell<String> { s -> s.firstOrNull()?.lowercaseChar() in 'a'..'m' } }
-            val count = spawn("count") { CountCell<String>() }
-            refs["produce"] = produceCell.ref
-            refs["count"] = count.ref
+            produceHandle = spawn("produce") { ref ->
+                FilterCell<String>(ref) { s -> s.firstOrNull()?.lowercaseChar() in 'a'..'m' }
+            }
+            wantedHandle = spawn("wanted") { ref -> IntersectSetCell<String>(ref) }
         }
-        manage.connect(itemsUnion.ref, "outlet", refs.getValue("produce"), "inlet")
-        // `count` is fed by the items ∩ votes intersection wired below (not the
-        // raw votes union), so "N voted" counts listed items that carry a vote.
-        // A vote for a since-removed item is retained in the votes set but drops
-        // out of the intersection, so it neither shows a ★ nor inflates the count.
+        val produceCell = produceHandle!!
+        val wantedCell = wantedHandle!!
+        manage.connect(itemsUnion.ref, "outlet", produceCell.ref, "inlet")
 
-        val itemsHub = SetHubCell<String>({ synchronized(state) { items = it }; broadcast() })
-        val votesHub = SetHubCell<String>({ synchronized(state) { votes = it }; broadcast() })
-        val produceHub = SetHubCell<String>({ synchronized(state) { produce = it }; broadcast() })
-        val countHub = CounterHubCell({ synchronized(state) { voteCount = it }; broadcast() })
-        listOf(itemsHub, votesHub, produceHub, countHub).forEach { manage.spawn(it) }
-        manage.connect(itemsUnion.ref, "outlet", itemsHub.ref, "inlet")
-        manage.connect(votesUnion.ref, "outlet", votesHub.ref, "inlet")
-        manage.connect(refs.getValue("produce"), "outlet", produceHub.ref, "inlet")
-        manage.connect(refs.getValue("count"), "outlet", countHub.ref, "inlet")
+        host.observe(itemsUnion.ref, View.set<String>()) { synchronized(state) { items = it }; broadcast() }
+        host.observe(votesUnion.ref, View.set<String>()) { synchronized(state) { votes = it }; broadcast() }
+        host.observe(produceCell.ref, View.set<String>()) { synchronized(state) { produce = it }; broadcast() }
 
         // Derived view: items ∩ votes — "still wanted" is the incremental
         // intersection of two independently-mutating streams (the binary
-        // set operator the filter/count chain didn't yet show). It feeds both
-        // the "Still wanted" list and the vote count, so both track votes for
-        // listed items only, without discarding the retained raw vote.
-        val wantedCell = IntersectSetCell<String>()
-        manage.spawn(wantedCell)
-        manage.connect(itemsUnion.ref, "outlet", wantedCell.ref, "left")
-        manage.connect(votesUnion.ref, "outlet", wantedCell.ref, "right")
-        manage.connect(wantedCell.ref, "outlet", refs.getValue("count"), "inlet")
-        val wantedHub = SetHubCell<String>({ synchronized(state) { wanted = it }; broadcast() })
-        manage.spawn(wantedHub)
-        manage.connect(wantedCell.ref, "outlet", wantedHub.ref, "inlet")
+        // set operator the filter chain didn't yet show). It feeds both the
+        // "Still wanted" list and the vote count, so both track votes for
+        // listed items only, without discarding the retained raw vote. The
+        // vote count is derived from the wanted set's size (|items ∩ votes|):
+        // a vote for a since-removed item stays in the raw votes set but drops
+        // out of the intersection, so it neither shows a ★ nor inflates the count.
+        manage.link(itemsUnion.outlet, wantedCell.cell.left)
+        manage.link(votesUnion.outlet, wantedCell.cell.right)
+        host.observe(wantedCell.ref, View.set<String>()) {
+            synchronized(state) { wanted = it; voteCount = it.size.toLong() }; broadcast()
+        }
 
         if (wire != null) {
             val bridgeHost = ManagedHost(registry = registry)
@@ -152,9 +145,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             // peer replays the full history in order and converges.
             val chained = mapOf(
                 unionRef("items", peerRole) to
-                        (itemsUnion to itemsUnion.outlet.streamTo(routedDelta(TypedRef(unionRef("items", peerRole))))),
+                        (itemsUnion to itemsUnion.outlet.streamTo(routedDelta(unionRef("items", peerRole)))),
                 unionRef("votes", peerRole) to
-                        (votesUnion to votesUnion.outlet.streamTo(routedDelta(TypedRef(unionRef("votes", peerRole))))),
+                        (votesUnion to votesUnion.outlet.streamTo(routedDelta(unionRef("votes", peerRole)))),
             )
             // Anti-entropy on (re)announce (M10.4): a returning peer may have
             // missed deltas its dying socket swallowed — re-fire the catch-up
@@ -165,10 +158,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             }
         }
 
-        if (journal != null) {
-            knownUsers().forEach { writerFor(it) } // graph first: replayed ops need their cells
-            host.recoverFrom(journal)
-        }
+        // recover() pre-spawns every known writer (the factory rewires streamTo)
+        // then replays the shared WAL exactly once — the one correct ordering.
+        if (journalDir != null) writerCells.recover()
 
         server.createContext("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/op") { exchange -> handleOp(exchange) }
@@ -178,39 +170,26 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
     /**
      * Per-user writer cells, created on first op — every browser tab is a user.
-     * Refs are user-derived and the union links are registry-routed (M10.4):
-     * deterministic identity + routed (journaled) deltas are what make a
-     * journal replay reconstruct the same graph state after kill -9. Recovery
-     * pre-spawns writers for every user in [usersFile], so replayed ops run
-     * through the same cells and re-mint the same replay-stable tags.
+     * The [writerCells] family mints the deterministic ref, lazily spawns, and
+     * durably logs each compound key; the factory wires the union streamTo. This
+     * caches the inlet API pair per user (M10.4): deterministic identity + routed
+     * (journaled) deltas are what make a journal replay reconstruct the same
+     * graph state after kill -9. The [TypedRef] lookup navigates the kernel's
+     * own [SetApi] — no per-port proxy interface needed.
      */
     private fun writerFor(user: String): Pair<SetOps<String>, SetOps<String>> =
-        synchronized(writers) {
-            writers.getOrPut(user) {
-                val itemCell = SetCell<String>(CellRef(UUID.nameUUIDFromBytes("demo-writer:items:$user@$myRole".toByteArray())))
-                val voteCell = SetCell<String>(CellRef(UUID.nameUUIDFromBytes("demo-writer:votes:$user@$myRole".toByteArray())))
-                manage.spawn(itemCell)
-                manage.spawn(voteCell)
-                itemCell.outlet.streamTo(routedDelta(TypedRef(itemsUnion.ref)))
-                voteCell.outlet.streamTo(routedDelta(TypedRef(votesUnion.ref)))
-                usersFile?.takeIf { user !in knownUsers() }?.appendText(user + "\n")
+        synchronized(writerApi) {
+            writerApi.getOrPut(user) {
+                val itemCell = writerCells.getOrSpawn("$user:items")
+                val voteCell = writerCells.getOrSpawn("$user:votes")
                 val itemApi = host.lookup(TypedRef<SetApi<String>>(itemCell.ref))!!.inlet.call
                 val voteApi = host.lookup(TypedRef<SetApi<String>>(voteCell.ref))!!.inlet.call
                 itemApi to voteApi
             }
         }
 
-    private fun knownUsers(): List<String> =
-        usersFile?.takeIf { it.exists() }?.readLines()?.filter { it.isNotBlank() } ?: emptyList()
-
-    // The union's own api types its inlet as Serve (producer side, no `call`),
-    // so the typed ref is minted against SetHubApi — the kernel interface whose
-    // shape (`inlet: Use<Propagate<SetDelta<E>>>`) matches the port being
-    // navigated. Registry-resolving proxy (not host.lookup): sends to a peer's
-    // not-yet-announced union must park and replay on publication (spec 33).
-    @Suppress("UNCHECKED_CAST")
-    private fun routedDelta(tref: TypedRef<SetHubApi<String>>): Propagate<SetDelta<String>> =
-        (HostedCellProxy.create(tref.ref, registry, SetHubApi::class.java) as SetHubApi<String>).inlet.call
+    private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
+        RoutedPropagate(ref, "inlet", registry::deliver)
 
     private fun handleOp(exchange: HttpExchange) {
         val params = exchange.requestBody.readBytes().decodeToString()

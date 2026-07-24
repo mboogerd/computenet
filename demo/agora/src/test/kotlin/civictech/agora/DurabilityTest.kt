@@ -63,7 +63,7 @@ class DurabilityTest {
                 attention = civictech.cell.host.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
                 journal = FileJournal(journalFile),
             )
-            val service = AgoraService(host, quiescence = q, structureLog = structure)
+            val service = AgoraService(host, registry, quiescence = q, structureLog = structure)
             return Triple(controller, host, service)
         }
 
@@ -122,7 +122,7 @@ class DurabilityTest {
                 attention = civictech.cell.host.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
                 journal = FileJournal(journalFile),
             )
-            return host to AgoraService(host, quiescence = q, structureLog = structure)
+            return host to AgoraService(host, registry, quiescence = q, structureLog = structure)
         }
 
         fun awaitStable(service: AgoraService, deadlineMs: Long = 5_000): Map<CellRef, Double> {

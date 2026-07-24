@@ -5,11 +5,11 @@ import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import civictech.cell.CellRef
 import civictech.cell.data.Propagate
-import civictech.cell.graph.TypedRef
-import civictech.cell.graph.lookup
+import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.Link
 import civictech.cell.port.streamTo
+import civictech.cell.proxy.inlet
 
 /**
  * Graph management shared by the HTTP layer and the tests. Cells stay
@@ -19,13 +19,14 @@ import civictech.cell.port.streamTo
  * contains at least one head, because any new cycle runs through the edge
  * that closed it).
  *
- * All wiring is **routed** through the host queue (`streamTo` + typed-ref
- * lookups, the demo idiom) rather than DSL-linked: co-hosted DSL links fuse
+ * All wiring is **routed** through the host queue (`streamTo` + registry
+ * inlet handles, the demo idiom) rather than DSL-linked: co-hosted DSL links fuse
  * into synchronous calls that bypass the scheduler, and magnitude-based
  * prioritization needs every hop staged.
  */
 class AgoraService(
     private val host: ManagedHost,
+    private val registry: LocationRegistry,
     private val semantics: GradualSemantics = DfQuad,
     /** Cycle-head absorb threshold (per feedback edge; heads only). */
     private val quiescence: Double = 1e-3,
@@ -55,7 +56,10 @@ class AgoraService(
     private val manage = host.managementInlet.call
 
     // deterministic ref: journaled hub frames re-deliver after a restart
-    val hub = GraphHubCell(onCredence, ref = CellRef(java.util.UUID.nameUUIDFromBytes("agora:hub".toByteArray())))
+    val hub = civictech.cell.host.ObserveCell(
+        CredenceView(onCredence),
+        ref = CellRef(java.util.UUID.nameUUIDFromBytes("agora:hub".toByteArray())),
+    )
 
     private val cells = mutableMapOf<CellRef, ClaimCell>()
     private val nodes = LinkedHashMap<CellRef, NodeInfo>()
@@ -216,16 +220,16 @@ class AgoraService(
     }
 
     private fun routedHub(): Propagate<CredenceUpdate> =
-        host.lookup(TypedRef<GraphHubApi>(hub.ref))!!.inlet.call
+        registry.inlet(hub.ref, "inlet")
 
     private fun routedSource(edge: CellRef): Propagate<CredenceUpdate> =
-        host.lookup(TypedRef<EdgeApi>(edge))!!.sourceInlet.call
+        registry.inlet(edge, "sourceInlet")
 
     private fun routedInfluence(target: CellRef): Propagate<InfluenceDelta> =
-        host.lookup(TypedRef<ClaimApi>(target))!!.influenceInlet.call
+        registry.inlet(target, "influenceInlet")
 
     private fun routedStance(id: CellRef): Propagate<StanceDelta> =
-        host.lookup(TypedRef<ClaimApi>(id))!!.stanceInlet.call
+        registry.inlet(id, "stanceInlet")
 
     companion object {
         /**

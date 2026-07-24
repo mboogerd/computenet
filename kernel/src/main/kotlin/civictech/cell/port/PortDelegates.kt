@@ -14,7 +14,10 @@ import kotlin.reflect.KProperty
 class PortDelegateProvider<P : Port>(private val factory: () -> P) {
     operator fun provideDelegate(thisRef: Any?, property: KProperty<*>): ReadOnlyProperty<Any?, P> {
         val port = factory()
-        thisRef?.let { PortRegistry.of(it).register(property.name, port) }
+        thisRef?.let {
+            PortRegistry.of(it).register(property.name, port)
+            PortIdentities.stamp(it, property.name, port)
+        }
         return ReadOnlyProperty { _, _ -> port }
     }
 }
