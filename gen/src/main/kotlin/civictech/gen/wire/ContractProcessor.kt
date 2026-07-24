@@ -56,13 +56,43 @@ class ContractProcessor(
     private val logger: KSPLogger,
 ) : SymbolProcessor {
     private var emitted = false
+    private var basesGenerated = false
 
     @OptIn(KspExperimental::class)
     override fun process(resolver: Resolver): List<KSAnnotated> {
         if (emitted) return emptyList()
-        val contracts = resolver.getSymbolsWithAnnotation(Contract::class.qualifiedName!!)
-            .filterIsInstance<KSClassDeclaration>()
-            .filter { it.classKind == ClassKind.INTERFACE }
+
+        // Round 1, when @CellBase interfaces exist: generate ONLY the base
+        // classes, so the next round can resolve cells extending them —
+        // otherwise those subclasses' supertypes are error types and the cell
+        // scan (descriptors, Ports ids, proxies) misses them entirely.
+        if (!basesGenerated) {
+            basesGenerated = true
+            val cellBases = resolver.getSymbolsWithAnnotation(CellBase::class.qualifiedName!!)
+                .filterIsInstance<KSClassDeclaration>()
+                .sortedBy { it.qualifiedName!!.asString() }
+                .toList()
+            cellBases.filter { it.classKind != ClassKind.INTERFACE }.forEach {
+                logger.error("@CellBase targets the cell's Api interface; ${it.qualifiedName?.asString()} is not an interface", it)
+            }
+            val ifaces = cellBases.filter { it.classKind == ClassKind.INTERFACE }
+            if (ifaces.isNotEmpty()) {
+                val baseSources = Dependencies(true, *ifaces.mapNotNull { it.containingFile }.distinct().toTypedArray())
+                ifaces.forEach { generateCellBase(it, baseSources) }
+                return emptyList() // emit tables next round, with the bases resolvable
+            }
+        }
+
+        // Emission round. @Contract interfaces are collected by file walk, not
+        // getSymbolsWithAnnotation: in a second round the original sources are
+        // no longer "new files", but getAllFiles still sees them.
+        val contracts = resolver.getAllFiles()
+            .flatMap { file -> file.declarations.flatMap(::classesIn) }
+            .filter { decl ->
+                decl.classKind == ClassKind.INTERFACE && decl.annotations.any {
+                    it.annotationType.resolve().declaration.qualifiedName?.asString() == Contract::class.qualifiedName
+                }
+            }
             .sortedBy { it.qualifiedName!!.asString() }
             .toList()
 
@@ -74,15 +104,7 @@ class ContractProcessor(
             .sortedBy { it.qualifiedName!!.asString() }
             .toList()
 
-        val cellBases = resolver.getSymbolsWithAnnotation(CellBase::class.qualifiedName!!)
-            .filterIsInstance<KSClassDeclaration>()
-            .sortedBy { it.qualifiedName!!.asString() }
-            .toList()
-        cellBases.filter { it.classKind != ClassKind.INTERFACE }.forEach {
-            logger.error("@CellBase targets the cell's Api interface; ${it.qualifiedName?.asString()} is not an interface", it)
-        }
-
-        if (contracts.isEmpty() && cells.isEmpty() && cellBases.isEmpty()) return emptyList()
+        if (contracts.isEmpty() && cells.isEmpty()) return emptyList()
         emitted = true
 
         // Include both descriptor families so cell-only modules remain distinct.
@@ -229,8 +251,7 @@ class ContractProcessor(
 
         val sources = Dependencies(
             true,
-            *(contracts.mapNotNull { it.containingFile } + cells.mapNotNull { it.containingFile } +
-                cellBases.mapNotNull { it.containingFile })
+            *(contracts.mapNotNull { it.containingFile } + cells.mapNotNull { it.containingFile })
                 .distinct()
                 .toTypedArray(),
         )
@@ -300,16 +321,12 @@ class ContractProcessor(
         cells.filter {
             it.getVisibility() != com.google.devtools.ksp.symbol.Visibility.PRIVATE &&
                 it.getVisibility() != com.google.devtools.ksp.symbol.Visibility.LOCAL &&
-                it.parentDeclaration == null // nested cells: simple-name collisions, skipped in v1
+                it.parentDeclaration == null && // nested cells: simple-name collisions, skipped in v1
+                com.google.devtools.ksp.symbol.Modifier.ABSTRACT !in it.modifiers // bases can't spawn; ids belong to concrete cells
         }.forEach { cell ->
             val ports = cellPorts[cell].orEmpty()
             if (ports.isNotEmpty()) generatePortsObject(cell, ports, sources)
         }
-
-        // @CellBase: abstract base per annotated Api interface — ports declared
-        // + registered, inlets statically bound to abstract handler methods.
-        cellBases.filter { it.classKind == ClassKind.INTERFACE }
-            .forEach { generateCellBase(it, sources) }
 
         return emptyList()
     }

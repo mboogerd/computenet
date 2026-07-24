@@ -22,11 +22,9 @@ package civictech.gen.wire
  * property-name invariant (G-17) holds by construction — the mis-registration
  * the spawn-time check exists to catch cannot be written in this style.
  *
- * ponytail: single-round processor — cells *extending a generated base* are
- * not yet resolvable when the descriptor table is emitted, so they get no
- * CellDescriptor/Ports rows in v1 (benign: the spawn check is subset-based
- * and color falls back to marker interfaces). Upgrade path: defer table
- * emission to the final KSP round instead of the single-emit flag.
+ * Generation is two-round: bases emit first, tables/proxies/Ports second, so
+ * cells extending a generated base resolve like any other cell and get their
+ * descriptor rows, `<Cell>Ports` ids, and the spawn-time name check as usual.
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.SOURCE)
