@@ -251,6 +251,95 @@ class ContractProcessorTest {
         assertTrue("example.HiddenCell" in table, table) // descriptor rows still emitted
     }
 
+    // Richer stubs for @CellBase generation: the generated base calls
+    // registerPort/FanInlet.create/onEach/serve, so the stubs carry those shapes.
+    private val cellBaseStubs = """
+        package civictech.cell
+        interface Cell { val ref: CellRef }
+        class CellRef(val id: java.util.UUID)
+        """.trimIndent()
+    private val cellBasePortStubs = """
+        package civictech.cell.port
+        interface Serve<Api>
+        interface Use<Api>
+        interface Subscribe<Api>
+        class FanInlet<Api : Any> : Serve<Api>, Use<Api> {
+            fun serve(api: Api) {}
+            companion object { inline fun <reified Api : Any> create(): FanInlet<Api> = FanInlet() }
+        }
+        class FanOutlet<Api : Any> : Subscribe<Api> {
+            companion object { inline fun <reified Api : Any> create(): FanOutlet<Api> = FanOutlet() }
+        }
+        fun <P : Any> Any.registerPort(name: String, port: P): P = port
+        """.trimIndent()
+    private val cellBaseDataStubs = """
+        package civictech.cell.data
+        import civictech.cell.port.Serve
+        fun interface Propagate<T> { fun propagate(value: T) }
+        fun <T> Serve<Propagate<T>>.onEach(handler: (T) -> Unit) {}
+        """.trimIndent()
+
+    @Test
+    fun `CellBase interface generates an abstract base with registered ports and bound handlers`() {
+        val (compilation, result) = compileKeepingSources(
+            cellBaseStubs, cellBasePortStubs, cellBaseDataStubs,
+            """
+            package example
+            import civictech.gen.wire.CellBase
+            import civictech.cell.data.Propagate
+            import civictech.cell.port.Serve
+            import civictech.cell.port.Subscribe
+            import civictech.cell.port.Use
+
+            interface Ops { fun ping() }
+
+            @CellBase
+            interface EchoApi {
+                val inlet: Serve<Propagate<String>>
+                val ops: Use<Ops>
+                val outlet: Subscribe<Propagate<String>>
+            }
+
+            @CellBase
+            interface BoxApi<T> {
+                val input: Serve<Propagate<T>>
+                val output: Subscribe<Propagate<T>>
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        // normalize KotlinPoet's line wrapping before asserting on shapes
+        val echo = generatedSource(compilation, "EchoCellBase.kt").replace(Regex("\\s+"), " ")
+        assertTrue("public abstract class EchoCellBase(" in echo, echo)
+        assertTrue("override val inlet: FanInlet<Propagate<String>> = registerPort(\"inlet\", FanInlet.create<Propagate<String>>())" in echo, echo)
+        assertTrue("protected abstract fun onInlet(`value`: String)" in echo, echo)
+        assertTrue("protected abstract fun opsHandler(): Ops" in echo, echo)
+        assertTrue("inlet.onEach(this::onInlet)" in echo, echo)
+        assertTrue("ops.serve(opsHandler())" in echo, echo)
+        assertTrue("override val outlet: FanOutlet<Propagate<String>>" in echo, echo)
+
+        val box = generatedSource(compilation, "BoxCellBase.kt").replace(Regex("\\s+"), " ")
+        assertTrue("public abstract class BoxCellBase<T>(" in box, box)
+        assertTrue("protected abstract fun onInput(`value`: T)" in box, box)
+    }
+
+    @Test
+    fun `CellBase on a class is a compile error`() {
+        val result = compile(
+            cellBaseStubs,
+            """
+            package example
+            import civictech.gen.wire.CellBase
+
+            @CellBase
+            class NotAnInterface
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
+        assertTrue(result.messages.contains("targets the cell's Api interface"))
+    }
+
     private fun generatedSources(compilation: KotlinCompilation) =
         compilation.kspSourcesDir.walkTopDown().filter { it.isFile }.toList()
 

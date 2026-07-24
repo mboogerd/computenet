@@ -23,6 +23,7 @@ import com.squareup.kotlinpoet.FunSpec
 import com.squareup.kotlinpoet.KModifier
 import com.squareup.kotlinpoet.LIST
 import com.squareup.kotlinpoet.MAP
+import com.squareup.kotlinpoet.MemberName
 import com.squareup.kotlinpoet.ParameterSpec
 import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.STAR
@@ -72,7 +73,16 @@ class ContractProcessor(
             .filter { it.classKind == ClassKind.CLASS && cellType.isAssignableFrom(it.asStarProjectedType()) }
             .sortedBy { it.qualifiedName!!.asString() }
             .toList()
-        if (contracts.isEmpty() && cells.isEmpty()) return emptyList()
+
+        val cellBases = resolver.getSymbolsWithAnnotation(CellBase::class.qualifiedName!!)
+            .filterIsInstance<KSClassDeclaration>()
+            .sortedBy { it.qualifiedName!!.asString() }
+            .toList()
+        cellBases.filter { it.classKind != ClassKind.INTERFACE }.forEach {
+            logger.error("@CellBase targets the cell's Api interface; ${it.qualifiedName?.asString()} is not an interface", it)
+        }
+
+        if (contracts.isEmpty() && cells.isEmpty() && cellBases.isEmpty()) return emptyList()
         emitted = true
 
         // Include both descriptor families so cell-only modules remain distinct.
@@ -219,7 +229,8 @@ class ContractProcessor(
 
         val sources = Dependencies(
             true,
-            *(contracts.mapNotNull { it.containingFile } + cells.mapNotNull { it.containingFile })
+            *(contracts.mapNotNull { it.containingFile } + cells.mapNotNull { it.containingFile } +
+                cellBases.mapNotNull { it.containingFile })
                 .distinct()
                 .toTypedArray(),
         )
@@ -295,7 +306,106 @@ class ContractProcessor(
             if (ports.isNotEmpty()) generatePortsObject(cell, ports, sources)
         }
 
+        // @CellBase: abstract base per annotated Api interface — ports declared
+        // + registered, inlets statically bound to abstract handler methods.
+        cellBases.filter { it.classKind == ClassKind.INTERFACE }
+            .forEach { generateCellBase(it, sources) }
+
         return emptyList()
+    }
+
+    /**
+     * One abstract `<Name>CellBase` per `@CellBase` Api interface (see
+     * [CellBase] for the authoring contract and the v1 single-round ceiling).
+     * Port property names mirror the interface's, so G-17 holds by
+     * construction.
+     */
+    private fun generateCellBase(iface: KSClassDeclaration, sources: Dependencies) {
+        val pkg = iface.packageName.asString()
+        val baseName = iface.simpleName.asString().removeSuffix("Api") + "CellBase"
+        val typeParamResolver = iface.typeParameters.toTypeParameterResolver()
+        val typeVars = iface.typeParameters.map { it.toTypeVariableName(typeParamResolver) }
+        val ifaceType =
+            if (typeVars.isEmpty()) iface.toClassName() else iface.toClassName().parameterizedBy(typeVars)
+
+        val builder = TypeSpec.classBuilder(baseName)
+            .addKdoc("Generated from [%L]: ports declared + registered, inlets statically bound.", iface.qualifiedName!!.asString())
+            .addModifiers(KModifier.ABSTRACT)
+            .addTypeVariables(typeVars)
+            .addSuperinterface(ifaceType)
+            .addSuperinterface(CELL_IFACE)
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addParameter(
+                        ParameterSpec.builder("ref", CELL_REF)
+                            .defaultValue("%T(%T.randomUUID())", CELL_REF, JAVA_UUID)
+                            .build()
+                    )
+                    .build()
+            )
+            .addProperty(PropertySpec.builder("ref", CELL_REF, KModifier.OVERRIDE).initializer("ref").build())
+
+        val init = CodeBlock.builder()
+        iface.getAllProperties().forEach { prop ->
+            val propType = runCatching { prop.type.resolve() }.getOrNull()?.takeUnless { it.isError }
+            val roleFqn = propType?.declaration?.qualifiedName?.asString()
+            val api = propType?.arguments?.firstOrNull()?.type?.resolve()?.takeUnless { it.isError }
+            val name = prop.simpleName.asString()
+            if (propType == null || api == null || roleFqn !in PORT_ROLES) {
+                if (roleFqn in PORT_ROLES) logger.warn(
+                    "@CellBase ${iface.simpleName.asString()}.$name: unresolvable port Api type — left abstract", prop,
+                )
+                return@forEach // non-port members stay abstract for the subclass
+            }
+            val apiTypeName = api.toTypeName(typeParamResolver)
+            when (roleFqn) {
+                SUBSCRIBE_ROLE -> builder.addProperty(
+                    PropertySpec.builder(name, FAN_OUTLET_CLASS.parameterizedBy(apiTypeName), KModifier.OVERRIDE)
+                        .initializer("%M(%S, %T.create<%T>())", REGISTER_PORT, name, FAN_OUTLET_CLASS, apiTypeName)
+                        .build()
+                )
+
+                else -> { // SERVE_ROLE / USE_ROLE: an inlet
+                    builder.addProperty(
+                        PropertySpec.builder(name, FAN_INLET_CLASS.parameterizedBy(apiTypeName), KModifier.OVERRIDE)
+                            .initializer("%M(%S, %T.create<%T>())", REGISTER_PORT, name, FAN_INLET_CLASS, apiTypeName)
+                            .build()
+                    )
+                    if (api.declaration.qualifiedName?.asString() == PROPAGATE_MARKER) {
+                        val payload = api.arguments.firstOrNull()?.type?.resolve()
+                        val payloadName = payload?.toTypeName(typeParamResolver)
+                        if (payloadName == null) {
+                            logger.warn("@CellBase ${iface.simpleName.asString()}.$name: unresolvable payload — not auto-bound", prop)
+                        } else {
+                            val handler = "on" + name.replaceFirstChar { it.uppercase() }
+                            builder.addFunction(
+                                FunSpec.builder(handler)
+                                    .addModifiers(KModifier.PROTECTED, KModifier.ABSTRACT)
+                                    .addParameter("value", payloadName)
+                                    .build()
+                            )
+                            init.addStatement("%L.%M(this::%L)", name, ON_EACH, handler)
+                        }
+                    } else {
+                        val handler = name + "Handler"
+                        builder.addFunction(
+                            FunSpec.builder(handler)
+                                .addModifiers(KModifier.PROTECTED, KModifier.ABSTRACT)
+                                .returns(apiTypeName)
+                                .build()
+                        )
+                        init.addStatement("%L.serve(%L())", name, handler)
+                    }
+                }
+            }
+        }
+        val initBlock = init.build()
+        if (!initBlock.isEmpty()) builder.addInitializerBlock(initBlock)
+
+        FileSpec.builder(pkg, baseName)
+            .addType(builder.build())
+            .build()
+            .writeTo(codeGenerator, sources)
     }
 
     private data class ScannedPort(
@@ -537,6 +647,20 @@ class ContractProcessor(
         const val OUTLET = "civictech.cell.port.Outlet"
         val INLET_ID: ClassName = ClassName("civictech.cell.graph", "InletId")
         val OUTLET_ID: ClassName = ClassName("civictech.cell.graph", "OutletId")
+
+        // @CellBase generation
+        const val SERVE_ROLE = "civictech.cell.port.Serve"
+        const val USE_ROLE = "civictech.cell.port.Use"
+        const val SUBSCRIBE_ROLE = "civictech.cell.port.Subscribe"
+        val PORT_ROLES = setOf(SERVE_ROLE, USE_ROLE, SUBSCRIBE_ROLE)
+        const val PROPAGATE_MARKER = "civictech.cell.data.Propagate"
+        val CELL_IFACE: ClassName = ClassName("civictech.cell", "Cell")
+        val CELL_REF: ClassName = ClassName("civictech.cell", "CellRef")
+        val JAVA_UUID: ClassName = ClassName("java.util", "UUID")
+        val FAN_INLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanInlet")
+        val FAN_OUTLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanOutlet")
+        val REGISTER_PORT = MemberName("civictech.cell.port", "registerPort")
+        val ON_EACH = MemberName("civictech.cell.data", "onEach")
         const val MAGNITUDE_MARKER = "civictech.cell.data.Magnitude"
         const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
         const val BLOCKING_MARKER = "civictech.cell.BlockingCell"

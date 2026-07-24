@@ -401,6 +401,22 @@ descriptor table are the prerequisites for both.
 - **Codegen for hub cells / catch-up / diff-emit** — rejected; library
   abstractions suffice (§4).
 
+## 6b. Landed extension: `@CellBase` static handler binding
+
+For cells whose inlet behavior is fixed at authoring time, the imperative
+`init { inlet.onEach { … } }` step is ceremony. `@CellBase` on the Api
+interface generates an abstract `<Name>CellBase` that declares + registers
+every port and statically binds each inlet: `Serve<Propagate<T>>` becomes
+`protected abstract fun on<Name>(value: T)`; a non-Propagate contract inlet
+becomes `protected abstract fun <name>Handler(): C` served at construction.
+The cell is then just overridden methods — no `registerPort`, no `serve`,
+and the G-17 name==property invariant cannot be violated by construction.
+(KSP is additive-only, so a method-level annotation on the cell itself
+cannot inject the port members; the interface-driven base is the honest
+form of "declare the handler statically".) v1 ceiling: single-round
+processing means subclasses of generated bases miss descriptor/Ports rows
+— see `CellBase.kt`'s ponytail note for the upgrade path.
+
 ## 7. Open questions
 
 1. **SAM inference of `TypedCellFactory<C>`** from existing
