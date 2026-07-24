@@ -1,5 +1,9 @@
 # Consistent multi-view snapshot (`combineLatest` gated on the wave frontier)
 
+> **Absorbed into the roadmap**: scheduled as
+> [96 §E2](../doc/spec/90-roadmap/96-incremental-engines-plan.md) (the aligned
+> multi-view sink; acceptance = E2.3/E2.5/E2.6).
+
 ## Origin
 `demo/shopping` renders four independently-derived views (`items`, `produce`,
 `votes`/`wanted`, `voteCount`) and pushes them as one JSON object over SSE. Each

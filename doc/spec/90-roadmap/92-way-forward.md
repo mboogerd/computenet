@@ -627,6 +627,21 @@ quiescence + the headless FP-resolution probe), `MagnitudePriorityTest`
 (dramatic changes outrun staged-earlier micro-changes, FIFO when off), and
 `DurabilityTest` (kill -9 recovery through codec-contributed app deltas).*
 
+## Incremental-engines milestones (E1-E6) — see 96 ⚠ PROPOSED, NOT COMMITTED
+
+Six further milestones realizing the incremental-engines research
+(`doc/research/incremental-engines/`, 2026-07-23) are planned in
+[96-incremental-engines-plan.md](96-incremental-engines-plan.md), sequenced after
+M17 and scoped to their own id space (E1-E6) to avoid claiming M-slots here:
+**E1** convergent OR-map (closes G-23; promotes R8), **E2** vector-frontier
+observation edge (F-5, G-13/G-40), **E3** delivered-watermark substrate
+(G-39/G-40 residuals + causal-stability GC trigger for G-42), **E4**
+lateness/waterline eviction, **E5** cycles + incremental fixpoints (G-19
+residual, G-41), **E6** weighted (Z-set) family. New research entries R10-R17
+accompany them in [95](95-research-plan.md). Note: [94](94-implementation-plan.md)
+predates M17 and lists some already-built waves; 96 deliberately does not extend
+it — reconciling 94's drift is a separate maintenance task.
+
 ## Working agreements (process, immediate)
 
 - **Specs lead code**: changes to semantics update the relevant spec file in

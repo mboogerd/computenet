@@ -1,0 +1,6310 @@
+
+<!DOCTYPE html>
+<html lang="en" dir=ZgotmplZ>
+
+<head>
+  <meta name="generator" content="Hugo 0.124.1">
+  
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Streaming Analytics # Event Time and Watermarks # Introduction # Flink explicitly supports three different notions of time:
+event time: the time when an event occurred, as recorded by the device producing (or storing) the event
+ingestion time: a timestamp recorded by Flink at the moment it ingests the event
+processing time: the time when a specific operator in your pipeline is processing the event
+For reproducible results, e.g., when computing the maximum price a stock reached during the first hour of trading on a given day, you should use event time.">
+<meta name="theme-color" content="#FFFFFF"><meta property="og:title" content="Streaming Analytics" />
+<meta property="og:description" content="Streaming Analytics # Event Time and Watermarks # Introduction # Flink explicitly supports three different notions of time:
+event time: the time when an event occurred, as recorded by the device producing (or storing) the event
+ingestion time: a timestamp recorded by Flink at the moment it ingests the event
+processing time: the time when a specific operator in your pipeline is processing the event
+For reproducible results, e.g., when computing the maximum price a stock reached during the first hour of trading on a given day, you should use event time." />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/streaming_analytics/" /><meta property="article:section" content="docs" />
+
+
+<title>Streaming Analytics | Apache Flink</title>
+<link rel="manifest" href="/flink/flink-docs-release-2.3/manifest.json"><link rel="icon" href="/flink/flink-docs-release-2.3//favicon.png" type="image/x-icon">
+<link rel="alternate" hreflang="zh" href="//nightlies.apache.org/flink/flink-docs-release-2.3/zh/docs/learn-flink/streaming_analytics/" title="流式分析">
+
+<link rel="stylesheet" href="/flink/flink-docs-release-2.3/book.min.b4bea2c3b89ef96889adca82c788702915eeb9f027a0f68484ff91d18c80cdca.css" integrity="sha256-tL6iw7ie&#43;WiJrcqCx4hwKRXuufAnoPaEhP&#43;R0YyAzco=">
+<script defer src="/flink/flink-docs-release-2.3/en.search.min.3d975d92f61037744031e6f97651726361ebf00f6e8aa3844ce719d77165d36c.js" integrity="sha256-PZddkvYQN3RAMeb5dlFyY2Hr8A9uiqOETOcZ13Fl02w="></script>
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+
+  
+
+<link rel="canonical" href="https://nightlies.apache.org/flink/flink-docs-stable/docs/learn-flink/streaming_analytics/" />
+
+<link rel="stylesheet" type="text/css" href="/flink/flink-docs-release-2.3//font-awesome/css/font-awesome.min.css">
+<script src="/flink/flink-docs-release-2.3//js/anchor.min.js"></script>
+<script src="/flink/flink-docs-release-2.3//js/flink.js"></script>
+
+
+    
+    <script>
+      var _paq = window._paq = window._paq || [];
+       
+       
+      _paq.push(['disableCookies']);
+       
+      _paq.push(["setDomains", ["*.flink.apache.org","*.nightlies.apache.org/flink"]]);
+      _paq.push(['trackPageView']);
+      _paq.push(['enableLinkTracking']);
+      (function() {
+        var u="//analytics.apache.org/";
+        _paq.push(['setTrackerUrl', u+'matomo.php']);
+        _paq.push(['setSiteId', '1']);
+        var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+        g.async=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+      })();
+    </script>
+    
+</head>
+
+<body dir=ZgotmplZ>
+  <input type="checkbox" class="hidden toggle" id="menu-control" />
+  <input type="checkbox" class="hidden toggle" id="toc-control" />
+  <main class="container flex">
+    <aside class="book-menu">
+      
+  
+
+<nav>
+
+<a id="logo" href="/flink/flink-docs-release-2.3/">
+    <img width="70%" src="/flink/flink-docs-release-2.3//flink-header-logo.svg">
+</a>
+<p style="text-align:right">v2.3.0</p>
+
+<div class="book-search">
+  <input type="text" id="book-search-input" placeholder="Search" aria-label="Search" maxlength="64" data-hotkeys="s/" />
+  <div class="book-search-spinner hidden"></div>
+  <ul id="book-search-results"></ul>
+</div>
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+  
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-5f707409be6416a223395a1b8a36311d" class="toggle"  />
+    <label for="section-5f707409be6416a223395a1b8a36311d" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-rocket title appetizer" aria-hidden="true"></i>&nbsp;&nbsp;Getting Started</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/getting-started/local_installation/" class="">First Steps</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/getting-started/quickstart-sql/" class="">Flink SQL Tutorial</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/getting-started/table_api/" class="">Table API Tutorial</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/getting-started/datastream/" class="">DataStream API Tutorial</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/getting-started/flink-operations-playground/" class="">Flink Operations Playground</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-0413f21c3d477383b7fd91c5d34e586c" class="toggle" checked />
+    <label for="section-0413f21c3d477383b7fd91c5d34e586c" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-hand-paper-o title appetizer" aria-hidden="true"></i>&nbsp;&nbsp;Learn Flink</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/streaming_analytics/" class=" active">Streaming Analytics</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/etl/" class="">Data Pipelines & ETL</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/event_driven/" class="">Event-driven Applications</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/table_api/" class="">Learn the Table API</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/datastream_api/" class="">Learn the DataStream API</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/fault_tolerance/" class="">Fault Tolerance</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-4dfc8562234113bbbd1bf020df83f295" class="toggle"  />
+    <label for="section-4dfc8562234113bbbd1bf020df83f295" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-map-o title appetizer" aria-hidden="true"></i>&nbsp;&nbsp;Concepts</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/stateful-stream-processing/" class="">Stateful Stream Processing</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/time/" class="">Timely Stream Processing</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/flink-architecture/" class="">Flink Architecture</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-0113339f07f77bfe2471e6ca3d257423" class="toggle"  />
+    <label for="section-0113339f07f77bfe2471e6ca3d257423" class="flex justify-between">Streaming SQL & Table Concepts<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/determinism/" class="">Determinism in Continuous Queries</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/dynamic_tables/" class="">Dynamic Tables</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/time_attributes/" class="">Time Attributes</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/versioned_tables/" class="">Versioned Tables</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/temporal_table_function/" class="">Temporal Table Function</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/glossary/" class="">Glossary</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  	<br/>
+  
+  
+    <input type="checkbox" id="section-49e56af90e297b291fcbf9ec542e1e05" class="toggle"  />
+    <label for="section-49e56af90e297b291fcbf9ec542e1e05" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-database title maindish" aria-hidden="true"></i>&nbsp;&nbsp;Flink SQL</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-308812e0e4431242c90b87492f089498" class="toggle"  />
+    <label for="section-308812e0e4431242c90b87492f089498" class="flex justify-between">SQL Interfaces<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/interfaces/sql-client/" class="">SQL Client</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-93036dfe213d2446c9411ccc1fbc2a31" class="toggle"  />
+    <label for="section-93036dfe213d2446c9411ccc1fbc2a31" class="flex justify-between">SQL Gateway<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/interfaces/sql-gateway/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/interfaces/sql-gateway/rest/" class="">REST Endpoint</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/interfaces/sql-gateway/hiveserver2/" class="">HiveServer2 Endpoint</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/interfaces/jdbc-driver/" class="">Flink JDBC Driver</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-6d1694c29d29ded17f52e55a34477c1f" class="toggle"  />
+    <label for="section-6d1694c29d29ded17f52e55a34477c1f" class="flex justify-between">SQL Reference<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/overview/" class="">SQL</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/data-types/" class="">Data Types</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-9262c96b673a596163895aee4ab9f692" class="toggle"  />
+    <label for="section-9262c96b673a596163895aee4ab9f692" class="flex justify-between">Data Definition (DDL)<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/ddl/create/" class="">CREATE Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/ddl/drop/" class="">DROP Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/ddl/alter/" class="">ALTER Statements</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-10120a92b04ab0481b6ae4bddbce1753" class="toggle"  />
+    <label for="section-10120a92b04ab0481b6ae4bddbce1753" class="flex justify-between">Data Manipulation (DML)<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/dml/insert/" class="">INSERT Statement</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/dml/truncate/" class="">TRUNCATE Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/dml/update/" class="">UPDATE Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/dml/delete/" class="">DELETE Statements</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-47d6bf276bffae7ad3f9f2bf07aae747" class="toggle"  />
+    <label for="section-47d6bf276bffae7ad3f9f2bf07aae747" class="flex justify-between">Queries<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/hints/" class="">Hints</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/with/" class="">WITH clause</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select/" class="">SELECT & WHERE</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/select-distinct/" class="">SELECT DISTINCT</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-tvf/" class="">Windowing TVF</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/model-inference/" class="">Model Inference</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/vector-search/" class="">Vector Search</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-agg/" class="">Window Aggregation</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/changelog/" class="">Changelog Conversion</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/group-agg/" class="">Group Aggregation</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/over-agg/" class="">Over Aggregation</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/joins/" class="">Joins</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-join/" class="">Window JOIN</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/set-ops/" class="">Set Operations</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/orderby/" class="">ORDER BY clause</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/limit/" class="">LIMIT clause</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/topn/" class="">Top-N</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-topn/" class="">Window Top-N</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/deduplication/" class="">Deduplication</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/window-deduplication/" class="">Window Deduplication</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/match_recognize/" class="">Pattern Recognition</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/queries/time-travel/" class="">Time Travel</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-faf25cebf5d8d01a5423744784b2dc20" class="toggle"  />
+    <label for="section-faf25cebf5d8d01a5423744784b2dc20" class="flex justify-between">Utility Statements<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/analyze/" class="">ANALYZE Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/describe/" class="">DESCRIBE Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/explain/" class="">EXPLAIN Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/use/" class="">USE Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/show/" class="">SHOW Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/load/" class="">LOAD Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/unload/" class="">UNLOAD Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/set/" class="">SET Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/reset/" class="">RESET Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/jar/" class="">JAR Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/job/" class="">JOB Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/reference/utility/call/" class="">CALL Statements</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-6b244f7a21d123617ae312f356440707" class="toggle"  />
+    <label for="section-6b244f7a21d123617ae312f356440707" class="flex justify-between">Functions<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/functions/built-in-functions/" class="">Built-in Functions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/functions/user-defined-functions/" class="">User-Defined Functions</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/catalogs/" class="">Catalogs</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/timezone/" class="">Time Zone</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-f5cecd1399d36ead8d684d8dd903e7c8" class="toggle"  />
+    <label for="section-f5cecd1399d36ead8d684d8dd903e7c8" class="flex justify-between">Materialized Table<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/materialized-table/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/materialized-table/statements/" class="">Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/materialized-table/deployment/" class="">Deployment</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/materialized-table/quickstart/" class="">Quickstart</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-b68df14aa89690461b6bb282573c967b" class="toggle"  />
+    <label for="section-b68df14aa89690461b6bb282573c967b" class="flex justify-between">Hive Compatibility<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-c957f9ad80f377001bdb79e89da4deac" class="toggle"  />
+    <label for="section-c957f9ad80f377001bdb79e89da4deac" class="flex justify-between">Hive Dialect<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-6140b22fca5631359f9f0a0af6395d87" class="toggle"  />
+    <label for="section-6140b22fca5631359f9f0a0af6395d87" class="flex justify-between">Queries<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/sort-cluster-distribute-by/" class="">Sort/Cluster/Distributed By</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/group-by/" class="">Group By</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/join/" class="">Join</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/set-op/" class="">Set Operations</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/lateral-view/" class="">Lateral View Clause</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/window-functions/" class="">Window Functions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/sub-queries/" class="">Sub-Queries</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/cte/" class="">CTE</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/transform/" class="">Transform Clause</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/queries/table-sample/" class="">Table Sample</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/create/" class="">CREATE Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/drop/" class="">DROP Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/alter/" class="">ALTER Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/insert/" class="">INSERT Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/load-data/" class="">Load Data Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/show/" class="">SHOW Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/add/" class="">ADD Statements</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/sql/hive-compatibility/hive-dialect/set/" class="">SET Statements</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-d8d048ddbc7a732638484c957a757340" class="toggle"  />
+    <label for="section-d8d048ddbc7a732638484c957a757340" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-code title maindish" aria-hidden="true"></i>&nbsp;&nbsp;Flink APIs</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-fc1de14be5e5d838979a48c465250d03" class="toggle"  />
+    <label for="section-fc1de14be5e5d838979a48c465250d03" class="flex justify-between">Table API<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/common/" class="">Concepts & Common API</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/table_environment/" class="">TableEnvironment</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/tableapi/" class="">Table API</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-22e7b3538f18fb2f53ae99c6d97e0a70" class="toggle"  />
+    <label for="section-22e7b3538f18fb2f53ae99c6d97e0a70" class="flex justify-between">Functions<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/functions/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/functions/udfs/" class="">User-defined Functions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/functions/ptfs/" class="">Process Table Functions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/functions/python-udfs/" class="">Python User-defined Functions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/functions/systemfunctions/" class="">System (Built-in) Functions</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/data_stream_api/" class="">DataStream API Integration</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/procedures/" class="">Procedures</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/modules/" class="">Modules</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/olap_quickstart/" class="">OLAP Quickstart</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/config/" class="">Configuration</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/tuning/" class="">Performance Tuning</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/sourcessinks/" class="">User-defined Sources & Sinks</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/catalogs/" class="">Catalogs</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/types/" class="">Data Types</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/jdbcdriver/" class="">JDBC Driver</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/sqlclient/" class="">SQL Client</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/table/timezone/" class="">Time Zone</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-7b63eb1d42720f02cb4ca98ba8a3b74d" class="toggle"  />
+    <label for="section-7b63eb1d42720f02cb4ca98ba8a3b74d" class="flex justify-between">DataStream API<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/execution_mode/" class="">Execution Mode (Batch/Streaming)</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-f0c46af91e7c100817e917858eae238c" class="toggle"  />
+    <label for="section-f0c46af91e7c100817e917858eae238c" class="flex justify-between">Event Time<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/event-time/generating_watermarks/" class="">Generating Watermarks</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/event-time/built_in/" class="">Builtin Watermark Generators</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-6f122fc465b210ae5faeed00adb2b910" class="toggle"  />
+    <label for="section-6f122fc465b210ae5faeed00adb2b910" class="flex justify-between">State & Fault Tolerance<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/state_migration/" class="">State TTL Migration Compatibility</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/state/" class="">Working with State</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/state_v2/" class="">Working with State V2</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/broadcast_state/" class="">The Broadcast State Pattern</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/checkpointing/" class="">Checkpointing</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/state_backends/" class="">State Backends</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-a3fcdcac5fd87109c4ca02f419d12286" class="toggle"  />
+    <label for="section-a3fcdcac5fd87109c4ca02f419d12286" class="flex justify-between">Data Types & Serialization<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/serialization/types_serialization/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/serialization/schema_evolution/" class="">State Schema Evolution</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/serialization/custom_serialization/" class="">Custom State Serialization</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/fault-tolerance/serialization/third_party_serializers/" class="">3rd Party Serializers</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/user_defined_functions/" class="">User-Defined Functions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-5659df6808f60ba278c1b146e4b16692" class="toggle"  />
+    <label for="section-5659df6808f60ba278c1b146e4b16692" class="flex justify-between">Operators<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/windows/" class="">Windows</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/joining/" class="">Joining</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/process_function/" class="">Process Function</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/asyncio/" class="">Async I/O</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/full_window_partition/" class="">Full Window Partition</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/side_output/" class="">Side Outputs</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/application_parameters/" class="">Handling Application Parameters</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/testing/" class="">Testing</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/experimental/" class="">Experimental Features</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/java_lambdas/" class="">Java Lambda Expressions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-fb38fe2b9df53c02f947d4b0aac0fa57" class="toggle"  />
+    <label for="section-fb38fe2b9df53c02f947d4b0aac0fa57" class="flex justify-between">Managing Execution<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/execution/execution_configuration/" class="">Execution Configuration</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/execution/packaging/" class="">Program Packaging</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/execution/parallel/" class="">Parallel Execution</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/sinks/" class="">Data Sinks</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/sources/" class="">Data Sources</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-840d45ed1b9e435b096baa3409e94f08" class="toggle"  />
+    <label for="section-840d45ed1b9e435b096baa3409e94f08" class="flex justify-between">DataStream API (V2)<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/building_blocks/" class="">Building Blocks</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/context_and_state_processing/" class="">Context and State Processing</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-7dfd9646b3edd3d58704dd778f3adb33" class="toggle"  />
+    <label for="section-7dfd9646b3edd3d58704dd778f3adb33" class="flex justify-between">Time Processing<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/time-processing/processing_timer_service/" class="">Processing Timer Service</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/time-processing/event_timer_service/" class="">Event Timer Service</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-5ae053260e0549ed643cdf00aca7338c" class="toggle"  />
+    <label for="section-5ae053260e0549ed643cdf00aca7338c" class="flex justify-between">Builtin Functions<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/builtin-funcs/windows/" class="">Windows</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/builtin-funcs/joining/" class="">Joining</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream-v2/watermark/" class="">Watermark</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-662511fdcd2768c5be47c75a3051d902" class="toggle"  />
+    <label for="section-662511fdcd2768c5be47c75a3051d902" class="flex justify-between">Project Configuration<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/configuration/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/configuration/maven/" class="">Using Maven</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/configuration/gradle/" class="">Using Gradle</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/configuration/connector/" class="">Connectors and Formats</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/configuration/testing/" class="">Test Dependencies</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/configuration/advanced/" class="">Advanced Configuration</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-dc39f05ccab6b67fc69433332811a66a" class="toggle"  />
+    <label for="section-dc39f05ccab6b67fc69433332811a66a" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-book title maindish" aria-hidden="true"></i>&nbsp;&nbsp;Libraries</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/libs/cep/" class="">Event Processing (CEP)</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/libs/state_processor_api/" class="">State Processor API</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-cca35f842c08f0e2b4a94e3d03b79c9b" class="toggle"  />
+    <label for="section-cca35f842c08f0e2b4a94e3d03b79c9b" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-random title maindish" aria-hidden="true"></i>&nbsp;&nbsp;Connectors</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-1ec915aa3878543fe04ac2887e9b280b" class="toggle"  />
+    <label for="section-1ec915aa3878543fe04ac2887e9b280b" class="flex justify-between">SQL & Table API Connectors<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-8460208304ad1a31531b026eb35a254e" class="toggle"  />
+    <label for="section-8460208304ad1a31531b026eb35a254e" class="flex justify-between">Formats<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/overview/" class="">Formats</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/csv/" class="">CSV</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/json/" class="">JSON</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/avro/" class="">Avro</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/avro-confluent/" class="">Confluent Avro</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/protobuf/" class="">Protobuf</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/debezium/" class="">Debezium</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/canal/" class="">Canal</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/maxwell/" class="">Maxwell</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/ogg/" class="">Ogg</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/parquet/" class="">Parquet</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/orc/" class="">Orc</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/formats/raw/" class="">Raw</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/kafka/" class="">Kafka</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/upsert-kafka/" class="">Upsert Kafka</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/dynamic-kafka/" class="">Dynamic Kafka</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/dynamodb/" class="">DynamoDB</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/firehose/" class="">Firehose</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/kinesis/" class="">Kinesis</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/mongodb/" class="">MongoDB</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/jdbc/" class="">JDBC</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/elasticsearch/" class="">Elasticsearch</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/opensearch/" class="">Opensearch</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/filesystem/" class="">FileSystem</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/hbase/" class="">HBase</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/datagen/" class="">DataGen</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/print/" class="">Print</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/blackhole/" class="">BlackHole</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-8bcefe17159eeddaa362d4bb3df42d58" class="toggle"  />
+    <label for="section-8bcefe17159eeddaa362d4bb3df42d58" class="flex justify-between">Hive<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/hive/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/hive/hive_catalog/" class="">Hive Catalog</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/hive/hive_read_write/" class="">Hive Read & Write</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/hive/hive_functions/" class="">Hive Functions</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/table/downloads/" class="">Download</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-d3c5cece297d1dc3bfaacc83fd82d121" class="toggle"  />
+    <label for="section-d3c5cece297d1dc3bfaacc83fd82d121" class="flex justify-between">DataStream Connectors<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/guarantees/" class="">Fault Tolerance Guarantees</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-b49b092b3676e812016085e5d76a5d34" class="toggle"  />
+    <label for="section-b49b092b3676e812016085e5d76a5d34" class="flex justify-between">Formats<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/avro/" class="">Avro</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/azure_table_storage/" class="">Azure Table storage</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/csv/" class="">CSV</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/hadoop/" class="">Hadoop</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/json/" class="">JSON</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/parquet/" class="">Parquet</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/formats/text_files/" class="">Text files</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/datagen/" class="">DataGen</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/dynamic-kafka/" class="">Dynamic Kafka</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/kafka/" class="">Kafka</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/cassandra/" class="">Cassandra</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/dynamodb/" class="">DynamoDB</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/elasticsearch/" class="">Elasticsearch</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/firehose/" class="">Firehose</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/kinesis/" class="">Kinesis</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/mongodb/" class="">MongoDB</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/opensearch/" class="">Opensearch</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/prometheus/" class="">Prometheus</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/sqs/" class="">SQS</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/filesystem/" class="">FileSystem</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/rabbitmq/" class="">RabbitMQ</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/pubsub/" class="">Google Cloud PubSub</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/hybridsource/" class="">Hybrid Source</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/pulsar/" class="">Pulsar</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/datastream/jdbc/" class="">JDBC</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-2fcbe9cffc46e044292f1c58e2433cfb" class="toggle"  />
+    <label for="section-2fcbe9cffc46e044292f1c58e2433cfb" class="flex justify-between">Models<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/models/openai/" class="">OpenAI</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/models/triton/" class="">Triton</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/connectors/models/downloads/" class="">Download</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  	<br/>
+  
+  
+    <input type="checkbox" id="section-988c4238198a24c7eac9b0f056d01246" class="toggle"  />
+    <label for="section-988c4238198a24c7eac9b0f056d01246" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-sliders title dessert" aria-hidden="true"></i>&nbsp;&nbsp;Deployment</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/java_compatibility/" class="">Java Compatibility</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-ba42b10e013d4c1cded0e3d71bbf7632" class="toggle"  />
+    <label for="section-ba42b10e013d4c1cded0e3d71bbf7632" class="flex justify-between">Resource Providers<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-fd1b89f7f96f6f13bd386555bde5c6c4" class="toggle"  />
+    <label for="section-fd1b89f7f96f6f13bd386555bde5c6c4" class="flex justify-between">Standalone<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/resource-providers/standalone/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/resource-providers/standalone/working_directory/" class="">Working Directory</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/resource-providers/standalone/docker/" class="">Docker</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/resource-providers/standalone/kubernetes/" class="">Kubernetes</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/resource-providers/native_kubernetes/" class="">Native Kubernetes</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/resource-providers/yarn/" class="">YARN</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/config/" class="">Configuration</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-d779f4558e95aa8f0d88accc87948e7c" class="toggle"  />
+    <label for="section-d779f4558e95aa8f0d88accc87948e7c" class="flex justify-between">Memory Configuration<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/memory/mem_setup/" class="">Set up Flink's Process Memory</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/memory/mem_setup_tm/" class="">Set up TaskManager Memory</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/memory/mem_setup_jobmanager/" class="">Set up JobManager Memory</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/memory/mem_tuning/" class="">Memory Tuning Guide</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/memory/mem_trouble/" class="">Troubleshooting</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/memory/mem_migration/" class="">Migration Guide</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/memory/network_mem_tuning/" class="">Network Buffer Tuning</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/adaptive_batch/" class="">Adaptive Batch</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/cli/" class="">Command-Line Interface</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/elastic_scaling/" class="">Elastic Scaling</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/finegrained_resource/" class="">Fine-Grained Resource Management</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/speculative_execution/" class="">Speculative Execution</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-ff6b158aead316ef9b72a9e080e1fbaa" class="toggle"  />
+    <label for="section-ff6b158aead316ef9b72a9e080e1fbaa" class="flex justify-between">File Systems<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/filesystems/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/filesystems/common/" class="">Common Configurations</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/filesystems/s3/" class="">Amazon S3</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/filesystems/gcs/" class="">Google Cloud Storage</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/filesystems/oss/" class="">Aliyun OSS</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/filesystems/azure/" class="">Azure Blob Storage</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/filesystems/plugins/" class="">Plugins</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-82464b1d94113aeeae644fee44d8bdc0" class="toggle"  />
+    <label for="section-82464b1d94113aeeae644fee44d8bdc0" class="flex justify-between">High Availability<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/ha/overview/" class="">Overview</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/ha/zookeeper_ha/" class="">ZooKeeper HA Services</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/ha/kubernetes_ha/" class="">Kubernetes HA Services</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/metric_reporters/" class="">Metric Reporters</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/trace_reporters/" class="">Trace Reporters</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/event_reporters/" class="">Event Reporters</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-7efb6ac0e6eaa4bfa0ca0b6df2d1d466" class="toggle"  />
+    <label for="section-7efb6ac0e6eaa4bfa0ca0b6df2d1d466" class="flex justify-between">REPLs<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-3e09897360d9ce1800a69b7b538d04ed" class="toggle"  />
+    <label for="section-3e09897360d9ce1800a69b7b538d04ed" class="flex justify-between">Security<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/security/security-ssl/" class="">SSL Setup</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/security/security-kerberos/" class="">Kerberos</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/security/security-delegation-token/" class="">Delegation tokens</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-e48f78363feda19ae1eb1a6e93b02b4a" class="toggle"  />
+    <label for="section-e48f78363feda19ae1eb1a6e93b02b4a" class="flex justify-between">Tasks Scheduling<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/tasks-scheduling/balanced_tasks_scheduling/" class="">Balanced Tasks Scheduling</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-7a61dc38b1a27405a48dd97752c85b02" class="toggle"  />
+    <label for="section-7a61dc38b1a27405a48dd97752c85b02" class="flex justify-between">Advanced<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/advanced/external_resources/" class="">External Resources</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/advanced/historyserver/" class="">History Server</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/advanced/logging/" class="">Logging</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/advanced/failure_enrichers/" class="">Failure Enrichers</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/deployment/advanced/job_status_listener/" class="">Job Status Changed Listener</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-512d1bcfc743fbc907e7b8296ec5b6fe" class="toggle"  />
+    <label for="section-512d1bcfc743fbc907e7b8296ec5b6fe" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-cogs title dessert" aria-hidden="true"></i>&nbsp;&nbsp;Operations</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-667807756a90ecc26a50cb5d9ae937ab" class="toggle"  />
+    <label for="section-667807756a90ecc26a50cb5d9ae937ab" class="flex justify-between">State & Fault Tolerance<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/checkpoints/" class="">Checkpoints</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/checkpointing_under_backpressure/" class="">Checkpointing under backpressure</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/savepoints/" class="">Savepoints</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/checkpoints_vs_savepoints/" class="">Checkpoints vs. Savepoints</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/state_backends/" class="">State Backends</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/large_state_tuning/" class="">Tuning Checkpoints and Large State</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/disaggregated_state/" class="">Disaggregated State Management</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/state/task_failure_recovery/" class="">Task Failure Recovery</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/metrics/" class="">Metrics</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/traces/" class="">Traces</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/events/" class="">Events</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-392b1dc477fd40ad2ed7fe9b60036507" class="toggle"  />
+    <label for="section-392b1dc477fd40ad2ed7fe9b60036507" class="flex justify-between">Batch<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/batch/batch_shuffle/" class="">Batch Shuffle</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/batch/recovery_from_job_master_failure/" class="">Recovery job progress from job master failures</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-3217013ba4bd2e2dc01c803f02efce29" class="toggle"  />
+    <label for="section-3217013ba4bd2e2dc01c803f02efce29" class="flex justify-between">Debugging<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/debugging/debugging_event_time/" class="">Debugging Windows & Event Time</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/debugging/debugging_classloading/" class="">Debugging Classloading</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/debugging/flame_graphs/" class="">Flame Graphs</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/debugging/profiler/" class="">Profiler</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/debugging/application_profiling/" class="">Application Profiling & Debugging</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/rest_api/" class="">REST API</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-de94d933ef675fd7aee8eecaee5bd423" class="toggle"  />
+    <label for="section-de94d933ef675fd7aee8eecaee5bd423" class="flex justify-between">Monitoring<span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/monitoring/checkpoint_monitoring/" class="">Monitoring Checkpointing</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/monitoring/back_pressure/" class="">Monitoring Back Pressure</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/upgrading/" class="">Upgrading Applications and Flink Versions</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/ops/production_ready/" class="">Production Readiness Checklist</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <input type="checkbox" id="section-82733d0ff5d0aa47100b03360974d047" class="toggle"  />
+    <label for="section-82733d0ff5d0aa47100b03360974d047" class="flex justify-between"><div style="font-weight:450;margin-bottom:0.5em"><i class="fa fa-book title digestif" aria-hidden="true"></i>&nbsp;&nbsp;Internals</div><span>▾</span>
+    </label>
+  
+
+          
+  <ul>
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/internals/sources/" class="">Data Sources</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/internals/sinks/" class="">Data Sinks</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/internals/job_scheduling/" class="">Jobs and Scheduling</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/internals/task_lifecycle/" class="">Task Lifecycle</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/internals/application_lifecycle/" class="">Application Lifecycle</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/internals/filesystems/" class="">File Systems</a>
+  
+
+        </li>
+      
+    
+      
+        <li>
+          
+  
+  
+
+  
+  
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/internals/data_lineage/" class="">Data Lineage</a>
+  
+
+        </li>
+      
+    
+  </ul>
+
+        </li>
+      
+    
+  </ul>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<br/>
+<hr class="menu-break">
+
+<a href="//flink.apache.org" style="color:black;margin-bottom:0.5em"><i class="link fa fa-external-link title" aria-hidden="true"></i> Project Homepage</a>
+<br/>
+
+<a href="//nightlies.apache.org/flink/flink-docs-release-2.3/api/java/" style="color:black;margin-bottom:0.5em"><i class="link fa fa-external-link title" aria-hidden="true"></i> JavaDocs</a>
+<br/>
+
+<a href="//nightlies.apache.org/flink/flink-docs-release-2.3/api/python/" style="color:black;margin-bottom:0.5em"><i class="link fa fa-external-link title" aria-hidden="true"></i> PyDocs</a>
+<br/>
+
+<hr class="menu-break">
+<li style="list-style-type: none">
+  <br>
+  <input type="checkbox" id="section-version-picker" class="toggle">
+  <label for="section-version-picker" class="flex justify-between">
+     <div style="font-weight:450;margin-bottom:0.5em">Pick Docs Version</div>
+     <span>▾</span>
+  </label>
+  <ul>
+    <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/">
+      2.3 (✓)
+    </a>
+    <hr class="menu-break">
+    
+      <li>
+        <a href="http://nightlies.apache.org/flink/flink-docs-release-2.3">
+          v2.3
+        </a>
+      </li>
+    
+      <li>
+        <a href="http://nightlies.apache.org/flink/flink-docs-release-2.2">
+          v2.2
+        </a>
+      </li>
+    
+    <hr class="menu-break">
+    <li>
+      <a href="//nightlies.apache.org/flink/flink-docs-release-2.3//versions">
+          All Versions
+      </a>
+    </li>
+  </ul>
+</li>
+
+
+
+
+  
+
+  
+
+
+  
+
+
+
+
+
+
+<a  href="//nightlies.apache.org/flink/flink-docs-release-2.3/zh/docs/learn-flink/streaming_analytics/" class="flex align-center">
+  <i class="fa fa-globe" aria-hidden="true"></i>&nbsp;&nbsp;
+  中文版
+</a>
+<script src="/flink/flink-docs-release-2.3//js/track-search-terms.js"></script>
+
+
+</nav>
+
+
+
+
+  <script>(function(){var e=document.querySelector("aside.book-menu nav");addEventListener("beforeunload",function(){localStorage.setItem("menu.scrollTop",e.scrollTop)}),e.scrollTop=localStorage.getItem("menu.scrollTop")})()</script>
+
+
+ 
+    </aside>
+
+    <div class="book-page">
+      <header class="book-header">
+        
+  <div class="flex align-center justify-between">
+  <label for="menu-control">
+    <img src="/flink/flink-docs-release-2.3/svg/menu.svg" class="book-icon" alt="Menu" />
+  </label>
+
+  <strong>Streaming Analytics</strong>
+
+  <label for="toc-control">
+    
+    <img src="/flink/flink-docs-release-2.3/svg/toc.svg" class="book-icon" alt="Table of Contents" />
+    
+  </label>
+</div>
+
+
+  
+  <aside class="hidden clearfix">
+    
+  
+
+<nav id="TableOfContents"><h3>On This Page <button class="toc" onclick="collapseToc()"><i class="fa fa-compress" aria-hidden="true"></i></button></h3>
+  <ul>
+    <li><a href="#streaming-analytics">Streaming Analytics</a>
+      <ul>
+        <li><a href="#event-time-and-watermarks">Event Time and Watermarks</a>
+          <ul>
+            <li><a href="#introduction">Introduction</a></li>
+            <li><a href="#working-with-event-time">Working with Event Time</a></li>
+            <li><a href="#watermarks">Watermarks</a></li>
+            <li><a href="#latency-vs-completeness">Latency vs. Completeness</a></li>
+            <li><a href="#lateness">Lateness</a></li>
+            <li><a href="#working-with-watermarks">Working with Watermarks</a></li>
+          </ul>
+        </li>
+        <li><a href="#windows">Windows</a>
+          <ul>
+            <li><a href="#introduction-1">Introduction</a></li>
+            <li><a href="#window-assigners">Window Assigners</a></li>
+            <li><a href="#window-functions">Window Functions</a></li>
+            <li><a href="#late-events">Late Events</a></li>
+            <li><a href="#surprises">Surprises</a></li>
+          </ul>
+        </li>
+        <li><a href="#hands-on">Hands-on</a></li>
+        <li><a href="#further-reading">Further Reading</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+
+
+  </aside>
+  
+ 
+      </header>
+
+      
+
+
+
+
+
+      
+  <article class="markdown"><!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+<h1 id="streaming-analytics">
+  Streaming Analytics
+  <a class="anchor" href="#streaming-analytics">#</a>
+</h1>
+<h2 id="event-time-and-watermarks">
+  Event Time and Watermarks
+  <a class="anchor" href="#event-time-and-watermarks">#</a>
+</h2>
+<h3 id="introduction">
+  Introduction
+  <a class="anchor" href="#introduction">#</a>
+</h3>
+<p>Flink explicitly supports three different notions of time:</p>
+<ul>
+<li>
+<p><em>event time:</em> the time when an event occurred, as recorded by the device producing (or storing) the event</p>
+</li>
+<li>
+<p><em>ingestion time:</em> a timestamp recorded by Flink at the moment it ingests the event</p>
+</li>
+<li>
+<p><em>processing time:</em> the time when a specific operator in your pipeline is processing the event</p>
+</li>
+</ul>
+<p>For reproducible results, e.g., when computing the maximum price a stock reached during the first
+hour of trading on a given day, you should use event time. In this way the result won&rsquo;t depend on
+when the calculation is performed. This kind of real-time application is sometimes performed using
+processing time, but then the results are determined by the events that happen to be processed
+during that hour, rather than the events that occurred then. Computing analytics based on processing
+time causes inconsistencies, and makes it difficult to re-analyze historic data or test new
+implementations.</p>
+<h3 id="working-with-event-time">
+  Working with Event Time
+  <a class="anchor" href="#working-with-event-time">#</a>
+</h3>
+<p>If you want to use event time, you will also need to supply a Timestamp Extractor and Watermark
+Generator that Flink will use to track the progress of event time. This will be covered in the
+section below on <a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/streaming_analytics/#working-with-watermarks">Working with Watermarks</a>, but first we should explain what watermarks are.</p>
+<h3 id="watermarks">
+  Watermarks
+  <a class="anchor" href="#watermarks">#</a>
+</h3>
+<p>Let&rsquo;s work through a simple example that will show why watermarks are needed, and how they work.</p>
+<p>In this example you have a stream of timestamped events that arrive somewhat out of order, as shown
+below. The numbers shown are timestamps that indicate when these events actually occurred. The first
+event to arrive happened at time 4, and it is followed by an event that happened earlier, at time 2,
+and so on:</p>
+
+<div style="text-align: center;">
+    ··· 23 19 22 24 21 14 17 13 12 15 9 11 7 2 4 →
+</div>
+<p>Now imagine that you are trying create a stream sorter.
+This is meant to be an application that processes each event from a stream as it arrives, and emits a new stream containing the same events, but ordered by their timestamps.</p>
+<p>Some observations:</p>
+<p>(1) The first element your stream sorter sees is the 4, but you can&rsquo;t just immediately release it as
+the first element of the sorted stream. It may have arrived out of order, and an earlier event might
+yet arrive. In fact, you have the benefit of some god-like knowledge of this stream&rsquo;s future, and
+you can see that your stream sorter should wait at least until the 2 arrives before producing any
+results.</p>
+<p><em>Some buffering, and some delay, is necessary.</em></p>
+<p>(2) If you do this wrong, you could end up waiting forever. First the sorter saw an event from time
+4, and then an event from time 2. Will an event with a timestamp less than 2 ever arrive? Maybe.
+Maybe not. You could wait forever and never see a 1.</p>
+<p><em>Eventually you have to be courageous and emit the 2 as the start of the sorted stream.</em></p>
+<p>(3) What you need then is some sort of policy that defines when, for any given timestamped event, to
+stop waiting for the arrival of earlier events.</p>
+<p><em>This is precisely what watermarks do</em> — they define when to stop waiting for earlier events.</p>
+<p>Event time processing in Flink depends on <em>watermark generators</em> that insert special timestamped
+elements into the stream, called <em>watermarks</em>. A watermark for time <em>t</em> is an assertion that the
+stream is (probably) now complete up through time <em>t</em>.</p>
+<p>When should this stream sorter stop waiting, and push out the 2 to start the sorted stream? When a
+watermark arrives with a timestamp of 2, or greater.</p>
+<p>(4) You might imagine different policies for deciding how to generate watermarks.</p>
+<p>Each event arrives after some delay, and these delays vary, so some events are delayed more than
+others. One simple approach is to assume that these delays are bounded by some maximum delay. Flink
+refers to this strategy as <em>bounded-out-of-orderness</em> watermarking. It is easy to imagine more
+complex approaches to watermarking, but for most applications a fixed delay works well enough.</p>
+<h3 id="latency-vs-completeness">
+  Latency vs. Completeness
+  <a class="anchor" href="#latency-vs-completeness">#</a>
+</h3>
+<p>Another way to think about watermarks is that they give you, the developer of a streaming
+application, control over the tradeoff between latency and completeness. Unlike in batch processing,
+where one has the luxury of being able to have complete knowledge of the input before producing any
+results, with streaming you must eventually stop waiting to see more of the input, and produce some
+sort of result.</p>
+<p>You can either configure your watermarking aggressively, with a short bounded delay, and thereby
+take the risk of producing results with rather incomplete knowledge of the input &ndash; i.e., a possibly
+wrong result, produced quickly. Or you can wait longer, and produce results that take advantage of
+having more complete knowledge of the input stream(s).</p>
+<p>It is also possible to implement hybrid solutions that produce initial results quickly, and then
+supply updates to those results as additional (late) data is processed. This is a good approach for
+some applications.</p>
+<h3 id="lateness">
+  Lateness
+  <a class="anchor" href="#lateness">#</a>
+</h3>
+<p>Lateness is defined relative to the watermarks. A <code>Watermark(t)</code> asserts that the stream is complete
+up through time <em>t</em>; any event following this watermark whose timestamp is ≤ <em>t</em> is late.</p>
+<h3 id="working-with-watermarks">
+  Working with Watermarks
+  <a class="anchor" href="#working-with-watermarks">#</a>
+</h3>
+<p>In order to perform event-time-based event processing, Flink needs to know the time associated with
+each event, and it also needs the stream to include watermarks.</p>
+<p>The Taxi data sources used in the hands-on exercises take care of these details for you. But in your
+own applications you will have to take care of this yourself, which is usually done by implementing
+a class that extracts the timestamps from the events, and generates watermarks on demand. The
+easiest way to do this is by using a <code>WatermarkStrategy</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">DataStream</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">stream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">...;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="n">WatermarkStrategy</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">WatermarkStrategy</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="p">.</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="n">forBoundedOutOfOrderness</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofSeconds</span><span class="p">(</span><span class="n">20</span><span class="p">))</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="p">.</span><span class="na">withTimestampAssigner</span><span class="p">((</span><span class="n">event</span><span class="p">,</span><span class="w"> </span><span class="n">timestamp</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">event</span><span class="p">.</span><span class="na">timestamp</span><span class="p">);</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="n">DataStream</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">withTimestampsAndWatermarks</span><span class="w"> </span><span class="o">=</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="n">stream</span><span class="p">.</span><span class="na">assignTimestampsAndWatermarks</span><span class="p">(</span><span class="n">strategy</span><span class="p">);</span><span class="w">
+</span></span></span></code></pre></div>
+<p><a href="#top" class="top pull-right"><i class="fas fa-triangle"></i> Back to top</a></p>
+
+
+<h2 id="windows">
+  Windows
+  <a class="anchor" href="#windows">#</a>
+</h2>
+<p>Flink features very expressive window semantics.</p>
+<p>In this section you will learn:</p>
+<ul>
+<li>how windows are used to compute aggregates on unbounded streams,</li>
+<li>which types of windows Flink supports, and</li>
+<li>how to implement a DataStream program with a windowed aggregation</li>
+</ul>
+<h3 id="introduction-1">
+  Introduction
+  <a class="anchor" href="#introduction-1">#</a>
+</h3>
+<p>It is natural when doing stream processing to want to compute aggregated analytics on bounded subsets
+of the streams in order to answer questions like these:</p>
+<ul>
+<li>number of page views per minute</li>
+<li>number of sessions per user per week</li>
+<li>maximum temperature per sensor per minute</li>
+</ul>
+<p>Computing windowed analytics with Flink depends on two principal abstractions: <em>Window Assigners</em>
+that assign events to windows (creating new window objects as necessary), and <em>Window Functions</em>
+that are applied to the events assigned to a window.</p>
+<p>Flink&rsquo;s windowing API also has notions of <em>Triggers</em>, which determine when to call the window
+function, and <em>Evictors</em>, which can remove elements collected in a window.</p>
+<p>In its basic form, you apply windowing to a keyed stream like this:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">stream</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">keyBy</span><span class="p">(</span><span class="o">&lt;</span><span class="n">key</span><span class="w"> </span><span class="n">selector</span><span class="o">&gt;</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">window</span><span class="p">(</span><span class="o">&lt;</span><span class="n">window</span><span class="w"> </span><span class="n">assigner</span><span class="o">&gt;</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">reduce</span><span class="o">|</span><span class="n">aggregate</span><span class="o">|</span><span class="n">process</span><span class="p">(</span><span class="o">&lt;</span><span class="n">window</span><span class="w"> </span><span class="n">function</span><span class="o">&gt;</span><span class="p">);</span><span class="w">
+</span></span></span></code></pre></div><p>You can also use windowing with non-keyed streams, but keep in mind that in this case, the
+processing will <em>not</em> be done in parallel:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">stream</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">windowAll</span><span class="p">(</span><span class="o">&lt;</span><span class="n">window</span><span class="w"> </span><span class="n">assigner</span><span class="o">&gt;</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">reduce</span><span class="o">|</span><span class="n">aggregate</span><span class="o">|</span><span class="n">process</span><span class="p">(</span><span class="o">&lt;</span><span class="n">window</span><span class="w"> </span><span class="n">function</span><span class="o">&gt;</span><span class="p">);</span><span class="w">
+</span></span></span></code></pre></div><h3 id="window-assigners">
+  Window Assigners
+  <a class="anchor" href="#window-assigners">#</a>
+</h3>
+<p>Flink has several built-in types of window assigners, which are illustrated below:</p>
+<img
+  src="/flink/flink-docs-release-2.3//fig/window-assigners.svg"
+  alt="Window assigners"
+  width="80%"
+  style="display:block;margin-left:auto;margin-right:auto"
+>
+<p>Some examples of what these window assigners might be used for, and how to specify them:</p>
+<ul>
+<li>Tumbling time windows
+<ul>
+<li><em>page views per minute</em></li>
+<li><code>TumblingEventTimeWindows.of(Duration.ofMinutes(1))</code></li>
+</ul>
+</li>
+<li>Sliding time windows
+<ul>
+<li><em>page views per minute computed every 10 seconds</em></li>
+<li><code>SlidingEventTimeWindows.of(Duration.ofMinutes(1), Duration.ofSeconds(10))</code></li>
+</ul>
+</li>
+<li>Session windows
+<ul>
+<li><em>page views per session, where sessions are defined by a gap of at least 30 minutes between sessions</em></li>
+<li><code>EventTimeSessionWindows.withGap(Duration.ofMinutes(30))</code></li>
+</ul>
+</li>
+</ul>
+<p>Durations can be specified using one of <code>Duration.ofMillis(n)</code>, <code>Duration.ofSeconds(n)</code>, <code>Duration.ofMinutes(n)</code>, <code>Duration.ofHours(n)</code>, and <code>Duration.ofDays(n)</code>.</p>
+<p>The time-based window assigners (including session windows) come in both event time and processing
+time flavors. There are significant tradeoffs between these two types of time windows. With
+processing time windowing you have to accept these limitations:</p>
+<ul>
+<li>can not correctly process historic data,</li>
+<li>can not correctly handle out-of-order data,</li>
+<li>results will be non-deterministic,</li>
+</ul>
+<p>but with the advantage of lower latency.</p>
+<p>When working with count-based windows, keep in mind that these windows will not fire until a batch
+is complete. There&rsquo;s no option to time-out and process a partial window, though you could implement
+that behavior yourself with a custom Trigger.</p>
+<p>A global window assigner assigns every event (with the same key) to the same global window. This is
+only useful if you are going to do your own custom windowing, with a custom Trigger. In many cases
+where this might seem useful you will be better off using a <code>ProcessFunction</code> as described
+<a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/event_driven/#process-functions">in another section</a>.</p>
+<h3 id="window-functions">
+  Window Functions
+  <a class="anchor" href="#window-functions">#</a>
+</h3>
+<p>You have three basic options for how to process the contents of your windows:</p>
+<ol>
+<li>as a batch, using a <code>ProcessWindowFunction</code> that will be passed an <code>Iterable</code> with the window&rsquo;s contents;</li>
+<li>incrementally, with a <code>ReduceFunction</code> or an <code>AggregateFunction</code> that is called as each event is assigned to the window;</li>
+<li>or with a combination of the two, wherein the pre-aggregated results of a <code>ReduceFunction</code> or an <code>AggregateFunction</code> are supplied to a <code>ProcessWindowFunction</code> when the window is triggered.</li>
+</ol>
+<p>Here are examples of approaches 1 and 3. Each implementation finds the peak value from each sensor
+in 1 minute event time windows, and producing a stream of Tuples containing <code>(key, end-of-window-timestamp, max_value)</code>.</p>
+<h4 id="processwindowfunction-example">
+  ProcessWindowFunction Example
+  <a class="anchor" href="#processwindowfunction-example">#</a>
+</h4>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">DataStream</span><span class="o">&lt;</span><span class="n">SensorReading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">...;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="n">input</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">keyBy</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="na">key</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">window</span><span class="p">(</span><span class="n">TumblingEventTimeWindows</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMinutes</span><span class="p">(</span><span class="n">1</span><span class="p">)))</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">process</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">MyWastefulMax</span><span class="p">());</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="kd">public</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kd">class</span> <span class="nc">MyWastefulMax</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">ProcessWindowFunction</span><span class="o">&lt;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="n">SensorReading</span><span class="p">,</span><span class="w">                  </span><span class="c1">// input type</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="n">Tuple3</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;</span><span class="p">,</span><span class="w">  </span><span class="c1">// output type</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="n">String</span><span class="p">,</span><span class="w">                         </span><span class="c1">// key type</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="n">TimeWindow</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w">                   </span><span class="c1">// window type</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nd">@Override</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">process</span><span class="p">(</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">String</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"> 
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">Iterable</span><span class="o">&lt;</span><span class="n">SensorReading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">events</span><span class="p">,</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">Collector</span><span class="o">&lt;</span><span class="n">Tuple3</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">Integer</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">0</span><span class="p">;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">SensorReading</span><span class="w"> </span><span class="n">event</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">events</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Math</span><span class="p">.</span><span class="na">max</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="na">value</span><span class="p">,</span><span class="w"> </span><span class="n">max</span><span class="p">);</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="p">}</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="n">out</span><span class="p">.</span><span class="na">collect</span><span class="p">(</span><span class="n">Tuple3</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">window</span><span class="p">().</span><span class="na">getEnd</span><span class="p">(),</span><span class="w"> </span><span class="n">max</span><span class="p">));</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">}</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="p">}</span><span class="w">
+</span></span></span></code></pre></div><p>A couple of things to note in this implementation:</p>
+<ul>
+<li>All of the events assigned to the window have to be buffered in keyed Flink state until the window is triggered. This is potentially quite expensive.</li>
+<li>Our <code>ProcessWindowFunction</code> is being passed a <code>Context</code> object which contains information about the window. Its interface looks like this:</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="kd">public</span><span class="w"> </span><span class="kd">abstract</span><span class="w"> </span><span class="kd">class</span> <span class="nc">Context</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">java</span><span class="p">.</span><span class="na">io</span><span class="p">.</span><span class="na">Serializable</span><span class="w"> </span><span class="p">{</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">abstract</span><span class="w"> </span><span class="n">W</span><span class="w"> </span><span class="nf">window</span><span class="p">();</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">abstract</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="nf">currentProcessingTime</span><span class="p">();</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">abstract</span><span class="w"> </span><span class="kt">long</span><span class="w"> </span><span class="nf">currentWatermark</span><span class="p">();</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">abstract</span><span class="w"> </span><span class="n">KeyedStateStore</span><span class="w"> </span><span class="nf">windowState</span><span class="p">();</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">abstract</span><span class="w"> </span><span class="n">KeyedStateStore</span><span class="w"> </span><span class="nf">globalState</span><span class="p">();</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kd">abstract</span><span class="w"> </span><span class="o">&lt;</span><span class="n">X</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">output</span><span class="p">(</span><span class="n">OutputTag</span><span class="o">&lt;</span><span class="n">X</span><span class="o">&gt;</span><span class="w"> </span><span class="n">outputTag</span><span class="p">,</span><span class="w"> </span><span class="n">X</span><span class="w"> </span><span class="n">value</span><span class="p">);</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="p">}</span><span class="w">
+</span></span></span></code></pre></div><p><code>windowState</code> and <code>globalState</code> are places where you can store per-key, per-window, or global
+per-key information for all windows of that key. This might be useful, for example, if you want to record something about the current window and use that when processing a subsequent window.</p>
+<h4 id="incremental-aggregation-example">
+  Incremental Aggregation Example
+  <a class="anchor" href="#incremental-aggregation-example">#</a>
+</h4>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">DataStream</span><span class="o">&lt;</span><span class="n">SensorReading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">...;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="n">input</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">keyBy</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="na">key</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">window</span><span class="p">(</span><span class="n">TumblingEventTimeWindows</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMinutes</span><span class="p">(</span><span class="n">1</span><span class="p">)))</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">reduce</span><span class="p">(</span><span class="k">new</span><span class="w"> </span><span class="n">MyReducingMax</span><span class="p">(),</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">MyWindowFunction</span><span class="p">());</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="kd">private</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kd">class</span> <span class="nc">MyReducingMax</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">ReduceFunction</span><span class="o">&lt;</span><span class="n">SensorReading</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="n">SensorReading</span><span class="w"> </span><span class="nf">reduce</span><span class="p">(</span><span class="n">SensorReading</span><span class="w"> </span><span class="n">r1</span><span class="p">,</span><span class="w"> </span><span class="n">SensorReading</span><span class="w"> </span><span class="n">r2</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">r1</span><span class="p">.</span><span class="na">value</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">r2</span><span class="p">.</span><span class="na">value</span><span class="p">()</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">r1</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">r2</span><span class="p">;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">}</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="p">}</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="kd">private</span><span class="w"> </span><span class="kd">static</span><span class="w"> </span><span class="kd">class</span> <span class="nc">MyWindowFunction</span><span class="w"> </span><span class="kd">extends</span><span class="w"> </span><span class="n">ProcessWindowFunction</span><span class="o">&lt;</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="n">SensorReading</span><span class="p">,</span><span class="w"> </span><span class="n">Tuple3</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">SensorReading</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">TimeWindow</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="nd">@Override</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="kd">public</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">process</span><span class="p">(</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">String</span><span class="w"> </span><span class="n">key</span><span class="p">,</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">Context</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">Iterable</span><span class="o">&lt;</span><span class="n">SensorReading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">maxReading</span><span class="p">,</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">            </span><span class="n">Collector</span><span class="o">&lt;</span><span class="n">Tuple3</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Long</span><span class="p">,</span><span class="w"> </span><span class="n">SensorReading</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="n">SensorReading</span><span class="w"> </span><span class="n">max</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">maxReading</span><span class="p">.</span><span class="na">iterator</span><span class="p">().</span><span class="na">next</span><span class="p">();</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">        </span><span class="n">out</span><span class="p">.</span><span class="na">collect</span><span class="p">(</span><span class="n">Tuple3</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">context</span><span class="p">.</span><span class="na">window</span><span class="p">().</span><span class="na">getEnd</span><span class="p">(),</span><span class="w"> </span><span class="n">max</span><span class="p">));</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">}</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="p">}</span><span class="w">
+</span></span></span></code></pre></div><p>Notice that the <code>Iterable&lt;SensorReading&gt;</code>
+will contain exactly one reading &ndash; the pre-aggregated maximum computed by <code>MyReducingMax</code>.</p>
+<h3 id="late-events">
+  Late Events
+  <a class="anchor" href="#late-events">#</a>
+</h3>
+<p>By default, when using event time windows, late events are dropped. There are two optional parts of the window API that give you more control over this.</p>
+<p>You can arrange for the events that would be dropped to be collected to an alternate output stream instead, using a mechanism called
+<a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/learn-flink/event_driven/#side-outputs">Side Outputs</a>.
+Here is an example of what that might look like:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">OutputTag</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lateTag</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">OutputTag</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="p">(</span><span class="s">&#34;late&#34;</span><span class="p">){};</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="n">SingleOutputStreamOperator</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">stream</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">keyBy</span><span class="p">(...)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">window</span><span class="p">(...)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">sideOutputLateData</span><span class="p">(</span><span class="n">lateTag</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">process</span><span class="p">(...);</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">  
+</span></span></span><span class="line"><span class="cl"><span class="w"></span><span class="n">DataStream</span><span class="o">&lt;</span><span class="n">Event</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lateStream</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result</span><span class="p">.</span><span class="na">getSideOutput</span><span class="p">(</span><span class="n">lateTag</span><span class="p">);</span><span class="w">
+</span></span></span></code></pre></div><p>You can also specify an interval of <em>allowed lateness</em> during which the late events will continue to
+be assigned to the appropriate window(s) (whose state will have been retained). By default each late
+event will cause the window function to be called again (sometimes called a <em>late firing</em>).</p>
+<p>By default the allowed lateness is 0. In other words, elements behind the watermark are dropped (or sent to the side output).</p>
+<p>For example:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">stream</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">keyBy</span><span class="p">(...)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">window</span><span class="p">(...)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">allowedLateness</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofSeconds</span><span class="p">(</span><span class="n">10</span><span class="p">))</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">process</span><span class="p">(...);</span><span class="w">
+</span></span></span></code></pre></div><p>When the allowed lateness is greater than zero, only those events that are so late that they would
+be dropped are sent to the side output (if it has been configured).</p>
+<h3 id="surprises">
+  Surprises
+  <a class="anchor" href="#surprises">#</a>
+</h3>
+<p>Some aspects of Flink&rsquo;s windowing API may not behave in the way you would expect. Based on
+frequently asked questions on the <a href="https://flink.apache.org/community.html#mailing-lists">flink-user mailing list</a> and elsewhere, here are some facts
+about windows that may surprise you.</p>
+<h4 id="sliding-windows-make-copies">
+  Sliding Windows Make Copies
+  <a class="anchor" href="#sliding-windows-make-copies">#</a>
+</h4>
+<p>Sliding window assigners can create lots of window objects, and will copy each event into every relevant window. For example, if you have sliding windows every 15 minutes that are 24-hours in length, each event will be copied into 4 * 24 = 96 windows.</p>
+<h4 id="time-windows-are-aligned-to-the-epoch">
+  Time Windows are Aligned to the Epoch
+  <a class="anchor" href="#time-windows-are-aligned-to-the-epoch">#</a>
+</h4>
+<p>Just because you are using hour-long processing-time windows and start your application running at
+12:05 does not mean that the first window will close at 1:05. The first window will be 55 minutes
+long and close at 1:00.</p>
+<p>Note, however, that the tumbling and sliding window assigners take an optional offset parameter
+that can be used to change the alignment of the windows. See
+<a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/windows/#tumbling-windows">Tumbling Windows</a> and
+<a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/windows/#sliding-windows">Sliding Windows</a> for details.</p>
+<h4 id="windows-can-follow-windows">
+  Windows Can Follow Windows
+  <a class="anchor" href="#windows-can-follow-windows">#</a>
+</h4>
+<p>For example, it works to do this:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="line"><span class="cl"><span class="n">stream</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">keyBy</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">t</span><span class="p">.</span><span class="na">key</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">window</span><span class="p">(</span><span class="o">&lt;</span><span class="n">window</span><span class="w"> </span><span class="n">assigner</span><span class="o">&gt;</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">reduce</span><span class="p">(</span><span class="o">&lt;</span><span class="n">reduce</span><span class="w"> </span><span class="n">function</span><span class="o">&gt;</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">windowAll</span><span class="p">(</span><span class="o">&lt;</span><span class="n">same</span><span class="w"> </span><span class="n">window</span><span class="w"> </span><span class="n">assigner</span><span class="o">&gt;</span><span class="p">)</span><span class="w">
+</span></span></span><span class="line"><span class="cl"><span class="w">    </span><span class="p">.</span><span class="na">reduce</span><span class="p">(</span><span class="o">&lt;</span><span class="n">same</span><span class="w"> </span><span class="n">reduce</span><span class="w"> </span><span class="n">function</span><span class="o">&gt;</span><span class="p">);</span><span class="w">
+</span></span></span></code></pre></div><p>You might expect Flink&rsquo;s runtime to be smart enough to do this parallel pre-aggregation for you (provided you are using a ReduceFunction or AggregateFunction), but it&rsquo;s not.</p>
+<p>The reason why this works is that the events produced by a time window are assigned timestamps
+based on the time at the end of the window. So, for example, all of the events produced
+by an hour-long window will have timestamps marking the end of an hour. Any subsequent window
+consuming those events should have a duration that is the same as, or a multiple of, the
+previous window.</p>
+<h4 id="no-results-for-empty-timewindows">
+  No Results for Empty TimeWindows
+  <a class="anchor" href="#no-results-for-empty-timewindows">#</a>
+</h4>
+<p>Windows are only created when events are assigned to them. So if there are no events in a given time
+frame, no results will be reported.</p>
+<h4 id="late-events-can-cause-late-merges">
+  Late Events Can Cause Late Merges
+  <a class="anchor" href="#late-events-can-cause-late-merges">#</a>
+</h4>
+<p>Session windows are based on an abstraction of windows that can <em>merge</em>. Each element is initially
+assigned to a new window, after which windows are merged whenever the gap between them is small
+enough. In this way, a late event can bridge the gap separating two previously separate sessions,
+producing a late merge.</p>
+
+<p><a href="#top" class="top pull-right"><i class="fas fa-triangle"></i> Back to top</a></p>
+
+
+<h2 id="hands-on">
+  Hands-on
+  <a class="anchor" href="#hands-on">#</a>
+</h2>
+<p>The hands-on exercise that goes with this section is the 
+<a href="//github.com/apache/flink-training/blob/release-2.3//hourly-tips">
+    Hourly Tips Exercise
+</a>
+.</p>
+<h2 id="further-reading">
+  Further Reading
+  <a class="anchor" href="#further-reading">#</a>
+</h2>
+<ul>
+<li><a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/time/">Timely Stream Processing</a></li>
+<li><a href="//nightlies.apache.org/flink/flink-docs-release-2.3/docs/dev/datastream/operators/windows/">Windows</a></li>
+</ul>
+
+<p><a href="#top" class="top pull-right"><i class="fas fa-triangle"></i> Back to top</a></p>
+
+
+</article>
+ 
+      
+
+      <footer class="book-footer">
+        
+  
+
+
+
+
+
+<a href="https://cwiki.apache.org/confluence/display/FLINK/Flink+Translation+Specifications">Want to contribute translation?</a>
+<br><br>
+<a href="//github.com/apache/flink/edit/release-2.3/docs/content/docs/learn-flink/streaming_analytics.md" style="color:black"><i class="fa fa-edit fa-fw"></i>Edit This Page</a>
+
+
+ 
+        
+      </footer>
+
+      
+  
+  <div class="book-comments">
+
+</div>
+  
+ 
+
+      <label for="menu-control" class="hidden book-menu-overlay"></label>
+    </div>
+
+    
+    <aside class="book-toc">
+      
+  
+
+<nav id="TableOfContents"><h3>On This Page <button class="toc" onclick="collapseToc()"><i class="fa fa-compress" aria-hidden="true"></i></button></h3>
+  <ul>
+    <li><a href="#streaming-analytics">Streaming Analytics</a>
+      <ul>
+        <li><a href="#event-time-and-watermarks">Event Time and Watermarks</a>
+          <ul>
+            <li><a href="#introduction">Introduction</a></li>
+            <li><a href="#working-with-event-time">Working with Event Time</a></li>
+            <li><a href="#watermarks">Watermarks</a></li>
+            <li><a href="#latency-vs-completeness">Latency vs. Completeness</a></li>
+            <li><a href="#lateness">Lateness</a></li>
+            <li><a href="#working-with-watermarks">Working with Watermarks</a></li>
+          </ul>
+        </li>
+        <li><a href="#windows">Windows</a>
+          <ul>
+            <li><a href="#introduction-1">Introduction</a></li>
+            <li><a href="#window-assigners">Window Assigners</a></li>
+            <li><a href="#window-functions">Window Functions</a></li>
+            <li><a href="#late-events">Late Events</a></li>
+            <li><a href="#surprises">Surprises</a></li>
+          </ul>
+        </li>
+        <li><a href="#hands-on">Hands-on</a></li>
+        <li><a href="#further-reading">Further Reading</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+
+ 
+    </aside>
+    <aside class="expand-toc">
+      <button class="toc" onclick="expandToc()">
+        <i class="fa fa-expand" aria-hidden="true"></i>
+      </button>
+    </aside>
+    
+  </main>
+
+  
+
+
+
+<script>
+(function() {
+  var copyIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+  var checkIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  var errorIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>';
+
+  
+  
+  
+  document.querySelectorAll('pre > code').forEach(function(codeBlock) {
+    var pre = codeBlock.parentNode;
+
+    
+    var container = pre.parentNode.classList.contains('highlight')
+      ? pre.parentNode
+      : pre;
+
+    
+    var wrapper = document.createElement('div');
+    wrapper.className = 'code-block-wrapper';
+    container.parentNode.insertBefore(wrapper, container);
+    wrapper.appendChild(container);
+
+    
+    var button = document.createElement('button');
+    button.className = 'copy-code-button';
+    button.type = 'button';
+    button.setAttribute('aria-label', 'Copy code to clipboard');
+    button.innerHTML = copyIcon;
+
+    wrapper.appendChild(button);
+
+    button.addEventListener('click', function() {
+      
+      var text = codeBlock.innerText;
+
+      
+      text = text.split('\n').map(function(line) {
+        return line.replace(/^\$ /, '');
+      }).join('\n').trim();
+
+      navigator.clipboard.writeText(text).then(function() {
+        
+        button.blur();
+
+        
+        button.innerHTML = checkIcon;
+        button.classList.add('copied');
+
+        setTimeout(function() {
+          button.innerHTML = copyIcon;
+          button.classList.remove('copied');
+        }, 2000);
+      }, function(error) {
+        
+        button.blur();
+        button.innerHTML = errorIcon;
+        button.classList.add('error');
+
+        setTimeout(function() {
+          button.innerHTML = copyIcon;
+          button.classList.remove('error');
+        }, 2000);
+      });
+    });
+  });
+})();
+</script>
+
+
+</body>
+
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
