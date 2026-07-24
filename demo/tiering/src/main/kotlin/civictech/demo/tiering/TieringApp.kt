@@ -1,25 +1,20 @@
 package civictech.demo.tiering
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Timestamp
 import civictech.cell.data.Aggregators
 import civictech.cell.data.CombineLatestCell
 import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.KeyedSetCell
 import civictech.cell.data.KeyedSetOps
-import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.graph.graph
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.FanInlet
+import civictech.cell.host.View
+import civictech.cell.host.observe
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
@@ -117,77 +112,25 @@ interface PrefInletProxy {
     val inlet: Use<SetOps<Pref>>
 }
 
-/** Folds tagged set deltas into current membership, any element type. */
-class SetFold<E> {
-    private val live = mutableMapOf<E, MutableSet<Timestamp>>()
-
-    fun apply(delta: SetDelta<E>) {
-        delta.adds.forEach { (e, tags) -> live.getOrPut(e) { mutableSetOf() } += tags }
-        delta.dels.forEach { (e, tags) ->
-            live[e]?.let { it -= tags; if (it.isEmpty()) live.remove(e) }
-        }
-    }
-
-    fun current(): Set<E> = live.keys.toSet()
-}
-
-/** A hub cell folding one derived set stream into app state. */
-class SetHubCell<E>(
-    private val onUpdate: (Set<E>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val fold = SetFold<E>()
-
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<E>>>))
-
-    init {
-        inlet.serve(object : Propagate<SetDelta<E>> {
-            override fun propagate(value: SetDelta<E>) {
-                fold.apply(value)
-                onUpdate(fold.current())
-            }
-        })
-    }
-}
-
-/** A hub cell folding one MapDelta stream into app state. */
-class MapHubCell<K, V>(
-    private val onUpdate: (Map<K, V>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    private val entries = mutableMapOf<K, V>()
-
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<K, V>>>))
-
-    init {
-        inlet.serve(object : Propagate<MapDelta<K, V>> {
-            override fun propagate(value: MapDelta<K, V>) {
-                entries.putAll(value.puts)
-                value.removals.forEach { entries.remove(it) }
-                onUpdate(entries.toMap())
-            }
-        })
-    }
-}
-
 class TieringApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
-    private val manage = host.managementInlet.call
     private val refs = TierPipeline.build(host)
     private val itemOps = host.lookup<ItemInletProxy>(refs.items)!!.inlet.call
     private val valOps = host.lookup<ValuationInletProxy>(refs.vals)!!.inlet.call
     private val prefOps = host.lookup<PrefInletProxy>(refs.prefs)!!.inlet.call
 
     private val state = Object()
-    private var items: Set<String> = emptySet()
-    private var valuations: Set<Valuation> = emptySet()
-    private var prefs: Set<Pref> = emptySet()
-    private var tierAvg: Map<String, Double> = emptyMap()
-    private var prefAvg: Map<String, Double> = emptyMap()
-    private var fused: Map<String, Tiered> = emptyMap()
+    // Read model: each derived outlet materialized by a kernel observation sink,
+    // read via current() in stateJson. Constructed WITHOUT an onChange listener
+    // so no broadcast() fires before all six sinks exist; listeners are
+    // registered in init once construction is complete.
+    private val itemsView = host.observe(refs.items, View.set<String>())
+    private val valuationsView = host.observe(refs.vals, View.set<Valuation>())
+    private val prefsView = host.observe(refs.prefs, View.set<Pref>())
+    private val tierAvgView = host.observe(refs.tierAvg, View.map<String, Double>())
+    private val prefAvgView = host.observe(refs.prefAvg, View.map<String, Double>())
+    private val fusedView = host.observe(refs.fused, View.map<String, Tiered>())
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
@@ -206,24 +149,14 @@ class TieringApp(port: Int = 8080) {
     val boundPort: Int get() = server.address.port
 
     init {
-        fun <E> setHub(ref: CellRef, sink: (Set<E>) -> Unit) {
-            val hub = SetHubCell<E>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-
-        fun <K, V> mapHub(ref: CellRef, sink: (Map<K, V>) -> Unit) {
-            val hub = MapHubCell<K, V>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, "outlet", hub.ref, "inlet")
-        }
-
-        setHub<String>(refs.items) { items = it }
-        setHub<Valuation>(refs.vals) { valuations = it }
-        setHub<Pref>(refs.prefs) { prefs = it }
-        mapHub<String, Double>(refs.tierAvg) { tierAvg = it }
-        mapHub<String, Double>(refs.prefAvg) { prefAvg = it }
-        mapHub<String, Tiered>(refs.fused) { fused = it }
+        // Register one broadcast per sink now that all six exist; registering
+        // fires an immediate catch-up (harmless — clients is still empty).
+        itemsView.onChange { broadcast() }
+        valuationsView.onChange { broadcast() }
+        prefsView.onChange { broadcast() }
+        tierAvgView.onChange { broadcast() }
+        prefAvgView.onChange { broadcast() }
+        fusedView.onChange { broadcast() }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
@@ -325,9 +258,16 @@ class TieringApp(port: Int = 8080) {
         }
     }
 
-    private fun stateJson(): String = synchronized(state) {
+    private fun stateJson(): String {
         fun esc(s: String) = "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
         fun num(d: Double) = "%.4f".format(Locale.ROOT, d)
+
+        val items = itemsView.current()
+        val valuations = valuationsView.current()
+        val prefs = prefsView.current()
+        val tierAvg = tierAvgView.current()
+        val prefAvg = prefAvgView.current()
+        val fused = fusedView.current()
 
         val board = Tiering.TIERS.joinToString(",") { tier ->
             val entries = fused.filterValues { it.tier == tier }.entries
@@ -352,7 +292,7 @@ class TieringApp(port: Int = 8080) {
                 """{"agent":${esc(it.agent)},"winner":${esc(it.winner)},"loser":${esc(it.loser)}}"""
             }
 
-        """{"items":${items.sorted().joinToString(",", "[", "]") { esc(it) }},""" +
+        return """{"items":${items.sorted().joinToString(",", "[", "]") { esc(it) }},""" +
                 """"board":{$board,"unrated":$unrated},"signals":$signals,""" +
                 """"valuations":$vals,"prefs":$prefList}"""
     }
