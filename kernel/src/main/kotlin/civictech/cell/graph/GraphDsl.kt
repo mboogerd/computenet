@@ -208,7 +208,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 class CellHandle internal constructor(
     val name: String,
     val ref: CellRef,
-    private val builder: GraphBuilder,
+    internal val builder: GraphBuilder,
 ) {
     /** Default-port link: `writer linkTo union` connects "outlet" → "inlet". */
     infix fun linkTo(target: CellHandle) = builder.connect(this, "outlet", target, "inlet")
@@ -244,6 +244,22 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         requireBoundRef(name, identity, ref, cell.ref)
         steps += SpawnStep(name, factory, identity, parent?.name)
         return CellHandle(name, host.call.spawn(cell), this).also { handlesByRef[it.ref] = it }
+    }
+
+    /**
+     * Brings an already-spawned, app-owned [cell] into the algebra as a
+     * [CellHandle] so combinators (`filter`/`count`/`intersect`/`union`) can
+     * chain off it. Unlike [spawn] this records **no** [SpawnStep] and issues
+     * **no** host `spawn` — the cell already lives on the host, so re-spawning
+     * would double it. The trade-off is deliberate: a [GraphSpec] whose chain
+     * roots at an adopted handle is not self-contained for replay (the app owns
+     * that cell's lifecycle); only the connects it participates in are recorded.
+     * No new semantics — just a handle over an existing ref (G-30).
+     */
+    fun adopt(cell: Cell): CellHandle {
+        val name = "adopted-${cell.ref.id}"
+        require(names.add(name)) { "cell ${cell.ref} already adopted" }
+        return CellHandle(name, cell.ref, this).also { handlesByRef[it.ref] = it }
     }
 
     fun connect(from: CellHandle, outlet: String, to: CellHandle, inlet: String) {
