@@ -1,10 +1,10 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.*
+import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
@@ -21,6 +21,7 @@ interface KeyedSetOps<K, E> {
     fun remove(key: K)
 }
 
+@CellBase
 interface KeyedSetApi<K, E> {
     val inlet: Use<KeyedSetOps<K, E>>
     val outlet: Subscribe<Propagate<SetDelta<E>>>
@@ -46,11 +47,8 @@ interface KeyedSetApi<K, E> {
  * it (distinct-projection / OR-set union — the [FlatMapSetCell] many-to-one
  * case). A re-put retracts only the element's tag under *this* key.
  */
-class KeyedSetCell<K, E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
-    KeyedSetApi<K, E>, Cell, Stateful {
-    override val inlet = registerPort("inlet", FanInlet.create<KeyedSetOps<K, E>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
-
+class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
+    KeyedSetCellBase<K, E>(ref), Stateful {
     /** The element under a key and the single add-tag this cell minted for it. */
     private class Entry<E>(val element: E, val tag: Timestamp)
 
@@ -66,7 +64,10 @@ class KeyedSetCell<K, E>(override val ref: CellRef = CellRef(UUID.randomUUID()))
         UUID.nameUUIDFromBytes("keyed-set-tags:${ref.id}:${ref.instanceId}".toByteArray())
     private var tagCounter = 0L
 
-    private val inletApi = object : KeyedSetOps<K, E> {
+    // constructed inline: the factory runs during base-class init, before this
+    // class's own fields initialize — the object only *captures* `this`; its
+    // methods read subclass state later, at message time.
+    override fun inletHandler(): KeyedSetOps<K, E> = object : KeyedSetOps<K, E> {
         override fun put(key: K, element: E) {
             val prev = current[key]
             // effective-only (21): re-putting the identical element is a no-op,
@@ -93,7 +94,6 @@ class KeyedSetCell<K, E>(override val ref: CellRef = CellRef(UUID.randomUUID()))
     }
 
     init {
-        inlet.serve(inletApi)
         // late-join catch-up (G-22): all current elements as one delta-from-
         // empty. Two keys holding the same element union their add-tags, so the
         // late subscriber's fold agrees with the live one on membership.

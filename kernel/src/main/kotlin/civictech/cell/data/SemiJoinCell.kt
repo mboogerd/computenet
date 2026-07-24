@@ -1,18 +1,16 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface SemiJoinApi<A, B> {
     val left: Serve<Propagate<SetDelta<A>>>
     val right: Serve<Propagate<SetDelta<B>>>
@@ -35,15 +33,11 @@ interface SemiJoinApi<A, B> {
  * wrapper is the remedy).
  */
 class SemiJoinCell<A, B, K>(
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ref: CellRef = CellRef(UUID.randomUUID()),
     private val leftKey: (A) -> K,
     private val rightKey: (B) -> K,
     private val negated: Boolean = false,
-) : SemiJoinApi<A, B>, Cell, Stateful {
-    override val left = registerPort("left", FanInlet.create<Propagate<SetDelta<A>>>())
-    override val right = registerPort("right", FanInlet.create<Propagate<SetDelta<B>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<A>>>())
-
+) : SemiJoinCellBase<A, B>(ref), Stateful {
     private val leftState = TagState<A>()
     private val rightState = TagState<B>()
     private val minted = MintedTags<A>(ref, "semijoin")
@@ -53,35 +47,33 @@ class SemiJoinCell<A, B, K>(
     private val rightRows = mutableMapOf<K, MutableSet<B>>()
 
     init {
-        left.serve(object : Propagate<SetDelta<A>> {
-            override fun propagate(value: SetDelta<A>) {
-                val effective = leftState.apply(value)
-                val adds = mutableMapOf<A, Set<Timestamp>>()
-                val dels = mutableMapOf<A, Set<Timestamp>>()
-                (effective.adds.keys + effective.dels.keys).forEach { a ->
-                    index(leftIndex, leftKey(a), a, live = a in leftState)
-                    reconcile(a, adds, dels)
-                }
-                emit(adds, dels)
-            }
-        })
-        right.serve(object : Propagate<SetDelta<B>> {
-            override fun propagate(value: SetDelta<B>) {
-                val effective = rightState.apply(value)
-                val adds = mutableMapOf<A, Set<Timestamp>>()
-                val dels = mutableMapOf<A, Set<Timestamp>>()
-                (effective.adds.keys + effective.dels.keys).forEach { b ->
-                    val k = rightKey(b)
-                    index(rightRows, k, b, live = b in rightState)
-                    // key presence may have flipped: reconcile is idempotent,
-                    // so visiting unflipped keys' rows is just a no-op
-                    leftIndex[k]?.forEach { a -> reconcile(a, adds, dels) }
-                }
-                emit(adds, dels)
-            }
-        })
         // late-join catch-up (G-22): the advertised output as a delta-from-empty
         outlet.catchUpOnLinked { if (minted.isEmpty) null else minted.asDelta() }
+    }
+
+    override fun onLeft(value: SetDelta<A>) {
+        val effective = leftState.apply(value)
+        val adds = mutableMapOf<A, Set<Timestamp>>()
+        val dels = mutableMapOf<A, Set<Timestamp>>()
+        (effective.adds.keys + effective.dels.keys).forEach { a ->
+            index(leftIndex, leftKey(a), a, live = a in leftState)
+            reconcile(a, adds, dels)
+        }
+        emit(adds, dels)
+    }
+
+    override fun onRight(value: SetDelta<B>) {
+        val effective = rightState.apply(value)
+        val adds = mutableMapOf<A, Set<Timestamp>>()
+        val dels = mutableMapOf<A, Set<Timestamp>>()
+        (effective.adds.keys + effective.dels.keys).forEach { b ->
+            val k = rightKey(b)
+            index(rightRows, k, b, live = b in rightState)
+            // key presence may have flipped: reconcile is idempotent,
+            // so visiting unflipped keys' rows is just a no-op
+            leftIndex[k]?.forEach { a -> reconcile(a, adds, dels) }
+        }
+        emit(adds, dels)
     }
 
     private fun <R> index(into: MutableMap<K, MutableSet<R>>, key: K, row: R, live: Boolean) {

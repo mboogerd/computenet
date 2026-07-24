@@ -1,22 +1,20 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.EdgeClose
 import civictech.cell.port.EdgeOpen
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface QuorumSetApi<E> {
     /** Fan-in: one link per source, each carrying `SetDelta<E>` under its own tag lane. */
     val inlet: Serve<Propagate<SetDelta<E>>>
@@ -47,12 +45,9 @@ interface QuorumSetApi<E> {
  * not move (e.g. an empty source joining tightens an intersection).
  */
 class QuorumSetCell<E>(
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ref: CellRef = CellRef(UUID.randomUUID()),
     private val threshold: (liveSources: Int) -> Int,
-) : QuorumSetApi<E>, Cell, Stateful {
-    override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
-
+) : QuorumSetCellBase<E>(ref), Stateful {
     private val lanes = PresenceLanes<E>()
 
     /** Elements currently advertised downstream, each with the exact tags advertised on entry. */
@@ -74,15 +69,14 @@ class QuorumSetCell<E>(
                 else -> {}
             }
         }
-        inlet.serve(object : Propagate<SetDelta<E>> {
-            override fun propagate(value: SetDelta<E>) {
-                evaluate(lanes.fold(CurrentContext.get(), value))
-            }
-        })
         // late-join catch-up (G-22): the advertised quorum as a delta-from-empty
         outlet.linking.onLinked = { link ->
             if (advertised.isNotEmpty()) outlet.at(link.to).propagate(SetDelta(adds = advertised.toMap()))
         }
+    }
+
+    override fun onInlet(value: SetDelta<E>) {
+        evaluate(lanes.fold(CurrentContext.get(), value))
     }
 
     private fun evaluate(candidates: Collection<E>) {

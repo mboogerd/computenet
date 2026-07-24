@@ -1,17 +1,15 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface JoinApi<K, V, W> {
     val left: Serve<Propagate<MapDelta<K, V>>>
     val right: Serve<Propagate<MapDelta<K, W>>>
@@ -25,47 +23,41 @@ interface JoinApi<K, V, W> {
  * limit (G-23): untagged, so concurrent same-key puts resolve by arrival
  * order — single-writer-per-key or single-stream inputs converge.
  */
-class JoinCell<K, V, W>(override val ref: CellRef = CellRef(UUID.randomUUID())) : JoinApi<K, V, W>, Cell, Stateful {
-    override val left = registerPort("left", FanInlet.create<Propagate<MapDelta<K, V>>>())
-    override val right = registerPort("right", FanInlet.create<Propagate<MapDelta<K, W>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, Pair<V, W>>>>())
-
+class JoinCell<K, V, W>(ref: CellRef = CellRef(UUID.randomUUID())) : JoinCellBase<K, V, W>(ref), Stateful {
     private val leftMap = mutableMapOf<K, V>()
     private val rightMap = mutableMapOf<K, W>()
 
     init {
-        left.serve(object : Propagate<MapDelta<K, V>> {
-            override fun propagate(value: MapDelta<K, V>) {
-                val puts = mutableMapOf<K, Pair<V, W>>()
-                val removals = mutableSetOf<K>()
-                value.puts.forEach { (k, v) ->
-                    leftMap[k] = v
-                    rightMap[k]?.let { w -> puts[k] = v to w }
-                }
-                value.removals.forEach { k ->
-                    if (leftMap.remove(k) != null && k in rightMap) removals += k
-                }
-                emit(puts, removals)
-            }
-        })
-        right.serve(object : Propagate<MapDelta<K, W>> {
-            override fun propagate(value: MapDelta<K, W>) {
-                val puts = mutableMapOf<K, Pair<V, W>>()
-                val removals = mutableSetOf<K>()
-                value.puts.forEach { (k, w) ->
-                    rightMap[k] = w
-                    leftMap[k]?.let { v -> puts[k] = v to w }
-                }
-                value.removals.forEach { k ->
-                    if (rightMap.remove(k) != null && k in leftMap) removals += k
-                }
-                emit(puts, removals)
-            }
-        })
         // late-join catch-up (G-22): the current join as a delta-from-empty
         outlet.catchUpOnLinked {
             joined().takeIf { it.isNotEmpty() }?.let { MapDelta(it, emptySet()) }
         }
+    }
+
+    override fun onLeft(value: MapDelta<K, V>) {
+        val puts = mutableMapOf<K, Pair<V, W>>()
+        val removals = mutableSetOf<K>()
+        value.puts.forEach { (k, v) ->
+            leftMap[k] = v
+            rightMap[k]?.let { w -> puts[k] = v to w }
+        }
+        value.removals.forEach { k ->
+            if (leftMap.remove(k) != null && k in rightMap) removals += k
+        }
+        emit(puts, removals)
+    }
+
+    override fun onRight(value: MapDelta<K, W>) {
+        val puts = mutableMapOf<K, Pair<V, W>>()
+        val removals = mutableSetOf<K>()
+        value.puts.forEach { (k, w) ->
+            rightMap[k] = w
+            leftMap[k]?.let { v -> puts[k] = v to w }
+        }
+        value.removals.forEach { k ->
+            if (rightMap.remove(k) != null && k in leftMap) removals += k
+        }
+        emit(puts, removals)
     }
 
     private fun joined(): Map<K, Pair<V, W>> =

@@ -1,14 +1,11 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
@@ -28,18 +25,19 @@ data class CounterDelta(val amount: Long) : Serializable, MergeablePayload {
     override fun mergeWith(other: MergeablePayload): MergeablePayload = merge(other as CounterDelta)
 }
 
+@CellBase
 interface CounterApi {
     val inlet: Use<CounterOps>
     val outlet: Subscribe<Propagate<CounterDelta>>
 }
 
-class CounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : CounterApi, Cell, Stateful {
-    override val inlet = registerPort("inlet", FanInlet.create<CounterOps>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<CounterDelta>>())
-
+class CounterCell(ref: CellRef = CellRef(UUID.randomUUID())) : CounterCellBase(ref), Stateful {
     private var total = 0L
 
-    private val inletApi = object : CounterOps {
+    // constructed inline: the factory runs during base-class init, before this
+    // class's own fields initialize — the object only *captures* `this`; its
+    // methods read subclass state later, at message time.
+    override fun inletHandler(): CounterOps = object : CounterOps {
         override fun increment(amount: Long) {
             total += amount
             // effective-only (21): zero-amount ops don't emit
@@ -50,7 +48,6 @@ class CounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Coun
     }
 
     init {
-        inlet.serve(inletApi)
         // late-join catch-up (G-22): current total as a delta-from-zero
         outlet.catchUpOnLinked { if (total != 0L) CounterDelta(total) else null }
     }

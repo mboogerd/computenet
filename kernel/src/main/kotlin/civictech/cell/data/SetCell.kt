@@ -1,11 +1,11 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.port.*
+import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
@@ -45,16 +45,14 @@ data class SetDelta<E>(
     }
 }
 
+@CellBase
 interface SetApi<E> {
     val inlet: Use<SetOps<E>>
     val outlet: Subscribe<Propagate<SetDelta<E>>>
 }
 
-class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
-    SetApi<E>, Cell, Stateful, Replicable<SetDelta<E>> {
-    override val inlet = registerPort("inlet", FanInlet.create<SetOps<E>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
-
+class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
+    SetCellBase<E>(ref), Stateful, Replicable<SetDelta<E>> {
     /**
      * Replica gossip intake (spec 42, M7.3): another replica's effective
      * deltas merge here; only *new* tag information re-emits (effective-only,
@@ -88,7 +86,10 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     /** Current membership: elements with at least one un-tombstoned add-tag. */
     fun membership(): Set<E> = adds.keys.filterTo(mutableSetOf()) { liveTags(it).isNotEmpty() }
 
-    private val inletApi = object : SetOps<E> {
+    // constructed inline: the factory runs during base-class init, before this
+    // class's own fields initialize — the object only *captures* `this`; its
+    // methods read subclass state later, at message time.
+    override fun inletHandler(): SetOps<E> = object : SetOps<E> {
         override fun add(element: E) {
             val tag = Timestamp(tagSource, ++tagCounter)
             adds.getOrPut(element) { mutableSetOf() } += tag
@@ -135,7 +136,6 @@ class SetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         }.filterValues { it.isNotEmpty() }
 
     init {
-        inlet.serve(inletApi)
         deltaInlet.serve(object : Propagate<SetDelta<E>> {
             override fun propagate(value: SetDelta<E>) = applyRemote(value)
         })

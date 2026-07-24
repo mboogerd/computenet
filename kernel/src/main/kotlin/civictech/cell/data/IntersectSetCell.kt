@@ -1,18 +1,16 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface IntersectSetApi<E> {
     val left: Serve<Propagate<SetDelta<E>>>
     val right: Serve<Propagate<SetDelta<E>>>
@@ -28,43 +26,39 @@ interface IntersectSetApi<E> {
  * 21) — the advertised tag set may lag the inputs, which is sound because
  * downstream only ever sees tags this cell later deletes itself.
  */
-class IntersectSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) : IntersectSetApi<E>, Cell, Stateful {
-    override val left = registerPort("left", FanInlet.create<Propagate<SetDelta<E>>>())
-    override val right = registerPort("right", FanInlet.create<Propagate<SetDelta<E>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
-
+class IntersectSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) : IntersectSetCellBase<E>(ref), Stateful {
     private val leftState = TagState<E>()
     private val rightState = TagState<E>()
     private val advertised = mutableMapOf<E, Set<Timestamp>>()
 
     init {
-        left.serve(handler(leftState))
-        right.serve(handler(rightState))
         // late-join catch-up (G-22): the advertised intersection as a delta-from-empty
         outlet.catchUpOnLinked { if (advertised.isEmpty()) null else SetDelta(adds = advertised.toMap()) }
     }
 
-    private fun handler(side: TagState<E>) = object : Propagate<SetDelta<E>> {
-        override fun propagate(value: SetDelta<E>) {
-            val effective = side.apply(value)
-            val adds = mutableMapOf<E, Set<Timestamp>>()
-            val dels = mutableMapOf<E, Set<Timestamp>>()
+    override fun onLeft(value: SetDelta<E>) = fold(leftState, value)
 
-            (effective.adds.keys + effective.dels.keys).forEach { element ->
-                val isIn = element in leftState && element in rightState
-                val wasIn = element in advertised
-                if (isIn && !wasIn) {
-                    val tags = leftState.tags(element) + rightState.tags(element)
-                    advertised[element] = tags
-                    adds[element] = tags
-                } else if (!isIn && wasIn) {
-                    dels[element] = advertised.remove(element)!!
-                }
-            }
+    override fun onRight(value: SetDelta<E>) = fold(rightState, value)
 
-            if (adds.isNotEmpty() || dels.isNotEmpty()) {
-                outlet.call.propagate(SetDelta(adds, dels))
+    private fun fold(side: TagState<E>, value: SetDelta<E>) {
+        val effective = side.apply(value)
+        val adds = mutableMapOf<E, Set<Timestamp>>()
+        val dels = mutableMapOf<E, Set<Timestamp>>()
+
+        (effective.adds.keys + effective.dels.keys).forEach { element ->
+            val isIn = element in leftState && element in rightState
+            val wasIn = element in advertised
+            if (isIn && !wasIn) {
+                val tags = leftState.tags(element) + rightState.tags(element)
+                advertised[element] = tags
+                adds[element] = tags
+            } else if (!isIn && wasIn) {
+                dels[element] = advertised.remove(element)!!
             }
+        }
+
+        if (adds.isNotEmpty() || dels.isNotEmpty()) {
+            outlet.call.propagate(SetDelta(adds, dels))
         }
     }
 

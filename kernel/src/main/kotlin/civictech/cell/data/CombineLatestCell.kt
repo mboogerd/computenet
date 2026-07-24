@@ -1,17 +1,15 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface CombineLatestApi<K, V, W, R> {
     val left: Serve<Propagate<MapDelta<K, V>>>
     val right: Serve<Propagate<MapDelta<K, W>>>
@@ -40,34 +38,28 @@ interface CombineLatestApi<K, V, W, R> {
  * order; single-writer-per-key or single-stream inputs converge.
  */
 class CombineLatestCell<K, V, W, R>(
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ref: CellRef = CellRef(UUID.randomUUID()),
     private val combine: (K, V?, W?) -> R?,
-) : CombineLatestApi<K, V, W, R>, Cell, Stateful {
-    override val left = registerPort("left", FanInlet.create<Propagate<MapDelta<K, V>>>())
-    override val right = registerPort("right", FanInlet.create<Propagate<MapDelta<K, W>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, R>>>())
-
+) : CombineLatestCellBase<K, V, W, R>(ref), Stateful {
     private val leftMap = mutableMapOf<K, V>()
     private val rightMap = mutableMapOf<K, W>()
     private val emitted = mutableMapOf<K, R>() // last published R per key (the combined map)
 
     init {
-        left.serve(object : Propagate<MapDelta<K, V>> {
-            override fun propagate(value: MapDelta<K, V>) {
-                value.puts.forEach { (k, v) -> leftMap[k] = v }
-                value.removals.forEach { leftMap.remove(it) }
-                emitChanges(value.puts.keys + value.removals)
-            }
-        })
-        right.serve(object : Propagate<MapDelta<K, W>> {
-            override fun propagate(value: MapDelta<K, W>) {
-                value.puts.forEach { (k, w) -> rightMap[k] = w }
-                value.removals.forEach { rightMap.remove(it) }
-                emitChanges(value.puts.keys + value.removals)
-            }
-        })
         // late-join catch-up (G-22): the current combined map as a delta-from-empty
         outlet.catchUpOnLinked { if (emitted.isEmpty()) null else MapDelta(emitted.toMap(), emptySet()) }
+    }
+
+    override fun onLeft(value: MapDelta<K, V>) {
+        value.puts.forEach { (k, v) -> leftMap[k] = v }
+        value.removals.forEach { leftMap.remove(it) }
+        emitChanges(value.puts.keys + value.removals)
+    }
+
+    override fun onRight(value: MapDelta<K, W>) {
+        value.puts.forEach { (k, w) -> rightMap[k] = w }
+        value.removals.forEach { rightMap.remove(it) }
+        emitChanges(value.puts.keys + value.removals)
     }
 
     // combine over the current latest-value pair; a key absent from both sides is

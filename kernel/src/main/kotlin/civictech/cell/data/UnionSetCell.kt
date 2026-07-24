@@ -1,19 +1,17 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface UnionSetApi<E> {
     val inlet: Serve<Propagate<SetDelta<E>>>
     val outlet: Subscribe<Propagate<SetDelta<E>>>
@@ -34,25 +32,21 @@ interface UnionSetApi<E> {
  * lets this cell itself act as the re-baselining producer when it sits
  * directly behind a RESTARTed host.
  */
-class UnionSetCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
-    UnionSetApi<E>, Cell, Stateful, ReBaselineEmitting {
-    override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
-
+class UnionSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
+    UnionSetCellBase<E>(ref), Stateful, ReBaselineEmitting {
     private val state = TagState<E>()
 
     init {
-        inlet.serve(object : Propagate<SetDelta<E>> {
-            override fun propagate(value: SetDelta<E>) {
-                val notice = CurrentContext.get()?.reBaseline
-                val effective = if (notice != null) state.applyReBaseline(value, notice) else state.apply(value)
-                if (effective.adds.isNotEmpty() || effective.dels.isNotEmpty()) {
-                    outlet.call.propagate(effective)
-                }
-            }
-        })
         // late-join catch-up (G-22): live tags as a delta-from-empty
         outlet.catchUpOnLinked { if (state.size > 0) state.asDelta() else null }
+    }
+
+    override fun onInlet(value: SetDelta<E>) {
+        val notice = CurrentContext.get()?.reBaseline
+        val effective = if (notice != null) state.applyReBaseline(value, notice) else state.apply(value)
+        if (effective.adds.isNotEmpty() || effective.dels.isNotEmpty()) {
+            outlet.call.propagate(effective)
+        }
     }
 
     override fun snapshot(): Serializable = state.snapshot()

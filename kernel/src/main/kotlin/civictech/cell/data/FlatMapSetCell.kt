@@ -1,18 +1,16 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface FlatMapSetApi<A, B> {
     val inlet: Serve<Propagate<SetDelta<A>>>
     val outlet: Subscribe<Propagate<SetDelta<B>>>
@@ -30,12 +28,9 @@ interface FlatMapSetApi<A, B> {
  * [f] must be pure — dels re-apply it to translate removals.
  */
 class FlatMapSetCell<A, B>(
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ref: CellRef = CellRef(UUID.randomUUID()),
     private val f: (A) -> Iterable<B>,
-) : FlatMapSetApi<A, B>, Cell, Stateful {
-    override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<A>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<B>>>())
-
+) : FlatMapSetCellBase<A, B>(ref), Stateful {
     private val state = TagState<A>()
 
     // fold-with-union: colliding outputs merge tag sets — a mapKeys-style
@@ -47,18 +42,17 @@ class FlatMapSetCell<A, B>(
     }
 
     init {
-        inlet.serve(object : Propagate<SetDelta<A>> {
-            override fun propagate(value: SetDelta<A>) {
-                val effective = state.apply(value)
-                val mapped = SetDelta(remap(effective.adds), remap(effective.dels))
-                if (mapped.adds.isNotEmpty() || mapped.dels.isNotEmpty()) {
-                    outlet.call.propagate(mapped)
-                }
-            }
-        })
         // late-join catch-up (G-22): output state is derived, so recompute it
         // from input state rather than keeping a second copy
         outlet.catchUpOnLinked { if (state.size > 0) SetDelta(adds = remap(state.asDelta().adds)) else null }
+    }
+
+    override fun onInlet(value: SetDelta<A>) {
+        val effective = state.apply(value)
+        val mapped = SetDelta(remap(effective.adds), remap(effective.dels))
+        if (mapped.adds.isNotEmpty() || mapped.dels.isNotEmpty()) {
+            outlet.call.propagate(mapped)
+        }
     }
 
     override fun snapshot(): Serializable = state.snapshot()

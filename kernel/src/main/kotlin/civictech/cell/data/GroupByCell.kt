@@ -1,17 +1,15 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface GroupByApi<E, K, A> {
     val inlet: Serve<Propagate<SetDelta<E>>>
     val outlet: Subscribe<Propagate<MapDelta<K, A>>>
@@ -32,13 +30,10 @@ interface GroupByApi<E, K, A> {
  * aggregate-level gossip (42).
  */
 class GroupByCell<E, K, A, ACC : Serializable>(
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ref: CellRef = CellRef(UUID.randomUUID()),
     private val keyFn: (E) -> K,
     private val aggregator: Aggregator<E, A, ACC>,
-) : GroupByApi<E, K, A>, Cell, Stateful {
-    override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, A>>>())
-
+) : GroupByCellBase<E, K, A>(ref), Stateful {
     private val state = TagState<E>()
 
     private class Group<ACC>(var count: Int, var acc: ACC)
@@ -46,51 +41,50 @@ class GroupByCell<E, K, A, ACC : Serializable>(
     private val groups = mutableMapOf<K, Group<ACC>>()
 
     init {
-        inlet.serve(object : Propagate<SetDelta<E>> {
-            override fun propagate(value: SetDelta<E>) {
-                val touched = value.adds.keys + value.dels.keys
-                val liveBefore = touched.filterTo(mutableSetOf()) { it in state }
-                state.apply(value)
-
-                // first-touch snapshot per affected group: emission compares
-                // against the value before this delta, not mid-fold values
-                val before = mutableMapOf<K, A?>()
-                touched.forEach { e ->
-                    val was = e in liveBefore
-                    val now = e in state
-                    if (was == now) return@forEach // tag churn, no membership flip
-                    val k = keyFn(e)
-                    if (k !in before) before[k] = groups[k]?.let { aggregator.value(it.acc) }
-                    if (now) {
-                        val g = groups.getOrPut(k) { Group(0, aggregator.empty()) }
-                        g.count++
-                        g.acc = aggregator.insert(g.acc, e)
-                    } else {
-                        val g = checkNotNull(groups[k]) { "retract for untracked group $k" }
-                        g.count--
-                        g.acc = aggregator.retract(g.acc, e)
-                        if (g.count == 0) groups.remove(k)
-                    }
-                }
-
-                val puts = mutableMapOf<K, A>()
-                val removals = mutableSetOf<K>()
-                before.forEach { (k, old) ->
-                    val now = groups[k]?.let { aggregator.value(it.acc) }
-                    when {
-                        now == null && old != null -> removals += k
-                        now != null && now != old -> puts[k] = now // effective-only: value-equals gates
-                    }
-                }
-                if (puts.isNotEmpty() || removals.isNotEmpty()) {
-                    outlet.call.propagate(MapDelta(puts, removals))
-                }
-            }
-        })
         // late-join catch-up (G-22): current aggregates as a delta-from-empty
         outlet.catchUpOnLinked {
             if (groups.isEmpty()) null
             else MapDelta(groups.mapValues { aggregator.value(it.value.acc) }, emptySet())
+        }
+    }
+
+    override fun onInlet(value: SetDelta<E>) {
+        val touched = value.adds.keys + value.dels.keys
+        val liveBefore = touched.filterTo(mutableSetOf()) { it in state }
+        state.apply(value)
+
+        // first-touch snapshot per affected group: emission compares
+        // against the value before this delta, not mid-fold values
+        val before = mutableMapOf<K, A?>()
+        touched.forEach { e ->
+            val was = e in liveBefore
+            val now = e in state
+            if (was == now) return@forEach // tag churn, no membership flip
+            val k = keyFn(e)
+            if (k !in before) before[k] = groups[k]?.let { aggregator.value(it.acc) }
+            if (now) {
+                val g = groups.getOrPut(k) { Group(0, aggregator.empty()) }
+                g.count++
+                g.acc = aggregator.insert(g.acc, e)
+            } else {
+                val g = checkNotNull(groups[k]) { "retract for untracked group $k" }
+                g.count--
+                g.acc = aggregator.retract(g.acc, e)
+                if (g.count == 0) groups.remove(k)
+            }
+        }
+
+        val puts = mutableMapOf<K, A>()
+        val removals = mutableSetOf<K>()
+        before.forEach { (k, old) ->
+            val now = groups[k]?.let { aggregator.value(it.acc) }
+            when {
+                now == null && old != null -> removals += k
+                now != null && now != old -> puts[k] = now // effective-only: value-equals gates
+            }
+        }
+        if (puts.isNotEmpty() || removals.isNotEmpty()) {
+            outlet.call.propagate(MapDelta(puts, removals))
         }
     }
 

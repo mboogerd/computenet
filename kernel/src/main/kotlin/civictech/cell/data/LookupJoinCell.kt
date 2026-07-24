@@ -1,16 +1,14 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface LookupJoinApi<K, V, J, D, R> {
     val fact: Serve<Propagate<MapDelta<K, V>>>
     val dimension: Serve<Propagate<MapDelta<J, D>>>
@@ -48,14 +46,10 @@ interface LookupJoinApi<K, V, J, D, R> {
  * single-stream inputs converge.
  */
 class LookupJoinCell<K, V, J, D, R>(
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ref: CellRef = CellRef(UUID.randomUUID()),
     private val fk: (K) -> J,
     private val combine: (K, V, D?) -> R?,
-) : LookupJoinApi<K, V, J, D, R>, Cell, Stateful {
-    override val fact = registerPort("fact", FanInlet.create<Propagate<MapDelta<K, V>>>())
-    override val dimension = registerPort("dimension", FanInlet.create<Propagate<MapDelta<J, D>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, R>>>())
-
+) : LookupJoinCellBase<K, V, J, D, R>(ref), Stateful {
     private val facts = mutableMapOf<K, V>()
     private val dims = mutableMapOf<J, D>()
     private val byDim = mutableMapOf<J, MutableSet<K>>() // reverse index J -> facts referencing it
@@ -65,40 +59,38 @@ class LookupJoinCell<K, V, J, D, R>(
     constructor(fk: (K) -> J, combine: (K, V, D?) -> R?) : this(CellRef(UUID.randomUUID()), fk, combine)
 
     init {
-        fact.serve(object : Propagate<MapDelta<K, V>> {
-            override fun propagate(value: MapDelta<K, V>) {
-                value.puts.forEach { (k, v) ->
-                    facts[k] = v
-                    byDim.getOrPut(fk(k)) { mutableSetOf() }.add(k)
-                }
-                value.removals.forEach { k ->
-                    if (facts.remove(k) != null) deindex(k)
-                }
-                emitChanges(value.puts.keys + value.removals)
-            }
-        })
-        dimension.serve(object : Propagate<MapDelta<J, D>> {
-            override fun propagate(value: MapDelta<J, D>) {
-                // fan-out: one dimension delta recomputes exactly the facts under
-                // each touched j (byDim), never a full fact rescan
-                val touched = mutableSetOf<K>()
-                value.puts.forEach { (j, d) ->
-                    dims[j] = d
-                    byDim[j]?.let { touched += it }
-                }
-                value.removals.forEach { j ->
-                    dims.remove(j)
-                    byDim[j]?.let { touched += it } // left-outer: referencing facts re-emit with D=null
-                }
-                emitChanges(touched)
-            }
-        })
         // late-join catch-up (G-22): the current enriched map as a delta-from-empty
         outlet.linking.onLinked = { link ->
             if (emitted.isNotEmpty()) {
                 outlet.at(link.to).propagate(MapDelta(emitted.toMap(), emptySet()))
             }
         }
+    }
+
+    override fun onFact(value: MapDelta<K, V>) {
+        value.puts.forEach { (k, v) ->
+            facts[k] = v
+            byDim.getOrPut(fk(k)) { mutableSetOf() }.add(k)
+        }
+        value.removals.forEach { k ->
+            if (facts.remove(k) != null) deindex(k)
+        }
+        emitChanges(value.puts.keys + value.removals)
+    }
+
+    override fun onDimension(value: MapDelta<J, D>) {
+        // fan-out: one dimension delta recomputes exactly the facts under
+        // each touched j (byDim), never a full fact rescan
+        val touched = mutableSetOf<K>()
+        value.puts.forEach { (j, d) ->
+            dims[j] = d
+            byDim[j]?.let { touched += it }
+        }
+        value.removals.forEach { j ->
+            dims.remove(j)
+            byDim[j]?.let { touched += it } // left-outer: referencing facts re-emit with D=null
+        }
+        emitChanges(touched)
     }
 
     private fun deindex(k: K) {

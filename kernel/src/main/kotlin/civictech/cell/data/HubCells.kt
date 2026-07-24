@@ -1,16 +1,16 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.util.UUID
 
+@CellBase
 interface SetHubApi<E> {
     val inlet: Use<Propagate<SetDelta<E>>>
 }
 
+@CellBase
 interface MapHubApi<K, V> {
     val inlet: Use<Propagate<MapDelta<K, V>>>
 }
@@ -21,13 +21,12 @@ interface MapHubApi<K, V> {
  */
 class SetHubCell<E>(
     private val onUpdate: (Set<E>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : SetHubApi<E>, Cell {
+    ref: CellRef = CellRef(UUID.randomUUID()),
+) : SetHubCellBase<E>(ref) {
     private val view = SetView<E>()
-    override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
 
-    init {
-        inlet.onEach { if (view.apply(it)) onUpdate(view.current()) }
+    override fun onInlet(value: SetDelta<E>) {
+        if (view.apply(value)) onUpdate(view.current())
     }
 }
 
@@ -37,12 +36,11 @@ class SetHubCell<E>(
  */
 class MapHubCell<K, V>(
     private val onUpdate: (Map<K, V>) -> Unit,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : MapHubApi<K, V>, Cell {
+    ref: CellRef = CellRef(UUID.randomUUID()),
+) : MapHubCellBase<K, V>(ref) {
     private val view = MapView<K, V>()
-    override val inlet = registerPort("inlet", FanInlet.create<Propagate<MapDelta<K, V>>>())
 
-    init {
-        inlet.onEach { if (view.apply(it)) onUpdate(view.current()) }
+    override fun onInlet(value: MapDelta<K, V>) {
+        if (view.apply(value)) onUpdate(view.current())
     }
 }

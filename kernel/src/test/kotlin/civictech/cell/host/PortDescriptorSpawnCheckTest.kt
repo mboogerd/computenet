@@ -28,7 +28,9 @@ class PortDescriptorSpawnCheckTest {
     fun `generated cell descriptors carry the port table`() {
         val descriptor = ContractRegistry.cellDescriptor(SetCell::class.java)
         descriptor.shouldNotBeNull()
-        descriptor.ports.map { it.name to it.direction } shouldBe listOf(
+        // set comparison: declaration order shifts between subclass-declared and
+        // base-inherited ports and is not part of the descriptor contract
+        descriptor.ports.map { it.name to it.direction }.toSet() shouldBe setOf(
             "inlet" to PortDirection.IN,
             "outlet" to PortDirection.OUT,
             "deltaInlet" to PortDirection.IN,

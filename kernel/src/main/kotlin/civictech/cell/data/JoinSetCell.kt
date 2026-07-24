@@ -1,18 +1,16 @@
 package civictech.cell.data
 
-import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.port.FanInlet
-import civictech.cell.port.FanOutlet
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.catchUpOnLinked
-import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 
+@CellBase
 interface JoinSetApi<A, B, C> {
     val left: Serve<Propagate<SetDelta<A>>>
     val right: Serve<Propagate<SetDelta<B>>>
@@ -35,15 +33,11 @@ interface JoinSetApi<A, B, C> {
  * single-writer map streams.
  */
 class JoinSetCell<A, B, K, C>(
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ref: CellRef = CellRef(UUID.randomUUID()),
     private val leftKey: (A) -> K,
     private val rightKey: (B) -> K,
     private val combine: (A, B) -> C,
-) : JoinSetApi<A, B, C>, Cell, Stateful {
-    override val left = registerPort("left", FanInlet.create<Propagate<SetDelta<A>>>())
-    override val right = registerPort("right", FanInlet.create<Propagate<SetDelta<B>>>())
-    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<C>>>())
-
+) : JoinSetCellBase<A, B, C>(ref), Stateful {
     private val leftState = TagState<A>()
     private val rightState = TagState<B>()
     private val minted = MintedTags<Pair<A, B>>(ref, "join")
@@ -53,32 +47,6 @@ class JoinSetCell<A, B, K, C>(
     private val rightIndex = mutableMapOf<K, MutableSet<B>>()
 
     init {
-        left.serve(object : Propagate<SetDelta<A>> {
-            override fun propagate(value: SetDelta<A>) {
-                val effective = leftState.apply(value)
-                val adds = mutableMapOf<C, MutableSet<Timestamp>>()
-                val dels = mutableMapOf<C, MutableSet<Timestamp>>()
-                (effective.adds.keys + effective.dels.keys).forEach { a ->
-                    val k = leftKey(a)
-                    index(leftIndex, k, a, live = a in leftState)
-                    rightIndex[k]?.forEach { b -> reconcile(a, b, adds, dels) }
-                }
-                emit(adds, dels)
-            }
-        })
-        right.serve(object : Propagate<SetDelta<B>> {
-            override fun propagate(value: SetDelta<B>) {
-                val effective = rightState.apply(value)
-                val adds = mutableMapOf<C, MutableSet<Timestamp>>()
-                val dels = mutableMapOf<C, MutableSet<Timestamp>>()
-                (effective.adds.keys + effective.dels.keys).forEach { b ->
-                    val k = rightKey(b)
-                    index(rightIndex, k, b, live = b in rightState)
-                    leftIndex[k]?.forEach { a -> reconcile(a, b, adds, dels) }
-                }
-                emit(adds, dels)
-            }
-        })
         // late-join catch-up (G-22): advertised pairs folded under combine
         outlet.catchUpOnLinked {
             if (minted.isEmpty) null
@@ -90,6 +58,30 @@ class JoinSetCell<A, B, K, C>(
                 SetDelta(adds = adds)
             }
         }
+    }
+
+    override fun onLeft(value: SetDelta<A>) {
+        val effective = leftState.apply(value)
+        val adds = mutableMapOf<C, MutableSet<Timestamp>>()
+        val dels = mutableMapOf<C, MutableSet<Timestamp>>()
+        (effective.adds.keys + effective.dels.keys).forEach { a ->
+            val k = leftKey(a)
+            index(leftIndex, k, a, live = a in leftState)
+            rightIndex[k]?.forEach { b -> reconcile(a, b, adds, dels) }
+        }
+        emit(adds, dels)
+    }
+
+    override fun onRight(value: SetDelta<B>) {
+        val effective = rightState.apply(value)
+        val adds = mutableMapOf<C, MutableSet<Timestamp>>()
+        val dels = mutableMapOf<C, MutableSet<Timestamp>>()
+        (effective.adds.keys + effective.dels.keys).forEach { b ->
+            val k = rightKey(b)
+            index(rightIndex, k, b, live = b in rightState)
+            leftIndex[k]?.forEach { a -> reconcile(a, b, adds, dels) }
+        }
+        emit(adds, dels)
     }
 
     private fun <R> index(into: MutableMap<K, MutableSet<R>>, key: K, row: R, live: Boolean) {
