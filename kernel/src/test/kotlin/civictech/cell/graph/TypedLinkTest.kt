@@ -284,6 +284,33 @@ class TypedLinkTest {
         }
     }
 
+    // --- ref-only path: generated <Cell>Ports ids through the typed connect overloads ---
+
+    @Test
+    fun `generated Ports ids connect via the ref-only typed overloads`() {
+        val controller = SimulationController(seed = 8)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val hostApi = host.managementInlet.call
+
+        val writer = SetCell<String>()
+        val union = UnionSetCell<String>()
+        hostApi.spawn(writer)
+        hostApi.spawn(union)
+
+        // payload type unifies through the phantom ids; lowers to the string connect
+        val result = hostApi.connect(
+            writer.ref, civictech.cell.data.SetCellPorts.outlet<String>(),
+            union.ref, civictech.cell.data.UnionSetCellPorts.inlet<String>(),
+        )
+        result.shouldBeInstanceOf<LinkResult.Connected>()
+
+        val counts = mutableListOf<SetDelta<String>>()
+        union.outlet.subscribe(Use.fixed(Propagate { counts += it }, PortRef.generate()))
+        writer.inlet.call.add("x")
+        controller.runToIdle()
+        counts.size shouldBe 1
+    }
+
     private fun countsOf(outlet: Subscribe<Propagate<CounterDelta>>): MutableList<CounterDelta> {
         val counts = mutableListOf<CounterDelta>()
         outlet.subscribe(Use.fixed(object : Propagate<CounterDelta> {

@@ -1,35 +1,23 @@
 package civictech.demo.tiering
 
-import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.CombineLatestCell
 import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.CombineLatestApi
-import civictech.cell.data.CombineLatestCellPorts
 import civictech.cell.data.KeyedSetApi
 import civictech.cell.data.KeyedSetCell
-import civictech.cell.data.KeyedSetCellPorts
-import civictech.cell.data.MapHubCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetHubCell
-import civictech.cell.data.GroupByCellPorts
-import civictech.cell.data.MapDelta
-import civictech.cell.data.MapHubCellPorts
-import civictech.cell.data.Propagate
-import civictech.cell.data.SetCellPorts
-import civictech.cell.data.SetDelta
-import civictech.cell.data.SetHubCellPorts
-import civictech.cell.graph.OutletId
 import civictech.cell.graph.TypedRef
-import civictech.cell.graph.connect
 import civictech.cell.graph.graph
 import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.View
+import civictech.cell.host.observe
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
@@ -118,19 +106,22 @@ object TierPipeline {
 class TieringApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
-    private val manage = host.managementInlet.call
     private val refs = TierPipeline.build(host)
     private val itemOps = host.lookup(refs.items)!!.inlet.call
     private val valOps = host.lookup(refs.vals)!!.inlet.call
     private val prefOps = host.lookup(refs.prefs)!!.inlet.call
 
     private val state = Object()
-    private var items: Set<String> = emptySet()
-    private var valuations: Set<Valuation> = emptySet()
-    private var prefs: Set<Pref> = emptySet()
-    private var tierAvg: Map<String, Double> = emptyMap()
-    private var prefAvg: Map<String, Double> = emptyMap()
-    private var fused: Map<String, Tiered> = emptyMap()
+    // Read model: each derived outlet materialized by a kernel observation sink,
+    // read via current() in stateJson. Constructed WITHOUT an onChange listener
+    // so no broadcast() fires before all six sinks exist; listeners are
+    // registered in init once construction is complete.
+    private val itemsView = host.observe(refs.items.ref, View.set<String>())
+    private val valuationsView = host.observe(refs.vals.ref, View.set<Valuation>())
+    private val prefsView = host.observe(refs.prefs.ref, View.set<Pref>())
+    private val tierAvgView = host.observe(refs.tierAvg.ref, View.map<String, Double>())
+    private val prefAvgView = host.observe(refs.prefAvg.ref, View.map<String, Double>())
+    private val fusedView = host.observe(refs.fused.ref, View.map<String, Tiered>())
     private val clients = CopyOnWriteArrayList<OutputStream>()
 
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
@@ -149,26 +140,14 @@ class TieringApp(port: Int = 8080) {
     val boundPort: Int get() = server.address.port
 
     init {
-        // ref-only typed wiring: generated Ports ids unify the payload type at
-        // compile time and lower to the same string connect
-        fun <E> setHub(ref: CellRef, outlet: OutletId<Propagate<SetDelta<E>>>, sink: (Set<E>) -> Unit) {
-            val hub = SetHubCell<E>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, outlet, hub.ref, SetHubCellPorts.inlet<E>())
-        }
-
-        fun <K, V> mapHub(ref: CellRef, outlet: OutletId<Propagate<MapDelta<K, V>>>, sink: (Map<K, V>) -> Unit) {
-            val hub = MapHubCell<K, V>({ synchronized(state) { sink(it) }; broadcast() })
-            manage.spawn(hub)
-            manage.connect(ref, outlet, hub.ref, MapHubCellPorts.inlet<K, V>())
-        }
-
-        setHub(refs.items.ref, SetCellPorts.outlet<String>()) { items = it }
-        setHub(refs.vals.ref, KeyedSetCellPorts.outlet<Pair<String, String>, Valuation>()) { valuations = it }
-        setHub(refs.prefs.ref, SetCellPorts.outlet<Pref>()) { prefs = it }
-        mapHub(refs.tierAvg.ref, GroupByCellPorts.outlet<Valuation, String, Double, Serializable>()) { tierAvg = it }
-        mapHub(refs.prefAvg.ref, GroupByCellPorts.outlet<Contribution, String, Double, Serializable>()) { prefAvg = it }
-        mapHub(refs.fused.ref, CombineLatestCellPorts.outlet<String, Double, Double, Tiered>()) { fused = it }
+        // Register one broadcast per sink now that all six exist; registering
+        // fires an immediate catch-up (harmless — clients is still empty).
+        itemsView.onChange { broadcast() }
+        valuationsView.onChange { broadcast() }
+        prefsView.onChange { broadcast() }
+        tierAvgView.onChange { broadcast() }
+        prefAvgView.onChange { broadcast() }
+        fusedView.onChange { broadcast() }
 
         server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
         server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
@@ -270,9 +249,16 @@ class TieringApp(port: Int = 8080) {
         }
     }
 
-    private fun stateJson(): String = synchronized(state) {
+    private fun stateJson(): String {
         fun esc(s: String) = "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
         fun num(d: Double) = "%.4f".format(Locale.ROOT, d)
+
+        val items = itemsView.current()
+        val valuations = valuationsView.current()
+        val prefs = prefsView.current()
+        val tierAvg = tierAvgView.current()
+        val prefAvg = prefAvgView.current()
+        val fused = fusedView.current()
 
         val board = Tiering.TIERS.joinToString(",") { tier ->
             val entries = fused.filterValues { it.tier == tier }.entries
@@ -297,7 +283,7 @@ class TieringApp(port: Int = 8080) {
                 """{"agent":${esc(it.agent)},"winner":${esc(it.winner)},"loser":${esc(it.loser)}}"""
             }
 
-        """{"items":${items.sorted().joinToString(",", "[", "]") { esc(it) }},""" +
+        return """{"items":${items.sorted().joinToString(",", "[", "]") { esc(it) }},""" +
                 """"board":{$board,"unrated":$unrated},"signals":$signals,""" +
                 """"valuations":$vals,"prefs":$prefList}"""
     }
