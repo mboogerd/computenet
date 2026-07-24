@@ -112,7 +112,7 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         }
         val produceCell = produceHandle!!
         val wantedCell = wantedHandle!!
-        manage.connect(itemsUnion.ref, "outlet", produceCell.ref, "inlet")
+        manage.link(itemsUnion.outlet, produceCell.cell.inlet)
 
         host.observe(itemsUnion.ref, View.set<String>()) { synchronized(state) { items = it }; broadcast() }
         host.observe(votesUnion.ref, View.set<String>()) { synchronized(state) { votes = it }; broadcast() }
