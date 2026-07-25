@@ -68,6 +68,20 @@ data class WireFrame(
     val protocolId: String? = null,
     val protocolMessage: @Polymorphic Any? = null,
     val edge: WireEdge? = null,
+    /**
+     * The versioned interest-assignment epoch (spec 20/24 §Partitioned state,
+     * 40/42 §Interest-scoped instance sets, CP-D3): the routing table's
+     * `routingEpoch` crossing the wire alongside a routed command. Additive —
+     * populated only when the invocation carries a
+     * [civictech.cell.data.RoutedCommand] (a `PartitionedCell` shard route),
+     * `null` otherwise, so the encoding stays backward-compatible with no
+     * version bump. The receiving shard reads the same epoch in-band from the
+     * command payload; the frame field makes the routing epoch observable at
+     * the transport boundary (a stale-epoch command a shard no longer owns is
+     * dropped/re-routed, so an in-flight command crossing a repartition flip
+     * neither loses nor double-counts).
+     */
+    val routingEpoch: Long? = null,
 )
 
 /** See [WireFrame.edge]. */
@@ -115,6 +129,12 @@ object WireCodec {
                 subclass(MapDelta::class, MapDelta.serializer(polyAny, polyAny) as KSerializer<MapDelta<*, *>>)
                 @Suppress("UNCHECKED_CAST")
                 subclass(ListDelta::class, ListDelta.serializer(polyAny) as KSerializer<ListDelta<*>>)
+                // PartitionedCell shard route (spec 20/24 §Partitioned state, CP-D3): epoch + delta
+                @Suppress("UNCHECKED_CAST")
+                subclass(
+                    civictech.cell.data.RoutedCommand::class,
+                    civictech.cell.data.RoutedCommand.serializer(polyAny) as KSerializer<civictech.cell.data.RoutedCommand<*>>,
+                )
                 // single-writer leader→follower log unit (spec 42 §Single-writer replication, W4.3)
                 @Suppress("UNCHECKED_CAST")
                 subclass(Stamped::class, Stamped.serializer(polyAny) as KSerializer<Stamped<*>>)
@@ -178,6 +198,8 @@ object WireCodec {
                 type = invocation.type,
                 context = inv.context,
                 args = inv.args,
+                // additive: lift a routed command's epoch to the frame boundary (CP-D3)
+                routingEpoch = inv.args.firstNotNullOfOrNull { (it as? civictech.cell.data.RoutedCommand<*>)?.epoch },
             )
         }
         return json.encodeToString(WireFrame.serializer(), frame).toByteArray()

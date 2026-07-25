@@ -1,6 +1,8 @@
 package civictech.cell.data
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.host.LocationRegistry
 import civictech.cell.membrane.CompositeCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -8,6 +10,8 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
+import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.replication.Interest
 import java.io.Serializable
 import java.util.UUID
 
@@ -158,4 +162,195 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
             }
         }
     }
+}
+
+/**
+ * A routed shard command (spec 20/24 §Partitioned state, 40/42 §Interest-scoped
+ * instance sets, CP-D3): a key-range slice of a [SetDelta] plus the versioned
+ * interest-assignment [epoch] it was routed under. Crosses the wire as an
+ * ordinary polymorphic argument, and its [epoch] is lifted to the
+ * `WireFrame.routingEpoch` additive field so the routing epoch is observable at
+ * the transport boundary. A shard whose interest no longer admits a key drops
+ * the slice (a stale-epoch command re-routes), so an in-flight command crossing
+ * a repartition flip neither loses nor double-counts.
+ */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("RoutedCommand")
+data class RoutedCommand<E>(
+    val epoch: Long,
+    val delta: SetDelta<E>,
+) : Serializable
+
+/**
+ * An interest-scoped **hosted instance** of a partitioned logical id (spec
+ * 40/42 §Interest-scoped instance sets, 20/24 §Partitioned state, CP-D3): one
+ * shard of a [PartitionedCell], spawnable onto any real
+ * [civictech.cell.host.ManagedHost] and reached by the router over the registry
+ * — in-process or across a bridge, transparently. It holds the disjoint
+ * key-range assigned by its [Interest] and merges routed slices idempotently
+ * (tag union, replay-safe), exactly like a [SetCell] replica; the difference is
+ * one predicate.
+ *
+ * Its [routeInlet] is the receiving end of the disjoint-interest linker. When
+ * [epochAware] (the default), every routed slice is re-filtered to the shard's
+ * *current* [interest] before merging, and an interest reassignment ([assign])
+ * sheds the elements the shard no longer owns — so a repartition flip (interest
+ * reassignment + a bump of the routing epoch) loses nothing and double-counts
+ * nothing even while stale commands are still in flight. With [epochAware]
+ * false the guard is off (the CP-D3 control): a shard applies every slice blind
+ * and keeps sheddable elements, so a flip forks a group across two shards and
+ * the board diverges from a batch group-by.
+ */
+class ShardCell<E>(
+    override val ref: CellRef,
+    private val keyFn: (E) -> Any?,
+    initialInterest: Interest,
+    private val epochAware: Boolean = true,
+) : Cell {
+
+    private val state = TagState<E>()
+
+    @Volatile
+    private var interest: Interest = initialInterest
+
+    @Volatile
+    private var assignedEpoch: Long = 0L
+
+    /** The disjoint-interest linker's receiving end — routed [RoutedCommand] slices merge here. */
+    val routeInlet = registerPort("routeInlet", FanInlet.create<Propagate<RoutedCommand<E>>>())
+
+    init {
+        routeInlet.serve(Propagate<RoutedCommand<E>> { cmd -> onRouted(cmd) })
+    }
+
+    private fun onRouted(cmd: RoutedCommand<E>) {
+        // Interest guard (CP-D3): re-filter the slice to the shard's CURRENT
+        // interest before merging. A stale in-flight slice for a key this shard
+        // no longer owns is dropped — the new owner already holds it (replay).
+        val delta = if (epochAware) (cmd.delta.within(interest) { keyFn(it as E) } ?: return) else cmd.delta
+        state.apply(delta)
+    }
+
+    /**
+     * Interest reassignment (spec 42 §Interest-scoped instance sets, CP-D3):
+     * adopt [newInterest] at routing [epoch] and shed every element the new
+     * interest no longer admits — the moved range leaves its old owner as the
+     * router replays it into the new owner, so no key is ever held by two
+     * shards. A no-op shed under [epochAware] false is the control's defect.
+     */
+    fun assign(newInterest: Interest, epoch: Long) {
+        if (epochAware) {
+            val shed = state.elements.filterTo(mutableSetOf()) { !newInterest.admits(keyFn(it)) }
+            if (shed.isNotEmpty()) state.apply(SetDelta(dels = shed.associateWith { state.tags(it) }))
+        }
+        interest = newInterest
+        assignedEpoch = maxOf(assignedEpoch, epoch)
+    }
+
+    /** This shard's live key range — its contribution to the scatter-gather board. */
+    fun membership(): Set<E> = state.elements
+}
+
+/**
+ * The distributed placement of a [PartitionedCell] over an **instance set**
+ * (spec 40/42 §Interest-scoped instance sets, 20/24 §Partitioned state, CP-D3):
+ * shards are interest-scoped [ShardCell] instances of one logical id, each
+ * hosted on a real [civictech.cell.host.ManagedHost] (possibly behind a bridge)
+ * and reached over [registry]. The single-host, in-process [PartitionedCell] is
+ * the degenerate placement of this same model; here the shards are genuinely
+ * distributed and fed over the wire.
+ *
+ * The router **is** the disjoint-interest linker: for each incoming element it
+ * consults the routing table — the per-shard [Interest] assignment — and routes
+ * the element's slice to exactly the shard whose interest admits its group key,
+ * using the same `Scoped.within` filter the gossip linker uses (CP-D2). Each
+ * routed slice carries [routingEpoch], the versioned interest-assignment epoch,
+ * which crosses the wire (additive `WireFrame.routingEpoch`). Because ranges are
+ * disjoint, the scatter-gather union of the shards' key ranges is the coherent
+ * cross-partition board with the merge function never exercised.
+ *
+ * [repartition] is interest reassignment, not a bespoke protocol: bump the
+ * epoch, reassign each shard's [Interest] (each shard sheds the range it lost),
+ * and replay the live state-as-delta into the new owners over the ordinary
+ * routing path — the same machinery a re-announce drives. The [ledger] is the
+ * router's own total-interest view (the sharded-replication setting, 42), kept
+ * so the replay is a local state-as-delta rather than a scatter of shard-to-
+ * shard pulls.
+ */
+class PartitionedShardSet<E>(
+    private val totalSlots: Int,
+    private val keyFn: (E) -> Any?,
+    private val registry: LocationRegistry,
+) {
+
+    /** The router's proxy view of one shard: the wire-crossing data plane plus the local control handle. */
+    private class Shard<E>(
+        val cell: ShardCell<E>,
+        var interest: Interest,
+        val route: Propagate<RoutedCommand<E>>,
+    )
+
+    /** Registry proxy shape for a shard's [ShardCell.routeInlet] (resolved by port name, in-process or bridged). */
+    interface ShardRoute<E> {
+        val routeInlet: Use<Propagate<RoutedCommand<E>>>
+    }
+
+    private val shards = mutableListOf<Shard<E>>()
+
+    /** The router's total-interest state-as-delta source, for interest-reassignment replay (42). */
+    private val ledger = TagState<E>()
+
+    /** The versioned interest-assignment epoch (spec 20/24 "flip the table atomically and bump its epoch"). */
+    var routingEpoch: Long = 0L
+        private set
+
+    val shardCount: Int get() = shards.size
+
+    /**
+     * Register a shard already spawned+published on its host (reachable via
+     * [registry], in-process or over a bridge). The router opens a wire-crossing
+     * data-plane proxy to its [ShardCell.routeInlet] and records the shard's
+     * [Interest] in the routing table.
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun addShard(cell: ShardCell<E>, interest: Interest) {
+        val route = (HostedCellProxy.create(cell.ref, registry, ShardRoute::class.java) as ShardRoute<E>).routeInlet.call
+        shards += Shard(cell, interest, route)
+        registry.setInterest(cell.ref, interest)
+    }
+
+    /** Route [delta] to the owning shards (each slice filtered to that shard's interest), stamped with the epoch. */
+    fun route(delta: SetDelta<E>) {
+        ledger.apply(delta)
+        emit(delta, routingEpoch)
+    }
+
+    private fun emit(delta: SetDelta<E>, epoch: Long) {
+        shards.forEach { shard ->
+            val slice = delta.within(shard.interest) { keyFn(it as E) } ?: return@forEach
+            shard.route.propagate(RoutedCommand(epoch, slice))
+        }
+    }
+
+    /**
+     * Repartition = interest reassignment (spec 42, 20/24 §Partitioned state,
+     * CP-D3): bump the epoch, reassign each shard's [Interest] (each shard sheds
+     * the range it lost), then replay the live state-as-delta into the new
+     * owners over the routing path. Under the epoch guard this loses nothing and
+     * double-counts nothing; the epoch-blind control skips the shed and forks
+     * moved groups across two shards.
+     */
+    fun repartition(newInterests: List<Interest>) {
+        require(newInterests.size == shards.size) { "expected ${shards.size} interests, got ${newInterests.size}" }
+        routingEpoch++
+        shards.forEachIndexed { i, shard ->
+            shard.interest = newInterests[i]
+            registry.setInterest(shard.cell.ref, newInterests[i])
+            shard.cell.assign(newInterests[i], routingEpoch)
+        }
+        emit(ledger.asDelta(), routingEpoch)
+    }
+
+    /** The scatter-gather board: each shard's live key range (spec: "union of disjoint-key catch-ups"). */
+    fun memberships(): List<Set<E>> = shards.map { it.cell.membership() }
 }
