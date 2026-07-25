@@ -141,6 +141,47 @@ value class NatureVector(val levels: Map<NatureAxis, NatureLevel>) {
 /** A single-axis nature conflict — the only failure a scoped-axis link can raise. */
 data class NatureMismatch(val axis: NatureAxis, val offered: NatureLevel, val required: NatureLevel)
 
+/**
+ * CP-G2 — the **sparse** wire form of a [NatureVector]: a flat
+ * `[axisOrdinal, levelRank, …]` int-pair list carrying *only declared axes*,
+ * so [NatureVector.DEFAULT] projects to the empty list (zero bytes on the wire,
+ * absent field ⇒ DEFAULT ⇒ today's behavior verbatim). The actual JSON
+ * encoding is the `WireFrame.natures: List<Int>` field in the kernel codec;
+ * this pure `NatureVector`↔`List<Int>` mapping is the serialization proper and
+ * lives with the vocabulary it encodes.
+ */
+fun NatureVector.toWire(): List<Int> =
+    if (isDefault) emptyList()
+    else levels.entries.flatMap { (axis, level) -> listOf(axis.ordinal, level.rank) }
+
+/**
+ * Inverse of [toWire], **forward-compatible by construction**: an axis ordinal
+ * or level rank a newer peer names that this build cannot resolve is *ignored*
+ * for that axis — never a refusal (an old peer must not reject a new peer's link
+ * over an axis it cannot name). An empty/odd-tailed list ⇒ [NatureVector.DEFAULT].
+ */
+fun natureVectorFromWire(wire: List<Int>): NatureVector {
+    if (wire.isEmpty()) return NatureVector.DEFAULT
+    val axes = NatureAxis.entries
+    val levels = LinkedHashMap<NatureAxis, NatureLevel>()
+    var i = 0
+    while (i + 1 < wire.size) {
+        val axis = axes.getOrNull(wire[i])
+        val level = axis?.let { natureLevelOf(it, wire[i + 1]) }
+        if (axis != null && level != null) levels[axis] = level
+        i += 2
+    }
+    return if (levels.isEmpty()) NatureVector.DEFAULT else NatureVector(levels)
+}
+
+/** The [NatureLevel] on [axis] with the given [rank] (== enum ordinal), or null if a newer peer's rank. */
+private fun natureLevelOf(axis: NatureAxis, rank: Int): NatureLevel? = when (axis) {
+    NatureAxis.OWNERSHIP -> Ownership.entries.getOrNull(rank)
+    NatureAxis.MERGE_IDEMPOTENCE -> MergeClass.entries.getOrNull(rank)
+    NatureAxis.COLOR -> Color.entries.getOrNull(rank)
+    NatureAxis.MONOTONICITY -> Monotonicity.entries.getOrNull(rank)
+}
+
 enum class PortDirection { IN, OUT }
 
 /**

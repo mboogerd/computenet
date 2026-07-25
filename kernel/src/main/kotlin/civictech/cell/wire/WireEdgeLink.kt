@@ -11,9 +11,11 @@ import civictech.cell.port.ProtocolBridge
 import civictech.cell.port.ProtocolId
 import civictech.cell.port.Protocols
 import civictech.cell.port.handshake
+import civictech.cell.port.natures
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink
+import civictech.gen.wire.NatureVector
 import civictech.gen.wire.ProtocolRegistry
 import java.util.UUID
 
@@ -51,6 +53,12 @@ class WireEdgeLink(
     private val sink: InvocationSink? = null,
     override val fromPort: Port? = null,
     override val toPort: Port? = null,
+    /**
+     * CP-G2: the natures of *this link's sending endpoint* (the producer for a
+     * `bridgeTo` link). Rides the `EdgeOpen` frame ([WireCodec]) so the peer's
+     * handshake reconciles the real cross-host vector; DEFAULT ⇒ zero wire bytes.
+     */
+    val natures: NatureVector = NatureVector.DEFAULT,
 ) : Link {
     @Volatile private var active = true
     private val unlinkListeners = mutableListOf<(Link) -> Unit>()
@@ -74,7 +82,7 @@ class WireEdgeLink(
 
     /** Attaches a working reply [sink] and negotiated [capabilities] to a bare, decode-reconstructed link. */
     fun withBridge(sink: InvocationSink, capabilities: Set<ProtocolId>): WireEdgeLink =
-        WireEdgeLink(id, from, to, fromAddr, toAddr, capabilities, sink, fromPort, toPort)
+        WireEdgeLink(id, from, to, fromAddr, toAddr, capabilities, sink, fromPort, toPort, natures)
 
     override fun onUnlink(listener: (Link) -> Unit) {
         if (active) unlinkListeners += listener else listener(this)
@@ -105,6 +113,14 @@ fun <T> T.bridgeTo(
     toAddr: PortAddress,
     sink: InvocationSink,
     capabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
+    /**
+     * CP-G2: the remote inlet's required natures (its descriptor vector, arrived
+     * over the reverse leg). DEFAULT ⇒ today's behavior — the producer accepts
+     * the link without knowing the consumer's requirement. Supplying the real
+     * vector turns a genuine cross-host mismatch into a link-time refusal, the
+     * same typed [civictech.gen.wire.NatureMismatch] the consumer side reaches.
+     */
+    counterpart: NatureVector = NatureVector.DEFAULT,
 ): LinkResult where T : Linked, T : Port {
     val link = WireEdgeLink(
         id = UUID.randomUUID(),
@@ -115,11 +131,13 @@ fun <T> T.bridgeTo(
         protocolCapabilities = capabilities,
         sink = sink,
         fromPort = this,
+        // this producer's own natures ride the EdgeOpen frame to the consumer
+        natures = natures,
     )
     // Route through the shared handshake (C-13): source-side onLink admission
     // + onLinked catch-up hooks run, and EdgeOpen is fired downstream over the
     // negotiated protocol path (crossing the wire) rather than raw.
-    return handshake(link, from = ref, targetRef = link.to, local = this, fireEdgeOpen = true)
+    return handshake(link, from = ref, targetRef = link.to, local = this, fireEdgeOpen = true, counterpart = counterpart)
 }
 
 /**
@@ -139,6 +157,13 @@ fun <T> T.bridgeFrom(
     fromAddr: PortAddress,
     sink: InvocationSink,
     capabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
+    /**
+     * CP-G2: the remote outlet's offered natures, carried across the wire in the
+     * producer's `EdgeOpen` frame (read back off the decoded [WireEdgeLink] via
+     * [WireEdgeLink.natures]). DEFAULT ⇒ a peer that predates the frame field,
+     * or today's caller ⇒ today's behavior verbatim (additive default).
+     */
+    counterpart: NatureVector = NatureVector.DEFAULT,
 ): LinkResult where T : Linked, T : Port {
     val link = WireEdgeLink(
         id = UUID.randomUUID(),
@@ -149,13 +174,14 @@ fun <T> T.bridgeFrom(
         protocolCapabilities = capabilities,
         sink = sink,
         toPort = this,
+        natures = natures,
     )
     // Route through the shared handshake (C-13): this is the *target* side, so
     // the inlet's link policies and the peer allowlist (43) now fire on a
     // bridged edge exactly as on a local one. EdgeOpen is NOT fired here — it
     // crosses the wire once from the producer's bridgeTo and lands on this
     // inlet's real port via the ordinary PORT_PROTOCOL delivery path.
-    return handshake(link, from = link.from, targetRef = ref, local = this, fireEdgeOpen = false)
+    return handshake(link, from = link.from, targetRef = ref, local = this, fireEdgeOpen = false, counterpart = counterpart)
 }
 
 /** Tears down a bridged half-link: fires `EdgeClose` (crossing the bridge when the peer is remote) and detaches. */
