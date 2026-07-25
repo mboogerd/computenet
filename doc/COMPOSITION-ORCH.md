@@ -75,11 +75,14 @@ Legend: pending · impl-running · impl-done · validating · READY · merged ·
 | CP-A1 | merged | comp/CP-A1 | be8468e | spec; validator PASS |
 | CP-B1 | merged | comp/CP-B1 | f9d563d | richer spec §E3.2 shape (rows/closed); validator PASS |
 | CP-C1 | merged | comp/CP-C1 | 395c85e | journalFor selector; byte-identical default; validator PASS |
-| CP-A2 | pending | comp/CP-A-tail | | bundled α-tail |
-| CP-A3 | pending | comp/CP-A-tail | | bundled α-tail |
-| CP-A4 | pending | comp/CP-A-tail | | bundled α-tail |
-| CP-B2 | pending | comp/CP-B2 | | |
-| CP-B3 | pending | comp/CP-B3 | | JOIN |
+| CP-A2 | merged | comp/CP-A-tail | f94e5ce | bundled α-tail; validator PASS |
+| CP-A3 | merged | comp/CP-A-tail | cdbe1c2 | bundled α-tail; validator PASS |
+| CP-A4 | merged | comp/CP-A-tail | 9e12569 | WaveFrontier + FanInlet.frontierPolicy; validator PASS |
+| CP-B2 | merged | comp/CP-B2 | 309dd3d | outlet-tap seam (coarse); E3.3(a) per-origin frontier deferred to CP-B3 |
+| CP-B3 | pending | comp/CP-B3 | | JOIN; needs E3.3(a) per-origin DeliveredFrontier in cell applyRemote (see note) |
+
+**Wave 2 COMPLETE** — combined gate green @ `9e12569` (559 tests, 0 failed).
+**CP-B3 note**: CP-B2's watermark keys by re-emitter epoch (`originate` discards origin ctx before the tap). CP-B3's E3.4 replica-frontier settlement needs the finer **per-origin** delivered frontier → CP-B3 must also implement E3.3(a): a `DeliveredFrontier` in `SetCell`/`PnCounterCell.applyRemote` feeding `advance` keyed by origin source. Expanded CP-B3 file scope accordingly.
 | CP-D1 | pending | comp/CP-D1 | | spec |
 | CP-E1 | pending | comp/CP-E1 | | demo/exchange |
 | CP-D2 | pending | comp/CP-D-tail | | bundled δ-tail |
