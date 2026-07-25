@@ -230,12 +230,28 @@ class ContractProcessor(
                                 CellDescriptor::class, fqn, CellColor::class, color.name,
                             )
                             ports.forEach { p ->
-                                add(
-                                    "%T(%S, %T.%L, %S, %LL),\n",
-                                    PortDescriptor::class.asClassName(), p.name,
-                                    PortDirection::class.asClassName(), p.direction.name,
-                                    p.contractFqn, StableHash.of(p.contractFqn),
-                                )
+                                val natures = portNatureLevels(cell, color, p)
+                                if (natures.isEmpty()) {
+                                    add(
+                                        "%T(%S, %T.%L, %S, %LL),\n",
+                                        PortDescriptor::class.asClassName(), p.name,
+                                        PortDirection::class.asClassName(), p.direction.name,
+                                        p.contractFqn, StableHash.of(p.contractFqn),
+                                    )
+                                } else {
+                                    add(
+                                        "%T(%S, %T.%L, %S, %LL, natures·=·%T.of(",
+                                        PortDescriptor::class.asClassName(), p.name,
+                                        PortDirection::class.asClassName(), p.direction.name,
+                                        p.contractFqn, StableHash.of(p.contractFqn),
+                                        NATURE_VECTOR,
+                                    )
+                                    natures.forEachIndexed { i, (levelClass, levelName) ->
+                                        if (i > 0) add(", ")
+                                        add("%T.%L", levelClass, levelName)
+                                    }
+                                    add(")),\n")
+                                }
                             }
                             add("⇤)),\n")
                         }
@@ -622,6 +638,45 @@ class ContractProcessor(
         return Triple(contractClassName, proxyClassName, constructedType)
     }
 
+    /**
+     * The non-default nature levels of one port, folded from cell-level markers
+     * (mirroring the [CellColor] scan) and the port's own contract (CP-F2). Each
+     * pair is (generated level enum, constant name); an empty list ⇒
+     * [NatureVector.DEFAULT] ⇒ today's behavior. Sparse by construction: only
+     * a level *stronger* than the axis default is emitted.
+     *
+     * - COLOR         — cell implements `BlockingCell`/`SuspendingCell` (reuses [color]).
+     * - MERGE_IDEMPOTENCE — cell implements `Replicable` (idempotent-merge class).
+     * - OWNERSHIP     — the port's Api contract carries an `Owned`/`Leased` param.
+     * - MONOTONICITY  — the port's Api contract carries a `Magnitude` payload.
+     */
+    private fun portNatureLevels(
+        cell: KSClassDeclaration,
+        color: CellColor,
+        port: ScannedPort,
+    ): List<Pair<ClassName, String>> {
+        val levels = mutableListOf<Pair<ClassName, String>>()
+        // cell-level color — same markers the CellColor scan reads, folded onto
+        // every port of the cell (per-CELL nature reaching the port vector).
+        if (color != CellColor.PURE) levels += NATURE_COLOR to color.name
+        // cell-level merge class: a Replicable cell declares idempotent merge.
+        if (isSubtype(cell.asStarProjectedType(), REPLICABLE_MARKER)) {
+            levels += NATURE_MERGE to "IDEMPOTENT"
+        }
+        // per-port axes read off the port's Api contract methods.
+        val api = port.apiType.declaration as? KSClassDeclaration
+        if (api != null) {
+            val abstractFns = api.getAllFunctions().filter { it.isAbstract }.toList()
+            if (abstractFns.any { fn -> fn.parameters.any { carriesExclusive(it.type.resolve()) } }) {
+                levels += NATURE_OWNERSHIP to "EXCLUSIVE"
+            }
+            if (abstractFns.any { fn -> fn.parameters.any { carriesMarker(it.type.resolve(), MAGNITUDE_MARKER) } }) {
+                levels += NATURE_MONOTONICITY to "MONOTONE"
+            }
+        }
+        return levels
+    }
+
     /** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
     private fun carriesExclusive(type: com.google.devtools.ksp.symbol.KSType): Boolean {
         if (type.declaration.qualifiedName?.asString() in EXCLUSIVE_MARKERS) return true
@@ -682,6 +737,14 @@ class ContractProcessor(
         const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
         const val BLOCKING_MARKER = "civictech.cell.BlockingCell"
         const val SUSPENDING_MARKER = "civictech.cell.SuspendingCell"
+
+        // Nature scan (CP-F2): generated level-enum references, folded into
+        // PortDescriptor.natures. These live in :gen alongside NatureVector.
+        val NATURE_VECTOR = ClassName("civictech.gen.wire", "NatureVector")
+        val NATURE_COLOR = ClassName("civictech.gen.wire", "Color")
+        val NATURE_MERGE = ClassName("civictech.gen.wire", "MergeClass")
+        val NATURE_OWNERSHIP = ClassName("civictech.gen.wire", "Ownership")
+        val NATURE_MONOTONICITY = ClassName("civictech.gen.wire", "Monotonicity")
 
         // Proxy generation (W4.6, C-5 completion)
         val INVOCATION_HANDLER: ClassName = ClassName("java.lang.reflect", "InvocationHandler")
