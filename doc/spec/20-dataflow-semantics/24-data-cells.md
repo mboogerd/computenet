@@ -497,3 +497,44 @@ sources are derived from the cell ref (M10.1), so a recovered instance re-mints
 the exact tags the network already observed; the baseline marks the *wave-plane*
 disposition of the replay, not the *state-plane* merge, which stays ordinary
 observed-remove/tag-set union.
+
+## The shard is a dataflow cell (PN-4)
+
+`ShardCell` — the hosted interest-scoped instance of a partitioned logical id
+(§Partitioned state, 42 §Interest-scoped instance sets) — is a full dataflow
+cell, not a write-only sink. It is `Stateful` and `Replicable`:
+
+- **`Stateful` snapshot = `(TagState, interest, assignedEpoch)`.** A shard's
+  recoverable state is not just its tags but the key-`Interest` it holds and the
+  routing epoch it has adopted. Interest is *snapshotted state*, never re-read
+  from the constructor on recovery — a checkpoint-restored shard keeps the range
+  it holds instead of resurrecting the range it shed.
+- **Outlet + `deltaInlet` + `StateRequest`.** Every membership change (a routed
+  slice, a gossip merge, a shed) re-emits on the outlet, so a shard composes as
+  an ordinary source: partitioned+durable, partitioned+replicated (overlapping
+  interest, the sharded-replication setting), and pull-from-partitioned are
+  buildable rather than merely untested. The `StateRequest` handler answers a
+  pull with an interest-scoped, `since`-filtered state-as-delta stamped as a
+  catch-up baseline (the `SetCell` pull contract, 20/21 §Pull) — never a wave.
+
+**Recovery of a partitioned node.** The router (`PartitionedShardSet`) holds no
+durable state of its own: the routing table *is* the shards' interests and the
+epoch *is* their max-register. After a crash it is recomputed by
+`rebuildFrom(shards)` — asking each restored shard what interest and epoch it
+holds. A shard's shed is invisible to its own WAL (the router narrows interest
+by a direct in-process reassignment, not a routed frame), so a shard reconstructed
+under its **current** (post-repartition) interest drops its pre-repartition
+frames for the range it lost on replay; reconstructed under its constructor
+`initialInterest` it re-admits them and the moved range resurrects on two shards
+at once (the executable control). This composes with the checkpoint guard
+(PN-0b): a checkpoint captures the shard's `Stateful` snapshot and compacts the
+WAL to it; before PN-4 a write-only shard contributed no snapshot, so the guard
+is what kept the compaction from truncating the frames that were its only
+recovery.
+
+The router's own interest combinators (moving-range, union, complement during a
+repartition flip) are expressed in the closed serializable `Interest` algebra
+(PN-3a) rather than anonymous predicates: the moving range is
+`Complement(⋃ᵢ (oldᵢ ∩ newᵢ))` — a key stays put iff the same shard admits it in
+both tables — honest and wire-safe, no longer a predicate whose `overlaps`
+unconditionally lied.
