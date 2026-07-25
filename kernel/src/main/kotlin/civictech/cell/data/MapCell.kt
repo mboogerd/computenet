@@ -25,7 +25,7 @@ interface MapOps<K, V> {
 data class MapDelta<K, V>(
     val puts: Map<K, V>,
     val removals: Set<K>
-) : Serializable {
+) : Serializable, civictech.cell.replication.Scoped<MapDelta<K, V>> {
     /**
      * Aggregate merge path (CP-G1): fold two deltas per key with [combine]
      * instead of the single-writer last-writer-wins replace. A key present in
@@ -43,6 +43,28 @@ data class MapDelta<K, V>(
         other.puts.forEach { (k, v) -> puts[k] = if (k in puts) combine(puts.getValue(k), v) else v }
         val removals = this.removals + other.removals
         return MapDelta(puts.filterKeys { it !in removals }, removals)
+    }
+
+    /**
+     * Restrict this aggregate delta to the entries whose map key [interest]
+     * admits (spec 42 §Interest-scoped instance sets, PN-3b): the same
+     * per-emission filter [SetDelta.within] gives a set delta, now for the map
+     * key space so a [Replicable] aggregate ([MergeableGroupByCell]) can be
+     * interest-sliced instead of riding whole to a partial-interest peer.
+     * [keyOf] projects the map key to the key the interest is scoped over
+     * (identity for a replica mesh, the group key for a partitioned aggregate).
+     * Returns `null` when nothing remains — the emission never rides the link.
+     * Both the direct [MapCell] delta and CP-G1's [merge] path produce a
+     * `MapDelta`, so both are sliceable through this one implementation.
+     */
+    override fun within(
+        interest: civictech.cell.replication.Interest,
+        keyOf: (Any?) -> Any?,
+    ): MapDelta<K, V>? {
+        if (interest is civictech.cell.replication.Interest.Total) return this
+        val p = puts.filterKeys { interest.admits(keyOf(it)) }
+        val r = removals.filterTo(mutableSetOf()) { interest.admits(keyOf(it)) }
+        return if (p.isEmpty() && r.isEmpty()) null else MapDelta(p, r)
     }
 }
 

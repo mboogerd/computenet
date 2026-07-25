@@ -149,4 +149,28 @@ class InterestScopedCatchUpTest {
 
     private fun producerFrontier(producer: SetCell<String>): TagFrontier =
         pull(producer, scope = Interest.Total)!!.frontier!!
+
+    // ----- PN-3b: MapDelta (aggregate) is Scoped too ------------------------
+
+    @Test
+    fun `MapDelta aggregate is Scoped — a partial-interest peer receives only admitted keys`() {
+        // an aggregate keyed by a numeric group key; interest in [0,5).
+        val agg = MapDelta(
+            puts = mapOf(1L to "a", 2L to "b", 5L to "c", 9L to "d"),
+            removals = setOf(3L, 7L),
+        )
+        val scope = Interest.Ranges(listOf(Interest.Ranges.Range(0, 5)))
+
+        val sliced = agg.within(scope) { it }!!
+        sliced.puts shouldBe mapOf(1L to "a", 2L to "b")   // 5, 9 excluded
+        sliced.removals shouldBe setOf(3L)                 // 7 excluded
+
+        // CONTROL: pre-Scoped, the whole aggregate rides to the partial peer —
+        // Total admits everything, over-delivering keys 5, 9, 7 the scope drops.
+        agg.within(Interest.Total) { it } shouldBe agg
+        (agg.puts.keys != sliced.puts.keys) shouldBe true  // strictly more than the slice
+
+        // empty slice ⇒ the emission is dropped, never rides the link.
+        agg.within(Interest.Ranges(listOf(Interest.Ranges.Range(100, 200)))) { it } shouldBe null
+    }
 }
