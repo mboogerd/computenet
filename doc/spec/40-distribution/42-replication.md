@@ -1,6 +1,6 @@
 # 42 — Interest-Driven Replication
 
-> **Status**: Implemented for the mergeable set family (M7); single-writer leader/follower design decided, unimplemented (§Single-writer replication); keyed structures open
+> **Status**: Implemented for the mergeable set family (M7); single-writer leader/follower design decided, unimplemented (§Single-writer replication); keyed/partitioned structures unified under §Interest-scoped instance sets (replication and partitioning as two settings of one mesh — design decided, code deferred with the G-24 trigger)
 > **Sources**: ADR 0 (§5, §6), ADR 1 (§11, §12), ADR — Cellular Software Development Process (runtime characteristics)
 > **Implementation**: `cell.replication.Replication` (symmetric gossip-mesh
 > linker over registry announcements, plus its eviction gate —
@@ -103,6 +103,72 @@ candidacy under persistent high attention with remote hotspots, partition
 split/merge and bulk-rebalance triggering by load/size/attention, and
 per-Principal resource budgets bounding authenticated interest claims with a
 concrete cost to mint an identity (93 I-3/I-9/I-19/I-8/I-28).
+
+## Interest-scoped instance sets: one mesh, replication and partitioning as two settings
+
+Replication and partitioning are not two distribution mechanisms — they are two
+settings of a **single knob** over a **single substrate**. This section states
+that substrate; 24 §Partitioned state is its disjoint-interest instantiation.
+The two sections describe one mesh, read twice.
+
+The substrate is the **instance set** of a logical cell: the live instances of
+one `logicalId` (G-8), each a full `CellRef` published to the registry
+(`LocationRegistry.instancesOf(logicalId)`; `replicasOf` is its replication-class
+view). The linker over that set is the same membership-reactive rule already
+built — link each local instance's delta outlet to every discovered instance's
+`deltaInlet` (`cell.replication.Replication`, `Replication.maybeLink`). Nothing
+above is new; what is new is one predicate.
+
+- **Per-instance `Interest`.** Each instance carries an `Interest` — a
+  Serializable predicate over the delta/key space declaring which deltas that
+  instance wants (hash-slot set / key range / arbitrary predicate; default =
+  **total interest**, every delta). `maybeLink` links two instances only where
+  their interests overlap, and each emission is filtered to the *target's*
+  interest before it rides the link: a delta a peer has no interest in never
+  crosses. Interest is the demand signal P6 already names (30/34) made concrete
+  per instance and per link.
+
+- **Union is the merge.** Convergence is still the cell's declared merge over
+  the instance set. The three named regimes below are exactly three profiles of
+  `(Interest, union)`:
+
+  | Regime | Interest profile | Union degenerates to | Why it is safe |
+  |---|---|---|---|
+  | **Replication** | **total** interest on every instance | idempotent merge (tag union, pointwise-max) | echoes terminate on effective-only (21); merge is commutative/associative/idempotent (G-23) |
+  | **Partitioning** | **disjoint** key-interest — each instance owns one key range, no two overlap | **disjoint** union (no key ever merges concurrently) | disjointness *is* the merge-safety proof: a delta only ever mentions its own keys, so union is conflict-free and needs no merge function — this is why a non-mergeable keyed structure still shards |
+  | **Sharded replication** | **overlapping partial** interest — shards that also keep replicas of some ranges | idempotent merge on the overlap, disjoint union on the remainder | the overlap is the replication case (idempotent), the remainder is the partition case (disjoint); both hold pointwise |
+
+  Partitioning is the **conflict-free degenerate case** of replication: set every
+  instance's interest disjoint and the idempotent-union mesh becomes a disjoint
+  router with the merge function never exercised. Sharded replication is the
+  interpolation — free, because it is just the two safe cases holding on
+  disjoint sub-ranges of one instance's interest.
+
+- **"Many partition types" = many `Interest` assignment functions, not many
+  cells.** A hash partitioner, a range partitioner, a locality partitioner are
+  three functions assigning `Interest` to instances over the *one* mesh — not
+  three composite cell types. The partition-structure taxonomy (deferred until a
+  second real structure demands it) is a taxonomy of assignment functions, and
+  each new one composes with wire, journal, catch-up, and park/replay for free
+  because it rides the same substrate.
+
+Everything replication already earned is inherited by construction. Delta gossip
+over ordinary bridges (41), park-on-partition + idempotent catch-up (anti-entropy
+above), state-as-delta-from-empty late join (G-22), and the eviction gate
+(93 I-3) are properties of the mesh, so the disjoint-interest setting gets them
+without re-earning a single pair. Repartition (24 §Partitioned state) is
+therefore **interest reassignment**: change an instance's `Interest`, replay the
+moved range as one state-as-delta catch-up (21) into its new owner, park the
+flip window (33) — the same machinery a re-announce already drives, not a bespoke
+routing-table protocol.
+
+Contract for the unbuilt realization (design decided here, code deferred with
+the G-24 trigger): `Interest` is a per-instance field the linker consults;
+`maybeLink` filters deltas by target interest; `PartitionedCell` (24) is the
+disjoint-interest naming/composition convenience over an instance set, its router
+*is* the disjoint-interest linker, and its `routingEpoch` is the versioned
+interest-assignment table. No second distribution mechanism, no second sync
+protocol — one mesh, one knob.
 
 ## Decided in 93, not yet built
 

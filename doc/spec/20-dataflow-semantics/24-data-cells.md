@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; partitioning, tag-epoch continuity, and restart supersession design decided in 93, unbuilt)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, tag-epoch continuity, and restart supersession design decided, unbuilt)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.RelationalGraphs` (outer joins)
 
@@ -203,19 +203,32 @@ partitions replicate (93 I-25/I-2/I-3/I-8).
 ADR 1 §5: large keyed datasets shard by key for concurrency, locality, and
 scale-out; non-partitioned is for atomic structures.
 
+**Partitioning is the disjoint-interest setting of one mesh.** It is not a
+second distribution mechanism, nor even a second *replication* mechanism: it is
+the conflict-free degenerate case of the instance-set-with-interest substrate in
+40/42 §Interest-scoped instance sets. Shards are interest-scoped instances of one
+logical id, each carrying a disjoint key-`Interest`; the router is the
+disjoint-interest linker (`Replication.maybeLink`); disjoint union is the merge
+with the merge function never exercised. Everything this section specifies about
+keyed structure — how keys route, how disjointness proves merge-safety, how a
+range moves — is the keyed vocabulary of that one model; wire, journal, catch-up,
+and park/replay are inherited from replication, not re-earned here (42).
+
 ⚠ GAP (G-24, deferred with trigger — build when the first keyed dataset
 feels placement pressure; the M4 exit app never sharded): nothing is built,
-but the composite design is decided (93 I-8, evaluated under placement in
+but the design is decided (the instance-set substrate, 42 §Interest-scoped
+instance sets; composite naming per 93 I-8, evaluated under placement in
 93 I-19). Everything below is decided design, not code; kernel untouched,
 per P1.
 
 A **PartitionedCell** is one composite cell — one membrane, one logical id —
-owning organelle cells that each hold a **disjoint key range**. Keyed
-structures only (Set = element-keyed, Map = key-keyed): positionally-indexed
-`ListCell` is out of scope — a global position index across shards is
-ill-defined, and `ListDelta`'s convergence limit is not dissolved by
-disjointness; partition a list by keying entries on a stable id, never on
-position.
+a naming/composition convenience over a **disjoint-interest instance set**: its
+organelle cells are the interest-scoped instances, each holding a **disjoint key
+range** (its key-`Interest`). Keyed structures only (Set = element-keyed, Map =
+key-keyed): positionally-indexed `ListCell` is out of scope — a global position
+index across shards is ill-defined, and `ListDelta`'s convergence limit is not
+dissolved by disjointness; partition a list by keying entries on a stable id,
+never on position.
 
 - **Two membrane ports.** A routing inlet carrying the organelles' own
   command contract and a merging outlet carrying the delta contract; from
@@ -240,11 +253,13 @@ position.
   delta from one organelle only ever mentions its own keys: merging is
   conflict-free union, no downstream diamond joins two partitions on the
   same key, and cross-source glitches are impossible without coordination.
-- **Repartition = per-range Buffering + a versioned routing table.** Moving
-  range R: set R to Buffering on the router (other ranges flow), transfer
-  R's state-as-delta-from-empty, flip the table atomically and bump its
-  epoch, replay parked commands in order; a stale-epoch command re-routes.
-  External links observe none of it.
+- **Repartition = interest reassignment + per-range Buffering.** Moving range
+  R is `Interest` reassignment on the disjoint-interest mesh (42): set R to
+  Buffering on the router (other ranges flow), replay R's
+  state-as-delta-from-empty into its new owner as one catch-up (the same
+  mechanism a re-announce drives, not a bespoke protocol), flip the versioned
+  routing table atomically and bump its `routingEpoch`, replay parked commands
+  in order; a stale-epoch command re-routes. External links observe none of it.
 - **Late join = per-organelle catch-up.** Each organelle unicasts its
   key-range state-as-delta-from-empty (the G-22 mechanism); the union of
   disjoint-key catch-ups IS the coherent cross-partition snapshot.
@@ -271,24 +286,27 @@ partitioning must not become a second distribution mechanism, and doesn't:
   organelle is supervised by its own host; the composite holds a policy per
   partition and MUST re-apply it after every (re)placement, since
   supervision is per-host and does not migrate.
-- **Replication composes per organelle.** A mergeable organelle joins its
-  own gossip mesh (40/42) independently; the composite never coordinates
+- **Replication composes per organelle — same knob, wider interest.** A
+  mergeable organelle joins its own gossip mesh (40/42) independently by
+  widening its `Interest` to overlap peers: a shard that also keeps replicas is
+  the **sharded-replication** setting (42), reached by overlapping partial
+  interest, not by a second mechanism. The composite never coordinates
   replication.
 
-⚠ GAP (G-56): PartitionedCell's adopted design (G-24, trigger armed) leaves
-its distribution edges open: routing-table epoch consistency under
-concurrent organelle migration, repartition-window buffering bounds,
-bulk-rebalance atomicity, supervision-travels-with-placement, per-shard
-replica targeting, range queries, and per-key attention routing. Proposal:
-generative wire tests for the stale-epoch re-route racing registry
-re-resolution and for migrate-during-repartition (ownership and placement
-maps changing near-simultaneously); a buffering-bound analysis for long
-state transfers under quotas and backpressure; a
-supervision-follows-placement API replacing composite-local re-apply
-discipline; router targeting rules when shards replicate (leader per
-shard); a scatter-gather range-read protocol over the state-request
-substrate; and the attention-routing proxy forwarding interest per key
-(93 I-8/I-19/I-9).
+~~⚠ GAP (G-56): PartitionedCell's adopted design leaves its distribution edges
+open.~~ **Resolved by design (superseded by 42 §Interest-scoped instance
+sets)**: the "distribution edges" are not partition-specific edges to design —
+they are the replication mesh's edges, which partitioning inherits as the
+disjoint-interest setting of one substrate. Each former residual dissolves or
+relocates: routing-table epoch consistency *is* the versioned interest-assignment
+table's `routingEpoch` (realized CP-D3); repartition-window buffering *is* the
+mesh's park/replay on interest reassignment (realized CP-D4); per-shard replica
+targeting *is* the overlapping-interest / sharded-replication setting, not a
+targeting mechanism; the scatter-gather range read *is* the union of disjoint-key
+catch-ups (already stated above). The genuinely-open remainders are not partition
+edges: supervision-travels-with-placement is the placement concern G-61, and
+bulk-rebalance / resharding triggers / per-key attention routing are the economic
+layer G-62 — both cited from those gaps, neither owed by this section.
 
 ## Tag continuity across epochs, restart, and swap
 

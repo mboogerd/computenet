@@ -257,20 +257,12 @@ drain/suspend/despawn, unifying the two halves of the recursion: co-hosted
 organelles are the degenerate one-host case, organelles on child hosts are
 the host-tree case, and the membrane surface is identical in both.
 
-⚠ GAP (G-56): PartitionedCell's adopted design (G-24, trigger armed) leaves
-its distribution edges open — routing-table epoch consistency under
-concurrent organelle migration, repartition-window buffering bounds,
-bulk-rebalance atomicity, supervision-travels-with-placement, per-shard
-replica targeting, range queries, and per-key attention routing. Proposal:
-generative wire tests for the stale-epoch re-route racing registry
-re-resolution and for migrate-during-repartition (ownership and placement
-maps changing near-simultaneously); a buffering-bound analysis for long
-state transfers under quotas and backpressure; a
-supervision-follows-placement API replacing composite-local re-apply
-discipline; router targeting rules when shards replicate (leader per
-shard); a scatter-gather range-read protocol over the state-request
-substrate; and the attention-routing proxy forwarding interest per key
-(93 I-8/I-19/I-9).
+~~⚠ GAP (G-56): PartitionedCell's distribution edges open.~~ **Resolved by
+design (CP-D1)**: partitioning is the disjoint-interest setting of the
+replication mesh and inherits its edges (40/42 §Interest-scoped instance sets;
+24 §Partitioned state). The one host-layer residual — supervision that travels
+with (re)placement rather than being re-applied composite-locally — is the
+general placement concern G-61 (below), not a partition-specific edge.
 
 ⚠ GAP (G-61): nothing decides where cells land — the color-aware co-hosting
 engine (30/32 SHOULD), GraphSpec placement constraints, multi-host replay

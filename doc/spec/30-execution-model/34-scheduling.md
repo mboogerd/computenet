@@ -246,20 +246,12 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    never HIGH; promotion, shadows, partitions, fusion, and construction are
    placements in this lattice, not exceptions to it.
 
-   ⚠ GAP (G-56): PartitionedCell's adopted design (G-24, trigger armed)
-   leaves its distribution edges open — routing-table epoch consistency
-   under concurrent organelle migration, repartition-window buffering
-   bounds, bulk-rebalance atomicity, supervision-travels-with-placement,
-   per-shard replica targeting, range queries, and per-key attention
-   routing. Proposal: generative wire tests for the stale-epoch re-route
-   racing registry re-resolution and for migrate-during-repartition
-   (ownership and placement maps changing near-simultaneously); a
-   buffering-bound analysis for long state transfers under quotas and
-   backpressure; a supervision-follows-placement API replacing
-   composite-local re-apply discipline; router targeting rules when shards
-   replicate (leader per shard); a scatter-gather range-read protocol over
-   the state-request substrate; and the attention-routing proxy forwarding
-   interest per key (93 I-8/I-19/I-9).
+   ~~⚠ GAP (G-56): PartitionedCell's distribution edges open.~~ **Resolved by
+   design (CP-D1)**: partitioning is the disjoint-interest setting of the
+   replication mesh and inherits its edges (40/42 §Interest-scoped instance
+   sets; 24 §Partitioned state). The one scheduling-layer residual — per-key
+   attention routing, forwarding interest per key to a shard — is the economic
+   layer G-62, not a partition-specific edge.
 
 6. **Attention is a request, not an entitlement**
    (decided in 93 I-28, unimplemented). The answer to "an attacker claiming
