@@ -18,11 +18,17 @@ Live state for the [PERNODE-TICKETS.md](PERNODE-TICKETS.md) run. Kept current as
 
 Legend: pending · impl-running · validating · READY · merged · escalated
 
-### Wave 0 — defect surfacing (5 × FRESH, disjoint)
+### Wave 0 — defect surfacing (5 × FRESH, disjoint) — **COMPLETE** (combined gate green @ 6fc8669)
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-0a | pending | comp/PN-0a | | dead-letter frontier silent drop |
-| PN-0b | pending | comp/PN-0b | | checkpoint refuses non-Stateful journal |
-| PN-0c | pending | comp/PN-0c | | WatermarkCell.close() into evict/unpublish |
-| CP-G1 | pending | comp/CP-G1 | | mergeable aggregates |
-| CP-G2 | pending | comp/CP-G2 | | nature vectors cross the wire |
+| PN-0a | merged | comp/PN-0a | efc3031 | dead-letter via counted `unmatchedDrops`+`onDropped`; control load-bearing; validator READY |
+| PN-0b | merged | comp/PN-0b | 0a7f569 | guard widened to Stateful-snapshot OR Effectful-frontier (else broke EffectfulRecoveryTest); validator READY |
+| PN-0c | merged | comp/PN-0c | 2211b64 | close() in despawn branch only (not suspend); R13 lag reproduced deterministically; validator READY |
+| CP-G1 | merged | comp/CP-G1 | b5109fc | MergeableGroupByCell+MapDelta.merge; demo op=replace-per-key (disjoint ranges); GroupByCell byte-identical; validator READY |
+| CP-G2 | merged | comp/CP-G2 | 6fc8669 | NatureVector rides EdgeOpen frame (sparse/forward-compat); Link.kt needed no edit (CP-F3 seam); validator READY |
+
+### Wave 1 — PN-1 (α FRESH) ∥ PN-3a/c (β FRESH)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-1    | pending | comp/PN-1    | | replay-stable port identity |
+| PN-3a/c | pending | comp/PN-3a-c | | interest closes; StateRequest scope + vector since |
