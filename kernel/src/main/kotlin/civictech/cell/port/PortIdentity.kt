@@ -32,7 +32,13 @@ internal object PortIdentities {
      * identity and are simply not stamped — [of] returns null for them.
      */
     fun stamp(owner: Any?, name: String, port: Port) {
-        if (owner is Cell) table[port] = PortIdentity(owner.ref, name)
+        if (owner is Cell) {
+            table[port] = PortIdentity(owner.ref, name)
+            // PN-1: a hosted cell's port gets a replay-stable ref derived from
+            // (ownerRef, name) here, at the one seam that knows both. Anonymous
+            // ports (not a Cell owner) are never stamped and keep generate().
+            (port as? DerivedPortRef)?.deriveRef(owner.ref, name)
+        }
     }
 
     fun of(port: Port): PortIdentity? = table[port]

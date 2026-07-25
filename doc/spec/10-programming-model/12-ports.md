@@ -18,6 +18,27 @@ A port declares:
 - a **cardinality** — how many links it accepts (fan-in, fan-out, one-to-one);
 - optionally, **policies** and link-time validation (see 10/13).
 
+## Port identity is replay-stable
+
+A port carries a `PortRef` — the identity links resolve to and the identity an
+outlet stamps onto `MessageContext.sourcePort` at emission. For a port owned by
+a **hosted cell** this ref is **derived**, not random: at registration time
+(the one seam that knows both the owning `CellRef` and the registered port
+name) the ref is set to
+
+```
+PortRef.of(cellRef, name) = nameUUIDFromBytes("port:$name:${cellRef.id}:${cellRef.instanceId}")
+```
+
+— the same M10.1 derivation that gives `SetCell.tagSource`, `MintedTags`, and
+the replication watermark ref their restart-stable identity. A cell rebuilt or
+recovered with the same `(cellRef, name)` therefore re-mints the exact `PortRef`
+the network already observed, so a wave stamped before a restart still matches
+its edge in the rebuilt graph (the durable plane keys on `(cellRef, portName)`;
+`sourcePort` now keys the same thing). Anonymous ports — `Use.fixed` endpoints,
+ad-hoc test scaffolding, and any port not registered on a `Cell` — are never
+stamped and keep the fresh random ref minted at construction (PN-1).
+
 ## Contracts are push-only interfaces
 
 A contract is a plain interface whose methods are **push-only** (no return
