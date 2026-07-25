@@ -40,12 +40,104 @@ interface Interest : Serializable {
     /** Does this interest want the delta touching [key]? The per-element emission filter. */
     fun admits(key: Any?): Boolean
 
+    /**
+     * The interest algebra closes here (PN-3a, plan §2 F6, spec 42 §Interest-
+     * scoped instance sets). Before this, combinators over interests were
+     * anonymous `object : Interest` values that returned `overlaps = true`
+     * unconditionally — a lie the linker cannot distinguish from a real overlap,
+     * and non-`Serializable` (a captured lambda), so they could never ride the
+     * versioned interest-assignment table across the wire. Every arm below is a
+     * `data class`/`object`: [overlaps] is computed structurally by the single
+     * symmetric [Companion.overlap] (honest — provably-disjoint pairs return
+     * `false`, undecidable pairs stay conservatively `true` but *symmetrically*),
+     * and every arm round-trips through Java serialization to an `equals` value.
+     */
+    companion object {
+        /**
+         * Structural, **symmetric** overlap decision shared by every arm (the
+         * honesty [overlaps] promises). Symmetric by construction: the pair is
+         * matched without regard to argument order, so `overlap(a, b) ==
+         * overlap(b, a)` for all arms. Honest where decidable — [Empty] overlaps
+         * nothing, [Slots]/[Ranges] compare their sets exactly, [Union]/
+         * [Intersect] distribute over their members — and conservatively `true`
+         * only where a shared key is genuinely undecidable ([Complement], mixed
+         * slot/range kinds), never the blanket `true` the old anonymous
+         * combinators returned.
+         */
+        fun overlap(a: Interest, b: Interest): Boolean = when {
+            a is Empty || b is Empty -> false
+            a is Total || b is Total -> true
+            a is Union -> a.members.any { overlap(it, b) }
+            b is Union -> b.members.any { overlap(a, it) }
+            a is Intersect -> a.members.all { overlap(it, b) }
+            b is Intersect -> b.members.all { overlap(a, it) }
+            a is Complement || b is Complement -> true // negation: a shared key is undecidable — link conservatively
+            a is Slots && b is Slots -> a.slots.any { it in b.slots }
+            a is Ranges && b is Ranges -> a.intersectsRanges(b)
+            else -> true // mixed decidable kinds (Slots vs Ranges): conservative, filtering still applies per-emission
+        }
+    }
+
     /** Total interest — every key, every delta (the replication setting; the default). */
     object Total : Interest {
-        override fun overlaps(other: Interest): Boolean = true
+        // honest against the new algebra: Total overlaps everything EXCEPT Empty
+        // (symmetric with Empty.overlaps). For every pre-existing kind (Total,
+        // Slots) this still returns true, so non-opting graphs are unchanged.
+        override fun overlaps(other: Interest): Boolean = overlap(this, other)
         override fun admits(key: Any?): Boolean = true
         override fun toString(): String = "Interest.Total"
         private fun readResolve(): Any = Total
+    }
+
+    /** Empty interest — no key, no delta: overlaps nothing, admits nothing (the identity for [Union]). */
+    object Empty : Interest {
+        override fun overlaps(other: Interest): Boolean = false
+        override fun admits(key: Any?): Boolean = false
+        override fun toString(): String = "Interest.Empty"
+        private fun readResolve(): Any = Empty
+    }
+
+    /** Admits a key any member admits (∪); overlaps anything any member overlaps. */
+    data class Union(val members: List<Interest>) : Interest {
+        override fun overlaps(other: Interest): Boolean = overlap(this, other)
+        override fun admits(key: Any?): Boolean = members.any { it.admits(key) }
+    }
+
+    /** Admits a key every member admits (∩); the empty intersect admits all (vacuous). */
+    data class Intersect(val members: List<Interest>) : Interest {
+        override fun overlaps(other: Interest): Boolean = overlap(this, other)
+        override fun admits(key: Any?): Boolean = members.all { it.admits(key) }
+    }
+
+    /** Admits exactly the keys [of] does not (¬); overlap against a negation is undecidable ⇒ conservative. */
+    data class Complement(val of: Interest) : Interest {
+        override fun overlaps(other: Interest): Boolean = overlap(this, other)
+        override fun admits(key: Any?): Boolean = !of.admits(key)
+    }
+
+    /**
+     * A union of half-open integer ranges `[lo, hi)` over a key's numeric value
+     * (the ordered-key partitioner, complementary to [Slots]' hash partitioner).
+     * A key admits iff `(key as Number).toLong()` lands in some range; a
+     * non-numeric key admits nowhere. Two [Ranges] overlap iff any of their
+     * ranges intersect — decidable and honest.
+     */
+    data class Ranges(val ranges: List<Range>) : Interest {
+        data class Range(val lo: Long, val hi: Long) : java.io.Serializable {
+            init { require(lo <= hi) { "range lo ($lo) must be <= hi ($hi)" } }
+            fun contains(v: Long): Boolean = v in lo until hi
+            fun intersects(other: Range): Boolean = lo < other.hi && other.lo < hi
+        }
+
+        override fun overlaps(other: Interest): Boolean = overlap(this, other)
+        override fun admits(key: Any?): Boolean {
+            val v = (key as? Number)?.toLong() ?: return false
+            return ranges.any { it.contains(v) }
+        }
+
+        /** Do any of this interest's ranges intersect any of [other]'s? (symmetric) */
+        fun intersectsRanges(other: Ranges): Boolean =
+            ranges.any { r -> other.ranges.any { r.intersects(it) } }
     }
 
     /**
@@ -61,11 +153,10 @@ interface Interest : Serializable {
             require(totalSlots > 0) { "totalSlots must be positive, got $totalSlots" }
         }
 
-        override fun overlaps(other: Interest): Boolean = when (other) {
-            is Total -> true
-            is Slots -> slots.any { it in other.slots }
-            else -> true // unknown interest kind: link conservatively, filtering still applies per-emission
-        }
+        // routed through the shared symmetric decision (Slots vs Slots still
+        // compares slot sets exactly, Slots vs Total still true) — bit-identical
+        // for every pre-existing kind; only the new arms are decided honestly.
+        override fun overlaps(other: Interest): Boolean = overlap(this, other)
 
         override fun admits(key: Any?): Boolean = slotOf(key, totalSlots) in slots
 
