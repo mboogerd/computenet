@@ -2,11 +2,17 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Stateful
+import civictech.cell.TagFrontier
+import civictech.cell.Timestamp
 import civictech.cell.host.LocationRegistry
 import civictech.cell.membrane.CompositeCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
+import civictech.cell.port.Protocols
+import civictech.cell.port.ProtocolSupport
+import civictech.cell.port.StateRequest
 import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
@@ -206,29 +212,82 @@ class ShardCell<E>(
     private val keyFn: (E) -> Any?,
     initialInterest: Interest,
     private val epochAware: Boolean = true,
-) : Cell {
+) : Cell, Stateful, Replicable<SetDelta<E>> {
 
     private val state = TagState<E>()
 
     @Volatile
-    private var interest: Interest = initialInterest
+    private var interestField: Interest = initialInterest
 
     @Volatile
-    private var assignedEpoch: Long = 0L
+    private var assignedEpochField: Long = 0L
+
+    /**
+     * This shard's current key-`Interest` (PN-4). It is *snapshotted state*, not
+     * a constructor constant: a recovered instance restores the interest it held
+     * at checkpoint, and [PartitionedShardSet.rebuildFrom] reads it back to
+     * recompute the routing table. Rebuilding the table from the constructor's
+     * `initialInterest` instead (the pre-PN-4 behavior) resurrects a shed range.
+     */
+    val interest: Interest get() = interestField
+
+    /** The routing epoch this shard has adopted (PN-4) — the max-register [rebuildFrom] folds. */
+    val assignedEpoch: Long get() = assignedEpochField
 
     /** The disjoint-interest linker's receiving end — routed [RoutedCommand] slices merge here. */
     val routeInlet = registerPort("routeInlet", FanInlet.create<Propagate<RoutedCommand<E>>>())
 
+    /**
+     * The shard's effective-delta stream (PN-4): every membership change — a
+     * routed slice, a gossip merge, or a shed — re-emits here, so a shard is an
+     * ordinary dataflow source (partitioned+durable/replicated/pull, no longer a
+     * write-only sink reachable only by the direct [membership] call).
+     */
+    override val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<E>>>())
+
+    /**
+     * Replica gossip intake (PN-4, [Replicable]): a peer instance's effective
+     * deltas merge here, re-filtered to this shard's interest; only new tag
+     * information re-emits, so echoes die out — the overlapping-interest
+     * (sharded-replication) setting of one mesh (spec 42).
+     */
+    override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<SetDelta<E>>>())
+
     init {
         routeInlet.serve(Propagate<RoutedCommand<E>> { cmd -> onRouted(cmd) })
+        deltaInlet.serve(Propagate<SetDelta<E>> { delta -> onGossip(delta) })
+        // late-join catch-up (G-22): this shard's key-range state-as-delta-from-empty
+        outlet.catchUpOnLinked { state.asDelta().takeIf { it.adds.isNotEmpty() } }
+        // on-demand pull (spec 20/21 §Pull; the SetCell six-liner): a single-wave
+        // state-as-delta reply, scoped to the requester's interest slice and
+        // stamped as a catch-up baseline, delivered only to the requester.
+        ProtocolSupport.of(outlet).handle(Protocols.StateRequest) { _, message ->
+            val request = message as StateRequest
+            val out = contentsSince(request.since, request.scope)
+            if (out.isEmpty()) return@handle
+            outlet.baselineTo(request.replyTo, currentFrontier(request.scope)) {
+                propagate(SetDelta(adds = out))
+            }
+        }
     }
 
     private fun onRouted(cmd: RoutedCommand<E>) {
         // Interest guard (CP-D3): re-filter the slice to the shard's CURRENT
         // interest before merging. A stale in-flight slice for a key this shard
         // no longer owns is dropped — the new owner already holds it (replay).
-        val delta = if (epochAware) (cmd.delta.within(interest) { keyFn(it as E) } ?: return) else cmd.delta
-        state.apply(delta)
+        val delta = if (epochAware) (cmd.delta.within(interestField) { keyFn(it as E) } ?: return) else cmd.delta
+        emit(state.apply(delta))
+    }
+
+    /** Merge a peer replica's delta (interest-scoped); re-emit exactly the new tag information. */
+    private fun onGossip(delta: SetDelta<E>) {
+        val scoped = if (epochAware) (delta.within(interestField) { keyFn(it as E) } ?: return) else delta
+        val eff = state.apply(scoped)
+        if (eff.adds.isNotEmpty() || eff.dels.isNotEmpty()) outlet.originate { propagate(eff) }
+    }
+
+    private fun emit(eff: SetDelta<E>) {
+        if (eff.adds.isNotEmpty() || eff.dels.isNotEmpty()) outlet.call.propagate(eff)
     }
 
     /**
@@ -241,14 +300,51 @@ class ShardCell<E>(
     fun assign(newInterest: Interest, epoch: Long) {
         if (epochAware) {
             val shed = state.elements.filterTo(mutableSetOf()) { !newInterest.admits(keyFn(it)) }
-            if (shed.isNotEmpty()) state.apply(SetDelta(dels = shed.associateWith { state.tags(it) }))
+            if (shed.isNotEmpty()) emit(state.apply(SetDelta(dels = shed.associateWith { state.tags(it) })))
         }
-        interest = newInterest
-        assignedEpoch = maxOf(assignedEpoch, epoch)
+        interestField = newInterest
+        assignedEpochField = maxOf(assignedEpochField, epoch)
     }
 
     /** This shard's live key range — its contribution to the scatter-gather board. */
     fun membership(): Set<E> = state.elements
+
+    /** This shard's full tag state as a delta-from-empty — the router's [rebuildFrom] ledger source. */
+    internal fun contents(): SetDelta<E> = state.asDelta()
+
+    /** Tags a [since] frontier has not seen, restricted to the [scope] the requester admits (the SetCell pattern). */
+    private fun contentsSince(since: TagFrontier?, scope: Interest?): Map<E, Set<Timestamp>> {
+        val admit: (E) -> Boolean =
+            if (scope == null || scope is Interest.Total) { _ -> true } else { e -> scope.admits(keyFn(e)) }
+        return state.elements.filter(admit).associateWith { e ->
+            state.tags(e).filterTo(mutableSetOf()) { since == null || (since.perSource[it.sourceId] ?: -1L) < it.counter }
+        }.filterValues { it.isNotEmpty() }
+    }
+
+    /** Highest tag counter per source over the [scope]-admitted keys — the reply's reported currency. */
+    private fun currentFrontier(scope: Interest?): TagFrontier {
+        val admit: (E) -> Boolean =
+            if (scope == null || scope is Interest.Total) { _ -> true } else { e -> scope.admits(keyFn(e)) }
+        val frontier = mutableMapOf<UUID, Long>()
+        state.elements.filter(admit).forEach { e ->
+            state.tags(e).forEach { t -> frontier.merge(t.sourceId, t.counter, ::maxOf) }
+        }
+        return TagFrontier(frontier)
+    }
+
+    // snapshot/restore (PN-4): a shard's recoverable state is its tag state AND
+    // its (interest, assignedEpoch) — so a checkpoint-restored shard keeps the
+    // range it holds and the epoch it adopted, instead of resurrecting its
+    // constructor interest and re-admitting a shed range on tail replay.
+    override fun snapshot(): Serializable = arrayListOf(state.snapshot(), interestField, assignedEpochField)
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: Serializable) {
+        val parts = state as ArrayList<Serializable>
+        this.state.restore(parts[0])
+        interestField = parts[1] as Interest
+        assignedEpochField = parts[2] as Long
+    }
 }
 
 /**
@@ -298,7 +394,7 @@ class PartitionedShardSet<E>(
     private val shards = mutableListOf<Shard<E>>()
 
     /** The router's total-interest state-as-delta source, for interest-reassignment replay (42). */
-    private val ledger = TagState<E>()
+    private var ledger = TagState<E>()
 
     /** The versioned interest-assignment epoch (spec 20/24 "flip the table atomically and bump its epoch"). */
     var routingEpoch: Long = 0L
@@ -395,7 +491,13 @@ class PartitionedShardSet<E>(
         flipping = true
         flipBuffered = buffered
         val old = shards.map { it.interest }
-        val moving = predicateInterest { key -> ownerUnder(newInterests, key) != ownerUnder(old, key) }
+        // Moving range = keys whose owning shard changes (β's algebra, PN-4/F6):
+        // a key stays put iff the SAME shard admits it in both tables, so the
+        // stable set is the union of per-shard old∩new and the moving set its
+        // complement — serializable and honest, replacing the anonymous
+        // predicate whose `overlaps` unconditionally lied.
+        val stable = Interest.Union(newInterests.indices.map { i -> Interest.Intersect(listOf(old[i], newInterests[i])) })
+        val moving = Interest.Complement(stable)
         movingInterest = moving
         pendingInterests = newInterests
         // The routing table stays OLD for the whole window (routing continuity —
@@ -436,22 +538,34 @@ class PartitionedShardSet<E>(
 
     private var pendingInterests: List<Interest>? = null
 
-    /** The index of the shard whose interest admits [key] under [interests], or null (unrouted). */
-    private fun ownerUnder(interests: List<Interest>, key: Any?): Int? =
-        interests.indexOfFirst { it.admits(key) }.takeIf { it >= 0 }
-
     /** The scatter-gather board: each shard's live key range (spec: "union of disjoint-key catch-ups"). */
     fun memberships(): List<Set<E>> = shards.map { it.cell.membership() }
 
-    companion object {
-        private fun predicateInterest(admit: (Any?) -> Boolean): Interest = object : Interest {
-            override fun overlaps(other: Interest): Boolean = true
-            override fun admits(key: Any?): Boolean = admit(key)
+    /**
+     * Recover the router from its (already-recovered) shards (PN-4). The router
+     * holds no durable state of its own — the routing table *is* the shards'
+     * interests and the epoch *is* their max-register — so after a crash the
+     * table is recomputed by asking each restored shard what interest and epoch
+     * it holds. Reading each shard's *current* [ShardCell.interest] (restored
+     * from its checkpoint / replayed frames under its recovered interest) is what
+     * keeps a shed range shed; recomputing from the constructor `initialInterest`
+     * instead resurrects it and double-counts (the PN-4 control).
+     */
+    fun rebuildFrom(restored: List<ShardCell<E>>) {
+        shards.clear()
+        ledger = TagState()
+        var maxEpoch = 0L
+        restored.forEach { cell ->
+            addShard(cell, cell.interest)
+            ledger.apply(cell.contents())
+            maxEpoch = maxOf(maxEpoch, cell.assignedEpoch)
         }
+        routingEpoch = maxEpoch
+    }
 
-        private fun unionInterest(a: Interest, b: Interest): Interest =
-            predicateInterest { a.admits(it) || b.admits(it) }
+    companion object {
+        private fun unionInterest(a: Interest, b: Interest): Interest = Interest.Union(listOf(a, b))
 
-        private fun complement(interest: Interest): Interest = predicateInterest { !interest.admits(it) }
+        private fun complement(interest: Interest): Interest = Interest.Complement(interest)
     }
 }
