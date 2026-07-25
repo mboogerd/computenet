@@ -88,10 +88,12 @@ Legend: pending · impl-running · impl-done · validating · READY · merged ·
 |--------|-------|--------|---------------|-------|
 | CP-D1 | merged | comp/CP-D1 | d81b4c6 | spec: interest-scoped instance sets; G-56 retired; validator PASS |
 | CP-E1 | merged | comp/CP-E1 | eade494 | demo/exchange scaffold; validator PASS. **Probe gap for E2**: no MapDelta-merge operator (GroupByCell not Replicable → input-replication+recompute) |
-| CP-D2 | pending | comp/CP-D-tail | | bundled δ-tail: Interest filter on gossip linker |
-| CP-D3 | pending | comp/CP-D-tail | | bundled δ-tail: PartitionedCell on instance-set substrate |
-| CP-D4 | pending | comp/CP-D-tail | | bundled δ-tail: repartition under concurrent placement |
-| CP-E2 | pending | comp/CP-E2 | | PHASE EXIT: partitioned exchange + ExchangeCompositionExitTest |
+| CP-D2 | merged | comp/CP-D-tail | 7e02d37 | Interest (Total/Slots), maybeLink filter, default byte-identical; validator PASS |
+| CP-D3 | merged | comp/CP-D-tail | c4d6aa9 | PartitionedCell shards-across-hosts, routingEpoch wire field; validator PASS |
+| CP-D4 | merged | comp/CP-D-tail | a5cf896 | buffered flip zero-loss; unbuffered control diverges; validator PASS |
+| CP-E2 | pending | comp/CP-E2 | | PHASE EXIT: partitioned exchange + ExchangeCompositionExitTest (7 empty pairs) |
+
+**Wave 5 COMPLETE** — combined gate green @ `a5cf896`. Note (from D-tail review, non-blocking): distributed router uses a total-interest ledger for replay rather than shard-to-shard StateRequest (in-process `routed` ledger left in place — partial realization of "retire bespoke ledger"); control-plane holds ShardCell refs, data-plane crosses wire.
 
 **Wave 2 COMPLETE** — combined gate green @ `9e12569` (559 tests, 0 failed).
 **CP-B3 note**: CP-B2's watermark keys by re-emitter epoch (`originate` discards origin ctx before the tap). CP-B3's E3.4 replica-frontier settlement needs the finer **per-origin** delivered frontier → CP-B3 must also implement E3.3(a): a `DeliveredFrontier` in `SetCell`/`PnCounterCell.applyRemote` feeding `advance` keyed by origin source. Expanded CP-B3 file scope accordingly.
