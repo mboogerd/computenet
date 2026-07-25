@@ -11,7 +11,11 @@ import civictech.cell.data.SetDelta
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
+import civictech.cell.Cell
 import civictech.cell.graph.TypedRef
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.registerPort
 import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
@@ -21,6 +25,7 @@ import civictech.cell.host.link
 import civictech.cell.host.observe
 import civictech.cell.port.streamTo
 import civictech.cell.proxy.RoutedPropagate
+import civictech.cell.replication.Interest
 import civictech.cell.wire.Peering
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
@@ -52,6 +57,23 @@ private fun encodeOrder(region: String, id: String, amount: Long): String =
 
 private fun regionOf(order: String): String = order.substringBefore(SEP)
 private fun amountOf(order: String): Long = order.substringAfterLast(SEP).toLong()
+
+/**
+ * The disjoint-merge scatter-gather (CP-E2, spec 42): a bare fan-in→fan-out
+ * forward of per-shard [MapDelta] region-sums. Because the shards own disjoint
+ * region ranges, their key spaces never overlap, so this forward is
+ * conflict-free — the merge function the general no-`MapDelta`-merge gap would
+ * demand is never exercised.
+ */
+class MapMergeCell<K, V>(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    @Suppress("UNCHECKED_CAST")
+    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<K, V>>>))
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, V>>>())
+
+    init {
+        inlet.serve(Propagate { delta -> outlet.call.propagate(delta) })
+    }
+}
 
 class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
@@ -94,15 +116,38 @@ class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: 
     // orders → union (mesh-replicated inputs)
     private val orderUnion = UnionSetCell<String>(ref = unionRef("orders", myRole))
 
-    // union → per-region GroupBy(sum): MapDelta<region, sum>
-    private val groupBy = GroupByCell<String, String, Long, Long>(
-        keyFn = ::regionOf,
-        aggregator = Aggregators.sumOf(::amountOf),
+    // Partitioned aggregation (CP-E2, spec 42 §Interest-scoped instance sets):
+    // the plain single GroupBy(sum) is swapped for a region-partitioned set of
+    // shard GroupBys, EACH ON ITS OWN HOST, owning a disjoint region-slot range.
+    // The router forwards each order's region slice to exactly its owning shard;
+    // because ranges are disjoint, the shard region-sums never collide, so the
+    // scatter-gather union of shard outputs is the board with no partial-sum
+    // merge (the GroupBy-not-Replicable / no-MapDelta-merge gap is designed
+    // around: we partition the INPUT and recompute per shard, never merging
+    // aggregates). Shards on different hosts = the C–F pairwise cell in one graph.
+    private val shardCount = 2
+    private val totalSlots = 12
+    private val shardHosts = List(shardCount) { ManagedHost(registry = registry) }
+    private val shardInterests = List(shardCount) { Interest.Slots.forShard(it, shardCount, totalSlots) }
+    private fun shardRef(i: Int) = CellRef(UUID.nameUUIDFromBytes("exchange-shard:$i@$myRole".toByteArray()))
+    private val shards = List(shardCount) { i ->
+        GroupByCell<String, String, Long, Long>(
+            ref = shardRef(i),
+            keyFn = ::regionOf,
+            aggregator = Aggregators.sumOf(::amountOf),
+        )
+    }
+
+    // Disjoint-merge scatter-gather (spec 42): a bare fan-in→fan-out forward of
+    // the per-shard region-sums. Shard ranges are disjoint, so the forward is
+    // conflict-free — no merge function is ever exercised.
+    private val boardMerge = MapMergeCell<String, Long>(
+        ref = CellRef(UUID.nameUUIDFromBytes("exchange-board-merge@$myRole".toByteArray())),
     )
 
-    // GroupBy → glitch-free board (CP-A4): a whole-cell fan-in whose inlet carries
-    // WaveFrontier(WAIT). Un-partitioned it is a single-arm passthrough; CP-E2
-    // adds the shard arms that make the completeness gate bite.
+    // merge → glitch-free board (CP-A4): a whole-cell fan-in whose inlet carries
+    // WaveFrontier(WAIT). It surfaces the scatter-gathered board as one aligned
+    // MapDelta per wave, so the SSE never shows a half-applied shard update.
     @Suppress("UNCHECKED_CAST")
     private val boardApi = Propagate::class.java as Class<Propagate<MapDelta<String, Long>>>
     private val boardCell = GlitchFreeCell(boardApi)
@@ -127,12 +172,26 @@ class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: 
 
     init {
         manage.spawn(orderUnion)
-        manage.spawn(groupBy)
+        manage.spawn(boardMerge)
         manage.spawn(boardCell)
+        shards.forEachIndexed { i, shard -> shardHosts[i].managementInlet.call.spawn(shard) }
 
-        // union → groupBy → glitch-free board
-        manage.link(orderUnion.outlet, groupBy.inlet)
-        manage.link(groupBy.outlet, boardCell.inlet)
+        // each shard's region-sums → the disjoint merge (cross-host, routed via
+        // the registry) → glitch-free board
+        shards.forEach { it.outlet.streamTo(routedMapDelta(boardMerge.ref)) }
+        manage.link(boardMerge.outlet, boardCell.inlet)
+
+        // the region router: fan the union stream out to the owning shard only.
+        // Each order's group key (region) hashes to exactly one shard's slot
+        // range, so the partition is total and disjoint (spec 42).
+        orderUnion.outlet.streamTo(object : Propagate<SetDelta<String>> {
+            override fun propagate(value: SetDelta<String>) {
+                shards.forEachIndexed { i, shard ->
+                    val slice = value.within(shardInterests[i]) { regionOf(it as String) } ?: return@forEachIndexed
+                    routedDelta(shard.ref).propagate(slice)
+                }
+            }
+        })
 
         // observe the board's aligned outlet → SSE state
         host.observe(boardCell.ref, View.map<String, Long>()) {
@@ -184,6 +243,9 @@ class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: 
         }
 
     private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
+        RoutedPropagate(ref, "inlet", registry::deliver)
+
+    private fun routedMapDelta(ref: CellRef): Propagate<MapDelta<String, Long>> =
         RoutedPropagate(ref, "inlet", registry::deliver)
 
     private fun handleOp(exchange: HttpExchange) {
