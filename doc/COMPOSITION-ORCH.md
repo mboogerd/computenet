@@ -79,7 +79,19 @@ Legend: pending · impl-running · impl-done · validating · READY · merged ·
 | CP-A3 | merged | comp/CP-A-tail | cdbe1c2 | bundled α-tail; validator PASS |
 | CP-A4 | merged | comp/CP-A-tail | 9e12569 | WaveFrontier + FanInlet.frontierPolicy; validator PASS |
 | CP-B2 | merged | comp/CP-B2 | 309dd3d | outlet-tap seam (coarse); E3.3(a) per-origin frontier deferred to CP-B3 |
-| CP-B3 | pending | comp/CP-B3 | | JOIN; needs E3.3(a) per-origin DeliveredFrontier in cell applyRemote (see note) |
+| CP-B3 | merged | comp/CP-B3 | 9e26039 | JOIN (E3.3(a)+E3.4); validation caught whole-cell-replace glitch → reworked to per-edge; PASS |
+
+**PHASE 1 COMPLETE** — gate green @ `9e26039`; all 5 named tests landed (GlitchFreeBridgedDiamondTest, GlitchFreeOperatorSuiteTest, InletFrontierPolicyTest, GlitchFreeReplicaFrontierTest, MixedDurabilityTest). One rework: CP-B3's replica-fed settlement was whole-cell-replacing the wave-frontier predicate (broke local-arm glitch-freedom, 50/50 probe); reworked to per-edge (`markReplicaFed`), + committed `MixedArmGlitchFreeTest`.
+
+### Phase 2 (Wave 4–6)
+| Ticket | State | Branch | Merged commit | Notes |
+|--------|-------|--------|---------------|-------|
+| CP-D1 | pending | comp/CP-D1 | | spec: interest-scoped instance sets |
+| CP-E1 | pending | comp/CP-E1 | | demo/exchange scaffold (un-partitioned) |
+| CP-D2 | pending | comp/CP-D-tail | | bundled δ-tail: Interest filter on gossip linker |
+| CP-D3 | pending | comp/CP-D-tail | | bundled δ-tail: PartitionedCell on instance-set substrate |
+| CP-D4 | pending | comp/CP-D-tail | | bundled δ-tail: repartition under concurrent placement |
+| CP-E2 | pending | comp/CP-E2 | | PHASE EXIT: partitioned exchange + ExchangeCompositionExitTest |
 
 **Wave 2 COMPLETE** — combined gate green @ `9e12569` (559 tests, 0 failed).
 **CP-B3 note**: CP-B2's watermark keys by re-emitter epoch (`originate` discards origin ctx before the tap). CP-B3's E3.4 replica-frontier settlement needs the finer **per-origin** delivered frontier → CP-B3 must also implement E3.3(a): a `DeliveredFrontier` in `SetCell`/`PnCounterCell.applyRemote` feeding `advance` keyed by origin source. Expanded CP-B3 file scope accordingly.
