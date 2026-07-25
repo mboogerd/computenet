@@ -33,9 +33,17 @@ Legend: pending · impl-running · validating · READY · merged · escalated
 | PN-1    | merged | comp/PN-1    | cdc852c | PortRef.of derived at stamp time; ctor param ref→initialRef (shadowing); validator READY |
 | PN-3a/c | merged | comp/PN-3ac  | c6457ea | Interest algebra closed; StateRequest.scope; per-instance RetainedFrontiers; Total/Slots bit-identical; validator READY |
 
-### Wave 2 — PN-2 (α CONT) ∥ PN-4 (γ FRESH) ∥ PN-3b (β CONT)
+### Wave 2 — PN-2 (α CONT) ∥ PN-4 (γ FRESH) ∥ PN-3b (β CONT) — **COMPLETE** (gate green @ 701f0b7)
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-2  | pending | comp/PN-2  | | journal replay is a baseline (ReplayScope) |
-| PN-4  | pending | comp/PN-4  | | ShardCell grows up (Stateful+Replicable) |
-| PN-3b | pending | comp/PN-3b | | MapDelta is Scoped |
+| PN-2  | merged | comp/PN-2  | 6218b02 | ReplayScope thread-local; baselineTo switch + unified Baseline shape DEFERRED to PN-3/PN-6 (validator: legit); ctrl(b) stays green per ticket |
+| PN-4  | merged | comp/PN-4  | 8849ca9 | ShardCell Stateful+Replicable; rebuildFrom; non-checkpointed shed-recovery partial-durable (journaled assignment = PN-6); single-host byte-identical |
+| PN-3b | merged | comp/PN-3b | 701f0b7 | MapDelta:Scoped mirrors SetDelta.within; covers CP-G1 merge path |
+
+Spec 24-data-cells.md conflicts (3 EOF-appended sections) resolved by union.
+
+### Wave 3 — PN-5 (γ CONT) ∥ PN-9 (ε FRESH)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-5 | pending | comp/PN-5 | | scatter-gather pull |
+| PN-9 | pending | comp/PN-9 | | policy tiers on inlets; policy lists on outlets |
