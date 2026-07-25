@@ -52,7 +52,20 @@ fun interface ProtocolBridge {
 
 sealed interface LinkResult {
     data class Connected(val link: Link) : LinkResult
-    data class Rejected(val reason: String) : LinkResult
+
+    /**
+     * A refused handshake. [reason] is the human string every existing call
+     * site and test already asserts on; [mismatch] is the CP-F1 typed slot,
+     * non-null only when a scoped-axis nature conflict caused the refusal
+     * (CP-F3). The secondary constructor keeps every legacy `Rejected(reason)`
+     * site — and their asserted strings — byte-for-byte intact.
+     */
+    data class Rejected(
+        val mismatch: civictech.gen.wire.NatureMismatch?,
+        val reason: String,
+    ) : LinkResult {
+        constructor(reason: String) : this(null, reason)
+    }
 
     /**
      * The handshake runs on the target's host (cross-host proxy link); the outcome

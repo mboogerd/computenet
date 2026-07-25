@@ -34,6 +34,113 @@ data class ContractDescriptor(
 
 enum class CellColor { PURE, BLOCKING, SUSPENDING }
 
+/**
+ * The irreducible composition axes (COMPOSITION-PLAN.md, Appendix B §"The
+ * irreducible remainder"): the ~4 natures whose mismatch fails *silently* today
+ * and so must become a loud typed refusal — nothing here is adaptable, so there
+ * is deliberately no negotiation/auto-insertion vocabulary. Every other axis
+ * from Appendix A (consistency, delivery, durability, replication, partition,
+ * locality) was found *dissolvable* by the Phase-2 probe and is out of scope.
+ */
+enum class NatureAxis { OWNERSHIP, MERGE_IDEMPOTENCE, COLOR, MONOTONICITY }
+
+/**
+ * One level on one [NatureAxis]. The per-axis enums are the only inhabitants;
+ * the first constant of each is the axis DEFAULT (absent axis ⇒ this level ⇒
+ * today's behavior), and later constants are *stronger* — offering a stronger
+ * level satisfies a weaker requirement (see `NatureNegotiation.reconcile`).
+ */
+sealed interface NatureLevel {
+    val axis: NatureAxis
+    /** Rank within the axis lattice; higher subsumes lower. */
+    val rank: Int
+}
+
+/** Exclusive-ownership class of the payload a port carries (spec 23, G-21). */
+enum class Ownership : NatureLevel {
+    /** Fan-out-safe (no `Owned`/`Leased`) — the DEFAULT. */
+    SHARED,
+    /** Carries an exclusive `Owned`/`Leased` payload — single-consumer only. */
+    EXCLUSIVE;
+
+    override val axis get() = NatureAxis.OWNERSHIP
+    override val rank get() = ordinal
+}
+
+/** Merge class of a replicated/gossiped delta stream (spec 42). */
+enum class MergeClass : NatureLevel {
+    /** Merge is not idempotent (e.g. plain addition) — the DEFAULT. */
+    NON_IDEMPOTENT,
+    /** Idempotent merge (tag union, pointwise max) — gossip/catch-up safe. */
+    IDEMPOTENT;
+
+    override val axis get() = NatureAxis.MERGE_IDEMPOTENCE
+    override val rank get() = ordinal
+}
+
+/** Execution color a cell demands of its host (spec 32, G-3). */
+enum class Color : NatureLevel {
+    /** No blocking/suspension — spawns on any host color; the DEFAULT. */
+    PURE,
+    BLOCKING,
+    SUSPENDING;
+
+    override val axis get() = NatureAxis.COLOR
+    override val rank get() = ordinal
+}
+
+/** Whether a delta stream is monotone (safe to re-origination on a cycle). */
+enum class Monotonicity : NatureLevel {
+    /** Not known monotone — the DEFAULT. */
+    NON_MONOTONE,
+    /** Monotone / magnitude-bounded — safe on a feedback cycle (spec 21 §Cycles). */
+    MONOTONE;
+
+    override val axis get() = NatureAxis.MONOTONICITY
+    override val rank get() = ordinal
+}
+
+/**
+ * A **sparse** vector of declared natures. Absent axes read as their DEFAULT
+ * level, so [DEFAULT] (the empty vector) is *exactly today's behavior* — and,
+ * being empty, is the zero-cost same-nature fast path (see [isDefault]).
+ */
+@JvmInline
+value class NatureVector(val levels: Map<NatureAxis, NatureLevel>) {
+    /** The declared level on [axis], or its DEFAULT (first-constant) level. */
+    fun level(axis: NatureAxis): NatureLevel = levels[axis] ?: defaultOf(axis)
+
+    /** No axis declared ⇒ literally today's behavior ⇒ the reconcile fast path. */
+    val isDefault: Boolean get() = levels.isEmpty()
+
+    /** Folds another vector in; [other]'s declared levels win on shared axes. */
+    fun with(other: NatureVector): NatureVector =
+        if (other.isDefault) this
+        else if (isDefault) other
+        else NatureVector(levels + other.levels)
+
+    fun with(level: NatureLevel): NatureVector = NatureVector(levels + (level.axis to level))
+
+    companion object {
+        /** Shared, zero-alloc empty singleton — the same-nature fast-path sentinel. */
+        val DEFAULT = NatureVector(emptyMap())
+
+        fun of(vararg levels: NatureLevel): NatureVector =
+            if (levels.isEmpty()) DEFAULT else NatureVector(levels.associateBy { it.axis })
+
+        /** The DEFAULT (first-constant) level of each axis — "absent ⇒ today". */
+        fun defaultOf(axis: NatureAxis): NatureLevel = when (axis) {
+            NatureAxis.OWNERSHIP -> Ownership.SHARED
+            NatureAxis.MERGE_IDEMPOTENCE -> MergeClass.NON_IDEMPOTENT
+            NatureAxis.COLOR -> Color.PURE
+            NatureAxis.MONOTONICITY -> Monotonicity.NON_MONOTONE
+        }
+    }
+}
+
+/** A single-axis nature conflict — the only failure a scoped-axis link can raise. */
+data class NatureMismatch(val axis: NatureAxis, val offered: NatureLevel, val required: NatureLevel)
+
 enum class PortDirection { IN, OUT }
 
 /**
@@ -49,6 +156,13 @@ data class PortDescriptor(
     val contractFqn: String,
     /** `StableHash.of(contractFqn)` — joins to [ContractDescriptor.contractId]. */
     val contractId: Long,
+    /**
+     * Declared natures of this port (the G-60 slot for composition typing).
+     * [NatureVector.DEFAULT] (the KSP default) ⇒ today's behavior verbatim;
+     * a non-default vector is projected onto the live [civictech.cell.port.Port]
+     * at `registerPort` and reconciled at link time (CP-F2/CP-F3).
+     */
+    val natures: NatureVector = NatureVector.DEFAULT,
 )
 
 /** Placement metadata for one concrete Cell implementation. */
