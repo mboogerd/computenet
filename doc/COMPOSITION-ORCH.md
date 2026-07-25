@@ -91,7 +91,16 @@ Legend: pending · impl-running · impl-done · validating · READY · merged ·
 | CP-D2 | merged | comp/CP-D-tail | 7e02d37 | Interest (Total/Slots), maybeLink filter, default byte-identical; validator PASS |
 | CP-D3 | merged | comp/CP-D-tail | c4d6aa9 | PartitionedCell shards-across-hosts, routingEpoch wire field; validator PASS |
 | CP-D4 | merged | comp/CP-D-tail | a5cf896 | buffered flip zero-loss; unbuffered control diverges; validator PASS |
-| CP-E2 | pending | comp/CP-E2 | | PHASE EXIT: partitioned exchange + ExchangeCompositionExitTest (7 empty pairs) |
+| CP-E2 | merged | comp/CP-E2 | 500c1d7 | PHASE EXIT; validator PASS. Composition genuinely exercised (C–F over real bridges, both controls diverge). Honest per-pair: C–B/C–F/A–B strong, C–D solid; A–F/A–C/A–O are known residuals proven by CP-A2/A3's own tests, not by this one graph. |
+
+**PHASE 2 COMPLETE** — gate green @ `500c1d7`. Probe surfaced no new type-system axis (composition buildable demo-side; no kernel MapDelta-merge needed). So Phase-3 scope stays the irreducible ~4 axes.
+
+### Phase 3 (Wave 7) — minimal type system (ζ, one lane, bundled)
+| Ticket | State | Branch | Merged commit | Notes |
+|--------|-------|--------|---------------|-------|
+| CP-F1 | pending | comp/CP-F | | Nature vocabulary + typed Rejected(mismatch), zero behavior change |
+| CP-F2 | pending | comp/CP-F | | KSP emits natures (marker scan mirroring CellColor) |
+| CP-F3 | pending | comp/CP-F | | reconcile() in handshake: typed refusals only (no Adapt/planner) |
 
 **Wave 5 COMPLETE** — combined gate green @ `a5cf896`. Note (from D-tail review, non-blocking): distributed router uses a total-interest ledger for replay rather than shard-to-shard StateRequest (in-process `routed` ledger left in place — partial realization of "retire bespoke ledger"); control-plane holds ShardCell refs, data-plane crosses wire.
 
