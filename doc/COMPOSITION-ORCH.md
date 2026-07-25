@@ -86,8 +86,8 @@ Legend: pending · impl-running · impl-done · validating · READY · merged ·
 ### Phase 2 (Wave 4–6)
 | Ticket | State | Branch | Merged commit | Notes |
 |--------|-------|--------|---------------|-------|
-| CP-D1 | pending | comp/CP-D1 | | spec: interest-scoped instance sets |
-| CP-E1 | pending | comp/CP-E1 | | demo/exchange scaffold (un-partitioned) |
+| CP-D1 | merged | comp/CP-D1 | d81b4c6 | spec: interest-scoped instance sets; G-56 retired; validator PASS |
+| CP-E1 | merged | comp/CP-E1 | eade494 | demo/exchange scaffold; validator PASS. **Probe gap for E2**: no MapDelta-merge operator (GroupByCell not Replicable → input-replication+recompute) |
 | CP-D2 | pending | comp/CP-D-tail | | bundled δ-tail: Interest filter on gossip linker |
 | CP-D3 | pending | comp/CP-D-tail | | bundled δ-tail: PartitionedCell on instance-set substrate |
 | CP-D4 | pending | comp/CP-D-tail | | bundled δ-tail: repartition under concurrent placement |
