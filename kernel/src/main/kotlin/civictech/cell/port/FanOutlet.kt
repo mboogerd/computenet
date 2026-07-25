@@ -1,5 +1,6 @@
 package civictech.cell.port
 
+import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.PendingReBaseline
@@ -22,8 +23,21 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class FanOutlet<Api : Any>(
     val clazz: Class<Api>,
-    override val ref: PortRef = PortRef.generate()
-) : Use<Api>, Subscribe<Api>, Linked {
+    initialRef: PortRef = PortRef.generate()
+) : Use<Api>, Subscribe<Api>, Linked, DerivedPortRef {
+
+    // PN-1: fresh random at construction, reassigned once at stamp time to the
+    // (ownerRef, name)-derived ref when this outlet is registered on a Cell.
+    // NB: the parameter is NOT named `ref` — a same-named ctor param would
+    // shadow this property inside body lambdas (e.g. the `call` proxy), which
+    // would then capture the construction-time value and never see the derived
+    // ref, defeating the whole ticket.
+    override var ref: PortRef = initialRef
+        private set
+
+    override fun deriveRef(owner: CellRef, name: String) {
+        ref = PortRef.of(owner, name)
+    }
 
     override val linking = LinkSupport()
 

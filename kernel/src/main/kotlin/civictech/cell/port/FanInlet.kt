@@ -1,5 +1,6 @@
 package civictech.cell.port
 
+import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.proxy.Buffering
 import civictech.cell.proxy.Invocation
@@ -52,9 +53,21 @@ interface InletFrontier {
  */
 class FanInlet<Api : Any>(
     val clazz: Class<Api>,
-    override val ref: PortRef = PortRef.generate(),
+    initialRef: PortRef = PortRef.generate(),
     default: Api? = null
-) : Use<Api>, Serve<Api>, Linked {
+) : Use<Api>, Serve<Api>, Linked, DerivedPortRef {
+
+    // PN-1: fresh random at construction, reassigned once at stamp time to the
+    // (ownerRef, name)-derived ref when this inlet is registered on a Cell.
+    // NB: the parameter is NOT named `ref` — a same-named ctor param would
+    // shadow this property inside body lambdas/initializers, capturing the
+    // construction-time value instead of the derived ref.
+    override var ref: PortRef = initialRef
+        private set
+
+    override fun deriveRef(owner: CellRef, name: String) {
+        ref = PortRef.of(owner, name)
+    }
 
     override val linking = LinkSupport()
 
