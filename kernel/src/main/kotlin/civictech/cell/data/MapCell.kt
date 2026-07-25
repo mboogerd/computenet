@@ -25,7 +25,26 @@ interface MapOps<K, V> {
 data class MapDelta<K, V>(
     val puts: Map<K, V>,
     val removals: Set<K>
-) : Serializable
+) : Serializable {
+    /**
+     * Aggregate merge path (CP-G1): fold two deltas per key with [combine]
+     * instead of the single-writer last-writer-wins replace. A key present in
+     * only one side carries through unchanged — **absent key = the operator's
+     * identity** — and a key in both is combined. Removals union; a key both
+     * put and removed resolves to removed on either side, so the fold is
+     * order-independent exactly when [combine] is commutative-associative
+     * (max/min/set-union — or a counted operator like `+` over disjoint keys).
+     * This is what lets a [Replicable] group-by gossip O(groups) aggregates and
+     * converge, where the plain [MapCell]/[GroupByCell] `MapDelta` would lose a
+     * concurrent partial to last-writer-wins.
+     */
+    fun merge(other: MapDelta<K, V>, combine: (V, V) -> V): MapDelta<K, V> {
+        val puts = LinkedHashMap(this.puts)
+        other.puts.forEach { (k, v) -> puts[k] = if (k in puts) combine(puts.getValue(k), v) else v }
+        val removals = this.removals + other.removals
+        return MapDelta(puts.filterKeys { it !in removals }, removals)
+    }
+}
 
 @CellBase
 interface MapApi<K, V> {
