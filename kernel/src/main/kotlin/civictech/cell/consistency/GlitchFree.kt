@@ -77,6 +77,21 @@ class GlitchFreeCell<Api : Any>(
         frontier.installReplicaGate(WaveFrontier.ReplicaGate(replicaFrontier, originTags))
     }
 
+    /**
+     * Declare a **single arm** replica-fed (E3.4): only the inlinks from
+     * [fromOutlet] settle on [replicaFrontier]; every sibling arm keeps the
+     * ordinary cross-inlink frontier, so a local fan-in diamond on this same cell
+     * stays glitch-free. Use this instead of [useReplicaFrontier] whenever the
+     * cell mixes replica-fed and local inlinks.
+     */
+    fun markReplicaFed(
+        fromOutlet: civictech.cell.port.PortRef,
+        replicaFrontier: ReplicaFrontier,
+        originTags: (Invocation) -> Collection<Timestamp>,
+    ) {
+        frontier.markReplicaFed(fromOutlet, WaveFrontier.ReplicaGate(replicaFrontier, originTags))
+    }
+
     /** Re-run settlement after the merged replica watermark advanced (E3.4). */
     fun recheck() = frontier.recheck()
 

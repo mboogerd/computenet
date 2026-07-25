@@ -9,6 +9,7 @@ import civictech.cell.port.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.InletFrontier
 import civictech.cell.port.Link
+import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
 import civictech.cell.port.StateRequest
@@ -57,24 +58,40 @@ class WaveFrontier(
     private lateinit var release: (Invocation) -> Unit
 
     /**
-     * Opt-in replica-fed settlement (E3.4). A glitch-free consumer drawing from
-     * *replicas* of one logical source cannot align its inlinks by wave source —
-     * each replica re-originates a delivered wave under its own outlet epoch, so
-     * the ordinary cross-inlink per-source predicate ([expectedEdges]) would
-     * stall forever (a source only ever appears on the one edge whose replica
-     * minted it). When set, settlement is instead read from the replica set: a
-     * buffered wave releases once every ORIGIN tag its payload carries is
+     * Opt-in replica-fed settlement (E3.4), declared **per edge** — not per cell.
+     *
+     * An edge is *replica-fed* when its deliveries arrive from a *replica* of one
+     * logical source. Such a source cannot be aligned by the ordinary cross-inlink
+     * per-source predicate ([expectedLocalEdges]): each replica re-originates a
+     * delivered wave under its own outlet epoch, so the source appears on exactly
+     * the one edge whose replica minted it, and every sibling edge would be a
+     * *phantom* expected-edge that never settles (its floor defaults to
+     * `MIN_VALUE`). So a replica-fed edge gates on the replica SET instead: a wave
+     * it delivered releases once every ORIGIN tag its payload carries is
      * [ReplicaFrontier.completeAt] — "the replica set delivered it", not merely
-     * "my replica delivered it". [ReplicaGate.originTags] extracts those origin
-     * tags from the payload, keeping this fold payload-agnostic.
+     * "my replica delivered it".
+     *
+     * A *local* edge keeps the ordinary cross-inlink frontier ([isSettled]) so a
+     * local fan-in diamond on the very same cell stays glitch-free. Settlement is
+     * therefore composed **per edge**: each expected edge is ready under its own
+     * rule (see [flushReady]) — never globally replaced.
+     *
+     * [replicaFedBy] carries per-outlet declarations; [blanketGate] is the
+     * whole-cell convenience (mark every edge replica-fed) kept for the
+     * all-replica join. [ReplicaGate.originTags] extracts origin tags from the
+     * payload, keeping this fold payload-agnostic.
      */
-    private var replicaGate: ReplicaGate? = null
+    private val replicaFedBy = mutableMapOf<PortRef, ReplicaGate>()
+    private var blanketGate: ReplicaGate? = null
 
-    /** Configuration for [replicaGate]: the cross-replica read plus a payload origin-tag extractor. */
+    /** Configuration for a replica-fed edge: the cross-replica read plus a payload origin-tag extractor. */
     class ReplicaGate(
         val frontier: ReplicaFrontier,
         val originTags: (Invocation) -> Collection<Timestamp>,
     )
+
+    /** The gate governing [edge], if it is replica-fed (per-outlet declaration, else the blanket). */
+    private fun gateFor(edge: EdgeState): ReplicaGate? = replicaFedBy[edge.link.from] ?: blanketGate
 
     private val pending = LinkedHashMap<Timestamp, LinkedHashMap<UUID, Invocation>>()
 
@@ -184,11 +201,25 @@ class WaveFrontier(
     }
 
     /**
-     * Install the cross-replica settlement read (E3.4). Immediately re-checks:
-     * a gate installed after waves already buffered must not leave them stuck.
+     * Whole-cell convenience (E3.4): mark **every** edge replica-fed under one
+     * gate — the all-replica join, where no inlink is local. Prefer
+     * [markReplicaFed] to declare a single arm replica-fed while sibling arms stay
+     * local (the mixed-arm case). Immediately re-checks: a gate installed after
+     * waves already buffered must not leave them stuck.
      */
     fun installReplicaGate(gate: ReplicaGate) {
-        replicaGate = gate
+        blanketGate = gate
+        flushReady()
+    }
+
+    /**
+     * Declare a **single edge** replica-fed (E3.4) — the inlinks from [fromOutlet]
+     * gate on the replica frontier while every other inlink keeps the ordinary
+     * cross-inlink predicate. Marking is by source outlet ref so it survives the
+     * edge's open/close lifecycle and needs no live [Link] at declaration time.
+     */
+    fun markReplicaFed(fromOutlet: PortRef, gate: ReplicaGate) {
+        replicaFedBy[fromOutlet] = gate
         flushReady()
     }
 
@@ -226,33 +257,53 @@ class WaveFrontier(
         flushReady()
     }
 
-    private fun expectedEdges(timestamp: Timestamp): Set<UUID> = edges.values
+    /**
+     * The **local** expected edges of a wave (the cross-inlink frontier). Every
+     * open, non-suspended *local* edge whose floor for this source is below the
+     * wave's counter must settle before release — this is what keeps a local
+     * fan-in diamond glitch-free. Replica-fed edges are excluded: a local source
+     * never flows through a replica inlink, so counting one would be a phantom
+     * sibling that never settles.
+     */
+    private fun expectedLocalEdges(timestamp: Timestamp): Set<UUID> = edges.values
         .asSequence()
         .filter { it.open && it.link.id !in suspendedEdges }
+        .filter { gateFor(it) == null }
         .filter { (it.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter }
         .map { it.link.id }
         .toSet()
 
     /**
-     * Replica-fed readiness (E3.4): the wave arrived on its delivering edge (it
-     * is in [pending]), so "my replica delivered it" already holds; the only
-     * remaining question is whether the replica SET has — every origin tag the
-     * buffered invocations carry must be [ReplicaFrontier.completeAt].
+     * Per-edge settlement (E3.4): a buffered wave is ready only when **every**
+     * expected edge is ready under its own rule.
+     *
+     * A wave delivered on a replica-fed edge carries a replica-minted source that
+     * lives on that one edge only; it is ready once the replica SET has delivered
+     * every origin tag its payload carries ([ReplicaFrontier.completeAt]) — its
+     * local sibling arms are NOT phantom expected-edges for it. A wave delivered
+     * on local edges is ready under the ordinary cross-inlink frontier over the
+     * local expected edges. The two classes never share a timestamp (a replica
+     * re-originates under its own outlet epoch), so classifying by the wave's
+     * delivering edges is unambiguous.
      */
-    private fun replicaReady(timestamp: Timestamp, gate: ReplicaGate): Boolean {
+    private fun ready(timestamp: Timestamp): Boolean {
         val wave = pending[timestamp] ?: return false
-        return wave.values.all { invocation ->
-            gate.originTags(invocation).all { tag -> gate.frontier.completeAt(tag.sourceId, tag.counter) }
+        val replicaFed = wave.entries.mapNotNull { (edgeId, invocation) ->
+            edges[edgeId]?.let { edge -> gateFor(edge)?.let { gate -> gate to invocation } }
         }
+        if (replicaFed.isNotEmpty()) {
+            // Replica-fed wave: gate purely on the merged watermark, no phantom siblings.
+            return replicaFed.all { (gate, invocation) ->
+                gate.originTags(invocation).all { tag -> gate.frontier.completeAt(tag.sourceId, tag.counter) }
+            }
+        }
+        // Local wave: the ordinary cross-inlink frontier over local expected edges.
+        return expectedLocalEdges(timestamp).all { isSettled(it, timestamp) }
     }
 
     private fun flushReady() {
-        val gate = replicaGate
         val ready = pending.keys
-            .filter { timestamp ->
-                if (gate != null) replicaReady(timestamp, gate)
-                else expectedEdges(timestamp).all { isSettled(it, timestamp) }
-            }
+            .filter { timestamp -> ready(timestamp) }
             .sortedWith(compareBy({ it.sourceId }, { it.counter }))
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue
