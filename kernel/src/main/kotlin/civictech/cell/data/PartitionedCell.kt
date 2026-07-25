@@ -188,6 +188,20 @@ data class RoutedCommand<E>(
 ) : Serializable
 
 /**
+ * One leg of a scatter-gather pull (PN-5, spec 20/24 §Partitioned state, 40/42
+ * §Interest-scoped instance sets): the [delta] slice one [instance] shard
+ * answered a pull with, plus the [frontier] that slice is current to. The
+ * consumer unions the deltas into the board and retains the frontier **per
+ * instance** ([civictech.cell.port.RetainedFrontiers]) — merging one scalar
+ * `since` across instances silently loses each shard's non-contiguous tags.
+ */
+data class PullReply<E>(
+    val instance: CellRef,
+    val delta: SetDelta<E>,
+    val frontier: TagFrontier,
+)
+
+/**
  * An interest-scoped **hosted instance** of a partitioned logical id (spec
  * 40/42 §Interest-scoped instance sets, 20/24 §Partitioned state, CP-D3): one
  * shard of a [PartitionedCell], spawnable onto any real
@@ -312,6 +326,19 @@ class ShardCell<E>(
     /** This shard's full tag state as a delta-from-empty — the router's [rebuildFrom] ledger source. */
     internal fun contents(): SetDelta<E> = state.asDelta()
 
+    /**
+     * This shard's scatter-gather pull leg (PN-5, spec 20/24 §Partitioned state):
+     * its own slice of the board — the [scope]-admitted tags a [since] frontier
+     * has not seen — paired with the frontier that slice is current to. The exact
+     * `(contentsSince, currentFrontier)` pair PN-4's [Protocols.StateRequest]
+     * handler answers with, minus the outlet emission: the router reads it
+     * directly (like [membership]) so no wave is minted — a baseline is never a
+     * wave. Per-shard-consistent by construction; cross-shard freshness is
+     * whatever each leg happens to observe.
+     */
+    internal fun pullSlice(since: TagFrontier?, scope: Interest?): Pair<Map<E, Set<Timestamp>>, TagFrontier> =
+        contentsSince(since, scope) to currentFrontier(scope)
+
     /** Tags a [since] frontier has not seen, restricted to the [scope] the requester admits (the SetCell pattern). */
     private fun contentsSince(since: TagFrontier?, scope: Interest?): Map<E, Set<Timestamp>> {
         val admit: (E) -> Boolean =
@@ -395,6 +422,9 @@ class PartitionedShardSet<E>(
 
     /** The router's total-interest state-as-delta source, for interest-reassignment replay (42). */
     private var ledger = TagState<E>()
+
+    /** Synthetic instance id for a ledger-served pull reply (the control-b answerer). */
+    private val ledgerRef = CellRef(UUID.randomUUID())
 
     /** The versioned interest-assignment epoch (spec 20/24 "flip the table atomically and bump its epoch"). */
     var routingEpoch: Long = 0L
@@ -540,6 +570,59 @@ class PartitionedShardSet<E>(
 
     /** The scatter-gather board: each shard's live key range (spec: "union of disjoint-key catch-ups"). */
     fun memberships(): List<Set<E>> = shards.map { it.cell.membership() }
+
+    /**
+     * Scatter-gather pull (PN-5, spec 20/24 §Partitioned state, 40/42
+     * §Interest-scoped instance sets). A pull against a partitioned logical id
+     * has no single answerer: the router serving it from its own [ledger] would
+     * hold O(total state) at one node — the very thing partitioning exists to
+     * avoid ([pullFromLedger] is that control). Instead the router **fans** the
+     * pull to every shard whose interest overlaps [scope], and each shard answers
+     * its own slice with its own frontier ([ShardCell.pullSlice]). The board is
+     * never materialized at one node — no leg carries more than its shard's range.
+     *
+     * Freshness is per-shard-consistent, cross-shard-arbitrary: each leg is a
+     * baseline (never a wave), and legs are independent — a shard that is
+     * mid-migration ([LocationRegistry.isHeld], the funnel-hold reuse) is skipped
+     * here and its leg deferred to a later pull rather than read torn.
+     *
+     * [sinceOf] supplies the currency to pull each instance from — the consumer's
+     * **per-instance** retained frontier ([civictech.cell.port.RetainedFrontiers.sinceFor]).
+     * Feeding one frontier merged across instances instead silently loses a
+     * deferred shard's non-contiguous tags (control a): its counters read as
+     * already-seen under a sibling's higher water.
+     */
+    fun pull(scope: Interest, sinceOf: (CellRef) -> TagFrontier?): List<PullReply<E>> {
+        val out = mutableListOf<PullReply<E>>()
+        shards.forEach { shard ->
+            if (!shard.interest.overlaps(scope)) return@forEach
+            if (registry.isHeld(shard.cell.ref)) return@forEach // migrating — its leg defers
+            val overlap = Interest.Intersect(listOf(shard.interest, scope))
+            val (adds, frontier) = shard.cell.pullSlice(sinceOf(shard.cell.ref), overlap)
+            if (adds.isEmpty()) return@forEach
+            out += PullReply(shard.cell.ref, SetDelta(adds = adds), frontier)
+        }
+        return out
+    }
+
+    /**
+     * Control (b): answer the whole pull from the router's own total-interest
+     * [ledger] in one reply. Functionally green — the assembled union is
+     * identical — but it materializes O(total state) at a single node, which is
+     * exactly what the fan-out [pull] avoids (a partitioned cell exists so no one
+     * node holds the whole board).
+     */
+    fun pullFromLedger(scope: Interest, since: TagFrontier?): List<PullReply<E>> {
+        val admit: (E) -> Boolean =
+            if (scope is Interest.Total) { _ -> true } else { e -> scope.admits(keyFn(e)) }
+        val adds = ledger.elements.filter(admit).associateWith { e ->
+            ledger.tags(e).filterTo(mutableSetOf()) { since == null || (since.perSource[it.sourceId] ?: -1L) < it.counter }
+        }.filterValues { it.isNotEmpty() }
+        if (adds.isEmpty()) return emptyList()
+        val frontier = mutableMapOf<UUID, Long>()
+        adds.forEach { (_, tags) -> tags.forEach { t -> frontier.merge(t.sourceId, t.counter, ::maxOf) } }
+        return listOf(PullReply(ledgerRef, SetDelta(adds = adds), TagFrontier(frontier)))
+    }
 
     /**
      * Recover the router from its (already-recovered) shards (PN-4). The router
