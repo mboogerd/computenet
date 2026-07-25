@@ -231,6 +231,14 @@ class Replication(private val registry: LocationRegistry) {
 
     private fun maybeLink(local: Replicable<*>, other: CellRef) {
         if (other == local.ref) return
+        // Interest gate (spec 40/42 §Interest-scoped instance sets, CP-D2): a
+        // gossip link forms only where the two instances' interests overlap —
+        // disjoint interests (the partitioning setting) form no link at all, so
+        // a delta cannot even reach an instance that does not want it. Default
+        // is total interest on both sides, so overlap is always true here and
+        // this is byte-identical to pre-interest gossip.
+        val targetInterest = registry.interestOf(other)
+        if (!registry.interestOf(local.ref).overlaps(targetInterest)) return
         val key = local.ref to other
         linked[key]?.let { (cell, link) ->
             // Anti-entropy on re-announce (M10.1): a re-announced replica may
@@ -248,7 +256,24 @@ class Replication(private val registry: LocationRegistry) {
         // path and re-checked at the receiving inlet's serve
         val routed = (HostedCellProxy.create(other, registry, ReplicaDeltaInlet::class.java)
                 as ReplicaDeltaInlet).deltaInlet.call
+        // Per-emission interest filter (CP-D2): every delta — the live stream
+        // and the onLinked catch-up baked into the link below — is restricted
+        // to the *target's* interest before it rides. A delta a partial-interest
+        // peer has no interest in never crosses. Total interest short-circuits to
+        // the bare routed sink, so the default gossip path is unwrapped and
+        // byte-identical.
+        val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
+        else Propagate { delta -> scopeToInterest(targetInterest, delta)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
-        linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(routed)
+        linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(sink)
     }
+
+    /**
+     * Restrict [delta] to the sub-delta [interest] admits (spec 42 §Interest-
+     * scoped instance sets). In a replica mesh the element *is* the key
+     * (`keyOf` identity); a non-[Scoped] delta rides whole. `null` means the
+     * emission is dropped — it never rides the link.
+     */
+    private fun scopeToInterest(interest: Interest, delta: Any?): Any? =
+        if (delta is Scoped<*>) delta.within(interest) { it } else delta
 }
