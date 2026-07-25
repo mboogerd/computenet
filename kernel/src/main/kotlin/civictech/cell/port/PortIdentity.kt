@@ -31,13 +31,22 @@ internal object PortIdentities {
      * registered on a non-cell owner (ad-hoc test scaffolding) carry no logical
      * identity and are simply not stamped — [of] returns null for them.
      */
+    /**
+     * PN-2 control seam: revert PN-1's replay-stable derivation (ports keep the
+     * fresh random ref minted at construction) while keeping everything else.
+     * `DurableGlitchFreeReplayTest`'s control (b) flips this to prove PN-2's
+     * baseline path carries recovery *independently* of PN-1's identity
+     * derivation. Production always derives.
+     */
+    internal var deriveRefs = true
+
     fun stamp(owner: Any?, name: String, port: Port) {
         if (owner is Cell) {
             table[port] = PortIdentity(owner.ref, name)
             // PN-1: a hosted cell's port gets a replay-stable ref derived from
             // (ownerRef, name) here, at the one seam that knows both. Anonymous
             // ports (not a Cell owner) are never stamped and keep generate().
-            (port as? DerivedPortRef)?.deriveRef(owner.ref, name)
+            if (deriveRefs) (port as? DerivedPortRef)?.deriveRef(owner.ref, name)
         }
     }
 

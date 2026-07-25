@@ -480,3 +480,20 @@ for remote graph mutation across a bridge; composition of disclosure/
 integrity across nested/transitive membranes and multi-hop relays; and an
 at-rest encryption stance for durable journals and parked/overflow state
 (93 I-28 §8).
+
+## Durable replay of a mid-graph data cell (PN-2)
+
+A journaled data cell is recovered by replaying its write-ahead frames through
+the ordinary intake (24 durability, M10.1). PN-2 (22 §Recovery is a baseline)
+makes that replay a **baseline** rather than a live wave: a mid-graph cell whose
+frames carry a non-null wave context re-emits its restored deltas flagged
+`MessageContext.baseline`, so a downstream glitch-free join installs them as arm
+state and never waits for a volatile sibling arm to replay the same wave. This
+is what lets a durable data cell feed one arm of a fork-join diamond whose other
+arm is volatile — the exchange demo's previously-unwritten "journal only
+context-free roots" invariant is retired: mid-graph journaled cells recover
+without stalling the join. Tag continuity across the replay is unchanged — tag
+sources are derived from the cell ref (M10.1), so a recovered instance re-mints
+the exact tags the network already observed; the baseline marks the *wave-plane*
+disposition of the replay, not the *state-plane* merge, which stays ordinary
+observed-remove/tag-set union.

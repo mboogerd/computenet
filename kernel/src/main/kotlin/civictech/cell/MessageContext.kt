@@ -112,6 +112,35 @@ object PendingReBaseline {
 }
 
 /**
+ * Thread-local staging for the [TagFrontier] a *replay*'s emissions should
+ * carry as their [MessageContext.baseline] (PN-2, plan §3 Rule of recovery, §4
+ * PN-2). The exact analogue of [PendingReBaseline]: read at the point an outlet
+ * mints a fresh context (`CurrentContext.get() == null`), so a cell that
+ * *originates* while its host is replaying its journal marks that emission a
+ * catch-up baseline rather than an ordinary live wave. Reactive
+ * (transparent-flow) emissions inherit the baseline via the ordinary
+ * [MessageContext.copy] once the replayed frame itself carries it (stamped by
+ * [civictech.cell.host.ManagedHost.recoverFrom]) — a recovery produces no
+ * waves and therefore no glitches (durability is a state-plane property,
+ * glitch-freedom a wave-plane one; replay crosses neither into the other).
+ */
+object ReplayScope {
+    private val local = ThreadLocal<TagFrontier?>()
+
+    fun get(): TagFrontier? = local.get()
+
+    fun <R> with(frontier: TagFrontier?, block: () -> R): R {
+        val previous = local.get()
+        local.set(frontier)
+        try {
+            return block()
+        } finally {
+            local.set(previous)
+        }
+    }
+}
+
+/**
  * Host-/thread-local current context. All writes go through [with] (set /
  * try / finally-restore) — a missed restore silently welds waves together,
  * especially under the single-threaded SimulationController.
