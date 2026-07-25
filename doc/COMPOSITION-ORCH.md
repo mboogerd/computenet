@@ -68,11 +68,13 @@ MixedDurabilityTest all landed with controls.
 
 Legend: pending · impl-running · impl-done · validating · READY · merged · escalated · blocked
 
+**Wave 1 COMPLETE** — combined gate green (`./gradlew test` BUILD SUCCESSFUL) @ `f9d563d`.
+
 | Ticket | State | Branch | Merged commit | Notes |
 |--------|-------|--------|---------------|-------|
-| CP-A1 | pending | comp/CP-A1 | | spec |
-| CP-B1 | pending | comp/CP-B1 | | |
-| CP-C1 | pending | comp/CP-C1 | | merge before A4 |
+| CP-A1 | merged | comp/CP-A1 | be8468e | spec; validator PASS |
+| CP-B1 | merged | comp/CP-B1 | f9d563d | richer spec §E3.2 shape (rows/closed); validator PASS |
+| CP-C1 | merged | comp/CP-C1 | 395c85e | journalFor selector; byte-identical default; validator PASS |
 | CP-A2 | pending | comp/CP-A-tail | | bundled α-tail |
 | CP-A3 | pending | comp/CP-A-tail | | bundled α-tail |
 | CP-A4 | pending | comp/CP-A-tail | | bundled α-tail |
