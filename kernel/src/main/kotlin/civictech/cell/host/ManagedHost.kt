@@ -87,8 +87,22 @@ open class ManagedHost(
      * data invocation is appended as a wire frame before staging — a journal
      * is a bridge to disk. Null = volatile host (default, pre-M10 behavior).
      * Recovery: rebuild the graph (spawn the same cells), then [recoverFrom].
+     *
+     * This is the whole-host convenience form: it maps to the degenerate
+     * constant [journalFor] selector that returns this same journal for every
+     * cell. Prefer [journalFor] when durability is per-cell (CP-C1).
      */
     private val journal: Journal? = null,
+    /**
+     * Per-cell journal selector (CP-C1): durability is a **per-cell** concern.
+     * For each cell, the selector names the write-ahead [Journal] its accepted
+     * invocations (and [Effectful] processed-frontier advances) tee to, or
+     * `null` to make that cell **volatile** — never journaled, never replayed.
+     * The whole-host [journal] above is the degenerate case: a constant
+     * selector returning the one journal for every cell, byte-identical to
+     * pre-CP-C1 behavior. When omitted, the selector derives from [journal].
+     */
+    private val journalFor: ((CellRef) -> Journal?)? = null,
     /** Opt-in data intake bound; management invocations remain exempt. */
     private val intakeBound: IntakeBound? = null,
     /**
@@ -106,6 +120,14 @@ open class ManagedHost(
     internal var parentHost: ManagedHost? = null
         private set
     private val childHosts = mutableListOf<ManagedHost>()
+
+    /**
+     * The effective per-cell journal selector (CP-C1). Explicit [journalFor]
+     * wins; otherwise the whole-host [journal] becomes the constant selector
+     * (returning it — possibly null — for every cell), preserving pre-CP-C1
+     * behavior exactly.
+     */
+    private val journalSelector: (CellRef) -> Journal? = journalFor ?: { journal }
 
     internal fun subtreeCellCount(): Int = cells.size + childHosts.sumOf { it.subtreeCellCount() }
     override val managementInlet = registerPort("managementInlet", FanInlet.create<HostManagementApi>())
@@ -375,7 +397,7 @@ open class ManagedHost(
                     if (intakeBound?.policy == SaturationPolicy.Coalesce && coalesce(hostedInvocation)) {
                         // Coalescing is acceptance, not loss: retain every original
                         // in the WAL so recovery may replay the equivalent sequence.
-                        if (!recovering) journal?.append(journalFrame(hostedInvocation))
+                        if (!recovering) journalSelector(hostedInvocation.cellRef)?.append(journalFrame(hostedInvocation))
                         return
                     }
                     throw IntakeSaturatedException(ref)
@@ -383,8 +405,10 @@ open class ManagedHost(
             }
         }
         // write-ahead (M10.1): the intake is the single funnel, so journal
-        // order = acceptance order = per-cell FIFO on replay
-        if (!recovering) journal?.append(journalFrame(hostedInvocation))
+        // order = acceptance order = per-cell FIFO on replay. The tee is
+        // per-cell (CP-C1): a volatile cell's selector returns null and it is
+        // never written.
+        if (!recovering) journalSelector(hostedInvocation.cellRef)?.append(journalFrame(hostedInvocation))
         // stage at SEND time (not dispatch time) so a backlog can form and band
         // selection has something to choose between; one dispatcher task per
         // message keeps message count <= task count (a task may find nothing)
@@ -435,6 +459,11 @@ open class ManagedHost(
      * ordinary intake (decode = the same path a network frame takes — a
      * journal is a bridge to disk). Call after the graph is rebuilt (cells
      * spawned) and before new traffic; replays are not re-journaled.
+     *
+     * Per-cell (CP-C1): a journal only ever holds records for the cells whose
+     * selector tees to it (the write path is per-cell), so replaying it
+     * restores exactly those cells and re-delivers nothing to volatile cells
+     * that were never written. Recover each distinct journal once.
      */
     fun recoverFrom(journal: Journal) {
         recovering = true
@@ -466,16 +495,24 @@ open class ManagedHost(
     }
 
     /**
-     * Checkpoint (M10.2, extended G-59): capture every `Stateful` cell's
-     * snapshot AND the processed-frontier as one record, and compact the
-     * journal down to it — replay after a checkpoint is restore + tail. Runs
-     * on the management band so it can't interleave with a dispatching cell.
+     * Checkpoint (M10.2, extended G-59; keyed per-cell CP-C1): capture the
+     * `Stateful` snapshot AND processed-frontier of exactly the cells whose
+     * selector tees to THIS [journal], as one record, and compact that journal
+     * down to it — replay after a checkpoint is restore + tail. Keying keeps a
+     * per-cell journal free of state belonging to another journal (or to a
+     * volatile cell). For the degenerate whole-host constant selector every
+     * cell maps here, byte-identical to pre-CP-C1. Runs on the management band
+     * so it can't interleave with a dispatching cell.
      */
     fun checkpoint(journal: Journal) {
         enqueueAwaiting(0) {
             val state = HashMap<CellRef, Serializable>()
-            cells.forEach { (cellRef, cell) -> if (cell is Stateful) state[cellRef] = cell.snapshot() }
-            val frontier = processedFrontier.mapValues { HashMap(it.value) as Map<UUID, Long> }
+            cells.forEach { (cellRef, cell) ->
+                if (cell is Stateful && journalSelector(cellRef) === journal) state[cellRef] = cell.snapshot()
+            }
+            val frontier = processedFrontier
+                .filterKeys { journalSelector(it.first) === journal }
+                .mapValues { HashMap(it.value) as Map<UUID, Long> }
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()
@@ -781,7 +818,9 @@ open class ManagedHost(
                             hostedInvocation.invocation.invokeSuspending(port.call)
                             if (cell is Effectful && timestamp != null) {
                                 advanceFrontier(cellRef, hostedInvocation.portName, timestamp)
-                                journal?.append(journalFrontier(FrontierRecord(cellRef, hostedInvocation.portName, timestamp)))
+                                // per-cell tee (CP-C1): the frontier advance rides the same
+                                // journal as this cell's frames — volatile cells (null) skip it
+                                journalSelector(cellRef)?.append(journalFrontier(FrontierRecord(cellRef, hostedInvocation.portName, timestamp)))
                             }
                         }
                     }

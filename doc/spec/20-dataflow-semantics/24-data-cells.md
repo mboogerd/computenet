@@ -388,14 +388,24 @@ harness (93 I-11/I-27/I-21).
 
 ADR 1 §3 requires in-memory / durable / hybrid state.
 
-*(G-25 resolved, M10)*: durability is a host concern, exactly as proposed —
-a host constructed with a `Journal` write-ahead appends every accepted
-invocation **as a wire frame** (the same `WireCodec` encoding that crosses
-the network: a journal is a bridge to disk) before staging it; recovery
-rebuilds the graph, then `recoverFrom` restores the latest checkpoint's
-`Stateful` snapshots and replays the frame tail through the ordinary decode
-path. `checkpoint` compacts the log atomically; tombstone and PN-slot growth
-compact with it. Cells stay oblivious — with one honest exception:
+*(G-25 resolved, M10; refined per-cell CP-C1)*: durability is a **per-cell**
+concern. A host takes a `journalFor(cellRef)` selector naming the write-ahead
+`Journal` each cell's accepted invocations tee to — or `null` to make that
+cell **volatile** (never journaled, never replayed). The whole-host `Journal`
+is the degenerate case: the constant selector returning that one journal for
+every cell, byte-identical to the pre-CP-C1 tee. For a journaled cell the host
+appends every accepted invocation **as a wire frame** (the same `WireCodec`
+encoding that crosses the network: a journal is a bridge to disk) before
+staging it; recovery rebuilds the graph, then `recoverFrom` restores the
+latest checkpoint's `Stateful` snapshots and replays the frame tail through
+the ordinary decode path. Because the write path is per-cell, a journal only
+ever holds its own cells' records, so replaying it restores exactly those
+cells and re-delivers nothing to a co-hosted volatile cell — recover each
+distinct journal once. `checkpoint` is keyed the same way: it snapshots only
+the cells teeing to the passed journal and compacts that journal atomically;
+tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the
+per-cell scoping; its control shows a constant selector restores every cell).
+Cells stay oblivious — with one honest exception:
 **replay-stable identity**. A recovered instance must re-mint the identities
 the network already observed, so set tags and PN source slots derive from
 the cell's ref (never `randomUUID`) and the tag counter is snapshot state.
