@@ -13,6 +13,7 @@ import civictech.cell.port.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Link
+import civictech.cell.port.LinkResult
 import civictech.cell.port.ProtocolId
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
@@ -124,16 +125,16 @@ class ProtocolBridgeTest {
         producer.outlet.subscribe(Use.fixed(dataApi, dataRef))
 
         // establish the bridged link: producer fires EdgeOpen downstream, crossing the wire
-        val producerSide = producer.outlet.bridgeTo(
+        val producerSide = (producer.outlet.bridgeTo(
             selfAddr = PortAddress(producer.ref, "outlet"),
             toAddr = PortAddress(consumer.ref, "inlet"),
             sink = InvocationSink(net.egressAtoB::deliver),
-        )
-        val consumerSide = consumer.inlet.bridgeFrom(
+        ) as LinkResult.Connected).link
+        val consumerSide = (consumer.inlet.bridgeFrom(
             selfAddr = PortAddress(consumer.ref, "inlet"),
             fromAddr = PortAddress(producer.ref, "outlet"),
             sink = InvocationSink(net.egressBtoA::deliver),
-        )
+        ) as LinkResult.Connected).link
         net.controller.runToIdle()
 
         topologySeen shouldContainExactly listOf(EdgeOpen)
@@ -161,11 +162,11 @@ class ProtocolBridgeTest {
                 as DataInletProxy).inlet.call
         val dataRef2 = civictech.cell.port.PortRef.generate()
         producer.outlet.subscribe(Use.fixed(dataApi2, dataRef2))
-        val producerSide2 = producer.outlet.bridgeTo(
+        val producerSide2 = (producer.outlet.bridgeTo(
             selfAddr = PortAddress(producer.ref, "outlet"),
             toAddr = PortAddress(consumer2.ref, "inlet"),
             sink = InvocationSink(net.egressAtoB::deliver),
-        )
+        ) as LinkResult.Connected).link
         net.controller.runToIdle()
         topology2Seen shouldContainExactly listOf(EdgeOpen)
         consumer2.arrivals.shouldNotContain(1) // no pre-join replay

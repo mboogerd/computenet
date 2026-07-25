@@ -232,6 +232,53 @@ internal fun <Api> handshake(
     }
 }
 
+/**
+ * Handshake for a pre-built [link] whose counterpart is not a local [Port] —
+ * a bridged `WireEdgeLink` resolved across the wire (spec 41 point 4, closes
+ * C-13). Runs the same target-side gate a local link runs: the [local] port's
+ * link policies + peer allowlist (43, identity from [CurrentPeer]) and its
+ * `onLink` admission; on acceptance installs the given [link] (rather than
+ * minting a `PortLink`), wires the unlink teardown + the `onLinked`/`onUnlink`
+ * multicast hooks, and — for the producer side ([fireEdgeOpen]) — emits
+ * `EdgeOpen` downstream across the bridge through the negotiated protocol path
+ * (the consumer side instead receives it as an ordinary in-band frame).
+ *
+ * This is the overload `bridgeTo`/`bridgeFrom` route through so a bridged edge
+ * negotiates identically to a local one; transport stays out of `cell.port`
+ * (the caller supplies the already-resolved [link] and its `protocolBridge`).
+ */
+internal fun handshake(
+    link: Link,
+    from: PortRef,
+    targetRef: PortRef,
+    local: Linked,
+    role: LinkRole = LinkRole.Consume,
+    fireEdgeOpen: Boolean = false,
+): LinkResult {
+    val support = local.linking
+    support.reject(LinkRequest(from, targetRef, CurrentPeer.get(), role))?.let { return it }
+    return when (val result = support.onLink(link)) {
+        is LinkResult.Connected -> {
+            support.register(link)
+            link.onUnlink { l ->
+                support.remove(l)
+                support.onUnlink(l)
+                support.onUnlinkListeners.forEach { it(l) }
+            }
+            if (fireEdgeOpen) {
+                // Only topology-interested peers pay: crosses the wire iff the
+                // remote inlet handles TopologyOrder, exactly as the local path.
+                Protocols.sendDownstream(link, Protocols.TopologyOrder, EdgeOpen)
+            }
+            support.onLinked(link)
+            support.onLinkedListeners.forEach { it(link) }
+            result
+        }
+
+        else -> result
+    }
+}
+
 internal class PortLink(
     override val from: PortRef,
     override val to: PortRef,

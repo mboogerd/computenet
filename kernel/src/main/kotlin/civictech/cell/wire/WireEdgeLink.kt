@@ -2,14 +2,15 @@ package civictech.cell.wire
 
 import civictech.cell.CellRef
 import civictech.cell.port.EdgeClose
-import civictech.cell.port.EdgeOpen
 import civictech.cell.port.Link
+import civictech.cell.port.LinkResult
 import civictech.cell.port.Linked
 import civictech.cell.port.Port
 import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolBridge
 import civictech.cell.port.ProtocolId
 import civictech.cell.port.Protocols
+import civictech.cell.port.handshake
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink
@@ -104,7 +105,7 @@ fun <T> T.bridgeTo(
     toAddr: PortAddress,
     sink: InvocationSink,
     capabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
-): Link where T : Linked, T : Port {
+): LinkResult where T : Linked, T : Port {
     val link = WireEdgeLink(
         id = UUID.randomUUID(),
         from = ref,
@@ -115,9 +116,10 @@ fun <T> T.bridgeTo(
         sink = sink,
         fromPort = this,
     )
-    linking.register(link)
-    Protocols.sendDownstream(link, Protocols.TopologyOrder, EdgeOpen)
-    return link
+    // Route through the shared handshake (C-13): source-side onLink admission
+    // + onLinked catch-up hooks run, and EdgeOpen is fired downstream over the
+    // negotiated protocol path (crossing the wire) rather than raw.
+    return handshake(link, from = ref, targetRef = link.to, local = this, fireEdgeOpen = true)
 }
 
 /**
@@ -137,7 +139,7 @@ fun <T> T.bridgeFrom(
     fromAddr: PortAddress,
     sink: InvocationSink,
     capabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
-): Link where T : Linked, T : Port {
+): LinkResult where T : Linked, T : Port {
     val link = WireEdgeLink(
         id = UUID.randomUUID(),
         from = PortRef.generate(fromAddr.cell),
@@ -148,8 +150,12 @@ fun <T> T.bridgeFrom(
         sink = sink,
         toPort = this,
     )
-    linking.register(link)
-    return link
+    // Route through the shared handshake (C-13): this is the *target* side, so
+    // the inlet's link policies and the peer allowlist (43) now fire on a
+    // bridged edge exactly as on a local one. EdgeOpen is NOT fired here — it
+    // crosses the wire once from the producer's bridgeTo and lands on this
+    // inlet's real port via the ordinary PORT_PROTOCOL delivery path.
+    return handshake(link, from = link.from, targetRef = ref, local = this, fireEdgeOpen = false)
 }
 
 /** Tears down a bridged half-link: fires `EdgeClose` (crossing the bridge when the peer is remote) and detaches. */
