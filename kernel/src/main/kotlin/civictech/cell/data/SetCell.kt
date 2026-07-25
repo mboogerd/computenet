@@ -163,14 +163,37 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         outlet.originate { propagate(SetDelta(newAdds, newDels)) }
     }
 
-    /** Highest tag counter observed per tag source (spec 20/21 §Pull, 93 I-24). */
-    private fun currentFrontier(): TagFrontier {
+    /**
+     * Highest tag counter observed per tag source, restricted to the keys
+     * [scope] admits (spec 20/21 §Pull, 93 I-24; PN-3c). `null`/[Interest.Total]
+     * scope iterates every key — byte-identical to the pre-scope frontier — so a
+     * scope-absent pull's reported currency is unchanged.
+     */
+    private fun currentFrontier(scope: civictech.cell.replication.Interest? = null): TagFrontier {
+        val admit: (E) -> Boolean =
+            if (scope == null || scope is civictech.cell.replication.Interest.Total) { _ -> true }
+            else { e -> scope.admits(e) }
         val frontier = mutableMapOf<UUID, Long>()
-        (adds.values.asSequence() + dels.values.asSequence()).flatten().forEach { tag ->
+        val addSeq = adds.asSequence().filter { admit(it.key) }.map { it.value }
+        val delSeq = dels.asSequence().filter { admit(it.key) }.map { it.value }
+        (addSeq + delSeq).flatten().forEach { tag ->
             frontier.merge(tag.sourceId, tag.counter, ::maxOf)
         }
         return TagFrontier(frontier)
     }
+
+    /**
+     * Restrict a since-filtered output map to the keys [scope] admits (PN-3c):
+     * the per-element interest filter a partial-interest pull applies. Returns
+     * the same map unchanged for `null`/[Interest.Total] scope — the scope-absent
+     * reply is verbatim.
+     */
+    private fun scopedTo(
+        source: Map<E, Set<Timestamp>>,
+        scope: civictech.cell.replication.Interest?,
+    ): Map<E, Set<Timestamp>> =
+        if (scope == null || scope is civictech.cell.replication.Interest.Total) source
+        else source.filterKeys { scope.admits(it) }
 
     /** Only the tags a [since] frontier has not yet observed; unfiltered when [since] is null. */
     private fun sinceFilter(source: Map<E, MutableSet<Timestamp>>, since: TagFrontier?): Map<E, Set<Timestamp>> =
@@ -199,10 +222,13 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // requester — never broadcast, never admitted to wave completeness.
         ProtocolSupport.of(outlet).handle(Protocols.StateRequest) { _, message ->
             val request = message as StateRequest
-            val addsOut = sinceFilter(adds, request.since)
-            val delsOut = sinceFilter(dels, request.since)
+            // scope filter (PN-3c): restrict the reply to the requester's
+            // interest slice. scope absent/Total ⇒ the maps and the reported
+            // frontier are the pre-scope values, so the reply is verbatim.
+            val addsOut = scopedTo(sinceFilter(adds, request.since), request.scope)
+            val delsOut = scopedTo(sinceFilter(dels, request.since), request.scope)
             if (addsOut.isEmpty() && delsOut.isEmpty()) return@handle
-            outlet.baselineTo(request.replyTo, currentFrontier()) {
+            outlet.baselineTo(request.replyTo, currentFrontier(request.scope)) {
                 propagate(SetDelta(addsOut, delsOut))
             }
         }

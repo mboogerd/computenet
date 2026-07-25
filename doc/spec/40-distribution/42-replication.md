@@ -170,6 +170,43 @@ disjoint-interest naming/composition convenience over an instance set, its route
 interest-assignment table. No second distribution mechanism, no second sync
 protocol — one mesh, one knob.
 
+### The interest algebra is closed (PN-3a/c)
+
+Three properties the linker and the wire depend on, made true of the code:
+
+- **The algebra closes.** `Interest` is `Total`, `Empty`, `Slots` (hash-slot
+  set), `Ranges` (half-open ordered ranges), and the combinators `Union`,
+  `Intersect`, `Complement` — each a `data class`/`object`, none an anonymous
+  predicate. `overlaps` is *structural and symmetric*: a single shared decision
+  matches the arm pair without regard to order, so `a.overlaps(b) ==
+  b.overlaps(a)` always. It is *honest* where a shared key is decidable (`Empty`
+  overlaps nothing; disjoint slot sets / disjoint ranges do not overlap;
+  `Union`/`Intersect` distribute over their members) and only *conservatively*
+  `true` where it is genuinely undecidable (a `Complement`, mixed slot/range
+  kinds) — never the blanket `true` an anonymous combinator returned. Because
+  every arm is a `data class`, an interest round-trips through serialization to
+  an `equals` value, so it can ride the versioned interest-assignment table
+  across the wire. `Total` and `Slots` are behaviourally unchanged for every
+  pre-existing interaction (non-opting graphs see no difference).
+
+- **`StateRequest` is interest-scoped.** A pull carries `scope: Interest?`. The
+  producer restricts its baseline reply — both the state-as-delta and the
+  reported `TagFrontier` currency — to the keys `scope` admits, so a
+  partial-interest consumer (a shard peer, a scatter-gather leg) pulls exactly
+  its slice instead of the whole state. `scope` absent ⇒ `Total` ⇒ the whole
+  state, byte-identical to the pre-scope reply; every existing call site is
+  unchanged.
+
+- **Retained pull currency is per instance, never merged.** A consumer that
+  pulls an instance set keeps one `TagFrontier` *per source instance*
+  (`Map<instanceRef, TagFrontier>`), not one merged frontier. Shard holdings are
+  non-contiguous: instance A may hold counters {1,3,5} of a shared upstream
+  source while B holds {2,4}. A single pointwise-max `since` merged across
+  instances would carry A's `5` into the currency handed to B, so B's next
+  incremental pull reports every tag ≤ 5 as already-seen and silently drops B's
+  own holdings. A per-instance `since` is monotone *within* its instance and
+  never contaminated by a sibling's progress.
+
 ## Decided in 93, not yet built
 
 The feature-interaction analysis settled the following for this layer; all of
