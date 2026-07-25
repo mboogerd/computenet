@@ -52,6 +52,8 @@ class FlatMapSetCell<A, B>(
         val mapped = SetDelta(remap(effective.adds), remap(effective.dels))
         if (mapped.adds.isNotEmpty() || mapped.dels.isNotEmpty()) {
             outlet.call.propagate(mapped)
+        } else {
+            outlet.absorbAck() // deduped away — ack the swallowed wave (CP-A3)
         }
     }
 

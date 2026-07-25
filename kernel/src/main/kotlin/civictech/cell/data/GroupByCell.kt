@@ -85,6 +85,8 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         }
         if (puts.isNotEmpty() || removals.isNotEmpty()) {
             outlet.call.propagate(MapDelta(puts, removals))
+        } else {
+            outlet.absorbAck() // tag churn / value-equal fold — ack the swallowed wave (CP-A3)
         }
     }
 

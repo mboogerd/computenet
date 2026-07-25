@@ -109,6 +109,8 @@ class JoinSetCell<A, B, K, C>(
     private fun emit(adds: Map<C, Set<Timestamp>>, dels: Map<C, Set<Timestamp>>) {
         if (adds.isNotEmpty() || dels.isNotEmpty()) {
             outlet.call.propagate(SetDelta(adds, dels))
+        } else {
+            outlet.absorbAck() // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
         }
     }
 

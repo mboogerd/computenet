@@ -46,6 +46,8 @@ class UnionSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         val effective = if (notice != null) state.applyReBaseline(value, notice) else state.apply(value)
         if (effective.adds.isNotEmpty() || effective.dels.isNotEmpty()) {
             outlet.call.propagate(effective)
+        } else {
+            outlet.absorbAck() // diamond-fan-in duplicate deduped — ack the swallowed wave (CP-A3)
         }
     }
 

@@ -66,6 +66,8 @@ class JoinCell<K, V, W>(ref: CellRef = CellRef(UUID.randomUUID())) : JoinCellBas
     private fun emit(puts: Map<K, Pair<V, W>>, removals: Set<K>) {
         if (puts.isNotEmpty() || removals.isNotEmpty()) {
             outlet.call.propagate(MapDelta(puts, removals))
+        } else {
+            outlet.absorbAck() // a key present on only one side — ack the swallowed wave (CP-A3)
         }
     }
 

@@ -96,6 +96,10 @@ class SemiJoinCell<A, B, K>(
     private fun emit(adds: Map<A, Set<Timestamp>>, dels: Map<A, Set<Timestamp>>) {
         if (adds.isNotEmpty() || dels.isNotEmpty()) {
             outlet.call.propagate(SetDelta(adds, dels))
+        } else {
+            // frontier-gated antijoin/semijoin emission (CP-A3): a wave that flips
+            // no membership still advances the downstream frontier by an absorb-ack.
+            outlet.absorbAck()
         }
     }
 

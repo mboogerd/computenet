@@ -39,6 +39,8 @@ class FilterCell<E>(
         val effective = state.apply(passed)
         if (effective.adds.isNotEmpty() || effective.dels.isNotEmpty()) {
             outlet.call.propagate(effective)
+        } else {
+            outlet.absorbAck() // filtered/deduped away — ack the swallowed wave (CP-A3)
         }
     }
 
