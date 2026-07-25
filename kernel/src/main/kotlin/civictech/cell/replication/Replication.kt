@@ -81,7 +81,7 @@ class Replication(private val registry: LocationRegistry) {
      * replay-stable slot and the companions of one logical id find each other by
      * [LocationRegistry.replicasOf] exactly as the data replicas do.
      */
-    private fun watermarkRef(dataRef: CellRef): CellRef =
+    internal fun watermarkRef(dataRef: CellRef): CellRef =
         CellRef(UUID.nameUUIDFromBytes("watermark:${dataRef.id}".toByteArray()), dataRef.instanceId)
 
     /**
@@ -197,8 +197,21 @@ class Replication(private val registry: LocationRegistry) {
      *
      * Returns `true` if the replica despawned, `false` if it suspended
      * instead (no reachable peer).
+     *
+     * On a real (despawn) departure this closes the local delivered-watermark
+     * row once this peer hosts no further replica of the logical id (PN-0c, spec
+     * 40/42 §Delivered watermarks): [WatermarkCell.close] marks the row cleanly
+     * departed so a downstream replica-fed frontier stops constraining reads on
+     * it. This matters because membership ([LocationRegistry.replicasOf]) is only
+     * eventually consistent (the R13 caveat) — a consumer whose view still lists
+     * the departed member would otherwise wait forever on a row that can never
+     * advance again. The `closed` marker rides the same idempotent watermark
+     * mesh as the data, so it converges even where the topology unpublish is
+     * lost. [closeDepartedRow] is the PN-0c control seam only (default keeps the
+     * fix; `false` reproduces the pre-PN-0c wedge). Non-replica-fed graphs never
+     * read the row, so closing it is unobservable to them.
      */
-    fun evict(cell: Replicable<*>, host: ManagedHost): Boolean {
+    fun evict(cell: Replicable<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
         val reachablePeers = registry.replicasOf(cell.ref.id) - cell.ref
         if (reachablePeers.isEmpty()) {
             if (partitionSuspended.add(cell.ref)) host.managementInlet.call.suspend(cell.ref)
@@ -212,6 +225,9 @@ class Replication(private val registry: LocationRegistry) {
         }
         host.managementInlet.call.despawn(cell.ref)
         localReplicas[cell.ref.id]?.remove(cell)
+        // clean-departure watermark close: only once the last local replica of
+        // this id leaves (the companion carries this peer's single row).
+        if (closeDepartedRow && localReplicas[cell.ref.id].isNullOrEmpty()) watermarks[cell.ref.id]?.close()
         hostOf.remove(cell.ref)
         linked.keys.filter { it.first == cell.ref }.toList().forEach { linked.remove(it) }
         partitionSuspended.remove(cell.ref)
