@@ -27,6 +27,8 @@ import civictech.cell.attention.StallNotice
 import civictech.cell.attention.StallReason
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
+import civictech.cell.ReplayScope
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.wire.WireCodec
 import civictech.cell.graph.CellFactory
@@ -363,6 +365,19 @@ open class ManagedHost(
     @Volatile
     private var recovering = false
 
+    /**
+     * PN-2 (plan §3 Rule of recovery, §4 PN-2): stamp every replayed frame that
+     * carries a wave context (a mid-graph cell's frames — root frames driven
+     * externally carry none and are left untouched, preserving byte-for-byte
+     * behavior for non-opting graphs) as a catch-up [MessageContext.baseline],
+     * so [recoverFrom] re-enters the intake as a *baseline*, not a live wave.
+     * `false` reverts to the pre-PN-2 behavior — replay as ordinary waves,
+     * which stalls an asymmetric diamond join (the volatile arm never advances).
+     * Test seam for `DurableGlitchFreeReplayTest`'s control; production always
+     * replays as baseline.
+     */
+    internal var replayAsBaseline = true
+
     open fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
         if (hostedInvocation.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
             require(hostedInvocation.invocation.context == null) { "protocol invocations must carry null MessageContext" }
@@ -466,21 +481,44 @@ open class ManagedHost(
      */
     fun recoverFrom(journal: Journal) {
         recovering = true
+        // PN-2: the whole replay runs inside one [ReplayScope] so a cell that
+        // *originates* mid-replay marks that emission a baseline too; the frame
+        // itself is stamped up front (below) so a reactive re-emission inherits
+        // the baseline through the ordinary context copy across the async
+        // dispatch that follows this synchronous re-injection.
+        val scope: TagFrontier? = if (replayAsBaseline) TagFrontier(emptyMap()) else null
         try {
-            journal.replay().forEach { record ->
-                when (record[0]) {
-                    RECORD_FRAME -> enqueueHostedInvocation(
-                        WireCodec.decode(record.copyOfRange(1, record.size))
-                    )
+            ReplayScope.with(scope) {
+                journal.replay().forEach { record ->
+                    when (record[0]) {
+                        RECORD_FRAME -> enqueueHostedInvocation(
+                            WireCodec.decode(record.copyOfRange(1, record.size)).let { frame ->
+                                if (scope == null) frame else frame.baselined(scope)
+                            }
+                        )
 
-                    RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
-                    RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
-                    else -> error("unknown journal record type ${record[0]}")
+                        RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
+                        RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
+                        else -> error("unknown journal record type ${record[0]}")
+                    }
                 }
             }
         } finally {
             recovering = false
         }
+    }
+
+    /**
+     * PN-2: stamp a replayed frame's wave context as a catch-up [baseline]
+     * (plan §4 PN-2). Only a frame that already carries a context — a *mid-graph*
+     * cell's frame, reactive from an upstream wave — is marked; a root cell's
+     * externally-driven frame carries no context and is replayed verbatim
+     * (byte-for-byte behavior for non-opting graphs). An existing baseline is
+     * preserved, never overwritten.
+     */
+    private fun HostedPortInvocation.baselined(frontier: TagFrontier): HostedPortInvocation {
+        val ctx = invocation.context ?: return this
+        return copy(invocation = invocation.copy(context = ctx.copy(baseline = ctx.baseline ?: frontier)))
     }
 
     private fun journalFrame(hostedInvocation: HostedPortInvocation): ByteArray =

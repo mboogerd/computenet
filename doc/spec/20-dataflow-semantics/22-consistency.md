@@ -353,3 +353,42 @@ frame path (CP-A2, composition plan; see 40/41 point 4).
   host-configured bound; it is never part of the wave join key. Quiescence
   below the G-19 magnitude threshold terminates the wave sequence: the
   fixpoint is the state after the last emitted wave settles.
+
+## Recovery is a baseline, not a wave (PN-2)
+
+> **Status**: Implemented (PN-2). Journal replay re-enters the intake as a
+> catch-up **baseline**, closing matrix cell A–D (durable + glitch-free).
+
+Glitch-freedom is a property of the live *wave* plane; durability is a property
+of the *state* plane. A recovery moves state, so it must produce no waves — and
+therefore no glitches (the same rule already decided for `StateRequest` replies,
+§Pull/late-join). Before PN-2, `ManagedHost.recoverFrom` re-injected each
+journaled frame as an ordinary live wave. Post-PN-1 (replay-stable
+`sourcePort`) those waves match their edge again, but a frame replayed into one
+arm of a fork-join diamond then makes the join *expect* the sibling arm for that
+wave — and a **volatile** sibling arm never replays it, so the join stalls
+(transient floors make every sibling arm expected while the volatile arm never
+advances). Pre-PN-1 the same frames dropped silently on a `sourcePort` mismatch.
+
+**Rule of recovery.** Every emission in the replayed cone carries
+`MessageContext.baseline` (a `TagFrontier`), taking the frontier's existing
+baseline-exclusion path (§Pull/late-join): released immediately, installed as
+arm state, admitted to no wave-completeness set. Mechanism:
+
+- `recoverFrom` runs its whole replay inside a thread-local `ReplayScope`
+  (the exact analogue of `PendingReBaseline`) holding the baseline frontier.
+- A replayed frame that already carries a wave context — a **mid-graph** cell's
+  frame, reactive from an upstream wave — is stamped `baseline` up front. A
+  reactive re-emission then inherits it through the ordinary `MessageContext`
+  copy, so the mark rides the entire cone across the asynchronous dispatch that
+  follows the synchronous re-injection. A cell that *originates* mid-replay
+  reads the frontier from `ReplayScope` at its spontaneous-emission point.
+- A **root** cell's externally-driven frame carries no wave context and is
+  replayed verbatim — byte-for-byte behavior for graphs that do not opt in, and
+  the reason the mid-graph case (non-null context frames) is the one this rule
+  newly covers.
+
+`Effectful` processed-frontier consultation is unchanged: replay still dedups
+an already-applied `(sourceId, counter)` against it, so an effect fires once
+across crash + replay + resume. The invariant `released + suppressed ==
+journal.replay().size` holds — a silent drop lowers `released` and fails loudly.

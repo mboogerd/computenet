@@ -5,6 +5,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.PendingReBaseline
 import civictech.cell.ReBaselineNotice
+import civictech.cell.ReplayScope
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.proxy.Proxy
@@ -86,8 +87,13 @@ class FanOutlet<Api : Any>(
         ContractRegistry.descriptor(clazz)?.methods?.any { it.exclusive } == true
 
     override val call: Api = Proxy.fromClass(clazz) { _, method, args ->
-        val ctx = CurrentContext.get()?.let { it.copy(sourcePort = ref, hop = it.hop + 1) }
-            ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get())
+        // PN-2: during a journal replay every emission in the replayed cone
+        // rides as a catch-up baseline, not a live wave. A reactive emission
+        // inherits the baseline the replayed frame already carries (the copy
+        // below); a *spontaneous* emission (a cell that originates mid-replay)
+        // reads it from [ReplayScope], the exact analogue of [PendingReBaseline].
+        val ctx = CurrentContext.get()?.let { it.copy(sourcePort = ref, hop = it.hop + 1, baseline = it.baseline ?: ReplayScope.get()) }
+            ?: MessageContext(Timestamp(sourceId, waveCounter.incrementAndGet()), ref, PendingReBaseline.get(), baseline = ReplayScope.get())
         CurrentContext.with(ctx) {
             // snapshot: link/unlink during a wave must not fail the broadcast
             // Taps fire first, in emission order (spec 20/23 "taps-fire-first"),
