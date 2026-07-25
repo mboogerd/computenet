@@ -52,10 +52,22 @@ fun interface ReplicaFrontier {
  */
 class WaveFrontier(
     private val mode: GlitchFreeCell.WaveMode,
+    private val onDropped: (Invocation) -> Unit = {},
     private val onViolation: (GlitchViolation) -> Unit = {},
 ) : InletFrontier {
 
     private lateinit var release: (Invocation) -> Unit
+
+    /**
+     * PN-0a (plan §2 F1): count of invocations [offer] could not match to any
+     * open edge and routed to the dead-letter/diagnostic path instead of
+     * discarding silently. A non-zero value is the tripwire for the F1 defect —
+     * replayed journal frames, `streamTo`/`tap` producers, or duplicate edges
+     * arriving before/without their `EdgeOpen`. Observability only; delivery is
+     * unchanged (PN-1/PN-2 remove the cause).
+     */
+    var unmatchedDrops: Long = 0L
+        private set
 
     /**
      * Opt-in replica-fed settlement (E3.4), declared **per edge** — not per cell.
@@ -175,7 +187,18 @@ class WaveFrontier(
             release(invocation)
             return
         }
-        val edge = edges.values.singleOrNull { it.open && it.link.from == ctx.sourcePort } ?: return
+        val edge = edges.values.singleOrNull { it.open && it.link.from == ctx.sourcePort } ?: run {
+            // PN-0a (plan §2 F1): no open edge matches this invocation's source
+            // (a replayed journal frame, a streamTo/tap producer that never fired
+            // EdgeOpen, a duplicate edge). The frontier is a per-inlet policy with
+            // no handle on the host's dead-letter outlet, so route the drop to a
+            // counted diagnostic — still not delivered downstream (observable
+            // behavior unchanged), but no longer silent. This is the tripwire;
+            // PN-1/PN-2 remove the cause.
+            unmatchedDrops++
+            onDropped(invocation)
+            return
+        }
         val floor = edge.floors[ctx.timestamp.sourceId] ?: Long.MIN_VALUE
         if (ctx.timestamp.counter <= floor) return
         if (ctx.timestamp.counter <= (flushedHighWater[ctx.timestamp.sourceId] ?: Long.MIN_VALUE)) {
