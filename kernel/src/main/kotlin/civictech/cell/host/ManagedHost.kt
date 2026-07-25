@@ -512,6 +512,17 @@ open class ManagedHost(
             val frontier = processedFrontier
                 .filterKeys { journalSelector(it.first) === journal }
                 .mapValues { HashMap(it.value) as Map<UUID, Long> }
+            // PN-0b: reset() truncates the WAL down to this checkpoint blob. If
+            // the journal serves cells (frames on disk) but the blob captures
+            // NOTHING recoverable — no `Stateful` snapshot and no `Effectful`
+            // processed-frontier — those frames are the cells' only recovery,
+            // and the reset would silently destroy them. Refuse instead.
+            require(state.isNotEmpty() || frontier.isNotEmpty() ||
+                cells.keys.none { journalSelector(it) === journal }) {
+                "checkpoint would truncate a journal whose selected cells contribute " +
+                    "no snapshot and no processed-frontier — frame replay is their only " +
+                    "recovery, so resetting the WAL would destroy their state"
+            }
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()

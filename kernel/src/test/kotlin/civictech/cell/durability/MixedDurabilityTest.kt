@@ -1,12 +1,17 @@
 package civictech.cell.durability
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Consumer
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedCellProxy
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
@@ -33,6 +38,72 @@ class MixedDurabilityTest {
 
     private fun ops(host: ManagedHost, ref: CellRef): SetOps<String> =
         (HostedCellProxy.create(ref, host, SetInletProxy::class.java) as SetInletProxy).inlet.call
+
+    /**
+     * A non-`Stateful`, non-`Effectful` cell: it holds no snapshot and populates
+     * no processed-frontier, so its state exists ONLY as the replayable frames
+     * in the journal. Frame replay is its entire recovery path — exactly the
+     * kind of contributor a checkpoint must not truncate away.
+     */
+    class TallyCell(override val ref: CellRef) : Cell {
+        val received = mutableListOf<Int>()
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    received += input
+                }
+            })
+        }
+    }
+
+    interface TallyProxy {
+        val inlet: Use<Consumer<Int>>
+    }
+
+    private fun tally(host: ManagedHost, ref: CellRef): Consumer<Int> =
+        (HostedCellProxy.create(ref, host, TallyProxy::class.java) as TallyProxy).inlet.call
+
+    /**
+     * PN-0b: `checkpoint` snapshots only `Stateful` cells then unconditionally
+     * `journal.reset(...)`. A journal serving ONLY a non-`Stateful` cell has an
+     * empty snapshot AND an empty processed-frontier — the reset would truncate
+     * the frames that are the cell's ONLY recovery, silently destroying its
+     * state. The host must refuse the checkpoint and leave the WAL intact so a
+     * later replay still rebuilds the cell.
+     */
+    @Test
+    fun `checkpoint refuses a journal whose only contributor is non-Stateful, leaving the WAL replayable`() {
+        val controller = SimulationController(seed = 1)
+        val journal = InMemoryJournal() // "the disk": the only thing that survives the crash
+        val tallyRef = CellRef(UUID.randomUUID())
+
+        var host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        host.managementInlet.call.spawn(TallyCell(tallyRef))
+        controller.runToIdle()
+
+        // drive the non-Stateful cell: every call reaches the WAL as a frame,
+        // and frame replay is the cell's ONLY route back after a crash
+        tally(host, tallyRef).provide(10)
+        tally(host, tallyRef).provide(20)
+        controller.runToIdle()
+
+        // checkpoint would snapshot the (empty) Stateful set then reset() the
+        // WAL down to it — destroying frames 10 and 20. It must refuse instead.
+        shouldThrow<IllegalArgumentException> { host.checkpoint(journal) }
+
+        // CRASH: only the journal survives. Because checkpoint refused, the
+        // frames are still there and replay rebuilds the cell exactly.
+        host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        val recovered = TallyCell(tallyRef)
+        host.managementInlet.call.spawn(recovered)
+        controller.runToIdle()
+        host.recoverFrom(journal)
+        controller.runToIdle()
+
+        recovered.received shouldBe listOf(10, 20)
+    }
 
     @Test
     fun `per-cell tee recovers the journaled cell and re-delivers nothing to the volatile one`() {
