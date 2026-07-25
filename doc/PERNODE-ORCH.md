@@ -27,8 +27,15 @@ Legend: pending · impl-running · validating · READY · merged · escalated
 | CP-G1 | merged | comp/CP-G1 | b5109fc | MergeableGroupByCell+MapDelta.merge; demo op=replace-per-key (disjoint ranges); GroupByCell byte-identical; validator READY |
 | CP-G2 | merged | comp/CP-G2 | 6fc8669 | NatureVector rides EdgeOpen frame (sparse/forward-compat); Link.kt needed no edit (CP-F3 seam); validator READY |
 
-### Wave 1 — PN-1 (α FRESH) ∥ PN-3a/c (β FRESH)
+### Wave 1 — PN-1 (α FRESH) ∥ PN-3a/c (β FRESH) — **COMPLETE** (combined gate green @ c6457ea)
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-1    | pending | comp/PN-1    | | replay-stable port identity |
-| PN-3a/c | pending | comp/PN-3a-c | | interest closes; StateRequest scope + vector since |
+| PN-1    | merged | comp/PN-1    | cdc852c | PortRef.of derived at stamp time; ctor param ref→initialRef (shadowing); validator READY |
+| PN-3a/c | merged | comp/PN-3ac  | c6457ea | Interest algebra closed; StateRequest.scope; per-instance RetainedFrontiers; Total/Slots bit-identical; validator READY |
+
+### Wave 2 — PN-2 (α CONT) ∥ PN-4 (γ FRESH) ∥ PN-3b (β CONT)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-2  | pending | comp/PN-2  | | journal replay is a baseline (ReplayScope) |
+| PN-4  | pending | comp/PN-4  | | ShardCell grows up (Stateful+Replicable) |
+| PN-3b | pending | comp/PN-3b | | MapDelta is Scoped |
