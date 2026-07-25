@@ -192,6 +192,48 @@ class MergeableGroupByTest {
     }
 
     // ------------------------------------------------------------------
+    // 4. PN-3b: the aggregate MapDelta is interest-Scoped — a partial-interest
+    //    peer receives only the admitted group keys, never the whole map.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `scoped aggregate delta carries only admitted group keys, never more`() {
+        val total = 4
+        var sawStrictDrop = false
+        for (seed in 0L until 100L) {
+            val rnd = Random(seed)
+            val keys = (0 until 12).map { "g$it-${rnd.nextInt(1000)}" }.distinct()
+            val puts = keys.associateWith { rnd.nextInt(100).toLong() }
+            val removals = keys.filterTo(mutableSetOf()) { rnd.nextInt(4) == 0 } - puts.keys
+            val delta = MapDelta(puts, removals)
+            val admitted = (0 until total).filterTo(mutableSetOf()) { rnd.nextBoolean() }
+            val scope = civictech.cell.replication.Interest.Slots(admitted, total)
+
+            val expectPuts = puts.filterKeys { admits(it, admitted, total) }
+            val expectRem = removals.filterTo(mutableSetOf()) { admits(it, admitted, total) }
+            val sliced = delta.within(scope) { it }
+
+            if (expectPuts.isEmpty() && expectRem.isEmpty()) {
+                assertEquals(null, sliced, "empty slice must drop the emission on seed $seed")
+            } else {
+                assertEquals(expectPuts, sliced!!.puts, "over/under-delivered puts on seed $seed")
+                assertEquals(expectRem, sliced.removals, "over/under-delivered removals on seed $seed")
+            }
+            // CONTROL: the WHOLE delta (what a non-Scoped delta rides today) still
+            // carries keys the scope does not admit — the over-delivery Scoped prevents.
+            if (delta.puts.keys != expectPuts.keys || delta.removals != expectRem) sawStrictDrop = true
+        }
+        assertTrue(sawStrictDrop, "control never exercised a strict slice — the scope filter is not load-bearing")
+
+        // Total ⇒ the whole aggregate rides unchanged (replication default preserved).
+        val whole = MapDelta(mapOf("a" to 1L, "b" to 2L), setOf("c"))
+        assertEquals(whole, whole.within(civictech.cell.replication.Interest.Total) { it })
+    }
+
+    private fun admits(key: Any?, admitted: Set<Int>, total: Int) =
+        civictech.cell.replication.Interest.Slots.slotOf(key, total) in admitted
+
+    // ------------------------------------------------------------------
 
     private fun collectMap(cell: GroupByCell<String, String, Long, Long>): MutableList<MapDelta<String, Long>> {
         val out = mutableListOf<MapDelta<String, Long>>()

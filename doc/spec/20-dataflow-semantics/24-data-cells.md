@@ -480,3 +480,19 @@ for remote graph mutation across a bridge; composition of disclosure/
 integrity across nested/transitive membranes and multi-hop relays; and an
 at-rest encryption stance for durable journals and parked/overflow state
 (93 I-28 §8).
+
+## Interest-scoped aggregate deltas (PN-3b)
+
+`MapDelta` — the delta of `MapCell`, `GroupByCell`, and CP-G1's replicable
+`MergeableGroupByCell`, including its per-key `merge` path — implements
+`Scoped` over the *map key* space, the same per-emission interest filter
+`SetDelta` already carries over its element space (42 §Interest-scoped
+instance sets). The gossip linker (`Replication.scopeToInterest`) slices an
+aggregate delta to a partial-interest target so only the admitted group keys
+ride the link: `within(Interest.Total)` returns the delta whole (the
+replication default, so non-opting graphs are unchanged), a partial `Interest`
+restricts `puts`/`removals` to the admitted keys, and an empty slice returns
+`null` so the emission never rides at all. This is what lets a `Replicable`
+aggregate be interest-*sharded* rather than replicated whole to every peer;
+before it, a non-`Scoped` `MapDelta` rode the entire map to a partial-interest
+target (over-delivery). `SetDelta` semantics are untouched.
