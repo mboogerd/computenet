@@ -24,6 +24,8 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.gen.wire.ContractRegistry
 import civictech.gen.wire.JvmDescriptors
+import civictech.gen.wire.natureVectorFromWire
+import civictech.gen.wire.toWire
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.Polymorphic
@@ -82,6 +84,18 @@ data class WireFrame(
      * neither loses nor double-counts).
      */
     val routingEpoch: Long? = null,
+    /**
+     * The sending endpoint's declared [civictech.gen.wire.NatureVector], sparse
+     * (CP-G2, spec §Nature typing): only populated on a link-establishing
+     * `PORT_PROTOCOL` frame (the `EdgeOpen` a producer's `bridgeTo` fires), and
+     * only for its *declared* axes — a fully-default vector is the empty list,
+     * which `encodeDefaults=false` omits entirely (zero bytes, no version bump).
+     * Absent ⇒ [civictech.gen.wire.NatureVector.DEFAULT] ⇒ today's behavior, so
+     * a peer that predates this field still links (additive default). The
+     * receiver reconstructs it onto the decoded [WireEdgeLink] so the bridged
+     * handshake can reconcile the real cross-host natures instead of DEFAULT.
+     */
+    val natures: List<Int> = emptyList(),
 )
 
 /** See [WireFrame.edge]. */
@@ -179,6 +193,9 @@ object WireCodec {
                 type = invocation.type,
                 protocolId = id.name,
                 protocolMessage = invocation.protocolMessage,
+                // CP-G2: the sending endpoint's natures ride the link-open frame,
+                // sparse (DEFAULT ⇒ empty ⇒ omitted). The consumer reconciles them.
+                natures = link.natures.toWire(),
                 edge = WireEdge(
                     id = link.id.toString(),
                     fromRef = link.from, fromCell = link.fromAddr.cell, fromPortName = link.fromAddr.port,
@@ -226,6 +243,9 @@ object WireCodec {
                     from = edge.fromRef, to = edge.toRef,
                     fromAddr = PortAddress(edge.fromCell, edge.fromPortName),
                     toAddr = PortAddress(edge.toCell, edge.toPortName),
+                    // CP-G2: reconstruct the peer's natures (forward-compatible —
+                    // an unknown axis from a newer peer is ignored, never refused).
+                    natures = natureVectorFromWire(frame.natures),
                 ),
                 protocolMessage = frame.protocolMessage,
             )

@@ -66,6 +66,42 @@ class BridgedHandshakeTest {
     }
 
     @Test
+    fun `both endpoints agree even when the two vectors genuinely differ`() {
+        // CP-G2: pre-G2 both callers passed DEFAULT, so localVerdict == remoteVerdict
+        // held trivially (identical inputs). Here the producer offers a *stronger*
+        // level than the consumer requires — the vectors truly differ — yet the pure
+        // reconcile still lands the same verdict (Connected) on both hosts.
+        val producerNatures = NatureVector.of(MergeClass.IDEMPOTENT)  // stronger
+        val consumerNatures = NatureVector.DEFAULT                    // non-idempotent requirement
+
+        val consumerPort = FanInlet.create<Consumer<String>>()
+        PortNatures.stamp(consumerPort, consumerNatures)
+        val consumerVerdict = handshake(
+            fakeLink(PortRef.generate(), consumerPort.ref),
+            from = PortRef.generate(),
+            targetRef = consumerPort.ref,
+            local = consumerPort,
+            fireEdgeOpen = false,
+            counterpart = producerNatures,
+        )
+
+        val producerPort = FanInlet.create<Consumer<String>>()
+        PortNatures.stamp(producerPort, producerNatures)
+        val producerVerdict = handshake(
+            fakeLink(producerPort.ref, PortRef.generate()),
+            from = producerPort.ref,
+            targetRef = PortRef.generate(),
+            local = producerPort,
+            fireEdgeOpen = true,
+            counterpart = consumerNatures,
+        )
+
+        // location transparency with genuinely different vectors: both Connected
+        consumerVerdict.shouldBeInstanceOf<LinkResult.Connected>()
+        producerVerdict.shouldBeInstanceOf<LinkResult.Connected>()
+    }
+
+    @Test
     fun `a satisfied bridged edge connects on both endpoints`() {
         val bothIdempotent = NatureVector.of(MergeClass.IDEMPOTENT)
 
