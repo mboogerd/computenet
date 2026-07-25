@@ -52,7 +52,7 @@ data class PnCounterDelta(
  * compaction rides the same future work as set tombstones (G-25).
  */
 class PnCounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
-    Cell, Stateful, Replicable<PnCounterDelta> {
+    Cell, Stateful, Replicable<PnCounterDelta>, DeliveryTracking {
 
     val inlet = registerPort("inlet", FanInlet.create<PnCounterOps>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<PnCounterDelta>>())
@@ -71,12 +71,29 @@ class PnCounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
 
     fun total(): Long = incs.values.sum() - decs.values.sum()
 
+    // Per-origin delivered frontier (spec 40/42 §Delivered watermarks, E3.3(a)).
+    // A PN-counter delta already carries each source's FULL cumulative total, so
+    // its "delivered thru" is the cumulative itself (trivially contiguous — no
+    // holdback needed) and the natural monotone progress axis is the increment
+    // stream: listeners advance on each raised per-source increment cumulative.
+    private val deliveryListeners = mutableListOf<(UUID, Long) -> Unit>()
+
+    override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) {
+        deliveryListeners += listener
+    }
+
+    private fun recordDelivered(cumulativeIncs: Map<UUID, Long>) {
+        if (deliveryListeners.isEmpty()) return
+        for ((source, cumulative) in cumulativeIncs) deliveryListeners.forEach { it(source, cumulative) }
+    }
+
     private val inletApi = object : PnCounterOps {
         override fun increment(amount: Long) {
             if (amount < 0) return decrement(-amount)
             if (amount == 0L) return // effective-only (21)
             val cumulative = (incs[sourceId] ?: 0L) + amount
             incs[sourceId] = cumulative
+            recordDelivered(mapOf(sourceId to cumulative))
             outlet.call.propagate(PnCounterDelta(incs = mapOf(sourceId to cumulative)))
         }
 
@@ -96,6 +113,7 @@ class PnCounterCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         if (newIncs.isEmpty() && newDecs.isEmpty()) return // echo terminates here
         incs += newIncs
         decs += newDecs
+        recordDelivered(newIncs)
         outlet.originate { propagate(PnCounterDelta(newIncs, newDecs)) }
     }
 

@@ -52,7 +52,7 @@ interface SetApi<E> {
 }
 
 class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
-    SetCellBase<E>(ref), Stateful, Replicable<SetDelta<E>> {
+    SetCellBase<E>(ref), Stateful, Replicable<SetDelta<E>>, DeliveryTracking {
     /**
      * Replica gossip intake (spec 42, M7.3): another replica's effective
      * deltas merge here; only *new* tag information re-emits (effective-only,
@@ -80,6 +80,27 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         UUID.nameUUIDFromBytes("set-tags:${ref.id}:${ref.instanceId}".toByteArray())
     private var tagCounter = 0L
 
+    // Per-origin delivered frontier (spec 40/42 §Delivered watermarks, E3.3(a)):
+    // add-tags this replica has durably absorbed, tracked as a max-contiguous
+    // prefix per ORIGIN source (the tag's minting source, still visible here in
+    // the fold). Listeners — the replica's WatermarkCell companion — advance on
+    // each raised prefix, so the merged lattice answers "which origin waves has
+    // the replica set delivered" (E3.4), not "how many did each replica re-emit".
+    private val delivered = DeliveredFrontier()
+    private val deliveryListeners = mutableListOf<(UUID, Long) -> Unit>()
+
+    override fun onDeliver(listener: (source: UUID, thru: Long) -> Unit) {
+        deliveryListeners += listener
+    }
+
+    /** Fold [tags] into the delivered frontier; notify listeners of each raised per-origin prefix. */
+    private fun recordDelivered(tags: Iterable<Timestamp>) {
+        if (deliveryListeners.isEmpty()) return
+        val advanced = HashMap<UUID, Long>()
+        for (tag in tags) delivered.deliver(tag.sourceId, tag.counter)?.let { advanced[tag.sourceId] = it }
+        for ((source, thru) in advanced) deliveryListeners.forEach { it(source, thru) }
+    }
+
     private fun liveTags(element: E): Set<Timestamp> =
         (adds[element] ?: emptySet<Timestamp>()) - (dels[element] ?: emptySet())
 
@@ -93,6 +114,7 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         override fun add(element: E) {
             val tag = Timestamp(tagSource, ++tagCounter)
             adds.getOrPut(element) { mutableSetOf() } += tag
+            recordDelivered(listOf(tag)) // a local mint is trivially contiguous
             outlet.call.propagate(SetDelta(adds = mapOf(element to setOf(tag))))
         }
 
@@ -116,6 +138,10 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         if (newAdds.isEmpty() && newDels.isEmpty()) return // echo terminates here
         newAdds.forEach { (e, tags) -> adds.getOrPut(e) { mutableSetOf() } += tags }
         newDels.forEach { (e, tags) -> dels.getOrPut(e) { mutableSetOf() } += tags }
+        // advance the per-origin delivered frontier before re-emitting: membership
+        // now reflects these tags, so a peer reading the watermark that this
+        // advance gossips will also see the element live here (E3.3(a)/E3.4).
+        recordDelivered(newAdds.values.flatten())
         outlet.originate { propagate(SetDelta(newAdds, newDels)) }
     }
 

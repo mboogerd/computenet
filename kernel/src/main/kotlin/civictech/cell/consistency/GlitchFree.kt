@@ -5,10 +5,12 @@ import civictech.cell.CellContext
 import civictech.cell.CellError
 import civictech.cell.CellRef
 import civictech.cell.ErrorReporting
+import civictech.cell.Timestamp
 import civictech.cell.data.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.registerPort
+import civictech.cell.proxy.Invocation
 import java.util.*
 
 /**
@@ -62,6 +64,21 @@ class GlitchFreeCell<Api : Any>(
         inlet.serve(outlet.call)
         inlet.frontierPolicy = frontier
     }
+
+    /**
+     * Opt into the cross-replica settlement read (E3.4): waves settle only once
+     * every ORIGIN tag [originTags] extracts from a buffered payload is
+     * [ReplicaFrontier.completeAt] on [replicaFrontier] — a join over *replicas*
+     * of one logical source no longer treats its own replica's delivery as
+     * completeness. The owner must poke [recheck] when the merged watermark
+     * advances (peer watermark gossip is invisible to this inlet's events).
+     */
+    fun useReplicaFrontier(replicaFrontier: ReplicaFrontier, originTags: (Invocation) -> Collection<Timestamp>) {
+        frontier.installReplicaGate(WaveFrontier.ReplicaGate(replicaFrontier, originTags))
+    }
+
+    /** Re-run settlement after the merged replica watermark advanced (E3.4). */
+    fun recheck() = frontier.recheck()
 
     override fun onDeactivate(ctx: CellContext) {
         frontier.reset()

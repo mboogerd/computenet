@@ -16,6 +16,19 @@ import civictech.cell.proxy.Invocation
 import java.util.*
 
 /**
+ * Cross-replica settlement read (spec 20/22 §Completeness — cross-replica
+ * extension, E3.4): "has *every* replica-set member delivered origin wave
+ * `(source, counter)`", answered off the merged delivered-watermark lattice
+ * ([civictech.cell.data.WatermarkCell]) — the JoinBarrier read. A
+ * [civictech.cell.replication.Replication] builds the concrete read-view over
+ * its local companion; [WaveFrontier] consults it without new coordination
+ * traffic (the lattice is the only wire).
+ */
+fun interface ReplicaFrontier {
+    fun completeAt(source: UUID, counter: Long): Boolean
+}
+
+/**
  * The wave-completeness fold (spec 20/22), extracted from [GlitchFreeCell] as a
  * reusable per-inlet policy (CP-A4). Buffers the reactive data waves arriving on
  * an inlet until each wave's edge frontier is complete, then releases them in
@@ -42,6 +55,26 @@ class WaveFrontier(
 ) : InletFrontier {
 
     private lateinit var release: (Invocation) -> Unit
+
+    /**
+     * Opt-in replica-fed settlement (E3.4). A glitch-free consumer drawing from
+     * *replicas* of one logical source cannot align its inlinks by wave source —
+     * each replica re-originates a delivered wave under its own outlet epoch, so
+     * the ordinary cross-inlink per-source predicate ([expectedEdges]) would
+     * stall forever (a source only ever appears on the one edge whose replica
+     * minted it). When set, settlement is instead read from the replica set: a
+     * buffered wave releases once every ORIGIN tag its payload carries is
+     * [ReplicaFrontier.completeAt] — "the replica set delivered it", not merely
+     * "my replica delivered it". [ReplicaGate.originTags] extracts those origin
+     * tags from the payload, keeping this fold payload-agnostic.
+     */
+    private var replicaGate: ReplicaGate? = null
+
+    /** Configuration for [replicaGate]: the cross-replica read plus a payload origin-tag extractor. */
+    class ReplicaGate(
+        val frontier: ReplicaFrontier,
+        val originTags: (Invocation) -> Collection<Timestamp>,
+    )
 
     private val pending = LinkedHashMap<Timestamp, LinkedHashMap<UUID, Invocation>>()
 
@@ -150,6 +183,22 @@ class WaveFrontier(
         pending.clear()
     }
 
+    /**
+     * Install the cross-replica settlement read (E3.4). Immediately re-checks:
+     * a gate installed after waves already buffered must not leave them stuck.
+     */
+    fun installReplicaGate(gate: ReplicaGate) {
+        replicaGate = gate
+        flushReady()
+    }
+
+    /**
+     * Re-run settlement (E3.4). The replica frontier advances asynchronously as
+     * peer watermarks gossip in — a change no inlet event of this frontier
+     * observes — so its owner pokes this hook when the merged watermark moves.
+     */
+    fun recheck() = flushReady()
+
     private fun advanceWatermark(edgeId: UUID, sourceId: UUID, counter: Long) {
         watermark.getOrPut(edgeId) { mutableMapOf() }.merge(sourceId, counter, ::maxOf)
     }
@@ -184,9 +233,26 @@ class WaveFrontier(
         .map { it.link.id }
         .toSet()
 
+    /**
+     * Replica-fed readiness (E3.4): the wave arrived on its delivering edge (it
+     * is in [pending]), so "my replica delivered it" already holds; the only
+     * remaining question is whether the replica SET has — every origin tag the
+     * buffered invocations carry must be [ReplicaFrontier.completeAt].
+     */
+    private fun replicaReady(timestamp: Timestamp, gate: ReplicaGate): Boolean {
+        val wave = pending[timestamp] ?: return false
+        return wave.values.all { invocation ->
+            gate.originTags(invocation).all { tag -> gate.frontier.completeAt(tag.sourceId, tag.counter) }
+        }
+    }
+
     private fun flushReady() {
+        val gate = replicaGate
         val ready = pending.keys
-            .filter { timestamp -> expectedEdges(timestamp).all { isSettled(it, timestamp) } }
+            .filter { timestamp ->
+                if (gate != null) replicaReady(timestamp, gate)
+                else expectedEdges(timestamp).all { isSettled(it, timestamp) }
+            }
             .sortedWith(compareBy({ it.sourceId }, { it.counter }))
         for (timestamp in ready) {
             val wave = pending.remove(timestamp) ?: continue

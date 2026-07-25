@@ -90,8 +90,7 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     // is DERIVED from the ref, so a recovered instance replaying its journal
     // credits the SAME row the network already saw (pointwise max dedups the
     // replay). A random slot would resurrect a phantom replica row.
-    private val slotId: UUID =
-        UUID.nameUUIDFromBytes("watermark-slot:${ref.id}:${ref.instanceId}".toByteArray())
+    private val slotId: UUID = slotId(ref)
 
     // full converged state: every replica's row, unioned by pointwise max.
     private val rows: MutableMap<UUID, MutableMap<UUID, Long>> = mutableMapOf()
@@ -188,5 +187,16 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
             rows[r] = c.toMutableMap()
         }
         closed += map.getValue("closed") as Set<UUID>
+    }
+
+    companion object {
+        /**
+         * The lattice row a [WatermarkCell] with [ref] owns (M10.1 replay-stable):
+         * a consumer that knows a companion's ref — e.g.
+         * [civictech.cell.replication.Replication]'s per-member read — can name
+         * that member's row in [rows] without holding the cell instance.
+         */
+        fun slotId(ref: CellRef): UUID =
+            UUID.nameUUIDFromBytes("watermark-slot:${ref.id}:${ref.instanceId}".toByteArray())
     }
 }
