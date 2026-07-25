@@ -8,6 +8,7 @@ import civictech.cell.Owned
 import civictech.cell.Timestamp
 import civictech.cell.data.CounterDelta
 import civictech.cell.data.PnCounterDelta
+import civictech.cell.data.WatermarkDelta
 import civictech.cell.data.ListDelta
 import civictech.cell.data.MapDelta
 import civictech.cell.data.SetDelta
@@ -106,6 +107,8 @@ object WireCodec {
                 subclass(MessageContext::class)
                 subclass(CounterDelta::class)
                 subclass(PnCounterDelta::class)
+                // delivered-watermark lattice (spec 40/42 §Delivered watermarks, E3.2)
+                subclass(WatermarkDelta::class)
                 @Suppress("UNCHECKED_CAST")
                 subclass(SetDelta::class, SetDelta.serializer(polyAny) as KSerializer<SetDelta<*>>)
                 @Suppress("UNCHECKED_CAST")

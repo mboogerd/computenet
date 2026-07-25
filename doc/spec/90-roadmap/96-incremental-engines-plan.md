@@ -306,7 +306,11 @@ source's watermark column is fenced with the source (R14).
 **Implement**: spec text only; cite research 02 §2-3, 03 §3, 05 gaps 6-7.
 **Unblocks** E3.2-E3.7.
 
-### E3.2 — `WatermarkDelta` + `WatermarkCell` (the gossiped lattice) — P1 · High · `repl`
+### E3.2 — `WatermarkDelta` + `WatermarkCell` (the gossiped lattice) — P1 · High · `repl` ✅ LANDED (CP-B1)
+**Status**: the pointwise-max lattice + `Replicable` cell landed via composition
+ticket CP-B1 (`kernel/.../cell/data/Watermark.kt`), with the merge-law harness
+(commutative / idempotent / monotone / associative / gossip-no-regression). The
+seeded mesh-convergence run + signed-delta control remain open for E3.3+.
 **Spec**: 40/42 §Delivered watermarks (E3.1 point 1).
 **Implement**: `kernel/.../cell/data/WatermarkCell.kt`: `@Serializable
 @SerialName("WatermarkDelta") data class WatermarkDelta(rows: Map<UUID, Map<UUID, Long>>,
