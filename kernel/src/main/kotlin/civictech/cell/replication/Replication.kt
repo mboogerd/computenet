@@ -3,6 +3,7 @@ package civictech.cell.replication
 import civictech.cell.CellRef
 import civictech.cell.data.Propagate
 import civictech.cell.data.Replicable
+import civictech.cell.data.WatermarkCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanOutlet
@@ -54,6 +55,21 @@ class Replication(private val registry: LocationRegistry) {
     /** Established gossip links per (local replica → remote replica) pair. */
     private val linked = mutableMapOf<Pair<CellRef, CellRef>, Pair<Replicable<*>, Link>>()
 
+    /**
+     * The local delivered-watermark companion per replicated logical id (spec
+     * 40/42 §Delivered watermarks, E3.3 point b): one [WatermarkCell] tracks
+     * every local replica of that id, and — being itself [Replicable] — gossips
+     * over the *same* mesh as the data it tracks, no second protocol.
+     */
+    private val watermarks = mutableMapOf<UUID, WatermarkCell>()
+
+    /**
+     * The local delivered-watermark lattice for [logicalId]: its merged
+     * `rows()` are the per-(replica, source) delivered frontier every peer
+     * converges to. Null until a replica of [logicalId] is [replicate]d here.
+     */
+    fun watermarkOf(logicalId: UUID): WatermarkCell? = watermarks[logicalId]
+
     init {
         registry.onPublish { ref -> linkOut(ref) }
         // reconcile (spec 42, G-45): a peer's despawn/eviction removes it from
@@ -74,6 +90,31 @@ class Replication(private val registry: LocationRegistry) {
         hostOf[cell.ref] = host
         host.managementInlet.call.spawn(cell)
         registry.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
+        trackDeliveries(cell, host)
+    }
+
+    /**
+     * Delivered-tracking seam (spec 40/42 §Delivered watermarks, E3.3): wire
+     * [cell]'s delivery path into a [WatermarkCell] companion for its logical
+     * id, itself replicated on [host] so its deltas gossip over the existing
+     * mesh (no new protocol). The companion's ref id is derived from the data
+     * id (`watermark:{logicalId}`) and it borrows the data replica's
+     * `instanceId`, so each peer contributes a distinct, replay-stable row and
+     * the companions of one logical id find each other by [replicasOf] exactly
+     * as the data replicas do. A [WatermarkCell] is not itself tracked —
+     * that would recurse — its own convergence is the ordinary gossip path.
+     */
+    private fun trackDeliveries(cell: Replicable<*>, host: ManagedHost) {
+        if (cell is WatermarkCell) return
+        val companion = watermarks.getOrPut(cell.ref.id) {
+            val ref = CellRef(
+                UUID.nameUUIDFromBytes("watermark:${cell.ref.id}".toByteArray()),
+                cell.ref.instanceId,
+            )
+            WatermarkCell(ref).also { replicate(it, host) }
+        }
+        @Suppress("UNCHECKED_CAST")
+        companion.trackDeliveriesOf(cell.outlet as FanOutlet<Propagate<Any?>>)
     }
 
     /**

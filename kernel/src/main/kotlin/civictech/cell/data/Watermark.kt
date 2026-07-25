@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
 import civictech.cell.Stateful
 import civictech.cell.host.MergeablePayload
 import civictech.cell.port.*
@@ -148,6 +149,28 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
             if (rows.isEmpty() && closed.isEmpty()) null
             else WatermarkDelta(rows(), closed())
         }
+    }
+
+    /**
+     * Delivery seam (spec 40/42 §Delivered watermarks, E3.3): tap [dataOutlet]
+     * so every effective wave the tracked replica makes visible — a local mint
+     * OR a peer delta it absorbed and re-emitted (both broadcast through the
+     * outlet's `call`/`originate`, which fire taps; targeted `at`-catch-up does
+     * not) — advances this watermark for that wave's `(sourceId, counter)`,
+     * read straight off the emission's [CurrentContext]. Pointwise-max,
+     * effective-only [advance] makes gossip echoes and redeliveries fixpoints;
+     * the watermark itself then rides the ordinary replica mesh
+     * ([civictech.cell.replication.Replication]) — no new protocol.
+     *
+     * The advance is detached ([CurrentContext.with] `null`) so the watermark's
+     * own gossip emission mints a fresh wave from THIS cell's outlet instead of
+     * welding onto the data wave that triggered the tap.
+     */
+    fun <D> trackDeliveriesOf(dataOutlet: FanOutlet<Propagate<D>>) {
+        dataOutlet.tap(Use.fixed(Propagate<D> {
+            val ts = CurrentContext.get()?.timestamp ?: return@Propagate
+            CurrentContext.with(null) { advance(ts.sourceId, ts.counter) }
+        }, PortRef.generate()))
     }
 
     override fun snapshot(): Serializable =
