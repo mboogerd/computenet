@@ -304,6 +304,16 @@ class PartitionedShardSet<E>(
     var routingEpoch: Long = 0L
         private set
 
+    // Repartition flip window (spec 20/24 §Partitioned state "per-range
+    // Buffering", 93 I-19, CP-D4): while a flip is open, commands touching a
+    // moving key range are buffered — parked at the router — and replayed once,
+    // to the new owner, after the flip closes. Non-moving ranges flow untouched
+    // (the funnel never blocks). [flipBuffered] false is the CP-D4 control.
+    private var flipping = false
+    private var flipBuffered = true
+    private val flipBuffer = mutableListOf<SetDelta<E>>()
+    private var movingInterest: Interest? = null
+
     val shardCount: Int get() = shards.size
 
     /**
@@ -322,6 +332,17 @@ class PartitionedShardSet<E>(
     /** Route [delta] to the owning shards (each slice filtered to that shard's interest), stamped with the epoch. */
     fun route(delta: SetDelta<E>) {
         ledger.apply(delta)
+        val moving = movingInterest
+        if (flipping && flipBuffered && moving != null) {
+            // Per-range Buffering (spec 20/24, CP-D4): a command touching the
+            // moving range is parked at the router (delivered once, to the new
+            // owner, when the flip closes); the non-moving remainder flows now.
+            val movingPart = delta.within(moving) { keyFn(it as E) }
+            if (movingPart != null) flipBuffer += movingPart
+            val stablePart = delta.within(complement(moving)) { keyFn(it as E) }
+            if (stablePart != null) emit(stablePart, routingEpoch)
+            return
+        }
         emit(delta, routingEpoch)
     }
 
@@ -351,6 +372,86 @@ class PartitionedShardSet<E>(
         emit(ledger.asDelta(), routingEpoch)
     }
 
+    /**
+     * Open a repartition flip window under concurrent placement (spec 20/24
+     * §Partitioned state, 93 I-19, CP-D4). The moving key range — every key
+     * whose owning shard changes between the current and [newInterests]
+     * assignment — is set to Buffering ([route] parks commands touching it while
+     * the window is open); the live state-as-delta of the moving range is
+     * replayed into its new owners now (parking per-ref if a shard is migrating,
+     * so the funnel never blocks other ranges). Each gaining shard adopts a
+     * transient union of its old and new interest so it keeps serving its old
+     * range and accepts the moved range during the window. Close with
+     * [endRepartition].
+     *
+     * With [buffered] false (the CP-D4 control) the moving range is not buffered:
+     * during the window a command for a moving key is routed to both its old and
+     * its new owner (their interests transiently overlap) and double-counts.
+     */
+    fun beginRepartition(newInterests: List<Interest>, buffered: Boolean = true) {
+        require(newInterests.size == shards.size) { "expected ${shards.size} interests, got ${newInterests.size}" }
+        check(!flipping) { "a repartition flip is already open" }
+        routingEpoch++
+        flipping = true
+        flipBuffered = buffered
+        val old = shards.map { it.interest }
+        val moving = predicateInterest { key -> ownerUnder(newInterests, key) != ownerUnder(old, key) }
+        movingInterest = moving
+        pendingInterests = newInterests
+        // The routing table stays OLD for the whole window (routing continuity —
+        // the old owner keeps serving the moving range until the flip closes);
+        // only the moving range is set to Buffering. Each new owner's *guard* is
+        // widened (old ∪ new) so it accepts the replay of its moved-in range, and
+        // that pre-window snapshot is replayed to it now — parking per-ref if the
+        // shard is migrating, so the funnel never blocks other ranges.
+        val snapshot = ledger.asDelta()
+        shards.forEachIndexed { i, shard ->
+            shard.cell.assign(unionInterest(old[i], newInterests[i]), routingEpoch) // widen guard only; sheds nothing
+            val movedIn = snapshot.within(newInterests[i]) { keyFn(it as E) }?.within(moving) { keyFn(it as E) }
+            if (movedIn != null) shard.route.propagate(RoutedCommand(routingEpoch, movedIn))
+        }
+    }
+
+    /**
+     * Close the flip window (spec 20/24 §Partitioned state, CP-D4): narrow every
+     * shard to its final [Interest] (each old owner sheds the range it lost),
+     * then replay the buffered moving-range commands once, in order, to their new
+     * owners under the settled table. Zero loss, no double-count.
+     */
+    fun endRepartition() {
+        check(flipping) { "no repartition flip is open" }
+        val newInterests = checkNotNull(pendingInterests)
+        shards.forEachIndexed { i, shard ->
+            shard.interest = newInterests[i]
+            registry.setInterest(shard.cell.ref, newInterests[i])
+            shard.cell.assign(newInterests[i], routingEpoch)
+        }
+        flipping = false
+        movingInterest = null
+        pendingInterests = null
+        val buffered = flipBuffer.toList()
+        flipBuffer.clear()
+        buffered.forEach { emit(it, routingEpoch) }
+    }
+
+    private var pendingInterests: List<Interest>? = null
+
+    /** The index of the shard whose interest admits [key] under [interests], or null (unrouted). */
+    private fun ownerUnder(interests: List<Interest>, key: Any?): Int? =
+        interests.indexOfFirst { it.admits(key) }.takeIf { it >= 0 }
+
     /** The scatter-gather board: each shard's live key range (spec: "union of disjoint-key catch-ups"). */
     fun memberships(): List<Set<E>> = shards.map { it.cell.membership() }
+
+    companion object {
+        private fun predicateInterest(admit: (Any?) -> Boolean): Interest = object : Interest {
+            override fun overlaps(other: Interest): Boolean = true
+            override fun admits(key: Any?): Boolean = admit(key)
+        }
+
+        private fun unionInterest(a: Interest, b: Interest): Interest =
+            predicateInterest { a.admits(it) || b.admits(it) }
+
+        private fun complement(interest: Interest): Interest = predicateInterest { !interest.admits(it) }
+    }
 }

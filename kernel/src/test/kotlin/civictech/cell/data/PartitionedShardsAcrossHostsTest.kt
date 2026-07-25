@@ -32,7 +32,7 @@ class PartitionedShardsAcrossHostsTest {
     /** A router side bridged to [shardCount] shards, each on its own host+registry. */
     private class Mesh(seed: Long, val shardCount: Int, val totalSlots: Int, epochAware: Boolean, keyFn: (String) -> Any?) {
         val controller = SimulationController(seed)
-        private val routerRegistry = LocationRegistry()
+        val routerRegistry = LocationRegistry()
         private val routerBridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = routerRegistry)
         private val routerSide = Peering.Side(routerRegistry, routerBridgeHost)
         val logicalId: UUID = UUID.randomUUID()
@@ -54,6 +54,12 @@ class PartitionedShardsAcrossHostsTest {
         }
 
         fun quiesce() = controller.runToIdle()
+
+        /** Simulate shard [i] migrating away (its router-side deliveries park per-ref, funnel rule). */
+        fun migrate(i: Int) = routerRegistry.hold(CellRef(logicalId, i.toLong()))
+
+        /** Shard [i]'s migration completes — parked deliveries replay in order. */
+        fun heal(i: Int) = routerRegistry.release(CellRef(logicalId, i.toLong()))
     }
 
     /** A single-writer OR-set input: mints add-tags, tombstones observed tags on remove — feeds the router. */
@@ -151,6 +157,53 @@ class PartitionedShardsAcrossHostsTest {
             if (board != batch) diverged++
         }
         // if this fails the flip never moved a live element — the guard would be untested
+        (diverged > 0).shouldBeTrue()
+    }
+
+    /** A flip window racing a shard migration, with writes throughout the window. */
+    private fun runD4(seed: Long, buffered: Boolean): Pair<Map<String, Long>, Map<String, Long>> {
+        val shardCount = 3
+        val totalSlots = 12
+        val mesh = Mesh(seed, shardCount, totalSlots, epochAware = true, keyFn = ::key)
+        val input = Input()
+        val rnd = Random(seed)
+        val rotated = List(shardCount) { s -> Interest.Slots.forShard((s + 1) % shardCount, shardCount, totalSlots) }
+
+        fun tick() {
+            val e = domain[rnd.nextInt(domain.size)]
+            val delta = if (rnd.nextInt(10) < 6 || e !in input.liveSet()) input.add(e) else input.remove(e)
+            if (delta != null) mesh.router.route(delta)
+            repeat(rnd.nextInt(3)) { mesh.controller.step() }
+        }
+
+        repeat(30) { tick() } // warm up
+        mesh.migrate(1) // shard 1 begins migrating (its router-side traffic parks per-ref)
+        mesh.router.beginRepartition(rotated, buffered) // open the flip window while shard 1 is away
+        repeat(30) { i -> // writes throughout the window, racing the migration
+            tick()
+            if (i == 15) mesh.heal(1) // migration completes mid-window
+        }
+        mesh.router.endRepartition() // close the flip window
+        repeat(20) { tick() } // post-flip writes
+        mesh.quiesce()
+        return boardOf(mesh.router.memberships()) to batch(input.liveSet())
+    }
+
+    @Test
+    fun `repartition racing a shard migration under a buffered flip loses nothing, 100 seeds`() {
+        for (seed in 0L until 100L) {
+            val (board, batch) = runD4(seed, buffered = true)
+            board shouldBe batch // the buffered flip window + per-ref migration park = zero loss, zero double
+        }
+    }
+
+    @Test
+    fun `control - an unbuffered flip racing a migration drops or double-routes on some seed`() {
+        var diverged = 0
+        for (seed in 0L until 50L) {
+            val (board, batch) = runD4(seed, buffered = false)
+            if (board != batch) diverged++
+        }
         (diverged > 0).shouldBeTrue()
     }
 }

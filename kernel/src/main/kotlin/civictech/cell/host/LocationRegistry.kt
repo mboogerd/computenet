@@ -141,11 +141,11 @@ class LocationRegistry {
      * not on the fast path).
      */
     fun deliver(invocation: HostedPortInvocation) {
-        if (send(locations[invocation.cellRef], invocation)) return
+        if (invocation.cellRef !in held && send(locations[invocation.cellRef], invocation)) return
         val queue = parked.computeIfAbsent(invocation.cellRef) { mutableListOf() }
         synchronized(queue) {
             // re-check under the per-ref lock so a concurrent publish can't strand this invocation
-            if (send(locations[invocation.cellRef], invocation)) return
+            if (invocation.cellRef !in held && send(locations[invocation.cellRef], invocation)) return
             queue.add(invocation)
             // Register after parking as well as on the failed offer. If the
             // target crossed low-water between those operations, runNow
@@ -180,6 +180,7 @@ class LocationRegistry {
     }
 
     private fun replay(ref: CellRef, expected: Location) {
+        if (ref in held) return // parked deliberately for the flip window — [release] drains it
         val queue = parked[ref] ?: return
         synchronized(queue) {
             if (locations[ref] != expected) return
@@ -188,6 +189,26 @@ class LocationRegistry {
                 queue.removeAt(0)
             }
         }
+    }
+
+    /**
+     * Refs whose delivery is deliberately parked for a repartition flip window
+     * (spec 20/24 §Partitioned state "park the flip window", 40/42, CP-D4):
+     * per-ref, so a held key range confines its parking to itself — every other
+     * range flows unblocked (the funnel rule, 93 I-19). This reuses the ordinary
+     * park/replay path, not a second buffer.
+     */
+    private val held = ConcurrentHashMap.newKeySet<CellRef>()
+
+    /** Park [ref]'s deliveries (per-ref, funnel rule) until [release] — the flip-window buffer. */
+    fun hold(ref: CellRef) {
+        held += ref
+    }
+
+    /** Stop holding [ref] and drain everything parked during the window, in park order. */
+    fun release(ref: CellRef) {
+        held -= ref
+        locations[ref]?.let { replay(ref, it) }
     }
 
     /**
