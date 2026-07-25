@@ -1,6 +1,6 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented
+> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), while `Progress` absorb-acks and the handshake-routed bridged open are decided design (CP-A2), unimplemented
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext), 93 (feature-interaction resolutions I-1/4/5/11/13/14/18/23/24)
 > **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.Outlet`/`FanOutlet`, `cell.consistency.GlitchFreeCell`
 
@@ -244,6 +244,48 @@ source-set delta propagation with a liveness proof (an upstream cut must not
 strand a waiting join), the floors×cycles×merge-tag interaction, and the
 explicit topology-serializing coordinator (JoinBarrier) cell that doubles as
 the diamond-over-replica escape hatch (93 I-13/I-14).
+
+## Bridged frontier (location transparency)
+
+The observation frontier is **location-transparent**: the markers that carry
+it — `EdgeOpen`/`EdgeClose` (§Topology versioning) together with the
+`Progress(thru)` absorb-acks and `Stall` markers of the watermark rule
+(§Completeness over silent or stuck edges) — cross a wire bridge in the same
+per-link FIFO frame order as the data they order. A glitch-free join therefore
+computes an identical completeness condition whether a given frontier edge is
+in-process or bridged. A bridged edge is a `WireEdgeLink` (`cell.wire`)
+carrying stable per-side link identity (40/41 point 4), so frontier bookkeeping
+keyed by link id (`GlitchFreeCell.edges`, per-source watermarks) behaves exactly
+as it would for a local link, and the diamond guarantee holds across the cut.
+
+- **EdgeOpen/EdgeClose cross today** *(implemented, W3.2 — resolves the
+  wire-crossing sliver of G-39)*: they travel as ordinary `PORT_PROTOCOL`
+  frames on the contract-backed `topology-order` protocol, inheriting the
+  per-link FIFO the bridge already gives data (40/41 point 4). The consumer
+  computes the per-source floor on the marker it receives exactly as in-process
+  (§Topology versioning), so the far-host join opens and closes its arms in
+  frame order against the data on the same channel.
+- **Progress absorb-acks and `Stall` do not cross yet** *(decided design,
+  unimplemented — CP-A2, composition plan)*: the watermark rule's
+  non-delivery signals — a `Progress(thru)` absorb-ack minted at an upstream
+  quiescence boundary, and typed `Stall(reason, recoverable)` — must ride the
+  same `topology-order` FIFO across the bridge (as additive `WireFrame`
+  fields, no version bump), so a quiescent or stuck **remote** arm settles (or
+  loudly resolves) a far-host wave the same way a local one does. Without this,
+  a glitch-free consumer on the far side of a bridge can complete a wave only
+  from real data arrivals on its bridged arms; an effective-only-silent remote
+  arm blocks it forever — the cross-host face of G-40.
+
+⚠ CONFLICT (C-13): the shipped bridged link is installed by
+`WireEdgeLink.bridgeTo`/`bridgeFrom` (`cell.wire`) calling `linking.register`
+directly and firing `EdgeOpen` from a raw `Protocols.sendDownstream`, never
+routing through `handshake()` — so a bridged edge skips the link policies, the
+peer allowlist (43), the cardinality/cycle checks, and the negotiated
+`EdgeOpen`/`EdgeClose` emission that a local link runs. Local and remote links
+thus negotiate differently, contradicting location transparency (40/41
+§Requirement, where this is named a bug). Reconciled by routing the bridge
+install through `handshake()` and forwarding `Progress` absorb-acks over the
+frame path (CP-A2, composition plan; see 40/41 point 4).
 
 ## Implementation plan (ordered; 1–3 done)
 

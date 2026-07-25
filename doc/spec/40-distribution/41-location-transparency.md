@@ -10,6 +10,10 @@ Linking two ports MUST behave identically whether the cells share a thread, a
 process, or nothing but a network. Only cost differs (P2 tiers, 10/14):
 direct call → queue hop → serialized send.
 
+⚠ One shipped path violates this today: bridged links bypass the handshake, so
+local and remote links negotiate differently — a location-transparency bug
+(⚠ CONFLICT C-13, point 4 below), closed by CP-A2 (composition plan).
+
 ## What exists (in-process)
 
 - `host.lookup<Api>(ref)` returns a **cell proxy** implementing the cell's API
@@ -177,6 +181,22 @@ direct call → queue hop → serialized send.
    protocol this process's `ProtocolRegistry` knows); a full runtime
    negotiation handshake and a versioned ProtocolId↔contractId mapping
    remain open follow-up beyond this ticket's default-capability set.
+   ⚠ CONFLICT (C-13): the shipped bridged link bypasses the handshake — a
+   **location-transparency bug**. `WireEdgeLink.bridgeTo`/`bridgeFrom`
+   (`cell.wire`) install the link by calling `linking.register` directly and
+   fire `EdgeOpen` from a raw `Protocols.sendDownstream`, never routing through
+   `handshake()` (`cell.port.Link`). A bridged edge therefore skips everything
+   the local link path runs: the link policies and the peer allowlist (43 —
+   the `TrustBoundaryTest` `allowPeers` gate does not fire on bridged edges),
+   the cardinality/cycle checks, and the negotiated `EdgeOpen`/`EdgeClose`
+   emission. Local and remote links are left with *different* negotiation
+   semantics, in direct contradiction of §Requirement (linking MUST behave
+   identically local or remote). Closed by CP-A2 (composition plan):
+   `bridgeTo`/`bridgeFrom` route through a `handshake()` overload taking the
+   remote-resolved counterpart — policies, allowlist, and EdgeEvent emission
+   run on the bridged edge — and `Progress` absorb-acks forward over the frame
+   path as additive `WireFrame` fields so the bridged observation frontier
+   settles (20/22 §Bridged frontier).
    Topology edge events cross the bridge likewise (decided in 93 I-13):
    `EdgeOpen`/`EdgeClose` (20/22) travel as ordinary `PORT_PROTOCOL` frames
    on the `topology-order` protocol (now contract-backed, `TopologyOrderProtocol`,
