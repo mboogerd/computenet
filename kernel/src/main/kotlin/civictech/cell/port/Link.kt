@@ -1,6 +1,24 @@
 package civictech.cell.port
 
+import civictech.gen.wire.NatureVector
 import java.util.*
+
+/**
+ * CP-F3: reconcile a producer's [offered] natures against a consumer's
+ * [required] natures, mapping a [Reconciliation.Refuse] onto the typed
+ * [LinkResult.Rejected] the handshake returns. Null ⇒ [Reconciliation.Direct]
+ * ⇒ the link proceeds exactly as today.
+ */
+private fun reconcileNatures(offered: NatureVector, required: NatureVector): LinkResult.Rejected? =
+    when (val outcome = NatureNegotiation.reconcile(offered, required)) {
+        Reconciliation.Direct -> null
+        is Reconciliation.Refuse -> LinkResult.Rejected(
+            outcome.mismatch,
+            "nature mismatch on ${outcome.mismatch.axis}: producer offers " +
+                "${outcome.mismatch.offered}, consumer requires ${outcome.mismatch.required} " +
+                "(no adapter — typed refusal, CP-F3)",
+        )
+    }
 
 /**
  * A first-class, directional connection from an outlet to an inlet (G-12).
@@ -204,6 +222,13 @@ internal fun <Api> handshake(
     // identity rides the delivery (M8.2): bridged requests carry their peer
     support.reject(LinkRequest(portOut.ref, targetRef, CurrentPeer.get(), role))?.let { return it }
 
+    // CP-F3: reconcile the two port nature-vectors after policies, before
+    // install. Direct (the same-nature/default fast path) costs nothing; a
+    // scoped-axis conflict becomes a loud typed refusal where today the
+    // mismatch would drop silently at first emission.
+    reconcileNatures(portOut.natures, (target as? Port)?.natures ?: NatureVector.DEFAULT)
+        ?.let { return it }
+
     val sourceLinking = (portOut as? Linked)?.linking
     val link = PortLink(portOut.ref, targetRef, portOut, target as? Port) { link ->
         // The close is terminal on the link's in-process protocol/data FIFO:
@@ -267,9 +292,23 @@ internal fun handshake(
     local: Linked,
     role: LinkRole = LinkRole.Consume,
     fireEdgeOpen: Boolean = false,
+    counterpart: NatureVector = NatureVector.DEFAULT,
 ): LinkResult {
     val support = local.linking
     support.reject(LinkRequest(from, targetRef, CurrentPeer.get(), role))?.let { return it }
+
+    // CP-F3: the bridged edge runs the *same* pure reconcile as a local link,
+    // so the verdict is location-transparent (BridgedHandshakeTest asserts
+    // localVerdict == remoteVerdict). The remote endpoint's vector arrives as
+    // [counterpart]; today's callers pass DEFAULT (additive, zero behavior
+    // change) — carrying the peer's descriptor vector across the wire is a
+    // follow-on. `fireEdgeOpen` marks the producer side, fixing which vector is
+    // offered vs required.
+    val localNatures = (local as? Port)?.natures ?: NatureVector.DEFAULT
+    val offered = if (fireEdgeOpen) localNatures else counterpart
+    val required = if (fireEdgeOpen) counterpart else localNatures
+    reconcileNatures(offered, required)?.let { return it }
+
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
             support.register(link)

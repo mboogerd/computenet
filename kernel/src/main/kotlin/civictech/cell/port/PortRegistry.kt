@@ -42,6 +42,10 @@ fun <P : Port> Any.registerPort(name: String, port: P): P =
     port.also {
         PortRegistry.of(this).register(name, it)
         PortIdentities.stamp(this, name, it)
+        // CP-F3: project the generated descriptor's declared natures onto the
+        // live port so the handshake can reconcile them (no-op unless the cell
+        // has a generated descriptor carrying non-default natures).
+        PortNatures.project(this, name, it)
     }
 
 /**
