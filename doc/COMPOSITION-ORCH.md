@@ -98,9 +98,15 @@ Legend: pending · impl-running · impl-done · validating · READY · merged ·
 ### Phase 3 (Wave 7) — minimal type system (ζ, one lane, bundled)
 | Ticket | State | Branch | Merged commit | Notes |
 |--------|-------|--------|---------------|-------|
-| CP-F1 | pending | comp/CP-F | | Nature vocabulary + typed Rejected(mismatch), zero behavior change |
-| CP-F2 | pending | comp/CP-F | | KSP emits natures (marker scan mirroring CellColor) |
-| CP-F3 | pending | comp/CP-F | | reconcile() in handshake: typed refusals only (no Adapt/planner) |
+| CP-F1 | merged | comp/CP-F | b39e5d0 | NatureAxis(4)/NatureVector sparse+DEFAULT; Rejected backward-compat ctor; validator PASS |
+| CP-F2 | merged | comp/CP-F | 2dd96d4 | KSP marker scan (Replicable/Magnitude/Owned/Leased/Blocking/Suspending); validator PASS |
+| CP-F3 | merged | comp/CP-F | d40e4ad | pure reconcile→Direct\|Refuse, no Adapt; merge-idempotence silent-drop→typed refusal; validator PASS |
+
+**PHASE 3 COMPLETE** — final `./gradlew test` gate **BUILD SUCCESSFUL @ d40e4ad**.
+
+## RUN COMPLETE — all 3 phases / 7 waves / 16 tickets merged into `main` @ `d40e4ad`
+
+Every ticket: Opus-5 impl in an isolated worktree (TDD, watchdog-timed tests) → Opus-5 validation in its own worktree (faithfulness + rebase/merge-prep) → host FF-merge. One rework: **CP-B3** (validation caught a whole-cell replica-gate replacing the wave-frontier predicate → local-arm glitch broken 50/50; reworked to per-edge + committed `MixedArmGlitchFreeTest`). No other reworks; all rebases clean. Scoping calls honestly surfaced by validators: CP-B2 coarse watermark (E3.3(a) deferred to B3), CP-E1 MapDelta-merge gap (designed around in E2), CP-E2 in-process-100-seed + real-two-JVM-kill9 split (composition genuinely exercised, C–F over real bridges), CP-F3 COLOR excluded from link reconcile + bridged wire-vector deferred.
 
 **Wave 5 COMPLETE** — combined gate green @ `a5cf896`. Note (from D-tail review, non-blocking): distributed router uses a total-interest ledger for replay rather than shard-to-shard StateRequest (in-process `routed` ledger left in place — partial realization of "retire bespoke ledger"); control-plane holds ShardCell refs, data-plane crosses wire.
 
