@@ -1,9 +1,35 @@
 package civictech.cell.port
 
+import civictech.cell.CurrentContext
 import civictech.cell.proxy.Buffering
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
 import civictech.cell.port.PortRef
+
+/**
+ * Per-inlet wave-completeness policy (spec 20/22 §Bridged frontier / Completeness
+ * over silent or stuck edges, CP-A4): buffers the reactive data waves arriving on
+ * an inlet until each wave's edge frontier is complete, then releases them, in
+ * per-source counter order, to the inlet's served handler. Opt in via
+ * [FanInlet.frontierPolicy]; the sugar cell
+ * [civictech.cell.consistency.GlitchFreeCell] wires one over an inlet→outlet
+ * pass-through.
+ *
+ * A frontier registers its own generic-protocol handlers (topology-order,
+ * progress, suspension) when [attach]ed, so edge and watermark markers reach it
+ * through the ordinary [ProtocolSupport] delivery path — identical whether the
+ * arm is in-process or bridged (spec 40/41 point 4).
+ */
+interface InletFrontier {
+    /** Wire this frontier onto [inlet], releasing complete waves through [release]. */
+    fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit)
+
+    /** Gate a reactive data invocation carrying its wave context. */
+    fun offer(invocation: Invocation)
+
+    /** Drop transient buffered state (RESTART): completeness accounting is unaffected. */
+    fun reset()
+}
 
 /**
  * An aggregating input port that supports multiple concurrent producers.
@@ -41,8 +67,28 @@ class FanInlet<Api : Any>(
     /** Current usable API implementation; null while cold (handler not yet installed). */
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
 
+    /**
+     * Opt-in wave-completeness gate (CP-A4). When set, reactive data arriving on
+     * [call] is routed through the frontier — buffered until its wave is complete,
+     * then released to the served handler — instead of dispatching directly. The
+     * frontier installs its own generic-protocol handlers on [attach].
+     */
+    var frontierPolicy: InletFrontier? = null
+        set(value) {
+            field = value
+            value?.attach(this) { inv -> inv.invoke(activeImplementation?.call ?: parkingImplementation) }
+        }
+
+    /** Frontier entry point: captures each call as a wave-stamped [Invocation] and offers it. */
+    private val frontierGate: Api by lazy {
+        Proxy.fromClass(clazz) { _, method, args ->
+            frontierPolicy?.offer(Invocation.of(method, args, CurrentContext.get()))
+            null
+        }
+    }
+
     override val call: Api = Proxy.delegating(clazz) {
-        activeImplementation?.call ?: parkingImplementation
+        if (frontierPolicy != null) frontierGate else (activeImplementation?.call ?: parkingImplementation)
     }
 
     override fun at(portRef: PortRef): Api {
