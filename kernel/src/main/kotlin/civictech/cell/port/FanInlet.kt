@@ -47,7 +47,15 @@ interface InletFrontier : InletPolicy
 class FanInlet<Api : Any>(
     val clazz: Class<Api>,
     initialRef: PortRef = PortRef.generate(),
-    default: Api? = null
+    default: Api? = null,
+    /**
+     * FU-6: opt-in single-writer (strict point-to-point) cardinality. When
+     * `true`, [linkFrom] refuses a second [LinkRole.Consume] producer, mirroring
+     * [FeedbackInlet]'s point-to-point refusal; Observe taps (read cardinality)
+     * stay unrestricted. Default `false` is unconditional fan-in — byte-identical
+     * to every existing inlet, no behavior change for non-opting graphs.
+     */
+    val singleWriter: Boolean = false
 ) : Use<Api>, Serve<Api>, Linked, DerivedPortRef {
 
     // PN-1: fresh random at construction, reassigned once at stamp time to the
@@ -216,13 +224,24 @@ class FanInlet<Api : Any>(
         parked.drain().forEach { it.invoke(call) }
     }
 
-    override fun linkFrom(portOut: LinkTo<Api>): LinkResult = handshake(
-        portOut = portOut,
-        target = this,
-        targetRef = ref,
-        install = { portOut.linkTo(this as Use<Api>) },
-        uninstall = { (portOut as? Subscribe<Api>)?.unsubscribe(ref) },
-    )
+    override fun linkFrom(portOut: LinkTo<Api>): LinkResult {
+        // FU-6: strict point-to-point on the write side. Refuse before the
+        // handshake if a producer already holds the single-writer slot; Observe
+        // taps do not count (read cardinality is unrestricted). Mirrors
+        // FeedbackInlet's point-to-point refusal shape.
+        if (singleWriter && linking.links.any { it.role == LinkRole.Consume }) {
+            return LinkResult.Rejected(
+                "single-writer inlet already has a producer (strict point-to-point, FU-6)"
+            )
+        }
+        return handshake(
+            portOut = portOut,
+            target = this,
+            targetRef = ref,
+            install = { portOut.linkTo(this as Use<Api>) },
+            uninstall = { (portOut as? Subscribe<Api>)?.unsubscribe(ref) },
+        )
+    }
 
     override fun linkTo(useApi: Use<Api>) {
         delegate(useApi)
@@ -231,7 +250,8 @@ class FanInlet<Api : Any>(
     companion object {
         inline fun <reified Api : Any> create(
             ref: PortRef = PortRef.generate(),
-            default: Api? = null
-        ): FanInlet<Api> = FanInlet(Api::class.java, ref, default)
+            default: Api? = null,
+            singleWriter: Boolean = false
+        ): FanInlet<Api> = FanInlet(Api::class.java, ref, default, singleWriter)
     }
 }
