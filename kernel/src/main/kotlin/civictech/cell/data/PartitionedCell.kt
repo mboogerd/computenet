@@ -679,12 +679,13 @@ class PartitionedShardSet<E>(
             if (registry.isHeld(shard.cell.ref)) return@forEach // migrating — its leg defers
             // Fan the StateRequest over the wire (the write path's transport), not
             // a direct object read: replyTo names the requester's inlet, since is
-            // this instance's retained currency, scope rides Total (the shard
-            // already holds only its slice — see StateRequest.scope).
+            // this instance's retained currency, and scope rides as a @Polymorphic
+            // Interest (FU-1) so a cross-host shard narrows its reply to
+            // shardInterest ∩ scope instead of over-fetching its whole slice.
             Protocols.sendUpstream(
                 pullEdge(shard.cell.ref, replyTo),
                 Protocols.StateRequest,
-                StateRequest(replyTo, sinceOf(shard.cell.ref)),
+                StateRequest(replyTo, sinceOf(shard.cell.ref), scope),
             )
         }
     }

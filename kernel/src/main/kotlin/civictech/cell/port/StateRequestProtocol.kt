@@ -30,24 +30,24 @@ import civictech.gen.wire.ProtocolDirection
  * non-null [civictech.cell.MessageContext.baseline], delivered only to
  * [replyTo] — never broadcast.
  *
- * Wire crossing (PN-5, spec 20/24 §Partitioned state): a `StateRequest` rides a
- * `PORT_PROTOCOL` frame so the scatter-gather router can fan it to shards behind
- * a bridge (`WireCodec` registers it in the polymorphic protocol-message
+ * Wire crossing (PN-5/FU-1, spec 20/24 §Partitioned state): a `StateRequest`
+ * rides a `PORT_PROTOCOL` frame so the scatter-gather router can fan it to shards
+ * behind a bridge (`WireCodec` registers it in the polymorphic protocol-message
  * module). [replyTo] and [since] are `@Serializable` and cross verbatim; [scope]
- * is `@Transient` — an [Interest] is only `java.io.Serializable`, not
- * kotlinx-serializable, so a partial-interest scope does not yet cross. This is
- * exactly enough for the partitioned pull: a shard already holds only its own
- * interest-slice, so a scope-absent (⇒ [Interest.Total]) request returns that
- * shard's whole slice — the correct leg for a `Total` scatter-gather requester.
- * Carrying a partial [scope] across the wire (kotlinx-serializing the [Interest]
- * algebra) is a follow-on; in-process callers pass [scope] unchanged.
+ * rides as a `@Polymorphic` [Interest] on the very channel `Assignment.interest`
+ * already uses (PN-6 made the whole [Interest] algebra kotlinx-serializable and
+ * `WireCodec` registers every arm), so a partial-interest scope now crosses a
+ * real bridge: a cross-host shard narrows its reply to `shardInterest ∩ scope`
+ * instead of returning its whole slice (FU-1 — the PN-5 over-fetch is closed).
+ * `null` ⇒ [Interest.Total] ⇒ the whole slice, byte-identical to the pre-scope
+ * reply, so every existing 2-arg caller and the whole-state reply are unchanged.
  */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("StateRequest")
 data class StateRequest(
     val replyTo: PortRef,
     val since: TagFrontier?,
-    @kotlinx.serialization.Transient val scope: Interest? = null,
+    @kotlinx.serialization.Polymorphic val scope: Interest? = null,
 )
 
 /**
