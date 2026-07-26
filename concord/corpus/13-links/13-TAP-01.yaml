@@ -1,0 +1,26 @@
+id: 13-TAP-01
+title: An observe-role tap alongside a consume link folds the same broadcast
+covers: [12-FANOUT-01, 21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: one set source linked to a consuming view and, separately, a tap view attached with role observe
+  when: adds and removes are applied to the source
+  then: the tap's fold is indistinguishable from the consumer's — both are subscribers of the same broadcast outlet
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: consumer, type: set-view}
+    - {id: tap, type: set-view}
+  links:
+    - {from: s, to: consumer}
+    - {from: s, to: tap, role: observe}
+script:
+  - {type: apply, on: s, op: add, value: apple}
+  - {type: apply, on: s, op: add, value: pear}
+  - {type: apply, on: s, op: remove, value: apple}
+  - {type: apply, on: s, op: add, value: plum}
+checks:
+  - {type: views-converge, views: [consumer, tap]}
+  - {type: final-view, view: consumer, equals: [pear, plum]}
+  - {type: no-dead-letters}

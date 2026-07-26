@@ -1,0 +1,32 @@
+# Concord CONTROL scenario (W3-3). kind: control — it MUST fail; the runner
+# asserts its failure (Concord P7 — the harness must be able to fail).
+# Correct graph, two views deliberately fed DIFFERENT filters, then asserted
+# to converge — a genuine divergence the harness must catch.
+id: CTL-CONVERGE-01
+title: Control — views fed different filters deliberately asserted to converge
+covers: [21-PROP-01]
+profile: core
+kind: control
+narrative:
+  given: one source feeding two views through DIFFERENT filter predicates (even vs odd)
+  when: a mix of even and odd values is applied
+  then: the two views hold genuinely different folds — the deliberate views-converge assertion fails, and the runner asserts this control fails
+graph:
+  cells:
+    - {id: s, type: set-source, of: int}
+    - {id: evens, type: filter, fn: even}
+    - {id: odds, type: filter, fn: odd}
+    - {id: v1, type: set-view}
+    - {id: v2, type: set-view}
+  links:
+    - {from: s, to: evens}
+    - {from: s, to: odds}
+    - {from: evens, to: v1}
+    - {from: odds, to: v2}
+script:
+  - {type: apply, on: s, op: add, value: 1}
+  - {type: apply, on: s, op: add, value: 2}
+  - {type: apply, on: s, op: add, value: 3}
+  - {type: apply, on: s, op: add, value: 4}
+checks:
+  - {type: views-converge, views: [v1, v2]}

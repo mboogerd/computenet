@@ -1,0 +1,27 @@
+id: 24-OP-FILTER-01
+title: Filter passes only elements satisfying the predicate
+covers: [24-OP-FILTER-01]
+profile: core
+kind: example
+narrative:
+  given: a set source filtered by an even predicate, observed through a set view
+  when: the integers 1 through 5 are added
+  then: only the even elements pass through, tags unchanged
+graph:
+  cells:
+    - {id: a, type: set-source, of: int}
+    - {id: f, type: filter, fn: even}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: f}
+    - {from: f, to: v}
+script:
+  - {type: apply, on: a, op: add, value: 1}
+  - {type: apply, on: a, op: add, value: 2}
+  - {type: apply, on: a, op: add, value: 3}
+  - {type: apply, on: a, op: add, value: 4}
+  - {type: apply, on: a, op: add, value: 5}
+checks:
+  - {type: final-view, view: v, equals: [2, 4]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

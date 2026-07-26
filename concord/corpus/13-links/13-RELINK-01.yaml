@@ -1,0 +1,31 @@
+id: 13-RELINK-01
+title: Unlink then relink — catch-up brings the reconnected view current
+covers: [13-LINK-01, 21-CATCHUP-02]
+profile: core
+kind: example
+narrative:
+  given: a set source feeding two views, early (always linked) and late (linked, then unlinked, then relinked)
+  when: ops flow while late is disconnected, then late relinks
+  then: the relink's catch-up brings late current, indistinguishable from early
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: early, type: set-view}
+    - {id: late, type: set-view}
+  links:
+    - {from: s, to: early}
+    - {from: s, to: late}
+script:
+  - {type: apply, on: s, op: add, value: before-1}
+  - {type: apply, on: s, op: add, value: before-2}
+  - {type: quiesce}
+  - {type: disconnect, from: s, to: late}
+  - {type: apply, on: s, op: add, value: while-detached}
+  - {type: quiesce}
+  - {type: connect, from: s, to: late}
+  - {type: quiesce}
+checks:
+  - {type: late-join-equals-early, early: early, late: late}
+  - {type: final-view, view: early, equals: [before-1, before-2, while-detached]}
+  - {type: incremental-equals-batch, view: late}
+  - {type: no-dead-letters}

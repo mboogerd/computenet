@@ -1,0 +1,33 @@
+# Concord CONTROL scenario (W3-3). kind: control — it MUST fail; the runner
+# asserts its failure (Concord P7 — the harness must be able to fail).
+# Same fork-join diamond as 22-GF-DIAMOND-01, but asserting the real
+# glitch-freedom invariant (observations-all-satisfy even) against the driver's
+# ScalarSumCombineCell binding, which cell-catalog.md documents as NOT
+# wave-aligned (kernel gap 1) — a genuinely torn (odd) intermediate sum is
+# expected to surface on at least one run of the sweep.
+id: CTL-GF-01
+title: Control — even-sum invariant asserted over a deliberately non-glitch-free combine
+covers: [22-GF-01]
+profile: core
+kind: control
+narrative:
+  given: one counter source forked through two identity arms into a summing combine that is NOT wave-aligned
+  when: the source is incremented repeatedly
+  then: an observer sees a torn (odd) intermediate sum on some run — the deliberate even-only assertion fails, and the runner asserts this control fails
+graph:
+  cells:
+    - {id: n, type: counter-source}
+    - {id: l, type: map, fn: identity}
+    - {id: r, type: map, fn: identity}
+    - {id: s, type: combine-latest, fn: sum}
+    - {id: v, type: value-view}
+  links:
+    - {from: n, to: l}
+    - {from: n, to: r}
+    - {from: l, to: s, inlet: left}
+    - {from: r, to: s, inlet: right}
+    - {from: s, to: v}
+script:
+  - {type: apply, on: n, op: increment, times: 50}
+checks:
+  - {type: observations-all-satisfy, view: v, fn: even}

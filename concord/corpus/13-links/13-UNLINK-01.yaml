@@ -1,0 +1,24 @@
+id: 13-UNLINK-01
+title: Unlink mid-script freezes the downstream fold — nothing after arrives
+covers: [13-LINK-01]
+profile: core
+kind: example
+narrative:
+  given: a set source linked to a view
+  when: the link is unlinked mid-script and further ops are applied to the source
+  then: the view keeps its last fold from before the unlink and receives nothing after
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: v, type: set-view}
+  links:
+    - {from: s, to: v}
+script:
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: beta}
+  - {type: quiesce}
+  - {type: disconnect, from: s, to: v}
+  - {type: apply, on: s, op: add, value: after-unlink}
+checks:
+  - {type: final-view, view: v, equals: [alpha, beta]}
+  - {type: no-dead-letters}

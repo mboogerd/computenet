@@ -1,0 +1,32 @@
+id: 24-OP-PARTITION-01
+title: A partitioned cell's converged view equals its unpartitioned group-by twin
+covers: [24-PART-03]
+profile: core
+kind: example
+narrative:
+  given: one set source fanned into both a plain group-by and a sharded partition (same key fn), each observed through its own count view
+  when: elements are added across several keys
+  then: because organelle key ranges are disjoint, the partitioned composite's converged view equals its unpartitioned group-by twin
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: g, type: group-by, fn: key-of}
+    - {id: vg, type: count-view}
+    - {id: p, type: partition, fn: key-of}
+    - {id: vp, type: count-view}
+  links:
+    - {from: a, to: g}
+    - {from: g, to: vg}
+    - {from: a, to: p}
+    - {from: p, to: vp}
+script:
+  - {type: apply, on: a, op: add, value: [x, 1]}
+  - {type: apply, on: a, op: add, value: [x, 2]}
+  - {type: apply, on: a, op: add, value: [y, 3]}
+  - {type: apply, on: a, op: add, value: [y, 4]}
+  - {type: apply, on: a, op: add, value: [z, 5]}
+checks:
+  - {type: views-converge, views: [vg, vp]}
+  - {type: incremental-equals-batch, view: vg}
+  - {type: incremental-equals-batch, view: vp}
+  - {type: no-dead-letters}

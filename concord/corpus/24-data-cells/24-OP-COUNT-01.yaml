@@ -1,0 +1,26 @@
+id: 24-OP-COUNT-01
+title: Count emits a counter delta only when distinct membership size changes
+covers: [24-OP-COUNT-01]
+profile: core
+kind: example
+narrative:
+  given: a set source counted by distinct element, observed through a value view
+  when: three distinct elements are added and one is removed
+  then: the count reflects the current distinct membership size
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: cnt, type: count}
+    - {id: v, type: value-view}
+  links:
+    - {from: a, to: cnt}
+    - {from: cnt, to: v}
+script:
+  - {type: apply, on: a, op: add, value: x}
+  - {type: apply, on: a, op: add, value: y}
+  - {type: apply, on: a, op: add, value: z}
+  - {type: apply, on: a, op: remove, value: y}
+checks:
+  - {type: final-view, view: v, equals: 2}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

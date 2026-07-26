@@ -1,0 +1,31 @@
+# Mapping note (W3-2): `lookup-join`, like `join`, binds to `JoinSetCell` (with a
+# different `combine`) — cell-catalog.md kernel-binding-status. Chapter 24 has no
+# EARS id specific to lookup-join; the closest real coverage is the JoinSet
+# equi-join requirement it shares the cell family with.
+id: 24-OP-LOOKUP-01
+title: Lookup-join enriches each left element with its matched right value, dropping unmatched rows
+covers: [24-OP-JOINSET-01]
+profile: core
+kind: example
+narrative:
+  given: a left set source of elements and a right set source of [key, value] pairs feeding a lookup-join, observed through a set view
+  when: one left element has a matching right key and another does not
+  then: the matched left element is enriched with the right value; the unmatched element is dropped from the output
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: lj, type: lookup-join, fn: key-of}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: lj, inlet: left}
+    - {from: b, to: lj, inlet: right}
+    - {from: lj, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [k1, v1]}
+  - {type: apply, on: a, op: add, value: [k2, v2]}
+  - {type: apply, on: b, op: add, value: [k1, d1]}
+checks:
+  - {type: final-view, view: v, equals: [[[k1, v1], d1]]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

@@ -1,0 +1,33 @@
+# Concord corpus scenario (W3-1). Canonical schema shape — see concord/schema/scenario.md.
+id: 22-SOURCE-ID-01
+title: Interleaved waves from two independent sources fold to equal views on two observers
+covers: [22-SRC-01]
+profile: core
+kind: example
+narrative:
+  given: two independent set sources feeding one union, fanned out to two separately observing views
+  when: adds and a remove from both sources interleave with no ordering guarantee between them
+  then: at quiescence both observers hold equal folds — cross-source convergence, not simultaneity
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: b, type: set-source, of: string}
+    - {id: u, type: union}
+    - {id: v1, type: set-view}
+    - {id: v2, type: set-view}
+  links:
+    - {from: a, to: u, inlet: left}
+    - {from: b, to: u, inlet: right}
+    - {from: u, to: v1}
+    - {from: u, to: v2}
+script:
+  - {type: apply, on: a, op: add, value: alpha}
+  - {type: apply, on: b, op: add, value: bravo}
+  - {type: apply, on: a, op: add, value: charlie}
+  - {type: apply, on: b, op: add, value: delta}
+  - {type: apply, on: a, op: remove, value: alpha}
+checks:
+  - {type: views-converge, views: [v1, v2]}
+  - {type: final-view, view: v1, equals: [bravo, charlie, delta]}
+  - {type: incremental-equals-batch, view: v1}
+  - {type: no-dead-letters}

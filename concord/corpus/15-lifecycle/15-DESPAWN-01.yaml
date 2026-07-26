@@ -1,0 +1,31 @@
+id: 15-DESPAWN-01
+title: Graceful despawn mid-flow unlinks cleanly; the remainder converges
+covers: [15-DESPAWN-01, 21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: two producers merging into one union, observed through a view
+  when: one producer is gracefully despawned mid-flow (unlinking it) and the other keeps producing
+  then: no dead letters are produced and the view converges to the batch fold of whatever each producer actually contributed
+graph:
+  cells:
+    - {id: w1, type: set-source, of: string}
+    - {id: w2, type: set-source, of: string}
+    - {id: u, type: union}
+    - {id: v, type: set-view}
+  links:
+    - {from: w1, to: u, inlet: left}
+    - {from: w2, to: u, inlet: right}
+    - {from: u, to: v}
+script:
+  - {type: apply, on: w1, op: add, value: alpha}
+  - {type: apply, on: w2, op: add, value: beta}
+  - {type: apply, on: w1, op: add, value: gamma}
+  - {type: quiesce}
+  - {type: despawn, on: w2}
+  - {type: apply, on: w1, op: add, value: delta}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v, equals: [alpha, beta, delta, gamma]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

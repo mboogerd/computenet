@@ -1,0 +1,23 @@
+# Concord corpus scenario (W3-1). Canonical schema shape — see concord/schema/scenario.md.
+id: 21-PULL-01
+title: A view linked after quiescence reaches current state with no further ops
+covers: [21-PULL-01]
+profile: core
+kind: example
+narrative:
+  given: a set source already carrying accepted adds at quiescence, with a view not yet linked to it
+  when: the view links after quiescence, with no further ops applied to the source
+  then: the view's catch-up (state-as-delta-from-empty on link) brings it to the source's current state on its own
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: v, type: set-view}
+script:
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: beta}
+  - {type: apply, on: s, op: remove, value: alpha}
+  - {type: quiesce}
+  - {type: connect, from: s, to: v}
+checks:
+  - {type: final-view, view: v, equals: [beta]}
+  - {type: no-dead-letters}

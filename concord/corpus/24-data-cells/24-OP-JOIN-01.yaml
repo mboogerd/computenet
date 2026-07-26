@@ -1,0 +1,39 @@
+# Mapping note (W3-2): the kernel `join` catalog id binds to `JoinSetCell` — the
+# relational equi-join over set streams of pairs (cell-catalog.md
+# kernel-binding-status: "join family binds over set streams of pairs [k, v]...
+# not the kernel's map-stream JoinCell"). The EARS id textually named
+# `24-OP-JOIN-01` in doc/spec is a DIFFERENT requirement — `JoinCell`, the LWW
+# dictionary join over two single-writer map streams (value-replacement
+# semantics, arrival-order). This scenario exercises the relational join the
+# kernel driver actually binds `join` to, so `covers:` names the JoinSet ids
+# (`24-OP-JOINSET-01/-02`), not the coincidentally-similar `24-OP-JOIN-01`.
+id: 24-OP-JOIN-01
+title: Relational equi-join emits one pair per live matching (left, right) row, many-to-many
+covers: [24-OP-JOINSET-01, 24-OP-JOINSET-02]
+profile: core
+kind: example
+narrative:
+  given: two set sources of [key, value] pairs feeding a relational join, observed through a set view
+  when: one right key has two live rows (many-to-many) and one of them is later removed
+  then: the join emits a pair per live matching row combination, and removing one contributing row retracts only its own pair — the sibling pair survives
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: j, type: join, fn: key-of}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: j, inlet: left}
+    - {from: b, to: j, inlet: right}
+    - {from: j, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [k1, L1]}
+  - {type: apply, on: a, op: add, value: [k2, L2]}
+  - {type: apply, on: b, op: add, value: [k1, R1]}
+  - {type: apply, on: b, op: add, value: [k2, R2a]}
+  - {type: apply, on: b, op: add, value: [k2, R2b]}
+  - {type: apply, on: b, op: remove, value: [k2, R2a]}
+checks:
+  - {type: final-view, view: v, equals: [[k1, L1, R1], [k2, L2, R2b]]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

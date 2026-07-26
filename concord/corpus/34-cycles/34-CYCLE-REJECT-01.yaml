@@ -1,0 +1,21 @@
+id: 34-CYCLE-REJECT-01
+title: A cycle-closing edge with no damping witness is rejected at construction
+covers: [21-CYCLE-01, 12-CARD-01]
+profile: core
+kind: example
+narrative:
+  given: a counter source seeding a CycleHead whose loop-closing edge carries a plain, non-Magnitude payload
+  when: the cycle-closing edge is connected
+  then: the connect is rejected (CycleWithoutDamping) — the admission check runs at construction, never at send time
+graph:
+  cells:
+    - {id: seed, type: counter-source}
+    - {id: fb, type: feedback-undamped}
+    - {id: v, type: value-view}
+  links:
+    - {from: seed, to: fb}
+    - {from: fb, to: v}
+script:
+  - {type: connect, from: fb, to: fb, outlet: loopOutlet, inlet: feedbackInput, expect: rejected}
+checks:
+  - {type: no-dead-letters}

@@ -1,0 +1,30 @@
+# Coverage note (W3-2): chapter 24 of doc/spec has no dedicated EARS id for
+# KeyedSetCell (it is a W3-0 catalog refinement — see cell-catalog.md note 6 /
+# BatchOracle.kt's documented assumptions). `covers:` falls back to the general
+# accepted-op convergence property (21-PROP-01) rather than inventing an id;
+# minting a `24-OP-KEYEDSET-01` EARS id is a spec-editing follow-up, not this
+# ticket's call.
+id: 24-OP-KEYEDSET-01
+title: Keyed-set upsert folds to the current set of held elements (last-writer-wins per key)
+covers: [21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: a keyed-set (kernel KeyedSetCell) observed through a set view
+  when: a key is put twice with different elements, another key is put, then the first key is removed
+  then: the view holds exactly the currently-held elements — a keyed upsert, not an add/remove-by-value set
+graph:
+  cells:
+    - {id: ks, type: keyed-set}
+    - {id: v, type: set-view}
+  links:
+    - {from: ks, to: v}
+script:
+  - {type: apply, on: ks, op: put, value: [k1, x]}
+  - {type: apply, on: ks, op: put, value: [k1, y]} # LWW: k1 now y
+  - {type: apply, on: ks, op: put, value: [k2, z]}
+  - {type: apply, on: ks, op: remove, value: k1}
+checks:
+  - {type: final-view, view: v, equals: [z]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

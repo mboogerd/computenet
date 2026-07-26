@@ -1,0 +1,24 @@
+id: 24-OP-FLATMAP-01
+title: Flatmap expands each element into a set, unioning colliding preimages' tags
+covers: [24-OP-FLATMAP-01, 24-OP-FLATMAP-02]
+profile: core
+kind: example
+narrative:
+  given: a set source of small lists, flat-mapped by identity, observed through a set view
+  when: two overlapping lists are added
+  then: the output is the distinct-projection union of all list members — an output stays live until its last live preimage dies
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: fm, type: flatmap, fn: identity}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: fm}
+    - {from: fm, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [1, 2]}
+  - {type: apply, on: a, op: add, value: [2, 3]}
+checks:
+  - {type: final-view, view: v, equals: [1, 2, 3]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

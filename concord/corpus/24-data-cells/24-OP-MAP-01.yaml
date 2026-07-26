@@ -1,0 +1,24 @@
+id: 24-OP-MAP-01
+title: Map source is last-writer-wins per key (single-stream semantics)
+covers: [24-OP-MAP-01]
+profile: core
+kind: example
+narrative:
+  given: a map source observed through a map view
+  when: a key is put twice and another key is put then removed
+  then: the final view holds the latest put per key — arrival-order key puts, the documented single-stream limit (not a convergent merge under concurrent writers)
+graph:
+  cells:
+    - {id: m, type: map-source}
+    - {id: v, type: map-view}
+  links:
+    - {from: m, to: v}
+script:
+  - {type: apply, on: m, op: put, value: [k1, 1]}
+  - {type: apply, on: m, op: put, value: [k1, 2]}
+  - {type: apply, on: m, op: put, value: [k2, 9]}
+  - {type: apply, on: m, op: remove, value: k2}
+checks:
+  - {type: final-view, view: v, equals: {k1: 2}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

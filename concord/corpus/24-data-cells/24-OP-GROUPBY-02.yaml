@@ -1,0 +1,28 @@
+id: 24-OP-GROUPBY-02
+title: Group-by with a non-count aggregator removes a group on its last retraction
+covers: [24-OP-GROUPBY-02, 24-AGG-01]
+profile: core
+kind: example
+narrative:
+  given: a set source of [key, value] pairs grouped by key with a max aggregator, observed through a count view
+  when: one group's members are both later removed
+  then: membership flips (not tag churn) drive insert/retract, and the group's last retraction removes it from the map entirely — the surviving group keeps its max
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: g, type: group-by, fn: key-of, agg: max}
+    - {id: v, type: count-view}
+  links:
+    - {from: a, to: g}
+    - {from: g, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [a, 5]}
+  - {type: apply, on: a, op: add, value: [a, 2]}
+  - {type: apply, on: a, op: add, value: [b, 3]}
+  - {type: apply, on: a, op: add, value: [b, 9]}
+  - {type: apply, on: a, op: remove, value: [a, 5]}
+  - {type: apply, on: a, op: remove, value: [a, 2]}
+checks:
+  - {type: final-view, view: v, equals: {b: 9}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

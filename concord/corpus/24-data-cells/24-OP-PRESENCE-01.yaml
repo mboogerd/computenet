@@ -1,0 +1,42 @@
+# Real semantic finding (W3-2), not the coverage gap it first looks like: the
+# batch oracle documents "count vs presence-count" as an open v1 ambiguity and
+# folds both to scalar current-membership cardinality (BatchOracle.kt). But the
+# KERNEL binding is not that at all: `PresenceCountCell` (kernel/.../data/
+# PresenceCountCell.kt) is a per-element FAN-IN lane counter sharing its
+# substrate (`PresenceLanes`) with `QuorumSetCell` — it emits `MapDelta<E, Int>`
+# keyed by element, one entry per element counting how many distinct LIVE
+# SOURCE LINKS currently assert it (group-death when a count drops to 0), not a
+# single scalar over one source. A scalar `value-view` on a single set-source
+# (mirroring `count`) is simply the wrong shape for what the kernel builds.
+# This scenario therefore uses the real fan-in shape (two set sources) and a
+# `map-view`, and narrows the checks to `final-view` (per-element lane counts)
+# — `incremental-equals-batch` is omitted because the oracle's scalar model
+# does not describe this cell; reconciling it is an oracle-model update, a
+# schema/oracle-change ticket, not something a corpus author decides silently.
+id: 24-OP-PRESENCE-01
+title: Presence-count emits, per element, how many live source links currently assert it
+covers: [21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: two set sources fanned into a presence-count, observed through a map view
+  when: one element is added on both sources and another only on one, then the shared source drops its own copy
+  then: each element's count is exactly its number of asserting live source links; a count reaching zero removes the element from the view (group-death)
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: b, type: set-source, of: string}
+    - {id: pc, type: presence-count}
+    - {id: v, type: map-view}
+  links:
+    - {from: a, to: pc}
+    - {from: b, to: pc}
+    - {from: pc, to: v}
+script:
+  - {type: apply, on: a, op: add, value: p}
+  - {type: apply, on: a, op: add, value: q}
+  - {type: apply, on: b, op: add, value: p}
+  - {type: apply, on: a, op: remove, value: q}
+checks:
+  - {type: final-view, view: v, equals: {p: 2}}
+  - {type: no-dead-letters}

@@ -1,0 +1,34 @@
+# Dispute note (W3-2, not a full DISPUTES.md entry — see cell-catalog.md
+# kernel-binding-status gap 1 / BatchOracle.kt): the kernel's `combine-latest
+# fn:sum` binding (`ScalarSumCombineCell`) is order-independent AT QUIESCENCE
+# but is NOT wave-aligned — an observer can transiently see a torn (partial)
+# sum mid-wave. So this scenario asserts `final-view` ONLY; a stream-level
+# check (`observations-all-satisfy`/glitch-freedom) awaits a genuine
+# wave-aligned scalar combine, which does not exist in the kernel today (the
+# same gap `22-GF-DIAMOND-01` documents for the fork-join case). `covers:`
+# names the general accepted-op convergence property (21-PROP-01) — chapter 24
+# has no EARS id dedicated to `combine-latest` itself.
+id: 24-OP-COMBINE-01
+title: Combine-latest sums the latest value of each inlet (final-view only — not wave-aligned)
+covers: [21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: two counter sources combined by sum, observed through a value view
+  when: each counter is incremented independently
+  then: at quiescence the combined view equals the sum of both counters' final totals
+graph:
+  cells:
+    - {id: n1, type: counter-source}
+    - {id: n2, type: counter-source}
+    - {id: s, type: combine-latest, fn: sum}
+    - {id: v, type: value-view}
+  links:
+    - {from: n1, to: s, inlet: left}
+    - {from: n2, to: s, inlet: right}
+    - {from: s, to: v}
+script:
+  - {type: apply, on: n1, op: increment, value: 30}
+  - {type: apply, on: n2, op: increment, value: 12}
+checks:
+  - {type: final-view, view: v, equals: 42}

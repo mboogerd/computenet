@@ -1,0 +1,30 @@
+# Concord corpus scenario (W3-1). Canonical schema shape — see concord/schema/scenario.md.
+id: 22-LIVE-01
+title: A silent source does not block another source's updates through a shared fan-in join
+covers: [22-LIVE-01]
+profile: core
+kind: example
+narrative:
+  given: two independent set sources feeding one k=1-of-2 fan-in join, observed through a set view
+  when: one source stays silent for the whole run while the other is repeatedly updated
+  then: at quiescence the view reflects every update from the live source — the silent source never blocks
+    them (completeness is per-source; over-alignment across independent sources is forbidden, hence
+    final-view rather than a stricter simultaneity check)
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: b, type: set-source, of: string}
+    - {id: j, type: quorum-set, k: 1}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: j}
+    - {from: b, to: j}
+    - {from: j, to: v}
+script:
+  - {type: apply, on: a, op: add, value: alpha}
+  - {type: apply, on: a, op: add, value: beta}
+  - {type: apply, on: a, op: add, value: gamma}
+  # b never receives an op — the silent independent source.
+checks:
+  - {type: final-view, view: v, equals: [alpha, beta, gamma]}
+  - {type: no-dead-letters}

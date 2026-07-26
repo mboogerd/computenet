@@ -1,0 +1,25 @@
+id: 24-OP-LIST-01
+title: List source keeps positional order under index-addressed edits (single-stream semantics)
+covers: [24-OP-LIST-01]
+profile: core
+kind: example
+narrative:
+  given: a list source observed through a list view
+  when: elements are appended, one is inserted mid-list, and the head is removed by index
+  then: the final view reflects the exact positional edits — index-addressed edits, the documented single-stream limit (not a convergent merge under concurrent writers)
+graph:
+  cells:
+    - {id: ls, type: list-source, of: string}
+    - {id: v, type: list-view}
+  links:
+    - {from: ls, to: v}
+script:
+  - {type: apply, on: ls, op: append, value: a}
+  - {type: apply, on: ls, op: append, value: b}
+  - {type: apply, on: ls, op: append, value: c}
+  - {type: apply, on: ls, op: insert, value: [1, z]}
+  - {type: apply, on: ls, op: remove-at, value: 0}
+checks:
+  - {type: final-view, view: v, equals: [z, b, c]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

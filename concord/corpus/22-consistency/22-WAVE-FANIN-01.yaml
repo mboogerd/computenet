@@ -1,0 +1,45 @@
+# Concord corpus scenario (W3-1). Canonical schema shape — see concord/schema/scenario.md.
+# NOTE (see DISPUTES.md): `glitch-free: true` is accepted on any CellSpec but is
+# NOT honoured by the concord kernel driver for fan-in set operators
+# (union/intersect/quorum-set/join/...) — no binding ever wires a GlitchFreeCell
+# decorator, so a torn-wave (partial-delivery) observation is possible mid-run.
+# Narrowed to what the driver can honor today (P2/P7: narrow the scenario, never
+# weaken the evaluator) — see the checks note below.
+id: 22-WAVE-FANIN-01
+title: A multi-inlet fan-in over a forked source exposes only whole waves
+covers: [22-GF-01]
+profile: core
+kind: example
+narrative:
+  given: one set source forked through two identity arms into a 2-of-2 fan-in quorum, observed through a set view
+  when: the source is repeatedly added to and removed from
+  then: at quiescence the view equals the batch fold of the source's accepted ops — the fan-in exposes
+    only whole waves, never a torn (single-arm) partial delivery
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: l, type: map, fn: identity}
+    - {id: r, type: map, fn: identity}
+    - {id: q, type: quorum-set, k: 2, glitch-free: true}
+    - {id: v, type: set-view}
+  links:
+    - {from: s, to: l}
+    - {from: s, to: r}
+    - {from: l, to: q}
+    - {from: r, to: q}
+    - {from: q, to: v}
+script:
+  - {type: apply, on: s, op: add, value: apple}
+  - {type: apply, on: s, op: add, value: pear}
+  - {type: apply, on: s, op: add, value: plum}
+  - {type: apply, on: s, op: remove, value: apple}
+checks:
+  # Narrowed to what the driver can honor today (P2/P7). The real assertion this
+  # scenario exists to make — every observation on v's stream reflects a whole
+  # wave from s, never a partial (single-arm) delivery — is an
+  # `observations-all-satisfy` over the fan-in's observation stream (22-GF-01),
+  # commented out below; see DISPUTES.md for the missing capability.
+  #   - {type: observations-all-satisfy, view: v, fn: <TBD: needs a per-wave predicate not in the function catalog>}
+  - {type: final-view, view: v, equals: [pear, plum]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

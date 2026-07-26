@@ -1,0 +1,25 @@
+id: 24-OP-GROUPBY-01
+title: Group-by folds a tagged set stream into per-key counts (default aggregator)
+covers: [24-OP-GROUPBY-01, 24-AGG-01]
+profile: core
+kind: example
+narrative:
+  given: a set source of [key, value] pairs grouped by key, observed through a count view
+  when: two elements share one key and one element holds another key
+  then: each group's count is a deterministic function of current membership — the default `agg`
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: g, type: group-by, fn: key-of}
+    - {id: v, type: count-view}
+  links:
+    - {from: a, to: g}
+    - {from: g, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [a, 1]}
+  - {type: apply, on: a, op: add, value: [a, 2]}
+  - {type: apply, on: a, op: add, value: [b, 3]}
+checks:
+  - {type: final-view, view: v, equals: {a: 2, b: 1}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

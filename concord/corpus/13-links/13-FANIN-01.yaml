@@ -1,0 +1,29 @@
+id: 13-FANIN-01
+title: Two producers into a merging inlet fold to the multiset merge
+covers: [12-FANIN-01, 21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: two set-source producers linked into a union operator's merging inlet
+  when: adds and removes are applied concurrently to both producers
+  then: at quiescence the downstream view equals the multiset merge of both producers' accepted ops
+graph:
+  cells:
+    - {id: w1, type: set-source, of: string}
+    - {id: w2, type: set-source, of: string}
+    - {id: u, type: union}
+    - {id: v, type: set-view}
+  links:
+    - {from: w1, to: u, inlet: left}
+    - {from: w2, to: u, inlet: right}
+    - {from: u, to: v}
+script:
+  - {type: apply, on: w1, op: add, value: apple}
+  - {type: apply, on: w2, op: add, value: pear}
+  - {type: apply, on: w1, op: add, value: plum}
+  - {type: apply, on: w2, op: add, value: apple}
+  - {type: apply, on: w1, op: remove, value: apple}
+checks:
+  - {type: final-view, view: v, equals: [apple, pear, plum]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

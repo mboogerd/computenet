@@ -1,0 +1,36 @@
+# Coverage note (W3-2): chapter 24 has no dedicated EARS id for QuorumSetCell's
+# k-of-n admission (a W3-0 catalog refinement — cell-catalog.md note 6). `covers:`
+# falls back to the general accepted-op convergence property (21-PROP-01) rather
+# than inventing an id; minting a `24-OP-QUORUM-01` EARS id is a spec-editing
+# follow-up, not this ticket's call.
+id: 24-OP-QUORUM-01
+title: Quorum-set admits an element once k of n live sources assert it
+covers: [21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: three set sources fanned into a quorum-set with k=2, observed through a set view
+  when: elements are added across the sources with varying overlap
+  then: only the element asserted by at least 2 of the 3 sources is admitted — k-of-n admission, observable via the k field
+graph:
+  cells:
+    - {id: a, type: set-source, of: int}
+    - {id: b, type: set-source, of: int}
+    - {id: cc, type: set-source, of: int}
+    - {id: q, type: quorum-set, k: 2}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: q}
+    - {from: b, to: q}
+    - {from: cc, to: q}
+    - {from: q, to: v}
+script:
+  - {type: apply, on: a, op: add, value: 1}
+  - {type: apply, on: a, op: add, value: 2}
+  - {type: apply, on: b, op: add, value: 2}
+  - {type: apply, on: b, op: add, value: 3}
+  - {type: apply, on: cc, op: add, value: 2}
+checks:
+  - {type: final-view, view: v, equals: [2]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

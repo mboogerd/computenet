@@ -1,0 +1,24 @@
+id: 24-OP-SET-01
+title: Set source emits only effective deltas (no-op remove of a never-added element)
+covers: [24-SET-01]
+profile: core
+kind: example
+narrative:
+  given: a single set source observed through a set view
+  when: elements are added and removed, including a remove targeting an element the source never added
+  then: the never-added remove is a no-op — the outlet emits only effective deltas, and the final view reflects exactly the surviving adds
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: v}
+script:
+  - {type: apply, on: a, op: add, value: apple}
+  - {type: apply, on: a, op: add, value: pear}
+  - {type: apply, on: a, op: remove, value: apple}
+  - {type: apply, on: a, op: remove, value: plum} # never added — the no-op case 24-SET-01 requires
+checks:
+  - {type: final-view, view: v, equals: [pear]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

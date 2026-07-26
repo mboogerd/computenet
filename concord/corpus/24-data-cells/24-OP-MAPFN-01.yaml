@@ -1,0 +1,30 @@
+# Mapping note (W3-2): `map` with a non-identity `fn` binds to the same
+# FlatMapSetCell family as `flatmap` (cell-catalog.md kernel-binding-status:
+# "map fn:<other>/flatmap -> FlatMapSetCell"), so this scenario's closest real
+# EARS coverage is the flatmap requirement ids, not a separate map-operator id
+# (chapter 24 has no dedicated one for the element-wise transform arm).
+id: 24-OP-MAPFN-01
+title: Map applies a pure transform element-wise over a tagged set stream
+covers: [24-OP-FLATMAP-01, 24-OP-FLATMAP-02]
+profile: core
+kind: example
+narrative:
+  given: a set source mapped by add(10), observed through a set view
+  when: three integers are added
+  then: each element is transformed 1:1, tags passing through unchanged
+graph:
+  cells:
+    - {id: a, type: set-source, of: int}
+    - {id: m, type: map, fn: add(10)}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: m}
+    - {from: m, to: v}
+script:
+  - {type: apply, on: a, op: add, value: 1}
+  - {type: apply, on: a, op: add, value: 2}
+  - {type: apply, on: a, op: add, value: 3}
+checks:
+  - {type: final-view, view: v, equals: [11, 12, 13]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

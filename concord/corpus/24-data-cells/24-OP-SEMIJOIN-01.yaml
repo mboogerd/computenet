@@ -1,0 +1,29 @@
+id: 24-OP-SEMIJOIN-01
+title: Semi-join keeps left rows whose key is present on the right, re-entering after a removal
+covers: [24-OP-SEMIJOIN-01, 24-OP-SEMIJOIN-02, 24-OP-SEMIJOIN-03]
+profile: core
+kind: example
+narrative:
+  given: two set sources feeding a semi-join (A ⋉ B), observed through a set view
+  when: the right side's only row for a key is removed and then a different row under the same key is added back
+  then: the left row re-enters the output — its output tag was minted per-entry, never borrowed from an input tag, so it is not left dead under tombstone folding
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: b, type: set-source}
+    - {id: sj, type: semi-join, fn: key-of}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: sj, inlet: left}
+    - {from: b, to: sj, inlet: right}
+    - {from: sj, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [k1, x]}
+  - {type: apply, on: a, op: add, value: [k2, y]}
+  - {type: apply, on: b, op: add, value: [k1, z]}
+  - {type: apply, on: b, op: remove, value: [k1, z]}
+  - {type: apply, on: b, op: add, value: [k1, z2]}
+checks:
+  - {type: final-view, view: v, equals: [[k1, x]]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

@@ -1,0 +1,37 @@
+id: 15-SNAPSHOT-01
+title: Snapshot, despawn, restore onto a standby producer mid-script; downstream converges to the twin
+covers: [15-SNAPSHOT-01, 21-CATCHUP-02]
+profile: core
+kind: example
+narrative:
+  given: a live producer feeding a view, a standby producer spawned but unlinked, and an untouched twin producer feeding a second view with the identical op history
+  when: the live producer is snapshotted, gracefully despawned, and its state is restored onto the standby, which then relinks to the view and keeps producing
+  then: the migrated view's fold converges to the twin's — the migration lost and duplicated nothing
+graph:
+  cells:
+    - {id: c1, type: set-source, of: string}
+    - {id: c2, type: set-source, of: string}
+    - {id: twin, type: set-source, of: string}
+    - {id: v, type: set-view}
+    - {id: v2, type: set-view}
+  links:
+    - {from: c1, to: v}
+    - {from: twin, to: v2}
+script:
+  - {type: apply, on: c1, op: add, value: alpha}
+  - {type: apply, on: twin, op: add, value: alpha}
+  - {type: apply, on: c1, op: add, value: beta}
+  - {type: apply, on: twin, op: add, value: beta}
+  - {type: quiesce}
+  - {type: snapshot, on: c1, as: blob1}
+  - {type: despawn, on: c1}
+  - {type: restore, on: c2, from: blob1}
+  - {type: connect, from: c2, to: v}
+  - {type: apply, on: c2, op: add, value: gamma}
+  - {type: apply, on: twin, op: add, value: gamma}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v, equals: [alpha, beta, gamma]}
+  - {type: views-converge, views: [v, v2]}
+  - {type: incremental-equals-batch, view: v2}
+  - {type: no-dead-letters}

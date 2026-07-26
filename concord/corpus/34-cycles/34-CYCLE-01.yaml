@@ -1,0 +1,24 @@
+id: 34-CYCLE-01
+title: A damped feedback loop is admitted and reaches its closed-form fixpoint
+covers: [21-CYCLE-01, 21-CYCLE-02]
+profile: core
+kind: example
+narrative:
+  given: a counter source seeding a CycleHead whose loop-closing edge carries a Magnitude damping witness
+  when: the cycle-closing edge is connected and the seed is applied
+  then: the closing edge is admitted (headed and damped) and the loop decays to the closed-form fixpoint
+graph:
+  cells:
+    - {id: seed, type: counter-source}
+    - {id: fb, type: feedback}
+    - {id: v, type: value-view}
+  links:
+    - {from: seed, to: fb}
+    - {from: fb, to: v}
+script:
+  - {type: connect, from: fb, to: fb, outlet: loopOutlet, inlet: feedbackInput}
+  - {type: apply, on: seed, op: increment, value: 64}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v, equals: 127}
+  - {type: no-dead-letters}

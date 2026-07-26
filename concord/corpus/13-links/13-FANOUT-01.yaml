@@ -1,0 +1,29 @@
+id: 13-FANOUT-01
+title: One source fans out to three consumers; every fold equals the source
+covers: [12-FANOUT-01, 21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: one set source linked to three independent set views
+  when: adds and removes are applied to the source
+  then: at quiescence every view's fold equals the source's accepted-op multiset, and all three converge
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: v1, type: set-view}
+    - {id: v2, type: set-view}
+    - {id: v3, type: set-view}
+  links:
+    - {from: s, to: v1}
+    - {from: s, to: v2}
+    - {from: s, to: v3}
+script:
+  - {type: apply, on: s, op: add, value: apple}
+  - {type: apply, on: s, op: add, value: pear}
+  - {type: apply, on: s, op: add, value: plum}
+  - {type: apply, on: s, op: remove, value: apple}
+checks:
+  - {type: views-converge, views: [v1, v2, v3]}
+  - {type: final-view, view: v1, equals: [pear, plum]}
+  - {type: incremental-equals-batch, view: v2}
+  - {type: no-dead-letters}

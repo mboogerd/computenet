@@ -1,0 +1,22 @@
+id: 24-OP-PNCOUNTER-01
+title: PN-counter folds per-source increments/decrements to a converging total
+covers: [24-OP-PNCOUNTER-01]
+profile: core
+kind: example
+narrative:
+  given: a replicable PN-counter observed through a value view
+  when: it is incremented then decremented
+  then: the delta merges by pointwise max over per-source cumulative totals (commutative, associative, idempotent), converging to the net total
+graph:
+  cells:
+    - {id: pn, type: pn-counter}
+    - {id: v, type: value-view}
+  links:
+    - {from: pn, to: v}
+script:
+  - {type: apply, on: pn, op: increment, value: 64}
+  - {type: apply, on: pn, op: decrement, value: 22}
+checks:
+  - {type: final-view, view: v, equals: 42}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

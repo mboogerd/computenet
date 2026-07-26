@@ -1,0 +1,40 @@
+# Commutativity twin of the 24-OP-UNION-01 pilot (W3-2, CONCORD-PLAN §3 "24 —
+# Data cells"): the inlet roles are swapped relative to the pilot (a -> right,
+# b -> left instead of a -> left, b -> right) to show union does not care which
+# physical inlet a source lands on. The script also races a genuine add-wins
+# case: "kiwi" is added independently on BOTH arms, then removed only on `a`.
+# Because tags are minted per-source, `a`'s remove can only retract `a`'s own
+# kiwi tag — `b`'s independently-minted kiwi tag was never observed by that
+# remove, so it survives the merge (24-SET-03: add-wins as a consequence of
+# tag-set union) and the union still shows kiwi live.
+id: 24-OP-UNION-02
+title: Union of two set sources converges the same regardless of which inlet each source lands on
+covers: [24-OP-UNION-01, 24-SET-02, 24-SET-03]
+profile: core
+kind: example
+narrative:
+  given: two set sources feeding a union operator with swapped inlet roles, observed through a set view
+  when: adds and removes are applied concurrently, including both arms independently adding the same element before only one arm removes it
+  then: at quiescence the view equals the union of the final source sets — swapped inlets converge the same, and the independently-tagged survivor of the shared element is not lost to the other arm's remove
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: b, type: set-source, of: string}
+    - {id: u, type: union}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: u, inlet: right}
+    - {from: b, to: u, inlet: left}
+    - {from: u, to: v}
+script:
+  - {type: apply, on: b, op: add, value: pear}
+  - {type: apply, on: a, op: add, value: apple}
+  - {type: apply, on: a, op: add, value: plum}
+  - {type: apply, on: b, op: add, value: kiwi}
+  - {type: apply, on: a, op: add, value: kiwi}
+  - {type: apply, on: a, op: remove, value: apple}
+  - {type: apply, on: a, op: remove, value: kiwi} # only retracts a's own kiwi tag — b's kiwi tag survives
+checks:
+  - {type: final-view, view: v, equals: [pear, plum, kiwi]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

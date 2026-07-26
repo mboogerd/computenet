@@ -1,0 +1,24 @@
+id: 24-OP-COUNTER-01
+title: Counter merges concurrent writers by addition (commutative, not idempotent)
+covers: [24-OP-COUNTER-01]
+profile: core
+kind: example
+narrative:
+  given: a single-instance counter observed through a value view
+  when: two logical writers issue increments and decrements against the shared counter with no ordering barrier between them
+  then: the merge (addition) is commutative — the final total is the same regardless of delivery interleaving, though the counter itself stays single-instance (never replicated)
+graph:
+  cells:
+    - {id: n, type: counter-source}
+    - {id: v, type: value-view}
+  links:
+    - {from: n, to: v}
+script:
+  - {type: apply, on: n, op: increment, value: 5} # writer 1
+  - {type: apply, on: n, op: increment, value: 37} # writer 2
+  - {type: apply, on: n, op: decrement, value: 6} # writer 1
+  - {type: apply, on: n, op: increment, times: 5} # writer 2, five unit steps
+checks:
+  - {type: final-view, view: v, equals: 41}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}
