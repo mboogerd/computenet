@@ -63,7 +63,16 @@ interface CycleHead<D : Any> {
  */
 class FeedbackInlet<D : Any>(
     override val ref: PortRef = PortRef.generate(),
-    private val quiescence: Double = 0.0,
+    val quiescence: Double = 0.0,
+    /**
+     * The erased payload class, when the port was declared via the [feedbackInlet]
+     * delegate (which reifies `D`). It lets link-time admission apply the same
+     * `is Magnitude` damping test this inlet dispatches on at runtime (Cycle.kt
+     * `provide`), without a KSP descriptor — see
+     * [civictech.cell.host.ManagedHost.connect]. `null` for bare/direct
+     * construction, in which case the payload-type witness simply does not fire.
+     */
+    val payloadType: Class<*>? = null,
     private val onLap: (D) -> Unit,
 ) : Use<Consumer<D>>, Linked {
 

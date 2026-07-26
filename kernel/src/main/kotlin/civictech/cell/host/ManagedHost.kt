@@ -40,6 +40,9 @@ import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.ParkQueue
 import civictech.cell.proxy.RoutedInletResolution
+import civictech.gen.wire.MergeClass
+import civictech.gen.wire.Monotonicity
+import civictech.gen.wire.NatureAxis
 import civictech.gen.wire.ProtocolRegistry
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
@@ -1154,11 +1157,28 @@ open class ManagedHost(
                 // cycles are not locally visible here; they fall to the runtime
                 // hop guard (20/22) instead.
                 registry?.topology?.let { topology ->
-                    if (inlet !is FeedbackInlet<*> && wouldCloseCycle(topology, from, to)) {
-                        return LinkResult.Rejected(
-                            "CycleWithoutHead: connecting $from.$outletName -> $to.$inletName would close a " +
-                                "locally-visible cycle with no declared CycleHead (spec 10/13, 20/21 §Cycles)"
-                        )
+                    if (wouldCloseCycle(topology, from, to)) {
+                        // Headedness (spec 10/13): the closing edge MUST land on a
+                        // declared CycleHead.
+                        if (inlet !is FeedbackInlet<*>) {
+                            return LinkResult.Rejected(
+                                "CycleWithoutHead: connecting $from.$outletName -> $to.$inletName would close a " +
+                                    "locally-visible cycle with no declared CycleHead (spec 10/13, 20/21 §Cycles)"
+                            )
+                        }
+                        // Damping (FU-8, ADR 1 feature 8): a head only *dampens* a
+                        // lap when the loop carries a damping witness. Without one a
+                        // properly-headed loop (non-Magnitude payload, non-idempotent
+                        // merge, no quiescence override) laps forever — the runaway
+                        // "magnitude-based throttling" was meant to exclude.
+                        if (!hasDampingWitness(outlet, inlet)) {
+                            return LinkResult.Rejected(
+                                "CycleWithoutDamping: connecting $from.$outletName -> $to.$inletName would close a " +
+                                    "locally-visible cycle whose head has no damping witness — the feedback payload " +
+                                    "is not Magnitude-typed, the producer declares neither MONOTONE nor IDEMPOTENT, " +
+                                    "and the head has no quiescence override (spec 21 §Cycles, ADR 1 feature 8)"
+                            )
+                        }
                     }
                 }
 
@@ -1267,6 +1287,29 @@ open class ManagedHost(
             topology.outbound(current).forEach { link -> link.to.cell?.let(stack::add) }
         }
         return false
+    }
+
+    /**
+     * FU-8 — is there a *damping witness* for a cycle closing on [head], fed by
+     * the closing edge's producer [outlet]? A head guarantees headedness but not
+     * termination; admit the loop only when at least one witness holds (spec 21
+     * §Cycles, ADR 1 feature 8). Any of:
+     *
+     *  1. **Magnitude payload** — the weak-tier quiescence damper is live. Tested
+     *     the same way [FeedbackInlet] dispatches at runtime (`is Magnitude`),
+     *     here against the reified payload class the [feedbackInlet] delegate
+     *     records; equivalently the KSP scan stamps such a producer MONOTONE (2).
+     *  2. **Fixpoint convergence** — the producer declares [Monotonicity.MONOTONE]
+     *     or an [MergeClass.IDEMPOTENT] merge, so laps fold to a fixpoint.
+     *  3. **Explicit quiescence override** — the head was constructed with a
+     *     `quiescence > 0` threshold, an intentional divergence damper.
+     */
+    private fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
+        head.payloadType?.let { if (Magnitude::class.java.isAssignableFrom(it)) return true }
+        val natures = outlet.natures
+        if (natures.level(NatureAxis.MONOTONICITY).rank >= Monotonicity.MONOTONE.rank) return true
+        if (natures.level(NatureAxis.MERGE_IDEMPOTENCE).rank >= MergeClass.IDEMPOTENT.rank) return true
+        return head.quiescence > 0.0
     }
 }
 
