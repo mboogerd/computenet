@@ -70,4 +70,15 @@ Spec 24-data-cells.md conflicts (3 EOF-appended sections) resolved by union.
 | PN-11 | pending | comp/PN-11   | | ParkQueue extraction (mechanical, byte-identical) |
 | PN-16 | pending | comp/PN-16   | | research spike (decision/spec paragraph; may or may not merge) |
 
-Only real W6 file collision: NatureNegotiation.kt (PN-8 + PN-18) — resolve union at merge.
+Only real W6 file collision: NatureNegotiation.kt (PN-8 + PN-18) — resolved union at merge (bb0cc17). **COMPLETE** (gate green @ bb0cc17).
+- PN-8 merged (1886ee6→c26473d): overlap-without-merge refused (MERGE_IDEMPOTENCE); control(c) on SetCell (aggregate re-mints identity); board=MAX. Residual: `reconcileOverlap` proven-in-test, not wired into runtime `InstanceSet.assign` (declaration-time enforcement is PN-13).
+- PN-18+PN-13 merged (comp/PN-1813→bb0cc17): OWNERSHIP SPSC refusal; InstanceSetStep lowers to N spawns + construction-time formation assignments; DURABLE-journal-less declaration refusal (stricter than PN-12 soft count, consistent).
+- PN-14 merged (85a8db7): reuse-ref rebind promotion; partitioned extension documented-not-coded (ShardCell accepted by same path; named test is ReplicatedPromotionTest only).
+- PN-11 merged (e1e45ae): ParkQueue unifies 5 sites, byte-identical (596/0 pins).
+- PN-16 merged (d30ad1f): decision (B) — static frontier model sufficient, no G-13; doc-only.
+
+### Wave 7 — PN-17 (η CONT) ∥ PN-19 (ι FRESH)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-17 | pending | comp/PN-17 | | effect authority on an instance set |
+| PN-19 | pending | comp/PN-19 | | attention scatter, per-instance park, Stall family (closes PN-7 DEGRADE gap) |
