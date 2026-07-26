@@ -95,6 +95,30 @@ class ReplicatedEffectTest {
         override fun adoptState(state: Long) {}
     }
 
+    /**
+     * An [Effectful] cell that is a plain mergeable [Replicable] — it carries NO
+     * single-writer authority. Joining the mergeable mesh ([Replication.replicate])
+     * with a second overlapping instance is exactly the ×N-effect combination
+     * PN-17 refuses at formation. (No such cell exists in production today; this is
+     * the constructed case that drives the real formation choke point.)
+     */
+    class MergeableEffectfulSink(override val ref: CellRef) :
+        civictech.cell.data.Replicable<Long>, Effectful, Cell {
+        override val outlet = registerPort("outlet", FanOutlet.create<Propagate<Long>>())
+        private val deltaInletPort = registerPort("deltaInlet", FanInlet.create<Propagate<Long>>())
+        override val deltaInlet: Use<Propagate<Long>> get() = deltaInletPort
+        init { deltaInletPort.serve(Propagate<Long> { }) }
+    }
+
+    /** A plain, non-[Effectful] mergeable [Replicable] — the non-opting mesh baseline. */
+    class MergeablePlainCell(override val ref: CellRef) :
+        civictech.cell.data.Replicable<Long>, Cell {
+        override val outlet = registerPort("outlet", FanOutlet.create<Propagate<Long>>())
+        private val deltaInletPort = registerPort("deltaInlet", FanInlet.create<Propagate<Long>>())
+        override val deltaInlet: Use<Propagate<Long>> get() = deltaInletPort
+        init { deltaInletPort.serve(Propagate<Long> { }) }
+    }
+
     /** An ordinary, non-replicated [Effectful] sink — the non-opting baseline. */
     class PlainEffectfulSink(override val ref: CellRef, effectLog: MutableList<Long>) : Cell, Effectful {
         val writeInlet = registerPort("writeInlet", FanInlet.create<SinkOps>())
@@ -241,5 +265,61 @@ class ReplicatedEffectTest {
         SingleWriterReplication.effectAuthorityRequired(effectful = true, disjoint = false) shouldBe true
         SingleWriterReplication.effectAuthorityRequired(effectful = true, disjoint = true) shouldBe false
         SingleWriterReplication.effectAuthorityRequired(effectful = false, disjoint = false) shouldBe false
+    }
+
+    /** A peer driving the *mergeable* mesh ([Replication]) — where the guard is wired. */
+    private class MeshPeer {
+        val controller = SimulationController()
+        val registry = LocationRegistry()
+        val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val replication = Replication(registry)
+    }
+
+    @Test
+    fun `real formation refuses a second overlapping Effectful mergeable replica with no authority`() {
+        val p = MeshPeer()
+        val id = UUID.randomUUID()
+        // first (lone) effectful replica: overlaps nobody → single-instance,
+        // admitted through the REAL Replication.replicate formation path
+        val a = MergeableEffectfulSink(CellRef(id, 0))
+        p.replication.replicate(a, p.host)
+        p.controller.runToIdle()
+
+        // second replica of the SAME logical id: Total interest overlaps a's →
+        // the ×N-effect set is being formed → refused at the real formation call,
+        // NOT by invoking the predicate directly
+        val b = MergeableEffectfulSink(CellRef(id, 1))
+        val refusal = shouldThrow<IllegalStateException> {
+            p.replication.replicate(b, p.host)
+        }
+        refusal.message shouldContain "Refused"
+        refusal.message shouldContain "effect authority"
+    }
+
+    @Test
+    fun `real formation admits a disjoint-interest Effectful mergeable replica with no authority`() {
+        val p = MeshPeer()
+        val id = UUID.randomUUID()
+        // two effectful replicas assigned DISJOINT hash-slot interests (partitioning):
+        // each logical delta reaches exactly one covering instance — effect-once by
+        // construction — so no authority is needed and formation admits both.
+        val a = MergeableEffectfulSink(CellRef(id, 0))
+        val b = MergeableEffectfulSink(CellRef(id, 1))
+        p.registry.setInterest(a.ref, Interest.Slots.forShard(0, shardCount = 2, totalSlots = 4))
+        p.registry.setInterest(b.ref, Interest.Slots.forShard(1, shardCount = 2, totalSlots = 4))
+
+        p.replication.replicate(a, p.host) // lone → admitted
+        p.replication.replicate(b, p.host) // disjoint from a → still admitted, no throw
+        p.controller.runToIdle()
+    }
+
+    @Test
+    fun `real formation leaves a plain non-Effectful mergeable mesh unchanged`() {
+        val p = MeshPeer()
+        val id = UUID.randomUUID()
+        // three plain (non-Effectful) Total-interest replicas form the overlapping
+        // mesh with no refusal — the non-opting path the guard must never touch
+        (0L..2L).forEach { p.replication.replicate(MergeablePlainCell(CellRef(id, it)), p.host) }
+        p.controller.runToIdle()
     }
 }
