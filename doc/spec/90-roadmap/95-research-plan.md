@@ -295,3 +295,137 @@ boundary, lazily materialized.
 **Actions**: after E6.6, measure the per-element column cost on a realistic bag
 workload; run the E6.2 double-count control through a mocked (1) encoding to test
 the redelivery claim.
+
+---
+
+## PN-16 — Frontier traversal: is the static-link model sufficient? — DECIDED (B: yes)
+
+> **Supersedes** CP-G7 ([COMPOSITION-TICKETS-NEXT.md](../../COMPOSITION-TICKETS-NEXT.md) §CP-G7).
+> This entry closes the question rather than proposing directions: the outcome is
+> a spec paragraph to promote, not a mechanism to build. Decision recorded against
+> the post-PN-1/2/7/10 code; grounded by tests run read-only.
+
+### The question, restated
+
+`WaveFrontier` computes wave completeness from a **static link set** — the edges
+present when the wave opened (`consistency/WaveFrontier.kt:56`, the `ponytail:`
+marker). CP-G7 asked: does the frontier need *transitive upstream traversal*
+(each cell exposing its complete upstream frontier through a multiplex port,
+G-13), or is **static links + absorb-acks (CP-A3) + interest-scoped quorum (PN-7)
++ per-edge declared source sets (E3.4)** sufficient for every structure we build?
+Exit is one of: a ticket for the real thing (multiplex G-13), or a spec paragraph
+promoting the current design from shortcut to decided.
+
+### Evidence examined
+
+- **`consistency/WaveFrontier.kt`** (whole file). Completeness is defined per
+  origin wave `(sourceId, counter)`, not per hop. An edge is counted only if it
+  is `Consume`-role (`expectedLocalEdges`, PN-10 excludes announced `Observe`
+  taps), open, non-suspended, not replica-fed, and its floor `< counter`. A
+  replica-fed edge (`ReplicaGate`) is settled off the merged watermark lattice,
+  not off sibling links. Every "an edge structurally never carries this source"
+  case is discharged *without* traversal: Observe-role exclusion, replica-fed
+  exclusion (phantom sibling), floor ≥ counter, or a watermark advance from a
+  real delta / a `Progress` absorb-ack / a later monotone wave.
+- **`MessageContext.kt`** (the crux). The origin `Timestamp(sourceId, counter)`
+  rides *every* data-path invocation. Outlets stamp a fresh timestamp only on a
+  *spontaneous* emission; a **reactive** (transparent-flow) emission carries the
+  incoming timestamp forward, rewriting only `sourcePort` (and bumping `hop`,
+  which is not part of the wave join key). So an intermediate cell that forwards
+  reactively — a mapper, a filter, `GroupByCell`/`MergeableGroupByCell` (which
+  "emits all groups touched by one input delta as a single `MapDelta` under the
+  input's wave id", `22-consistency.md`) — propagates the *origin* wave identity
+  unchanged to the join. The static frontier over the join's immediate inlinks is
+  therefore already the transitive frontier: the origin identity arrives in-band.
+- **`DurableGlitchFreeReplayTest`** (asymmetric-durability diamond — CP-G7's
+  requested "graph the static frontier gets wrong"). A fork-join diamond where
+  one arm is journaled and the volatile sibling can never replay. The static
+  frontier *would* wedge (an edge that never carries the replayed source can
+  never settle it) — and does, in control (a). PN-2 discharges it not by
+  traversal but by stamping replay as a **baseline** (`MessageContext.baseline`),
+  which the frontier excludes from every wave set (`WaveFrontier.offer`, the
+  `ctx.baseline != null` branch). *Ran read-only: 3/3 green, including the
+  control that stalls on every seed without the baseline.*
+- **`ShardedReplicaFrontierTest`** (the re-originating aggregator — a `SetCell`
+  instance set that is both sharded and replicated). Each replica *re-originates*
+  delivered waves under its own outlet epoch, so origin identity is **not** in
+  the `MessageContext` here — it is carried in the **payload** (origin tags on
+  the `SetDelta`) and settled against a **registry-discovered** covering quorum
+  (PN-7 `completeAt(source, counter, key)`). This is a dynamic frontier over an
+  instance set discovered at settlement time — achieved *without* multiplex
+  ports. *Ran read-only: 4/4 green, all three controls (members-all,
+  trivial-frontier, creation-fence-off) diverge.*
+- **`demo/exchange/.../Main.kt`** (the structure we actually build). Board =
+  `shards --streamTo--> MergeableGroupByCell --link--> GlitchFreeCell`. The
+  scatter arms are `streamTo` taps (Observe role, excluded); the merge forwards
+  the input wave id (transparent flow), so the board's single static inlink
+  carries the origin waves. Channel 1. The sharded-and-replicated arm (PN-15)
+  exercises channel 2. No third channel appears.
+
+### Decision — (B). The static model is sufficient for every structure we build.
+
+The origin wave identity reaches a glitch-free join by exactly one of two in-band
+channels, and each is served without transitive port traversal:
+
+1. **Transparent flow** — the origin `Timestamp` is forwarded in the
+   `MessageContext` through every reactive intermediate. The join's static
+   immediate-inlink frontier *is* the transitive frontier. (Local diamonds,
+   mapper/filter/group-by chains, the demo board's merge arm.)
+2. **Re-origination with tag-carrying payloads** — an aggregator that collapses
+   origin identity (a replica) carries the origin waves in its payload; PN-7
+   settles them against a registry-discovered covering quorum. A dynamic instance
+   set, no multiplex port. (The sharded-and-replicated board arm.)
+
+"An edge that structurally never carries a source can never settle it" — CP-G7's
+motivating failure — is real, and is discharged four ways in the current code
+(Observe-role exclusion PN-10, replica-fed exclusion E3.4, baseline exclusion
+PN-2, and watermark/absorb-ack retirement CP-A3), none of which is traversal.
+
+Transitive traversal (G-13 multiplex ports, a cell answering "describe your
+frontier") would be forced only by a structure that **re-originates under a fresh
+wave AND cannot carry origin tags in its payload AND still requires origin-level
+glitch-freedom across that boundary** — e.g. a windowing/batch operator emitting
+on its own schedule, wrapped so a downstream consumer demands glitch-freedom
+w.r.t. the *original* sources rather than the operator's re-originated waves. **We
+build no such structure**, and the guarantee it would want is arguably wrong: a
+deliberate origin collapse means glitch-freedom relative to the collapsed origin
+is the correct contract. This is a *decided boundary*, not a latent defect. Our
+aggregators are CRDT/delta types that carry tags precisely because that is what
+makes them replicable — the property that also keeps them inside channel 2.
+
+Should such a structure ever be built, the trigger is concrete and the mechanism
+named (G-13); this entry records the boundary so the future case is recognized
+rather than rediscovered. Until then, no ticket.
+
+### Spec paragraph to promote
+
+Replace the parenthetical caveat in `20-dataflow-semantics/22-consistency.md`
+(the block ending `Upstream frontier traversal awaits multiplex ports (G-13) —
+its traversal model is decided, see plan item 4; unwaved traffic passes
+through.`) with:
+
+> **Frontier traversal is by carried origin identity, not port traversal
+> (decided, PN-16).** A glitch-free join computes completeness per origin wave
+> `(source, counter)` over its immediate static inlinks. This is already the
+> transitive frontier: the origin `Timestamp` rides every reactive emission in
+> the `MessageContext`, so an intermediate cell that forwards transparently
+> (mapper, filter, group-by) delivers the *origin* wave identity to the join
+> unchanged. An aggregator that re-originates under its own epoch (a replica)
+> instead carries its origin waves in the payload, settled against a
+> registry-discovered covering quorum (interest-scoped, spec 22 §Interest-scoped
+> settlement) — a dynamic instance set without multiplex ports. Edges that
+> structurally never carry a wave's source are excluded rather than awaited:
+> announced `Observe` taps (link role), replica-fed edges (phantom siblings),
+> edges whose floor already covers the counter, and catch-up baselines (recovery
+> replay); a silent edge is retired by a `Progress` absorb-ack or any later
+> monotone wave. Transitive port traversal (multiplex ports, G-13) is therefore
+> **not required** by any structure in this system. It would be forced only by an
+> operator that re-originates under a fresh wave, cannot carry origin tags in its
+> payload, and is nonetheless required to be glitch-free relative to the original
+> sources — a combination this system does not build, and one whose guarantee is
+> arguably a category error (a deliberate origin collapse makes glitch-freedom
+> relative to the collapsed origin the correct contract). The trigger to revisit
+> is a concrete graph with exactly that shape; the `ponytail:` marker at
+> `WaveFrontier.kt` is retired by this decision. Unwaved traffic (null context)
+> still passes straight through.
+
