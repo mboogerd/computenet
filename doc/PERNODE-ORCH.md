@@ -83,7 +83,26 @@ Only real W6 file collision: NatureNegotiation.kt (PN-8 + PN-18) — resolved un
 | PN-17 | merged | comp/PN-17 | (W7) | leader-fires/follower-suppress (Shadow NoOp) exactly-once across handoff, LeaderMark fencing; suppression verified through real host path. **Reworked**: guard was proven-in-test but unwired → now wired into live `Replication.replicate` (Effectful+Replicable on mesh w/o authority refused at formation) |
 | PN-19 | merged | comp/PN-19 | a394d9c | interest-scatter + per-instance park + Stall/Resume covering-quorum shrink; closes PN-7's DEGRADE gap; PN-0c close() = degenerate terminal case; WAIT=today/DEGRADE opt-in |
 
-### Wave 8 — PN-15 (κ FRESH — the evidence join, LAST)
+### Wave 8 — PN-15 (κ FRESH — the evidence join, LAST) — **COMPLETE** (final gate green @ 96512e7)
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-15 | pending | comp/PN-15 | | evidence graph: bridged + filtered + sharded-AND-replicated arms + manifest assertion; pair-matrix update |
+| PN-15 | merged | comp/PN-15 | 96512e7 | evidence graph: bridged + filtered + genuinely sharded(3)-AND-replicated(2) arm over real bridges + manifest assertion (4 natures); all 3 controls diverge (tear/stall/wedge); pair-matrix updated with real test names; no kernel touched; validator READY |
+
+## RUN COMPLETE — all 8 waves / 22 tickets merged into `main` @ 96512e7
+
+Final authoritative gate: `./gradlew test --rerun-tasks` → **BUILD SUCCESSFUL, 49/49 tasks executed** (2026-07-26).
+
+Per-ticket: Opus impl in an isolated worktree (TDD, Bash-timeout-bounded tests, controls that diverge) → Opus validation in the impl worktree (faithfulness + full gate) → host `--no-ff` merge + combined per-wave gate.
+
+**Reworks (2):**
+- **PN-5** — v1's scatter-gather pull read co-located shard objects (the "behind bridges" claim was decorative); reworked to fan a serialized `StateRequest` over `registry::deliver` with shards replying `baselineTo` over the reverse bridge; re-validated genuinely distributed.
+- **PN-17** — the effect-authority formation guard was correct+unit-tested but wired into no live path; reworked to invoke it at the live `Replication.replicate` mergeable-mesh formation site (Effectful+Replicable w/o authority now refused at real formation).
+
+**Documented residuals (all honest, none blocking; verified by validators):**
+- PN-4: non-checkpointed shed-recovery was partial-durable → **closed by PN-6** (journaled assignment).
+- PN-6: `InstanceSet` epoch-admission lattice is unit-tested but not wired into the runtime router; leaderless mesh-sourced replay = R1, out of scope (ledger kept scoped, not deleted).
+- PN-7: R13 read-side creation fence covers known-rowless members; the entirely-unknown-member premature window is the eventual-membership race → **closed by PN-19**'s DEGRADE Stall/Resume shrink for the recoverable case.
+- PN-8: `reconcileOverlap` (MERGE_IDEMPOTENCE) proven-in-test; runtime enforcement is via PN-13's declaration-time `InstanceSetStep.validate` (PN-8 file scope excluded InstanceSet.kt).
+- PN-12: DURABLE spawn check is a counted diagnostic, not a hard refusal (a durable-capable cell run volatile is legitimate — the COLOR principle); INSTANCE_SCOPING refusal rides the axis-agnostic reconcile loop but has no dedicated e2e test.
+- PN-14: partitioned rolling promotion is documented + accepted by the same code path (ShardCell is Replicable), but only the replicated case has a test (the ticket's named test is ReplicatedPromotionTest only).
+- PN-16: decision (B) — static-link frontier model is sufficient; no G-13 multiplex ticket needed.
