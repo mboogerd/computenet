@@ -14,7 +14,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.Protocols
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.StateRequest
-import civictech.cell.port.catchUpOnLinked
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import civictech.cell.replication.Assignment
 import civictech.cell.replication.Interest

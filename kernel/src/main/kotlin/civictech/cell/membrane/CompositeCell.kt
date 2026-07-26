@@ -5,7 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.attention.Attention
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.Linked
+import civictech.cell.link.Linked
 import civictech.cell.port.Port
 import civictech.cell.port.ProtocolId
 import civictech.cell.port.ProtocolSupport

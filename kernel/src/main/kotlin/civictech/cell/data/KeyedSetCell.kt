@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
+import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract

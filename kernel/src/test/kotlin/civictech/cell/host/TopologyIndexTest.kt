@@ -4,8 +4,8 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.Link
-import civictech.cell.port.LinkResult
+import civictech.cell.link.Link
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.registerPort
 import civictech.cell.wire.Peering

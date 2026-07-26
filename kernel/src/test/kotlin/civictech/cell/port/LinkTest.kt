@@ -1,6 +1,10 @@
 package civictech.cell.port
 
 import civictech.cell.Consumer
+import civictech.cell.link.LinkPolicy
+import civictech.cell.link.LinkRequest
+import civictech.cell.link.LinkResult
+import civictech.cell.link.handshake
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf

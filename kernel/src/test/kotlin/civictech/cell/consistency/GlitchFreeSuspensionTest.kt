@@ -5,6 +5,7 @@ import civictech.cell.attention.AttentionSupport
 import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.link.*
 import civictech.cell.port.*
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe

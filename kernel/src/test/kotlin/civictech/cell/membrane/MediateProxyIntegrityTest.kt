@@ -1,7 +1,7 @@
 package civictech.cell.membrane
 
 import civictech.cell.Propagate
-import civictech.cell.port.PeerId
+import civictech.cell.link.PeerId
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 

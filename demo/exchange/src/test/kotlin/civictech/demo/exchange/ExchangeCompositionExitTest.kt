@@ -18,7 +18,7 @@ import civictech.cell.nature.manifestOf
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use

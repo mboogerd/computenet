@@ -7,7 +7,7 @@ import civictech.cell.Propagate
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.catchUpOnLinked
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.util.*
 import kotlin.math.abs

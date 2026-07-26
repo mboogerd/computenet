@@ -3,6 +3,7 @@ package civictech.cell.data
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Stateful
+import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.cell.data.delta.MapDelta
 import civictech.gen.wire.CellBase

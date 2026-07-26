@@ -5,6 +5,7 @@ import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
+import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.cell.data.delta.DeliveredFrontier
 import civictech.cell.data.delta.DeliveryTracking

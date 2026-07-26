@@ -7,7 +7,7 @@ import civictech.cell.Propagate
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import java.io.Serializable

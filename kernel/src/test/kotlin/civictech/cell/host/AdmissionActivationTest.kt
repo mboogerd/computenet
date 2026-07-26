@@ -4,7 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.input
 import civictech.cell.port.output
 import civictech.cell.port.use

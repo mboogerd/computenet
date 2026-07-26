@@ -1,5 +1,6 @@
 package civictech.cell.port
 
+import civictech.cell.link.LinkResult
 import civictech.nature.Color
 import civictech.nature.MergeClass
 import civictech.nature.Monotonicity

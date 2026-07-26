@@ -1,6 +1,10 @@
 package civictech.cell.port
 
 import civictech.cell.Propagate
+import civictech.cell.link.Link
+import civictech.cell.link.LinkResult
+import civictech.cell.link.handshake
+import civictech.cell.link.pullServe
 import civictech.nature.NatureAxis
 import civictech.nature.NatureVector
 import civictech.nature.PullService

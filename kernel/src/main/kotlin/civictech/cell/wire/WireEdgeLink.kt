@@ -1,16 +1,16 @@
 package civictech.cell.wire
 
 import civictech.cell.CellRef
+import civictech.cell.link.Link
+import civictech.cell.link.LinkResult
+import civictech.cell.link.Linked
+import civictech.cell.link.ProtocolBridge
+import civictech.cell.link.handshake
 import civictech.cell.port.EdgeClose
-import civictech.cell.port.Link
-import civictech.cell.port.LinkResult
-import civictech.cell.port.Linked
 import civictech.cell.port.Port
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolBridge
 import civictech.cell.port.ProtocolId
 import civictech.cell.port.Protocols
-import civictech.cell.port.handshake
 import civictech.cell.port.natures
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation

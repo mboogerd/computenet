@@ -1,5 +1,12 @@
 package civictech.cell.port
 
+import civictech.cell.link.Link
+import civictech.cell.link.Linked
+import civictech.cell.link.LinkResult
+import civictech.cell.link.LinkRole
+import civictech.cell.link.PortLink
+import civictech.cell.link.handshake
+
 /**
  * Streaming link through a routed stand-in (M5.7): subscribe [target] —
  * typically a registry-routed proxy api — as a consumer of this outlet,

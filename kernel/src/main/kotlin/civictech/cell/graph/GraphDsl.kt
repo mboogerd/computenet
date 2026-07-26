@@ -6,7 +6,7 @@ import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.replication.Interest
 import civictech.nature.Manifest
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.Port
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe

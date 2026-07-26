@@ -1,5 +1,7 @@
 package civictech.cell.port
 
+import civictech.cell.link.Link
+import civictech.cell.link.Linked
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
 import civictech.nature.ProtocolCardinality

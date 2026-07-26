@@ -8,8 +8,8 @@ import civictech.cell.port.EdgeEvent
 import civictech.cell.port.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.InletFrontier
-import civictech.cell.port.Link
-import civictech.cell.port.LinkRole
+import civictech.cell.link.Link
+import civictech.cell.link.LinkRole
 import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols

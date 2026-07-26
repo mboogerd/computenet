@@ -1,6 +1,6 @@
 package civictech.cell.host
 
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortIdentity
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe

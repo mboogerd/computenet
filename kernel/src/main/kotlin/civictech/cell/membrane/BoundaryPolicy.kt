@@ -1,9 +1,9 @@
 package civictech.cell.membrane
 
 import civictech.cell.attention.AttentionBand
-import civictech.cell.port.CurrentPeer
-import civictech.cell.port.LinkPolicy
-import civictech.cell.port.PeerId
+import civictech.cell.link.CurrentPeer
+import civictech.cell.link.LinkPolicy
+import civictech.cell.link.PeerId
 import civictech.cell.port.ProtocolId
 
 /**

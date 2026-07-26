@@ -9,13 +9,13 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.cell.port.CurrentPeer
+import civictech.cell.link.CurrentPeer
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.LinkResult
-import civictech.cell.port.PeerId
+import civictech.cell.link.LinkResult
+import civictech.cell.link.PeerId
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
-import civictech.cell.port.allowPeers
+import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf

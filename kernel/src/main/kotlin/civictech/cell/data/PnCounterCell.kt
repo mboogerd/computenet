@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Stateful
+import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.cell.UuidSerializer
 import civictech.cell.data.delta.DeliveryTracking

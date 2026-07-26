@@ -1,6 +1,9 @@
 package civictech.cell.port
 
 import civictech.cell.Consumer
+import civictech.cell.link.LinkResult
+import civictech.cell.link.LinkRole
+import civictech.cell.link.handshake
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test

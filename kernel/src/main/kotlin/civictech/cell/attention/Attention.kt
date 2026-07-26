@@ -1,7 +1,7 @@
 package civictech.cell.attention
 
-import civictech.cell.port.Link
-import civictech.cell.port.Linked
+import civictech.cell.link.Link
+import civictech.cell.link.Linked
 import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.ProtocolSupport

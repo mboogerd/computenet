@@ -5,6 +5,7 @@ import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.data.Magnitude
+import civictech.cell.link.LinkResult
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

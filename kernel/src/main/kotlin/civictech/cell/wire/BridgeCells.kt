@@ -6,7 +6,7 @@ import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
-import civictech.cell.port.PeerId
+import civictech.cell.link.PeerId
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.ProtocolId
 import civictech.cell.port.registerPort

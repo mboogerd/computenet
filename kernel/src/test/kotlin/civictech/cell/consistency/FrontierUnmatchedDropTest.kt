@@ -5,7 +5,7 @@ import civictech.cell.MessageContext
 import civictech.cell.Timestamp
 import civictech.cell.port.EdgeOpen
 import civictech.cell.port.FanInlet
-import civictech.cell.port.Link
+import civictech.cell.link.Link
 import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols

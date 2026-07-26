@@ -4,7 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.IdentityBinding
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
 import civictech.gen.wire.Contract

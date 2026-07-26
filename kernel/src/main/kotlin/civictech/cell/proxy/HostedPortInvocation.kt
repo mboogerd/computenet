@@ -1,7 +1,7 @@
 package civictech.cell.proxy
 
 import civictech.cell.CellRef
-import civictech.cell.port.Link
+import civictech.cell.link.Link
 import civictech.cell.port.ProtocolId
 
 /**
@@ -21,7 +21,7 @@ data class HostedPortInvocation(
      * bridge ingress, never serialized into frames — the receiving transport
      * knows its peer. Null = local origin.
      */
-    val peer: civictech.cell.port.PeerId? = null,
+    val peer: civictech.cell.link.PeerId? = null,
 ) {
     enum class Type {
         /**

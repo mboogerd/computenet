@@ -1,5 +1,7 @@
 package civictech.cell.port
 
+import civictech.cell.link.LinkResult
+import civictech.cell.link.PortLink
 import civictech.cell.port.PortRef
 
 /**

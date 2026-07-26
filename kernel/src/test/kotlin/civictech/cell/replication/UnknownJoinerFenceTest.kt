@@ -12,7 +12,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy

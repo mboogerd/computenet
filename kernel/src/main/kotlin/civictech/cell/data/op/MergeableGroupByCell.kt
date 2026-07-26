@@ -6,7 +6,7 @@ import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.catchUpOnLinked
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*

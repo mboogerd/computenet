@@ -1,5 +1,7 @@
 package civictech.cell.port
 
+import civictech.cell.link.LinkResult
+
 /**
  * Represents a consumer side of a connection that can receive a link from a [LinkTo] producer.
  *

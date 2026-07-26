@@ -6,7 +6,7 @@ import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
-import civictech.cell.port.catchUpOnLinked
+import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*

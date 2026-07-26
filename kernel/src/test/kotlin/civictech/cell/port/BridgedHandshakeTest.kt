@@ -1,6 +1,9 @@
 package civictech.cell.port
 
 import civictech.cell.Consumer
+import civictech.cell.link.Link
+import civictech.cell.link.LinkResult
+import civictech.cell.link.handshake
 import civictech.nature.MergeClass
 import civictech.nature.NatureVector
 import io.kotest.matchers.shouldBe

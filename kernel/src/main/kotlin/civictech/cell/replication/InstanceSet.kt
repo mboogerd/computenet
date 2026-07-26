@@ -12,7 +12,7 @@ import civictech.cell.port.Reconciliation
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
-import civictech.cell.port.catchUpOnLinked
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import civictech.cell.data.delta.SetDelta

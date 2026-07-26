@@ -2,7 +2,7 @@ package civictech.cell.graph
 
 import civictech.cell.CellRef
 import civictech.cell.host.HostManagementApi
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.Use
 
 /**

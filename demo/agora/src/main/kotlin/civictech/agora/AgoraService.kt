@@ -7,7 +7,7 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.port.Link
+import civictech.cell.link.Link
 import civictech.cell.port.streamTo
 import civictech.cell.host.inlet
 

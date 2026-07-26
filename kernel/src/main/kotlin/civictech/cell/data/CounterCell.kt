@@ -5,7 +5,7 @@ import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
-import civictech.cell.port.catchUpOnLinked
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.data.delta.CounterDelta
 import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract

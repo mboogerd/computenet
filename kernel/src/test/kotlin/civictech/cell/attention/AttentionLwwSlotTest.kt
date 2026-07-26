@@ -6,7 +6,7 @@ import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.Protocols
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe

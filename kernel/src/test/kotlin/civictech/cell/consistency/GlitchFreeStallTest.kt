@@ -11,9 +11,9 @@ import civictech.cell.attention.StallReason
 import civictech.cell.Propagate
 import civictech.cell.host.CellError
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.Link
+import civictech.cell.link.Link
 import civictech.cell.port.LinkFrom
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols

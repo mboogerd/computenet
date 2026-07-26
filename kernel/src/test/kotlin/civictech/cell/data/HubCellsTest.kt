@@ -2,7 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.Propagate
 import civictech.cell.port.LinkFrom
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test

@@ -2,6 +2,12 @@ package civictech.cell.port
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.link.Link
+import civictech.cell.link.Linked
+import civictech.cell.link.LinkResult
+import civictech.cell.link.LinkRole
+import civictech.cell.link.LinkSupport
+import civictech.cell.link.handshake
 import civictech.cell.proxy.Buffering
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.ParkQueue

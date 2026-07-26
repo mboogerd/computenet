@@ -7,6 +7,7 @@ import civictech.cell.MessageContext
 import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.WaveFrontier
+import civictech.cell.link.Link
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe

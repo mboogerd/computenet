@@ -8,7 +8,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.link
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortIdentity
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe

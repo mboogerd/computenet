@@ -3,6 +3,7 @@ package civictech.cell.consistency
 import civictech.cell.*
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.booleans.shouldBeTrue

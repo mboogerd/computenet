@@ -11,10 +11,10 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
-import civictech.cell.port.PeerId
+import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
-import civictech.cell.port.allowPeers
+import civictech.cell.link.allowPeers
 import civictech.cell.port.input
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation

@@ -5,7 +5,7 @@ import civictech.cell.Propagate
 import civictech.cell.port.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.PortNatures
 import civictech.cell.port.PortRef
 import civictech.cell.port.Protocols

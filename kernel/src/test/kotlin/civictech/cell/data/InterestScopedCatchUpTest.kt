@@ -6,7 +6,7 @@ import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom
-import civictech.cell.port.LinkResult
+import civictech.cell.link.LinkResult
 import civictech.cell.port.Protocols
 import civictech.cell.port.RetainedFrontiers
 import civictech.cell.port.StateRequest

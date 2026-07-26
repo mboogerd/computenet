@@ -2,7 +2,7 @@ package civictech.wire
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
-import civictech.cell.port.PeerId
+import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.host.IntakeClosedException

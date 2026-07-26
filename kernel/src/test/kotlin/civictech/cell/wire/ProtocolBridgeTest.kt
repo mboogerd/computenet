@@ -12,8 +12,8 @@ import civictech.cell.port.EdgeEvent
 import civictech.cell.port.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.Link
-import civictech.cell.port.LinkResult
+import civictech.cell.link.Link
+import civictech.cell.link.LinkResult
 import civictech.cell.port.ProtocolId
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
