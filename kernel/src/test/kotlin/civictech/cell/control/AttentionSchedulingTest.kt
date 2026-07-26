@@ -6,10 +6,9 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.DeadLetter
-import civictech.cell.host.ManagedHost
-import civictech.cell.host.SimulationController
 import civictech.cell.port.Use
 import civictech.cell.port.input
+import civictech.testkit.SimWorld
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
@@ -44,8 +43,9 @@ class AttentionSchedulingTest {
     }
 
     private class Fixture(policy: AttentionPolicy?) {
-        val controller = SimulationController()
-        val host = ManagedHost(scheduler = controller.scheduler(), attention = policy)
+        private val world = SimWorld(attention = policy)
+        val controller = world.controller
+        val host = world.host
         val deadLetters = mutableListOf<DeadLetter>()
         val hot = SinkCell()
         val cold = SinkCell()

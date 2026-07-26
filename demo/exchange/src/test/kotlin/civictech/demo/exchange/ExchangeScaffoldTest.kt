@@ -1,10 +1,10 @@
 package civictech.demo.exchange
 
+import civictech.testkit.JvmPeer
+import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
-import org.opentest4j.AssertionFailedError
 import java.io.File
 import java.net.HttpURLConnection
-import java.net.ServerSocket
 import java.net.URI
 import java.nio.file.Files
 
@@ -24,12 +24,13 @@ import java.nio.file.Files
  */
 class ExchangeScaffoldTest {
 
-    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
-
+    // NOT civictech.testkit.JvmPeer.launch: that helper always redirects the
+    // launched peer's output to INHERIT, but this test kills a peer mid-session,
+    // so its own per-process log file (not INHERIT) is the first diagnostic you
+    // want on failure — kept local deliberately (RS-9.2 divergence, mirrors
+    // CrashRestartConvergenceTest).
     private fun launch(vararg appArgs: String): Process {
         val java = File(System.getProperty("java.home"), "bin/java").absolutePath
-        // per-process log file: on failure the peers' own output is the first
-        // diagnostic you want (and never an INHERIT stream that outlives us).
         val log = File.createTempFile("computenet-exchange-peer-", ".log").apply { deleteOnExit() }
         return ProcessBuilder(
             java, "-cp", System.getProperty("java.class.path"), "civictech.demo.exchange.MainKt", *appArgs
@@ -61,14 +62,6 @@ class ExchangeScaffoldTest {
         connection.disconnect()
     }
 
-    private fun await(what: String, timeoutMs: Long = 45_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
-            Thread.sleep(100)
-        }
-    }
-
     private fun up(httpPort: Int): Boolean = runCatching {
         (URI("http://localhost:$httpPort/").toURL().openConnection() as HttpURLConnection)
             .apply { connectTimeout = 500; readTimeout = 500 }
@@ -79,13 +72,13 @@ class ExchangeScaffoldTest {
 
     @Test
     fun `edits on either JVM converge to the same region-sum board`() {
-        val httpA = freePort()
-        val httpB = freePort()
-        val ws = freePort()
+        val httpA = JvmPeer.freePort()
+        val httpB = JvmPeer.freePort()
+        val ws = JvmPeer.freePort()
         val peerA = launch("$httpA", "--listen", "$ws")
         val peerB = launch("$httpB", "--peer", "ws://localhost:$ws")
         try {
-            await("both peers serving HTTP") { up(httpA) && up(httpB) }
+            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
 
             // orders written on BOTH peers, two regions
             post(httpA, "add", "north", "o1", 10)
@@ -93,18 +86,18 @@ class ExchangeScaffoldTest {
             post(httpB, "add", "south", "o3", 5)
 
             // both boards converge to the SAME region→sum: north 30, south 5, total 35
-            await("A converged") { boardOf(httpA) == """{"north":30,"south":5}""" }
-            await("B converged") { boardOf(httpB) == """{"north":30,"south":5}""" }
-            await("totals equal") {
+            awaitUntil("A converged", timeoutMs = 45_000) { boardOf(httpA) == """{"north":30,"south":5}""" }
+            awaitUntil("B converged", timeoutMs = 45_000) { boardOf(httpB) == """{"north":30,"south":5}""" }
+            awaitUntil("totals equal", timeoutMs = 45_000) {
                 "\"total\":35" in currentState(httpA) && "\"total\":35" in currentState(httpB)
             }
             // the two peers' boards are byte-identical (sorted, deterministic)
-            await("boards identical") { currentState(httpA) == currentState(httpB) }
+            awaitUntil("boards identical", timeoutMs = 45_000) { currentState(httpA) == currentState(httpB) }
 
             // a retraction re-folds the sum incrementally on both sides
             post(httpB, "remove", "north", "o2", 20)
-            await("A re-folds after retraction") { boardOf(httpA) == """{"north":10,"south":5}""" }
-            await("B re-folds after retraction") { boardOf(httpB) == """{"north":10,"south":5}""" }
+            awaitUntil("A re-folds after retraction", timeoutMs = 45_000) { boardOf(httpA) == """{"north":10,"south":5}""" }
+            awaitUntil("B re-folds after retraction", timeoutMs = 45_000) { boardOf(httpB) == """{"north":10,"south":5}""" }
         } finally {
             peerA.destroy(); peerB.destroy()
             peerA.destroyForcibly(); peerB.destroyForcibly()
@@ -113,42 +106,42 @@ class ExchangeScaffoldTest {
 
     @Test
     fun `a kill -9'd peer recovers its journaled writer state and both sides re-converge`() {
-        val httpA = freePort()
-        val httpB = freePort()
-        val ws = freePort()
+        val httpA = JvmPeer.freePort()
+        val httpB = JvmPeer.freePort()
+        val ws = JvmPeer.freePort()
         val journalB = Files.createTempDirectory("computenet-exchange-journal-b").toFile()
         val peerA = launch("$httpA", "--listen", "$ws")
         var peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
         try {
-            await("both peers serving HTTP") { up(httpA) && up(httpB) }
+            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
 
             // shared pre-crash state: north written AT A, south written AT B (B journals its own)
             post(httpA, "add", "north", "o1", 10)
             post(httpB, "add", "south", "o2", 5)
-            await("pre-crash convergence") {
+            awaitUntil("pre-crash convergence", timeoutMs = 45_000) {
                 boardOf(httpA) == """{"north":10,"south":5}""" && boardOf(httpB) == """{"north":10,"south":5}"""
             }
 
             // B is kill -9'd mid-session
             peerB.destroyForcibly()
-            await("peer B is gone") { down(httpB) }
+            awaitUntil("peer B is gone", timeoutMs = 45_000) { down(httpB) }
 
             // life goes on at A: this order parks at A until B returns
             post(httpA, "add", "north", "o3", 7)
 
             // B relaunches with the SAME journal dir — writer replay + reconnect
             peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
-            await("peer B back up") { up(httpB) }
+            awaitUntil("peer B back up", timeoutMs = 45_000) { up(httpB) }
 
             // B recovered its OWN journaled writer (south o2=5) from the per-cell WAL,
             // re-received A's north (o1) over the re-peered mesh, and replayed A's
             // parked north (o3) — north 17, south 5.
-            await("B recovered + re-converged") { boardOf(httpB) == """{"north":17,"south":5}""" }
-            await("A re-converged") { boardOf(httpA) == """{"north":17,"south":5}""" }
+            awaitUntil("B recovered + re-converged", timeoutMs = 45_000) { boardOf(httpB) == """{"north":17,"south":5}""" }
+            awaitUntil("A re-converged", timeoutMs = 45_000) { boardOf(httpA) == """{"north":17,"south":5}""" }
 
             // fully live again, both directions
             post(httpB, "add", "south", "o4", 8)
-            await("post-restart edit visible on A") { boardOf(httpA) == """{"north":17,"south":13}""" }
+            awaitUntil("post-restart edit visible on A", timeoutMs = 45_000) { boardOf(httpA) == """{"north":17,"south":13}""" }
         } finally {
             peerA.destroy(); peerB.destroy()
             peerA.destroyForcibly(); peerB.destroyForcibly()
@@ -166,21 +159,21 @@ class ExchangeScaffoldTest {
     @Test
     fun `writer journal alone reconstructs the board after restart`() {
         val journal = Files.createTempDirectory("computenet-exchange-journal-solo").toFile()
-        val port = freePort()
+        val port = JvmPeer.freePort()
         val first = ExchangeApp(port, journalDir = journal).start()
         try {
             post(port, "add", "north", "o1", 10)
             post(port, "add", "north", "o2", 20)
             post(port, "add", "south", "o3", 5)
-            await("board built") { boardOf(port) == """{"north":30,"south":5}""" }
+            awaitUntil("board built", timeoutMs = 45_000) { boardOf(port) == """{"north":30,"south":5}""" }
         } finally {
             first.stop()
         }
-        await("port released") { down(port) }
+        awaitUntil("port released", timeoutMs = 45_000) { down(port) }
 
         val recovered = ExchangeApp(port, journalDir = journal).start()
         try {
-            await("board recovered from writer journal") {
+            awaitUntil("board recovered from writer journal", timeoutMs = 45_000) {
                 boardOf(port) == """{"north":30,"south":5}""" && "\"total\":35" in currentState(port)
             }
         } finally {

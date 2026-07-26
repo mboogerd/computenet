@@ -1,10 +1,9 @@
 package civictech.demo
 
+import civictech.testkit.JvmPeer
+import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
-import org.opentest4j.AssertionFailedError
-import java.io.File
 import java.net.HttpURLConnection
-import java.net.ServerSocket
 import java.net.URI
 
 /**
@@ -14,15 +13,6 @@ import java.net.URI
  * through the SSE endpoints (each fresh SSE connection is a "browser tab").
  */
 class TwoJvmConvergenceTest {
-
-    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
-
-    private fun launch(vararg appArgs: String): Process {
-        val java = File(System.getProperty("java.home"), "bin/java").absolutePath
-        return ProcessBuilder(
-            java, "-cp", System.getProperty("java.class.path"), "civictech.demo.MainKt", *appArgs
-        ).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.INHERIT).start()
-    }
 
     /** One SSE message from /events — a fresh tab is sent the current state immediately. */
     private fun currentState(httpPort: Int): String {
@@ -43,14 +33,6 @@ class TwoJvmConvergenceTest {
         connection.disconnect()
     }
 
-    private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
-            Thread.sleep(100)
-        }
-    }
-
     private fun up(httpPort: Int): Boolean = runCatching {
         (URI("http://localhost:$httpPort/").toURL().openConnection() as HttpURLConnection)
             .apply { connectTimeout = 500; readTimeout = 500 }
@@ -59,24 +41,24 @@ class TwoJvmConvergenceTest {
 
     @Test
     fun `edits on either JVM converge on the other`() {
-        val httpA = freePort()
-        val httpB = freePort()
-        val ws = freePort()
-        val peerA = launch("$httpA", "--listen", "$ws")
-        val peerB = launch("$httpB", "--peer", "ws://localhost:$ws")
+        val httpA = JvmPeer.freePort()
+        val httpB = JvmPeer.freePort()
+        val ws = JvmPeer.freePort()
+        val peerA = JvmPeer.launch("civictech.demo.MainKt", "$httpA", "--listen", "$ws")
+        val peerB = JvmPeer.launch("civictech.demo.MainKt", "$httpB", "--peer", "ws://localhost:$ws")
         try {
-            await("both peers serving HTTP") { up(httpA) && up(httpB) }
+            awaitUntil("both peers serving HTTP") { up(httpA) && up(httpB) }
 
             post(httpA, user = "alice", action = "add", item = "apples")
-            await("apples visible on peer B") { "apples" in currentState(httpB) }
+            awaitUntil("apples visible on peer B") { "apples" in currentState(httpB) }
 
             post(httpB, user = "bob", action = "add", item = "bread")
             post(httpB, user = "bob", action = "vote", item = "apples")
-            await("bread visible on peer A") { "bread" in currentState(httpA) }
-            await("bob's vote counted on peer A") { "\"voteCount\":1" in currentState(httpA) }
+            awaitUntil("bread visible on peer A") { "bread" in currentState(httpA) }
+            awaitUntil("bob's vote counted on peer A") { "\"voteCount\":1" in currentState(httpA) }
 
             post(httpA, user = "alice", action = "remove", item = "apples")
-            await("removal visible on peer B") {
+            awaitUntil("removal visible on peer B") {
                 // scope to the items array — the vote for apples legitimately remains
                 "apples" !in currentState(httpB).substringAfter("\"items\":").substringBefore("]")
             }

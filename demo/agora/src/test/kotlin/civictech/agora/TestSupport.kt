@@ -4,36 +4,28 @@ import civictech.agora.cell.Polarity
 import civictech.agora.semantics.DfQuad
 import civictech.agora.semantics.GradualSemantics
 import civictech.cell.CellRef
-import civictech.cell.host.LocationRegistry
-import civictech.cell.host.ManagedHost
-import civictech.cell.host.SimulationController
+import civictech.testkit.SimWorld
 
-/** One deterministic single-host world (the repo's SimulationController idiom). */
+/** One deterministic single-host world (the repo's SimulationController idiom, via SimWorld). */
 class Harness(
     seed: Long? = null,
     quiescence: Double = 1e-3,
     magnitude: Boolean = true,
     onCredence: (CellRef, Double) -> Unit = { _, _ -> },
 ) {
-    val controller = SimulationController(seed)
-    val registry = LocationRegistry()
-    val host = ManagedHost(
-        scheduler = controller.scheduler(),
-        registry = registry,
+    private val world = SimWorld(
+        seed = seed,
         attention = if (magnitude) {
             civictech.cell.host.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS)
         } else null,
     )
+    val controller = world.controller
+    val registry = world.registry
+    val host = world.host
     val service = AgoraService(host, registry, quiescence = quiescence, onCredence = onCredence)
 
     /** Drain to idle under a hard step budget: quiescence is asserted, not hoped for. */
-    fun runToIdle(budget: Int = 200_000): Int {
-        var steps = 0
-        while (controller.step()) {
-            check(++steps < budget) { "no quiescence within $budget steps" }
-        }
-        return steps
-    }
+    fun runToIdle(budget: Int = 200_000): Int = world.runToIdle(budget)
 }
 
 /**

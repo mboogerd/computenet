@@ -4,10 +4,9 @@ import civictech.cell.*
 import civictech.cell.control.AttentionSupport
 import civictech.cell.control.NonSuspendable
 import civictech.cell.host.AttentionPolicy
-import civictech.cell.host.ManagedHost
-import civictech.cell.host.SimulationController
 import civictech.cell.link.*
 import civictech.cell.port.*
+import civictech.testkit.SimWorld
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
@@ -72,11 +71,9 @@ class RegionSuspensionTest {
     }
 
     private inner class Fixture(nonSuspendableBranch: Boolean = false) {
-        val controller = SimulationController()
-        val host = ManagedHost(
-            scheduler = controller.scheduler(),
-            attention = AttentionPolicy(suspendAfter = 3),
-        )
+        private val world = SimWorld(attention = AttentionPolicy(suspendAfter = 3))
+        val controller = world.controller
+        val host = world.host
 
         val a = SourceCell(consumerInt)
         val b: TestMapper =

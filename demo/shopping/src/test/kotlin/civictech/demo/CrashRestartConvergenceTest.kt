@@ -1,10 +1,10 @@
 package civictech.demo
 
+import civictech.testkit.JvmPeer
+import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Test
-import org.opentest4j.AssertionFailedError
 import java.io.File
 import java.net.HttpURLConnection
-import java.net.ServerSocket
 import java.net.URI
 import java.nio.file.Files
 
@@ -17,12 +17,12 @@ import java.nio.file.Files
  */
 class CrashRestartConvergenceTest {
 
-    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
-
+    // NOT civictech.testkit.JvmPeer.launch: that helper always redirects the
+    // launched peer's output to INHERIT, but this test kills a peer mid-session,
+    // so its own per-process log file (not INHERIT) is the first diagnostic you
+    // want on failure — kept local deliberately (RS-9.2 divergence).
     private fun launch(vararg appArgs: String): Process {
         val java = File(System.getProperty("java.home"), "bin/java").absolutePath
-        // per-process log files (not INHERIT): on failure the peers' own output
-        // is the first diagnostic you want
         val log = File.createTempFile("computenet-crash-peer-", ".log").apply { deleteOnExit() }
         return ProcessBuilder(
             java, "-cp", System.getProperty("java.class.path"), "civictech.demo.MainKt", *appArgs
@@ -50,14 +50,6 @@ class CrashRestartConvergenceTest {
         connection.disconnect()
     }
 
-    private fun await(what: String, timeoutMs: Long = 45_000, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (!condition()) {
-            if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
-            Thread.sleep(100)
-        }
-    }
-
     private fun up(httpPort: Int): Boolean = runCatching {
         (URI("http://localhost:$httpPort/").toURL().openConnection() as HttpURLConnection)
             .apply { connectTimeout = 500; readTimeout = 500 }
@@ -68,43 +60,45 @@ class CrashRestartConvergenceTest {
 
     @Test
     fun `a kill -9'd peer recovers from its journal, re-peers, and both sides converge`() {
-        val httpA = freePort()
-        val httpB = freePort()
-        val ws = freePort()
+        val httpA = JvmPeer.freePort()
+        val httpB = JvmPeer.freePort()
+        val ws = JvmPeer.freePort()
         val journalB = Files.createTempDirectory("computenet-journal-b").toFile()
         val peerA = launch("$httpA", "--listen", "$ws")
         var peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
         try {
-            await("both peers serving HTTP") { up(httpA) && up(httpB) }
+            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
 
             // shared pre-crash state, written on BOTH sides
             post(httpA, user = "alice", action = "add", item = "apples")
             post(httpB, user = "bob", action = "add", item = "bread")
-            await("pre-crash convergence") { "apples" in items(httpB) && "bread" in items(httpA) }
+            awaitUntil("pre-crash convergence", timeoutMs = 45_000) {
+                "apples" in items(httpB) && "bread" in items(httpA)
+            }
 
             // B is kill -9'd mid-session
             peerB.destroyForcibly()
-            await("peer B is gone") { down(httpB) }
+            awaitUntil("peer B is gone", timeoutMs = 45_000) { down(httpB) }
 
             // life goes on at A: this edit parks at A until B returns
             post(httpA, user = "alice", action = "add", item = "cheese")
 
             // B relaunches with the SAME journal directory — recovery + reconnect
             peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
-            await("peer B back up") { up(httpB) }
+            awaitUntil("peer B back up", timeoutMs = 45_000) { up(httpB) }
 
             // B recovered its own pre-crash state from the journal (bread was
             // written AT B; apples arrived over the wire pre-crash — both are
             // journal records at B, neither is re-sent by A)
-            await("journal-recovered state visible on B") {
+            awaitUntil("journal-recovered state visible on B", timeoutMs = 45_000) {
                 "bread" in items(httpB) && "apples" in items(httpB)
             }
             // the edit made while B was down replays out of A's park
-            await("parked edit replayed to B") { "cheese" in items(httpB) }
+            awaitUntil("parked edit replayed to B", timeoutMs = 45_000) { "cheese" in items(httpB) }
 
             // and the session is fully live again, both directions
             post(httpB, user = "bob", action = "add", item = "dates")
-            await("post-restart edit visible on A") { "dates" in items(httpA) }
+            awaitUntil("post-restart edit visible on A", timeoutMs = 45_000) { "dates" in items(httpA) }
         } finally {
             peerA.destroy()
             peerB.destroyForcibly()

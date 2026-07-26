@@ -12,6 +12,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.testkit.SimWorld
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
@@ -82,8 +83,9 @@ class RestartReBaselineTest {
     }
 
     private class Fixture {
-        val controller = SimulationController(seed = 7)
-        val host = ManagedHost(scheduler = controller.scheduler())
+        private val world = SimWorld(seed = 7)
+        val controller = world.controller
+        val host = world.host
         val producer = TaggedProducerCell()
         val union = UnionSetCell<String>()
         val received = mutableListOf<SetDelta<String>>()

@@ -3,6 +3,7 @@ package civictech.cell.host
 import civictech.cell.*
 import civictech.cell.Propagate
 import civictech.cell.port.*
+import civictech.testkit.SimWorld
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -60,8 +61,9 @@ class SupervisionTest {
     }
 
     private class Fixture {
-        val controller = SimulationController(seed = 11)
-        val host = ManagedHost(scheduler = controller.scheduler())
+        private val world = SimWorld(seed = 11)
+        val controller = world.controller
+        val host = world.host
         val letters = mutableListOf<DeadLetter>()
         val cell = FragileCounterCell()
         val api: Consumer<Int>
