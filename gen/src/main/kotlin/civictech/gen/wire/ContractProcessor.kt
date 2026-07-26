@@ -2,16 +2,24 @@ package civictech.gen.wire
 
 import civictech.nature.CellColor
 import civictech.nature.CellDescriptor
+import civictech.nature.Color
 import civictech.nature.ContractDescriptor
 import civictech.nature.ContractModule
+import civictech.nature.InstanceScoping
 import civictech.nature.JvmDescriptors
+import civictech.nature.Manifest
+import civictech.nature.MergeClass
 import civictech.nature.MethodDescriptor
+import civictech.nature.Monotonicity
+import civictech.nature.NatureVector
+import civictech.nature.Ownership
 import civictech.nature.PortDescriptor
 import civictech.nature.PortDirection
 import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDescriptor
 import civictech.nature.ProtocolDirection
 import civictech.nature.StableHash
+import civictech.nature.WaveParticipation
 import com.google.devtools.ksp.KspExperimental
 import com.google.devtools.ksp.getAnnotationsByType
 import com.google.devtools.ksp.getVisibility
@@ -108,7 +116,7 @@ class ContractProcessor(
             .sortedBy { it.qualifiedName!!.asString() }
             .toList()
 
-        val cellType = resolver.getClassDeclarationByName(resolver.getKSNameFromString(CELL_MARKER))
+        val cellType = resolver.getClassDeclarationByName(resolver.getKSNameFromString(KernelFqn.CELL_MARKER))
             ?.asStarProjectedType()
         val cells = if (cellType == null) emptyList() else resolver.getAllFiles()
             .flatMap { file -> file.declarations.flatMap(::classesIn) }
@@ -171,8 +179,8 @@ class ContractProcessor(
                         }
                         MethodDescriptor(
                             StableHash.of("$fqn#$name$descriptor"), name, descriptor, exclusive,
-                            fn.parameters.any { carriesMarker(it.type.resolve(), MAGNITUDE_MARKER) },
-                            fn.parameters.any { carriesMarker(it.type.resolve(), REPLICABLE_MARKER) },
+                            fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.MAGNITUDE_MARKER) },
+                            fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.REPLICABLE_MARKER) },
                             keyIndex,
                         )
                     }
@@ -229,8 +237,8 @@ class ContractProcessor(
                     cells.forEach { cell ->
                         val fqn = cell.qualifiedName!!.asString()
                         val color = when {
-                            isSubtype(cell.asStarProjectedType(), SUSPENDING_MARKER) -> CellColor.SUSPENDING
-                            isSubtype(cell.asStarProjectedType(), BLOCKING_MARKER) -> CellColor.BLOCKING
+                            isSubtype(cell.asStarProjectedType(), KernelFqn.SUSPENDING_MARKER) -> CellColor.SUSPENDING
+                            isSubtype(cell.asStarProjectedType(), KernelFqn.BLOCKING_MARKER) -> CellColor.BLOCKING
                             else -> CellColor.PURE
                         }
                         val ports = cellPorts[cell].orEmpty()
@@ -392,17 +400,17 @@ class ContractProcessor(
             .addModifiers(KModifier.ABSTRACT)
             .addTypeVariables(typeVars)
             .addSuperinterface(ifaceType)
-            .addSuperinterface(CELL_IFACE)
+            .addSuperinterface(KernelFqn.CELL_IFACE)
             .primaryConstructor(
                 FunSpec.constructorBuilder()
                     .addParameter(
-                        ParameterSpec.builder("ref", CELL_REF)
-                            .defaultValue("%T(%T.randomUUID())", CELL_REF, JAVA_UUID)
+                        ParameterSpec.builder("ref", KernelFqn.CELL_REF)
+                            .defaultValue("%T(%T.randomUUID())", KernelFqn.CELL_REF, JAVA_UUID)
                             .build()
                     )
                     .build()
             )
-            .addProperty(PropertySpec.builder("ref", CELL_REF, KModifier.OVERRIDE).initializer("ref").build())
+            .addProperty(PropertySpec.builder("ref", KernelFqn.CELL_REF, KModifier.OVERRIDE).initializer("ref").build())
 
         val init = CodeBlock.builder()
         iface.getAllProperties().forEach { prop ->
@@ -410,27 +418,27 @@ class ContractProcessor(
             val roleFqn = propType?.declaration?.qualifiedName?.asString()
             val api = propType?.arguments?.firstOrNull()?.type?.resolve()?.takeUnless { it.isError }
             val name = prop.simpleName.asString()
-            if (propType == null || api == null || roleFqn !in PORT_ROLES) {
-                if (roleFqn in PORT_ROLES) logger.warn(
+            if (propType == null || api == null || roleFqn !in KernelFqn.PORT_ROLES) {
+                if (roleFqn in KernelFqn.PORT_ROLES) logger.warn(
                     "@CellBase ${iface.simpleName.asString()}.$name: unresolvable port Api type — left abstract", prop,
                 )
                 return@forEach // non-port members stay abstract for the subclass
             }
             val apiTypeName = api.toTypeName(typeParamResolver)
             when (roleFqn) {
-                SUBSCRIBE_ROLE -> builder.addProperty(
-                    PropertySpec.builder(name, FAN_OUTLET_CLASS.parameterizedBy(apiTypeName), KModifier.OVERRIDE)
-                        .initializer("%M(%S, %T.create<%T>())", REGISTER_PORT, name, FAN_OUTLET_CLASS, apiTypeName)
+                KernelFqn.SUBSCRIBE_ROLE -> builder.addProperty(
+                    PropertySpec.builder(name, KernelFqn.FAN_OUTLET_CLASS.parameterizedBy(apiTypeName), KModifier.OVERRIDE)
+                        .initializer("%M(%S, %T.create<%T>())", KernelFqn.REGISTER_PORT, name, KernelFqn.FAN_OUTLET_CLASS, apiTypeName)
                         .build()
                 )
 
-                else -> { // SERVE_ROLE / USE_ROLE: an inlet
+                else -> { // KernelFqn.SERVE_ROLE / KernelFqn.USE_ROLE: an inlet
                     builder.addProperty(
-                        PropertySpec.builder(name, FAN_INLET_CLASS.parameterizedBy(apiTypeName), KModifier.OVERRIDE)
-                            .initializer("%M(%S, %T.create<%T>())", REGISTER_PORT, name, FAN_INLET_CLASS, apiTypeName)
+                        PropertySpec.builder(name, KernelFqn.FAN_INLET_CLASS.parameterizedBy(apiTypeName), KModifier.OVERRIDE)
+                            .initializer("%M(%S, %T.create<%T>())", KernelFqn.REGISTER_PORT, name, KernelFqn.FAN_INLET_CLASS, apiTypeName)
                             .build()
                     )
-                    if (api.declaration.qualifiedName?.asString() == PROPAGATE_MARKER) {
+                    if (api.declaration.qualifiedName?.asString() == KernelFqn.PROPAGATE_MARKER) {
                         val payload = api.arguments.firstOrNull()?.type?.resolve()
                         val payloadName = payload?.toTypeName(typeParamResolver)
                         if (payloadName == null) {
@@ -443,7 +451,7 @@ class ContractProcessor(
                                     .addParameter("value", payloadName)
                                     .build()
                             )
-                            init.addStatement("%L.%M(this::%L)", name, ON_EACH, handler)
+                            init.addStatement("%L.%M(this::%L)", name, KernelFqn.ON_EACH, handler)
                         }
                     } else {
                         val handler = name + "Handler"
@@ -488,9 +496,9 @@ class ContractProcessor(
             val type = runCatching { prop.type.resolve() }.getOrNull()
                 ?.takeUnless { it.isError } ?: return@mapNotNull null
             val direction = when {
-                isSubtype(type, FAN_INLET) || isSubtype(type, INLET) -> PortDirection.IN
-                isSubtype(type, FAN_OUTLET) || isSubtype(type, OUTLET) -> PortDirection.OUT
-                isSubtype(type, FEEDBACK_INLET) -> {
+                isSubtype(type, KernelFqn.FAN_INLET) || isSubtype(type, KernelFqn.INLET) -> PortDirection.IN
+                isSubtype(type, KernelFqn.FAN_OUTLET) || isSubtype(type, KernelFqn.OUTLET) -> PortDirection.OUT
+                isSubtype(type, KernelFqn.FEEDBACK_INLET) -> {
                     // its type argument is a payload, not a port Api contract
                     logger.info("port ${cell.simpleName.asString()}.${prop.simpleName.asString()}: FeedbackInlet skipped (no Api contract)", prop)
                     return@mapNotNull null
@@ -527,7 +535,7 @@ class ContractProcessor(
             builder.addProperty(
                 PropertySpec.builder(nameConst, STRING, KModifier.CONST).initializer("%S", p.name).build()
             )
-            val idClass = if (p.direction == PortDirection.IN) INLET_ID else OUTLET_ID
+            val idClass = if (p.direction == PortDirection.IN) KernelFqn.INLET_ID else KernelFqn.OUTLET_ID
             val apiTypeName = try {
                 p.apiType.toTypeName(typeParamResolver)
             } catch (e: Exception) {
@@ -686,7 +694,7 @@ class ContractProcessor(
         // every port of the cell (per-CELL nature reaching the port vector).
         if (color != CellColor.PURE) levels += NATURE_COLOR to color.name
         // cell-level merge class: a Replicable cell declares idempotent merge.
-        if (isSubtype(cell.asStarProjectedType(), REPLICABLE_MARKER)) {
+        if (isSubtype(cell.asStarProjectedType(), KernelFqn.REPLICABLE_MARKER)) {
             levels += NATURE_MERGE to "IDEMPOTENT"
         }
         // per-port axes read off the port's Api contract methods.
@@ -696,7 +704,7 @@ class ContractProcessor(
             if (abstractFns.any { fn -> fn.parameters.any { carriesExclusive(it.type.resolve()) } }) {
                 levels += NATURE_OWNERSHIP to "EXCLUSIVE"
             }
-            if (abstractFns.any { fn -> fn.parameters.any { carriesMarker(it.type.resolve(), MAGNITUDE_MARKER) } }) {
+            if (abstractFns.any { fn -> fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.MAGNITUDE_MARKER) } }) {
                 levels += NATURE_MONOTONICITY to "MONOTONE"
             }
         }
@@ -708,11 +716,11 @@ class ContractProcessor(
         // demo's durable→volatile links never acquire a new requirement.
         if (port.direction == PortDirection.OUT) {
             // WAVED: a glitch-free cell emits aligned waves on its outlets.
-            if (isSubtype(cell.asStarProjectedType(), GLITCH_FREE_MARKER)) {
+            if (isSubtype(cell.asStarProjectedType(), KernelFqn.GLITCH_FREE_MARKER)) {
                 levels += NATURE_WAVE to "WAVED"
             }
             // INTEREST_SCOPED: the outlet carries a `Scoped` delta the linker can slice.
-            if (api != null && carriesMarker(port.apiType, SCOPED_MARKER)) {
+            if (api != null && carriesMarker(port.apiType, KernelFqn.SCOPED_MARKER)) {
                 levels += NATURE_SCOPING to "INTEREST_SCOPED"
             }
         }
@@ -728,16 +736,16 @@ class ContractProcessor(
     private fun manifestOf(cell: KSClassDeclaration): List<String> {
         val type = cell.asStarProjectedType()
         val tags = mutableListOf<String>()
-        if (isSubtype(type, GLITCH_FREE_MARKER)) tags += "GLITCH_FREE"
-        if (isSubtype(type, STATEFUL_MARKER)) tags += "DURABLE"
-        if (isSubtype(type, REPLICABLE_MARKER) || isSubtype(type, REBASELINE_MARKER)) tags += "REPLICATED"
-        if (isSubtype(type, PARTITIONED_MARKER)) tags += "PARTITIONED"
+        if (isSubtype(type, KernelFqn.GLITCH_FREE_MARKER)) tags += "GLITCH_FREE"
+        if (isSubtype(type, KernelFqn.STATEFUL_MARKER)) tags += "DURABLE"
+        if (isSubtype(type, KernelFqn.REPLICABLE_MARKER) || isSubtype(type, KernelFqn.REBASELINE_MARKER)) tags += "REPLICATED"
+        if (isSubtype(type, KernelFqn.PARTITIONED_MARKER)) tags += "PARTITIONED"
         return tags
     }
 
     /** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
     private fun carriesExclusive(type: com.google.devtools.ksp.symbol.KSType): Boolean {
-        if (type.declaration.qualifiedName?.asString() in EXCLUSIVE_MARKERS) return true
+        if (type.declaration.qualifiedName?.asString() in KernelFqn.EXCLUSIVE_MARKERS) return true
         return type.arguments.any { it.type?.resolve()?.let(::carriesExclusive) == true }
     }
 
@@ -764,62 +772,83 @@ class ContractProcessor(
     companion object {
         const val GENERATED_PACKAGE = "civictech.gen.wire.generated"
 
-        // FQN constants: :gen cannot depend on :kernel (the dependency runs the other way)
-        val EXCLUSIVE_MARKERS = setOf("civictech.cell.Owned", "civictech.cell.Leased")
-        const val KEY_ANNOTATION = "civictech.gen.wire.Key"
-        const val CELL_MARKER = "civictech.cell.Cell"
+        /**
+         * Kernel-side FQNs the processor scans for structurally, gathered in one
+         * place because `:gen` cannot depend on `:kernel` (the dependency runs
+         * the other way) — these can't be compile-checked `X::class` references
+         * here, so a kernel-side rename silently desyncs them from the real
+         * types. [ManifestDriftTest][civictech.cell.wire.ManifestDriftTest] (in
+         * `:kernel`) is the drift guard: it asserts every registered cell's
+         * declared [civictech.nature.Manifest] set equals the installed marker
+         * scan, so a miss here fails loudly there instead of silently dropping
+         * descriptors. Keep every kernel FQN string literal in this object —
+         * nothing kernel-side belongs loose in the rest of the companion.
+         */
+        object KernelFqn {
+            val EXCLUSIVE_MARKERS = setOf("civictech.cell.Owned", "civictech.cell.Leased")
+            const val CELL_MARKER = "civictech.cell.Cell"
 
-        // Port scan (typed port ids + PortDescriptor emission)
-        const val FAN_INLET = "civictech.cell.port.FanInlet"
-        const val INLET = "civictech.cell.port.Inlet"
-        const val FEEDBACK_INLET = "civictech.cell.port.FeedbackInlet"
-        const val FAN_OUTLET = "civictech.cell.port.FanOutlet"
-        const val OUTLET = "civictech.cell.port.Outlet"
-        val INLET_ID: ClassName = ClassName("civictech.cell.graph", "InletId")
-        val OUTLET_ID: ClassName = ClassName("civictech.cell.graph", "OutletId")
+            // Port scan (typed port ids + PortDescriptor emission)
+            const val FAN_INLET = "civictech.cell.port.FanInlet"
+            const val INLET = "civictech.cell.port.Inlet"
+            const val FEEDBACK_INLET = "civictech.cell.port.FeedbackInlet"
+            const val FAN_OUTLET = "civictech.cell.port.FanOutlet"
+            const val OUTLET = "civictech.cell.port.Outlet"
+            val INLET_ID: ClassName = ClassName("civictech.cell.graph", "InletId")
+            val OUTLET_ID: ClassName = ClassName("civictech.cell.graph", "OutletId")
 
-        // @CellBase generation
-        const val SERVE_ROLE = "civictech.cell.port.Serve"
-        const val USE_ROLE = "civictech.cell.port.Use"
-        const val SUBSCRIBE_ROLE = "civictech.cell.port.Subscribe"
-        val PORT_ROLES = setOf(SERVE_ROLE, USE_ROLE, SUBSCRIBE_ROLE)
-        const val PROPAGATE_MARKER = "civictech.cell.Propagate"
-        val CELL_IFACE: ClassName = ClassName("civictech.cell", "Cell")
-        val CELL_REF: ClassName = ClassName("civictech.cell", "CellRef")
+            // @CellBase generation
+            const val SERVE_ROLE = "civictech.cell.port.Serve"
+            const val USE_ROLE = "civictech.cell.port.Use"
+            const val SUBSCRIBE_ROLE = "civictech.cell.port.Subscribe"
+            val PORT_ROLES = setOf(SERVE_ROLE, USE_ROLE, SUBSCRIBE_ROLE)
+            const val PROPAGATE_MARKER = "civictech.cell.Propagate"
+            val CELL_IFACE: ClassName = ClassName("civictech.cell", "Cell")
+            val CELL_REF: ClassName = ClassName("civictech.cell", "CellRef")
+            val FAN_INLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanInlet")
+            val FAN_OUTLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanOutlet")
+            val REGISTER_PORT = MemberName("civictech.cell.port", "registerPort")
+            val ON_EACH = MemberName("civictech.cell", "onEach")
+            const val MAGNITUDE_MARKER = "civictech.cell.data.Magnitude"
+            const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
+            const val BLOCKING_MARKER = "civictech.cell.BlockingCell"
+            const val SUSPENDING_MARKER = "civictech.cell.SuspendingCell"
+
+            // PN-12 markers for the two refusing axes + the CellManifest scan (no
+            // new annotations: every one is an existing marker interface / `Scoped`).
+            const val SCOPED_MARKER = "civictech.cell.replication.Scoped"
+            const val STATEFUL_MARKER = "civictech.cell.Stateful"
+            const val REBASELINE_MARKER = "civictech.cell.ReBaselineEmitting"
+            const val GLITCH_FREE_MARKER = "civictech.cell.consistency.GlitchFree"
+            const val PARTITIONED_MARKER = "civictech.cell.data.Partitioned"
+        }
+
+        // :gen's own identity — same module, compile-checked.
+        val KEY_ANNOTATION: String = Key::class.qualifiedName!!
+
         val JAVA_UUID: ClassName = ClassName("java.util", "UUID")
-        val FAN_INLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanInlet")
-        val FAN_OUTLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanOutlet")
-        val REGISTER_PORT = MemberName("civictech.cell.port", "registerPort")
-        val ON_EACH = MemberName("civictech.cell", "onEach")
-        const val MAGNITUDE_MARKER = "civictech.cell.data.Magnitude"
-        const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
-        const val BLOCKING_MARKER = "civictech.cell.BlockingCell"
-        const val SUSPENDING_MARKER = "civictech.cell.SuspendingCell"
 
-        // PN-12 markers for the two refusing axes + the CellManifest scan (no new
-        // annotations: every one is an existing marker interface / `Scoped`).
-        const val SCOPED_MARKER = "civictech.cell.replication.Scoped"
-        const val STATEFUL_MARKER = "civictech.cell.Stateful"
-        const val REBASELINE_MARKER = "civictech.cell.ReBaselineEmitting"
-        const val GLITCH_FREE_MARKER = "civictech.cell.consistency.GlitchFree"
-        const val PARTITIONED_MARKER = "civictech.cell.data.Partitioned"
-
-        // Nature scan (CP-F2): generated level-enum references, folded into
-        // PortDescriptor.natures. These live in :nature (shared by :gen and :kernel).
-        val NATURE_VECTOR = ClassName("civictech.nature", "NatureVector")
-        val NATURE_COLOR = ClassName("civictech.nature", "Color")
-        val NATURE_MERGE = ClassName("civictech.nature", "MergeClass")
-        val NATURE_OWNERSHIP = ClassName("civictech.nature", "Ownership")
-        val NATURE_MONOTONICITY = ClassName("civictech.nature", "Monotonicity")
-        val NATURE_WAVE = ClassName("civictech.nature", "WaveParticipation")
-        val NATURE_SCOPING = ClassName("civictech.nature", "InstanceScoping")
-        val MANIFEST = ClassName("civictech.nature", "Manifest")
-
-        // Proxy generation (W4.6, C-5 completion)
+        // Proxy generation (W4.6, C-5 completion) — same module, compile-checked
+        // where `::class` can target the type. [ProxyConstructor] is a typealias
+        // for a function type (`(InvocationHandler) -> Any`), which has no
+        // `::class` of its own, so it stays a literal `ClassName`.
         val INVOCATION_HANDLER: ClassName = ClassName("java.lang.reflect", "InvocationHandler")
         val METHOD: ClassName = ClassName("java.lang.reflect", "Method")
         val CLASS_STAR = ClassName("java.lang", "Class").parameterizedBy(STAR)
-        val PROXY_MODULE: ClassName = ClassName("civictech.gen.wire", "ProxyModule")
+        val PROXY_MODULE: ClassName = ProxyModule::class.asClassName()
         val PROXY_CONSTRUCTOR: ClassName = ClassName("civictech.gen.wire", "ProxyConstructor")
+
+        // Nature scan (CP-F2): generated level-enum references, folded into
+        // PortDescriptor.natures. These live in :nature (shared by :gen and
+        // :kernel) — visible to :gen, so compile-checked via `::class` rather
+        // than a hand-typed FQN string.
+        val NATURE_VECTOR: ClassName = NatureVector::class.asClassName()
+        val NATURE_COLOR: ClassName = Color::class.asClassName()
+        val NATURE_MERGE: ClassName = MergeClass::class.asClassName()
+        val NATURE_OWNERSHIP: ClassName = Ownership::class.asClassName()
+        val NATURE_MONOTONICITY: ClassName = Monotonicity::class.asClassName()
+        val NATURE_WAVE: ClassName = WaveParticipation::class.asClassName()
+        val NATURE_SCOPING: ClassName = InstanceScoping::class.asClassName()
+        val MANIFEST: ClassName = Manifest::class.asClassName()
     }
 }
