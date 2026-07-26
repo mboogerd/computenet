@@ -125,7 +125,7 @@ class GlitchFreeReplicaFrontierTest {
         // OFF installs an always-true frontier — "settle on local delivery only" — the control.
         val frontier: ReplicaFrontier =
             if (replicaFrontierOn) p0.replication.replicaFrontier(logicalId)
-            else ReplicaFrontier { _, _ -> true }
+            else ReplicaFrontier { _, _, _ -> true }
         gf.useReplicaFrontier(frontier, originTags)
         p0.replication.onWatermarkAdvance(logicalId) { gf.recheck() }
 

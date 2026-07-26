@@ -114,7 +114,7 @@ class MemberDepartureFrontierTest {
         // gossiped companion (rows + closed), exactly as Replication.replicaFrontier
         // does, so close()'s converged `closed` marker is what releases held waves.
         val members = listOf(r0.ref, r1.ref, r2.ref)
-        val frontier = ReplicaFrontier { source, counter ->
+        val frontier = ReplicaFrontier { source, counter, _ ->
             val companion = p0.replication.watermarkOf(logicalId) ?: return@ReplicaFrontier false
             val rows = companion.rows()
             val closed = companion.closed()

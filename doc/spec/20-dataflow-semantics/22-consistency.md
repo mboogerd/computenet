@@ -392,3 +392,58 @@ arm state, admitted to no wave-completeness set. Mechanism:
 an already-applied `(sourceId, counter)` against it, so an effect fires once
 across crash + replay + resume. The invariant `released + suppressed ==
 journal.replay().size` holds — a silent drop lowers `released` and fails loudly.
+
+## Interest-scoped settlement (PN-7)
+
+> **Status**: Implemented (PN-7). Resolves the latent liveness conflict F2
+> between disjoint-`Interest` instance sets (PN-6) and the cross-replica
+> completeness read (E3.4): before PN-7 completeness quantified over *all*
+> replica-set members, so a disjoint-interest instance — one that by design never
+> delivers waves outside its slice — kept its delivered-watermark row at bottom
+> forever, stalling a `WaveMode.WAIT` consumer the moment shards joined the mesh.
+
+**Rule of settlement.** A wave `(s, t)` touching keys `K` is *replica-complete*
+iff for every `k ∈ K`, every **live, open member whose `Interest` admits `k`**
+has delivered it. The read is `ReplicaFrontier.completeAt(source, counter, key)`:
+the quorum is the **covering subset** of `LocationRegistry.instancesOf(logicalId)`
+filtered by `interestOf(member).admits(key)`, not every member. One expression
+collapses to the three cases:
+
+- **all-`Total`** (every member wants every key) ⇒ the covering subset is every
+  member ⇒ *today's behavior verbatim*;
+- **disjoint** (partitioning) ⇒ the covering subset is the one owning slice ⇒ no
+  phantom cross-slice member stalls the wave (F2 resolved);
+- **overlapping partial** (sharded replication) ⇒ the covering subset is the
+  slice's replica quorum.
+
+A `null` `key` — a consumer that extracts no origin keys — is *unfiltered*: the
+quorum is every member, byte-identical to pre-PN-7. The key is supplied per
+buffered payload by the `ReplicaGate.originKeys` extractor (each key the payload
+touches → the origin waves attached to it); with no extractor the gate falls
+back to the flat `originTags` read with a `null` key. Defaults (empty
+`originKeys`) therefore leave every non-opting graph unchanged.
+
+**Membership index.** `LocationRegistry.instancesOf(logicalId)` is served off a
+`byLogicalId` index maintained on every publish/removal, so the settlement read
+— called once per buffered wave per `recheck` — is O(instances-of-one-id) rather
+than a full scan of every published ref.
+
+### R13 creation fence (promoted to blocking in PN-7)
+
+Because filtering *shrinks* the quorum, a joining covering member is the
+premature-release hazard: dropping it from the quorum releases a wave it has not
+delivered — a mixed frontier — rather than holding conservatively. The fence
+(`Replication.replicaFrontier(logicalId, creationFence = true)`, the default) is
+the requirement that **every covering member is required**: one with no
+delivered-watermark row for `source` reads as bottom and holds the wave until it
+catches up, exactly as a lagging member does. With the fence off a member is
+admitted to the quorum only once it has some row for `source`, so a freshly
+joined covering member is silently skipped — reproducing the premature release.
+
+**Honest boundary.** `instancesOf` membership is itself only eventually
+consistent: a covering member the *local* view has not yet learned of at all
+cannot be waited on here (the read cannot conjure an unknown member). A converged
+membership barrier and the DEGRADE quorum-shrink analogue (DEGRADE has none under
+sharded replication — it behaves as WAIT) are **sequenced to PN-19**, documented
+not hidden. Clean departure remains the `WatermarkCell.close()` `closed` marker
+(PN-0c), which the covering read still honors.

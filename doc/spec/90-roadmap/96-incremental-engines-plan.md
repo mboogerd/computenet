@@ -360,6 +360,25 @@ R13 boundary).
 **Depends**: E3.2, E2.3 (the only cross-milestone code edge — schedule after E2.3 lands,
 or stub the hook behind an interface); coordinate with E3.3 (wave-source rows).
 
+> **Amendment (PN-7 — interest-scoped settlement).** E3.4's `completeAt(s, t)`
+> quantified over *every* membership row, which collides with PN-6's disjoint-
+> `Interest` instance sets (plan F2): a disjoint-interest member never delivers
+> waves outside its slice, so its row stays at bottom and a WAIT consumer stalls
+> forever once shards join the mesh. PN-7 generalizes the read to
+> `completeAt(source, counter, key)` — the quorum is the **covering subset** of
+> members whose interest *admits* `key` (plan §3 Rule of settlement, spec 22
+> §Interest-scoped settlement). All-`Total` collapses to E3.4's original behavior;
+> a `null` key (no origin-key extractor) is unfiltered ⇒ byte-identical defaults.
+> `LocationRegistry.instancesOf` is now an indexed membership read (perf cliff).
+> **R13** is promoted from optional to **blocking** and lands here: filtering
+> *shrinks* quorums, so a rowless joining covering member must **hold** the wave
+> (the fence, on by default) rather than be skipped (premature release). The
+> converged-membership barrier / DEGRADE quorum-shrink residual is **sequenced to
+> PN-19**. Test: `ShardedReplicaFrontierTest` (board over a 2-slot × 2-copy
+> instance set; 120 seeds) with controls (a) pre-PN-7 `members.all` never
+> releases, (b) trivial frontier tears the board, (c) fence off releases early for
+> a joining covering member.
+
 ### E3.5 — Consumer (b): the causal-stability read + GC proof harness (G-42 trigger) — P1 · Medium · `repl`
 **Spec**: 40/42 §Delivered watermarks (E3.1 point 2); 20/24 compaction-trigger note.
 **Implement**: `stableFrontier(logicalId): TagFrontier` on the

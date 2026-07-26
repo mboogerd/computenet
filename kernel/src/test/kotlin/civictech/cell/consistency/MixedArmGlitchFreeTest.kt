@@ -142,7 +142,7 @@ class MixedArmGlitchFreeTest {
     private fun runPerEdge(seed: Long, waves: Int): List<Observation> {
         val w = wire(seed)
         var mergedWatermark = Long.MIN_VALUE
-        val frontier = ReplicaFrontier { _, counter -> counter <= mergedWatermark }
+        val frontier = ReplicaFrontier { _, counter, _ -> counter <= mergedWatermark }
         w.gf.markReplicaFed(w.d.outlet.ref, frontier, originTags)
 
         emitLoop(w, seed, waves)
@@ -162,7 +162,7 @@ class MixedArmGlitchFreeTest {
      */
     private fun runWholeCell(seed: Long, waves: Int): List<Observation> {
         val w = wire(seed)
-        val frontier = ReplicaFrontier { _, _ -> true }
+        val frontier = ReplicaFrontier { _, _, _ -> true }
         w.gf.useReplicaFrontier(frontier, originTags)
 
         emitLoop(w, seed, waves)
@@ -231,7 +231,7 @@ class MixedArmGlitchFreeTest {
             // A replica frontier is present on the cell, but it governs an outlet that never
             // links here: marking is per-edge, so the actual local diamond edges keep the
             // ordinary cross-inlink predicate and stay glitch-free.
-            gf.markReplicaFed(PortRef.generate(), ReplicaFrontier { _, _ -> false }, originTags)
+            gf.markReplicaFed(PortRef.generate(), ReplicaFrontier { _, _, _ -> false }, originTags)
 
             val rnd = Random(seed)
             for (n in 1..waves) {
