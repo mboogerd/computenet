@@ -225,6 +225,21 @@ open class ManagedHost(
     private val parkedDrainedOnTeardownCount = AtomicLong()
     private val restartCount = AtomicLong()
 
+    /**
+     * PN-12 — spawn-time consumption of the [civictech.gen.wire.CellDescriptor.manifest]:
+     * a `Manifest.DURABLE` cell placed on this host with a journal selector that
+     * returns `null` for it is volatile — a previously *silent* durability gap
+     * (data lost on restart with nothing to replay from). Counted here so the
+     * condition is observable rather than silent. It is deliberately NOT a hard
+     * refusal: a durable-capable cell run volatile is a legitimate deployment (the
+     * exchange demo's aggregates are exactly that — rebuilt from the replayed
+     * writer WAL), so the manifest surfaces the gap without vetoing the spawn.
+     */
+    private val volatileDurableSpawnCount = AtomicLong()
+
+    /** PN-12: how many `DURABLE`-manifest cells were spawned onto a null journal selector. */
+    internal fun volatileDurableSpawns(): Long = volatileDurableSpawnCount.get()
+
     /** Snapshot of this host's supervision counters (G-46). */
     fun supervisionAccounting(): SupervisionAccounting = SupervisionAccounting(
         deadLetters = deadLetterCount.get(),
@@ -1003,15 +1018,20 @@ open class ManagedHost(
                 // this cell's ports, every declared port must be registered under
                 // its property name — the KSP-unlintable half of G-17, enforced
                 // here. Subset check: dynamic extra ports stay legal.
-                civictech.gen.wire.ContractRegistry.cellDescriptor(cell.javaClass)
-                    ?.ports?.takeIf { it.isNotEmpty() }?.let { declared ->
-                        val registered = PortRegistry.of(cell).names()
-                        val missing = declared.map { it.name }.filterNot { it in registered }
-                        require(missing.isEmpty()) {
-                            "cell ${cell.javaClass.name}: descriptor declares ports $missing not found in " +
-                                "registry $registered — registerPort's name must equal the property name (G-17)"
-                        }
+                val descriptor = civictech.gen.wire.ContractRegistry.cellDescriptor(cell.javaClass)
+                descriptor?.ports?.takeIf { it.isNotEmpty() }?.let { declared ->
+                    val registered = PortRegistry.of(cell).names()
+                    val missing = declared.map { it.name }.filterNot { it in registered }
+                    require(missing.isEmpty()) {
+                        "cell ${cell.javaClass.name}: descriptor declares ports $missing not found in " +
+                            "registry $registered — registerPort's name must equal the property name (G-17)"
                     }
+                }
+                // PN-12: surface a durable cell placed volatile (see [volatileDurableSpawnCount]).
+                if (descriptor != null &&
+                    civictech.gen.wire.Manifest.DURABLE in descriptor.manifest &&
+                    journalSelector(cell.ref) == null
+                ) volatileDurableSpawnCount.incrementAndGet()
                 cell.onActivate(ctx)
                 // spawn-time checkpoint: what a RESTART supervision restores (G-26)
                 if (cell is Stateful) checkpoints[cell.ref] = cell.snapshot()

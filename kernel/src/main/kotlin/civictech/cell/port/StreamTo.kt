@@ -17,13 +17,18 @@ package civictech.cell.port
  * allowlist + nature reconcile + EdgeOpen) with [LinkRole.Observe] — so the
  * mesh's `streamTo`-built edges negotiate and announce, yet never gate a
  * consumer's frontier. A routed proxy target (the cross-process case, whose
- * negotiation is `bridgeTo`/`bridgeFrom`'s job) still installs today's link,
- * but installs today's link unchanged. PN-12 flips the default to [true].
+ * negotiation is `bridgeTo`/`bridgeFrom`'s job) is not a local [Linked] port, so
+ * it falls through to today's link install unchanged even under [negotiated].
+ *
+ * PN-12: the default is now [true] — the one deliberate behavior change of the
+ * run. A local `streamTo` therefore negotiates by default (policies + allowlist +
+ * nature reconcile + `EdgeOpen` as an `Observe` link); routed/cross-process
+ * targets are unaffected (not [Linked]). Gated on the demo suite.
  */
 fun <Api : Any> FanOutlet<Api>.streamTo(
     target: Api,
     at: PortRef = PortRef.generate(),
-    negotiated: Boolean = false,
+    negotiated: Boolean = true,
 ): Link {
     if (negotiated) {
         (target as? Linked)?.let { linked ->

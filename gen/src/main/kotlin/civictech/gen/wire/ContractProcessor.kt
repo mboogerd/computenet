@@ -222,8 +222,20 @@ class ContractProcessor(
                             else -> CellColor.PURE
                         }
                         val ports = cellPorts[cell].orEmpty()
+                        val manifest = manifestOf(cell)
+                        // trailing `, manifest = setOf(...)` (omitted when empty ⇒ the default)
+                        val manifestSuffix: CodeBlock? = if (manifest.isEmpty()) null else buildCodeBlock {
+                            add(", manifest·=·setOf(")
+                            manifest.forEachIndexed { i, tag ->
+                                if (i > 0) add(", ")
+                                add("%T.%L", MANIFEST, tag)
+                            }
+                            add(")")
+                        }
                         if (ports.isEmpty()) {
-                            add("%T(fqn·=·%S, color·=·%T.%L),\n", CellDescriptor::class, fqn, CellColor::class, color.name)
+                            add("%T(fqn·=·%S, color·=·%T.%L", CellDescriptor::class, fqn, CellColor::class, color.name)
+                            manifestSuffix?.let { add("%L", it) }
+                            add("),\n")
                         } else {
                             add(
                                 "%T(fqn·=·%S, color·=·%T.%L, ports·=·listOf(\n⇥",
@@ -253,7 +265,9 @@ class ContractProcessor(
                                     add(")),\n")
                                 }
                             }
-                            add("⇤)),\n")
+                            add("⇤)")
+                            manifestSuffix?.let { add("%L", it) }
+                            add("),\n")
                         }
                     }
                     add("⇤)")
@@ -674,7 +688,39 @@ class ContractProcessor(
                 levels += NATURE_MONOTONICITY to "MONOTONE"
             }
         }
+        // PN-12 refusing-axis OFFERS. Stamped on OUT ports only: a stamp is a
+        // *requirement* when read off a consumer inlet and an *offer* when read
+        // off a producer outlet, and offering a stronger level never refuses a
+        // link (reconcile checks `offered.rank < required.rank`). Keeping these
+        // off inlets is what preserves today's behavior verbatim — the exchange
+        // demo's durable→volatile links never acquire a new requirement.
+        if (port.direction == PortDirection.OUT) {
+            // WAVED: a glitch-free cell emits aligned waves on its outlets.
+            if (isSubtype(cell.asStarProjectedType(), GLITCH_FREE_MARKER)) {
+                levels += NATURE_WAVE to "WAVED"
+            }
+            // INTEREST_SCOPED: the outlet carries a `Scoped` delta the linker can slice.
+            if (api != null && carriesMarker(port.apiType, SCOPED_MARKER)) {
+                levels += NATURE_SCOPING to "INTEREST_SCOPED"
+            }
+        }
         return levels
+    }
+
+    /**
+     * PN-12 — the structural [Manifest] natures of a cell, from the marker
+     * interfaces it implements (the same supertype scan [portNatureLevels] and
+     * the [CellColor] scan use). Mirrors the runtime `manifestOf` in :kernel;
+     * `ManifestDriftTest` pins the two agree.
+     */
+    private fun manifestOf(cell: KSClassDeclaration): List<String> {
+        val type = cell.asStarProjectedType()
+        val tags = mutableListOf<String>()
+        if (isSubtype(type, GLITCH_FREE_MARKER)) tags += "GLITCH_FREE"
+        if (isSubtype(type, STATEFUL_MARKER)) tags += "DURABLE"
+        if (isSubtype(type, REPLICABLE_MARKER) || isSubtype(type, REBASELINE_MARKER)) tags += "REPLICATED"
+        if (isSubtype(type, PARTITIONED_MARKER)) tags += "PARTITIONED"
+        return tags
     }
 
     /** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
@@ -738,6 +784,14 @@ class ContractProcessor(
         const val BLOCKING_MARKER = "civictech.cell.BlockingCell"
         const val SUSPENDING_MARKER = "civictech.cell.SuspendingCell"
 
+        // PN-12 markers for the two refusing axes + the CellManifest scan (no new
+        // annotations: every one is an existing marker interface / `Scoped`).
+        const val SCOPED_MARKER = "civictech.cell.replication.Scoped"
+        const val STATEFUL_MARKER = "civictech.cell.Stateful"
+        const val REBASELINE_MARKER = "civictech.cell.ReBaselineEmitting"
+        const val GLITCH_FREE_MARKER = "civictech.cell.consistency.GlitchFree"
+        const val PARTITIONED_MARKER = "civictech.cell.data.Partitioned"
+
         // Nature scan (CP-F2): generated level-enum references, folded into
         // PortDescriptor.natures. These live in :gen alongside NatureVector.
         val NATURE_VECTOR = ClassName("civictech.gen.wire", "NatureVector")
@@ -745,6 +799,9 @@ class ContractProcessor(
         val NATURE_MERGE = ClassName("civictech.gen.wire", "MergeClass")
         val NATURE_OWNERSHIP = ClassName("civictech.gen.wire", "Ownership")
         val NATURE_MONOTONICITY = ClassName("civictech.gen.wire", "Monotonicity")
+        val NATURE_WAVE = ClassName("civictech.gen.wire", "WaveParticipation")
+        val NATURE_SCOPING = ClassName("civictech.gen.wire", "InstanceScoping")
+        val MANIFEST = ClassName("civictech.gen.wire", "Manifest")
 
         // Proxy generation (W4.6, C-5 completion)
         val INVOCATION_HANDLER: ClassName = ClassName("java.lang.reflect", "InvocationHandler")

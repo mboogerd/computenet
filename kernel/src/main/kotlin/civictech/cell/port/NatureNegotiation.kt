@@ -44,18 +44,40 @@ object NatureNegotiation {
      * feeding a pure consumer on another host is normal) — reconciling it at
      * the link would be a false refusal, not a real silent drop.
      */
-    private val LINK_FLOW_AXES = setOf(
+    internal val LINK_FLOW_AXES = setOf(
         NatureAxis.OWNERSHIP,
         NatureAxis.MERGE_IDEMPOTENCE,
         NatureAxis.MONOTONICITY,
+        // PN-12: the two axes carrying today's *silent* mismatch drops. Unlike the
+        // structural CellManifest natures (GLITCH_FREE/DURABLE/…, deliberately kept
+        // OUT of this set — a volatile consumer of a durable producer is normal),
+        // these are genuine link-flow properties: an ALIGN inlet must refuse an
+        // unwaved producer, and a partial-interest inlet must refuse a non-scoped
+        // delta, rather than dropping/over-delivering unseen.
+        NatureAxis.WAVE_PARTICIPATION,
+        NatureAxis.INSTANCE_SCOPING,
     )
 
-    fun reconcile(offered: NatureVector, required: NatureVector): Reconciliation {
+    fun reconcile(offered: NatureVector, required: NatureVector): Reconciliation =
+        reconcile(offered, required, LINK_FLOW_AXES)
+
+    /**
+     * Test/control seam: reconcile against an explicit [linkFlowAxes] set. The
+     * PN-12 controls call it to *move axes in or out* of the refusing set —
+     * demonstrating that structural (CellManifest) natures moved in wrongly refuse
+     * the demo's durable→volatile link, and that removing `WAVE_PARTICIPATION`
+     * reverts the unwaved-producer drop to silent (today's F1).
+     */
+    internal fun reconcile(
+        offered: NatureVector,
+        required: NatureVector,
+        linkFlowAxes: Set<NatureAxis>,
+    ): Reconciliation {
         // Same-nature fast path: two default (empty) vectors are literally
         // today's behavior — a single reference/emptiness check, zero work.
         if (offered.isDefault && required.isDefault) return Reconciliation.Direct
         for ((axis, requiredLevel) in required.levels) {
-            if (axis !in LINK_FLOW_AXES) continue
+            if (axis !in linkFlowAxes) continue
             val offeredLevel = offered.level(axis)
             if (offeredLevel.rank < requiredLevel.rank) {
                 return Reconciliation.Refuse(NatureMismatch(axis, offeredLevel, requiredLevel))
