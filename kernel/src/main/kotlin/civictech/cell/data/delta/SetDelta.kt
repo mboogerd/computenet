@@ -17,7 +17,7 @@ import civictech.cell.partition.PartitionedCell
 data class SetDelta<E>(
     val adds: Map<E, Set<Timestamp>> = emptyMap(),
     val dels: Map<E, Set<Timestamp>> = emptyMap(),
-) : Serializable, MergeablePayload, civictech.cell.replication.Scoped<SetDelta<E>> {
+) : Serializable, MergeablePayload, civictech.cell.link.Scoped<SetDelta<E>> {
     fun merge(other: SetDelta<E>): SetDelta<E> =
         SetDelta(mergeTags(adds, other.adds), mergeTags(dels, other.dels))
 
@@ -33,10 +33,10 @@ data class SetDelta<E>(
      * restriction is empty — the emission never rides the link.
      */
     override fun within(
-        interest: civictech.cell.replication.Interest,
+        interest: civictech.cell.link.Interest,
         keyOf: (Any?) -> Any?,
     ): SetDelta<E>? {
-        if (interest is civictech.cell.replication.Interest.Total) return this
+        if (interest is civictech.cell.link.Interest.Total) return this
         val a = adds.filterKeys { interest.admits(keyOf(it)) }
         val d = dels.filterKeys { interest.admits(keyOf(it)) }
         return if (a.isEmpty() && d.isEmpty()) null else SetDelta(a, d)

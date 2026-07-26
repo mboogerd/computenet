@@ -5,6 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.evolve.Effectful
 import civictech.cell.host.LocationRegistry
+import civictech.cell.link.Interest
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanInlet

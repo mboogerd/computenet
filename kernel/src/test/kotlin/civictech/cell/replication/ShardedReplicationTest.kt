@@ -13,10 +13,11 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
+import civictech.cell.link.Interest
 import civictech.cell.link.LinkResult
-import civictech.cell.port.NatureNegotiation
+import civictech.cell.nature.NatureNegotiation
 import civictech.cell.port.PortRef
-import civictech.cell.port.Reconciliation
+import civictech.cell.nature.Reconciliation
 import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation

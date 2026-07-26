@@ -266,7 +266,7 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
 
         /**
          * The instance-set **formation** refusal (spec 31, mirroring PN-18's
-         * [civictech.cell.port.NatureNegotiation.admitToInstanceSet] and PN-8's
+         * [civictech.cell.nature.NatureNegotiation.admitToInstanceSet] and PN-8's
          * overlap refusal): an [effectful] cell joining a Total/overlapping set
          * with no declared authority is refused with a loud typed error, moved
          * to the moment the combination is formed rather than discovered as N

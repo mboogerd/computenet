@@ -15,7 +15,7 @@ import civictech.cell.protocol.RetainedFrontiers
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.cell.wire.Peering
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe

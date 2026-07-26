@@ -4,7 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.cell.replication.InstanceSet
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe

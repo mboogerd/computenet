@@ -14,8 +14,8 @@ import civictech.cell.port.Use
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.proxy.ParkQueue
 import civictech.cell.replication.Assignment
-import civictech.cell.replication.Interest
-import civictech.cell.replication.sliceTo
+import civictech.cell.link.Interest
+import civictech.cell.link.sliceTo
 import civictech.cell.wire.PortAddress
 import civictech.cell.wire.WireEdgeLink
 import java.util.UUID

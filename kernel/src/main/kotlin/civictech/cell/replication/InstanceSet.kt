@@ -7,11 +7,12 @@ import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.NatureNegotiation
-import civictech.cell.port.Reconciliation
+import civictech.cell.nature.NatureNegotiation
+import civictech.cell.nature.Reconciliation
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
+import civictech.cell.link.Interest
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable

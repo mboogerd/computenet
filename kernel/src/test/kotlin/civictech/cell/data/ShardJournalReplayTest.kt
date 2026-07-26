@@ -10,7 +10,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.cell.wire.Peering
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeTrue

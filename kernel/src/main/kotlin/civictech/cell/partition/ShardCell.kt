@@ -17,7 +17,7 @@ import civictech.cell.protocol.StateRequest
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import civictech.cell.replication.Assignment
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import java.io.Serializable
 import java.util.UUID
 

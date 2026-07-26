@@ -5,6 +5,8 @@ import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
 import civictech.cell.link.handshake
 import civictech.cell.link.pullServe
+import civictech.cell.nature.NatureNegotiation
+import civictech.cell.nature.Reconciliation
 import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.StateRequest
 import civictech.nature.NatureAxis

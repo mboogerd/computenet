@@ -8,7 +8,9 @@ import civictech.cell.data.WatermarkCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanOutlet
+import civictech.cell.link.Interest
 import civictech.cell.link.Link
+import civictech.cell.link.sliceTo
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo

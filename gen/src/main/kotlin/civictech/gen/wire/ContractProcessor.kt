@@ -816,7 +816,7 @@ class ContractProcessor(
 
             // PN-12 markers for the two refusing axes + the CellManifest scan (no
             // new annotations: every one is an existing marker interface / `Scoped`).
-            const val SCOPED_MARKER = "civictech.cell.replication.Scoped"
+            const val SCOPED_MARKER = "civictech.cell.link.Scoped"
             const val STATEFUL_MARKER = "civictech.cell.Stateful"
             const val REBASELINE_MARKER = "civictech.cell.ReBaselineEmitting"
             const val GLITCH_FREE_MARKER = "civictech.cell.consistency.GlitchFree"

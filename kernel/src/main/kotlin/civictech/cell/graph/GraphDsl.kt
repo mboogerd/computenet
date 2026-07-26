@@ -4,7 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.nature.Manifest
 import civictech.cell.link.LinkResult
 import civictech.cell.port.Port

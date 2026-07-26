@@ -279,7 +279,7 @@ class AttentionSupport private constructor(private val owner: Any) {
      * the caller so the attention package stays free of a dependency on the
      * `replication.Interest` algebra (which would cycle through `data`); a
      * consumer scatters by passing `{ link -> shardInterest(link).overlaps(scope) }`
-     * — the same [civictech.cell.replication.Interest.overlaps] the gossip linker
+     * — the same [civictech.cell.link.Interest.overlaps] the gossip linker
      * uses. Default accepts every link ⇒ byte-identical to pre-PN-19 broadcast, so
      * a non-scattering (non-opting) graph is unchanged. Assigning a scatter
      * immediately re-emits the current band under the new scope.

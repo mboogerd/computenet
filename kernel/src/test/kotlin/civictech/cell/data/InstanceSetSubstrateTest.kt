@@ -10,7 +10,7 @@ import civictech.cell.host.SimulationController
 import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.replication.Assignment
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.cell.replication.InstanceSet
 import civictech.cell.replication.Replication
 import io.kotest.matchers.booleans.shouldBeTrue

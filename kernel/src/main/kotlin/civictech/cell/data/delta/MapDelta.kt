@@ -15,7 +15,7 @@ import civictech.cell.data.op.MergeableGroupByCell
 data class MapDelta<K, V>(
     val puts: Map<K, V>,
     val removals: Set<K>
-) : Serializable, civictech.cell.replication.Scoped<MapDelta<K, V>> {
+) : Serializable, civictech.cell.link.Scoped<MapDelta<K, V>> {
     /**
      * Aggregate merge path (CP-G1): fold two deltas per key with [combine]
      * instead of the single-writer last-writer-wins replace. A key present in
@@ -49,10 +49,10 @@ data class MapDelta<K, V>(
      * `MapDelta`, so both are sliceable through this one implementation.
      */
     override fun within(
-        interest: civictech.cell.replication.Interest,
+        interest: civictech.cell.link.Interest,
         keyOf: (Any?) -> Any?,
     ): MapDelta<K, V>? {
-        if (interest is civictech.cell.replication.Interest.Total) return this
+        if (interest is civictech.cell.link.Interest.Total) return this
         val p = puts.filterKeys { interest.admits(keyOf(it)) }
         val r = removals.filterTo(mutableSetOf()) { interest.admits(keyOf(it)) }
         return if (p.isEmpty() && r.isEmpty()) null else MapDelta(p, r)

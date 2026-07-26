@@ -3,7 +3,7 @@ package civictech.cell.protocol
 import civictech.cell.CellRef
 import civictech.cell.TagFrontier
 import civictech.cell.port.PortRef
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
 import civictech.nature.ProtocolCardinality

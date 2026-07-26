@@ -3,7 +3,8 @@ package civictech.cell.replication
 import civictech.cell.CellRef
 import civictech.cell.Frozen
 import civictech.cell.Owned
-import civictech.cell.port.Reconciliation
+import civictech.cell.link.Interest
+import civictech.cell.nature.Reconciliation
 import civictech.nature.NatureAxis
 import civictech.nature.NatureVector
 import civictech.nature.Ownership

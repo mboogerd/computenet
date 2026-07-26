@@ -1,4 +1,4 @@
-package civictech.cell.replication
+package civictech.cell.link
 
 import java.io.Serializable
 import civictech.cell.partition.PartitionedCell

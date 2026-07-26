@@ -127,9 +127,9 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * scope iterates every key — byte-identical to the pre-scope frontier — so a
      * scope-absent pull's reported currency is unchanged.
      */
-    private fun currentFrontier(scope: civictech.cell.replication.Interest? = null): TagFrontier {
+    private fun currentFrontier(scope: civictech.cell.link.Interest? = null): TagFrontier {
         val admit: (E) -> Boolean =
-            if (scope == null || scope is civictech.cell.replication.Interest.Total) { _ -> true }
+            if (scope == null || scope is civictech.cell.link.Interest.Total) { _ -> true }
             else { e -> scope.admits(e) }
         val frontier = mutableMapOf<UUID, Long>()
         val addSeq = adds.asSequence().filter { admit(it.key) }.map { it.value }
@@ -148,9 +148,9 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      */
     private fun scopedTo(
         source: Map<E, Set<Timestamp>>,
-        scope: civictech.cell.replication.Interest?,
+        scope: civictech.cell.link.Interest?,
     ): Map<E, Set<Timestamp>> =
-        if (scope == null || scope is civictech.cell.replication.Interest.Total) source
+        if (scope == null || scope is civictech.cell.link.Interest.Total) source
         else source.filterKeys { scope.admits(it) }
 
     /** Only the tags a [since] frontier has not yet observed; unfiltered when [since] is null. */

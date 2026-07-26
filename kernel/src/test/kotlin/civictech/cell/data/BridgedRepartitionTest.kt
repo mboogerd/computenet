@@ -5,7 +5,7 @@ import civictech.cell.Timestamp
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.cell.wire.Peering
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe

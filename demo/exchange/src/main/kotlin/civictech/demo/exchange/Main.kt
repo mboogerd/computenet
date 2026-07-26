@@ -17,7 +17,7 @@ import civictech.cell.host.link
 import civictech.cell.observe.observe
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import civictech.cell.wire.Peering
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange

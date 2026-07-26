@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.host.LocationRegistry
+import civictech.cell.link.Interest
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.Use

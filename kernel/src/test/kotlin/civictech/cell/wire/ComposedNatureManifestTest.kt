@@ -7,8 +7,8 @@ import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.WaveFrontier
 import civictech.cell.data.SetCell
 import civictech.cell.port.FanInlet
-import civictech.cell.port.NatureNegotiation
-import civictech.cell.port.Reconciliation
+import civictech.cell.nature.NatureNegotiation
+import civictech.cell.nature.Reconciliation
 import civictech.cell.proxy.Invocation
 import civictech.nature.Color
 import civictech.nature.ContractRegistry

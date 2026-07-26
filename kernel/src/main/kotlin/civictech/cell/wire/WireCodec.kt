@@ -179,14 +179,14 @@ object WireCodec {
             }
             // the interest algebra crosses the wire as a polymorphic value inside
             // an Assignment (PN-6): every arm is a registered @Serializable subclass.
-            polymorphic(civictech.cell.replication.Interest::class) {
-                subclass(civictech.cell.replication.Interest.Total::class)
-                subclass(civictech.cell.replication.Interest.Empty::class)
-                subclass(civictech.cell.replication.Interest.Union::class)
-                subclass(civictech.cell.replication.Interest.Intersect::class)
-                subclass(civictech.cell.replication.Interest.Complement::class)
-                subclass(civictech.cell.replication.Interest.Ranges::class)
-                subclass(civictech.cell.replication.Interest.Slots::class)
+            polymorphic(civictech.cell.link.Interest::class) {
+                subclass(civictech.cell.link.Interest.Total::class)
+                subclass(civictech.cell.link.Interest.Empty::class)
+                subclass(civictech.cell.link.Interest.Union::class)
+                subclass(civictech.cell.link.Interest.Intersect::class)
+                subclass(civictech.cell.link.Interest.Complement::class)
+                subclass(civictech.cell.link.Interest.Ranges::class)
+                subclass(civictech.cell.link.Interest.Slots::class)
             }
         }.let { kernelModule ->
             // app-contributed delta serializers (M17): ServiceLoader-discovered,

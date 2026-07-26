@@ -10,7 +10,7 @@ import civictech.cell.link.LinkResult
 import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.RetainedFrontiers
 import civictech.cell.protocol.StateRequest
-import civictech.cell.replication.Interest
+import civictech.cell.link.Interest
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID

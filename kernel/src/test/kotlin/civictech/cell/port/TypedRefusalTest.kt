@@ -3,6 +3,8 @@ package civictech.cell.port
 import civictech.cell.Consumer
 import civictech.cell.link.LinkResult
 import civictech.cell.link.handshake
+import civictech.cell.nature.NatureNegotiation
+import civictech.cell.nature.Reconciliation
 import civictech.nature.Color
 import civictech.nature.MergeClass
 import civictech.nature.Monotonicity

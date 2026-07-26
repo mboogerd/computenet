@@ -212,7 +212,7 @@ class MergeableGroupByTest {
             val removals = keys.filterTo(mutableSetOf()) { rnd.nextInt(4) == 0 } - puts.keys
             val delta = MapDelta(puts, removals)
             val admitted = (0 until total).filterTo(mutableSetOf()) { rnd.nextBoolean() }
-            val scope = civictech.cell.replication.Interest.Slots(admitted, total)
+            val scope = civictech.cell.link.Interest.Slots(admitted, total)
 
             val expectPuts = puts.filterKeys { admits(it, admitted, total) }
             val expectRem = removals.filterTo(mutableSetOf()) { admits(it, admitted, total) }
@@ -232,11 +232,11 @@ class MergeableGroupByTest {
 
         // Total ⇒ the whole aggregate rides unchanged (replication default preserved).
         val whole = MapDelta(mapOf("a" to 1L, "b" to 2L), setOf("c"))
-        assertEquals(whole, whole.within(civictech.cell.replication.Interest.Total) { it })
+        assertEquals(whole, whole.within(civictech.cell.link.Interest.Total) { it })
     }
 
     private fun admits(key: Any?, admitted: Set<Int>, total: Int) =
-        civictech.cell.replication.Interest.Slots.slotOf(key, total) in admitted
+        civictech.cell.link.Interest.Slots.slotOf(key, total) in admitted
 
     // ------------------------------------------------------------------
 
