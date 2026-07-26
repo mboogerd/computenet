@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.UnionSetCell
 
 class QuorumSetCellTest {
 

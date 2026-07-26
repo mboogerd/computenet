@@ -14,6 +14,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.UnionSetCell
 
 /**
  * The G-23 claim: two views merging the same tagged delta streams converge to

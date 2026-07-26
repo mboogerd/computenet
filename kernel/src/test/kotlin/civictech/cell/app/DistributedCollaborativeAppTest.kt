@@ -3,12 +3,9 @@ package civictech.cell.app
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.CollectorCell
-import civictech.cell.data.CountCell
-import civictech.cell.data.FilterCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.data.UnionSetCell
 import civictech.cell.data.tagFold
 import civictech.cell.graph.graph
 import civictech.cell.host.CellError
@@ -37,6 +34,9 @@ import org.junit.jupiter.api.Test
 import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.CountCell
 
 /**
  * The M5 exit criterion: the M4 collaborative session — same cells, same

@@ -8,7 +8,6 @@ import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.data.UnionSetCell
 import civictech.cell.data.MergeableGroupByCell
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.lookup
@@ -34,6 +33,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.UnionSetCell
 
 // The composition probe (:demo:exchange, CP-E1). Two symmetric JVM peers hold
 // region-keyed orders in per-peer writer SetCells; the writers stream into a

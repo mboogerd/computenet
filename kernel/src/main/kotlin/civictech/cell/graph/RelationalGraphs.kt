@@ -1,9 +1,9 @@
 package civictech.cell.graph
 
-import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.JoinSetCell
 import civictech.cell.data.SemiJoinCell
-import civictech.cell.data.UnionSetCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.FlatMapSetCell
 
 /**
  * Outer joins as graph compositions (M11.6): no new cell semantics — matched

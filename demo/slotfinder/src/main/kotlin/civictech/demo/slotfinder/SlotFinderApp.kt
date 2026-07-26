@@ -1,8 +1,6 @@
 package civictech.demo.slotfinder
 
 import civictech.cell.data.Aggregators
-import civictech.cell.data.FilterCell
-import civictech.cell.data.FilterSetApi
 import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.QuorumSetApi
@@ -23,6 +21,8 @@ import java.io.Serializable
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.util.concurrent.CopyOnWriteArrayList
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.FilterSetApi
 
 /**
  * Meeting-slot finder: three participants each maintain a set of available

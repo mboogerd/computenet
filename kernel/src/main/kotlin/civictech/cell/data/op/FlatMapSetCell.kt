@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
@@ -10,8 +10,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.absorbAck
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.delta.TagState
 
 @CellBase
 interface FlatMapSetApi<A, B> {
@@ -34,7 +34,7 @@ class FlatMapSetCell<A, B>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val f: (A) -> Iterable<B>,
 ) : FlatMapSetCellBase<A, B>(ref), Stateful {
-    private val state = TagState<A>()
+    private val op = TaggedSetOperator<A>()
 
     // fold-with-union: colliding outputs merge tag sets — a mapKeys-style
     // last-wins remap silently drops liveness (the control test's failure class)
@@ -47,22 +47,22 @@ class FlatMapSetCell<A, B>(
     init {
         // late-join catch-up (G-22): output state is derived, so recompute it
         // from input state rather than keeping a second copy
-        outlet.catchUpOnLinked { if (state.size > 0) SetDelta(adds = remap(state.asDelta().adds)) else null }
+        outlet.catchUpOnLinked { if (op.state.size > 0) SetDelta(adds = remap(op.state.asDelta().adds)) else null }
     }
 
     override fun onInlet(value: SetDelta<A>) {
-        val effective = state.apply(value)
+        val effective = op.state.apply(value)
         val mapped = SetDelta(remap(effective.adds), remap(effective.dels))
-        if (mapped.adds.isNotEmpty() || mapped.dels.isNotEmpty()) {
-            outlet.call.propagate(mapped)
-        } else {
-            outlet.absorbAck() // deduped away — ack the swallowed wave (CP-A3)
-        }
+        op.emitOrAbsorb(
+            mapped,
+            propagate = { outlet.call.propagate(it) },
+            absorbAck = { outlet.absorbAck() }, // deduped away — ack the swallowed wave (CP-A3)
+        )
     }
 
-    override fun snapshot(): Serializable = state.snapshot()
+    override fun snapshot(): Serializable = op.snapshot()
 
-    override fun restore(state: Serializable) = this.state.restore(state)
+    override fun restore(state: Serializable) = op.restore(state)
 }
 
 /** Element-wise map as the one-output flatMap. */

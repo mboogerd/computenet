@@ -1,7 +1,5 @@
 package civictech.cell.graph
 
-import civictech.cell.data.CountCell
-import civictech.cell.data.CountSetApi
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -13,6 +11,8 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.CountCell
+import civictech.cell.data.op.CountSetApi
 
 class TypedRefTest {
 

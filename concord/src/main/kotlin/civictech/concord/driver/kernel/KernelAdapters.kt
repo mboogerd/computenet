@@ -16,6 +16,7 @@ import civictech.cell.port.FeedbackInlet
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.UUID
+import civictech.cell.data.op.FlatMapSetCell
 
 /**
  * Driver-internal adapter cells and view folds (W1-A/W3-0). These live **only**
@@ -29,13 +30,13 @@ import java.util.UUID
 
 /**
  * Binds the catalog `map` operator with `fn: identity` — a pass-through arm.
- * The kernel ships no element-map cell (only [civictech.cell.data.FlatMapSetCell]
+ * The kernel ships no element-map cell (only [civictech.cell.data.op.FlatMapSetCell]
  * over set streams), and the diamond exemplar applies `map, fn: identity` to a
  * *counter* stream, so no set-shaped cell fits either. This trivial pass-through
  * re-propagates every delta unchanged and is type-agnostic (erased `Propagate`),
  * so it binds identity arms over both `SetDelta` (21-PIPE-01) and `CounterDelta`
  * (22-GF-DIAMOND-01) streams. A *non-identity* element map binds to
- * [civictech.cell.data.FlatMapSetCell] with a singleton transform (see
+ * [civictech.cell.data.op.FlatMapSetCell] with a singleton transform (see
  * [KernelCatalog]).
  */
 class IdentityCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {

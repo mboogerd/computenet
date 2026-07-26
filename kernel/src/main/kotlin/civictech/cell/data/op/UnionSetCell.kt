@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
@@ -11,6 +11,7 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.absorbAck
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
 
@@ -37,31 +38,31 @@ interface UnionSetApi<E> {
  */
 class UnionSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
     UnionSetCellBase<E>(ref), Stateful, ReBaselineEmitting {
-    private val state = TagState<E>()
+    private val op = TaggedSetOperator<E>()
 
     init {
         // late-join catch-up (G-22): live tags as a delta-from-empty
-        outlet.catchUpOnLinked { if (state.size > 0) state.asDelta() else null }
+        outlet.catchUpOnLinked { if (op.state.size > 0) op.state.asDelta() else null }
     }
 
     override fun onInlet(value: SetDelta<E>) {
         val notice = CurrentContext.get()?.reBaseline
-        val effective = if (notice != null) state.applyReBaseline(value, notice) else state.apply(value)
-        if (effective.adds.isNotEmpty() || effective.dels.isNotEmpty()) {
-            outlet.call.propagate(effective)
-        } else {
-            outlet.absorbAck() // diamond-fan-in duplicate deduped — ack the swallowed wave (CP-A3)
-        }
+        val effective = if (notice != null) op.state.applyReBaseline(value, notice) else op.state.apply(value)
+        op.emitOrAbsorb(
+            effective,
+            propagate = { outlet.call.propagate(it) },
+            absorbAck = { outlet.absorbAck() }, // diamond-fan-in duplicate deduped — ack the swallowed wave (CP-A3)
+        )
     }
 
-    override fun snapshot(): Serializable = state.snapshot()
+    override fun snapshot(): Serializable = op.snapshot()
 
-    override fun restore(state: Serializable) = this.state.restore(state)
+    override fun restore(state: Serializable) = op.restore(state)
 
     /** RESTART re-baseline (93 I-22 R2): re-emit restored state, flagged over the ordinary catch-up path. */
     override fun reBaseline(supersedes: Set<UUID>, supersede: Boolean) {
-        if (state.size > 0 || supersedes.isNotEmpty()) {
-            outlet.reBaseline(supersedes, supersede) { propagate(state.asDelta()) }
+        if (op.state.size > 0 || supersedes.isNotEmpty()) {
+            outlet.reBaseline(supersedes, supersede) { propagate(op.state.asDelta()) }
         }
     }
 

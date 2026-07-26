@@ -1,11 +1,8 @@
 package civictech.cell.graph
 
-import civictech.cell.data.CountCell
-import civictech.cell.data.CountSetApi
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
-import civictech.cell.data.UnionSetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
@@ -17,6 +14,9 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.CountCell
+import civictech.cell.data.op.CountSetApi
 
 class GraphDslTest {
 

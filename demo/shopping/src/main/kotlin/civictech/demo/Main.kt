@@ -1,13 +1,11 @@
 package civictech.demo
 
 import civictech.cell.CellRef
-import civictech.cell.data.FilterCell
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.data.UnionSetCell
 import civictech.cell.graph.TypedCellHandle
 import civictech.cell.graph.TypedRef
 import civictech.cell.graph.graph
@@ -31,6 +29,8 @@ import java.net.URLDecoder
 import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
 
 // The UI transport is still JDK httpserver + SSE pushing full state (an
 // incremental browser client is M6+ material); the *peer* transport is the

@@ -17,6 +17,8 @@ import java.io.Serializable
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
 
 /**
  * The read/observe dual of the `graph { }` builder (spec

@@ -7,6 +7,7 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import civictech.cell.data.op.UnionSetCell
 
 /**
  * W1-D unit tests: pure-logic exercise of the concordance generator and its

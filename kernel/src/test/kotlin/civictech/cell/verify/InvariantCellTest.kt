@@ -1,6 +1,5 @@
 package civictech.cell.verify
 
-import civictech.cell.data.CountCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
@@ -14,6 +13,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.CountCell
 
 class InvariantCellTest {
 

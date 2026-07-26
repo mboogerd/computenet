@@ -1,6 +1,7 @@
 package civictech.cell.data
 
 import java.io.Serializable
+import civictech.cell.data.op.FlatMapSetCell
 
 /**
  * Window assignment as key derivation (M11.6): there is no wall clock (P1) —

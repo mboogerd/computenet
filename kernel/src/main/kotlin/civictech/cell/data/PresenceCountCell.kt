@@ -22,6 +22,7 @@ import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
+import civictech.cell.data.op.UnionSetCell
 
 /**
  * Per-source-link membership for a dynamic `SetDelta<E>` fan-in (the shared core

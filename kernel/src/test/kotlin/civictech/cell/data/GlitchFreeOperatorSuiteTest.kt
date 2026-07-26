@@ -22,6 +22,10 @@ import org.junit.jupiter.api.Test
 import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.mapSet
 
 /**
  * CP-A3 (spec 20/22 §Completeness over silent or stuck edges, G-40): the

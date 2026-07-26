@@ -10,6 +10,9 @@ import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.FlatMapSetCell
 
 /**
  * Keyed upsert input (F-3): the latest element under a [key] replaces the

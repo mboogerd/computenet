@@ -8,7 +8,6 @@ import civictech.cell.consistency.WaveFrontier
 import civictech.cell.data.PartitionedCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.ShardCell
-import civictech.cell.data.UnionSetCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.NatureNegotiation
 import civictech.cell.port.Reconciliation
@@ -25,6 +24,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import civictech.cell.data.op.UnionSetCell
 
 /**
  * PN-12 (plan §4). The exchange cells report their **composed structural natures**

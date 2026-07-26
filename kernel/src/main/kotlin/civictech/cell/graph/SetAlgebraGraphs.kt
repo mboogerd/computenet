@@ -1,10 +1,10 @@
 package civictech.cell.graph
 
-import civictech.cell.data.CountCell
-import civictech.cell.data.FilterCell
 import civictech.cell.data.IntersectSetCell
-import civictech.cell.data.UnionSetCell
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.CountCell
 
 /**
  * The everyday set-algebra operators as graph compositions (M4): sugar only —

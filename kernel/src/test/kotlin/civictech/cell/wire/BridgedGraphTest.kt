@@ -3,13 +3,10 @@ package civictech.cell.wire
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.CollectorCell
-import civictech.cell.data.CountCell
 import civictech.cell.data.DeltaInletProxy
-import civictech.cell.data.FilterCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.data.UnionSetCell
 import civictech.cell.data.tagFold
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
@@ -28,6 +25,9 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.CountCell
 
 /**
  * M5.3: the generative harness (G-31) over the wire. Two registries model two

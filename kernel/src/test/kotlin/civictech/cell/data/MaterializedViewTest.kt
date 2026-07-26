@@ -12,6 +12,7 @@ import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
+import civictech.cell.data.op.UnionSetCell
 
 /**
  * The consumer-side read models ([SetView] / [MapView] / [CountView]): the

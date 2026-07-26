@@ -2,10 +2,7 @@ package civictech.concord.driver.kernel
 
 import civictech.cell.Cell
 import civictech.cell.data.Aggregator
-import civictech.cell.data.CountCell
 import civictech.cell.data.CounterCell
-import civictech.cell.data.FilterCell
-import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.JoinSetCell
@@ -18,12 +15,15 @@ import civictech.cell.data.PresenceCountCell
 import civictech.cell.data.QuorumSetCell
 import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetCell
-import civictech.cell.data.UnionSetCell
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.concord.value.Value
 import java.io.Serializable
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.CountCell
 
 /**
  * The neutral cell-catalog → kernel-cell binding (W1-A/W3-0, CONCORD-PLAN §1.4

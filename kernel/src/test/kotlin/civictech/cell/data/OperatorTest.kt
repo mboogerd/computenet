@@ -15,6 +15,11 @@ import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.CountCell
+import civictech.cell.data.op.mapSet
 
 class OperatorTest {
 

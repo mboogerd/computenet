@@ -6,8 +6,6 @@ import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.data.Aggregators
-import civictech.cell.data.FilterCell
-import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.MergeableGroupByCell
 import civictech.cell.Propagate
@@ -15,7 +13,6 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.ShardCell
 import civictech.cell.data.PartitionedShardSet
-import civictech.cell.data.UnionSetCell
 import civictech.cell.data.WatermarkCell
 import civictech.cell.onEach
 import civictech.cell.host.LocationRegistry
@@ -44,6 +41,10 @@ import java.util.Random
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.mapSet
 
 /**
  * CP-E2 — the composition **phase exit** ("the Agora for composition").

@@ -3,10 +3,8 @@ package civictech.cell.graph
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
-import civictech.cell.data.CountCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.UnionSetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.link
@@ -25,6 +23,8 @@ import org.junit.jupiter.api.Test
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.CountCell
 
 /**
  * Typed port wiring (typed-port-links, 05): `link(a.outlet, b.inlet)` connects
@@ -300,7 +300,7 @@ class TypedLinkTest {
         // payload type unifies through the phantom ids; lowers to the string connect
         val result = hostApi.connect(
             writer.ref, civictech.cell.data.SetCellPorts.outlet<String>(),
-            union.ref, civictech.cell.data.UnionSetCellPorts.inlet<String>(),
+            union.ref, civictech.cell.data.op.UnionSetCellPorts.inlet<String>(),
         )
         result.shouldBeInstanceOf<LinkResult.Connected>()
 

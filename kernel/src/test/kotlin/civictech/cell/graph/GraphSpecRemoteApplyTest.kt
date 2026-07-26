@@ -1,7 +1,6 @@
 package civictech.cell.graph
 
 import civictech.cell.CellRef
-import civictech.cell.data.CountCell
 import civictech.cell.data.SetCell
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.ManagedHost
@@ -11,6 +10,7 @@ import civictech.cell.port.Use
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
+import civictech.cell.data.op.CountCell
 
 /**
  * W3.6 (G-51 core): the spawn-step parameters (identity/parent/factory),
