@@ -77,8 +77,13 @@ Only real W6 file collision: NatureNegotiation.kt (PN-8 + PN-18) — resolved un
 - PN-11 merged (e1e45ae): ParkQueue unifies 5 sites, byte-identical (596/0 pins).
 - PN-16 merged (d30ad1f): decision (B) — static frontier model sufficient, no G-13; doc-only.
 
-### Wave 7 — PN-17 (η CONT) ∥ PN-19 (ι FRESH)
+### Wave 7 — PN-17 (η CONT) ∥ PN-19 (ι FRESH) — **COMPLETE** (gate green @ [PN-17 merge])
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-17 | pending | comp/PN-17 | | effect authority on an instance set |
-| PN-19 | pending | comp/PN-19 | | attention scatter, per-instance park, Stall family (closes PN-7 DEGRADE gap) |
+| PN-17 | merged | comp/PN-17 | (W7) | leader-fires/follower-suppress (Shadow NoOp) exactly-once across handoff, LeaderMark fencing; suppression verified through real host path. **Reworked**: guard was proven-in-test but unwired → now wired into live `Replication.replicate` (Effectful+Replicable on mesh w/o authority refused at formation) |
+| PN-19 | merged | comp/PN-19 | a394d9c | interest-scatter + per-instance park + Stall/Resume covering-quorum shrink; closes PN-7's DEGRADE gap; PN-0c close() = degenerate terminal case; WAIT=today/DEGRADE opt-in |
+
+### Wave 8 — PN-15 (κ FRESH — the evidence join, LAST)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-15 | pending | comp/PN-15 | | evidence graph: bridged + filtered + sharded-AND-replicated arms + manifest assertion; pair-matrix update |
