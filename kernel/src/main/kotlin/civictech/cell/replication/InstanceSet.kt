@@ -49,10 +49,21 @@ data class AssignmentDelta(val entries: Map<CellRef, Assignment>) : Serializable
 /**
  * The interest-assignment table as a **[Replicable] max-register lattice** (PN-6,
  * plan §3 "assignment as a hosted Replicable lattice"): one entry per instance
- * `ref`, its value the [Assignment] `(interest, epoch)`. This is the one authority
- * the linker and the router both read — replication and partitioning are the same
- * instance set under different interest assignments (spec 42), so there is one
- * assignment table, not two.
+ * `ref`, its value the [Assignment] `(interest, epoch)`. Its epoch-max [merge]
+ * *is* the admission rule the single routing authority applies when it reassigns
+ * interest (via the journaled [Assignment] invocations to each shard's
+ * `assignInlet`), and its overlap predicate ([overlapCount]) is the one the
+ * gossip linker ([Replication.maybeLink]) realizes — replication and partitioning
+ * are the same instance set under different interest assignments (spec 42), so
+ * there is one assignment model, not two.
+ *
+ * Scope (PN-6): under the single-routing-authority window the router and linker
+ * still derive *live* interest from the registry / per-shard register; a runtime
+ * lattice that every peer reads and reassigns concurrently is the **leaderless
+ * R1** case, out of scope (see spec §Interest-scoped instance sets). This class
+ * is therefore the assignment *lattice model* — the oracle the substrate tests
+ * check the operational router/linker against, and the convergent form a future
+ * leaderless instance set would gossip — not a struct read on the live path today.
  *
  * **Admission rule** (the same everywhere, plan §3): a delivered assignment whose
  * epoch is *older* than what we hold is filtered through the current interest (it
