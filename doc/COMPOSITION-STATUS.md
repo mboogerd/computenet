@@ -150,20 +150,43 @@ move-by-serialize), G–J–K (`ShadowOwnershipTest`), I–N
 
 ### The empty cells (the important output)
 
-- **Partitioning (C): 11 of 14 pairs uncovered** — the worst axis.
-  `PartitionedCell` appears in exactly one test file; shards are in-process
-  organelles "never independently spawned onto a ManagedHost"; the file itself
-  says "distribution edges remain open, G-56". Nothing shards across hosts, the
-  wire, a journal, attention, or promotion.
-- **Glitch-freedom (A) never leaves the local in-memory world**: A–B, A–C, A–D,
-  A–F, A–G, A–J, A–K, A–L, A–N, A–O all empty. `WireEdgeLink` carries frontier
-  data, but no test wires a `GlitchFreeCell` across a peer boundary, and none
-  combines it with the shipped operator library.
-- **Attention × cycles (H–I)** — no test suspends a cyclic region.
-- **Promotion (K) never meets replication, sharding, journal, color, or
-  attention** (K–B, K–C, K–D, K–E, K–H empty).
-- **Effectful (J) only ever meets durability, ownership, shadow** — no effect
-  across the wire, under replication, or under magnitude scheduling.
+> **Update — the per-node run (PN-1..PN-19) closed the C/A/K/J/G/H gaps below.**
+> The pairs struck through here now have a real test; the composition-evidence
+> join that exercises them together in one graph is the demo
+> `ExchangeCompositionExitTest` (bridged arm A–F/A–O, filtered arm A–C, the
+> sharded-AND-replicated board C–B, and the manifest assertion), with the
+> mandated diverging controls (torn / stall / wedge).
+
+- **Partitioning (C): now composes across hosts, the wire, a journal, pull, and
+  replication.** ~~11 of 14 pairs uncovered~~. Shards are independently spawned
+  onto their own `ManagedHost`s and reached over `Peering` bridges
+  (`PartitionedShardsAcrossHostsTest`, `ExchangeCompositionExitTest`). Now
+  **covered**: **C–B** sharded-AND-replicated (overlap = replication) with
+  repartition racing replica failover (`ShardedReplicationTest`,
+  `ExchangeCompositionExitTest`); **C–D** journaled shard shed + replay
+  (`ShardJournalReplayTest`); **C–M** scatter-gather pull across shards
+  (`PartitionedPullTest`); **C–G** owned/routed shard ownership move
+  (`OwnedRoutedShardTest`); **C–H** partitioned attention scatter
+  (`PartitionedAttentionTest`).
+- **Glitch-freedom (A) now leaves the local in-memory world**: **A–B** over a
+  cross-replica settlement frontier and **A–F/A–O** across `Peering` bridges with
+  the operator library (`ExchangeCompositionExitTest`, `GlitchFreeBridgedDiamondTest`);
+  **A–C** the filtered arm with a CP-A3 absorb-ack, stalls without it
+  (`ExchangeCompositionExitTest`, `GlitchFreeOperatorSuiteTest`); **A–D** a
+  settlement-gated board over durable replicas, wedges when a covering-quorum
+  member is evicted without closing its row
+  (`ExchangeCompositionExitTest`, `ShardedReplicaFrontierTest`). Still open:
+  A–G, A–J, A–K, A–L, A–N.
+- **Attention × cycles (H–I)** — still no test suspends a cyclic region.
+- **Promotion (K) now meets replication**: **K–B** rolling replicated promotion
+  behind a shared `CellRef` (`ReplicatedPromotionTest`). Still open: K–C, K–D,
+  K–E, K–H.
+- **Effectful (J) now meets replication**: **J–B** replicated effect authority —
+  an `Effectful`+`Replicable` cell overlapping an existing replica is refused
+  unless it holds authority (`ReplicatedEffectTest`). Still open: effect across
+  the wire under magnitude scheduling.
+- **Ownership (G) now meets partitioning**: **G–C** an owned, routed shard moves
+  by the one linker + journaled assignment (`OwnedRoutedShardTest`).
 - **Membranes (L) never meet glitch-freedom, replication, durability, colors, or
   exclusives.**
 
