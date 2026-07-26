@@ -27,6 +27,15 @@ import java.io.Serializable
 import java.util.UUID
 
 /**
+ * PN-12 structural marker (`Manifest.PARTITIONED`): the cell holds its state
+ * across an interest-partitioned instance set (a composite router over shards,
+ * or one shard of one). KSP folds it into
+ * [civictech.gen.wire.CellDescriptor.manifest]. A pure marker — no methods, no
+ * new annotation.
+ */
+interface Partitioned
+
+/**
  * Composite over key-disjoint [GroupByCell] shards (spec 20/24 §Partitioned
  * state, G-24 realized; distribution edges remain open, G-56).
  *
@@ -81,7 +90,7 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
     private val keyFn: (E) -> K,
     private val aggregator: Aggregator<E, A, ACC>,
     private val partitionOf: (K) -> Int = { k -> k.hashCode() },
-) : CompositeCell(ref), GroupByApi<E, K, A> {
+) : CompositeCell(ref), GroupByApi<E, K, A>, Partitioned {
 
     init {
         require(initialShardCount > 0) { "shardCount must be positive, got $initialShardCount" }
@@ -236,7 +245,7 @@ class ShardCell<E>(
     private val keyFn: (E) -> Any?,
     initialInterest: Interest,
     private val epochAware: Boolean = true,
-) : Cell, Stateful, Replicable<SetDelta<E>> {
+) : Cell, Stateful, Replicable<SetDelta<E>>, Partitioned {
 
     private val state = TagState<E>()
 

@@ -113,6 +113,53 @@ replay); a Cloneable/copy capability for `Shadow.forkExclusive` with a
 stated failure mode for uncloneable payloads and unspecified Leased forks
 (93 I-20).
 
+## Negotiation (PN-12, implemented)
+
+A link is formed by a **handshake** that runs the target-side policies, the peer
+allowlist, and a pure `reconcile(offered, required)` over the two ports' declared
+**nature vectors** (CP-F3). `reconcile` only ever *composes* (Direct) or *refuses*
+loudly (a typed `NatureMismatch` naming the axis) — there is no adapter synthesis.
+
+**Link-flow axes vs structural natures (normative).** Only a small set of
+**link-flow axes** may refuse a link — natures that describe *how a payload flows
+across this edge*: `OWNERSHIP`, `MERGE_IDEMPOTENCE`, `MONOTONICITY`, and (PN-12)
+`WAVE_PARTICIPATION` and `INSTANCE_SCOPING`. `COLOR` is deliberately excluded (a
+placement property validated at spawn; a link legitimately crosses colors). The
+two PN-12 axes each turn a previously *silent* mismatch into a refusal:
+
+- `WAVE_PARTICIPATION` (`UNWAVED` < `WAVED`): an ALIGN-tier (`WaveFrontier`) inlet
+  requires `WAVED`. An unwaved producer streamed onto it is dropped silently today
+  (the F1 frontier drop); as a link-flow axis it is refused at formation instead.
+- `INSTANCE_SCOPING` (`SINGLETON` < `INTEREST_SCOPED`): a partial-interest inlet
+  requires an interest-scopable (`Scoped`) delta. A non-`Scoped` delta rides whole
+  and over-delivers silently today; as a link-flow axis it is refused instead.
+
+KSP stamps these as **offers** on producer outlets only (a glitch-free cell's
+outlets offer `WAVED`; a `Scoped`-delta outlet offers `INTEREST_SCOPED`) —
+offering a stronger level never refuses, so no existing link acquires a new
+requirement, and today's behavior is preserved verbatim on every link.
+
+**The CellManifest is not link-flow (normative).** A cell's *structural* natures
+— `GLITCH_FREE`, `DURABLE`, `REPLICATED`, `PARTITIONED`, `PULL_SERVING`, `GATED`
+(`Manifest`, KSP-derived from marker interfaces onto `CellDescriptor.manifest`) —
+describe *what a cell is*, not how an edge flows. They MUST NOT be reconciled at a
+link: a volatile consumer of a durable producer is normal (the exchange demo is
+exactly that), so making them refuse would repeat the COLOR mistake. They are
+consumed by spawn checks (a `DURABLE` cell placed on a null journal selector is
+surfaced as a volatile-durability gap, not silently lost), diagnostics, and drift
+assertions (`ManifestDriftTest`: declared == installed) — never by `reconcile`.
+
+**Negotiated attachment default (PN-12, the one behavior change).** `tap` and
+`streamTo` historically bypassed the handshake entirely. They now **negotiate by
+default** (`negotiated = true`) when — and only when — the target is a local
+`Linked` port: the attachment runs the same handshake as a Consume link, with
+`LinkRole.Observe`, so it announces an `EdgeOpen` and is refused on a nature
+mismatch, yet is filtered out of the wave-completeness frontier (Observe edges
+never gate a wave). A non-`Linked` target (an ad-hoc `Use.fixed` endpoint, a
+routed cross-process proxy whose negotiation is the bridge's job) cannot
+negotiate and falls through to the historic bypass unchanged. This change is gated
+on the composition demo suite (`ExchangeCompositionExitTest`, `ExchangeScaffoldTest`).
+
 ## Recovery and dead letters (decided in 93 I-22, unimplemented)
 
 - **RESTART never re-consumes an `Owned` payload** (93 I-22 R6): RESTART

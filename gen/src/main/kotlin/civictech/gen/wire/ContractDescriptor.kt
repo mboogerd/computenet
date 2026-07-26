@@ -42,7 +42,23 @@ enum class CellColor { PURE, BLOCKING, SUSPENDING }
  * from Appendix A (consistency, delivery, durability, replication, partition,
  * locality) was found *dissolvable* by the Phase-2 probe and is out of scope.
  */
-enum class NatureAxis { OWNERSHIP, MERGE_IDEMPOTENCE, COLOR, MONOTONICITY }
+enum class NatureAxis {
+    OWNERSHIP, MERGE_IDEMPOTENCE, COLOR, MONOTONICITY,
+    /**
+     * PN-12 refusing axis. A producer participates in the wave protocol (stamps
+     * aligned waves) or does not. An ALIGN-tier (`WaveFrontier`) inlet requires
+     * WAVED — an UNWAVED producer streamed onto it is dropped *silently* today
+     * (plan §2 F1); as a link-flow axis it becomes a loud typed refusal.
+     */
+    WAVE_PARTICIPATION,
+    /**
+     * PN-12 refusing axis. A delta is interest-scopable (`Scoped`) or not. A
+     * partial-interest inlet requires INTEREST_SCOPED — a non-`Scoped` delta rides
+     * whole to it and *over-delivers silently* today (plan §2 F7); as a link-flow
+     * axis it becomes a loud typed refusal.
+     */
+    INSTANCE_SCOPING,
+}
 
 /**
  * One level on one [NatureAxis]. The per-axis enums are the only inhabitants;
@@ -100,6 +116,40 @@ enum class Monotonicity : NatureLevel {
     override val rank get() = ordinal
 }
 
+/** Whether a port participates in the wave protocol (PN-12, spec 20/21 §Waves). */
+enum class WaveParticipation : NatureLevel {
+    /** Emits plain, un-timestamped traffic — the DEFAULT (an ALIGN inlet drops it). */
+    UNWAVED,
+    /** Stamps aligned waves — satisfies an ALIGN-tier (`WaveFrontier`) inlet. */
+    WAVED;
+
+    override val axis get() = NatureAxis.WAVE_PARTICIPATION
+    override val rank get() = ordinal
+}
+
+/** Whether a delta can be restricted to an [Interest]'s slice (PN-12, spec 42). */
+enum class InstanceScoping : NatureLevel {
+    /** Rides links whole (a non-`Scoped` delta over-delivers to a partial peer) — the DEFAULT. */
+    SINGLETON,
+    /** `Scoped`: the linker can slice it to a partial-interest target's admitted keys. */
+    INTEREST_SCOPED;
+
+    override val axis get() = NatureAxis.INSTANCE_SCOPING
+    override val rank get() = ordinal
+}
+
+/**
+ * PN-12 — the **structural** natures of a whole cell, sparse. Unlike a
+ * [NatureAxis] (a *link-flow* property reconciled at a link), these describe
+ * what a cell *is* (glitch-free board, durable writer, replicated union,
+ * partitioned shard, …). They are **deliberately never consulted by
+ * [civictech.cell.port.NatureNegotiation.reconcile]**: a volatile consumer of a
+ * durable producer is normal (the exchange demo is exactly that), so making them
+ * refuse at links would repeat the COLOR mistake. They are consumed by spawn
+ * checks, diagnostics, and drift assertions.
+ */
+enum class Manifest { GLITCH_FREE, DURABLE, REPLICATED, PARTITIONED, PULL_SERVING, GATED }
+
 /**
  * A **sparse** vector of declared natures. Absent axes read as their DEFAULT
  * level, so [DEFAULT] (the empty vector) is *exactly today's behavior* — and,
@@ -134,6 +184,8 @@ value class NatureVector(val levels: Map<NatureAxis, NatureLevel>) {
             NatureAxis.MERGE_IDEMPOTENCE -> MergeClass.NON_IDEMPOTENT
             NatureAxis.COLOR -> Color.PURE
             NatureAxis.MONOTONICITY -> Monotonicity.NON_MONOTONE
+            NatureAxis.WAVE_PARTICIPATION -> WaveParticipation.UNWAVED
+            NatureAxis.INSTANCE_SCOPING -> InstanceScoping.SINGLETON
         }
     }
 }
@@ -180,6 +232,8 @@ private fun natureLevelOf(axis: NatureAxis, rank: Int): NatureLevel? = when (axi
     NatureAxis.MERGE_IDEMPOTENCE -> MergeClass.entries.getOrNull(rank)
     NatureAxis.COLOR -> Color.entries.getOrNull(rank)
     NatureAxis.MONOTONICITY -> Monotonicity.entries.getOrNull(rank)
+    NatureAxis.WAVE_PARTICIPATION -> WaveParticipation.entries.getOrNull(rank)
+    NatureAxis.INSTANCE_SCOPING -> InstanceScoping.entries.getOrNull(rank)
 }
 
 enum class PortDirection { IN, OUT }
@@ -211,6 +265,12 @@ data class CellDescriptor(
     val fqn: String,
     val color: CellColor,
     val ports: List<PortDescriptor> = emptyList(),
+    /**
+     * PN-12 — the cell's structural natures ([Manifest]), KSP-derived from the
+     * marker interfaces it implements. Empty ⇒ a plain cell. Consumed by spawn
+     * checks / diagnostics / drift assertions; **never** by `reconcile`.
+     */
+    val manifest: Set<Manifest> = emptySet(),
 )
 
 data class ProtocolDescriptor(

@@ -23,6 +23,15 @@ import java.util.*
 class GlitchViolation(message: String) : Exception(message)
 
 /**
+ * PN-12 structural marker (`Manifest.GLITCH_FREE`): the cell surfaces one aligned
+ * wave per completeness step (an ALIGN-tier `WaveFrontier` on an inlet). KSP folds
+ * it into [civictech.gen.wire.CellDescriptor.manifest] and stamps
+ * `WaveParticipation.WAVED` onto the cell's outlets. A pure marker — no methods,
+ * no new annotation.
+ */
+interface GlitchFree
+
+/**
  * Opt-in glitch-freedom wrapper (spec 20/22): buffers per-wave inputs on [inlet]
  * until the wave's edge set is complete, then replays the wave's invocations to
  * [outlet] as one consistent group, each under its own context.
@@ -39,7 +48,7 @@ class GlitchFreeCell<Api : Any>(
     clazz: Class<Api>,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
     mode: WaveMode = WaveMode.WAIT,
-) : Cell, ErrorReporting {
+) : Cell, ErrorReporting, GlitchFree {
 
     /**
      * Recoverable-stall interaction (spec 34 decision 3): WAIT holds incomplete

@@ -210,16 +210,18 @@ class FanOutlet<Api : Any>(
      * [civictech.cell.Leased.borrow], never [civictech.cell.Owned.take] /
      * [civictech.cell.Leased.release].
      */
-    fun tap(port: Use<Api>, negotiated: Boolean = false): LinkResult {
-        // PN-10: opt-in negotiation. When [negotiated], the tap runs the same
-        // target-side handshake every Consume link runs — policies + peer
-        // allowlist + nature reconcile + EdgeOpen — with [LinkRole.Observe], so
-        // it announces itself (and refuses on a mismatch where today it dropped
-        // silently) yet never gates a wave. Default [false] keeps the historic
-        // bypass byte-for-byte: no handshake, no policies, always admitted.
-        if (negotiated) {
-            val target = port as? Linked
-                ?: return LinkResult.Rejected("negotiated tap requires a Linked target (spec 20/23 §Taps)")
+    fun tap(port: Use<Api>, negotiated: Boolean = true): LinkResult {
+        // PN-10: opt-in negotiation. When [negotiated] AND the target is a local
+        // [Linked] port, the tap runs the same target-side handshake every Consume
+        // link runs — policies + peer allowlist + nature reconcile + EdgeOpen —
+        // with [LinkRole.Observe], so it announces itself (and refuses on a
+        // mismatch where today it dropped silently) yet never gates a wave.
+        //
+        // PN-12: the default is now [true]. A non-[Linked] target (an ad-hoc
+        // `Use.fixed` endpoint, a routed proxy) cannot negotiate, so it falls
+        // through to the historic bypass unchanged — the flip is byte-for-byte for
+        // every existing tap, and live only for local port-to-port taps.
+        (port as? Linked)?.takeIf { negotiated }?.let { target ->
             return handshake(
                 portOut = this,
                 target = target,
