@@ -32,10 +32,8 @@ data class Invocation(
         // point for delivery and buffered replay alike. A null context clears
         // any stale wave (management calls, spontaneous emissions).
         return CurrentContext.with(context) {
-            try {
+            Proxy.unwrapInvocationTarget {
                 method.invoke(target, *(args.toTypedArray()))
-            } catch (e: java.lang.reflect.InvocationTargetException) {
-                throw e.targetException
             }
         }
     }
@@ -57,10 +55,8 @@ data class Invocation(
 
         return CurrentContext.withSuspending(context) {
             suspendCoroutineUninterceptedOrReturn { cont ->
-                try {
+                Proxy.unwrapInvocationTarget {
                     method.invoke(target, *(args.toTypedArray()), cont)
-                } catch (e: java.lang.reflect.InvocationTargetException) {
-                    throw e.targetException
                 }
             }
         }

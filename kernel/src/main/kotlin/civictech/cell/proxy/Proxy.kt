@@ -53,14 +53,25 @@ object Proxy {
     }
 
     /**
+     * Unwraps a reflective [java.lang.reflect.InvocationTargetException],
+     * rethrowing the invocation's real cause — the shape every `Method.invoke`
+     * dispatch site in this package repeats (delegating/broadcasting here,
+     * [Invocation], [Broadcast], and the port outlets).
+     */
+    internal inline fun <T> unwrapInvocationTarget(block: () -> T): T =
+        try {
+            block()
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.targetException
+        }
+
+    /**
      * Creates a proxy that delegates all calls to the implementation returned by [provider].
      */
     fun <T : Any> delegating(clazz: Class<T>, provider: () -> T): T {
         return fromClass(clazz) { _, method, args ->
-            try {
+            unwrapInvocationTarget {
                 method.invoke(provider(), *(args ?: emptyArray()))
-            } catch (e: java.lang.reflect.InvocationTargetException) {
-                throw e.targetException
             }
         }
     }
@@ -71,10 +82,8 @@ object Proxy {
     fun <T : Any> broadcasting(clazz: Class<T>, provider: () -> Iterable<T>): T {
         return fromClass(clazz) { _, method, args ->
             provider().forEach {
-                try {
+                unwrapInvocationTarget {
                     method.invoke(it, *(args ?: emptyArray()))
-                } catch (e: java.lang.reflect.InvocationTargetException) {
-                    throw e.targetException
                 }
             }
             null
@@ -82,10 +91,10 @@ object Proxy {
     }
 
     /**
-     * Creates a proxy that does nothing.
+     * Creates a proxy that does nothing — delegates to the [NoOp] handler.
      */
     fun <T : Any> noop(clazz: Class<T>): T {
-        return fromClass(clazz) { _, _, _ -> null }
+        return fromClass(clazz, NoOp)
     }
 
     /** Create a sink which discharges methods marked exclusive by generated metadata. */

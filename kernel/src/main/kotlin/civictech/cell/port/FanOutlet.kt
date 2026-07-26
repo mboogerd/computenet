@@ -107,10 +107,8 @@ class FanOutlet<Api : Any>(
 
     private fun invoke(target: Use<Api>, method: java.lang.reflect.Method, args: Array<out Any?>?) {
         val filtered = disclosureFilter(args ?: emptyArray()) ?: return
-        try {
+        Proxy.unwrapInvocationTarget {
             method.invoke(target.call, *filtered)
-        } catch (e: java.lang.reflect.InvocationTargetException) {
-            throw e.targetException
         }
     }
 
@@ -182,10 +180,8 @@ class FanOutlet<Api : Any>(
         return Proxy.fromClass(clazz) { _, method, args ->
             val target = consumers[portRef]?.call ?: taps[portRef]?.call ?: Proxy.noop(clazz)
             val filtered = disclosureFilter(args ?: emptyArray()) ?: return@fromClass null
-            try {
+            Proxy.unwrapInvocationTarget {
                 method.invoke(target, *filtered)
-            } catch (e: java.lang.reflect.InvocationTargetException) {
-                throw e.targetException
             }
         }
     }
