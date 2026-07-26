@@ -90,6 +90,16 @@ class GroupByCell<E, K, A, ACC : Serializable>(
         }
     }
 
+    /**
+     * This shard's live input membership as a delta-from-empty (PN-6): the raw
+     * tagged elements it currently holds, tags verbatim. A [PartitionedCell]
+     * repartition sources its replay from the shards' own contents instead of a
+     * router-side `routed` ledger (deleted, PN-6 §one linker one assignment), so
+     * the composite holds O(instances) routing state, never a second O(total)
+     * copy of every element.
+     */
+    internal fun contents(): SetDelta<E> = state.asDelta()
+
     // ponytail: acc is not deep-copied — every snapshot consumer (checkpoint,
     // migrate) serializes immediately; copy-on-snapshot if one ever retains it
     override fun snapshot(): Serializable = arrayListOf(

@@ -171,6 +171,21 @@ object WireCodec {
                 // state, PN-5): the scatter-gather router fans a StateRequest to
                 // shards behind a bridge, so it crosses as a PORT_PROTOCOL message.
                 subclass(civictech.cell.port.StateRequest::class)
+                // interest reassignment (PN-6, spec 40/42 §Interest-scoped instance
+                // sets): a journaled, ref-addressed hosted invocation to a shard's
+                // assignInlet — so it rides the WAL and crosses a bridge.
+                subclass(civictech.cell.replication.Assignment::class)
+            }
+            // the interest algebra crosses the wire as a polymorphic value inside
+            // an Assignment (PN-6): every arm is a registered @Serializable subclass.
+            polymorphic(civictech.cell.replication.Interest::class) {
+                subclass(civictech.cell.replication.Interest.Total::class)
+                subclass(civictech.cell.replication.Interest.Empty::class)
+                subclass(civictech.cell.replication.Interest.Union::class)
+                subclass(civictech.cell.replication.Interest.Intersect::class)
+                subclass(civictech.cell.replication.Interest.Complement::class)
+                subclass(civictech.cell.replication.Interest.Ranges::class)
+                subclass(civictech.cell.replication.Interest.Slots::class)
             }
         }.let { kernelModule ->
             // app-contributed delta serializers (M17): ServiceLoader-discovered,
@@ -219,8 +234,13 @@ object WireCodec {
                 type = invocation.type,
                 context = inv.context,
                 args = inv.args,
-                // additive: lift a routed command's epoch to the frame boundary (CP-D3)
-                routingEpoch = inv.args.firstNotNullOfOrNull { (it as? civictech.cell.data.RoutedCommand<*>)?.epoch },
+                // PN-6: no longer sniff a routed command's epoch onto the frame.
+                // The epoch was decorative at the point of use — admission checks
+                // the shard's CURRENT interest, never the payload epoch (which the
+                // journaled Assignment now carries authoritatively). The frame
+                // field stays in the schema and decode keeps reading old frames for
+                // one release; encode simply stops populating it.
+                routingEpoch = null,
             )
         }
         return json.encodeToString(WireFrame.serializer(), frame).toByteArray()

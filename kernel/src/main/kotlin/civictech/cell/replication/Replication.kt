@@ -37,7 +37,18 @@ import java.util.*
  * ceiling as the M5.7 streamTo idiom — fine single-threaded/simulated;
  * production wiring wants a host-queue hop).
  */
-class Replication(private val registry: LocationRegistry) {
+class Replication(
+    private val registry: LocationRegistry,
+    /**
+     * How the linker projects a delta element to the key an [Interest] is scoped
+     * over (PN-6, plan §3 "`maybeLink` generalized with `keyOf`"). Identity by
+     * default — in a replica mesh the element *is* the key, so the linker is
+     * byte-identical to pre-PN-6 gossip. A partitioned substrate supplies the
+     * group key, so the *same* linker serves partitioning: replication and
+     * partitioning are one slice-and-route mechanism ([sliceTo]), not two.
+     */
+    private val keyOf: (Any?) -> Any? = { it },
+) {
 
     interface ReplicaDeltaInlet {
         val deltaInlet: Use<Propagate<Any?>>
@@ -234,6 +245,16 @@ class Replication(private val registry: LocationRegistry) {
         return true
     }
 
+    /**
+     * How many gossip links the linker has formed among [refs] (PN-6 test seam):
+     * the number of ordered `(local, other)` pairs, both in [refs], that overlap
+     * and therefore linked. Filtered to [refs] so the count excludes the delivered-
+     * watermark companions the mesh also links — the assertion is "one link per
+     * overlapping instance pair", the one-linker invariant.
+     */
+    internal fun linkCountAmong(refs: Set<CellRef>): Int =
+        linked.keys.count { it.first in refs && it.second in refs }
+
     private fun linkOut(newRef: CellRef) {
         localReplicas[newRef.id]?.forEach { local ->
             maybeLink(local, newRef)
@@ -279,17 +300,9 @@ class Replication(private val registry: LocationRegistry) {
         // the bare routed sink, so the default gossip path is unwrapped and
         // byte-identical.
         val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
-        else Propagate { delta -> scopeToInterest(targetInterest, delta)?.let { routed.propagate(it) } }
+        else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
         linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(sink)
     }
 
-    /**
-     * Restrict [delta] to the sub-delta [interest] admits (spec 42 §Interest-
-     * scoped instance sets). In a replica mesh the element *is* the key
-     * (`keyOf` identity); a non-[Scoped] delta rides whole. `null` means the
-     * emission is dropped — it never rides the link.
-     */
-    private fun scopeToInterest(interest: Interest, delta: Any?): Any? =
-        if (delta is Scoped<*>) delta.within(interest) { it } else delta
 }
