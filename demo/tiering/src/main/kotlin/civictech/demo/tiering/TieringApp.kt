@@ -13,14 +13,13 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
+import civictech.demo.shell.DemoShell
+import civictech.demo.shell.demoPort
+import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
-import java.io.OutputStream
 import java.io.Serializable
-import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.util.*
-import java.util.concurrent.CopyOnWriteArrayList
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
@@ -123,7 +122,6 @@ class TieringApp(port: Int = 8080) {
     private val tierAvgView = host.observe(refs.tierAvg.ref, View.map<String, Double>())
     private val prefAvgView = host.observe(refs.prefAvg.ref, View.map<String, Double>())
     private val fusedView = host.observe(refs.fused.ref, View.map<String, Tiered>())
-    private val clients = CopyOnWriteArrayList<OutputStream>()
 
     // KeyedSetCell now owns the retract-old memory (F-3), so the app no longer
     // keeps a Valuation-valued shadow index. This lightweight KEY set exists only
@@ -136,9 +134,9 @@ class TieringApp(port: Int = 8080) {
     private val liveValKeys = mutableSetOf<Pair<String, String>>()  // (agent,item) keys with a live valuation; authoritative write-side record for the unitem cascade
     private val livePrefs = mutableSetOf<Pref>()
 
-    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
+    private val shell = DemoShell(port)
 
-    val boundPort: Int get() = server.address.port
+    val boundPort: Int get() = shell.boundPort
 
     init {
         // Register one broadcast per sink now that all six exist; registering
@@ -150,11 +148,10 @@ class TieringApp(port: Int = 8080) {
         prefAvgView.onChange { broadcast() }
         fusedView.onChange { broadcast() }
 
-        server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
-        server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
-        server.createContext("/op") { handleOp(it) }
-        server.createContext("/events") { handleEvents(it) }
-        server.executor = null
+        shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
+        shell.route("/state") { it.respond(200, stateJson(), "application/json") }
+        shell.route("/op") { handleOp(it) }
+        shell.sse("/events") { stateJson() }
     }
 
     private fun handleOp(exchange: HttpExchange) {
@@ -223,32 +220,7 @@ class TieringApp(port: Int = 8080) {
         exchange.respond(200, "ok")
     }
 
-    private fun handleEvents(exchange: HttpExchange) {
-        exchange.responseHeaders.add("Content-Type", "text/event-stream")
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(200, 0)
-        val out = exchange.responseBody
-        clients += out
-        send(out, stateJson())
-    }
-
-    private fun broadcast() {
-        val json = stateJson()
-        clients.forEach { send(it, json) }
-    }
-
-    private fun send(out: OutputStream, json: String) {
-        try {
-            // per-stream lock: concurrent broadcasts (hubs fire on virtual
-            // threads) must not interleave bytes into one SSE frame
-            synchronized(out) {
-                out.write("data: $json\n\n".toByteArray())
-                out.flush()
-            }
-        } catch (_: Exception) {
-            clients -= out
-        }
-    }
+    private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
         fun esc(s: String) = "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
@@ -289,22 +261,13 @@ class TieringApp(port: Int = 8080) {
                 """"valuations":$vals,"prefs":$prefList}"""
     }
 
-    private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
-        responseHeaders.add("Content-Type", contentType)
-        val bytes = body.toByteArray()
-        sendResponseHeaders(status, bytes.size.toLong())
-        responseBody.use { it.write(bytes) }
-    }
+    fun start(): TieringApp = apply { shell.start() }
 
-    fun start(): TieringApp = apply { server.start() }
-
-    fun stop() = server.stop(0)
+    fun stop() = shell.stop()
 }
 
 fun main(args: Array<String>) {
-    val port = args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
-        ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
-    val app = TieringApp(port).start()
+    val app = TieringApp(demoPort(args)).start()
     println("computenet tiering: http://localhost:${app.boundPort}")
 }
 

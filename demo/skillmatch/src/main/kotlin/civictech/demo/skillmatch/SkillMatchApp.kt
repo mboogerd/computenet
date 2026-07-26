@@ -12,13 +12,12 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
+import civictech.demo.shell.DemoShell
+import civictech.demo.shell.demoPort
+import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
-import java.io.OutputStream
 import java.io.Serializable
-import java.net.InetSocketAddress
 import java.net.URLDecoder
-import java.util.concurrent.CopyOnWriteArrayList
 import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.JoinSetApi
 import civictech.cell.data.op.SemiJoinCell
@@ -216,18 +215,15 @@ class SkillMatchApp(port: Int = 8080) {
     private val market: ObservationSink<Map<String, MarketEntry>> =
         host.observe(refs.market.ref, View.map<String, MarketEntry>())
 
-    private val clients = CopyOnWriteArrayList<OutputStream>()
+    private val shell = DemoShell(port)
 
-    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
-
-    val boundPort: Int get() = server.address.port
+    val boundPort: Int get() = shell.boundPort
 
     init {
-        server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
-        server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
-        server.createContext("/op") { handleOp(it) }
-        server.createContext("/events") { handleEvents(it) }
-        server.executor = null
+        shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
+        shell.route("/state") { it.respond(200, stateJson(), "application/json") }
+        shell.route("/op") { handleOp(it) }
+        shell.sse("/events") { stateJson() }
 
         // Wire broadcast now that the SSE machinery exists. onChange fires once
         // immediately (late-join catch-up with current state) then on every
@@ -267,34 +263,7 @@ class SkillMatchApp(port: Int = 8080) {
         exchange.respond(200, "ok")
     }
 
-    private fun handleEvents(exchange: HttpExchange) {
-        exchange.responseHeaders.add("Content-Type", "text/event-stream")
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(200, 0)
-        val out = exchange.responseBody
-        clients += out
-        send(out, stateJson())
-    }
-
-    private fun broadcast() {
-        val json = stateJson()
-        clients.forEach { send(it, json) }
-    }
-
-    private fun send(out: OutputStream, json: String) {
-        // per-stream lock: a connect-time send (HTTP thread) and a concurrent
-        // broadcast (scheduler thread) both write this same OutputStream, and
-        // java.io streams aren't thread-safe — interleaved frames would corrupt
-        // the SSE and silently freeze the client.
-        try {
-            synchronized(out) {
-                out.write("data: $json\n\n".toByteArray())
-                out.flush()
-            }
-        } catch (_: Exception) {
-            clients -= out
-        }
-    }
+    private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
         fun esc(s: String) = "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
@@ -334,22 +303,13 @@ class SkillMatchApp(port: Int = 8080) {
                 """"matches":$matchList,"progress":$progress,"gap":$gaps,"market":$marketJson}"""
     }
 
-    private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
-        responseHeaders.add("Content-Type", contentType)
-        val bytes = body.toByteArray()
-        sendResponseHeaders(status, bytes.size.toLong())
-        responseBody.use { it.write(bytes) }
-    }
+    fun start(): SkillMatchApp = apply { shell.start() }
 
-    fun start(): SkillMatchApp = apply { server.start() }
-
-    fun stop() = server.stop(0)
+    fun stop() = shell.stop()
 }
 
 fun main(args: Array<String>) {
-    val port = args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
-        ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
-    val app = SkillMatchApp(port).start()
+    val app = SkillMatchApp(demoPort(args)).start()
     println("computenet skillmatch: http://localhost:${app.boundPort}")
 }
 
