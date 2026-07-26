@@ -18,6 +18,7 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.InvocationSink
+import civictech.cell.proxy.ParkQueue
 import civictech.cell.replication.Assignment
 import civictech.cell.replication.Interest
 import civictech.cell.replication.sliceTo
@@ -486,7 +487,7 @@ class PartitionedShardSet<E>(
     // (the funnel never blocks). [flipBuffered] false is the CP-D4 control.
     private var flipping = false
     private var flipBuffered = true
-    private val flipBuffer = mutableListOf<SetDelta<E>>()
+    private val flipBuffer = ParkQueue<SetDelta<E>>()
     private var movingInterest: Interest? = null
 
     val shardCount: Int get() = shards.size
@@ -528,7 +529,7 @@ class PartitionedShardSet<E>(
             // moving range is parked at the router (delivered once, to the new
             // owner, when the flip closes); the non-moving remainder flows now.
             val movingPart = delta.within(moving) { keyFn(it as E) }
-            if (movingPart != null) flipBuffer += movingPart
+            if (movingPart != null) flipBuffer.park(movingPart)
             val stablePart = delta.within(complement(moving)) { keyFn(it as E) }
             if (stablePart != null) emit(stablePart, routingEpoch)
             return
@@ -627,9 +628,7 @@ class PartitionedShardSet<E>(
         flipping = false
         movingInterest = null
         pendingInterests = null
-        val buffered = flipBuffer.toList()
-        flipBuffer.clear()
-        buffered.forEach { emit(it, routingEpoch) }
+        flipBuffer.drain().forEach { emit(it, routingEpoch) }
     }
 
     private var pendingInterests: List<Interest>? = null
