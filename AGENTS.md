@@ -29,30 +29,60 @@ explicitly asks for documentation maintenance.
 ## Repository map
 
 - `kernel/`: the core cell model and runtime. Important packages include:
-  - `civictech.cell.port`: ports, links, fan-in/fan-out, registries, protocols.
+  - `civictech.cell`: pure vocabulary — `Cell`, `CellRef`, `MessageContext`,
+    `Ownership`, `Stateful`, `Propagate`, `MergeablePayload`, serializers,
+    `Ambient`.
+  - `civictech.cell.nature`: what a cell IS — `manifestOf`, `NatureNegotiation`.
+  - `civictech.cell.port`: port ADT + `FanInlet`/`FanOutlet` + `InletPolicy`
+    (mechanism only).
+  - `civictech.cell.link`: edge semantics — the `Link` ADT, handshake,
+    `LinkSupport`, identity, `LinkPolicy`, `Interest`, `Scoped`.
+  - `civictech.cell.protocol`: the generic protocol bus (`Protocols`,
+    `StateRequestProtocol`).
+  - `civictech.cell.proxy`: JDK dynamic-proxy toolkit + `Invocation` types.
+  - `civictech.cell.data`: source cells; `civictech.cell.data.delta` for delta
+    types (`SetDelta`, `MapDelta`, ...) plus `TagState`/`MintedTags`/
+    `DeliveredFrontier`; `civictech.cell.data.op` for operators (joins,
+    grouping, combine-latest, set algebra); `civictech.cell.data.view` for
+    read models (`MapView`/`SetView`/`CountView`/`HubCells`/
+    `MapDiffPublisher`).
+  - `civictech.cell.partition`: `PartitionedShardSet`, `ShardCell`, routing
+    runtime.
+  - `civictech.cell.control`: the operations plane — suspension, progress,
+    attention, `Magnitude`, `AbsorbAck`, `ParkQueue`, `AttentionScheduler`.
   - `civictech.cell.host`: `ManagedHost`, scheduling, location, supervision,
-    dead letters, intake and lifecycle behavior.
-  - `civictech.cell.data`: data cells, deltas, tags, joins, grouping, windows.
+    dead letters, intake and lifecycle behavior; `CellError`/`ErrorReporting`;
+    remoting proxies (`HostProxy`, `HostedCellProxy`, `RoutedInlet`).
+  - `civictech.cell.observe`: the app-facing observation API (`Observe`/`View`).
   - `civictech.cell.consistency`: glitch-free propagation/frontier machinery.
   - `civictech.cell.replication`: replication behavior.
   - `civictech.cell.wire`: transport-neutral codecs, bridge cells, peering.
   - `civictech.cell.graph` and `.membrane`: construction and composition.
+- `nature/`: the runtime nature vocabulary (`NatureVector`, `NatureAxis`,
+  `Manifest`, `ContractRegistry`, descriptor data classes, wire conversion
+  helpers) shared by `:gen` (processor-time) and `:kernel` (runtime); `:gen`'s
+  KSP processor classes stay in `:gen`.
 - `gen/`: KSP processors and descriptor/proxy generation. Generator behavior is
   part of the runtime contract; test diagnostics as well as generated output.
 - `gen-test/`: compile/generation fixtures. `:kernel:compileKotlin` depends on
   this module's tests, so generator failures may surface indirectly.
+- `testkit/`: shared test scaffolding (`SimWorld`, `AwaitUntil`, `HttpProbe`,
+  `JvmPeer`) consumed as `testImplementation` by `:kernel` and every demo.
 - `wire/`: the concrete WebSocket transport. Keep transport dependencies out of
   `kernel`; transport-neutral semantics stay behind the kernel bridge API.
 - `demo/`: aggregate container of demo applications, each a leaf sub-module:
+  - `demo/shell/` (`:demo:shell`): shared demo HTTP/SSE shell (`DemoShell`)
+    factoring out the JDK `httpserver` + SSE boilerplate every demo main used
+    to duplicate; depends only on `:kernel`.
   - `demo/shopping/` (`:demo:shopping`): the collaborative shopping list;
     executable and multi-JVM integration/convergence tests.
   - `demo/agora/` (`:demo:agora`): the argumentation-graph application and
     higher-level semantic/invariant tests; use it to detect accidental API or
     behavior regressions.
-  - `demo/slotfinder/`, `demo/skillmatch/`, `demo/tiering/`: incremental
-    dataflow demos (set intersection, joins, score fusion) whose purpose is to
-    showcase the operator suite and surface kernel gaps into
-    `doc/demo-findings.md`.
+  - `demo/slotfinder/`, `demo/skillmatch/`, `demo/tiering/`,
+    `demo/backlog-triage/`: incremental dataflow demos (set intersection,
+    joins, score fusion, ranking) whose purpose is to showcase the operator
+    suite and surface kernel gaps into `doc/demo-findings.md`.
 - `doc/spec/`: normative design, organized as foundations (`00`), programming
   model (`10`), dataflow semantics (`20`), execution (`30`), distribution (`40`),
   development/evolution (`50`), and roadmap (`90`).

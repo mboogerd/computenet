@@ -1,6 +1,10 @@
 # KSP + KotlinPoet DX catalog — cell authoring and graph wiring
 
-Status: design catalog (no implementation yet). Scope: developer experience for
+Status: design catalog. **Update (RS-10.1, post `restructure(RS-4.1)`): Phases
+0-4 and the §6b `@CellBase` extension have landed** (Phase 5 has not — see the
+per-phase annotations in §6 below). This header and the phase bodies otherwise
+describe the pre-implementation design as originally written; treat §6's
+phase annotations as the authoritative landed/pending status. Scope: developer experience for
 *creating new cells* and *combining cells into larger dataflow graphs*. The
 spec's own codegen gaps (G-60, G-52, G-47) are catalogued as later phases but
 this document does not block on them.
@@ -280,7 +284,7 @@ runtime dispatch path changes. Phases 0–2 are pure library and remove most
 demo boilerplate before any processor code is written; Phase 3 is the only new
 generation and pays twice (G-60 metadata + typed ref-path wiring).
 
-### Phase 0 — library debloat + port-style migration (no KSP)
+### Phase 0 — library debloat + port-style migration (no KSP) — **LANDED**
 
 - `Propagate` → Kotlin `fun interface` (`kernel/.../data/Propagate.kt`;
   binary-compatible; generated proxies unaffected). Optional sugar:
@@ -303,7 +307,7 @@ Tests: existing demo pipeline tests (tiering, skillmatch, slotfinder, agora)
 pin behavior — migration lands green with zero test edits. Risks: low; the
 `fun interface` conversion is the only kernel-semantics touch.
 
-### Phase 1 — typed wiring, instance path (library; absorbs `backlog/typed-port-links.md` + `backlog/05-typed-graph-wiring.md`)
+### Phase 1 — typed wiring, instance path (library; absorbs `backlog/typed-port-links.md` + `backlog/05-typed-graph-wiring.md`) — **LANDED**
 
 - `PortRegistry.kt`: reverse map, `PortAddress`, `addressOf`.
 - `GraphDsl.kt`: `TypedCellFactory`, `TypedCellHandle`, generic `spawn`,
@@ -326,7 +330,7 @@ value today; only tests build `SpawnStep` directly, unaffected); SAM inference
 of `TypedCellFactory<C>` from `{ SetCell<String>() }` — verify with one
 compile early; fallback is a separately-named `spawnTyped`.
 
-### Phase 2 — `TypedRef` lookups; delete the proxy-interface family (library)
+### Phase 2 — `TypedRef` lookups; delete the proxy-interface family (library) — **LANDED**
 
 - New `kernel/.../graph/TypedRef.kt`: `TypedRef<A>`, `refAs<A>()`, reified
   `lookup(TypedRef<A>)` on `HostManagementApi` (+ `ManagedHost` twin).
@@ -343,7 +347,7 @@ fails at graph build and `lookup(TypedRef)` round-trips through
 `HostedCellProxy` chokes on some Api property shape, fall back to a narrowed
 generated "client view" for that cell (reassess in Phase 3).
 
-### Phase 3 — KSP sweep: `PortDescriptor` + `<Cell>Ports` objects (aligns with G-60)
+### Phase 3 — KSP sweep: `PortDescriptor` + `<Cell>Ports` objects (aligns with G-60) — **LANDED** (generation only; call-site migration to `<Cell>Ports`/`PortIds` is out of scope for the restructure — see `doc/RESTRUCTURE-PLAN.md`'s explicitly-out-of-scope list)
 
 - `gen/.../wire/ContractDescriptor.kt`: `PortDescriptor`, `PortDirection`,
   `CellDescriptor.ports` (additive default).
@@ -370,7 +374,7 @@ overridden Api-interface property's explicit type; warn + skip (descriptor
 stays partial; the spawn check is subset-based so nothing breaks); as last
 resort require explicit types on delegated port properties.
 
-### Phase 4 — retire `gen/async` (`GenerateSuspended`)
+### Phase 4 — retire `gen/async` (`GenerateSuspended`) — **LANDED**
 
 `51-construction.md` marks `GenerateSuspended` superseded by the color/adapter
 model — "fold or retire (G-1)". Delete `gen/src/main/kotlin/civictech/gen/async/`,
@@ -380,7 +384,7 @@ kernel/demo/wire references. Sequenced after Phase 3 only so the richest
 KotlinPoet reference code is still in-tree while writing the Ports generator.
 Test: full build green.
 
-### Phase 5 (direction only) — G-52 membrane proxy, G-47 tap descriptors
+### Phase 5 (direction only) — G-52 membrane proxy, G-47 tap descriptors — **NOT LANDED**: `civictech.cell.membrane.MediateProxy` remains the hand-written proxy this phase describes replacing; still G-52's residual.
 
 Once membrane exposure declarations stabilize (`CompositeCell`,
 `TrafficLightCell`), the same processor pass generates the
@@ -401,7 +405,7 @@ descriptor table are the prerequisites for both.
 - **Codegen for hub cells / catch-up / diff-emit** — rejected; library
   abstractions suffice (§4).
 
-## 6b. Landed extension: `@CellBase` static handler binding
+## 6b. Landed extension: `@CellBase` static handler binding — **LANDED**
 
 For cells whose inlet behavior is fixed at authoring time, the imperative
 `init { inlet.onEach { … } }` step is ceremony. `@CellBase` on the Api

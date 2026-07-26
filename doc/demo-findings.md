@@ -10,7 +10,10 @@
 > Entry format: **observation** (what the demo needed) → **why it's a gap** (what the
 > kernel lacks) → **proposed shape** (candidate operator/mechanism).
 
-## F-1 — No map-stream fusion / per-key combine-latest / outer join
+## F-1 — No map-stream fusion / per-key combine-latest / outer join — **CLOSED**
+
+**Closed**: promoted to kernel `CombineLatestCell` (`civictech.cell.data.op.CombineLatestCell`,
+restructure RS-5.4), generalizing the `FuseCell` prototype described below.
 
 **Observation**: two demos independently need to combine two `MapDelta` streams per key:
 `:demo:tiering` fuses tier-average and preference-average maps into one score
@@ -37,7 +40,10 @@ band change.
 `MapDelta<K, Double>` emitting `MapDelta<K, Band>` effective-only on band transitions —
 i.e. hysteresis-friendly discretization as a first-class operator.
 
-## F-3 — Keyed re-valuation over OR-sets needs app-side bookkeeping
+## F-3 — Keyed re-valuation over OR-sets needs app-side bookkeeping — **CLOSED**
+
+**Closed**: promoted to kernel `KeyedSetCell` (`civictech.cell.data.KeyedSetCell`),
+the keyed-upsert set source proposed below.
 
 **Observation**: in `:demo:tiering`, an agent re-tiering an item must remove the *old*
 `Valuation` element and add the new one; the OR-set can only remove an element the app
@@ -76,3 +82,57 @@ promotion swap) exists — but no demo exercises *live* topology growth on a ser
 pipeline. Dynamic participants would be exactly that exercise.
 **Proposed shape**: a follow-up demo iteration that adds/removes participants live via
 the promotion swap window, doubling as an evolution-machinery showcase.
+
+## F-6 — No keyed-state cell with atomic cross-key (two-key) updates
+
+**Observation**: `:demo:backlog-triage`'s `RatingCell` (`RankingCells.kt`) hosts
+pairwise rating engines (elo, trueskill) whose updates are pairwise-local by
+design — one game moves only the two participants' accumulators — but are
+*cross-key*: updating the winner's rating needs the loser's current
+accumulator in the same atomic step, which a per-key aggregator (`GroupByCell`)
+can never see. The demo works around this by hosting the whole engine as one
+app-level cell over the raw preference-set stream instead of a per-key kernel
+aggregator.
+**Why it's a gap**: the kernel's keyed aggregators (`GroupByCell`,
+`MergeableGroupByCell`) assume single-key locality; there is no reusable shape
+for "read/write two keys' state atomically per input event."
+**Proposed shape**: a `PairKeyedStateCell<K, S>(update: (S, S) -> Pair<S, S>)` or
+similar two-key-atomic aggregator over a keyed-pair event stream, so pairwise
+online algorithms (elo/trueskill-shaped) can be expressed as a reusable kernel
+operator instead of a bespoke app-level engine host.
+
+## F-7 — No N-ary `MapDelta` combine
+
+**Observation**: `:demo:backlog-triage`'s `MetaRankCell` (`RankingCells.kt`)
+Borda-combines up to seven named `MapDelta<String, Double>` rating streams
+(mean, elo, bt, trueskill, glicko, wenglin, wilson) by hand-folding each named
+inlet into a `LinkedHashMap` and re-publishing the combined ranking via
+`MapDiffPublisher` on every upstream change.
+**Why it's a gap**: `CombineLatestCell` (the F-1 promotion) is binary
+(`V1, V2 -> R`); there is no kernel operator that folds an arbitrary, possibly
+dynamic, number of `MapDelta` streams per key.
+**Proposed shape**: an N-ary `CombineLatestCell`-family operator (or a
+`combineLatest(vararg sources)` / `List<Outlet<...>>`-driven variant) that
+folds per-key values across N map streams with the same outer-join,
+effective-only, late-join-catch-up semantics as the binary form.
+
+## F-8 — `MetaRankCell`'s dynamically-registered inlets are invisible to descriptor generation
+
+**Observation** (RS-4.1 finding): `MetaRankCell` registers one `FanInlet` per
+source-algorithm name from a constructor-supplied `List<String>`
+(`val inlets: Map<String, FanInlet<...>> = sources.associateWith { ... registerPort(name, ...) }`,
+`RankingCells.kt`). `ContractProcessor.scanPorts` walks declared properties at
+compile time and cannot see ports registered inside a runtime loop, so the
+generated `CellDescriptor` for `MetaRankCell` lists only its one static
+`outlet` property — the seven dynamic inlets are absent.
+**Why it's a gap**: this is not a bug today — the G-17 spawn-time check
+(`ManagedHost.spawn`, via `ContractRegistry.cellDescriptor`) is a *subset*
+check (`registeredNames ⊇ descriptorNames`), so an under-complete descriptor
+with extra runtime-registered ports is legal and spawns fine. It is, however,
+a standing limitation: any future consumer that treats the descriptor's
+`ports` list as *complete* (e.g. cold-cell enumeration without instantiation,
+per `doc/ksp-dx-catalog.md` §5c) will silently miss `MetaRankCell`'s dynamic
+inlets.
+**Proposed shape**: none proposed — recorded as a known ceiling of
+declaration-only KSP scanning (`doc/ksp-dx-catalog.md`'s "KSP is
+declaration-only" constraint), not a defect to fix.
