@@ -47,5 +47,5 @@ fun <T : Any> output(clazz: Class<T>) = PortDelegateProvider { FanOutlet(clazz) 
  * cycle-closing edge (spec 21 §Cycles, 93 I-5/I-6). See [FeedbackInlet] and
  * [CycleHead].
  */
-fun <D : Any> feedbackInlet(quiescence: Double = 0.0, onLap: (D) -> Unit) =
-    PortDelegateProvider { FeedbackInlet(quiescence = quiescence, onLap = onLap) }
+inline fun <reified D : Any> feedbackInlet(quiescence: Double = 0.0, noinline onLap: (D) -> Unit) =
+    PortDelegateProvider { FeedbackInlet(quiescence = quiescence, payloadType = D::class.java, onLap = onLap) }
