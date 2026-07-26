@@ -35,10 +35,10 @@ import civictech.cell.wire.WireCodec
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.requireBoundRef
-import civictech.cell.data.Magnitude
+import civictech.cell.control.Magnitude
 import civictech.cell.Propagate
 import civictech.cell.proxy.HostedPortInvocation
-import civictech.cell.proxy.ParkQueue
+import civictech.cell.control.ParkQueue
 import civictech.nature.MergeClass
 import civictech.nature.Monotonicity
 import civictech.nature.NatureAxis

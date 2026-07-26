@@ -1,7 +1,7 @@
 package civictech.agora.cell
 
 import civictech.cell.CellRef
-import civictech.cell.data.Magnitude
+import civictech.cell.control.Magnitude
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 

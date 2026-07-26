@@ -34,6 +34,9 @@ class NatureDescriptorSweepTest {
         package civictech.cell.data
         import civictech.cell.Cell
         interface Replicable<D> : Cell
+        """.trimIndent()
+    private val controlStubs = """
+        package civictech.cell.control
         interface Magnitude
         """.trimIndent()
     private val portStubs = """
@@ -50,13 +53,13 @@ class NatureDescriptorSweepTest {
     @Test
     fun `cell and port markers fold into PortDescriptor natures`() {
         val (compilation, result) = compileKeepingSources(
-            cellStubs, dataStubs, portStubs, graphStubs,
+            cellStubs, dataStubs, controlStubs, portStubs, graphStubs,
             """
             package example
             import civictech.cell.Cell
             import civictech.cell.BlockingCell
             import civictech.cell.Owned
-            import civictech.cell.data.Magnitude
+            import civictech.cell.control.Magnitude
             import civictech.cell.data.Replicable
             import civictech.cell.port.FanInlet
             import civictech.cell.port.FanOutlet

@@ -1,4 +1,4 @@
-package civictech.cell.proxy
+package civictech.cell.control
 
 import civictech.cell.partition.PartitionedShardSet
 

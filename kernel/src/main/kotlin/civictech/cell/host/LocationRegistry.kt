@@ -3,7 +3,7 @@ package civictech.cell.host
 import civictech.cell.CellRef
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
-import civictech.cell.proxy.ParkQueue
+import civictech.cell.control.ParkQueue
 import java.util.concurrent.ConcurrentHashMap
 
 /**

@@ -13,7 +13,7 @@ import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.Buffering
 import civictech.cell.proxy.Invocation
-import civictech.cell.proxy.ParkQueue
+import civictech.cell.control.ParkQueue
 import civictech.cell.proxy.Proxy
 import civictech.cell.port.PortRef
 

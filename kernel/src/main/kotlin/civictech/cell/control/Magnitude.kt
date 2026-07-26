@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.control
 
 /**
  * A delta payload that can state how big it is (spec 21 §Cycles, 93 I-6):

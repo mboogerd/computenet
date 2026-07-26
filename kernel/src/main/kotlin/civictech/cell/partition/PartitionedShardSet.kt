@@ -12,7 +12,7 @@ import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.StateRequest
 import civictech.cell.port.Use
 import civictech.cell.proxy.InvocationSink
-import civictech.cell.proxy.ParkQueue
+import civictech.cell.control.ParkQueue
 import civictech.cell.replication.Assignment
 import civictech.cell.link.Interest
 import civictech.cell.link.sliceTo

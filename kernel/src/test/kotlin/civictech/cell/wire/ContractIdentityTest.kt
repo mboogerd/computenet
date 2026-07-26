@@ -2,7 +2,7 @@ package civictech.cell.wire
 
 import civictech.cell.BlockingCell
 import civictech.cell.CellRef
-import civictech.cell.data.Magnitude
+import civictech.cell.control.Magnitude
 import civictech.cell.data.Replicable
 import civictech.cell.data.SetOps
 import civictech.cell.proxy.Invocation

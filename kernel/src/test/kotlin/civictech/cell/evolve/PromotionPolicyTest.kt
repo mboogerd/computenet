@@ -2,7 +2,7 @@ package civictech.cell.evolve
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.Magnitude
+import civictech.cell.control.Magnitude
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.membrane.TrafficLightCell

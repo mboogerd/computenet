@@ -1,7 +1,6 @@
-package civictech.cell.data
+package civictech.cell.control
 
 import civictech.cell.CurrentContext
-import civictech.cell.control.Progress
 import civictech.cell.port.FanOutlet
 import civictech.cell.protocol.Protocols
 

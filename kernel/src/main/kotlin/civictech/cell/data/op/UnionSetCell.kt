@@ -11,7 +11,7 @@ import civictech.cell.link.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
-import civictech.cell.data.absorbAck
+import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
 

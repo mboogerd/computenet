@@ -8,7 +8,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.Leased
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
-import civictech.cell.data.Magnitude
+import civictech.cell.control.Magnitude
 import civictech.cell.link.LinkResult
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry

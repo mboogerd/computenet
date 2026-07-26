@@ -809,7 +809,7 @@ class ContractProcessor(
             val FAN_OUTLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanOutlet")
             val REGISTER_PORT = MemberName("civictech.cell.port", "registerPort")
             val ON_EACH = MemberName("civictech.cell", "onEach")
-            const val MAGNITUDE_MARKER = "civictech.cell.data.Magnitude"
+            const val MAGNITUDE_MARKER = "civictech.cell.control.Magnitude"
             const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
             const val BLOCKING_MARKER = "civictech.cell.BlockingCell"
             const val SUSPENDING_MARKER = "civictech.cell.SuspendingCell"

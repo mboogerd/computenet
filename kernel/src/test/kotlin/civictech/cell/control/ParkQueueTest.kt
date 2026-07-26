@@ -1,4 +1,4 @@
-package civictech.cell.proxy
+package civictech.cell.control
 
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test

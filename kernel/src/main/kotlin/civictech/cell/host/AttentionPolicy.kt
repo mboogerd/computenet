@@ -22,7 +22,7 @@ data class AttentionPolicy(
     val stride: Int = 16,
     /**
      * Magnitude-band dispatch (spec 34, M17): maps the largest staged
-     * [civictech.cell.data.Magnitude] payload in a cell's queue to a band;
+     * [civictech.cell.control.Magnitude] payload in a cell's queue to a band;
      * the cell's effective band is `max(attention band, magnitude band)` —
      * urgency joins interest at the dispatch max, a sub-priority within the
      * data region only. Boost lifetime is the pending queue (cleared when it

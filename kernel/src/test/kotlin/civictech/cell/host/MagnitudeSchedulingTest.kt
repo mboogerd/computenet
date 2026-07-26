@@ -2,7 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.Magnitude
+import civictech.cell.control.Magnitude
 import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
