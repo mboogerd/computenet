@@ -249,4 +249,37 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
         @Suppress("UNCHECKED_CAST")
         shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).streamTo(routed)
     }
+
+    companion object {
+        /**
+         * PN-17 formation predicate (spec 31 §Effects on instance sets, plan
+         * §3b): an [Effectful][civictech.cell.evolve.Effectful] cell on a
+         * non-[disjoint] (Total/overlapping) instance set needs a declared
+         * effect **authority** — a single-writer leader that fires while its
+         * followers suppress. Disjoint interest is effect-once *by
+         * construction* (each logical delta reaches exactly one covering
+         * instance; the per-inlet processed-frontier dedups replay), so it
+         * needs none; a non-effectful cell is unconstrained.
+         */
+        fun effectAuthorityRequired(effectful: Boolean, disjoint: Boolean): Boolean =
+            effectful && !disjoint
+
+        /**
+         * The instance-set **formation** refusal (spec 31, mirroring PN-18's
+         * [civictech.cell.port.NatureNegotiation.admitToInstanceSet] and PN-8's
+         * overlap refusal): an [effectful] cell joining a Total/overlapping set
+         * with no declared authority is refused with a loud typed error, moved
+         * to the moment the combination is formed rather than discovered as N
+         * duplicate effects later. A leaderful set ([hasAuthority]) or a
+         * [disjoint] one never raises — exactly as a default requirement never
+         * refuses at a link, so no existing (non-effectful, or disjoint, or
+         * single-writer) instance set changes.
+         */
+        fun requireEffectAuthority(effectful: Boolean, disjoint: Boolean, hasAuthority: Boolean) {
+            check(!effectAuthorityRequired(effectful, disjoint) || hasAuthority) {
+                "Refused: an Effectful cell on a Total/overlapping instance set requires a declared " +
+                    "effect authority (a SingleWriterReplication leader) — spec 31 §Effects on instance sets (PN-17)"
+            }
+        }
+    }
 }

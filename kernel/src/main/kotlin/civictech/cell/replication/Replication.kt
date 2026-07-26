@@ -195,6 +195,41 @@ class Replication(
      * (distinct per replica, minted without coordination).
      */
     fun replicate(cell: Replicable<*>, host: ManagedHost) {
+        // PN-17 effect-authority formation refusal (spec 31 §Effects on instance
+        // sets, plan §3b). A [Replicable] that is ALSO
+        // [civictech.cell.evolve.Effectful] joining THIS mergeable mesh has no
+        // single-writer discipline to name one firer: the delta gossips to every
+        // overlapping replica and each fires the external effect once per logical
+        // delta (the ×N bug the ReplicatedEffectTest control makes visible). Refuse
+        // the moment the overlapping-effectful set is formed — a loud typed error
+        // ([SingleWriterReplication.requireEffectAuthority]), not a silent admit.
+        //
+        // What is NOT refused, so no existing graph changes:
+        //  - a non-[Effectful] replicable (every mergeable cell today — SetCell,
+        //    PnCounterCell, WatermarkCell, InstanceSet): the predicate is a no-op,
+        //    so this path is byte-for-byte unchanged;
+        //  - a disjoint-interest effectful replica (partitioning): each logical
+        //    delta reaches exactly one covering instance, effect-once by
+        //    construction, so no authority is needed. Disjointness here is the same
+        //    overlap test the linker ([maybeLink]) uses — an effectful replica that
+        //    overlaps NO already-known replica of its id forms no fan-out link;
+        //  - a lone/first effectful replica (overlaps nobody yet — single-instance
+        //    effectful is unchanged).
+        // The authority-bearing path is [SingleWriterReplication.replicate] (a
+        // SingleWriterReplicable leader fires, followers suppress) — a distinct
+        // method this guard never sees, so authority-declaring cells stay admitted.
+        if (cell is civictech.cell.evolve.Effectful) {
+            val interest = registry.interestOf(cell.ref)
+            val overlapsExisting = registry.replicasOf(cell.ref.id)
+                .any { it != cell.ref && interest.overlaps(registry.interestOf(it)) }
+            SingleWriterReplication.requireEffectAuthority(
+                effectful = true,
+                disjoint = !overlapsExisting,
+                // the mergeable mesh carries no leader discipline; a cell that wants
+                // to fire once must replicate via SingleWriterReplication instead
+                hasAuthority = false,
+            )
+        }
         localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
         hostOf[cell.ref] = host
         host.managementInlet.call.spawn(cell)
