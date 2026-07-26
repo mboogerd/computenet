@@ -18,7 +18,9 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.InvocationSink
+import civictech.cell.replication.Assignment
 import civictech.cell.replication.Interest
+import civictech.cell.replication.sliceTo
 import civictech.cell.wire.PortAddress
 import civictech.cell.wire.WireEdgeLink
 import java.io.Serializable
@@ -88,9 +90,6 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
     override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, A>>>())
 
-    /** Router's own tag ledger (spec 20/24): the union of every shard's live membership, tags preserved verbatim. */
-    private val routed = TagState<E>()
-
     /** Union-of-shards catch-up view, kept for late-join replay on THIS cell's own outlet. */
     private val merged = mutableMapOf<K, A>()
 
@@ -123,10 +122,9 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
     private fun shardFor(key: K): Int = Math.floorMod(partitionOf(key), shards.size)
 
     private fun route(value: SetDelta<E>) {
-        // our own ledger, purely for repartition-time replay; the incoming
-        // delta is still forwarded to shards below regardless of novelty here
-        routed.apply(value)
-
+        // PN-6: no router-side ledger — each element lives in exactly one shard's
+        // own TagState, so the router holds O(instances) routing state and never
+        // a second O(total) copy. Repartition sources its replay from the shards.
         val addsByShard = splitByShard(value.adds)
         val delsByShard = splitByShard(value.dels)
         (addsByShard.keys + delsByShard.keys).forEach { shard ->
@@ -162,10 +160,16 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
     fun repartition(newShardCount: Int) {
         require(newShardCount > 0) { "shardCount must be positive, got $newShardCount" }
         if (newShardCount == shards.size) return
+        // Source the live state-as-delta from the OLD shards' own contents (PN-6:
+        // the `routed` ledger is deleted) BEFORE replacing them — each element's
+        // ORIGINAL tags, verbatim (never re-minted, spec 20/24 §Tag continuity).
+        val live = shards.map { it.contents() }.fold(mutableMapOf<E, Set<Timestamp>>()) { acc, d ->
+            d.adds.forEach { (e, tags) -> acc.merge(e, tags) { a, b -> a + b } }
+            acc
+        }
         shards = List(newShardCount) { newShard() }
         routingEpoch++
-        routed.elements.forEach { e ->
-            val tags = routed.tags(e)
+        live.forEach { (e, tags) ->
             if (tags.isNotEmpty()) {
                 shards[shardFor(keyFn(e))].inlet.call.propagate(SetDelta(adds = mapOf(e to tags)))
             }
@@ -175,13 +179,16 @@ class PartitionedCell<E, K, A, ACC : Serializable>(
 
 /**
  * A routed shard command (spec 20/24 §Partitioned state, 40/42 §Interest-scoped
- * instance sets, CP-D3): a key-range slice of a [SetDelta] plus the versioned
- * interest-assignment [epoch] it was routed under. Crosses the wire as an
- * ordinary polymorphic argument, and its [epoch] is lifted to the
- * `WireFrame.routingEpoch` additive field so the routing epoch is observable at
- * the transport boundary. A shard whose interest no longer admits a key drops
- * the slice (a stale-epoch command re-routes), so an in-flight command crossing
- * a repartition flip neither loses nor double-counts.
+ * instance sets, CP-D3): a key-range slice of a [SetDelta]. A shard whose
+ * interest no longer admits a key drops the slice, so an in-flight command
+ * crossing a repartition flip neither loses nor double-counts — admission checks
+ * the shard's CURRENT interest, established by the journaled [Assignment].
+ *
+ * [epoch] is **deprecated (PN-6)**: it was decorative at the point of use
+ * (admission never read it — the current interest is the authority), and PN-6
+ * makes the assignment epoch durable on the [Assignment] lattice instead. The
+ * field is retained for one release (old frames still decode); `WireCodec` no
+ * longer sniffs it onto `WireFrame.routingEpoch`, and no reader consults it.
  */
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("RoutedCommand")
@@ -255,6 +262,17 @@ class ShardCell<E>(
     val routeInlet = registerPort("routeInlet", FanInlet.create<Propagate<RoutedCommand<E>>>())
 
     /**
+     * The journaled control-plane channel (PN-6): an interest reassignment arrives
+     * as an [Assignment] ref-addressed to this shard. Because it flows through the
+     * host intake (not a direct method call), it lands in the shard host's WAL and
+     * replays on recovery — so a non-checkpointed shard reconstructs the shed it
+     * performed, closing PN-4's residual (an unjournaled in-process narrow). The
+     * router sends here over the registry, in-process or across a bridge, exactly
+     * as it sends routed slices to [routeInlet].
+     */
+    val assignInlet = registerPort("assignInlet", FanInlet.create<Propagate<Assignment>>())
+
+    /**
      * The shard's effective-delta stream (PN-4): every membership change — a
      * routed slice, a gossip merge, or a shed — re-emits here, so a shard is an
      * ordinary dataflow source (partitioned+durable/replicated/pull, no longer a
@@ -272,6 +290,7 @@ class ShardCell<E>(
 
     init {
         routeInlet.serve(Propagate<RoutedCommand<E>> { cmd -> onRouted(cmd) })
+        assignInlet.serve(Propagate<Assignment> { a -> assign(a.interest, a.epoch) })
         deltaInlet.serve(Propagate<SetDelta<E>> { delta -> onGossip(delta) })
         // late-join catch-up (G-22): this shard's key-range state-as-delta-from-empty
         outlet.catchUpOnLinked { state.asDelta().takeIf { it.adds.isNotEmpty() } }
@@ -394,6 +413,18 @@ class PartitionedShardSet<E>(
     private val totalSlots: Int,
     private val keyFn: (E) -> Any?,
     private val registry: LocationRegistry,
+    /**
+     * How a repartition applies an interest reassignment to a shard (PN-6, the
+     * ticket's payoff). `true` ⇒ the assignment rides a **journaled, ref-addressed
+     * hosted invocation** to the shard's [ShardCell.assignInlet] over [registry]
+     * (in-process or across a bridge) — so it lands in the shard's WAL and a
+     * non-checkpointed shard replays the shed on recovery (PN-4's shed is now
+     * journaled-durable). `false` (the default, and control a) ⇒ a plain
+     * in-process `ShardCell.assign` call — unjournaled, so a crash+replay
+     * resurrects the shed range. The four PN-4/5 partition pin tests run the
+     * default (direct) path unchanged.
+     */
+    private val journaledAssign: Boolean = false,
 ) {
 
     /** The router's proxy view of one shard: the wire-crossing data plane plus the local control handle. */
@@ -401,6 +432,7 @@ class PartitionedShardSet<E>(
         val cell: ShardCell<E>,
         var interest: Interest,
         val route: Propagate<RoutedCommand<E>>,
+        val assign: Propagate<Assignment>,
     )
 
     /** Registry proxy shape for a shard's [ShardCell.routeInlet] (resolved by port name, in-process or bridged). */
@@ -408,9 +440,27 @@ class PartitionedShardSet<E>(
         val routeInlet: Use<Propagate<RoutedCommand<E>>>
     }
 
+    /** Registry proxy shape for a shard's [ShardCell.assignInlet] — the journaled control-plane channel (PN-6). */
+    interface ShardAssign {
+        val assignInlet: Use<Propagate<Assignment>>
+    }
+
     private val shards = mutableListOf<Shard<E>>()
 
-    /** The router's total-interest state-as-delta source, for interest-reassignment replay (42). */
+    /**
+     * The router's repartition-replay source (PN-6, *scoped* — plan §3 "scope or
+     * delete ledger"). The **routing** path ([route]) and the **pull** path
+     * ([pull]) are O(instances): routing consults only the per-instance interest
+     * table ([shards]); pull fans a `StateRequest` to each shard (PN-5). The
+     * ledger is retained solely because a repartition replay must be *complete and
+     * synchronous* even while routed slices are still in flight across a bridge to
+     * a shard — a snapshot gathered from the shards' own (async-lagging) contents
+     * would miss in-flight elements and lose them at the flip. It is written on
+     * the write path but read by no correctness path other than the flip replay
+     * (and the [pullFromLedger] control b). The fully leaderless, watermark-gated,
+     * mesh-sourced replay that would let this go entirely is R1 (out of scope —
+     * see spec §Interest-scoped instance sets, "single routing authority").
+     */
     private var ledger = TagState<E>()
 
     /** Synthetic instance id for a ledger-served pull reply (the control-b answerer). */
@@ -441,8 +491,23 @@ class PartitionedShardSet<E>(
     @Suppress("UNCHECKED_CAST")
     fun addShard(cell: ShardCell<E>, interest: Interest) {
         val route = (HostedCellProxy.create(cell.ref, registry, ShardRoute::class.java) as ShardRoute<E>).routeInlet.call
-        shards += Shard(cell, interest, route)
+        // The journaled control-plane proxy (PN-6): assignment rides the registry
+        // to the shard's assignInlet exactly as routed slices ride to routeInlet —
+        // in-process or over a bridge — so it lands in the shard host's WAL.
+        val assign = (HostedCellProxy.create(cell.ref, registry, ShardAssign::class.java) as ShardAssign).assignInlet.call
+        shards += Shard(cell, interest, route, assign)
         registry.setInterest(cell.ref, interest)
+    }
+
+    /**
+     * Apply an interest reassignment to a shard (PN-6). Journaled path: a
+     * ref-addressed hosted invocation to the shard's [ShardCell.assignInlet] over
+     * the registry — durable and replayed on recovery. Direct path (control a):
+     * an in-process `assign` call — unjournaled, so the shed resurrects on replay.
+     */
+    private fun assignShard(shard: Shard<E>, interest: Interest, epoch: Long) {
+        if (journaledAssign) shard.assign.propagate(Assignment(interest, epoch))
+        else shard.cell.assign(interest, epoch)
     }
 
     /** Route [delta] to the owning shards (each slice filtered to that shard's interest), stamped with the epoch. */
@@ -464,7 +529,9 @@ class PartitionedShardSet<E>(
 
     private fun emit(delta: SetDelta<E>, epoch: Long) {
         shards.forEach { shard ->
-            val slice = delta.within(shard.interest) { keyFn(it as E) } ?: return@forEach
+            // the one slice-and-route primitive (PN-6) — the same [sliceTo] the
+            // gossip linker uses, here with the group keyOf.
+            val slice = sliceTo(delta, shard.interest) { keyFn(it as E) } ?: return@forEach
             shard.route.propagate(RoutedCommand(epoch, slice))
         }
     }
@@ -483,7 +550,7 @@ class PartitionedShardSet<E>(
         shards.forEachIndexed { i, shard ->
             shard.interest = newInterests[i]
             registry.setInterest(shard.cell.ref, newInterests[i])
-            shard.cell.assign(newInterests[i], routingEpoch)
+            assignShard(shard, newInterests[i], routingEpoch)
         }
         emit(ledger.asDelta(), routingEpoch)
     }
@@ -528,7 +595,7 @@ class PartitionedShardSet<E>(
         // shard is migrating, so the funnel never blocks other ranges.
         val snapshot = ledger.asDelta()
         shards.forEachIndexed { i, shard ->
-            shard.cell.assign(unionInterest(old[i], newInterests[i]), routingEpoch) // widen guard only; sheds nothing
+            assignShard(shard, unionInterest(old[i], newInterests[i]), routingEpoch) // widen guard only; sheds nothing
             val movedIn = snapshot.within(newInterests[i]) { keyFn(it as E) }?.within(moving) { keyFn(it as E) }
             if (movedIn != null) shard.route.propagate(RoutedCommand(routingEpoch, movedIn))
         }
@@ -546,7 +613,7 @@ class PartitionedShardSet<E>(
         shards.forEachIndexed { i, shard ->
             shard.interest = newInterests[i]
             registry.setInterest(shard.cell.ref, newInterests[i])
-            shard.cell.assign(newInterests[i], routingEpoch)
+            assignShard(shard, newInterests[i], routingEpoch)
         }
         flipping = false
         movingInterest = null
@@ -644,6 +711,8 @@ class PartitionedShardSet<E>(
     fun pullFromLedger(scope: Interest, since: TagFrontier?): List<PullReply<E>> {
         val admit: (E) -> Boolean =
             if (scope is Interest.Total) { _ -> true } else { e -> scope.admits(keyFn(e)) }
+        // control b: answer the whole board from the router's own ledger in one
+        // reply — O(total) at one node, exactly what the fan-out [pull] avoids.
         val adds = ledger.elements.filter(admit).associateWith { e ->
             ledger.tags(e).filterTo(mutableSetOf()) { since == null || (since.perSource[it.sourceId] ?: -1L) < it.counter }
         }.filterValues { it.isNotEmpty() }

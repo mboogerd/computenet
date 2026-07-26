@@ -396,3 +396,77 @@ shard pulled for the first time under a sibling's accumulated water. A
 per-instance `since` is monotone within its instance and never contaminated by a
 sibling's progress, so an incremental scatter-gather pull returns exactly the
 tags that instance has not yet delivered.
+
+## One linker, one assignment: interest-scoped instance sets (PN-6)
+
+PN-4 gave a shard state, durability and a pull answerer; PN-5 made the pull
+cross the wire. PN-6 closes the substrate: the gossip linker and the shard
+router are recognized as **one** slice-and-route mechanism, the interest
+assignment becomes a **durable, addressable lattice**, and the router stops
+holding O(total) state on its correctness paths.
+
+**One linker (`sliceTo` + `keyOf`).** Replication and partitioning were already
+"two settings of one knob" (above); PN-6 makes them literally one function.
+`sliceTo(delta, interest, keyOf)` is the single primitive: restrict a delta to
+the sub-delta an interest admits over a key projection. The gossip linker
+(`Replication.maybeLink`) calls it with `keyOf` = identity — in a replica mesh
+the element *is* the key; the shard router (`PartitionedShardSet`) calls it with
+`keyOf` = the group key. The linker generalizes on `keyOf` so the *same* linker
+serves a partitioned substrate; there is no second slice mechanism to keep in
+step. A link forms exactly where two instances' interests overlap — one link per
+overlapping ordered instance pair, and nothing else.
+
+**One assignment (a hosted `Replicable` max-register).** Each instance's
+`(interest, epoch)` is an entry in an `InstanceSet`: a per-instance max-register
+lattice. Its merge is the **admission rule**, applied everywhere — a *newer*
+epoch is adopted; an *older* epoch is dropped (it cannot resurrect a shed range,
+whose absence the current higher-epoch interest already reflects); an *equal*
+epoch takes the commutative join (a canonical union) of the interests. The
+register is a proper join-semilattice value — commutative, idempotent,
+associative — so the table converges regardless of delivery order, and it
+gossips as an ordinary `Replicable` over the existing mesh (no second protocol).
+A non-commutative merge is the negative control: it forks the assignment by
+delivery order, and dropping control-plane frames while data flows
+half-applies a flip so the board forks — the merge and the control plane are
+both load-bearing.
+
+**Assignment is journaled, ref-addressed, replayed (the payoff).** Before PN-6
+a router narrowed a shard's interest by a direct in-process method call. That
+call was invisible to the shard's write-ahead log, so a *non-checkpointed*
+shard's shed was invisible to recovery: replaying its routed frames under its
+reconstructed (wide) interest re-admitted the range it had shed (PN-4's
+residual — durable only when the shard happened to have been checkpointed). PN-6
+sends the reassignment as an `Assignment` carried on an ordinary **hosted
+invocation to the shard's `assignInlet`**, addressed by `CellRef` over the
+registry — in-process or across a bridge, the same transport the routed slices
+take. Because it flows through the host intake it lands in the shard's WAL and
+**replays on recovery**: a shard reconstructed with its original wide interest
+still re-performs the shed when the journaled assignment replays. The interest
+algebra therefore crosses the wire — every `Interest` arm is a registered
+serializable value. `RoutedCommand.epoch` is thereby demoted to a decorative,
+**deprecated** field: admission checks the shard's *current* interest, never the
+payload epoch; the wire codec stops sniffing it onto `WireFrame.routingEpoch`
+(the frame field is retained and old frames still decode for one release).
+
+**Router state is O(instances) on its correctness paths.** Routing consults
+only the per-instance interest table; a pull fans a request to each
+interest-overlapping shard (PN-5). The in-process `PartitionedCell` no longer
+keeps a `routed` ledger at all — a repartition sources its replay from the
+shards' own contents. The distributed `PartitionedShardSet` retains a **scoped**
+ledger for one reason only: a repartition replay must be complete and
+synchronous even while routed slices are still in flight across a bridge to a
+shard, and a snapshot gathered from the shards' own async-lagging contents would
+miss those in-flight elements. No routing or pull path reads it; it also backs
+the PN-5 control-b anti-pattern (answering a whole pull from one node).
+
+**Coverage invariant and the single routing authority (R1).** A reassignment
+must not shrink an instance's interest until the gainer covers the shed range;
+during a flip the moving range is buffered (per-range, funnel rule) and the old
+owner keeps serving until the gainer has the range, so the window loses and
+double-counts nothing (verified over bridged repartition racing a migration,
+100 seeds). The flip window keeps a **single routing authority** for the moving
+range — the router that opened it. A fully **leaderless** instance set, where
+any peer may reassign concurrently and the max-register alone arbitrates without
+a single authority per flip window, is **R1 — out of scope here**; it needs the
+watermark-gated, mesh-sourced replay that would also retire the scoped ledger
+entirely, and is deferred.

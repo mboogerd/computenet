@@ -79,6 +79,8 @@ interface Interest : Serializable {
     }
 
     /** Total interest — every key, every delta (the replication setting; the default). */
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Interest.Total")
     object Total : Interest {
         // honest against the new algebra: Total overlaps everything EXCEPT Empty
         // (symmetric with Empty.overlaps). For every pre-existing kind (Total,
@@ -90,6 +92,8 @@ interface Interest : Serializable {
     }
 
     /** Empty interest — no key, no delta: overlaps nothing, admits nothing (the identity for [Union]). */
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Interest.Empty")
     object Empty : Interest {
         override fun overlaps(other: Interest): Boolean = false
         override fun admits(key: Any?): Boolean = false
@@ -98,19 +102,25 @@ interface Interest : Serializable {
     }
 
     /** Admits a key any member admits (∪); overlaps anything any member overlaps. */
-    data class Union(val members: List<Interest>) : Interest {
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Interest.Union")
+    data class Union(val members: List<@kotlinx.serialization.Polymorphic Interest>) : Interest {
         override fun overlaps(other: Interest): Boolean = overlap(this, other)
         override fun admits(key: Any?): Boolean = members.any { it.admits(key) }
     }
 
     /** Admits a key every member admits (∩); the empty intersect admits all (vacuous). */
-    data class Intersect(val members: List<Interest>) : Interest {
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Interest.Intersect")
+    data class Intersect(val members: List<@kotlinx.serialization.Polymorphic Interest>) : Interest {
         override fun overlaps(other: Interest): Boolean = overlap(this, other)
         override fun admits(key: Any?): Boolean = members.all { it.admits(key) }
     }
 
     /** Admits exactly the keys [of] does not (¬); overlap against a negation is undecidable ⇒ conservative. */
-    data class Complement(val of: Interest) : Interest {
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Interest.Complement")
+    data class Complement(@kotlinx.serialization.Polymorphic val of: Interest) : Interest {
         override fun overlaps(other: Interest): Boolean = overlap(this, other)
         override fun admits(key: Any?): Boolean = !of.admits(key)
     }
@@ -122,7 +132,11 @@ interface Interest : Serializable {
      * non-numeric key admits nowhere. Two [Ranges] overlap iff any of their
      * ranges intersect — decidable and honest.
      */
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Interest.Ranges")
     data class Ranges(val ranges: List<Range>) : Interest {
+        @kotlinx.serialization.Serializable
+        @kotlinx.serialization.SerialName("Interest.Range")
         data class Range(val lo: Long, val hi: Long) : java.io.Serializable {
             init { require(lo <= hi) { "range lo ($lo) must be <= hi ($hi)" } }
             fun contains(v: Long): Boolean = v in lo until hi
@@ -148,6 +162,8 @@ interface Interest : Serializable {
      * (the partitioning setting) forms no cross-shard links, and the union of
      * the shards is conflict-free by construction.
      */
+    @kotlinx.serialization.Serializable
+    @kotlinx.serialization.SerialName("Interest.Slots")
     data class Slots(val slots: Set<Int>, val totalSlots: Int) : Interest {
         init {
             require(totalSlots > 0) { "totalSlots must be positive, got $totalSlots" }
@@ -187,4 +203,25 @@ interface Scoped<D> {
      * raw element.
      */
     fun within(interest: Interest, keyOf: (Any?) -> Any?): D?
+}
+
+/**
+ * The **one** slice-and-route primitive (PN-6, plan §3 "keep exactly one
+ * link/slice mechanism"): restrict [delta] to the sub-delta [interest] admits
+ * over [keyOf]. Both the gossip linker ([civictech.cell.replication.Replication],
+ * `keyOf` = identity — the element *is* the key in a replica mesh) and the shard
+ * router ([civictech.cell.data.PartitionedShardSet], `keyOf` = the group key) are
+ * this same function under different `keyOf`s — replication and partitioning are
+ * two settings of one knob, not two mechanisms.
+ *
+ * [Interest.Total] short-circuits to the whole delta (the replication default,
+ * byte-identical to no filter); a non-[Scoped] delta also rides whole (only
+ * interest-scoped substrates need slicing); `null` means nothing is admitted and
+ * the emission is dropped.
+ */
+@Suppress("UNCHECKED_CAST")
+fun <D> sliceTo(delta: D, interest: Interest, keyOf: (Any?) -> Any?): D? = when {
+    interest is Interest.Total -> delta
+    delta is Scoped<*> -> (delta as Scoped<D>).within(interest, keyOf)
+    else -> delta
 }
