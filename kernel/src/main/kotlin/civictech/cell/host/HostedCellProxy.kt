@@ -1,10 +1,12 @@
-package civictech.cell.proxy
+package civictech.cell.host
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
-import civictech.cell.host.LocationRegistry
-import civictech.cell.host.ManagedHost
 import civictech.cell.port.Port
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.InvocationSink
+import civictech.cell.proxy.Proxy
 import java.lang.reflect.Method
 import java.lang.reflect.ParameterizedType
 

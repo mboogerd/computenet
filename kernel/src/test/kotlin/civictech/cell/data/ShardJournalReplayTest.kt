@@ -239,7 +239,7 @@ class ShardJournalReplayTest {
     }
 
     private fun route(host: ManagedHost, ref: CellRef): Propagate<RoutedCommand<String>> =
-        (civictech.cell.proxy.HostedCellProxy.create(ref, host, RouteProxy::class.java) as RouteProxy).routeInlet.call
+        (civictech.cell.host.HostedCellProxy.create(ref, host, RouteProxy::class.java) as RouteProxy).routeInlet.call
 
     @Test
     fun `control b - PN-0b guard protects a non-Stateful shard's WAL, without which recovery is empty`() {

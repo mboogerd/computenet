@@ -16,7 +16,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.allowPeers
 import civictech.cell.port.input
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.booleans.shouldBeTrue

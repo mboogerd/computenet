@@ -35,10 +35,8 @@ import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.requireBoundRef
 import civictech.cell.data.Magnitude
 import civictech.cell.Propagate
-import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.ParkQueue
-import civictech.cell.proxy.RoutedInletResolution
 import civictech.gen.wire.MergeClass
 import civictech.gen.wire.Monotonicity
 import civictech.gen.wire.NatureAxis
@@ -1248,7 +1246,7 @@ open class ManagedHost(
     private fun findPort(cell: Cell, name: String): Port? = PortRegistry.of(cell)[name]
 
     /**
-     * Routed-handle validation seam ([civictech.cell.proxy.inlet]): resolve a
+     * Routed-handle validation seam ([civictech.cell.host.inlet]): resolve a
      * named inlet on a locally-hosted cell to the erased api class a `propagate`
      * send would reach, or a typed reason it cannot. Uses the same private
      * [findPort] the delivery path uses, so a routed handle validates against

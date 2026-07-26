@@ -5,7 +5,6 @@ import civictech.cell.Timestamp
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.port.Use
-import civictech.cell.proxy.HostedCellProxy
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.junit.jupiter.api.Test

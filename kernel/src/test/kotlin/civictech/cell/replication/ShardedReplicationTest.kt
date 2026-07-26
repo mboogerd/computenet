@@ -21,7 +21,7 @@ import civictech.cell.port.NatureNegotiation
 import civictech.cell.port.PortRef
 import civictech.cell.port.Reconciliation
 import civictech.cell.port.Use
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
 import civictech.gen.wire.MergeClass

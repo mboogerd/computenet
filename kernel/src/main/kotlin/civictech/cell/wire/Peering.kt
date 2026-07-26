@@ -10,7 +10,7 @@ import civictech.cell.port.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.InvocationSink
 import civictech.gen.wire.Contract
 import java.util.UUID

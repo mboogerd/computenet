@@ -9,7 +9,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.Link
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.inlet
+import civictech.cell.host.inlet
 
 /**
  * Graph management shared by the HTTP layer and the tests. Cells stay

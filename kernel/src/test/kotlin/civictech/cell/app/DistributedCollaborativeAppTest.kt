@@ -27,7 +27,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import civictech.cell.verify.checkInvariants

@@ -8,7 +8,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.Use
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.replication.Assignment
 import civictech.cell.replication.Interest
 import civictech.cell.replication.InstanceSet

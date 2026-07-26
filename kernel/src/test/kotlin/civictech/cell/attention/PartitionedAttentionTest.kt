@@ -20,7 +20,7 @@ import civictech.cell.port.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.replication.Interest
 import civictech.cell.replication.Replication

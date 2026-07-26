@@ -15,7 +15,7 @@ import civictech.cell.port.LinkResult
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.broadcast
 import civictech.gen.wire.Contract
 import civictech.gen.wire.ContractRegistry

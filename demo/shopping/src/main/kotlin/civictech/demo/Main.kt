@@ -20,7 +20,7 @@ import civictech.cell.host.View
 import civictech.cell.host.link
 import civictech.cell.host.observe
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.RoutedPropagate
+import civictech.cell.host.RoutedPropagate
 import civictech.cell.wire.Peering
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange

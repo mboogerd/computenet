@@ -1,5 +1,8 @@
-package civictech.cell.proxy
+package civictech.cell.host
 
+import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.InvocationSink
+import civictech.cell.proxy.Proxy
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 

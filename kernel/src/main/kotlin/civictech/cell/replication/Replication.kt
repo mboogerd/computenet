@@ -14,7 +14,7 @@ import civictech.cell.port.Link
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import java.util.*
 
 /**

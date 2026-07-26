@@ -122,7 +122,7 @@ class SingleWriterReplicationTest {
             SwCounterCell(CellRef(logicalId, instanceId)).also { replication.replicate(it, host, mark, posture) }
 
         fun ops(replica: SwCounterCell): SwCounterOps =
-            (civictech.cell.proxy.HostedCellProxy.create(replica.ref, registry, WriteInletHolder::class.java)
+            (civictech.cell.host.HostedCellProxy.create(replica.ref, registry, WriteInletHolder::class.java)
                     as WriteInletHolder).writeInlet.call
     }
 

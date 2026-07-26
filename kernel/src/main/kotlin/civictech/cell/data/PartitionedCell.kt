@@ -17,7 +17,7 @@ import civictech.cell.port.StateRequest
 import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
-import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.proxy.ParkQueue
 import civictech.cell.replication.Assignment

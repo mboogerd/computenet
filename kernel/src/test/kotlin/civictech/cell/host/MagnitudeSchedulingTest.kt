@@ -7,7 +7,6 @@ import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
-import civictech.cell.proxy.HostedCellProxy
 import java.util.*
 import kotlin.test.Test
 import kotlin.test.assertEquals

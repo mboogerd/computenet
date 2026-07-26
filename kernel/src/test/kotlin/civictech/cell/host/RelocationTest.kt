@@ -3,7 +3,6 @@ package civictech.cell.host
 import civictech.cell.*
 import civictech.cell.Propagate
 import civictech.cell.port.*
-import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.collections.shouldBeEmpty
