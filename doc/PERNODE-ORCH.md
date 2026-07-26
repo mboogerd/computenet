@@ -118,3 +118,13 @@ Tickets: [PERNODE-FOLLOWUP-TICKETS.md](PERNODE-FOLLOWUP-TICKETS.md). FU-4 (adapt
 | FU-3 | merged | comp/FU-3 | db235ae | partitioned rolling promotion test coverage (`PartitionedPromotionTest`, shard-by-shard over real bridges, 100 seeds, both controls diverge); one minimal additive fix `PartitionedShardSet.rebindShard` (repoints the one non-ref-resolved `memberships()` handle); ReplicatedPromotionTest unchanged |
 
 Changelog updated: FU-1/FU-2/FU-3 limitation lines removed/rewritten to "closed". Remaining documented residuals: instance-set epoch lattice unwired (R1), DURABLE-diagnostic-not-refusal, no adapter synthesis (→ FU-4 exploration), frontier decided-as-is (PN-16).
+
+## ADR-1 re-read batch (FU-5..FU-9) — autonomous subset
+
+User added FU-5..FU-9. Running only the non-collaborative build tickets unsupervised: **FU-5, FU-6, FU-8**. NOT run (explicitly EXPLORATORY/COLLABORATIVE/RESEARCH, need user review): FU-7 (delta↔snapshot adapters), FU-9 (confidentiality lattice). FU-4 already phase-1 delivered (no-go), awaiting user review — untracked ADR + spike in working tree left untouched.
+
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| FU-5 | pending | comp/FU-5 | | PULL_SERVICE axis — pull-needing inlet onto non-serving producer refuses |
+| FU-6 | pending | comp/FU-6 | | single-writer inlet (SPSC mirror) |
+| FU-8 | pending | comp/FU-8 | | cycle admission checks damping, not just headedness |
