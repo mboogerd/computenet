@@ -7,6 +7,8 @@ import civictech.cell.data.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.NatureNegotiation
+import civictech.cell.port.Reconciliation
 import civictech.cell.port.PortRef
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
@@ -118,6 +120,23 @@ class InstanceSet(
         }
         return n
     }
+
+    /**
+     * PN-18: this assignment is **disjoint** iff no two instances' interests
+     * overlap — the partitioning setting (each key covered by at most one
+     * instance). The predicate the SPSC corollary consults at formation.
+     */
+    fun isDisjoint(): Boolean = overlapCount() == 0
+
+    /**
+     * PN-18 (spec 23 §SPSC corollary): admit an exclusive-carrying [routed] port
+     * into this instance set. Delegates to the OWNERSHIP refusal rule — admitted
+     * ([Reconciliation.Direct]) under a [disjoint][isDisjoint] assignment, refused
+     * (typed, naming `OWNERSHIP`) under a Total/overlapping one; a `SHARED`
+     * (DEFAULT) port always composes.
+     */
+    fun admitExclusive(routed: civictech.gen.wire.NatureVector): Reconciliation =
+        NatureNegotiation.admitToInstanceSet(routed, isDisjoint())
 
     private fun onGossip(delta: AssignmentDelta) {
         val effective = mutableMapOf<CellRef, Assignment>()
