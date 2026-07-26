@@ -61,7 +61,7 @@ class LateJoinCatchUpTest {
 
         repeat(ops / 2) { op() }
 
-        if (!catchUp) writer.outlet.linking.onLinked = {} // control: no catch-up
+        if (!catchUp) writer.outlet.linking.onLinkedListeners.clear() // control: no catch-up (PN-9: catch-up is an onLinkedListeners hook)
         (link(writer.outlet, late) is LinkResult.Connected).shouldBeTrue()
         reroute(writer.outlet, host, late)
 

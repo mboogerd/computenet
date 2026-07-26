@@ -33,7 +33,7 @@ class InterestScopedCatchUpTest {
 
     /** Pull [scope]/[since] state from [producer] via a fresh probe link; return the single baseline reply (or null). */
     private fun pull(producer: SetCell<String>, scope: Interest?, since: TagFrontier? = null): Reply? {
-        producer.outlet.linking.onLinked = {} // isolate the StateRequest pull path from the onLinked push
+        producer.outlet.linking.onLinkedListeners.clear() // isolate the StateRequest pull path from the onLinked push
         val replies = mutableListOf<Reply>()
         val probe = FanInlet(propagateSetDelta)
         probe.serve(object : Propagate<SetDelta<String>> {

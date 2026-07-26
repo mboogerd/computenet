@@ -61,7 +61,7 @@ class StatePullTest {
         val p2 = SetCell<String>()
         // isolate the new pull path from the pre-existing onLinked push (co-
         // hosted fast path, spec 21) so this test observes StateRequest alone
-        p2.outlet.linking.onLinked = {}
+        p2.outlet.linking.onLinkedListeners.clear()
 
         link(p1.outlet, gf)
         p1.inlet.call.add("early") // single open edge: flushes as an ordinary live wave
@@ -117,7 +117,7 @@ class StatePullTest {
         )
 
         val producer = SetCell<String>()
-        producer.outlet.linking.onLinked = {} // isolate the pull path
+        producer.outlet.linking.onLinkedListeners.clear() // isolate the pull path
         producer.inlet.call.add("x")
 
         link(producer.outlet, gf)

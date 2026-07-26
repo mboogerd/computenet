@@ -241,7 +241,7 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
         val key = leader.ref to followerRef
         shipped[key]?.let { link ->
             @Suppress("UNCHECKED_CAST")
-            (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).linking.onLinked(link)
+            (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).linking.fireLinked(link)
             return
         }
         val routed = (HostedCellProxy.create(followerRef, registry, DeltaInletHolder::class.java)

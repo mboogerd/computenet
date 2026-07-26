@@ -221,7 +221,7 @@ class Replication(private val registry: LocationRegistry) {
         // final push-catch-up to one reachable peer (best-effort; idempotent either way)
         linked.entries.firstOrNull { it.key.first == cell.ref }?.let { (_, linkedPair) ->
             @Suppress("UNCHECKED_CAST")
-            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.onLinked(linkedPair.second)
+            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(linkedPair.second)
         }
         host.managementInlet.call.despawn(cell.ref)
         localReplicas[cell.ref.id]?.remove(cell)
@@ -265,7 +265,7 @@ class Replication(private val registry: LocationRegistry) {
             // is idempotent (tags / pointwise max), so a plain re-announce
             // costs one redundant delta at worst.
             @Suppress("UNCHECKED_CAST")
-            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.onLinked(link)
+            (cell.outlet as FanOutlet<Propagate<Any?>>).linking.fireLinked(link)
             return
         }
         // the proxy resolves the port by name; delta types are erased on this

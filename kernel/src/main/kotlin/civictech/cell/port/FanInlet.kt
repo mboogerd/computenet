@@ -11,9 +11,10 @@ import civictech.cell.port.PortRef
  * Per-inlet wave-completeness policy (spec 20/22 §Bridged frontier / Completeness
  * over silent or stuck edges, CP-A4): buffers the reactive data waves arriving on
  * an inlet until each wave's edge frontier is complete, then releases them, in
- * per-source counter order, to the inlet's served handler. Opt in via
- * [FanInlet.frontierPolicy]; the sugar cell
- * [civictech.cell.consistency.GlitchFreeCell] wires one over an inlet→outlet
+ * per-source counter order, to the inlet's served handler. The [PolicyTier.ALIGN]
+ * member of the inlet policy chain (PN-9); opt in via [FanInlet.install] (or the
+ * deprecated [FanInlet.frontierPolicy] sugar). The sugar cell
+ * [civictech.cell.consistency.GlitchFreeCell] installs one over an inlet→outlet
  * pass-through.
  *
  * A frontier registers its own generic-protocol handlers (topology-order,
@@ -21,16 +22,7 @@ import civictech.cell.port.PortRef
  * through the ordinary [ProtocolSupport] delivery path — identical whether the
  * arm is in-process or bridged (spec 40/41 point 4).
  */
-interface InletFrontier {
-    /** Wire this frontier onto [inlet], releasing complete waves through [release]. */
-    fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit)
-
-    /** Gate a reactive data invocation carrying its wave context. */
-    fun offer(invocation: Invocation)
-
-    /** Drop transient buffered state (RESTART): completeness accounting is unaffected. */
-    fun reset()
-}
+interface InletFrontier : InletPolicy
 
 /**
  * An aggregating input port that supports multiple concurrent producers.
@@ -81,29 +73,116 @@ class FanInlet<Api : Any>(
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
 
     /**
-     * Opt-in wave-completeness gate (CP-A4). When set, reactive data arriving on
-     * [call] is routed through the frontier — buffered until its wave is complete,
-     * then released to the served handler — instead of dispatching directly. The
-     * frontier installs its own generic-protocol handlers on [attach].
+     * The inbound policy chain (PN-9, spec 12 §Policies): an ordered set of
+     * [InletPolicy] stages run in fixed [PolicyTier] order (ADMIT → GATE →
+     * ALIGN → ACTIVATE), install order irrelevant. Each stage is [attach]ed once
+     * with a stable release that indirects through [Stage.downstream]; [rewire]
+     * only re-links the downstream slots when a stage is added, so no policy is
+     * ever double-attached (double protocol-handler registration).
      */
+    private class Stage(val policy: InletPolicy) {
+        var downstream: (Invocation) -> Unit = {}
+    }
+
+    private val stages = mutableListOf<Stage>()
+
+    /** Entry of the built chain; null while no policy is installed (direct dispatch). */
+    private var chainEntry: ((Invocation) -> Unit)? = null
+
+    /** The chain terminal: the ACTIVATE tier — dispatch to the handler, or cold-park. */
+    private val terminal: (Invocation) -> Unit = { inv ->
+        inv.invoke(activeImplementation?.call ?: parkingImplementation)
+    }
+
+    /**
+     * Install an [InletPolicy] on this inlet (PN-9). Install order is irrelevant;
+     * the chain always runs in tier order. At most one [PolicyTier.ALIGN] policy
+     * is allowed (spec 12 §Policies) — a second throws.
+     */
+    fun install(policy: InletPolicy) {
+        require(!(policy.tier == PolicyTier.ALIGN && stages.any { it.policy.tier == PolicyTier.ALIGN })) {
+            "spec 12 §Policies: at most one ALIGN policy per inlet"
+        }
+        val stage = Stage(policy)
+        stages += stage
+        // Attach once; the release indirects through the (later re-wired) slot.
+        policy.attach(this) { inv -> stage.downstream(inv) }
+        rewire()
+    }
+
+    /** True iff a policy of [tier] is installed (spec 34 region detection keys on ALIGN). */
+    fun hasPolicy(tier: PolicyTier): Boolean = stages.any { it.policy.tier == tier }
+
+    /**
+     * Edge-event fan-out (PN-9): multiple policies on one inlet may care about
+     * `EdgeOpen`/`EdgeClose` (an ALIGN frontier tracks edges; a PullOnOpen issues
+     * a StateRequest) — but [ProtocolSupport] keeps a single handler per protocol
+     * id. This inlet owns that one [Protocols.TopologyOrder] handler and fans the
+     * event to every registered observer, in registration order, so policies
+     * compose without a global protocol-handler semantic change.
+     */
+    private val edgeObservers = mutableListOf<(Link, EdgeEvent) -> Unit>()
+
+    fun onEdgeEvent(observer: (Link, EdgeEvent) -> Unit) {
+        if (edgeObservers.isEmpty()) {
+            ProtocolSupport.of(this).handle(Protocols.TopologyOrder) { link, event ->
+                val edgeEvent = event as EdgeEvent
+                edgeObservers.toList().forEach { it(link, edgeEvent) }
+            }
+        }
+        edgeObservers += observer
+    }
+
+    private fun rewire() {
+        val sorted = stages.sortedBy { it.policy.tier.ordinal }
+        sorted.forEachIndexed { i, stage ->
+            stage.downstream = if (i + 1 < sorted.size) {
+                val next = sorted[i + 1].policy
+                ({ inv: Invocation -> next.offer(inv) })
+            } else {
+                terminal
+            }
+        }
+        chainEntry = sorted.firstOrNull()?.let { first -> { inv -> first.policy.offer(inv) } }
+    }
+
+    /** Drop transient buffered state across every installed policy (RESTART). */
+    fun resetPolicies() = stages.forEach { it.policy.reset() }
+
+    /**
+     * Deprecated ALIGN sugar (PN-9): assigning a frontier is now shorthand for
+     * [install]. Kept for the many call sites that set a [WaveFrontier] directly;
+     * new code should [install] policies (which composes across tiers).
+     */
+    @Deprecated("Install policies via install(); frontierPolicy is ALIGN-tier sugar", ReplaceWith("install(value)"))
     var frontierPolicy: InletFrontier? = null
         set(value) {
             field = value
-            value?.attach(this) { inv -> inv.invoke(activeImplementation?.call ?: parkingImplementation) }
+            if (value != null) install(value)
         }
 
-    /** Frontier entry point: captures each call as a wave-stamped [Invocation] and offers it. */
+    /** Chain entry point: captures each call as a wave-stamped [Invocation] and offers it to the chain head. */
     private val frontierGate: Api by lazy {
         Proxy.fromClass(clazz) { _, method, args ->
-            frontierPolicy?.offer(Invocation.of(method, args, CurrentContext.get()))
+            chainEntry?.invoke(Invocation.of(method, args, CurrentContext.get()))
             null
         }
     }
 
     override val call: Api = Proxy.delegating(clazz) {
-        if (frontierPolicy != null) frontierGate else (activeImplementation?.call ?: parkingImplementation)
+        if (chainEntry != null) frontierGate else (activeImplementation?.call ?: parkingImplementation)
     }
 
+    /**
+     * Targeted delivery (PN-9 decision: **policy-exempt**). [at] delivers a
+     * catch-up/pull-reply to one requester — a topology-versioned baseline
+     * ([civictech.cell.MessageContext.baseline]), never a wave position. The
+     * ALIGN frontier already releases such deliveries immediately (offer's
+     * baseline fast-path); routing [at] through the chain would be wrong (ADMIT
+     * could drop, GATE could hold, ALIGN could reorder a baseline — none
+     * admissible for state transfer). So [at] bypasses the policy chain and
+     * dispatches straight to the handler.
+     */
     override fun at(portRef: PortRef): Api {
         return Proxy.delegating(clazz) {
             activeImplementation?.at(portRef) ?: parkingImplementation

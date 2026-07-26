@@ -738,10 +738,10 @@ open class ManagedHost(
         return if (vetoed) null else region
     }
 
-    /** A cell is a wave-frontier join iff one of its inlets carries a [FanInlet.frontierPolicy] (CP-A4). */
+    /** A cell is a wave-frontier join iff one of its inlets carries an ALIGN policy (CP-A4, PN-9). */
     private fun hasFrontierPolicy(cell: Cell): Boolean {
         val ports = PortRegistry.of(cell)
-        return ports.names().any { name -> (ports[name] as? FanInlet<*>)?.frontierPolicy != null }
+        return ports.names().any { name -> (ports[name] as? FanInlet<*>)?.hasPolicy(PolicyTier.ALIGN) == true }
     }
 
     /**
@@ -1059,6 +1059,9 @@ open class ManagedHost(
                 registry?.unpublish(ref)
                 clearSupervision(ref)
                 cell.onDeactivate(ctx)
+                // PN-9 (leak bound): release the cell's ProtocolSupport entries so a
+                // despawned cell's ports (and their handler closures) can be collected.
+                ProtocolSupport.unbind(cell)
             }
 
             override fun supervise(ref: CellRef, policy: SupervisionPolicy) {

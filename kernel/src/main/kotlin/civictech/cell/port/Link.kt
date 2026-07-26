@@ -196,6 +196,18 @@ class LinkSupport {
     internal val onLinkedListeners = mutableListOf<(Link) -> Unit>()
     internal val onUnlinkListeners = mutableListOf<(Link) -> Unit>()
 
+    /**
+     * Re-fire every on-link hook for an already-installed [link] (PN-9): the
+     * single cell-facing [onLinked] slot **and** the [onLinkedListeners]
+     * multicast. Used by anti-entropy re-announce paths that push catch-up over
+     * an existing link — since catch-up moved to the multicast, a bare
+     * `onLinked(link)` would no longer reach it.
+     */
+    fun fireLinked(link: Link) {
+        onLinked(link)
+        onLinkedListeners.forEach { it(link) }
+    }
+
     fun reject(request: LinkRequest): LinkResult.Rejected? =
         policies.firstNotNullOfOrNull { it.evaluate(request) }
 
