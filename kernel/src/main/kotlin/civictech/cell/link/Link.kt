@@ -79,6 +79,7 @@ sealed interface LinkResult {
     /**
      * The handshake runs on the target's host (cross-host proxy link); the outcome
      * is not observable by the initiator until the wire layer exists (M5).
+     * A rejection on the target host is emitted to its dead-letter outlet.
      */
     data object Deferred : LinkResult
 }
