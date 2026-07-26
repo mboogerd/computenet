@@ -9,11 +9,7 @@ import civictech.cell.BlockingCell
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
-import civictech.cell.Leased
-import civictech.cell.MergeablePayload
-import civictech.cell.Owned
 import civictech.cell.ReBaselineEmitting
-import civictech.cell.Redacted
 import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
 import java.io.ByteArrayInputStream
@@ -119,6 +115,13 @@ open class ManagedHost(
     /** Failed/undeliverable invocations are published here instead of being dropped (G-26). */
     val deadLetterOutlet = registerPort("deadLetterOutlet", FanOutlet.create<Propagate<DeadLetter>>())
 
+    /**
+     * Dead-letter emission (G-26) — extracted to [DeadLetters] (RS-8.3). The
+     * only external coupling is [deadLetterOutlet] itself, since a registered
+     * port belongs to this host, not to the collaborator.
+     */
+    private val deadLetters = DeadLetters(hostRef = ref, emit = { deadLetterOutlet.call.propagate(it) })
+
     private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
 
     /** The concurrency color of this host's execution context (spec 32). */
@@ -142,32 +145,15 @@ open class ManagedHost(
      * Closable intake (spec 33, G-5): while closed, data and router sends fail
      * fast with [IntakeClosedException] — the sender's re-resolution signal.
      * Management stays open (a closed host must remain administrable).
+     * Forwards to [IntakeControl] (RS-8.3).
      */
-    @Volatile
-    private var intakeState = IntakeState.OPEN
-    private var saturationOrigin: Pair<CellRef, String>? = null
+    val currentIntakeState: IntakeState get() = intakeControl.intakeState
 
-    private val lowWaterListeners = mutableListOf<() -> Unit>()
+    internal fun onIntakeAvailable(listener: () -> Unit) = intakeControl.onIntakeAvailable(listener)
 
-    val currentIntakeState: IntakeState get() = intakeState
+    internal fun closeIntake() = intakeControl.closeIntake()
 
-    internal fun onIntakeAvailable(listener: () -> Unit) {
-        val runNow = synchronized(dataLock) {
-            if (intakeState == IntakeState.SATURATED) {
-                lowWaterListeners += listener
-                false
-            } else true
-        }
-        if (runNow) listener()
-    }
-
-    internal fun closeIntake() {
-        intakeState = IntakeState.CLOSED
-    }
-
-    internal fun openIntake() {
-        intakeState = IntakeState.OPEN
-    }
+    internal fun openIntake() = intakeControl.openIntake()
 
     private enum class State { RUNNING, DRAINING, DRAINED }
 
@@ -194,7 +180,6 @@ open class ManagedHost(
     fun generationOf(ref: CellRef): Long = generations[ref] ?: 0L
 
     /** Park/crash accounting (G-46): observability for exclusive payloads off the happy path. */
-    private val deadLetterCount = AtomicLong()
     private val parkedDrainedOnTeardownCount = AtomicLong()
     private val restartCount = AtomicLong()
 
@@ -215,7 +200,7 @@ open class ManagedHost(
 
     /** Snapshot of this host's supervision counters (G-46). */
     fun supervisionAccounting(): SupervisionAccounting = SupervisionAccounting(
-        deadLetters = deadLetterCount.get(),
+        deadLetters = deadLetters.deadLetterCount,
         parkedDrainedOnTeardown = parkedDrainedOnTeardownCount.get(),
         restarts = restartCount.get(),
     )
@@ -273,6 +258,22 @@ open class ManagedHost(
         awaitOnManagementBand = { action -> enqueueAwaiting(0, action) },
     )
 
+    /**
+     * Intake closed/saturated gating, coalescing, and saturation announce —
+     * extracted to [IntakeControl] (RS-8.3). Shares [dataLock] with the host,
+     * same as [attentionScheduler]/[hostDurability]; reads
+     * [AttentionScheduler]'s queue state via narrow accessors
+     * (`attentionScheduler::dataQueuedCount`, a queue-by-ref lookup) rather
+     * than holding a reference to the scheduler itself.
+     */
+    private val intakeControl = IntakeControl(
+        dataLock = dataLock,
+        intakeBound = intakeBound,
+        cellsView = { cells },
+        dataQueuedCount = attentionScheduler::dataQueuedCount,
+        dataQueueFor = { cellRef -> attentionScheduler.dataQueues[cellRef] },
+    )
+
     /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
     private fun clearSupervision(cellRef: CellRef) {
         policies.remove(cellRef)
@@ -323,36 +324,9 @@ open class ManagedHost(
         }
     }
 
-    private fun deadLetter(cause: Throwable?, description: String, invocation: HostedPortInvocation? = null) {
-        System.err.println("[ManagedHost ${ref.id}] dead letter: $description" + (cause?.let { " ($it)" } ?: ""))
-        deadLetterCount.incrementAndGet()
-        deadLetterOutlet.call.propagate(DeadLetter(ref, cause, description, invocation?.let(::sanitizeForDeadLetter)))
-    }
-
-    /**
-     * Dead-letter capture applies the boundary rules (spec 23 R8, G-46): the
-     * dead-letter outlet is a fan-out, so a live [Owned]/[Leased] reference
-     * MUST NOT enter it. `Owned` degenerates to move-by-serialize — frozen,
-     * exactly as at the bridge egress — and `Leased` is released and stands
-     * in as a [Redacted] marker; the outlet only ever fans `Frozen`/redacted/
-     * ordinary values, never a live exclusive handle. A wrapper the failing
-     * invocation had already taken/released before throwing has nothing left
-     * to capture; it is redacted with no value rather than crashing capture.
-     */
-    private fun sanitizeForDeadLetter(hostedInvocation: HostedPortInvocation): HostedPortInvocation {
-        val args = hostedInvocation.invocation.args
-        if (args.none { it is Owned<*> || it is Leased<*> }) return hostedInvocation
-        val sanitized = args.map { arg ->
-            when (arg) {
-                is Owned<*> -> runCatching { arg.freeze() }
-                    .getOrElse { Redacted("Owned payload already consumed before capture") }
-                is Leased<*> -> Redacted("Leased payload released at dead-letter capture")
-                    .also { runCatching { arg.release() } }
-                else -> arg
-            }
-        }
-        return hostedInvocation.copy(invocation = hostedInvocation.invocation.copy(args = sanitized))
-    }
+    /** Forwards to [DeadLetters] (RS-8.3) — kept as a same-named private method so every call site is unchanged. */
+    private fun deadLetter(cause: Throwable?, description: String, invocation: HostedPortInvocation? = null) =
+        deadLetters.deadLetter(cause, description, invocation)
 
     private fun enqueue(priority: Int, action: suspend () -> Any?) {
         scheduler.submit(priority) {
@@ -411,11 +385,11 @@ open class ManagedHost(
                 return
             }
         }
-        if (!isManagement && intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
+        if (!isManagement && intakeControl.intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
         if (!isManagement) {
             synchronized(dataLock) {
-                if (intakeState == IntakeState.SATURATED) {
-                    if (intakeBound?.policy == SaturationPolicy.Coalesce && coalesce(hostedInvocation)) {
+                if (intakeControl.intakeState == IntakeState.SATURATED) {
+                    if (intakeBound?.policy == SaturationPolicy.Coalesce && intakeControl.coalesce(hostedInvocation)) {
                         // Coalescing is acceptance, not loss: retain every original
                         // in the WAL so recovery may replay the equivalent sequence.
                         if (!hostDurability.recovering) journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(hostedInvocation))
@@ -435,15 +409,7 @@ open class ManagedHost(
         // message keeps message count <= task count (a task may find nothing)
         synchronized(dataLock) {
             attentionScheduler.stage(hostedInvocation)
-            intakeBound?.let { bound ->
-                if (!isManagement && attentionScheduler.dataQueuedCount() >= bound.highWater) {
-                    if (intakeState != IntakeState.SATURATED) {
-                        intakeState = IntakeState.SATURATED
-                        saturationOrigin = hostedInvocation.cellRef to hostedInvocation.portName
-                        announceSaturation(true)
-                    }
-                }
-            }
+            intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
         }
         enqueue(20) { attentionScheduler.dispatchOne() }
     }
@@ -452,21 +418,14 @@ open class ManagedHost(
      * Runs inside [AttentionScheduler]'s own `dataLock` critical section,
      * right after it dequeues a message (RS-8.1) — preserves the original
      * atomicity of the low-water intake transition, which used to happen
-     * inline in the same `synchronized(dataLock)` block as the dequeue.
+     * inline in the same `synchronized(dataLock)` block as the dequeue. Kept
+     * as a same-named private method on the host (RS-8.3) — rather than
+     * wiring [AttentionScheduler]'s constructor directly at `intakeControl`
+     * — to avoid a construction-order cycle: this callback is captured when
+     * [attentionScheduler] is built, before [intakeControl] (which itself
+     * needs [attentionScheduler]'s queue accessors) exists.
      */
-    private fun intakeLowWaterCheck(): List<() -> Unit> {
-        intakeBound?.let { bound ->
-            if (intakeState == IntakeState.SATURATED && attentionScheduler.dataQueuedCount() <= bound.lowWater) {
-                intakeState = IntakeState.OPEN
-                announceSaturation(false)
-                saturationOrigin = null
-                val listeners = lowWaterListeners.toList()
-                lowWaterListeners.clear()
-                return listeners
-            }
-        }
-        return emptyList()
-    }
+    private fun intakeLowWaterCheck(): List<() -> Unit> = intakeControl.lowWaterCheck()
 
     private fun notifyParked(cellRef: CellRef) {
         cells[cellRef]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
@@ -474,28 +433,6 @@ open class ManagedHost(
 
     private fun notifyResumed(cellRef: CellRef) {
         cells[cellRef]?.let { notifyDownstream(it, StallNotice.Resume) }
-    }
-
-    /** Caller holds dataLock. Same source+wave slot preserves wave identity and source FIFO. */
-    private fun coalesce(incoming: HostedPortInvocation): Boolean {
-        val payload = incoming.invocation.args.singleOrNull() as? MergeablePayload ?: return false
-        val context = incoming.invocation.context ?: return false
-        val queue = attentionScheduler.dataQueues[incoming.cellRef] ?: return false
-        val index = queue.indexOfLast { (_, old) ->
-            old.portName == incoming.portName &&
-                old.invocation.methodId == incoming.invocation.methodId &&
-                old.invocation.context?.timestamp == context.timestamp &&
-                old.invocation.context?.sourcePort == context.sourcePort &&
-                old.invocation.args.singleOrNull() is MergeablePayload
-        }
-        if (index < 0) return false
-        val entries = queue.toMutableList()
-        val (sequence, old) = entries[index]
-        val merged = (old.invocation.args.single() as MergeablePayload).mergeWith(payload)
-        entries[index] = sequence to old.copy(invocation = old.invocation.copy(args = listOf(merged)))
-        queue.clear()
-        queue.addAll(entries)
-        return true
     }
 
     /**
@@ -513,21 +450,6 @@ open class ManagedHost(
     private fun bandOf(cellRef: CellRef): AttentionBand = when {
         attention == null -> AttentionBand.NORMAL
         else -> cells[cellRef]?.let { AttentionSupport.of(it).band } ?: AttentionBand.NORMAL
-    }
-
-    /** Emits the host intake state on every inbound data edge; G-36 relays it producer-ward. */
-    private fun announceSaturation(asserted: Boolean) {
-        val (cellRef, portName) = saturationOrigin ?: return
-        val port = cells[cellRef]?.let { PortRegistry.of(it)[portName] } as? Linked ?: return
-        port.linking.links.forEach { link ->
-            if (link.toPort === port) {
-                Protocols.sendUpstream(
-                    link,
-                    Protocols.Saturation,
-                    SaturationSignal((port as Port).ref, asserted),
-                )
-            }
-        }
     }
 
     /**
@@ -1036,7 +958,7 @@ open class ManagedHost(
         })
 
         routerInlet.serve(Proxy.fromClass(HostRoutingApi::class.java) { _, method, args ->
-            if (intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
+            if (intakeControl.intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
             val invocation = Invocation.of(method, args).withTarget(internalHostRoutingApi)
             enqueue(10) { invocation.invoke() }
             null
