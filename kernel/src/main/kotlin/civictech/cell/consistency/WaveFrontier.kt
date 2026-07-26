@@ -9,6 +9,7 @@ import civictech.cell.port.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.InletFrontier
 import civictech.cell.port.Link
+import civictech.cell.port.LinkRole
 import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
@@ -289,9 +290,16 @@ class WaveFrontier(
      * fan-in diamond glitch-free. Replica-fed edges are excluded: a local source
      * never flows through a replica inlink, so counting one would be a phantom
      * sibling that never settles.
+     *
+     * PN-10: **Observe**-role edges (negotiated `tap`/`streamTo` announcements)
+     * are excluded too. A tap announces its edge — so it negotiates and appears
+     * in the topology — but it never carries the source's consume waves; counting
+     * it would be a phantom sibling that never settles, wedging the join. Only
+     * [LinkRole.Consume] edges gate a wave.
      */
     private fun expectedLocalEdges(timestamp: Timestamp): Set<UUID> = edges.values
         .asSequence()
+        .filter { it.link.role == LinkRole.Consume }
         .filter { it.open && it.link.id !in suspendedEdges }
         .filter { gateFor(it) == null }
         .filter { (it.floors[timestamp.sourceId] ?: Long.MIN_VALUE) < timestamp.counter }
