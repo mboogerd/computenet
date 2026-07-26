@@ -1,12 +1,19 @@
 package civictech.cell.data
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.port.FanInlet
+import civictech.cell.port.PortRef
 import civictech.cell.port.RetainedFrontiers
+import civictech.cell.port.Use
+import civictech.cell.port.registerPort
+import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.replication.Interest
 import civictech.cell.wire.Peering
 import io.kotest.matchers.booleans.shouldBeTrue
@@ -17,23 +24,67 @@ import java.util.UUID
 
 /**
  * PN-5 (spec 20/24 §Partitioned state, 40/42 §Interest-scoped instance sets):
- * scatter-gather pull. A pull against a partitioned logical id has no single
- * answerer — the router would need O(total state) at one node to serve it, the
- * very thing partitioning exists to avoid. Instead the router fans the pull to
- * every interest-overlapping shard; each answers its own slice with its own
- * frontier. Freshness is per-shard-consistent, cross-shard-arbitrary: a leg is a
- * baseline, never a wave, and a migrating shard's leg simply defers.
+ * scatter-gather pull, **over the wire**. A pull against a partitioned logical
+ * id has no single answerer — the router would need O(total state) at one node
+ * to serve it, the very thing partitioning exists to avoid. Instead the router
+ * fans a `StateRequest` to every interest-overlapping shard over the registry
+ * (the same transport the write path uses); each shard answers with its own PN-4
+ * `StateRequest` handler (`outlet.baselineTo(replyTo, currentFrontier(scope))`),
+ * so a shard behind a bridge is genuinely reached over that bridge and its reply
+ * genuinely crosses back to the requester. Freshness is per-shard-consistent,
+ * cross-shard-arbitrary: a leg is a baseline, never a wave, and a migrating
+ * shard's leg simply defers.
  *
- * A late joiner pulls a 3-shard cell (shards behind bridges, one held
- * mid-migration): the assembled union equals a batch group-by, and a second
- * incremental pull returns only the tags a per-shard retained `since` has not
- * seen. Controls: (a) one merged scalar `since` across shards silently loses the
- * migrating shard's non-contiguous tags; (b) answering from the router's own
+ * The pull crossing the wire is what this test proves. Shards live on their own
+ * hosts+registries, bridged to the router. The router's [PartitionedShardSet.pull]
+ * dereferences **no** co-located shard object for its state — it only addresses
+ * each shard by [CellRef] and sends a `StateRequest` frame; the answering
+ * `baselineTo` is delivered to a requester [PullInbox] on the router side over
+ * the shard's reverse bridge (an asynchronous reply — it materializes only after
+ * the simulation drains the bridge, not synchronously inside `pull`). The
+ * requester assembles the union from the N per-shard baseline replies and a
+ * second incremental pull returns only the tags a per-shard retained `since` has
+ * not seen. Controls: (a) one merged scalar `since` across shards silently loses
+ * the migrating shard's non-contiguous tags; (b) answering from the router's own
  * `ledger` is functionally green but materializes O(total) state at one node.
  */
 class PartitionedPullTest {
 
-    private fun key(e: String) = e.first().toString()
+    /**
+     * The requester (late joiner): a hosted cell on the router side collecting
+     * the shards' `baselineTo` pull replies. It correlates each reply to its
+     * shard by the reply's `sourcePort` (the shard outlet's derived ref) and
+     * reads the leg's frontier off [civictech.cell.MessageContext.baseline] — the
+     * baseline mark that separates a pull reply from a live routed delta arriving
+     * on the same subscription ("a baseline is never a wave").
+     */
+    private class PullInbox(
+        shardRefs: List<CellRef>,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
+        private val outletToShard = shardRefs.associateBy { PortRef.of(it, "outlet") }
+        private val collected = mutableListOf<PullReply<String>>()
+
+        init {
+            inlet.serve(object : Propagate<SetDelta<String>> {
+                override fun propagate(value: SetDelta<String>) {
+                    val ctx = CurrentContext.get()
+                    val frontier = ctx?.baseline ?: return // live wave (no baseline) — not a pull leg
+                    val shard = outletToShard[ctx.sourcePort] ?: return
+                    collected += PullReply(shard, value, frontier)
+                }
+            })
+        }
+
+        /** Take (and clear) the baseline replies collected since the last drain. */
+        fun drain(): List<PullReply<String>> = collected.toList().also { collected.clear() }
+    }
+
+    /** Registry proxy shape for the inbox's inlet, resolved by port name over a shard's reverse bridge. */
+    private interface InboxRoute {
+        val inlet: Use<Propagate<SetDelta<String>>>
+    }
 
     /** A router bridged to [shardCount] shards, each an interest-scoped hosted instance on its own host+registry. */
     private class Mesh(seed: Long, val shardCount: Int, val totalSlots: Int) {
@@ -43,6 +94,8 @@ class PartitionedPullTest {
         private val routerSide = Peering.Side(routerRegistry, routerBridgeHost)
         val logicalId: UUID = UUID.randomUUID()
         val router = PartitionedShardSet<String>(totalSlots, { it.first().toString() }, routerRegistry)
+        private val shardRefs = (0 until shardCount).map { CellRef(logicalId, it.toLong()) }
+        private val inbox = PullInbox(shardRefs)
 
         init {
             val shardCells = List(shardCount) { i ->
@@ -50,16 +103,44 @@ class PartitionedPullTest {
                 val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = reg)
                 val host = ManagedHost(scheduler = controller.scheduler(), registry = reg)
                 val interest = Interest.Slots.forShard(i, shardCount, totalSlots)
-                val shard = ShardCell<String>(CellRef(logicalId, i.toLong()), { it.first().toString() }, interest)
+                val shard = ShardCell<String>(shardRefs[i], { it.first().toString() }, interest)
                 host.managementInlet.call.spawn(shard)
                 Peering.loopback(routerSide, Peering.Side(reg, bridgeHost))
-                shard to interest
+                Triple(shard, interest, reg)
+            }
+            // The requester lives on the router side; loopback announces it to every
+            // shard's registry, so a shard's baselineTo reply routes home over its
+            // own reverse bridge (spec 41 point 3, the mirror the write path uses).
+            routerBridgeHost.managementInlet.call.spawn(inbox)
+            controller.runToIdle()
+            shardCells.forEach { (shard, interest, reg) ->
+                router.addShard(shard, interest)
+                // Reverse data path: subscribe the inbox (over the shard's registry)
+                // as the shard outlet's consumer under the pull replyTo, so the
+                // shard's baselineTo(replyTo) crosses the bridge back to the router
+                // side. Set up once, from the shard object at wiring time (as the
+                // kernel's bridged-link tests wire their data proxies); the pull
+                // PATH itself never touches this object — it only sends over the wire.
+                val replyProxy = (HostedCellProxy.create(inbox.ref, reg, InboxRoute::class.java) as InboxRoute).inlet.call
+                shard.outlet.subscribe(Use.fixed(replyProxy, inbox.inlet.ref))
             }
             controller.runToIdle()
-            shardCells.forEach { (shard, interest) -> router.addShard(shard, interest) }
         }
 
         fun quiesce() = controller.runToIdle()
+
+        /**
+         * Fire a scatter-gather pull and return the replies once they have crossed
+         * the bridge. `pull` only *sends* the `StateRequest`s; the `baselineTo`
+         * legs arrive asynchronously over each shard's reverse bridge, so we drain
+         * the simulation before reading the inbox — proof the reply crossed the
+         * wire rather than being read in-process inside `pull`.
+         */
+        fun pull(scope: Interest, sinceOf: (CellRef) -> TagFrontier?): List<PullReply<String>> {
+            router.pull(inbox.inlet.ref, scope, sinceOf)
+            controller.runToIdle()
+            return inbox.drain()
+        }
 
         /** Shard [i] begins migrating — a pull leg to it defers until it settles. */
         fun migrate(i: Int) = routerRegistry.hold(CellRef(logicalId, i.toLong()))
@@ -121,20 +202,20 @@ class PartitionedPullTest {
 
             // late joiner pulls while shard 1 is mid-migration: its leg defers
             mesh.migrate(1)
-            val round1 = mesh.router.pull(Interest.Total, sinceOf)
+            val round1 = mesh.pull(Interest.Total, sinceOf)
             record(round1)
             // the migrating shard was skipped, so round 1 is at most a subset of the board
             union(round1).all { it in input.liveSet() }.shouldBeTrue()
 
             // migration completes; the deferred leg is pulled from its own (null) currency ⇒ full
             mesh.heal(1)
-            val round2 = mesh.router.pull(Interest.Total, sinceOf)
+            val round2 = mesh.pull(Interest.Total, sinceOf)
             record(round2)
 
             (union(round1) + union(round2)) shouldBe input.liveSet() // assembled state equals the union
 
             // a second incremental pull with nothing new returns nothing unseen
-            val idle = mesh.router.pull(Interest.Total, sinceOf)
+            val idle = mesh.pull(Interest.Total, sinceOf)
             record(idle)
             union(idle) shouldBe emptySet()
 
@@ -148,7 +229,7 @@ class PartitionedPullTest {
             }
             mesh.quiesce()
 
-            val incremental = mesh.router.pull(Interest.Total, sinceOf)
+            val incremental = mesh.pull(Interest.Total, sinceOf)
             record(incremental)
             union(incremental) shouldBe newKeys // only unseen tags come back — batch-1 elements never repeat
         }
@@ -178,17 +259,17 @@ class PartitionedPullTest {
             val retained = RetainedFrontiers()
             var merged: TagFrontier? = null
             mesh.migrate(1)
-            val round1 = mesh.router.pull(Interest.Total) { retained.sinceFor(it) }
+            val round1 = mesh.pull(Interest.Total) { retained.sinceFor(it) }
             round1.forEach { retained.record(it.instance, it.frontier); merged = mergeFrontier(merged, it.frontier) }
             mesh.heal(1)
 
             // correct: the deferred shard 1 is pulled from its OWN (null) currency ⇒ full.
-            val ok2 = mesh.router.pull(Interest.Total) { retained.sinceFor(it) }
+            val ok2 = mesh.pull(Interest.Total) { retained.sinceFor(it) }
             val got = union(round1) + union(ok2)
 
             // control: shard 1 pulled with the MERGED since — its non-contiguous counters
             // are mostly <= the merged max, so they read as already-seen and never return.
-            val bad2 = mesh.router.pull(Interest.Total) { merged }
+            val bad2 = mesh.pull(Interest.Total) { merged }
             val lost = union(round1) + union(bad2)
 
             got shouldBe input.liveSet() // per-instance since never loses
@@ -217,7 +298,7 @@ class PartitionedPullTest {
             mesh.quiesce()
             if (input.liveSet().size < 2) continue
 
-            val fanned = mesh.router.pull(Interest.Total) { null }
+            val fanned = mesh.pull(Interest.Total) { null }
             val ledgered = mesh.router.pullFromLedger(Interest.Total, null)
 
             // both are functionally green: same assembled union of elements

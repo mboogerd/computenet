@@ -167,6 +167,10 @@ object WireCodec {
                 subclass(SaturationSignal::class)
                 subclass(civictech.cell.port.EdgeOpen::class)
                 subclass(civictech.cell.port.EdgeClose::class)
+                // on-demand pull request (spec 20/21 §Pull, 20/24 §Partitioned
+                // state, PN-5): the scatter-gather router fans a StateRequest to
+                // shards behind a bridge, so it crosses as a PORT_PROTOCOL message.
+                subclass(civictech.cell.port.StateRequest::class)
             }
         }.let { kernelModule ->
             // app-contributed delta serializers (M17): ServiceLoader-discovered,

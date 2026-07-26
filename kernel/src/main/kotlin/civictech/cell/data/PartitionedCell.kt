@@ -17,7 +17,10 @@ import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedCellProxy
+import civictech.cell.proxy.InvocationSink
 import civictech.cell.replication.Interest
+import civictech.cell.wire.PortAddress
+import civictech.cell.wire.WireEdgeLink
 import java.io.Serializable
 import java.util.UUID
 
@@ -326,19 +329,6 @@ class ShardCell<E>(
     /** This shard's full tag state as a delta-from-empty — the router's [rebuildFrom] ledger source. */
     internal fun contents(): SetDelta<E> = state.asDelta()
 
-    /**
-     * This shard's scatter-gather pull leg (PN-5, spec 20/24 §Partitioned state):
-     * its own slice of the board — the [scope]-admitted tags a [since] frontier
-     * has not seen — paired with the frontier that slice is current to. The exact
-     * `(contentsSince, currentFrontier)` pair PN-4's [Protocols.StateRequest]
-     * handler answers with, minus the outlet emission: the router reads it
-     * directly (like [membership]) so no wave is minted — a baseline is never a
-     * wave. Per-shard-consistent by construction; cross-shard freshness is
-     * whatever each leg happens to observe.
-     */
-    internal fun pullSlice(since: TagFrontier?, scope: Interest?): Pair<Map<E, Set<Timestamp>>, TagFrontier> =
-        contentsSince(since, scope) to currentFrontier(scope)
-
     /** Tags a [since] frontier has not seen, restricted to the [scope] the requester admits (the SetCell pattern). */
     private fun contentsSince(since: TagFrontier?, scope: Interest?): Map<E, Set<Timestamp>> {
         val admit: (E) -> Boolean =
@@ -576,10 +566,26 @@ class PartitionedShardSet<E>(
      * §Interest-scoped instance sets). A pull against a partitioned logical id
      * has no single answerer: the router serving it from its own [ledger] would
      * hold O(total state) at one node — the very thing partitioning exists to
-     * avoid ([pullFromLedger] is that control). Instead the router **fans** the
-     * pull to every shard whose interest overlaps [scope], and each shard answers
-     * its own slice with its own frontier ([ShardCell.pullSlice]). The board is
-     * never materialized at one node — no leg carries more than its shard's range.
+     * avoid ([pullFromLedger] is that control). Instead the router **fans** a
+     * `StateRequest` to every shard whose interest overlaps [scope], **over the
+     * registry** — the same wire transport the write path uses ([addShard]'s
+     * `HostedCellProxy`/`ShardRoute` proxy). Each shard answers with its own
+     * existing PN-4 [Protocols.StateRequest] handler
+     * (`outlet.baselineTo(replyTo, currentFrontier(scope))`), so a shard behind a
+     * bridge is genuinely reached over that bridge and its reply genuinely
+     * crosses back to [replyTo] — the router holds no direct object reference to
+     * a bridged shard's state on this path (only its [CellRef], to address the
+     * wire send, exactly as the write path does). The board is never materialized
+     * at one node — each baseline reply carries only its shard's range.
+     *
+     * The reply is asynchronous (it rides a bridge): this call **fires** the
+     * fan-out and returns; the requester at [replyTo] assembles the union from
+     * the N per-shard baseline replies as they arrive (each a
+     * [PullReply]-shaped `baselineTo` whose [civictech.cell.MessageContext.baseline]
+     * is that shard's frontier — a baseline is never a wave, so a live routed
+     * delta on the same subscription is not mistaken for a pull leg). The
+     * consumer retains the frontier **per instance**
+     * ([civictech.cell.port.RetainedFrontiers]).
      *
      * Freshness is per-shard-consistent, cross-shard-arbitrary: each leg is a
      * baseline (never a wave), and legs are independent — a shard that is
@@ -592,18 +598,41 @@ class PartitionedShardSet<E>(
      * deferred shard's non-contiguous tags (control a): its counters read as
      * already-seen under a sibling's higher water.
      */
-    fun pull(scope: Interest, sinceOf: (CellRef) -> TagFrontier?): List<PullReply<E>> {
-        val out = mutableListOf<PullReply<E>>()
+    fun pull(replyTo: PortRef, scope: Interest, sinceOf: (CellRef) -> TagFrontier?) {
         shards.forEach { shard ->
             if (!shard.interest.overlaps(scope)) return@forEach
             if (registry.isHeld(shard.cell.ref)) return@forEach // migrating — its leg defers
-            val overlap = Interest.Intersect(listOf(shard.interest, scope))
-            val (adds, frontier) = shard.cell.pullSlice(sinceOf(shard.cell.ref), overlap)
-            if (adds.isEmpty()) return@forEach
-            out += PullReply(shard.cell.ref, SetDelta(adds = adds), frontier)
+            // Fan the StateRequest over the wire (the write path's transport), not
+            // a direct object read: replyTo names the requester's inlet, since is
+            // this instance's retained currency, scope rides Total (the shard
+            // already holds only its slice — see StateRequest.scope).
+            Protocols.sendUpstream(
+                pullEdge(shard.cell.ref, replyTo),
+                Protocols.StateRequest,
+                StateRequest(replyTo, sinceOf(shard.cell.ref)),
+            )
         }
-        return out
     }
+
+    /**
+     * A one-shot bridged link carrying a pull `StateRequest` upstream to a shard's
+     * outlet (PN-5). Its `protocolBridge` routes the frame to `fromAddr` (the
+     * shard outlet) through [registry] — resolving in-process or across a bridge
+     * transparently, the same resolution the write proxy uses. The shard's
+     * handler replies `baselineTo(replyTo)`, which reaches the requester over the
+     * reverse data path its subscription established (never this link), so this
+     * link needs no registration and lives only for the one send.
+     */
+    private fun pullEdge(shardRef: CellRef, replyTo: PortRef): WireEdgeLink =
+        WireEdgeLink(
+            id = UUID.randomUUID(),
+            from = PortRef.of(shardRef, "outlet"),
+            to = replyTo,
+            fromAddr = PortAddress(shardRef, "outlet"),
+            toAddr = PortAddress(replyTo.cell ?: shardRef, "inlet"),
+            protocolCapabilities = setOf(Protocols.StateRequest),
+            sink = InvocationSink(registry::deliver),
+        )
 
     /**
      * Control (b): answer the whole pull from the router's own total-interest
