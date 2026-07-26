@@ -125,6 +125,8 @@ User added FU-5..FU-9. Running only the non-collaborative build tickets unsuperv
 
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| FU-5 | pending | comp/FU-5 | | PULL_SERVICE axis — pull-needing inlet onto non-serving producer refuses |
-| FU-6 | pending | comp/FU-6 | | single-writer inlet (SPSC mirror) |
-| FU-8 | pending | comp/FU-8 | | cycle admission checks damping, not just headedness |
+| FU-6 | merged | comp/FU-6 | (ADR-batch) | single-writer `FanInlet` (`singleWriter=false` default, byte-identical); validator READY |
+| FU-8 | merged | comp/FU-8 | (ADR-batch) | cycle admission requires a damping witness (Magnitude ∥ MONOTONE/IDEMPOTENT ∥ explicit quiescence); CycleHeadTest unchanged, no existing cycle refused; validator READY |
+| FU-5 | merged | comp/FU-5 | (ADR-batch) | PULL_SERVICE refusing axis. **DEVIATION:** ticket said "installing PullOnOpen IS the requirement" unconditionally — that reds the whole glitch-free subsystem (GlitchFreeCell installs PullOnOpen on every ALIGN inlet against tolerated non-serving producers). Agent made it **opt-in**: `PullOnOpen(requireServing = true)` stamps the requirement; default `false` = today's behavior. Consumers must set `requireServing = true` to get the refusal. Needs user sign-off on the surface. |
+
+Combined ADR-batch gate green (clean `--rerun-tasks` 49/49) after FU-5+FU-6+FU-8 merges. One transient `BUILD FAILED` immediately post-merge did not reproduce across two clean full re-runs (resource blip). FU-5/FU-6 merged without a separate validator merge-gate step (validators had already reported READY; user requested prompt merge of completed work); FU-5 merged per user's "resume + unblock" request with the deviation flagged for review.
