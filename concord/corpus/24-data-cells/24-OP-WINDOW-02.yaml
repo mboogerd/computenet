@@ -1,0 +1,26 @@
+id: 24-OP-WINDOW-02
+title: Sliding window expands each event into every window it falls in
+covers: [24-OP-WINDOW-01]
+profile: core
+kind: example
+narrative:
+  given: a set source of [event-time, value] pairs expanded into every 10-wide, 5-sliding window each event falls in, summed per window, observed through a count view
+  when: one element's windows are later fully retracted
+  then: sliding assignment is per-element expansion then group (M11.6) — one element contributes to several window keys, and the last retraction of a window's sole member removes that group entirely (SQL group-death, carried over from group-by)
+graph:
+  cells:
+    - {id: a, type: set-source}
+    - {id: w, type: window, agg: sum, window: {kind: sliding, size: 10, slide: 5}}
+    - {id: v, type: count-view}
+  links:
+    - {from: a, to: w}
+    - {from: w, to: v}
+script:
+  - {type: apply, on: a, op: add, value: [3, 5]}
+  - {type: apply, on: a, op: add, value: [12, 7]}
+  - {type: apply, on: a, op: add, value: [22, 9]}
+  - {type: apply, on: a, op: remove, value: [12, 7]}
+checks:
+  - {type: final-view, view: v, equals: {"-5": 5, "0": 5, "15": 9, "20": 9}}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

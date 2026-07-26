@@ -115,7 +115,40 @@ data class CellSpec(
      * before the replica joins the mesh (`KernelDriverDist.spawnReplica`).
      */
     val interest: InterestSpec? = null,
+    /**
+     * Window descriptor (M11.6 "windowing = key derivation",
+     * `24-data-cells.md` §Grouped aggregation, `24-OP-WINDOW-01`/`-02`):
+     * present only on a `window` cell. Optional and additive — existing
+     * scenarios carry no `window:` block and still parse. `size`/`slide` count
+     * the raw event-time/sequence field's units (there is no wall clock, spec
+     * 24), not durations.
+     */
+    val window: WindowSpec? = null,
 )
+
+/**
+ * A `window` cell's key-derivation descriptor (M11.6): tumbling assigns each
+ * element's event time to one composite bucket key (`size`); sliding expands
+ * each element into every window of `size` it falls in, `slide` apart, then
+ * groups (mirrors the kernel `Windows.tumbling`/`Windows.sliding` assigners —
+ * see `KernelCatalog`/`BatchOracle`). Windows never close (`24-OP-WINDOW-02`):
+ * a late element is an ordinary add and retractions flow like any other view.
+ */
+@Serializable
+data class WindowSpec(
+    val kind: WindowKind,
+    /** The window length, in event-time/sequence units. */
+    val size: Long,
+    /** The hop between successive window starts; required for `sliding`, ignored for `tumbling`. */
+    val slide: Long? = null,
+)
+
+/** A `window` cell's assignment strategy (`24-OP-WINDOW-01`). */
+@Serializable
+enum class WindowKind {
+    @SerialName("tumbling") TUMBLING,
+    @SerialName("sliding") SLIDING,
+}
 
 /**
  * The neutral interest sub-grammar (`42-INTEREST-01`): a small, closed vocabulary

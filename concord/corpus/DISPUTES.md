@@ -73,17 +73,50 @@ full by-scenario entries below are now marked **RESOLVED (R1)**.
   (`MapDelta<E,Int>`, group-death at 0) matching `PresenceCountCell`, so
   `incremental-equals-batch` is restored rather than omitted.
 
+## Resolved by R2 (dispute-resolution wave — observability + windowing)
+
+Five more entries closed in dispute-resolution wave R2 (two parallel tickets,
+file-merged onto `main`). Each named a gap that on investigation turned out to be
+a missing *harness/schema surface* over a real kernel capability — not a kernel
+hole — so R2 built the surface without weakening any check. Their full
+by-scenario entries below are now marked **RESOLVED (R2)**.
+
+- `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — **RESOLVED** (`schema-gap` +
+  `driver-binding-gap`, NOT a kernel gap). Window is a key-derivation group-by
+  over the kernel's real `Windows.tumbling`/`sliding` functions: `CellSpec.window`
+  (`WindowSpec` on `Scenario.kt`) is bound in `KernelCatalog`/`KernelAdapters`
+  (`kind:tumbling`→`GroupByCell` with a `Windows.tumbling` `keyFn`;
+  `kind:sliding`→`WindowSlidingCell`, a `FlatMapSetCell` over `Windows.sliding`
+  into a `GroupByCell`), and `BatchOracle.windowFold` models the identical key
+  derivation. Both scenarios pass golden + `incremental-equals-batch` +
+  `no-dead-letters`.
+- `22-WAVE-FANIN-01` — **RESOLVED** (`schema-gap`). The set-shaped per-wave
+  predicate that was missing now exists: `observations-whole-waves`
+  (`schema/Check.kt` + `check/Checks.kt`, R2-A) asserts that every observation on
+  the view is a complete wave (no torn single-arm partial), evaluated over the
+  real `quorum-set` (`QuorumSetCell`) glitch-free fan-in. The scenario positively
+  asserts glitch-freedom again alongside `final-view` + `incremental-equals-batch`
+  + `no-dead-letters`.
+- `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — **RESOLVED** (`schema-gap`). Re-modeled
+  as SET fork-joins over `quorum-set` (a genuine kernel glitch-free operator whose
+  `evaluate()` only `propagate()`s once quorum is met), so glitch-freedom is now
+  positively asserted via `observations-whole-waves` (single diamond and nested
+  double-diamond respectively) — no longer `final-view`-only.
+
 ## Category index (worklist, cheapest first)
 
 **`schema-gap` — a descriptor surface the frozen W0 schema does not expose;
 needs a between-waves schema-change ticket:**
 
-- `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — no window-spec descriptor (also
-  `kernel-gap`: no `window` cell binding — see entry).
-- `22-WAVE-FANIN-01` — no set-shaped per-wave predicate in the frozen function
-  catalog, so "this observation is a complete wave" is unassertable over a set
-  stream (the glitch-free *wiring* landed W3-4; this check-shape gap did not —
-  see entry).
+- `24-OP-COMBINE-01` (+ the `CTL-GF-01` control) — the **scalar** `combine-latest`
+  (`ScalarSumCombineCell`) cannot be glitch-free-observed: it emits a torn
+  per-arm delta before any wrapper coalesces it, and no wave-coalescing scalar
+  combine exists in the kernel. This is the one genuine remaining glitch-free
+  gap; also `kernel-gap` — see entry.
+
+*(`24-OP-WINDOW-01` / `24-OP-WINDOW-02` — resolved in R2 (window = key-derivation
+group-by over `Windows`); `22-WAVE-FANIN-01` — resolved in R2 (set-shaped
+`observations-whole-waves` predicate landed). See the "Resolved by R2" section.)*
 
 *(`12-NEGOTIATE-01`, `23-SPSC-01` (reject half), `24-OP-PRESENCE-01` — resolved
 in R1, see the "Resolved by R1" section above.)*
@@ -94,14 +127,19 @@ design is unimplemented; deep, implementation-ticket work:**
 - `21-REBASE-01` / `15-RESTART-01` — no RESTART/re-baseline driver verb; the
   landed RESTART mechanism contradicts the decided `ReBaseline` design
   (conflict C-12). `kernel-gap` + `spec-gap`.
-- `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — no `window` cell in the kernel
-  (`Windows` ships key functions only). `kernel-gap` (+ `schema-gap`).
-- `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — no wave-**coalescing** operator in the
-  kernel. The W3-4 glitch-free wiring wraps outputs in `GlitchFreeCell`, but that
-  replays per-invocation and every catalog operator emits one delta per element,
-  so a scalar observer still folds the torn intermediate (verified: `even` fails
-  on event #1 of the diamond). A version-buffered combine that emits once per
-  completed wave is absent. `kernel-gap`.
+- `24-OP-COMBINE-01` / `CTL-GF-01` (scalar `combine-latest`) — no wave-**coalescing
+  scalar** combine in the kernel. `ScalarSumCombineCell` emits a `CounterDelta`
+  per input arm; the two arms of one source wave arrive as distinct waves and
+  `GlitchFreeCell` replays per-invocation, so a scalar observer still folds the
+  torn intermediate sum (verified: `CTL-GF-01`'s `even` fails on event #1 as
+  asserted). A version-buffered combine that emits once per completed wave is
+  absent. This is the one genuine remaining glitch-free `kernel-gap` — see entry.
+
+*(`24-OP-WINDOW-01` / `24-OP-WINDOW-02` — resolved in R2: on investigation this
+was a schema/driver-binding gap, not a kernel one (`Windows.tumbling`/`sliding`
+are real). `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — resolved in R2: re-modeled as
+SET fork-joins over the real `quorum-set` glitch-free join, so wave-coalescing is
+no longer needed to observe them. See the "Resolved by R2" section.)*
 
 ---
 
@@ -129,54 +167,68 @@ design is unimplemented; deep, implementation-ticket work:**
   writer flows, second writer `expect: rejected`, `final-view: [still-flows]` +
   `no-dead-letters`); passes the sweep.
 
-### `22-WAVE-FANIN-01` — wiring **RESOLVED (W3-4)**, check-shape **`schema-gap`** remains
+### `22-WAVE-FANIN-01` — **RESOLVED (R2, `schema-gap`)**
 
 - **Requirement**: `22-GF-01` (while a single-source wave is partially delivered
   across a fork-join, a glitch-free cell shall not expose derived state mixing
   pre-wave and post-wave inputs).
-- **Wiring (resolved)**: `glitch-free: true` was inert; the W3-4 driver now
+- **Wiring (resolved W3-4)**: `glitch-free: true` was inert; the W3-4 driver
   spawns a downstream kernel `GlitchFreeCell` and routes the operator's output
-  through it over a real host link (so the frontier sees `EdgeOpen`/`Progress` —
-  the GlitchFreeOperatorSuiteTest construction). The wrapper is
-  correctness-preserving: this scenario's `final-view` /
-  `incremental-equals-batch` / `no-dead-letters` pass *through* it.
-- **Remaining gap (schema/check-vocabulary)**: asserting "no observation mixes
-  pre-wave/post-wave inputs" over a **set-shaped** observation stream still needs
-  a predicate the frozen function catalog lacks — the scalar
-  `even`/`odd`/`mod-eq`/`eq`/`gt`/`lt` predicates all return false on a set
-  (`ListVal`) observation, and `observations-all-satisfy(fn)` evaluates one
-  element predicate per observation with no notion of wave completeness. A scalar
-  recast does not rescue it either — see the `22-GF-DIAMOND-01` kernel-gap below.
+  through it over a real host link (the GlitchFreeOperatorSuiteTest construction).
+  The wrapper is correctness-preserving: `final-view` / `incremental-equals-batch`
+  / `no-dead-letters` pass *through* it.
+- **How resolved (R2-A)**: the missing piece was a **set-shaped per-wave
+  predicate**. R2 added the `observations-whole-waves` check (`schema/Check.kt`
+  parse + `check/Checks.kt` evaluator/dispatch): over the real `quorum-set`
+  (`QuorumSetCell`, `civictech.cell.data.op`) glitch-free fan-in — whose own
+  `evaluate()` only `propagate()`s once quorum is met — it asserts that every
+  observation on the view is a *whole wave*, never a torn single-arm partial.
+  No scalar predicate is coerced onto a `ListVal`; the check reasons about wave
+  completeness directly.
 - **Filed scenario**: `22-WAVE-FANIN-01.yaml` (one source forked through two
-  identity arms into a 2-of-2 glitch-free `quorum-set`) keeps `final-view` +
-  `incremental-equals-batch` + `no-dead-letters`. Restore
-  `observations-all-satisfy` when a set-shaped per-wave predicate lands in the
-  function catalog (schema-change ticket).
+  identity arms into a 2-of-2 glitch-free `quorum-set`) now positively asserts
+  `observations-whole-waves` alongside `final-view` + `incremental-equals-batch`
+  + `no-dead-letters`. Passes the multi-profile sweep.
 
-### `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — wiring **RESOLVED (W3-4)**, wave-coalescing **`kernel-gap`** remains
+### `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — **RESOLVED (R2, `schema-gap`)**
 
 - **Requirement**: `22-GF-01` / `22-GF-02` (glitch-freedom, composing across
   nested/chained fork-joins).
-- **Wiring (resolved)**: `glitch-free: true` now spawns the downstream
-  `GlitchFreeCell` wrapper (as above). But this does **not** make the scalar
-  diamond glitch-free-observable: the only scalar `combine-latest` binding is
-  `ScalarSumCombineCell`, which emits a `CounterDelta` per input arm; the two
-  arms of one source wave arrive as distinct waves and `GlitchFreeCell` replays
-  per-invocation, so an observer still folds the odd (torn) intermediate sum.
-  **Verified**: adding `observations-all-satisfy(v, even)` back fails on every
-  run with `event #1 = 1` (the torn intermediate).
-- **Remaining gap (kernel)**: a genuinely wave-aligned / wave-**coalescing**
-  scalar combine (version-buffered, emitting one delta per completed wave) does
-  not exist in the kernel (cell-catalog.md "the two honest gaps", gap 1). This is
-  the same shape blocking the set case (every catalog operator emits one delta
-  per element), so it is the general blocker for observing glitch-freedom.
-- **Filed scenarios**: `22-GF-DIAMOND-01.yaml` and `22-GF-NESTED-01.yaml` keep
-  `final-view` only. Disabled checks to restore verbatim once a wave-coalescing
-  operator lands:
-  ```yaml
-  - {type: observations-all-satisfy, view: v, fn: even}       # 22-GF-DIAMOND-01
-  - {type: observations-all-satisfy, view: v, fn: mod-eq(4,0)} # 22-GF-NESTED-01
-  ```
+- **How resolved (R2-A)**: both were originally SCALAR diamonds over
+  `combine-latest` (`ScalarSumCombineCell`), which cannot be glitch-free-observed
+  (torn per-arm delta — see the scalar-combine residual entry below). R2
+  **re-modeled them as SET fork-joins over `quorum-set`** (`QuorumSetCell`), a
+  genuine kernel glitch-free operator whose `evaluate()` only `propagate()`s once
+  quorum is met. Glitch-freedom is now **positively asserted** via the new
+  `observations-whole-waves` check: `22-GF-DIAMOND-01.yaml` is a single set
+  diamond (`s`→two identity arms→2-of-2 `quorum-set`), `22-GF-NESTED-01.yaml` a
+  nested double-diamond (three chained `quorum-set` levels). Both drop the old
+  `final-view`-only shape and assert `observations-whole-waves` +
+  `incremental-equals-batch` + `no-dead-letters`. Pass the multi-profile sweep.
+- **Note**: the scalar wave-coalescing gap these entries used to file is real but
+  narrower than first thought — it blocks only the *scalar* `combine-latest`, not
+  the glitch-free set joins. It is re-filed precisely as the scalar-combine
+  residual entry below (`24-OP-COMBINE-01` / `CTL-GF-01`).
+
+### `24-OP-COMBINE-01` / `CTL-GF-01` — scalar `combine-latest` **`kernel-gap`** (remaining glitch-free residual)
+
+- **Requirement**: `22-GF-01` / `22-GF-02` (glitch-freedom) for the **scalar**
+  combine shape specifically.
+- **Gap**: a genuinely wave-aligned / wave-**coalescing scalar** combine
+  (version-buffered, emitting one delta per completed wave) does not exist in the
+  kernel (cell-catalog.md "the two honest gaps", gap 1). The only scalar
+  `combine-latest` binding is `ScalarSumCombineCell`, which emits a `CounterDelta`
+  per input arm; the two arms of one source wave arrive as distinct waves and
+  `GlitchFreeCell` replays per-invocation, so an observer folds the torn
+  intermediate sum before any wrapper coalesces it. The set case is NOT affected
+  (`quorum-set` coalesces at the operator — see the two entries above); this is
+  now the *only* remaining glitch-free kernel-gap.
+- **Filed as control**: `CTL-GF-01.yaml` (one counter source forked through two
+  identity arms into a scalar summing `combine-latest`) asserts
+  `observations-all-satisfy(v, even)` and **FAILS-as-asserted** on the sweep —
+  the sentinel that keeps this gap honest and visible. Restore a positive scalar
+  glitch-free assertion on `24-OP-COMBINE-01` once a wave-coalescing scalar
+  combine lands in the kernel.
 
 ### `12-NEGOTIATE-01` — **RESOLVED (R1, `schema-gap`)**
 
@@ -218,21 +270,26 @@ design is unimplemented; deep, implementation-ticket work:**
   `Consume` link at connect time (see `13-TAP-01`). Only the reject half is
   covered.
 
-### `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — **`kernel-gap`** + **`schema-gap`**
+### `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — **RESOLVED (R2, `schema-gap` + `driver-binding-gap`)**
 
 - **Requirement ids**: `24-OP-WINDOW-01`, `24-OP-WINDOW-02`
   (`24-data-cells.md`, §Grouped aggregation "Windowing = key derivation").
-- **Gap**: the `window` cell-catalog id has no honest kernel binding —
-  `KernelCatalog.build("window", …)` throws `UnsupportedCatalogBinding`
-  (`Windows` ships event-time key functions, tumbling/sliding, not a cell), and
-  no window-spec descriptor is frozen on the scenario schema. `BatchOracle`
-  folds `window` as an untested pass-through for the same reason. Authoring a
-  scenario would either hit `UnsupportedCatalogBinding` at construction or fake a
-  pass-through against an oracle flagged untested — the iron rule forbids both.
-- **Resolves**: a schema-change ticket freezing a window-spec descriptor
-  (tumbling/sliding params) **and** a real kernel windowing binding (composite
-  key derivation over `Windows.tumbling`/`sliding`) the oracle can model
-  identically. Open coverage gap until then.
+- **Not a kernel gap after all**: the spec's own framing — "windowing = key
+  derivation (M11.6)" — and the kernel's real `Windows.tumbling`/`sliding`
+  event-time functions mean `window` is a group-by over a derived composite key,
+  not a missing cell. What was missing was the schema descriptor and the driver
+  binding.
+- **How resolved (R2-B)**: added `WindowSpec` + `CellSpec.window` on
+  `Scenario.kt`; `KernelCatalog`/`KernelAdapters` bind it honestly —
+  `kind:tumbling`→a `GroupByCell` whose `keyFn` composes `Windows.tumbling`;
+  `kind:sliding`→`WindowSlidingCell` (a real `FlatMapSetCell` over
+  `Windows.sliding` linked into a real `GroupByCell`, packaged as one cell).
+  `BatchOracle.windowFold` models the identical key derivation, and `CorpusRunner`
+  lowers `window:` to a neutral `Value`. Windows never close: a late element is an
+  ordinary add, retractions flow like any other group-by view (M11.6).
+- **Filed scenarios**: `24-OP-WINDOW-01.yaml` (tumbling) and `24-OP-WINDOW-02.yaml`
+  (sliding) assert golden + `incremental-equals-batch` + `no-dead-letters`; pass
+  the multi-profile sweep against the oracle.
 
 ### `24-OP-PRESENCE-01` — **RESOLVED (R1, `oracle-gap`)** (harness-side)
 
@@ -393,10 +450,14 @@ re-applied) *and* state-rebuilt-by-replay.
   kernel unit test; the OR-set tag plane is not boundary-observable per P1).
 - `24-REPLAY-01` (a journaled mid-graph cell's replayed frames flagged
   `MessageContext.baseline` so a downstream **glitch-free join** installs them as
-  arm state) is **not** authored: the `dur` corpus has no glitch-free join, and
-  the scalar/set glitch-free observation gap is itself filed above
-  (`22-GF-DIAMOND-01`). Author it once a wave-coalescing operator lands and a
-  durable arm can feed it.
+  arm state) is **not yet authored but now UNBLOCKED** (as of R2): the
+  set-glitch-free observation gap that blocked it is resolved — a real SET
+  glitch-free `quorum-set` join now exists (`22-WAVE-FANIN-01` et al.) and can
+  feed a durable arm, and `observations-whole-waves` can assert the replayed
+  frames install as baseline arm state without tearing. Authorable in a follow-up
+  (wire a journaled durable arm into a `quorum-set` and assert
+  `observations-whole-waves`); no longer waits on a wave-coalescing scalar
+  operator.
 - `FileJournal` segmentation/rotation and **cross-host** recovery-frontier drift
   are single-in-process-host out of scope here (the driver runs the durable
   subgraph on one reserved host; cross-host is W4-A `dist` territory).

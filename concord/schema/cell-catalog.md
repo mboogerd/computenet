@@ -42,7 +42,7 @@ no ops (they react to their inlets).
 | `count` | — | Distinct-element count of a set stream; emits a counter delta. |
 | `presence-count` | — | Count of currently-present elements (presence, not distinct history). |
 | `quorum-set` | `k` | **Fan-in operator** over set streams (kernel `QuorumSetCell`): one link per source; an element is emitted once `k` of the `n` live source links assert it. `k` optional, default `n` (all sources ⇒ an intersection). k-of-n admission observable (24-OP-QUORUM-01). |
-| `window` | (window spec) | Step-windowed fold over the stream. **Unbound** — no kernel cell + no frozen descriptor; see note 5. |
+| `window` | `window` (descriptor), `agg` | Windowing = key derivation (M11.6): assigns each `[at, value]` element to one (`tumbling`) or several (`sliding`) window-start keys derived from `at` alone (no wall clock), then folds each window with `agg` (as `group-by`). `window: {kind: tumbling\|sliding, size, slide?}` — `slide` required for `sliding`, ignored for `tumbling`. Windows never close: a late element is an ordinary add, retractions flow like any other view (`24-OP-WINDOW-01`/`-02`). |
 | `partition` | `fn` (`key-of`), `agg` | A **sharded group-by** (kernel `PartitionedCell`): partitions elements by key across shards and folds each with `agg`; the union of shard aggregates equals the unpartitioned `group-by` twin. Observed through a `count-view`. |
 
 ## Views (terminal sinks the checks read)
@@ -77,7 +77,7 @@ The cycle-closing edge names its ports explicitly: `{from: fb, to: fb, outlet: l
 ## Kernel-binding status (W3-0 — the driver is catalog-complete)
 
 The kernel driver (`civictech.concord.driver.kernel`) binds every catalog id below
-except the two honest gaps in bold. Sources bind to `civictech.cell.data` cells;
+except the one honest gap in bold. Sources bind to `civictech.cell.data` cells;
 views and the two adapters (`map fn:identity`, scalar `combine-latest`) and the
 scalar/list view folds and the `feedback` head live in the driver's
 `KernelAdapters`.
@@ -100,14 +100,18 @@ both `CounterDelta` and `PnCounterDelta`; `list-view`→a list `View`; `feedback
 `NatureGatedSinkCell` (a hand-registered `ContractRegistry` descriptor projects a
 required nature onto its inlet — CP-F2/F3, W4-A followup); `exclusive-source`/
 `exclusive-sink`→`ExclusiveSourceCell`/`ExclusiveSinkCell` (an `Owned`-carrying
-`FanOutlet` contract, likewise hand-registered — M5.6, W4-A followup).
+`FanOutlet` contract, likewise hand-registered — M5.6, W4-A followup); `window
+kind:tumbling`→a bare `GroupByCell` whose `keyFn` composes `Windows.tumbling`;
+`window kind:sliding`→`WindowSlidingCell` (a real `FlatMapSetCell` over
+`Windows.sliding` linked into a real `GroupByCell`, packaged as one `Cell` — the
+same two-cell composition kernel `WindowingTest` exercises directly).
 
 The `join` family binds over **set streams of pairs `[k, v]`** (matching the batch
 oracle), not the kernel's map-stream `JoinCell`/`LookupJoinCell` — those are keyed
 map joins with a different element shape, and the corpus's join operators consume
 set sources.
 
-### The two honest gaps (§5 — corpus disputes)
+### The one honest gap (§5 — corpus disputes)
 
 1. **No wave-aligned scalar `combine-latest`.** `ScalarSumCombineCell` is
    order-independent at quiescence (`final-view` holds) but **not** wave-aligned:
@@ -117,11 +121,14 @@ set sources.
    stream) is a kernel gap; treat it as a dispute. `combine-latest` with any `fn`
    other than `sum` throws `UnsupportedCatalogBinding`.
 
-2. **`window` is unbound.** `Windows` ships only event-time key functions
-   (tumbling/sliding), not a cell, and no window-spec descriptor param is frozen on
-   the schema. A step-window operator needs a frozen window descriptor **and** an
-   oracle model before it can be bound. `24-OP-WINDOW-01` is blocked pending a
-   schema-change ticket; `window` throws `UnsupportedCatalogBinding`.
+`window` was resolved (R2-B, `24-OP-WINDOW-01`/`-02`): the dispute filed it as a
+`kernel-gap`, but spec 24 §Grouped aggregation names the exact composition —
+"windowing = key derivation" — and the kernel's `Windows.tumbling`/`sliding` are
+real event-time → key-derivation functions, not a stub. The gap was a **driver
+binding + schema descriptor** gap, not a kernel one: `CellSpec.window` (below)
+freezes `{kind, size, slide?}`, and `KernelCatalog`/`WindowSlidingCell` bind it to
+the real `GroupByCell` aggregation (tumbling directly; sliding via a real
+`FlatMapSetCell` expansion stage) — see the binding table above.
 
 ### W3-0 catalog refinements (the driver made the catalog honest)
 
@@ -137,6 +144,9 @@ set sources.
   group-by, folding identically to its unpartitioned twin.
 - **`list-view`** was added (the kernel `View` companion has no list fold).
 - **`feedback`/`feedback-undamped`** were added for the cycle scenarios.
+- **`window`** takes the new `window` descriptor field (`{kind: tumbling|sliding,
+  size, slide?}`, `scenario.md`) alongside the existing `agg`; resolves the
+  `24-OP-WINDOW-01`/`-02` dispute (R2-B).
 
 `counter-source`/`pn-counter` `increment`/`decrement` take the amount from `value:`
 (default a unit step), repeated by `times:` — the oracle and driver agree.

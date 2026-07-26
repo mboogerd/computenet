@@ -1,17 +1,20 @@
-# Concord corpus scenario (W3-1, wiring landed W3-4). Canonical schema shape —
-# see concord/schema/scenario.md.
-# NOTE (see DISPUTES.md): `glitch-free: true` is now HONOURED — the W3-4 driver
+# Concord corpus scenario (W3-1, wiring landed W3-4, positive assertion
+# restored R2-A). Canonical schema shape — see concord/schema/scenario.md.
+# NOTE (see DISPUTES.md): `glitch-free: true` is HONOURED — the W3-4 driver
 # routes this operator's output through a downstream kernel GlitchFreeCell
 # (GlitchFreeOperatorSuiteTest construction), so the wave-alignment gate is real
 # and correctness-preserving (this scenario's `incremental-equals-batch` /
-# `no-dead-letters` pass *through* that wrapper). What is still NOT expressible is
-# the positive stream assertion: `observations-all-satisfy` over a SET stream
-# needs a per-wave (set-shaped) predicate absent from the frozen function catalog,
-# and a scalar even/mod invariant would need a wave-COALESCING operator (one delta
-# per completed wave) — the kernel operators emit incrementally and GlitchFreeCell
-# replays per-invocation, so an observer still folds each element separately. That
-# is a kernel gap, not driver wiring (see DISPUTES.md). Narrowed accordingly
-# (P2/P7: narrow the scenario, never weaken the evaluator).
+# `no-dead-letters` pass *through* that wrapper). The positive stream assertion
+# — "every observation on v's stream reflects a whole wave from s, never a
+# torn (single-arm) partial delivery" — is now expressible: `quorum-set` is a
+# real kernel glitch-free operator (`QuorumSetCell`, `civictech.cell.data.op`):
+# its own `evaluate()` only calls `propagate()` once an element's live-lane
+# count *meets* the k=2 threshold, so a single-arm delivery never reaches the
+# outlet at all (verified — see DISPUTES.md investigation note). The
+# `observations-whole-waves` check (R2-A, `schema/Check.kt` /
+# `check/Checks.kt`) makes this assertable: every value on v's stream must
+# equal `s`'s own add/remove fold at some *whole* prefix of its accepted ops —
+# a torn delivery could never be such a prefix.
 id: 22-WAVE-FANIN-01
 title: A multi-inlet fan-in over a forked source exposes only whole waves
 covers: [22-GF-01]
@@ -41,15 +44,7 @@ script:
   - {type: apply, on: s, op: add, value: plum}
   - {type: apply, on: s, op: remove, value: apple}
 checks:
-  # The glitch-free wrapper is now wired (W3-4) and the checks below pass through
-  # it. The real positive assertion this scenario exists to make — every
-  # observation on v's stream reflects a whole wave from s, never a partial
-  # (single-arm) delivery (22-GF-01) — is an `observations-all-satisfy` over the
-  # fan-in's observation stream, still commented out: it needs a set-shaped
-  # per-wave predicate the frozen function catalog does not expose (the scalar
-  # even/mod/eq predicates return false on a set observation), and a scalar recast
-  # would need a wave-coalescing operator (kernel gap). See DISPUTES.md.
-  #   - {type: observations-all-satisfy, view: v, fn: <needs a per-wave set predicate not in the function catalog>}
   - {type: final-view, view: v, equals: [pear, plum]}
   - {type: incremental-equals-batch, view: v}
+  - {type: observations-whole-waves, view: v, source: s}
   - {type: no-dead-letters}

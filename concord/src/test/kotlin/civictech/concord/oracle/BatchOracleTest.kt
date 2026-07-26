@@ -8,6 +8,8 @@ import civictech.concord.oracle.Fx.list
 import civictech.concord.oracle.Fx.map
 import civictech.concord.oracle.Fx.s
 import civictech.concord.oracle.Fx.scenario
+import civictech.concord.schema.WindowKind
+import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
 import kotlin.test.Test
@@ -309,6 +311,66 @@ class BatchOracleTest {
         ).view("v")
         countByKey("partition") shouldBe countByKey("group-by")
         countByKey("partition") shouldBe map("a" to i(2), "b" to i(1))
+    }
+
+    // --- window (M11.6 "windowing = key derivation", 24-OP-WINDOW-01/02) ----
+
+    @Test
+    fun `window tumbling folds each event into its composite bucket key (default count)`() {
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"),
+                cell("w", "window", window = WindowSpec(kind = WindowKind.TUMBLING, size = 10)),
+                cell("v", "count-view"),
+            ),
+            links = listOf(link("a", "w"), link("w", "v")),
+            script = listOf(
+                apply("a", "add", list(i(3), s("x"))),
+                apply("a", "add", list(i(9), s("y"))),
+                apply("a", "add", list(i(17), s("z"))),
+            ),
+        )
+        // bucket(at) = floorDiv(at, 10) * 10 — 3 and 9 share bucket 0, 17 falls in bucket 10.
+        BatchOracle(sc).view("v") shouldBe map("0" to i(2), "10" to i(1))
+    }
+
+    @Test
+    fun `window tumbling sum updates on late elements and retractions (windows never close)`() {
+        // Same fixture as kernel WindowingTest's "tumbling window sums update on
+        // late elements and retractions" — the oracle must agree with the real
+        // kernel binding element for element.
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"),
+                cell("w", "window", agg = "sum", window = WindowSpec(kind = WindowKind.TUMBLING, size = 10)),
+                cell("v", "count-view"),
+            ),
+            links = listOf(link("a", "w"), link("w", "v")),
+            script = listOf(
+                apply("a", "add", list(i(3), i(5))),
+                apply("a", "add", list(i(17), i(7))),
+                apply("a", "add", list(i(8), i(2))), // late element: an ordinary add, windows never close
+                apply("a", "remove", list(i(3), i(5))), // a retraction flows into the window aggregate
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe map("0" to i(2), "10" to i(7))
+    }
+
+    @Test
+    fun `window sliding expands each event into every window it falls in, sum aggregator`() {
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"),
+                cell("w", "window", agg = "sum", window = WindowSpec(kind = WindowKind.SLIDING, size = 10, slide = 5)),
+                cell("v", "count-view"),
+            ),
+            links = listOf(link("a", "w"), link("w", "v")),
+            script = listOf(
+                apply("a", "add", list(i(3), i(5))), // Windows.sliding(10,5)(3) = [-5, 0]
+                apply("a", "add", list(i(12), i(7))), // Windows.sliding(10,5)(12) = [5, 10]
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe map("-5" to i(5), "0" to i(5), "5" to i(7), "10" to i(7))
     }
 
     @Test

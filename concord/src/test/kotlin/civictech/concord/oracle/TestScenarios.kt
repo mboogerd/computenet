@@ -9,12 +9,19 @@ import civictech.concord.schema.LinkSpec
 import civictech.concord.schema.Profile
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.Step
+import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
 
 /** Terse in-code builders for oracle/check fixtures — no YAML, no kernel. */
 object Fx {
-    fun cell(id: String, type: String, fn: String? = null, agg: String? = null, k: Int? = null): CellSpec =
-        CellSpec(id = id, type = type, fn = fn, agg = agg, k = k)
+    fun cell(
+        id: String,
+        type: String,
+        fn: String? = null,
+        agg: String? = null,
+        k: Int? = null,
+        window: WindowSpec? = null,
+    ): CellSpec = CellSpec(id = id, type = type, fn = fn, agg = agg, k = k, window = window)
 
     fun link(from: String, to: String, inlet: String? = null): LinkSpec =
         LinkSpec(from = from, to = to, inlet = inlet)

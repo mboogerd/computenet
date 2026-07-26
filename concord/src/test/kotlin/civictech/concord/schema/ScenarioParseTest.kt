@@ -49,10 +49,14 @@ class ScenarioParseTest {
             s.script.filterIsInstance<ApplyStep>() shouldNotBe emptyList<ApplyStep>()
             (s.checks.first() as FinalView).view shouldBe "v"
         },
-        DynamicTest.dynamicTest("22-GF-DIAMOND-01 carries a glitch-free combine and a value golden") {
+        DynamicTest.dynamicTest("22-GF-DIAMOND-01 carries a glitch-free quorum join and a set golden") {
+            // Re-modeled R2-A (DISPUTES.md): the scalar `combine-latest` shape could
+            // never be made glitch-free-observable (kernel gap — see the scenario's
+            // own header note), so the pilot now carries a SET-based fork-join over
+            // a real kernel glitch-free operator (`quorum-set`, `QuorumSetCell`).
             val s = load("corpus/22-consistency/22-GF-DIAMOND-01.yaml")
-            s.graph!!.cells.single { it.type == "combine-latest" }.glitchFree shouldBe true
-            s.script.filterIsInstance<ApplyStep>().single().times shouldBe 50
+            s.graph!!.cells.single { it.type == "quorum-set" }.glitchFree shouldBe true
+            s.script.filterIsInstance<ApplyStep>() shouldNotBe emptyList<ApplyStep>()
         },
         DynamicTest.dynamicTest("CTL-GOLDEN-01 is a control") {
             val s = load("corpus/controls/CTL-GOLDEN-01.yaml")

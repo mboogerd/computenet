@@ -1,56 +1,68 @@
-# Concord corpus scenario (W3-1). Canonical schema shape — see concord/schema/scenario.md.
-# DISPUTE (see concord/corpus/DISPUTES.md): this scenario exists to assert
-# glitch-freedom composing across a NESTED fork-join (22-GF-02) — two inner
-# diamonds (each summing two identity arms of the same source) whose sums feed
-# an outer combine. W3-4 wired `glitch-free: true` to a downstream GlitchFreeCell,
-# but the composition is built from scalar `combine-latest fn:sum`
-# (ScalarSumCombineCell), which is order-independent at quiescence yet NOT
-# wave-aligned: it emits a CounterDelta per arm and GlitchFreeCell replays
-# per-invocation, so a torn intermediate sum is still observable (same gap
-# 22-GF-DIAMOND-01 narrows around, one nesting level deeper — a wave-coalescing
-# scalar combine is a kernel gap). `observations-all-satisfy` stays commented out;
-# only final-view is asserted today.
+# Concord corpus scenario (W3-1; re-modeled R2-A — see DISPUTES.md
+# `22-GF-NESTED-01`). Canonical schema shape — see concord/schema/scenario.md.
+#
+# INVESTIGATION (R2-A): same finding as `22-GF-DIAMOND-01` one nesting level
+# deeper — the original scalar model (`combine-latest fn:sum,
+# glitch-free:true`, chained) cannot be rescued: `glitch-free:true` wraps the
+# NAMED cell's own single outlet, and `ScalarSumCombineCell` already emits a
+# torn per-arm `CounterDelta` before any wrapper sees it. Genuine kernel gap
+# (no wave-coalescing scalar combine); not fakeable, stays reported.
+#
+# Re-modeled as a SET double diamond over `quorum-set` (`QuorumSetCell`), the
+# same real kernel glitch-free fan-in `22-WAVE-FANIN-01`/`22-GF-DIAMOND-01`
+# use: two inner 2-of-2 quorum diamonds (each gating on its own pair of
+# identity arms of the shared source) feed an OUTER 2-of-2 quorum, so an
+# element only reaches `v` once *all four* underlying arms have independently
+# confirmed it — the SET-shaped analogue of "every observed total is a whole
+# multiple of the fan-out factor" (22-GF-02: composability across nesting
+# levels). `observations-whole-waves` (R2-A) asserts exactly that: every
+# observation on v's stream is a whole prefix-fold of n's own accepted ops, at
+# every nesting level, not just at quiescence.
 id: 22-GF-NESTED-01
 title: Glitch-freedom composes across a nested fork-join (double diamond)
 covers: [22-GF-02]
 profile: core
 kind: example
 narrative:
-  given: one counter source forked into two inner diamonds (each summing two identity arms), whose sums feed an outer combine
-  when: the source is incremented repeatedly
-  then: every observed outer total is a whole multiple of the fan-out factor — no observation mixes arms
-    across a wave, at either nesting level
+  given: one set source forked into two inner 2-of-2 quorum diamonds (each over its own pair of identity arms),
+    whose outputs feed an outer 2-of-2 quorum
+  when: the source is repeatedly added to and removed from
+  then: every observation on the view's stream is a whole completed-wave state of the source — no observation
+    ever reflects a partial delivery at either nesting level
 graph:
   cells:
-    - {id: n, type: counter-source}
+    - {id: n, type: set-source, of: string}
     - {id: l1, type: map, fn: identity}
     - {id: r1, type: map, fn: identity}
-    - {id: s1, type: combine-latest, fn: sum, glitch-free: true}
+    - {id: q1, type: quorum-set, k: 2, glitch-free: true}
     - {id: l2, type: map, fn: identity}
     - {id: r2, type: map, fn: identity}
-    - {id: s2, type: combine-latest, fn: sum, glitch-free: true}
-    - {id: s3, type: combine-latest, fn: sum, glitch-free: true}
-    - {id: v, type: value-view}
+    - {id: q2, type: quorum-set, k: 2, glitch-free: true}
+    - {id: q3, type: quorum-set, k: 2, glitch-free: true}
+    - {id: v, type: set-view}
   links:
     - {from: n, to: l1}
     - {from: n, to: r1}
-    - {from: l1, to: s1, inlet: left}
-    - {from: r1, to: s1, inlet: right}
+    - {from: l1, to: q1}
+    - {from: r1, to: q1}
     - {from: n, to: l2}
     - {from: n, to: r2}
-    - {from: l2, to: s2, inlet: left}
-    - {from: r2, to: s2, inlet: right}
-    - {from: s1, to: s3, inlet: left}
-    - {from: s2, to: s3, inlet: right}
-    - {from: s3, to: v}
+    - {from: l2, to: q2}
+    - {from: r2, to: q2}
+    - {from: q1, to: q3}
+    - {from: q2, to: q3}
+    - {from: q3, to: v}
 script:
-  - {type: apply, on: n, op: increment, times: 50}
+  - {type: apply, on: n, op: add, value: e1}
+  - {type: apply, on: n, op: add, value: e2}
+  - {type: apply, on: n, op: add, value: e3}
+  - {type: apply, on: n, op: add, value: e4}
+  - {type: apply, on: n, op: remove, value: e2}
+  - {type: apply, on: n, op: add, value: e5}
+  - {type: apply, on: n, op: remove, value: e4}
+  - {type: apply, on: n, op: add, value: e6}
 checks:
-  # Narrowed to what the driver can honor today (P2/P7: narrow the scenario,
-  # never weaken the evaluator). The real assertion this scenario exists to make
-  # — every observed value on v's stream is divisible by 4 (each increment fans
-  # out over 4 identity arms into two inner diamonds and one outer diamond), i.e.
-  # no observation mixes arms across a wave at either nesting level (22-GF-02) —
-  # is commented out below; see DISPUTES.md:
-  #   - {type: observations-all-satisfy, view: v, fn: <TBD: needs a mod-eq(4,0)-shaped predicate already in the catalog, but no wave-aligned binding to observe it against>}
-  - {type: final-view, view: v, equals: 200}
+  - {type: final-view, view: v, equals: [e1, e3, e5, e6]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: observations-whole-waves, view: v, source: n}
+  - {type: no-dead-letters}

@@ -19,6 +19,8 @@ import civictech.concord.schema.RestoreStep
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.SnapshotStep
 import civictech.concord.schema.Step
+import civictech.concord.schema.WindowKind
+import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
 import civictech.concord.yaml.ConcordYaml
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -230,7 +232,17 @@ class CorpusRunner {
         cell.inletMode?.let { put("inlet-mode", Value.StrVal(it)) }
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }
         cell.interest?.let { put("interest", interestValue(it)) }
+        cell.window?.let { put("window", windowValue(it)) }
     }
+
+    /** Lower a scenario's `window:` descriptor to the neutral [Value] model (24-OP-WINDOW-01/02). */
+    private fun windowValue(w: WindowSpec): Value = Value.MapVal(
+        buildMap {
+            put("kind", Value.StrVal(if (w.kind == WindowKind.TUMBLING) "tumbling" else "sliding"))
+            put("size", Value.IntVal(w.size))
+            w.slide?.let { put("slide", Value.IntVal(it)) }
+        },
+    )
 
     /** Lower a scenario's `interest:` descriptor to the neutral [Value] model (42-INTEREST-01). */
     private fun interestValue(spec: civictech.concord.schema.InterestSpec): Value = Value.of(

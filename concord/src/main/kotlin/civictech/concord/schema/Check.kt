@@ -76,3 +76,32 @@ data class EffectCount(
     val key: String? = null,
     val exactly: Int,
 ) : Check
+
+/**
+ * The **set-shaped** glitch-freedom check (spec 22 `22-GF-01`/`22-GF-02`;
+ * DISPUTES.md `22-GF-DIAMOND-01`/`22-GF-NESTED-01`/`22-WAVE-FANIN-01`):
+ * [view]'s observation stream must never expose a torn fork-join delivery — a
+ * state where one arm of a wave has landed and its sibling has not.
+ * `observations-all-satisfy` cannot express this: its `fn` is drawn from the
+ * frozen (scalar) function catalog, and every scalar predicate (`even`,
+ * `mod-eq`, …) trivially fails a set-valued (`ListVal`) observation, so there
+ * is no way to assert wave-completeness over a SET stream with the existing
+ * vocabulary.
+ *
+ * Semantics: every value on [view]'s stream must equal the [source]
+ * set-source cell's own fold at *some* whole prefix of its accepted
+ * `add`/`remove` op sequence (script order, `times` expanded) — i.e. the
+ * observation is exactly what the source looked like after 0..N whole
+ * completed ops, never a state that could only arise from part of one op's
+ * fork-join delivery. The evaluator (`civictech.concord.check.Checks`) computes
+ * these prefixes itself (harness-only, `add`/`remove` semantics), so this check
+ * stays kernel-free and driver-neutral like the rest of the vocabulary — it
+ * does not reuse the batch oracle (which only knows the *final* fold) or the
+ * function catalog (which is scalar-shaped).
+ */
+@Serializable
+@SerialName("observations-whole-waves")
+data class ObservationsWholeWaves(
+    val view: String,
+    val source: String,
+) : Check

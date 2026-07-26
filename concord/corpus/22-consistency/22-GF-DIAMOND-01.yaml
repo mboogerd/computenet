@@ -1,39 +1,61 @@
-# Concord pilot scenario (W0). Canonical schema shape — see concord/schema/scenario.md.
-# NOTE: `value-view` (a scalar view fold) has no kernel binding yet — see the W0
-# report / cell-catalog.md. W1-A must add a scalar View alongside set/map/count.
+# Concord corpus scenario (W3-1 pilot; re-modeled R2-A — see DISPUTES.md
+# `22-GF-DIAMOND-01`). Canonical schema shape — see concord/schema/scenario.md.
+#
+# INVESTIGATION (R2-A): the original model (`combine-latest fn:sum,
+# glitch-free:true`, a SCALAR diamond) cannot be made glitch-free-observable
+# with the driver's existing wiring: `glitch-free:true` spawns a downstream
+# GlitchFreeCell wrapping the NAMED cell's own single outlet — for
+# `ScalarSumCombineCell` that outlet is already the torn per-arm CounterDelta
+# stream (it emits on every `left`/`right` invocation, before any wrapper ever
+# sees the wave), so GF has only one inbound edge to buffer and nothing left to
+# coalesce. That is a genuine kernel gap (no wave-**coalescing** scalar
+# combine exists) — not fakeable, so it stays reported (see DISPUTES.md,
+# residual scalar case).
+#
+# The SET case is different: `quorum-set` (`QuorumSetCell`) is a *real* kernel
+# glitch-free fan-in — its own `evaluate()` only calls `propagate()` once an
+# element's live-lane count reaches the threshold, so a single-arm delivery
+# never reaches its outlet at all (no separate wrapper needed to coalesce it;
+# the operator itself never emits a torn intermediate). Re-modeling the
+# fork-join diamond over SET semantics (same shape 22-WAVE-FANIN-01 already
+# proved) makes 22-GF-01 honestly assertable: `observations-whole-waves`
+# (R2-A, schema/Check.kt + check/Checks.kt) checks that every observation on
+# v's stream equals the source's own fold at some *whole* prefix of its
+# accepted ops — exactly "no observation mixes pre-wave and post-wave inputs".
 id: 22-GF-DIAMOND-01
 title: Fork-join observer never sees a torn wave
 covers: [22-GF-01]
 profile: core
 kind: example
 narrative:
-  given: one counter source forked through two identity arms into a summing join
-  when: the source is incremented repeatedly
-  then: every observed sum is even — no observation mixes arms across a wave
+  given: one set source forked through two identity arms into a 2-of-2 quorum join, observed through a set view
+  when: the source is repeatedly added to and removed from
+  then: every observation on the view's stream is a whole completed-wave state of the source — no observation
+    ever reflects only one arm's half of a fork-join delivery
 graph:
   cells:
-    - {id: n, type: counter-source}
+    - {id: n, type: set-source, of: string}
     - {id: l, type: map, fn: identity}
     - {id: r, type: map, fn: identity}
-    - {id: s, type: combine-latest, fn: sum, glitch-free: true}
-    - {id: v, type: value-view}
+    - {id: q, type: quorum-set, k: 2, glitch-free: true}
+    - {id: v, type: set-view}
   links:
     - {from: n, to: l}
     - {from: n, to: r}
-    - {from: l, to: s, inlet: left}
-    - {from: r, to: s, inlet: right}
-    - {from: s, to: v}
+    - {from: l, to: q}
+    - {from: r, to: q}
+    - {from: q, to: v}
 script:
-  - {type: apply, on: n, op: increment, times: 50}
+  - {type: apply, on: n, op: add, value: e1}
+  - {type: apply, on: n, op: add, value: e2}
+  - {type: apply, on: n, op: add, value: e3}
+  - {type: apply, on: n, op: add, value: e4}
+  - {type: apply, on: n, op: remove, value: e2}
+  - {type: apply, on: n, op: add, value: e5}
+  - {type: apply, on: n, op: remove, value: e4}
+  - {type: apply, on: n, op: add, value: e6}
 checks:
-  # Narrowed (P2/P7: narrow the scenario, never weaken the evaluator).
-  # `observations-all-satisfy(v, even)` — the real glitch-freedom invariant — stays
-  # omitted. W3-4 wired `glitch-free: true` to a downstream GlitchFreeCell, but that
-  # does NOT rescue the scalar diamond: `ScalarSumCombineCell` emits a CounterDelta
-  # per input arm, the two arms of one source wave arrive as distinct waves, and
-  # GlitchFreeCell replays per-invocation — so an observer still sees the odd
-  # (torn) intermediate sum (verified: event #1 = 1 fails `even`). A genuinely
-  # wave-aligned / wave-coalescing scalar combine (one delta per completed wave) is
-  # a kernel gap. Restore once it lands (see DISPUTES.md):
-  #   - {type: observations-all-satisfy, view: v, fn: even}
-  - {type: final-view, view: v, equals: 100}
+  - {type: final-view, view: v, equals: [e1, e3, e5, e6]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: observations-whole-waves, view: v, source: n}
+  - {type: no-dead-letters}

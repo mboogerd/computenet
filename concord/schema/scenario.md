@@ -67,11 +67,36 @@ optional descriptor param the driver binds. The v1 named params:
 | `host` | host placement (dist profile) |
 | `replica-of` | logical replica-group id (dist profile) |
 | `interest` | interest-scoped instance-set assignment (dist profile) — see below |
+| `window` | window descriptor for a `window` cell (`{kind: tumbling\|sliding, size, slide?}`) — see below |
 
-`agg` and `k` are **additive** (W3-0): existing files deserialize unchanged (both
-optional with the defaults above). The parser stays lenient — an unknown key is
-ignored — so promoting a further param to a typed field remains a schema-change
-ticket.
+`agg`, `k`, and `window` are **additive** (W3-0 / R2-B): existing files deserialize
+unchanged (all optional; `window` absent on every non-`window` cell). The parser
+stays lenient — an unknown key is ignored — so promoting a further param to a
+typed field remains a schema-change ticket.
+
+#### `window` (R2-B, `24-OP-WINDOW-01`/`-02`)
+
+Spec 24 §Grouped aggregation, M11.6: **"windowing = key derivation"** — there is no
+wall clock, so a window is an explicit function of an integer event-time/sequence
+field carried on the element, never of arrival order or wave id. A `window` cell's
+elements are `[at, value]` pairs (`at` the event-time/sequence field, `value` the
+payload — the same `[k, v]` convention `join`/`group-by` use); its `agg` field
+(above) folds each window's value components exactly as `group-by` does.
+
+```yaml
+- {id: w, type: window, agg: sum, window: {kind: tumbling, size: 10}}
+- {id: w, type: window, agg: sum, window: {kind: sliding, size: 10, slide: 5}}
+```
+
+| field | meaning |
+|---|---|
+| `kind` | `tumbling` — one composite window-start key per element; or `sliding` — the element expands into every window of `size` it falls in, `slide` apart, then groups |
+| `size` | the window length, in event-time/sequence units (no wall clock) |
+| `slide` | the hop between successive window starts; **required** for `sliding`, ignored for `tumbling` |
+
+Windows never close (`24-OP-WINDOW-02`): a late element is an ordinary add and a
+retraction flows into the window aggregate exactly as any other `group-by` view —
+there is no eviction, no timer, no watermark (deferred with trigger, spec 24).
 
 #### `interest` (W4-A followup, `42-INTEREST-01`)
 

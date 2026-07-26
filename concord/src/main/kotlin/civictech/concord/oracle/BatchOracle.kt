@@ -7,6 +7,8 @@ import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.Expect
 import civictech.concord.schema.LinkSpec
 import civictech.concord.schema.Scenario
+import civictech.concord.schema.WindowKind
+import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
 
 /** Raised when a scenario's topology is outside the batch oracle's remit (e.g. a feedback cycle). */
@@ -53,9 +55,18 @@ class OracleUnsupported(message: String) : RuntimeException(message)
  *   a keyed upsert (`put(key, element)` last-writer-wins per key, `remove(key)`),
  *   whose output is the flat set of currently-held elements (a set-view) — NOT the
  *   per-key partitions the v1 catalog implied. Refined to match the kernel (§5).
- * - **`window` / `partition`.** `window` has no kernel cell (deferred, note 5) and
- *   is folded as pass-through (untested — unbound in the driver). `partition` is a
- *   sharded group-by (PartitionedCell) whose union of shard aggregates equals the
+ * - **`window`.** M11.6 "windowing = key derivation" (`24-data-cells.md` §Grouped
+ *   aggregation, `24-OP-WINDOW-01`/`-02`): a `window` cell's frozen `window:`
+ *   descriptor ([civictech.concord.schema.WindowSpec]) assigns each element (a
+ *   `[at, value]` pair) to one or more window-start keys — tumbling: one
+ *   composite key per element; sliding: every window of `size` the element
+ *   falls in, `slide` apart — then group-by's own `agg` fold runs over the
+ *   value components, exactly mirroring the kernel binding
+ *   (`Windows.tumbling`/`sliding` + `GroupByCell`, `KernelCatalog`/
+ *   `WindowSlidingCell`). Windows never close: the fold is over the whole
+ *   accepted-op multiset, so a late add is just another member — there is no
+ *   separate eviction step to model. `partition` is a sharded group-by
+ *   (PartitionedCell) whose union of shard aggregates equals the
  *   unpartitioned group-by twin, so it folds identically to `group-by`.
  * - **`join` family element shape.** With no pilot pinning the joined element, the
  *   oracle treats elements as pairs `[k, v]` (`key-of` = first component): `join`
@@ -227,7 +238,7 @@ class BatchOracle(private val scenario: Scenario) {
             "combine-latest" -> Fold.ScalarF(Functions.aggregate(fn(cell), ins.map { asScalar(foldOf(it.from)) }))
             "count" -> Fold.ScalarF(Value.IntVal(asSet(single()).size.toLong()))
             "presence-count" -> presenceCountFold(ins)
-            "window" -> single() // pass-through (documented v1 semantics; unbound in the driver)
+            "window" -> windowFold(cell, single())
             // Views are pass-throughs of their upstream fold; renderView converts to Value.
             in Values.VIEW_TYPES -> single()
             else -> throw OracleUnsupported("operator type '${cell.type}' has no oracle fold")
@@ -294,6 +305,44 @@ class BatchOracle(private val scenario: Scenario) {
         // matching the kernel binding's `sumOf/minOf/maxOf { valueOf(it) }`.
         val aggId = cell.agg ?: "count"
         return Fold.MapF(groups.mapValues { (_, g) -> Functions.aggregate(aggId, g.map { Functions.valueOf(it) }) })
+    }
+
+    /**
+     * `window` (M11.6 "windowing = key derivation", `24-OP-WINDOW-01`/`-02`):
+     * every element is a `[at, value]` pair; [windowsOf] assigns `at` to one
+     * (tumbling) or several (sliding) window-start keys, and every group's
+     * `agg` fold runs over the value components — the same shape
+     * `groupByFold` uses, just keyed by window instead of `Functions.keyOf`.
+     * Mirrors the kernel `Windows.tumbling`/`sliding` formulas exactly (see
+     * `kernel/.../data/Windows.kt`, proven by `WindowingTest`). Windows never
+     * close: this is a whole-multiset fold, so a late add is simply another
+     * member of its window(s) — there is no separate eviction step.
+     */
+    private fun windowFold(cell: CellSpec, input: Fold): Fold {
+        val spec = cell.window ?: error("${cell.id} (window): needs a `window:` descriptor")
+        val aggId = cell.agg ?: "count"
+        val groups = LinkedHashMap<Value, MutableList<Value>>()
+        for (el in asSet(input)) {
+            val at = Values.asLong(Functions.keyOf(el))
+                ?: error("${cell.id}: window element's event-time key is not an integer: $el")
+            windowsOf(spec, at).forEach { w -> groups.getOrPut(Value.IntVal(w)) { ArrayList() }.add(el) }
+        }
+        return Fold.MapF(groups.mapValues { (_, g) -> Functions.aggregate(aggId, g.map { Functions.valueOf(it) }) })
+    }
+
+    /** Every window start [at] falls in, ascending — tumbling: exactly one; sliding: `Windows.sliding`'s formula. */
+    private fun windowsOf(spec: WindowSpec, at: Long): List<Long> = when (spec.kind) {
+        WindowKind.TUMBLING -> listOf(Math.floorDiv(at, spec.size) * spec.size)
+        WindowKind.SLIDING -> {
+            val slide = spec.slide ?: error("sliding window needs a `slide`")
+            val starts = mutableListOf<Long>()
+            var start = Math.floorDiv(at, slide) * slide
+            while (start + spec.size > at) {
+                starts += start
+                start -= slide
+            }
+            starts.reversed()
+        }
     }
 
     /**

@@ -5,6 +5,7 @@ import civictech.concord.oracle.BatchOracle
 import civictech.concord.oracle.Functions
 import civictech.concord.oracle.OracleUnsupported
 import civictech.concord.oracle.Values
+import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.Check
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.FinalView
@@ -13,9 +14,11 @@ import civictech.concord.schema.LateJoinEqualsEarly
 import civictech.concord.schema.NoDeadLetters
 import civictech.concord.schema.ObservationsAllSatisfy
 import civictech.concord.schema.ObservationsMonotone
+import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.ViewsConverge
+import civictech.concord.value.Value
 
 /**
  * The executable check vocabulary (§1.4) — the oracles that turn a declarative
@@ -39,6 +42,7 @@ object Checks {
         is LateJoinEqualsEarly -> lateJoinEqualsEarly(check, ctx)
         is ObservationsAllSatisfy -> observationsAllSatisfy(check, ctx)
         is ObservationsMonotone -> observationsMonotone(check, ctx)
+        is ObservationsWholeWaves -> observationsWholeWaves(check, ctx)
         is ReplicasConverge -> replicasConverge(check, ctx)
         is NoDeadLetters -> noDeadLetters(ctx)
         is EffectCount -> effectCount(check, ctx)
@@ -140,6 +144,57 @@ object Checks {
             }
         }
         return CheckResult.Passed
+    }
+
+    /**
+     * The set-shaped glitch-freedom check (spec 22 `22-GF-01`/`22-GF-02`,
+     * DISPUTES.md `22-GF-DIAMOND-01`/`22-GF-NESTED-01`/`22-WAVE-FANIN-01`):
+     * every value on [check]'s view's observation stream must equal [check]'s
+     * source's own `add`/`remove` fold at *some whole prefix* of its accepted op
+     * sequence. A torn fork-join delivery — one arm's contribution landed
+     * without its sibling's — would show up as an observed set that is not any
+     * whole-prefix fold (e.g. missing or containing exactly one arm's half of a
+     * paired admission), so this is a real, checkable stand-in for "no
+     * observation mixes pre-wave and post-wave inputs" over a SET stream, where
+     * the frozen (scalar) function catalog has nothing to offer
+     * `observations-all-satisfy`.
+     *
+     * The prefix folds are computed locally (harness-only `add`/`remove`
+     * semantics over [check]'s source's `ApplyStep`s) rather than via
+     * [BatchOracle] — the oracle only exposes the *final* fold (`view`/
+     * `allViewValues`), not per-prefix history, and this check needs the whole
+     * chain of intermediate states, not just the end of it.
+     */
+    fun observationsWholeWaves(check: ObservationsWholeWaves, ctx: CheckContext): CheckResult {
+        val ops = ctx.scenario.script.filterIsInstance<ApplyStep>().filter { it.on == check.source }
+        val prefixes = LinkedHashSet<Set<Value>>()
+        val running = LinkedHashSet<Value>()
+        prefixes += LinkedHashSet(running)
+        for (op in ops) repeat(op.times ?: 1) {
+            when (op.op) {
+                "add" -> running.add(
+                    op.value ?: return CheckResult.Failed(
+                        "observations-whole-waves(${check.view}): '${check.source}' add with no value",
+                    ),
+                )
+                "remove" -> running.remove(op.value)
+                else -> return CheckResult.Failed(
+                    "observations-whole-waves(${check.view}): '${check.source}' op '${op.op}' is not " +
+                        "add/remove (only a set-source's own vocabulary is modeled)",
+                )
+            }
+            prefixes += LinkedHashSet(running)
+        }
+        val log = ctx.driver.observationLog(check.view)
+        val offending = log.withIndex().firstOrNull { (_, v) ->
+            val observed = (v as? Value.ListVal)?.items?.toSet()
+                ?: return@firstOrNull true // not set-shaped — cannot be a whole-prefix state either
+            observed !in prefixes
+        } ?: return CheckResult.Passed
+        return CheckResult.Failed(
+            "observations-whole-waves(${check.view}): event #${offending.index} ${Values.render(offending.value)} " +
+                "is not a whole-prefix state of '${check.source}' — a torn fork-join delivery",
+        )
     }
 
     /**

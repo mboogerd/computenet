@@ -19,6 +19,7 @@ import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.Windows
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
@@ -138,12 +139,12 @@ internal object KernelCatalog {
                         "(§5 kernel gap).",
                 )
             }
-            "window" -> throw UnsupportedCatalogBinding(
-                "window has no honest kernel binding — `Windows` ships only event-time key functions " +
-                    "(tumbling/sliding), not a cell, and no window-spec descriptor param is frozen on the " +
-                    "schema (cell-catalog.md note 5). A step-window operator needs a frozen window descriptor " +
-                    "+ an oracle model before it can be bound (§5 catalog gap).",
-            )
+            // `window` (M11.6 "windowing = key derivation", spec 24 §Grouped aggregation,
+            // 24-OP-WINDOW-01/02): NOT a kernel-gap — `Windows.tumbling`/`sliding` are pure
+            // event-time → key-derivation functions the frozen `window:` descriptor
+            // (CellSpec, W3-0-followup) feeds straight into the real `GroupByCell`
+            // aggregation, exactly the composition kernel `WindowingTest` exercises.
+            "window" -> Built(window(params, KernelFunctions.aggregator(agg)))
 
             // ---- views ------------------------------------------------------
             "set-view" -> observeCell(View.set<Any?>(), ViewKind.SET, singleWriter)
@@ -197,6 +198,49 @@ internal object KernelCatalog {
 
     private fun <ACC : Serializable> partitioned(a: Aggregator<Any?, Long, ACC>): PartitionedCell<Any?, Any?, Long, ACC> =
         PartitionedCell(initialShardCount = 4, keyFn = { KernelFunctions.keyOf(it) }, aggregator = a)
+
+    /**
+     * Binds catalog `window` (M11.6 "windowing = key derivation"): every
+     * element is a `[at, value]` pair — `at` the event-time/sequence
+     * attribute (`KernelFunctions.keyOf`), `value` the payload
+     * (`KernelFunctions.valueOf`) — matching the `[k, v]` convention `join`/
+     * `group-by` already use. Windows never close (`24-OP-WINDOW-02`): neither
+     * arm below evicts on a timer, so a late element is an ordinary add and a
+     * retraction flows exactly as any other view.
+     * - **tumbling**: a 1:1 function of the event time, so it needs no
+     *   fan-out stage — the window start folds straight into `GroupByCell`'s
+     *   `keyFn` (`24-OP-WINDOW-01`: "tumbling as a composite key").
+     * - **sliding**: one element can belong to several windows, so it binds
+     *   to `WindowSlidingCell` — the real kernel `FlatMapSetCell` (per-element
+     *   window-start expansion over `Windows.sliding`) linked into a real
+     *   `GroupByCell` (24-OP-WINDOW-01: "sliding as per-element expansion
+     *   then group"), the same two-cell composition kernel `WindowingTest`
+     *   proves incremental-equals-batch on directly.
+     */
+    private fun <ACC : Serializable> window(params: Map<String, Value>, a: Aggregator<Any?, Long, ACC>): Cell {
+        val descriptor = (params["window"] as? Value.MapVal)?.entries
+            ?: throw UnsupportedCatalogBinding("window requires a `window: {kind, size, slide?}` descriptor")
+        val kind = (descriptor["kind"] as? Value.StrVal)?.value
+            ?: throw UnsupportedCatalogBinding("window descriptor needs a string `kind` (tumbling|sliding)")
+        val size = (descriptor["size"] as? Value.IntVal)?.value
+            ?: throw UnsupportedCatalogBinding("window descriptor needs an integer `size`")
+        return when (kind) {
+            "tumbling" -> {
+                val bucket = Windows.tumbling(size)
+                GroupByCell(keyFn = { e: Any? -> bucket(eventTime(e)) }, aggregator = a)
+            }
+            "sliding" -> {
+                val slide = (descriptor["slide"] as? Value.IntVal)?.value
+                    ?: throw UnsupportedCatalogBinding("sliding window descriptor needs an integer `slide`")
+                WindowSlidingCell(Windows.sliding(size, slide), a)
+            }
+            else -> throw UnsupportedCatalogBinding("window kind '$kind' unbound (tumbling|sliding)")
+        }
+    }
+
+    /** A window element's event-time/sequence attribute (the `at` of a `[at, value]` pair). */
+    private fun eventTime(e: Any?): Long =
+        KernelFunctions.asLong(KernelFunctions.keyOf(e)) ?: error("window element's event-time key is not an integer: $e")
 
     /** `exclusive-sink`: a running-count view over `ExclusivePush` deliveries (23-SPSC-01). */
     private fun exclusiveSink(): Built {

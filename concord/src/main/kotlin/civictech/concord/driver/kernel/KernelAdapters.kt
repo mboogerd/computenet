@@ -5,8 +5,13 @@ import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Owned
 import civictech.cell.Stateful
+import civictech.cell.data.Aggregator
 import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.delta.ListDelta
+import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByCell
 import civictech.cell.control.Magnitude
 import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.Propagate
@@ -15,6 +20,9 @@ import civictech.cell.observe.View
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.FeedbackInlet
+import civictech.cell.port.LinkFrom
+import civictech.cell.port.Use
+import civictech.cell.port.PortRef
 import civictech.cell.port.registerPort
 import civictech.nature.CellColor
 import civictech.nature.CellDescriptor
@@ -264,6 +272,70 @@ class FeedbackCell(
 
     override fun restore(state: Serializable) {
         total = state as Long
+    }
+}
+
+/**
+ * Binds catalog `window` with `kind: sliding` (M11.6 "windowing = key
+ * derivation", spec 24 §Grouped aggregation, `24-OP-WINDOW-01`): one element
+ * can belong to several sliding windows, so — as the spec names the
+ * composition verbatim — this wraps a real kernel [FlatMapSetCell] (the
+ * per-element window-start expansion over [starts], a
+ * [civictech.cell.data.Windows.sliding] assigner) linked into a real kernel
+ * [GroupByCell] (the aggregation), via the same negotiated kernel link
+ * kernel `WindowingTest`'s `sliding windows - flatMap expansion plus groupBy
+ * equals batch` case exercises directly — packaged as one [Cell] so the
+ * driver's one-cell-per-catalog-id model (`KernelCatalog.build`) can spawn it.
+ * (`window kind: tumbling` needs no such wrapper: the window start is a 1:1
+ * function of the event time, so it binds straight to a bare [GroupByCell]
+ * whose `keyFn` composes the tumbling assigner — see `KernelCatalog.window`.)
+ *
+ * Each inbound element is a `[at, value]` pair; [starts] maps `at` to every
+ * window start it falls in, and each expands to `[windowStart, value]` —
+ * `GroupByCell.keyFn` groups on the first component, `aggregator` folds the
+ * second (`KernelFunctions.keyOf`/`valueOf`, the same `[k, v]` convention
+ * `join`/`group-by` use). Windows never close (`24-OP-WINDOW-02`): neither
+ * [FlatMapSetCell] nor [GroupByCell] evicts on a timer, so a late element is
+ * an ordinary add through the same expand-then-group path and a retraction
+ * flows exactly as any other view.
+ */
+class WindowSlidingCell<ACC : Serializable>(
+    starts: (Long) -> List<Long>,
+    aggregator: Aggregator<Any?, Long, ACC>,
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : Cell, Stateful {
+
+    private val expand = FlatMapSetCell<Any?, Any?>(f = { e ->
+        val at = KernelFunctions.asLong(KernelFunctions.keyOf(e))
+            ?: error("window element's event-time key is not an integer: $e")
+        val value = KernelFunctions.valueOf(e)
+        starts(at).map { windowStart -> listOf(windowStart, value) }
+    })
+
+    private val grouped = GroupByCell(
+        keyFn = { e: Any? -> KernelFunctions.keyOf(e) },
+        aggregator = aggregator,
+    )
+
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Any?>>>())
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<Any?, Long>>>())
+
+    init {
+        @Suppress("UNCHECKED_CAST")
+        expand.outlet.linkTo(grouped.inlet as LinkFrom<Propagate<SetDelta<Any?>>>)
+        inlet.serve(Propagate<SetDelta<Any?>> { d -> expand.inlet.call.propagate(d) })
+        grouped.outlet.subscribe(
+            Use.fixed(Propagate<MapDelta<Any?, Long>> { d -> outlet.call.propagate(d) }, PortRef.generate()),
+        )
+    }
+
+    override fun snapshot(): Serializable = arrayListOf(expand.snapshot(), grouped.snapshot())
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: Serializable) {
+        val parts = state as ArrayList<Serializable>
+        expand.restore(parts[0])
+        grouped.restore(parts[1])
     }
 }
 
