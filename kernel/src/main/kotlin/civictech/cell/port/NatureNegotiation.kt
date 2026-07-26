@@ -6,6 +6,7 @@ import civictech.gen.wire.MergeClass
 import civictech.gen.wire.NatureAxis
 import civictech.gen.wire.NatureMismatch
 import civictech.gen.wire.NatureVector
+import civictech.gen.wire.Ownership
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -107,6 +108,31 @@ object NatureNegotiation {
         val merge = structure.level(NatureAxis.MERGE_IDEMPOTENCE)
         return if (merge.rank >= MergeClass.IDEMPOTENT.rank) Reconciliation.Direct
         else Reconciliation.Refuse(NatureMismatch(NatureAxis.MERGE_IDEMPOTENCE, merge, MergeClass.IDEMPOTENT))
+    }
+
+    /**
+     * PN-18 — the SPSC corollary for instance sets (spec 23 §SPSC corollary).
+     * The SPSC rule (an `Owned`/`Leased` payload has exactly one downstream
+     * consumer; MUST NOT cross into a broadcast) extends verbatim to an instance
+     * set: an exclusive-carrying routed port may join one only under a [disjoint]
+     * assignment, where the router delivers each payload to exactly one covering
+     * instance (a legal move-by-serialize). A Total/overlapping assignment fans
+     * one exclusive to N instances — the very double-consume the SPSC rule
+     * forbids — so it is a typed [Reconciliation.Refuse] on the **existing**
+     * `OWNERSHIP` axis. No new vocabulary: the level is CP-F1's `EXCLUSIVE`.
+     * (`Leased` is additionally refused across *any* instance boundary by the
+     * pre-existing wire/cycle rule — it never crosses a machine boundary.)
+     *
+     * A `SHARED` (fan-out-safe, DEFAULT) port always composes — the refusal is
+     * scoped precisely to the exclusive bit, so no existing instance set changes.
+     */
+    fun admitToInstanceSet(routed: NatureVector, disjoint: Boolean): Reconciliation {
+        val ownership = routed.level(NatureAxis.OWNERSHIP)
+        return if (ownership.rank > Ownership.SHARED.rank && !disjoint) {
+            Reconciliation.Refuse(NatureMismatch(NatureAxis.OWNERSHIP, ownership, Ownership.SHARED))
+        } else {
+            Reconciliation.Direct
+        }
     }
 }
 

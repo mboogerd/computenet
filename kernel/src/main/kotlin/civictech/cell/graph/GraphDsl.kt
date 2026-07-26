@@ -2,7 +2,10 @@ package civictech.cell.graph
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.manifestOf
 import civictech.cell.host.HostManagementApi
+import civictech.cell.replication.Interest
+import civictech.gen.wire.Manifest
 import civictech.cell.port.LinkResult
 import civictech.cell.port.Port
 import civictech.cell.port.Serve
@@ -79,6 +82,114 @@ data class SpawnStep(
 data class ConnectStep(val from: String, val outlet: String, val to: String, val inlet: String) : GraphStep
 
 /**
+ * PN-13 — one instance's declared slot in a heterogeneous instance set (spec
+ * 40/42 §Interest-scoped instance sets, 51 §Graph construction DSL): the
+ * [interest] it is assigned, plus placement/durability/frontier hints. Every
+ * field is *data* — the DSL gains parameters, not verbs (51): the [interest] is
+ * the formation assignment (PN-6 made it a management invocation; here it is
+ * folded into construction), and a subsequent journaled *re*assignment is the
+ * runtime counterpart, not a declaration.
+ *
+ * - [instanceId] the set-local ordinal — drives the spawn handle and the
+ *   partition function; the actual `(logicalId, instanceId)` ref is minted fresh
+ *   by [IdentityBinding.NewInstanceOf] on each replay (memberships/links are
+ *   interest-determined, invariant to the minted ids).
+ * - [placement] host-selector hint (recorded, routed by the multi-host replay
+ *   driver — 93 I-15, driver unbuilt).
+ * - [journalId] the journal a `DURABLE` instance binds to; `null` ⇒ a
+ *   journal-less host, refused for a durable cell at declaration ([InstanceSetStep.validate]).
+ * - [frontierPolicy] the frontier-policy hint for this instance.
+ */
+data class InstanceSpec(
+    val interest: Interest,
+    val instanceId: Int,
+    val placement: String? = null,
+    val journalId: String? = null,
+    val frontierPolicy: String? = null,
+) : Serializable
+
+/**
+ * PN-13 — builds the cell for one instance from its resolved [CellRef] and its
+ * [InstanceSpec] (so the declared [InstanceSpec.interest] and hints are baked in
+ * at construction). Serializable so a recorded [InstanceSetStep] is graphs-as-data.
+ */
+fun interface InstanceFactory : Serializable {
+    fun build(ref: CellRef, spec: InstanceSpec): Cell
+}
+
+/**
+ * PN-13 — the per-instance [CellFactory] an [InstanceSetStep] lowers to: a
+ * *data class* over `(base, spec)`, so a lowered [SpawnStep] is structurally
+ * `equals` to a hand-written one carrying the same base factory and spec — the
+ * "parameters, not verbs" check (51). A raw lambda closure would defeat that
+ * equality; this preserves it.
+ */
+data class InstanceCellFactory(val base: InstanceFactory, val spec: InstanceSpec) : CellFactory {
+    override fun create(ref: CellRef): Cell = base.build(ref, spec)
+}
+
+/**
+ * PN-13 — the composed-node declaration (spec 40/42, 51 §Graph construction DSL):
+ * one [logicalId] and a heterogeneous set of [instances] (`instances =
+ * f(interestPartition, replicationFactor)`), each carrying its own interest and
+ * hints. It **lowers** ([lower]) to N × [SpawnStep] under
+ * [IdentityBinding.NewInstanceOf] — nothing the host doesn't already accept (51:
+ * "the DSL gains parameters, not verbs"); the N interest assignments are the
+ * per-instance [InstanceCellFactory]s' construction-time formation assignments.
+ *
+ * Mis-compositions are refused at declaration ([validate], stricter than PN-12's
+ * host-level soft count): partitioning a cell whose manifest lacks `PARTITIONED`
+ * (a SINGLETON cell) is refused on the `INSTANCE_SCOPING` axis, and a `DURABLE`
+ * cell declared journal-less is refused on the `DURABLE` nature.
+ */
+data class InstanceSetStep(
+    val handle: String,
+    val logicalId: UUID,
+    val factory: InstanceFactory,
+    val instances: List<InstanceSpec>,
+) : GraphStep {
+
+    /** The primitive steps this declaration lowers to — N identity-preserving spawns. */
+    fun lower(): List<GraphStep> {
+        validate()
+        return instances.map { spec ->
+            SpawnStep(
+                handle = "$handle-${spec.instanceId}",
+                factory = InstanceCellFactory(factory, spec),
+                identity = IdentityBinding.NewInstanceOf(logicalId),
+            )
+        }
+    }
+
+    /**
+     * Cold structural pre-validation (the 51/93 I-21 gap, scoped to this
+     * declaration): a sample cell's [manifestOf] is read to refuse the two
+     * mis-compositions the ticket names, each message naming the offending axis.
+     */
+    internal fun validate() {
+        require(instances.isNotEmpty()) { "instance set '$handle': no instances declared" }
+        val sample = factory.build(IdentityBinding.NewInstanceOf(logicalId).resolve(), instances.first())
+        val manifest = manifestOf(sample.javaClass)
+        // partitioning = a multi-instance set whose interests are not all Total
+        // (a disjoint/partial assignment); replication (all-Total) is not.
+        val partitioning = instances.size > 1 && instances.any { it.interest != Interest.Total }
+        require(!(partitioning && Manifest.PARTITIONED !in manifest)) {
+            "instance set '$handle': cannot partition a SINGLETON cell " +
+                "${sample.javaClass.simpleName} (manifest $manifest lacks PARTITIONED) — " +
+                "refused on the INSTANCE_SCOPING axis"
+        }
+        if (Manifest.DURABLE in manifest) {
+            val journalless = instances.filter { it.journalId == null }.map { it.instanceId }
+            require(journalless.isEmpty()) {
+                "instance set '$handle': DURABLE cell ${sample.javaClass.simpleName} declared " +
+                    "on a journal-less host (instances $journalless carry no journal id) — " +
+                    "refused on the DURABLE nature"
+            }
+        }
+    }
+}
+
+/**
  * Enforces that a spawned [Cell] carries the ref its [IdentityBinding] chose —
  * but only when the binding made an *explicit* choice ([IdentityBinding.NewInstanceOf]/
  * [IdentityBinding.Exact]): a factory ignoring the resolved ref there would silently
@@ -121,6 +232,15 @@ data class ApplyReport(val results: Map<String, StepResult>) : Serializable {
 data class GraphSpec(val steps: List<GraphStep>) : Serializable {
 
     /**
+     * PN-13 — the primitive step list: every [InstanceSetStep] expanded to its
+     * N × [SpawnStep] lowering, all other steps passed through. Apply and replay
+     * run over this; the recorded [steps] keep the high-level declaration
+     * (graphs-as-data), and the two agree by construction — the same [lower].
+     */
+    fun lowered(): List<GraphStep> =
+        steps.flatMap { if (it is InstanceSetStep) it.lower() else listOf(it) }
+
+    /**
      * Local, co-located replay (51 §Graph construction DSL): synchronous loud
      * failure, unchanged — the first rejected `connect` throws, and a `spawn`
      * whose resolved ref is already live throws too (the ordinary live-ref
@@ -130,7 +250,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
      */
     fun applyTo(host: Use<HostManagementApi>): Map<String, CellRef> {
         val refs = mutableMapOf<String, CellRef>()
-        steps.forEach { step ->
+        lowered().forEach { step ->
             when (step) {
                 is SpawnStep -> {
                     val ref = step.identity.resolve()
@@ -149,6 +269,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                             (result as LinkResult.Rejected).reason
                     }
                 }
+
+                // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
+                is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
             }
         }
         return refs
@@ -169,7 +292,7 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
     fun applyRemote(host: Use<HostManagementApi>): ApplyReport {
         val refs = mutableMapOf<String, CellRef>()
         val results = mutableMapOf<String, StepResult>()
-        steps.forEach { step ->
+        lowered().forEach { step ->
             when (step) {
                 is SpawnStep -> {
                     val parentRef = step.parent?.let { refs[it] }
@@ -204,6 +327,9 @@ data class GraphSpec(val steps: List<GraphStep>) : Serializable {
                         }
                     }
                 }
+
+                // Unreachable: lowered() expands every InstanceSetStep to SpawnSteps.
+                is InstanceSetStep -> error("InstanceSetStep must be lowered before apply")
             }
         }
         return ApplyReport(results)
@@ -262,6 +388,31 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
         steps += SpawnStep(name, factory, identity, parent?.name)
         return TypedCellHandle(name, host.call.spawn(cell), this, cell)
             .also { handlesByRef[it.ref] = it }
+    }
+
+    /**
+     * PN-13 — declare a heterogeneous instance set (spec 40/42, 51): records one
+     * [InstanceSetStep] (graphs-as-data) and applies its [InstanceSetStep.lower]
+     * spawns immediately, returning a handle per instance (in `instances` order).
+     * Validation is loud at declaration; the recorded step re-lowers identically
+     * on replay ([GraphSpec.lowered]).
+     */
+    fun instanceSet(
+        handle: String,
+        logicalId: UUID,
+        factory: InstanceFactory,
+        instances: List<InstanceSpec>,
+    ): List<CellHandle> {
+        val step = InstanceSetStep(handle, logicalId, factory, instances)
+        val handles = step.lower().filterIsInstance<SpawnStep>().map { s ->
+            require(names.add(s.handle)) { "duplicate handle '${s.handle}'" }
+            val ref = s.identity.resolve()
+            val cell = s.factory.create(ref)
+            requireBoundRef(s.handle, s.identity, ref, cell.ref)
+            CellHandle(s.handle, host.call.spawn(cell), this).also { handlesByRef[it.ref] = it }
+        }
+        steps += step
+        return handles
     }
 
     /**

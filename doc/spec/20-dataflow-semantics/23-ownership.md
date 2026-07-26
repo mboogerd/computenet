@@ -71,6 +71,44 @@ Corollaries:
   external subscribers needs a separate non-exclusive outlet (`Frozen` or
   plain).
 
+## SPSC corollary: exclusive payloads across an instance set (PN-18, implemented)
+
+The SPSC rule extends verbatim to an **instance set** (spec 40/42): the
+consumers of a routed port are the set's instances, and "exactly one downstream
+consumer" becomes "each payload reaches exactly one covering instance". Because
+replication and partitioning are two settings of one interest knob (spec 42),
+the disposition follows directly from the assignment:
+
+- **Disjoint interest ⇒ legal move-by-serialize.** When no two instances'
+  interests overlap, the router (the one `sliceTo`/`admits` primitive)
+  delivers each payload to exactly one covering instance. An
+  `Owned`/`Leased`-carrying port MAY join the set — this is exactly the
+  cross-machine `Owned` transfer (serialize + drop the sender's reference),
+  fanned across the disjoint cover rather than a single edge.
+- **Total/overlapping interest ⇒ refused at formation.** A non-disjoint
+  assignment would deliver one exclusive to N instances — the double-consume
+  the SPSC rule forbids (the instance-set form of "MUST NOT cross into a
+  `Broadcast`"). Instance-set formation refuses an exclusive-carrying port
+  under a non-disjoint assignment: a typed `Rejected(mismatch)` on the
+  **existing** `OWNERSHIP` axis (`EXCLUSIVE` offered where the fan-out cover
+  admits only `SHARED`) — no new vocabulary. A `SHARED` (fan-out-safe) port is
+  unaffected; the refusal is scoped precisely to the exclusive bit.
+- **`Leased` never crosses an instance boundary.** As at any machine boundary
+  and on any cycle edge (above), `Leased` is refused across an instance set
+  regardless of disjointness — a lease on a remote pool is meaningless; freeze
+  or copy first.
+- **Repartition preserves exclusivity via Buffering.** A flip window parks a
+  moving key's commands at the router (the Buffering proxy MAY hold `Owned`;
+  buffering preserves exclusivity) and replays each once to the new owner, so
+  a payload is consumed exactly once across the flip. A payload with no covering
+  instance during the window is not dropped — it takes the visible dead-letter
+  boundary (G-46), `Owned` freezing into `Frozen`.
+
+Enforcement point: `InstanceSet.admitExclusive` (delegating to
+`NatureNegotiation.admitToInstanceSet`), consulted at formation — the same pure
+`OWNERSHIP` refusal the link handshake uses, applied to the whole cover instead
+of a single edge.
+
 ## Taps: consumers vs observers (decided in 93 I-20, unbuilt)
 
 The SPSC count is a count of **consumers**, not of attachments. Every
