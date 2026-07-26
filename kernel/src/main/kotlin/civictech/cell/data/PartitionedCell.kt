@@ -633,6 +633,37 @@ class PartitionedShardSet<E>(
 
     private var pendingInterests: List<Interest>? = null
 
+    /**
+     * Follow a shard through an in-place **rolling promotion** (FU-3, PN-14
+     * shard-by-shard; spec 53 §Replicated promotion). A shard is a ref-addressed
+     * [Replicable] instance, so promoting it is the same reuse-ref rebind
+     * [civictech.cell.evolve.Promotion.promoteReplica] /
+     * [civictech.cell.replication.Replication.rebind] runs for a replica: the
+     * [candidate] REUSES the incumbent's [CellRef], which makes the swap
+     * crash-recovery-equivalent. Because both the routing data plane ([route]) and
+     * the journaled control plane ([assign]) are **ref-keyed** proxies over the
+     * registry, they already follow the reused ref to the republished candidate
+     * with no rewiring — the write and repartition paths need no change. The one
+     * router-held handle that does NOT resolve by ref is the direct [ShardCell]
+     * object read by [memberships] (the harness/in-process board read): it still
+     * points at the retired incumbent object, frozen at promotion time. This
+     * repoints it to [candidate], keeping its (unchanged) [Interest] and its
+     * ref-keyed proxies.
+     *
+     * Ref-keyed by construction: a candidate spawned with a **fresh** CellRef (the
+     * FU-3 control) has no matching routing-table entry, so this refuses it —
+     * exactly the orphaning that loses that shard's post-promotion writes.
+     */
+    fun rebindShard(candidate: ShardCell<E>) {
+        val i = shards.indexOfFirst { it.cell.ref == candidate.ref }
+        require(i >= 0) {
+            "rebindShard follows a shard's REUSED CellRef through an in-place promotion; no shard is " +
+                "registered for ref ${candidate.ref} (a fresh-ref candidate orphans its routing entry)"
+        }
+        val old = shards[i]
+        shards[i] = Shard(candidate, old.interest, old.route, old.assign)
+    }
+
     /** The scatter-gather board: each shard's live key range (spec: "union of disjoint-key catch-ups"). */
     fun memberships(): List<Set<E>> = shards.map { it.cell.membership() }
 
