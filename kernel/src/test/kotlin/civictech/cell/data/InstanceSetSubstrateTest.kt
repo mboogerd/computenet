@@ -19,6 +19,8 @@ import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.partition.ShardCell
+import civictech.cell.partition.RoutedCommand
 
 /**
  * PN-6 (spec 40/42 §Interest-scoped instance sets, 20/24 §Partitioned state):

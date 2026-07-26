@@ -16,13 +16,14 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.partition.ShardCell
 
 /**
  * One instance's interest assignment (PN-6, spec 40/42 §Interest-scoped instance
  * sets): the [interest] it is assigned at routing [epoch]. This is the value of
  * the per-instance max-register the [InstanceSet] holds, and — carried on a
  * journaled, ref-addressed hosted invocation to a
- * [civictech.cell.data.ShardCell]'s `assignInlet` — the durable, replayable form
+ * [civictech.cell.partition.ShardCell]'s `assignInlet` — the durable, replayable form
  * of an interest reassignment. Before PN-6 the router narrowed a shard's interest
  * by a direct in-process call: unjournaled, so a non-checkpointed shard's shed
  * was invisible to recovery (PN-4's residual). An `Assignment` invocation lands

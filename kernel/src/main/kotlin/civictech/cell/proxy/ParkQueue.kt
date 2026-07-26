@@ -1,5 +1,7 @@
 package civictech.cell.proxy
 
+import civictech.cell.partition.PartitionedShardSet
+
 /**
  * ParkQueue — the append-in-order / hold / drain-once primitive (PN-11).
  *
@@ -8,7 +10,7 @@ package civictech.cell.proxy
  * [civictech.cell.membrane.TrafficLightCell] red buffer,
  * [civictech.cell.host.LocationRegistry]'s per-ref location parking,
  * [civictech.cell.host.ManagedHost]'s suspended-cell parking, and the
- * [civictech.cell.data.PartitionedShardSet] repartition flip buffer. In every
+ * [civictech.cell.partition.PartitionedShardSet] repartition flip buffer. In every
  * case something arrives while a gate is shut, accumulates in *arrival order*
  * (the hold), and replays *once, in order* when the gate opens (the drain).
  *

@@ -2,7 +2,6 @@ package civictech.cell.graph
 
 import civictech.cell.CellRef
 import civictech.cell.data.SetCell
-import civictech.cell.data.ShardCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.replication.Interest
@@ -13,6 +12,7 @@ import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.UUID
 import kotlin.random.Random
+import civictech.cell.partition.ShardCell
 
 /**
  * PN-13 (spec 40/42 §Interest-scoped instance sets, 51 §Graph construction DSL).

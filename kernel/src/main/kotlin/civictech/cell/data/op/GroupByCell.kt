@@ -14,6 +14,7 @@ import civictech.cell.data.absorbAck
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
+import civictech.cell.partition.PartitionedCell
 
 @CellBase
 interface GroupByApi<E, K, A> {

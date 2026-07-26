@@ -820,7 +820,7 @@ class ContractProcessor(
             const val STATEFUL_MARKER = "civictech.cell.Stateful"
             const val REBASELINE_MARKER = "civictech.cell.ReBaselineEmitting"
             const val GLITCH_FREE_MARKER = "civictech.cell.consistency.GlitchFree"
-            const val PARTITIONED_MARKER = "civictech.cell.data.Partitioned"
+            const val PARTITIONED_MARKER = "civictech.cell.partition.Partitioned"
         }
 
         // :gen's own identity — same module, compile-checked.

@@ -22,6 +22,9 @@ import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.partition.ShardCell
+import civictech.cell.partition.PullReply
+import civictech.cell.partition.PartitionedShardSet
 
 /**
  * FU-1 (spec 20/24 §Partitioned state, 40/42 §Interest-scoped instance sets):

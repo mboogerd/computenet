@@ -1,6 +1,8 @@
 package civictech.cell.replication
 
 import java.io.Serializable
+import civictech.cell.partition.PartitionedCell
+import civictech.cell.partition.PartitionedShardSet
 
 /**
  * A per-instance demand predicate over the delta/key space (spec 40/42
@@ -210,7 +212,7 @@ interface Scoped<D> {
  * link/slice mechanism"): restrict [delta] to the sub-delta [interest] admits
  * over [keyOf]. Both the gossip linker ([civictech.cell.replication.Replication],
  * `keyOf` = identity — the element *is* the key in a replica mesh) and the shard
- * router ([civictech.cell.data.PartitionedShardSet], `keyOf` = the group key) are
+ * router ([civictech.cell.partition.PartitionedShardSet], `keyOf` = the group key) are
  * this same function under different `keyOf`s — replication and partitioning are
  * two settings of one knob, not two mechanisms.
  *

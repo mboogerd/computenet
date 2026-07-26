@@ -9,8 +9,6 @@ import civictech.cell.data.Aggregators
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.data.ShardCell
-import civictech.cell.data.PartitionedShardSet
 import civictech.cell.data.WatermarkCell
 import civictech.cell.onEach
 import civictech.cell.host.LocationRegistry
@@ -45,6 +43,8 @@ import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.mapSet
 import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.op.MergeableGroupByCell
+import civictech.cell.partition.ShardCell
+import civictech.cell.partition.PartitionedShardSet
 
 /**
  * CP-E2 — the composition **phase exit** ("the Agora for composition").

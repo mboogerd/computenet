@@ -20,6 +20,9 @@ import java.util.Random
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
+import civictech.cell.partition.ShardCell
+import civictech.cell.partition.RoutedCommand
+import civictech.cell.partition.PartitionedShardSet
 
 /**
  * PN-4 (spec 20/24 §Partitioned state, 40/42 §Interest-scoped instance sets):

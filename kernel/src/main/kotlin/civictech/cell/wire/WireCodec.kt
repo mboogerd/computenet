@@ -76,7 +76,7 @@ data class WireFrame(
      * 40/42 §Interest-scoped instance sets, CP-D3): the routing table's
      * `routingEpoch` crossing the wire alongside a routed command. Additive —
      * populated only when the invocation carries a
-     * [civictech.cell.data.RoutedCommand] (a `PartitionedCell` shard route),
+     * [civictech.cell.partition.RoutedCommand] (a `PartitionedCell` shard route),
      * `null` otherwise, so the encoding stays backward-compatible with no
      * version bump. The receiving shard reads the same epoch in-band from the
      * command payload; the frame field makes the routing epoch observable at
@@ -147,8 +147,8 @@ object WireCodec {
                 // PartitionedCell shard route (spec 20/24 §Partitioned state, CP-D3): epoch + delta
                 @Suppress("UNCHECKED_CAST")
                 subclass(
-                    civictech.cell.data.RoutedCommand::class,
-                    civictech.cell.data.RoutedCommand.serializer(polyAny) as KSerializer<civictech.cell.data.RoutedCommand<*>>,
+                    civictech.cell.partition.RoutedCommand::class,
+                    civictech.cell.partition.RoutedCommand.serializer(polyAny) as KSerializer<civictech.cell.partition.RoutedCommand<*>>,
                 )
                 // single-writer leader→follower log unit (spec 42 §Single-writer replication, W4.3)
                 @Suppress("UNCHECKED_CAST")
