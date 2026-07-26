@@ -39,11 +39,19 @@ Elements of the pattern:
 1. **Command contract** on the inlet (semantic operations, not raw deltas) —
    the cell derives effective deltas from owned state.
 2. **Delta contract** on the outlet; emissions are effective-only (21) —
-   removing an unobserved element is a no-op.
+   removing an unobserved element is a no-op. `[24-SET-01]` The outlet SHALL
+   emit only effective deltas: a remove of an element the cell has not
+   observed as added SHALL be a no-op (Ubiquitous).
 3. **Merge on the delta type is commutative, associative, idempotent** —
    tag-set union — so membership converges regardless of arrival order.
-   Add-wins is not a configured bias but a consequence: a concurrent add's
-   tag is never observed by the remove. Tags are `Timestamp`s minted
+   `[24-SET-02]` `SetDelta` merge (tag-set union) SHALL be commutative,
+   associative, and idempotent, such that membership converges to the same
+   result regardless of delivery order (Ubiquitous). Add-wins is not a
+   configured bias but a consequence: a concurrent add's
+   tag is never observed by the remove. `[24-SET-03]` A remove SHALL only
+   retract the tags it observed, such that a concurrent add's tag — never
+   observed by that remove — survives the merge (add-wins as a consequence
+   of tag-set union, Ubiquitous). Tags are `Timestamp`s minted
    cell-locally (unique per add instance — see 22 for why wave ids are not
    reused). This is the CRDT-style ingredient for decentralized replication
    (40/42) without imposing CRDTs everywhere. (Contrast — decided in
@@ -54,29 +62,46 @@ Elements of the pattern:
 4. **Derived cells consume delta contracts**: `UnionSetCell` tracks live
    tags per element, forwards only new tag information (duplicate deliveries
    across diamond fan-ins dedup), and any consumer derives membership from
-   the forwarded tag algebra. `CounterCell` (`increment`/`decrement` →
+   the forwarded tag algebra. `[24-OP-UNION-01]` `UnionSetCell` SHALL track
+   live tags per element and forward only new tag information, such that
+   duplicate deliveries of the same tag across a diamond fan-in are
+   deduplicated (Ubiquitous). `CounterCell` (`increment`/`decrement` →
    `CounterDelta`) is commutative by construction: merge is addition —
    commutative but **not idempotent**, so `CounterCell` is single-instance
-   (never replicated; fine for derived per-peer views). The replicable
+   (never replicated; fine for derived per-peer views). `[24-OP-COUNTER-01]`
+   `CounterCell` merge SHALL be addition (commutative, not idempotent), and
+   `CounterCell` SHALL be single-instance — never replicated (Ubiquitous).
+   The replicable
    counter is `PnCounterCell` (session delta 4): per-source cumulative
    inc/dec totals under a private per-instance source id, `PnCounterDelta`
    merging by pointwise max — commutative, associative, idempotent — so it
    joins the set family in the mergeable class (`Replicable`, 42) and
    survives gossip-mesh echoes, partitions, and late-join catch-up.
+   `[24-OP-PNCOUNTER-01]` `PnCounterDelta` merge (pointwise max over
+   per-source cumulative totals) SHALL be commutative, associative, and
+   idempotent, such that `PnCounterCell` replicas converge across
+   gossip-mesh echoes, partitions, and late-join catch-up (Ubiquitous).
 
 *(G-23 resolved for the set and counter families, M4.1: convergence validated
 by a 200-seed interleaving test with a control run proving arrival-order
 application diverges. `MapDelta`/`ListDelta` instead carry **documented
 convergence limits** — arrival-order key puts and index-addressed edits are
 single-stream semantics; stable multi-writer forms wait for replication
-pressure (42).)*
+pressure (42). `[24-OP-MAP-01]` `[24-OP-LIST-01]` `MapDelta`'s arrival-order
+key puts and `ListDelta`'s index-addressed edits SHALL remain single-stream
+semantics only — neither is a convergent merge under concurrent writers
+(Ubiquitous).)*
 
 ## Required next steps in the family
 
 - ~~G-22: State + catch-up~~ **Resolved (M4.2)**: every data cell wires the
   post-install `onLinked` hook (13, 21) to unicast state-as-delta-from-empty
   to a late-joining subscriber, and implements `Stateful` so state survives
-  drain/migrate (30/33) — no longer trapped in private fields. On-demand pull
+  drain/migrate (30/33) — no longer trapped in private fields.
+  `[24-CATCHUP-01]` WHEN a subscriber links to a data cell's outlet after
+  deltas have already flowed, the cell SHALL unicast its
+  state-as-delta-from-empty to that subscriber, and SHALL preserve that
+  state across drain/migrate via `Stateful` (Event-driven). On-demand pull
   without relinking remains with G-18/G-13 (21).
 - ~~Operator library~~ **Implemented (M4.3, extended to the full relational
   suite in M11)** — each an ordinary cell with declared incremental
@@ -91,42 +116,75 @@ pressure (42).)*
   equi-join), **single-instance** outputs are single-writer streams
   (groupBy, the counters outside the PN form):
   - `FilterCell` — predicate filter over a tagged set stream, tags intact.
+    `[24-OP-FILTER-01]` `FilterCell` SHALL pass through only elements
+    satisfying the predicate, with element tags unchanged (Ubiquitous).
   - `CountCell` — distinct-element count; emits commutative `CounterDelta`s
-    on membership-size change only.
+    on membership-size change only. `[24-OP-COUNT-01]` `CountCell` SHALL
+    emit a `CounterDelta` only when membership size changes, counting
+    distinct elements (Ubiquitous).
   - `IntersectSetCell` — binary (`left`/`right` inlets; n-ary by chaining);
     advertises entry tags, deletes all advertised tags on exit, absorbs tag
-    churn that doesn't flip membership.
+    churn that doesn't flip membership. `[24-OP-INTERSECT-01]`
+    `IntersectSetCell` SHALL advertise an element's entry tags on entry and
+    delete all advertised tags on exit, absorbing tag churn that does not
+    flip membership (Ubiquitous).
   - `JoinCell` — the **LWW dictionary join**: keyed inner join over two
     single-writer map streams where either side's put *refreshes* the pair —
     value-replacement semantics, inherently arrival-order (`MapDelta`'s
     documented limit). Useful for config/dictionary lookups; not the
-    relational join.
+    relational join. `[24-OP-JOIN-01]` `JoinCell` SHALL be a keyed inner
+    join over two single-writer map streams where either side's put
+    refreshes the pair under value-replacement (arrival-order) semantics
+    (Ubiquitous).
   - `JoinSetCell` / `joinSet` / `crossProduct` (M11.5) — the **relational
     equi-join** over convergent tagged set streams: a pair is live iff both
     rows are live under matching keys; one minted tag per live pair
     ([MintedTags] — pairs re-enter when a removed row returns), emitted under
-    `combine(a, b)`. Many-to-one `combine` collapses via per-pair tags (the
+    `combine(a, b)`. `[24-OP-JOINSET-01]` `JoinSetCell` SHALL emit a pair
+    under `combine(a, b)` iff both rows are live under matching keys, minting
+    one tag per live pair such that a pair re-enters when a removed row
+    returns (Ubiquitous). Many-to-one `combine` collapses via per-pair tags (the
     output survives until its last pair dies — whole-element deletion is the
     divergent naive form, control-tested); many-to-many keys yield all
-    pairs; cross product = the unit key. `combine` outputs crossing the wire
+    pairs; cross product = the unit key. `[24-OP-JOINSET-02]` Many-to-one
+    `combine` outputs SHALL survive until their last contributing pair dies
+    (per-pair tag collapse, not whole-element deletion); many-to-many keys
+    SHALL yield all pairs; cross product SHALL be the unit-key case
+    (Ubiquitous). `combine` outputs crossing the wire
     must be `@Serializable` app types (`Pair` is not WireCodec-registered).
   - `SemiJoinCell` / `differenceSet` (M11.2) — keyed semijoin (`A ⋉ B`) and
     antijoin (`A ▷ B`, `negated`); difference (`A ⊖ B`, SQL EXCEPT DISTINCT)
-    is the antijoin on identity keys. Non-monotone: re-entry rides the other
+    is the antijoin on identity keys. `[24-OP-SEMIJOIN-01]` `SemiJoinCell`
+    SHALL implement keyed semijoin (`A ⋉ B`) and antijoin (`A ▷ B`), with
+    difference (`A ⊖ B`) as the antijoin on identity keys (Ubiquitous).
+    Non-monotone: re-entry rides the other
     side's removal, so output tags are **minted per entry** (`MintedTags`,
     tag hygiene, 21) — never borrowed from inputs (control test: input-tag
-    reuse leaves re-entries dead under tombstone folding). Output membership
+    reuse leaves re-entries dead under tombstone folding).
+    `[24-OP-SEMIJOIN-02]` Semijoin/antijoin output tags SHALL be minted per
+    entry, never borrowed from input tags, so a re-entry after the other
+    side's removal is not left dead under tombstone folding (Ubiquitous).
+    Output membership
     at idle is a deterministic function of the converged add-wins input
     memberships; duplicates converge on membership, not tags; not
-    glitch-free (22's wrapper is the remedy). Set semantics only — bag
+    glitch-free (22's wrapper is the remedy). `[24-OP-SEMIJOIN-03]` WHILE
+    both input streams are idle, semijoin/antijoin output membership SHALL
+    be a deterministic function of the converged add-wins input
+    memberships (duplicates converge on membership, not tags); the operator
+    is not glitch-free on its own (State-driven). Set semantics only — bag
     semantics (EXCEPT ALL) would need a weighted family (see below).
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
     tagged set stream, input tags passing through. Sound because tag algebra
     is per-(element, tag): colliding outputs **union** their preimages' tag
     sets (last-wins remapping is the divergent naive form, proven by control
     test), so an output stays live until its last live preimage dies —
-    distinct-projection semantics. Transform must be pure; dels translate by
-    re-applying it.
+    distinct-projection semantics. `[24-OP-FLATMAP-01]` `FlatMapSetCell`
+    SHALL union the tag sets of colliding outputs' preimages, such that an
+    output stays live until its last live preimage dies (Ubiquitous).
+    Transform must be pure; dels translate by
+    re-applying it. `[24-OP-FLATMAP-02]` The `FlatMapSetCell` transform
+    function MUST be pure; deletions SHALL translate by re-applying it
+    (Ubiquitous).
   - The shared live-tag fold lives in `TagState` (internal); `MapperCell`
     remains the scalar map/filter.
   Verified: a seeded writers→union→filter→count pipeline equals a batch
@@ -137,18 +195,29 @@ pressure (42).)*
 
 `GroupByCell(keyFn, aggregator)` folds a tagged set stream into per-key
 aggregates on a `MapDelta<K, A>` outlet; `GroupByCell.global` is
-fold-to-scalar (one constant-key group). The normative rule of the family: an
+fold-to-scalar (one constant-key group). `[24-OP-GROUPBY-01]` `GroupByCell`
+SHALL fold a tagged set stream into per-key aggregates on a `MapDelta<K, A>`
+outlet; `GroupByCell.global` SHALL fold to one constant-key group
+(Ubiquitous). The normative rule of the family: an
 `Aggregator` is a **deterministic function of group membership** —
 `value(acc)` may depend only on which elements are live, never on
 insertion/retraction order. Arrival-order aggregates (first/last/scan) are
 excluded by this rule; it is what makes incremental-equals-batch testable and
-per-peer recompute converge.
+per-peer recompute converge. `[24-AGG-01]` An `Aggregator`'s `value(acc)`
+SHALL depend only on which elements are currently live, never on
+insertion/retraction order, so arrival-order aggregates (first/last/scan) are
+excluded (Ubiquitous).
 
 - Membership flips (not tag churn) drive `insert`/`retract`; a group's last
   retraction removes the group (`MapDelta` removal — SQL group-death
-  semantics); emission is effective-only by value equality (21). All groups
+  semantics); emission is effective-only by value equality (21).
+  `[24-OP-GROUPBY-02]` Membership flips, not tag churn, SHALL drive
+  `insert`/`retract`, and a group's last retraction SHALL remove the group
+  from the `MapDelta` outlet (Ubiquitous). All groups
   touched by one input delta emit as one `MapDelta` under the input's wave
-  id (22), so a glitch-free wrap composes normally.
+  id (22), so a glitch-free wrap composes normally. `[24-OP-GROUPBY-03]` All
+  groups touched by one input delta SHALL emit as one `MapDelta` under that
+  input's wave id (Ubiquitous).
 - Aggregator classes: **self-inverting** (count, sumOf, avgOf — O(1)
   accumulators, retraction is arithmetic; Long selectors — float sums are
   order-sensitive) and **non-invertible** (minOf/maxOf/topK/collectToSet,
@@ -157,15 +226,26 @@ per-peer recompute converge.
   distinct elements can share an extracted value, and retraction of the
   current extremum must reshuffle without a re-scan. Bounded-memory top-k is
   rejected as unsound under retractions (an evicted value can become top
-  again — control-tested). Selectors must be total orders with deterministic
-  tie-break.
+  again — control-tested). `[24-OP-GROUPBY-04]` IF a non-invertible
+  aggregator (min/max/topK/collectToSet) is implemented with bounded-memory
+  eviction, THEN it is unsound under retractions (an evicted value can
+  become top again) — the accumulator SHALL instead retain the full support
+  multiset (Unwanted behavior). Selectors must be total orders with deterministic
+  tie-break. `[24-OP-GROUPBY-05]` Non-invertible aggregator selectors MUST be
+  total orders with a deterministic tie-break (Ubiquitous).
 - **Windowing = key derivation (M11.6).** There is no wall clock (P1) and
   wave ids are per-source, so event time is an explicit attribute of the
   element and a window is just part of the group key: tumbling = composite
   key via `Windows.tumbling`; sliding = per-element expansion
-  (`FlatMapSetCell` over `Windows.sliding`) then group. **Windows never
+  (`FlatMapSetCell` over `Windows.sliding`) then group. `[24-OP-WINDOW-01]`
+  A window SHALL be expressed as part of the group key alone — tumbling as a
+  composite key, sliding as per-element expansion then group — since there
+  is no wall clock and event time is an explicit element attribute
+  (Ubiquitous). **Windows never
   close** — late elements are ordinary adds, retractions flow (view
-  semantics). Deferred with triggers: watermark-driven eviction (an ordinary
+  semantics). `[24-OP-WINDOW-02]` Windows SHALL NOT close: a late element
+  SHALL be an ordinary add and retractions SHALL flow as in any other view
+  (Ubiquitous). Deferred with triggers: watermark-driven eviction (an ordinary
   watermark-as-data source feeding upstream dels; trigger: real
   window-state memory pressure) and session windows (assignment is not a
   per-element function; trigger: first proximity-session consumer).
@@ -173,16 +253,26 @@ per-peer recompute converge.
   placement-dependent, breaking P1 and batch equivalence.
 - **Outer joins are compositions, not cells (M11.6)**: `leftJoin` /
   `rightJoin` / `fullJoin` graph factories union the relational join's
-  matched rows with null-completed antijoin rows. Eventually consistent,
+  matched rows with null-completed antijoin rows. `[24-OP-OUTERJOIN-01]`
+  `leftJoin`/`rightJoin`/`fullJoin` SHALL union the relational join's
+  matched rows with null-completed antijoin rows (Ubiquitous). Eventually consistent,
   not glitch-free — transient `(a, null)`/`(a, b)` overlap while opposing
   updates are in flight; an atomic outer-join cell waits for a consumer
-  that can't tolerate the transient.
+  that can't tolerate the transient. `[24-OP-OUTERJOIN-02]` WHILE opposing
+  updates to an outer-join composition are in flight, the composition SHALL
+  be only eventually consistent — a transient overlap of `(a, null)` and
+  `(a, b)` rows for the same key MAY be observed before convergence
+  (State-driven).
 - **Replication story: recompute, not gossip.** The output is single-writer
   `MapDelta` (its documented contract, satisfied by construction), so
   `GroupByCell` is not `Replicable` — and needn't be: aggregates are
   deterministic functions of convergent membership, so each peer derives its
   own from its replicated input and all converge at idle with zero
-  aggregate-level coordination. Gossipable aggregate outputs (per-source
+  aggregate-level coordination. `[24-OP-GROUPBY-06]` `GroupByCell`'s outlet
+  SHALL be single-writer `MapDelta` and `GroupByCell` SHALL NOT be
+  `Replicable`; each peer SHALL derive its own aggregate from its
+  replicated input, converging at idle with zero aggregate-level
+  coordination (Ubiquitous). Gossipable aggregate outputs (per-source
   keyed cumulative sums, `PnCounterDelta` generalized) stay deferred with
   trigger: *first aggregate-only replica under input-size pressure*.
 
@@ -221,6 +311,15 @@ instance sets; composite naming per 93 I-8, evaluated under placement in
 93 I-19). Everything below is decided design, not code; kernel untouched,
 per P1.
 
+⚠ EARS-GAP: this status claim ("nothing is built... kernel untouched")
+appears stale — `kernel/.../cell/data/PartitionedCell.kt` and its test suite
+(`PartitionedCellTest`, `PartitionedPromotionTest`, `PartitionedPullTest`,
+`PartitionedPullScopeWireTest`) exist, and §PN-4 below (same chapter)
+describes `ShardCell`/`PartitionedCell` in the present tense as landed. The
+`[24-PART-*]` ids below are minted on the assumption that PN-4's landed
+description is authoritative and this G-24 status line is out of date; a
+spec editor with fuller context should confirm or retract them.
+
 A **PartitionedCell** is one composite cell — one membrane, one logical id —
 a naming/composition convenience over a **disjoint-interest instance set**: its
 organelle cells are the interest-scoped instances, each holding a **disjoint key
@@ -235,6 +334,10 @@ never on position.
   outside the composite is indistinguishable from a single data cell.
   External links bind the composite's ports, so rebalancing never
   re-handshakes counterparts; organelles are never externally addressed.
+  `[24-PART-01]` A `PartitionedCell` composite SHALL be externally
+  indistinguishable from a single data cell — one membrane, its external
+  links bound to the composite's own ports — such that repartitioning never
+  re-handshakes external counterparts (Ubiquitous).
 - **Routing is a served proxy keyed by a `@Key` descriptor slot.** A `@Key`
   annotation on one data-contract parameter emits a `keyIndex` into the
   method descriptor; the router extracts the key, applies the Serializable
@@ -242,6 +345,10 @@ never on position.
   dispatch, the one place per-message routing is intrinsic to the feature
   (same accepted status as `HostRoutingApi.route`). Key-less methods
   (`clear()`) broadcast and MUST be non-exclusive (KSP lint).
+  `[24-PART-02]` The router SHALL forward a keyed invocation to exactly one
+  organelle inlet selected by the total partitioner over the `@Key` slot;
+  key-less methods SHALL broadcast to every organelle and MUST be
+  non-exclusive (Ubiquitous).
 - **Demux preserves SPSC.** The partitioner maps each key to exactly one
   organelle, so the exclusive bit (G-21, 23) holds end-to-end: an `Owned`
   payload moves exactly once into exactly one organelle. Fan-out is not
@@ -253,6 +360,10 @@ never on position.
   delta from one organelle only ever mentions its own keys: merging is
   conflict-free union, no downstream diamond joins two partitions on the
   same key, and cross-source glitches are impossible without coordination.
+  `[24-PART-03]` Because organelle key ranges are disjoint, the composite's
+  merging outlet SHALL forward each organelle's delta preserving its
+  `MessageContext` as conflict-free union, such that a partitioned cell's
+  converged view equals its unpartitioned twin's (Ubiquitous).
 - **Repartition = interest reassignment + per-range Buffering.** Moving range
   R is `Interest` reassignment on the disjoint-interest mesh (42): set R to
   Buffering on the router (other ranges flow), replay R's
@@ -260,9 +371,18 @@ never on position.
   mechanism a re-announce drives, not a bespoke protocol), flip the versioned
   routing table atomically and bump its `routingEpoch`, replay parked commands
   in order; a stale-epoch command re-routes. External links observe none of it.
+  `[24-PART-04]` WHEN a key range R is repartitioned, the router SHALL set R
+  to Buffering (other ranges continue flowing), replay R's
+  state-as-delta-from-empty into its new owner, then atomically flip the
+  routing table and bump its `routingEpoch` and replay parked commands in
+  order — all invisible to external links (Event-driven).
 - **Late join = per-organelle catch-up.** Each organelle unicasts its
   key-range state-as-delta-from-empty (the G-22 mechanism); the union of
   disjoint-key catch-ups IS the coherent cross-partition snapshot.
+  `[24-PART-05]` WHEN a subscriber links to a partitioned cell, each
+  organelle SHALL unicast its own key-range state-as-delta-from-empty, such
+  that the union of disjoint-key catch-ups is the coherent cross-partition
+  snapshot (Event-driven).
 
 Under real placement (93 I-19) the composite reduces to shipped primitives —
 partitioning must not become a second distribution mechanism, and doesn't:
@@ -313,13 +433,26 @@ layer G-62 — both cited from those gaps, neither owed by this section.
 Three tag-algebra rules govern replication, RESTART, and instance swap.
 They are decided design (93 I-14, I-22, I-27), unimplemented.
 
+⚠ EARS-GAP: this "unimplemented" claim appears stale — the kernel already
+contains `ReBaselineEmitting`, `TagState`'s use of it, and
+`RestartReBaselineTest`, and CONCORD-PLAN §3 lists `15-RESTART-01`
+("restart with re-baseline; downstream equals batch despite the restart")
+as core-profile corpus, implying re-baseline convergence is meant to be
+testable now. The `[24-TAG-*]` ids below are minted on that basis; a spec
+editor with fuller context should confirm or retract them, and reconcile
+this line and the chapter status header accordingly.
+
 - **Tags are data, never re-minted for received state** (decided in 93 I-14
   Rule S3). A genuinely new local add mints its tag under the cell's
   current source epoch; thereafter the tag travels **verbatim** — copied
   unchanged by gossip (40/42), by `Stateful.snapshot()`, by
   `StateMigrating.importFrom` (50/53), and by state-as-delta-from-empty
   catch-up (21). A cell MUST NOT re-mint tags for state it received or
-  imported. This is the replication-level complement of the landed
+  imported. `[24-TAG-01]` A genuinely new local add SHALL mint its tag
+  under the cell's current source epoch; thereafter that tag SHALL travel
+  verbatim through gossip, `Stateful.snapshot()`, `importFrom`, and
+  state-as-delta-from-empty catch-up — a cell MUST NOT re-mint a tag for
+  state it received or imported (Ubiquitous). This is the replication-level complement of the landed
   operator-level tag-hygiene rule (`MintedTags` above): derived output
   mints fresh tags; relayed or imported state preserves them. Outlet-counter
   durability is optional — a fresh epoch on recovery is the always-correct
@@ -336,7 +469,13 @@ They are decided design (93 I-14, I-22, I-27), unimplemented.
   consumer MUST (a) drop every live tag from the listed superseded sources
   that the re-baseline does not re-assert, (b) apply `state` by ordinary
   tag-union merge, and (c) fence the superseded source ids as dead lanes,
-  rejecting any late delta stamped with a dead `sourceId`. Tags are
+  rejecting any late delta stamped with a dead `sourceId`. `[24-TAG-02]`
+  WHEN a convergent consumer receives
+  `ReBaseline(source, supersedes, state, supersede = true)`, it MUST drop
+  every live tag from the listed superseded sources that the re-baseline
+  does not re-assert, apply `state` by ordinary tag-union merge, and fence
+  the superseded source ids as dead lanes — rejecting any later delta
+  stamped with a dead `sourceId` (Event-driven). Tags are
   source-scoped, so the retraction removes only the reverted producer's
   lost contribution — healthy peers' tags survive — and the rule composes
   with multi-writer merge; `supersede = false` (pull-merge) retracts
@@ -355,7 +494,13 @@ They are decided design (93 I-14, I-22, I-27), unimplemented.
   counter high-water): a fallback re-baseline under a fresh source would
   double-count the incumbent's already-delivered contribution (§Established
   pattern). A fallback swap MUST announce its fresh source via the I-22
-  `ReBaseline` supersession notice — the landed shadow-promotion fallback
+  `ReBaseline` supersession notice — `[24-TAG-03]` IF a cell's merge is
+  non-idempotent across source identity (the counters), THEN its swap
+  handoff MUST use state transform with source continuity (the candidate
+  adopts the incumbent's outlet `sourceId` and counter high-water) rather
+  than the catch-up-fallback tier, and any fallback swap MUST announce its
+  fresh source via the `ReBaseline` supersession notice (Unwanted
+  behavior) — the landed shadow-promotion fallback
   (50/53) is silent: the candidate emits under its own fresh sourceId with
   no supersession signal. The drain-window export snapshot is the same
   `Stateful.snapshot()` that G-25 journals — one capture serves the
@@ -409,17 +554,25 @@ ADR 1 §3 requires in-memory / durable / hybrid state.
 *(G-25 resolved, M10; refined per-cell CP-C1)*: durability is a **per-cell**
 concern. A host takes a `journalFor(cellRef)` selector naming the write-ahead
 `Journal` each cell's accepted invocations tee to — or `null` to make that
-cell **volatile** (never journaled, never replayed). The whole-host `Journal`
+cell **volatile** (never journaled, never replayed). `[24-DUR-01]` A host's
+`journalFor(cellRef)` selector SHALL name the `Journal` a cell's accepted
+invocations tee to, or `null` to make that cell volatile — never journaled,
+never replayed (Ubiquitous). The whole-host `Journal`
 is the degenerate case: the constant selector returning that one journal for
 every cell, byte-identical to the pre-CP-C1 tee. For a journaled cell the host
 appends every accepted invocation **as a wire frame** (the same `WireCodec`
 encoding that crosses the network: a journal is a bridge to disk) before
 staging it; recovery rebuilds the graph, then `recoverFrom` restores the
 latest checkpoint's `Stateful` snapshots and replays the frame tail through
-the ordinary decode path. Because the write path is per-cell, a journal only
+the ordinary decode path. `[24-DUR-02]` On recovery, the host SHALL rebuild
+the graph, then `recoverFrom` SHALL restore the latest checkpoint's
+`Stateful` snapshots and replay the frame tail through the ordinary decode
+path (Ubiquitous). Because the write path is per-cell, a journal only
 ever holds its own cells' records, so replaying it restores exactly those
 cells and re-delivers nothing to a co-hosted volatile cell — recover each
-distinct journal once. `checkpoint` is keyed the same way: it snapshots only
+distinct journal once. `[24-DUR-03]` A journal SHALL only ever hold its own
+cells' records, such that replaying it restores exactly those cells and
+re-delivers nothing to a co-hosted volatile cell (Ubiquitous). `checkpoint` is keyed the same way: it snapshots only
 the cells teeing to the passed journal and compacts that journal atomically;
 tombstone and PN-slot growth compact with it (`MixedDurabilityTest` proves the
 per-cell scoping; its control shows a constant selector restores every cell).
@@ -428,7 +581,11 @@ Cells stay oblivious — with one honest exception:
 the network already observed, so set tags and PN source slots derive from
 the cell's ref (never `randomUUID`) and the tag counter is snapshot state.
 Random identity + replay = resurrected removals and double counts
-(`CrashRecoveryTest` proves both directions). Remaining with a trigger:
+(`CrashRecoveryTest` proves both directions). `[24-DUR-04]` A recovered
+instance MUST re-mint the identities the network already observed — set
+tags and PN source slots derived from the cell's ref (never `randomUUID`),
+tag counter restored as snapshot state — such that replay does not
+resurrect removals or double-count (Ubiquitous). Remaining with a trigger:
 journal segmentation/rotation and the disk-overflow mailbox (33) — the
 first workload where one fsync'd file hurts.
 
@@ -441,7 +598,11 @@ re-emissions. For `Effectful` sinks *(G-59 resolved, W2.6, closes C-9)*: an
 `(sourceId, counter)` per inlet — consulted by both `recoverFrom` replay and
 post-recovery live delivery; an invocation at or behind the frontier is
 suppressed-emission (dropped as already-acted) instead of re-driving the
-sink. The decided journal classification still diverges from the landed
+sink. `[24-DUR-05]` IF an invocation at an `Effectful` inlet is at or behind
+that inlet's processed-frontier (the last applied `(sourceId, counter)`),
+THEN it SHALL be suppressed — dropped as already-acted — rather than
+re-driving the sink, whether encountered during `recoverFrom` replay or
+post-recovery live delivery (Unwanted behavior). The decided journal classification still diverges from the landed
 tee: 93 I-7 journals only `PORT_API` data plus topology events, while the
 shipped journal appends every intake frame (management included) and does
 not journal topology at all — the graph is rebuilt out-of-band before
@@ -488,7 +649,12 @@ the ordinary intake (24 durability, M10.1). PN-2 (22 §Recovery is a baseline)
 makes that replay a **baseline** rather than a live wave: a mid-graph cell whose
 frames carry a non-null wave context re-emits its restored deltas flagged
 `MessageContext.baseline`, so a downstream glitch-free join installs them as arm
-state and never waits for a volatile sibling arm to replay the same wave. This
+state and never waits for a volatile sibling arm to replay the same wave.
+`[24-REPLAY-01]` WHEN a journaled mid-graph cell's replayed frames carry a
+non-null wave context, it SHALL re-emit its restored deltas flagged
+`MessageContext.baseline`, such that a downstream glitch-free join installs
+them as arm state without waiting for a volatile sibling arm to replay the
+same wave (Event-driven). This
 is what lets a durable data cell feed one arm of a fork-join diamond whose other
 arm is volatile — the exchange demo's previously-unwritten "journal only
 context-free roots" invariant is retired: mid-graph journaled cells recover
@@ -508,7 +674,11 @@ cell, not a write-only sink. It is `Stateful` and `Replicable`:
   recoverable state is not just its tags but the key-`Interest` it holds and the
   routing epoch it has adopted. Interest is *snapshotted state*, never re-read
   from the constructor on recovery — a checkpoint-restored shard keeps the range
-  it holds instead of resurrecting the range it shed.
+  it holds instead of resurrecting the range it shed. `[24-SHARD-01]` A
+  `ShardCell`'s `Stateful` snapshot SHALL be `(TagState, interest,
+  assignedEpoch)`; `interest` SHALL be snapshotted state, never re-read from
+  the constructor on recovery, such that a checkpoint-restored shard keeps
+  the range it holds instead of resurrecting the range it shed (Ubiquitous).
 - **Outlet + `deltaInlet` + `StateRequest`.** Every membership change (a routed
   slice, a gossip merge, a shed) re-emits on the outlet, so a shard composes as
   an ordinary source: partitioned+durable, partitioned+replicated (overlapping
@@ -516,17 +686,28 @@ cell, not a write-only sink. It is `Stateful` and `Replicable`:
   buildable rather than merely untested. The `StateRequest` handler answers a
   pull with an interest-scoped, `since`-filtered state-as-delta stamped as a
   catch-up baseline (the `SetCell` pull contract, 20/21 §Pull) — never a wave.
+  `[24-SHARD-02]` Every shard membership change SHALL re-emit on the outlet;
+  the `StateRequest` handler SHALL answer a pull with an interest-scoped,
+  `since`-filtered state-as-delta stamped as a catch-up baseline, never a
+  wave (Ubiquitous).
 
 **Recovery of a partitioned node.** The router (`PartitionedShardSet`) holds no
 durable state of its own: the routing table *is* the shards' interests and the
 epoch *is* their max-register. After a crash it is recomputed by
 `rebuildFrom(shards)` — asking each restored shard what interest and epoch it
-holds. A shard's shed is invisible to its own WAL (the router narrows interest
+holds. `[24-SHARD-03]` The partitioned router SHALL hold no durable state of
+its own — the routing table SHALL be recomputed after a crash by
+`rebuildFrom(shards)`, asking each restored shard what interest and epoch it
+holds (Ubiquitous). A shard's shed is invisible to its own WAL (the router narrows interest
 by a direct in-process reassignment, not a routed frame), so a shard reconstructed
 under its **current** (post-repartition) interest drops its pre-repartition
 frames for the range it lost on replay; reconstructed under its constructor
 `initialInterest` it re-admits them and the moved range resurrects on two shards
-at once (the executable control). This composes with the checkpoint guard
+at once (the executable control). `[24-SHARD-04]` WHEN a shard recovers, it
+SHALL reconstruct under its current post-repartition interest, dropping
+pre-repartition frames for any range it shed (reconstructing under the
+constructor's `initialInterest` instead resurrects the moved range on two
+shards at once — rejected, executable control) (Event-driven). This composes with the checkpoint guard
 (PN-0b): a checkpoint captures the shard's `Stateful` snapshot and compacts the
 WAL to it; before PN-4 a write-only shard contributed no snapshot, so the guard
 is what kept the compaction from truncating the frames that were its only
@@ -537,19 +718,28 @@ repartition flip) are expressed in the closed serializable `Interest` algebra
 (PN-3a) rather than anonymous predicates: the moving range is
 `Complement(⋃ᵢ (oldᵢ ∩ newᵢ))` — a key stays put iff the same shard admits it in
 both tables — honest and wire-safe, no longer a predicate whose `overlaps`
-unconditionally lied.
+unconditionally lied. `[24-SHARD-05]` The moving range during a repartition
+SHALL be `Complement(⋃ᵢ (oldᵢ ∩ newᵢ))` in the closed serializable `Interest`
+algebra: a key stays put iff the same shard admits it in both the old and new
+routing tables (Ubiquitous).
 ## Interest-scoped aggregate deltas (PN-3b)
 
 `MapDelta` — the delta of `MapCell`, `GroupByCell`, and CP-G1's replicable
 `MergeableGroupByCell`, including its per-key `merge` path — implements
 `Scoped` over the *map key* space, the same per-emission interest filter
 `SetDelta` already carries over its element space (42 §Interest-scoped
-instance sets). The gossip linker (`Replication.scopeToInterest`) slices an
+instance sets). `[24-SCOPED-01]` `MapDelta` SHALL implement `Scoped` over the
+map key space, the same per-emission interest filter `SetDelta` carries over
+its element space (Ubiquitous). The gossip linker (`Replication.scopeToInterest`) slices an
 aggregate delta to a partial-interest target so only the admitted group keys
 ride the link: `within(Interest.Total)` returns the delta whole (the
 replication default, so non-opting graphs are unchanged), a partial `Interest`
 restricts `puts`/`removals` to the admitted keys, and an empty slice returns
-`null` so the emission never rides at all. This is what lets a `Replicable`
+`null` so the emission never rides at all. `[24-SCOPED-02]` The gossip linker
+SHALL slice an aggregate delta to a partial-interest target such that
+`within(Interest.Total)` returns the delta whole, a partial `Interest`
+restricts `puts`/`removals` to the admitted keys, and an empty slice returns
+`null` so the emission does not ride at all (Ubiquitous). This is what lets a `Replicable`
 aggregate be interest-*sharded* rather than replicated whole to every peer;
 before it, a non-`Scoped` `MapDelta` rode the entire map to a partial-interest
 target (over-delivery). `SetDelta` semantics are untouched.

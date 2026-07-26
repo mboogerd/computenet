@@ -6,8 +6,11 @@
 
 ## Push (default, implemented)
 
-State changes propagate automatically along links as **invocations on
-downstream contracts**. The canonical data-path contract is:
+[21-PROP-01] State changes propagate automatically along links as **invocations
+on downstream contracts**: the graph SHALL deliver every accepted delta to every
+transitively linked consumer, such that at quiescence each consumer's fold
+equals the fold of the source's accepted-op multiset. The canonical data-path
+contract is:
 
 ```kotlin
 interface Propagate<D> { fun propagate(delta: D) }
@@ -48,9 +51,14 @@ Normative requirements on a delta type:
 
 ## Pull
 
-ADR 1 requires on-demand reads and recomputation: a consumer asks for current
-state (or a recompute) rather than waiting for pushes — needed for late
-joiners, UI queries, and suspended subgraph reactivation.
+[21-PULL-01] ADR 1 requires on-demand reads and recomputation: WHEN a consumer
+asks for current state (or a recompute) rather than waiting for further pushes,
+the producer SHALL bring it to the current state — needed for late joiners, UI
+queries, and suspended subgraph reactivation.
+
+[21-CATCHUP-02] WHEN a subscriber links to an outlet after deltas have already
+flowed, the outlet SHALL bring the subscriber current such that its subsequent
+fold is indistinguishable from an early subscriber's.
 
 **Late-join = catch-up on link** *(implemented, M4.2 — the core of G-18)*:
 the post-install `onLinked` hook (13) fires once the new subscriber is
@@ -101,7 +109,10 @@ interaction, and the explicit topology-serializing coordinator
 
 **On-demand pull** *(implemented, W2.2 — closes the G-18 residual, decided
 in 93 I-16)*: a consumer asking for a recompute or state *without*
-relinking. Not a new mechanism: a management-class
+relinking. ⚠ EARS-GAP: the *without-relinking* recompute has no driver-SPI
+trigger verb (the SPI exposes `connect`/`apply`/`readView`, not a `requestState`),
+so only the link-based catch-up (21-PULL-01 / 21-CATCHUP-02) is boundary-checkable;
+the no-relink pull path is unobservable as the SPI stands. Not a new mechanism: a management-class
 **`StateRequest(replyTo, since: TagFrontier?)`** on the link's metadata
 plane (12, G-13) — null context, no `Owned`/`Leased`, bypasses data-path
 parking, idempotent — travels upstream; the reply is ordinary data, a
@@ -145,8 +156,11 @@ convergent consumer drops un-reasserted tags from superseded sources,
 merges the state by tag union, and thereafter rejects deltas from those
 dead lanes) or **pull-merge** (derived/replicated cells: ordinary
 idempotent catch-up via `requestState`/mesh anti-entropy, no retraction).
-This re-establishes deterministic application and effective-only emission
-downstream after a producer reverts. The landed RESTART (30/31 rule 5,
+[21-REBASE-01] WHEN a source re-baselines (RESTART or re-baseline), the framework
+SHALL reconcile downstream consumers so their folds converge to a value
+consistent with the restored state (equal to a delta-only twin). This
+re-establishes deterministic application and effective-only emission downstream
+after a producer reverts. The landed RESTART (30/31 rule 5,
 M3.5) is exactly the bare local rollback the decision forbids — spawn-time
 checkpoint, same `sourceId` with a rolled-back counter (tag/wave aliasing
 possible), no downstream reconciliation (conflict C-12, recorded at 30/31
@@ -212,21 +226,22 @@ the empirical probe for weak-tier quiescence (G-19 residual):
   `CycleError`. In a correctly-headed graph it never fires; it is the
   backstop for headless loops and cross-host cycles no link-time check can
   see.
-- **Admission and payloads**: a `connect` closing a locally-visible cycle
-  is `Rejected` unless the cycle contains a head (`CycleWithoutHead`) and
-  every data edge is throttle-capable (`CycleRequiresMagnitude`); `Leased`
-  is forbidden on cycle edges (`CycleRejectsLeased`, 20/23); `Owned` is
-  permitted — absorption *is* the single consumption (`take()` into loop
-  state).
+- **Admission and payloads**: [21-CYCLE-01] IF a `connect` closes a
+  locally-visible cycle, THEN it SHALL be `Rejected` unless the cycle contains a
+  head (`CycleWithoutHead`) and every data edge is throttle-capable
+  (`CycleRequiresMagnitude`); `Leased` is forbidden on cycle edges
+  (`CycleRejectsLeased`, 20/23); `Owned` is permitted — absorption *is* the
+  single consumption (`take()` into loop state).
 - **A `CycleHead` is a fusion barrier** (§Fusion): re-origination MUST
   enqueue on the host queue even co-hosted, bounding stack depth to O(1)
   per lap and serializing laps through the queue.
 
-The honest guarantee: **bounded-lap termination for every admitted cycle**
-(structural quiescence for the strong tier; the hop-guard dead-letter as
-the hard backstop otherwise); **fixpoint convergence only for the strong
-tier** — the weak tier converges only if its loop map is contractive
-w.r.t. `size()`, which the framework does not verify. Quiescence is
+The honest guarantee: [21-CYCLE-02] **every admitted cycle SHALL reach quiescence
+in a bounded number of laps** (bounded-lap termination — structural quiescence
+for the strong tier; the hop-guard dead-letter as the hard backstop otherwise);
+[21-CYCLE-03] **WHERE a cycle's feedback deltas are idempotent-merge (strong
+tier), the loop SHALL converge to a fixpoint** — the weak tier converges only if
+its loop map is contractive w.r.t. `size()`, which the framework does not verify. Quiescence is
 lap-based, not time-based: no timers, no virtual-time dependency.
 
 ⚠ GAP (G-19, residual): weak-tier fixpoint convergence — a *meaningful*

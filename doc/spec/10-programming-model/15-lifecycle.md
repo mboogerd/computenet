@@ -40,7 +40,7 @@ COLD  --spawn(cell)-->  HOT  --suspend-->  SUSPENDED  --resume-->  HOT
   (`inlet.serve(impl)` / `inlet.delegate(outlet)`) and establishes internal
   logic. Constructor-time serving (as `SetCell` does today in `init`) is the
   declared **eager** mode — see §Admission vs activation.
-- Activation MUST be idempotent-safe or guarded: re-activation of an already
+- [15-ACTIVATE-01] Activation MUST be idempotent-safe or guarded: re-activation of an already
   hot cell is an error the host rejects.
 - Promotion state handoff is **not** activation (matches code; decided in
   [93 I-27](../90-roadmap/93-feature-interactions.md)): `Stateful.restore` /
@@ -48,15 +48,19 @@ COLD  --spawn(cell)-->  HOT  --suspend-->  SUSPENDED  --resume-->  HOT
   promotion swap (50/53) never re-activates candidate or incumbent — the
   re-activation guard above is untouched. The export/import pair sits
   strictly between `onActivate` and `onDeactivate` and touches neither.
-  Decided restriction on the swap's catch-up fallback tier (93 I-27,
+  [15-PROMOTE-01] Decided restriction on the swap's catch-up fallback tier (93 I-27,
   reconciled): T2 is sound only for cells idempotent across a source-identity
   change and MUST emit the `ReBaseline` supersession notice; non-idempotent
   cells (e.g. `CounterCell`) MUST hand off via restore/transform (T0/T1).
   The landed fallback is silent and unrestricted — see 50/53 §G-33.
+  ⚠ EARS-GAP: the decided restriction and the landed behavior currently
+  disagree (landed fallback is silent/unrestricted, not gated on
+  idempotence) — unclear which behavior a scenario should assert until
+  50/53 §G-33 is reconciled.
 
 ### Hot phase
 
-- Ports are live: inlets dispatch to served implementations; outlets emit.
+- [15-HOT-01] Ports are live: inlets dispatch to served implementations; outlets emit.
 - Composition operators (`map`, etc.) on a hot cell operate on live flows;
   on a cold cell they build graph structure: a serializable `GraphSpec` of
   **proposed** links (G-30), which MAY be structurally pre-validated cold and
@@ -65,7 +69,7 @@ COLD  --spawn(cell)-->  HOT  --suspend-->  SUSPENDED  --resume-->  HOT
   itself is future work — 50/51.)
 
 *(G-51 core resolved, W3.6)*: `GraphSpec.applyRemote` gives remote application a
-defined failure contract — partial-apply, always leave-and-report. Rejected
+defined failure contract — partial-apply, always leave-and-report. [15-APPLY-01] Rejected
 steps (including an `Exact` re-apply of a live ref, hitting the ordinary
 live-ref spawn guard) dead-letter on the target host and fold into a returned
 `ApplyReport`; the applier never sees a synchronous throw and remaining steps
@@ -76,26 +80,26 @@ structural pre-validation (cardinality/ownership/contract) ahead of replay.
 
 ## Normative rules
 
-1. **No logic in constructors.** All behavior establishment belongs in
+1. [15-RULE-01] **No logic in constructors.** All behavior establishment belongs in
    `onActivate`. Rationale: a cold cell must be safe to create anywhere,
    including on machines that will never run it (mobility, 30/33; codegen).
    Sole exception: the declared eager mode — §Admission vs activation.
-2. **The structural layers are discoverable without running logic.** Whatever
+2. [15-RULE-02] **The structural layers are discoverable without running logic.** Whatever
    declaration style is used, a port's structural layers — name, descriptor
    (contract, direction, cardinality, exclusive bit, protocol capabilities),
    and policy set — exist from construction and are enumerable by the host
    without running cell logic (decided in 93 I-26; see §Admission vs
    activation).
-3. **Data-traffic dispatch requires HOT; admission does not.** Admission —
+3. [15-RULE-03] **Data-traffic dispatch requires HOT; admission does not.** Admission —
    the structural half of linking — is binding from construction (93 I-26).
    Calling a hosting-specific operation cold remains an error with a clear
    message (guarded phase state), not undefined behavior.
 4. **Deactivation mirrors activation.** *(G-16 fully resolved, M3.3:
-   `Cell.onDeactivate(ctx)` exists; `despawn(ref)` unregisters the cell and
+   `Cell.onDeactivate(ctx)` exists; [15-DESPAWN-01] `despawn(ref)` unregisters the cell and
    invokes it on the host's execution context, and re-spawning a live ref is
    rejected. The drain protocol (30/33) guarantees deactivation runs only
    after every accepted invocation has flushed — its phase-2 task sits below
-   data priority — and captures `Stateful` snapshots at that point. The
+   data priority — and [15-SNAPSHOT-01] captures `Stateful` snapshots at that point. The
    SUSPENDED state in the diagram above is real: `drainHost`/`resumeHost`
    re-activate the same cells in place, and re-activation after deactivation
    is legal.)*
@@ -121,7 +125,7 @@ handler-establishment).
 
 - *Hosted cell* (default): handler-establishment = `onActivate` (HOT). The
   parking window is the spawn→activate interval.
-- *Eager cell*: handler-establishment = **construction** — `serve`/`delegate`
+- [15-EAGER-01] *Eager cell*: handler-establishment = **construction** — `serve`/`delegate`
   run in `init`, the parking window is zero-length, and the cell may carry
   traffic unhosted (useful for tests and embedded composition). An eager cell
   MUST be pure, allocation-free serving, MUST NOT assume a host context, and
@@ -130,7 +134,7 @@ handler-establishment).
   capability (an `Eager` marker the host/KSP can check), not an ad-hoc
   exception; default guidance stays `onActivate`.
 
-A link admitted against a cell whose handler is not yet installed is live
+[15-PARK-01] A link admitted against a cell whose handler is not yet installed is live
 topology with a **parked tail**: inbound invocations MUST park in the
 Buffering primitive (30/33), in order, with their contexts, and replay on
 activation before any post-activation send lands — to the message path, a

@@ -107,21 +107,21 @@ see 40/41.
 Port implementations encode cardinality:
 
 - `FanInlet<T>` — many users may call; one served implementation.
-- `FanOutlet<T>` — one caller (the owning cell); many subscribers; emission is
+- `FanOutlet<T>` — [12-FANOUT-01] one caller (the owning cell); many subscribers; emission is
   broadcast.
-- `OneToOnePort<T>` — exactly one counterpart; required for `Owned`/`Leased`
+- `OneToOnePort<T>` — [12-CARD-02] exactly one counterpart; required for `Owned`/`Leased`
   payloads (20/23) and safe mutable-state transfer.
 
 Rules (normative):
 
-1. Cardinality MUST be enforced at **structural admission**, never send time
+1. [12-CARD-01] Cardinality MUST be enforced at **structural admission**, never send time
    (P2, P5). "Link time" decomposes into *admission* — structural, reading
    only the port's descriptor (contract, cardinality, exclusive bit,
    policies), binding from construction in any lifecycle phase — and
    *activation*, behavioral, gated on the cell's handler establishment
    (decided in 93 I-26; the refinement matches the shipped descriptor-driven
    enforcement).
-2. Fan-out MUST be rejected at link time when the contract's payload types
+2. [12-EXCL-01] Fan-out MUST be rejected at link time when the contract's payload types
    carry exclusive ownership (`Owned`, `Leased`) — see 20/23. This refusal
    binds **Consume** links only (decided in 93 I-20, unimplemented): a
    downstream attachment is either a *Consume* link (receives the declared
@@ -131,9 +131,16 @@ Rules (normative):
    counted). `FanOutlet.tap(observer)` — equivalently a
    `LinkRole { Consume, Observe }` on the 10/13 handshake — is the decided
    surface.
-3. Multi-producer inlets are permitted only where the cell declares merge
+   ⚠ EARS-GAP: the Consume/Observe scoping is decided but unimplemented; the
+   currently landed behavior (M5.6) rejects *any* second subscriber on an
+   `Owned`/`Leased`-carrying outlet, not only a second Consume link — unclear
+   which behavior a scenario should assert against until Observe/tap ships.
+3. [12-FANIN-01] Multi-producer inlets are permitted only where the cell declares merge
    semantics (e.g. `UnionSetCell` ref-counting) — "unions may explicitly
    allow multiple producers".
+   ⚠ EARS-GAP: the converse isn't stated — whether an inlet on a cell that
+   does *not* declare merge semantics rejects a second producer link at
+   admission, or merely admits it with unspecified resulting fold semantics.
 
 *(G-12 phase 1: the handshake protocol of 10/13 is implemented —
 `linkTo(LinkFrom)` returns `LinkResult`, point-to-point ports reject at

@@ -129,8 +129,10 @@ topologies (diamond: `A → B, A → C, B+C → D`; D must not see B's update fo
 wave *t* paired with C's for wave *t−1*).
 
 Global propagation locks (SID-UP-style) are **rejected**: they serialize the
-whole graph (violates P4). Instead, a cell MAY declare itself glitch-free, and
-then:
+whole graph (violates P4). [22-GF-01] WHILE a wave from a single source is
+partially delivered across a fork-join, a cell that has declared itself
+glitch-free SHALL NOT expose derived state that mixes pre-wave and post-wave
+inputs. Instead, a cell MAY declare itself glitch-free, and then:
 
 1. **Dependency tracking** — on init and on topology change, traverse upstream
    to discover which inlets/edges feed it for a given wave.
@@ -147,8 +149,10 @@ then:
 Traversal does not recurse to sources: it stops at the **nearest upstream
 glitch-free cells**, whose outputs are already per-wave consistent. Only the
 edges between that frontier and the declaring cell need tracking and
-buffering. Consequently glitch-freedom **composes**: chains of glitch-free
-cells cost each cell only its local frontier.
+buffering. [22-GF-02] Consequently glitch-freedom **composes**: WHILE a wave is partially
+delivered across nested or chained fork-joins, every glitch-free cell in the
+chain SHALL preserve the no-torn-wave guarantee — chains of glitch-free cells
+cost each cell only its local frontier.
 
 Non-declaring cells process eagerly with zero coordination cost (P4, P2).
 
@@ -169,6 +173,11 @@ Upstream frontier traversal awaits multiplex ports (G-13) — its traversal
 model is decided, see plan item 4; unwaved traffic passes through.)*
 
 ### Completeness over silent or stuck edges (decided in 93 I-18, unimplemented)
+
+[22-LIVE-01] IF an independent source feeding a multi-source join is silent for
+a wave, THEN the join SHALL NOT block updates from other sources from becoming
+observable at quiescence (completeness is per-source; over-alignment across
+independent sources is forbidden).
 
 The shipped wrapper can only observe arrivals; the decided rule makes
 non-delivery positive. A glitch-free join keeps a per-inlink, per-source
@@ -207,9 +216,9 @@ Structural changes must be causally consistent with value updates:
   wave *t*'s input completeness condition.
 - *(G-20 decided and implemented: wave ids are per-source monotonic counters —
   `Timestamp(sourceId, counter)`, minted by the emitting outlet. No global
-  time protocol; glitch-free cells buffer per (source, counter). Cross-source
-  joins get **convergence**, not simultaneity, unless an explicit coordinator
-  cell is inserted. Cycle wave semantics are decided in 93 I-5 — see Cycles
+  time protocol; glitch-free cells buffer per (source, counter). [22-SRC-01]
+  Cross-source joins SHALL get **convergence** — equal folds on all observers at
+  quiescence — not simultaneity, unless an explicit coordinator cell is inserted. Cycle wave semantics are decided in 93 I-5 — see Cycles
   below; fixpoint semantics stay open with G-19.)*
 
 In-band edge markers (decided in 93 I-13, unimplemented): the stamp lives on
@@ -251,9 +260,9 @@ The observation frontier is **location-transparent**: the markers that carry
 it — `EdgeOpen`/`EdgeClose` (§Topology versioning) together with the
 `Progress(thru)` absorb-acks and `Stall` markers of the watermark rule
 (§Completeness over silent or stuck edges) — cross a wire bridge in the same
-per-link FIFO frame order as the data they order. A glitch-free join therefore
-computes an identical completeness condition whether a given frontier edge is
-in-process or bridged. A bridged edge is a `WireEdgeLink` (`cell.wire`)
+per-link FIFO frame order as the data they order. [22-GF-03] WHERE a frontier edge is bridged across a host boundary, a glitch-free
+join SHALL compute an identical completeness condition and preserve the diamond
+guarantee across the cut, exactly as for an in-process edge. A bridged edge is a `WireEdgeLink` (`cell.wire`)
 carrying stable per-side link identity (40/41 point 4), so frontier bookkeeping
 keyed by link id (`GlitchFreeCell.edges`, per-source watermarks) behaves exactly
 as it would for a local link, and the diamond guarantee holds across the cut.
@@ -360,9 +369,11 @@ frame path (CP-A2, composition plan; see 40/41 point 4).
 > catch-up **baseline**, closing matrix cell A–D (durable + glitch-free).
 
 Glitch-freedom is a property of the live *wave* plane; durability is a property
-of the *state* plane. A recovery moves state, so it must produce no waves — and
-therefore no glitches (the same rule already decided for `StateRequest` replies,
-§Pull/late-join). Before PN-2, `ManagedHost.recoverFrom` re-injected each
+of the *state* plane. [22-REC-01] WHEN a cell recovers state by journal replay,
+every replayed emission SHALL be installed as a baseline and produce no wave —
+and therefore no glitch (the same rule already decided for `StateRequest`
+replies, §Pull/late-join) — so observers converge to the pre-crash fold without
+seeing a torn wave. Before PN-2, `ManagedHost.recoverFrom` re-injected each
 journaled frame as an ordinary live wave. Post-PN-1 (replay-stable
 `sourcePort`) those waves match their edge again, but a frame replayed into one
 arm of a fork-join diamond then makes the join *expect* the sibling arm for that
@@ -460,7 +471,12 @@ member joining and its existence reaching this node.
 
 **Invariant.** An *unannounced* covering member must cause a **conservative hold**,
 never a premature release — the same asymmetry R13 gives a known-but-rowless
-member, extended to an unknown one.
+member, extended to an unknown one. ⚠ EARS-GAP: this invariant is
+boundary-relevant (a premature release is a torn cross-replica read) but is not
+deterministically triggerable through the driver SPI — there is no verb to
+inject a membership-announcement race — so it resists a checkable scenario as
+the SPI stands; its clean observable form (sharded replicas converge without
+torn reads) is a chapter-42 replication requirement, not a chapter-22 id.
 
 **Mechanism (reuse, not a new protocol).** Each replica announces its existence
 on the **delivered-watermark companion** (`WatermarkCell.announceMember()`): its

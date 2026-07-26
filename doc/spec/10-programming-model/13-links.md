@@ -47,10 +47,10 @@ fun onLinked(link: Link)
 ```
 
 Handshakes are where cardinality (12), ownership constraints (20/23),
-policies, and setup/cleanup run. Rejection reasons include: at capacity,
+policies, and setup/cleanup run. [13-LINK-05] Rejection reasons include: at capacity,
 schema/contract mismatch, policy denial, ownership violation. One rejection
 is structural-topological (decided in
-[93 I-5](../90-roadmap/93-feature-interactions.md)): a `connect` that would
+[93 I-5](../90-roadmap/93-feature-interactions.md)): [13-LINK-06] a `connect` that would
 close a cycle wholly visible to one host and containing no declared
 `CycleHead` (20/22) MUST be `Rejected` with a `CycleWithoutHead` reason — a
 rare-path walk of the new cycle (P2 permits expensive linking). Cross-host
@@ -65,7 +65,7 @@ are binding from construction (a cold cell admits). *Activation* is
 behavioral: data traffic dispatches only into an installed handler (10/15);
 a link admitted before activation is live topology with a parked tail —
 inbound invocations park in order and replay at activation, before any
-post-activation send lands. A *stateful* `onLink` (one that consults hot
+post-activation send lands. [13-LINK-02] A *stateful* `onLink` (one that consults hot
 state — a per-port declaration; the default is structural-only) on a
 not-yet-hot cell MUST defer on the always-open management inlet (30/33) and
 replay its handshake at activation, surfacing `Connected`/`Rejected` then —
@@ -86,13 +86,13 @@ rejection surface for wrong-color or invalid remote spawns pinned against
 G-26/G-12 (93 I-26/I-15).
 
 *(G-12 phase 1 implemented: `cell.port.Link`/`LinkResult`/`LinkSupport`.
-`linkTo(LinkFrom)` runs the target-side handshake — policies → cardinality →
+[13-LINK-03] `linkTo(LinkFrom)` runs the target-side handshake — policies → cardinality →
 `onLink` — and returns `Connected(link)` / `Rejected(reason)`; the link is
-retained by both ports (`port.linking.links`); `link.unlink()` is idempotent,
+retained by both ports (`port.linking.links`); [13-LINK-01] `link.unlink()` is idempotent,
 detaches both sides and fires the target's `onUnlink`. Cardinality violations
 now return `Rejected` instead of throwing. `ManagedHost.connect` routes
 through the handshake and surfaces the `LinkResult` to the caller.
-Cross-host caveat: a proxy-initiated `linkTo` returns `LinkResult.Deferred` —
+[13-LINK-04] Cross-host caveat: a proxy-initiated `linkTo` returns `LinkResult.Deferred` —
 the authoritative handshake runs on the target's host, and a rejection there
 is emitted to that host's `deadLetterOutlet`. (M5.4 decision: this contract
 holds across the wire too — a synchronous reply channel was deliberately not
@@ -110,12 +110,12 @@ stale-reference re-resolution happens (40/41).
 
 **Rebind semantics** (decided in 93 I-2): any *new* full-ref link MUST run
 the full target-side handshake — policies → cardinality → `onLink`.
-Migration and RESTART preserve `instanceId` (the same instance moves or
+[13-REBIND-01] Migration and RESTART preserve `instanceId` (the same instance moves or
 recovers in place, 30/31, 30/33), so their links are *not* rebinds: direct
 links travel with the cell, routed links re-resolve the same ref, and no
 spurious handshake re-runs. A promotion relink (50/53) *is* a rebind — a new
 `instanceId` — so the handshake DOES re-run against the candidate, including
-the port-compatibility check: for each rebindable link the candidate MUST
+the port-compatibility check: [13-REBIND-02] for each rebindable link the candidate MUST
 present a port with matching `(portName, contractId)`, else the relink is
 `Rejected`. No link ever transfers silently past its veto point.
 
@@ -191,7 +191,7 @@ suspended target: connected link buffers/fails-fast per policy, then
 re-resolves (never silently drops)
 ```
 
-**Edge events** (decided in 93 I-13): a successful `onLink`/`onUnlink` on a
+**Edge events** (decided in 93 I-13): [13-EDGE-01] a successful `onLink`/`onUnlink` on a
 topology-interested edge MUST emit an in-band `EdgeOpen`/`EdgeClose` marker
 riding the link's own per-link FIFO channel — `EdgeOpen` ahead of any data,
 `EdgeClose` after the final data — so topology changes sit in the same
@@ -199,10 +199,10 @@ logical-time domain as the waves they affect (20/22 §Topology versioning).
 Emission is gated on a downstream having expressed topology-order interest;
 outlets without glitch-free subscribers pay nothing.
 
-Invariant (normative): **no message loss at link operations** — a message
+[13-NOLOSS-01] Invariant (normative): **no message loss at link operations** — a message
 accepted by a link before `unlink`/suspend MUST be delivered or explicitly
 parked in a durable/inspectable place; ordering per link MUST be preserved
-(see 30/33 for the drain protocol). Under intake saturation (decided in
+(see 30/33 for the drain protocol). [13-NOLOSS-02] Under intake saturation (decided in
 93 I-12) the invariant extends to name the SATURATED state: a message
 accepted by a link MUST be delivered, coalesced (mergeable deltas fold into
 a bounded per-source pending slot), or parked in a bounded inspectable

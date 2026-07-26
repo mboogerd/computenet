@@ -24,3 +24,27 @@ dependencies {
     testRuntimeOnly(libs.junit.platform)
     testImplementation(kotlin("test"))
 }
+
+// W1-D: the concordance generator (Concord §1.5 / `concord/schema/provenance.md`).
+// A JavaExec (not a custom Gradle task type) running civictech.concord.provenance's
+// main(), so the lint/scan logic stays plain Kotlin in `main` — unit-testable on its
+// own and free of the Gradle API. Report-only by default; pass
+// `-Pconcord.fatal=true` to fail the build when dangling/orphan lints fire.
+// Deliberately NOT wired into `check` here — the corpus is mid-construction and the
+// pilot `covers:` ids are provisional (see provenance.md's note), so fatal-on-`check`
+// is W2's job once the pilots' covers are reconciled against real EARS ids.
+tasks.register<JavaExec>("concordance") {
+    group = "verification"
+    description = "Generates doc/spec/CONCORDANCE.md from L0 requirement ids and corpus " +
+        "covers: tags; lints dangling covers / orphan scenarios (fatal) and coverage gaps " +
+        "(report-only). Pass -Pconcord.fatal=true to fail on fatal findings."
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("civictech.concord.provenance.ConcordanceKt")
+    val fatal = (project.findProperty("concord.fatal") as String?).toBoolean()
+    args(
+        rootProject.layout.projectDirectory.dir("doc/spec").asFile.path,
+        layout.projectDirectory.dir("corpus").asFile.path,
+        rootProject.layout.projectDirectory.file("doc/spec/CONCORDANCE.md").asFile.path,
+        fatal.toString(),
+    )
+}
