@@ -154,7 +154,11 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             // hook so the full state-as-delta flows again; tag idempotence
             // makes the repeat free. Same pattern as Replication.maybeLink.
             registry.onPublish { ref ->
-                chained[ref]?.let { (cell, link) -> cell.outlet.linking.onLinked(link) }
+                // PN-9: fire the full on-link multicast (catch-up moved to
+                // onLinkedListeners), not just the single onLinked slot, so a
+                // returning peer's re-announce still re-pushes catch-up. Same
+                // fix as exchange/Main.kt and Replication.maybeLink.
+                chained[ref]?.let { (cell, link) -> cell.outlet.linking.fireLinked(link) }
             }
         }
 
