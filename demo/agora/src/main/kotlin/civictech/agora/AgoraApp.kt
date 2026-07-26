@@ -6,17 +6,16 @@ import civictech.cell.durability.FileJournal
 import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.demo.shell.DemoShell
+import civictech.demo.shell.demoPort
+import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.io.OutputStream
-import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.util.*
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The argumentation backend: JDK HttpServer + SSE over an [AgoraService]
@@ -33,8 +32,6 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         attention = AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
         journal = journal,
     )
-    private val clients = CopyOnWriteArrayList<OutputStream>()
-
     val service = AgoraService(
         host,
         registry,
@@ -42,8 +39,8 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         onCredence = { _, _ -> broadcast() },
     )
 
-    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
-    val boundPort: Int get() = server.address.port
+    private val shell = DemoShell(port)
+    val boundPort: Int get() = shell.boundPort
 
     @Serializable
     private data class NodeDto(
@@ -67,11 +64,10 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         // restart. ponytail: compaction needs a quiescence-safe checkpoint;
         // do it when journals actually get big.
         if (journal != null) host.recoverFrom(journal)
-        server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
-        server.createContext("/graph") { it.respond(200, graphJson(), "application/json") }
-        server.createContext("/op") { handleOp(it) }
-        server.createContext("/events") { handleEvents(it) }
-        server.executor = null
+        shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
+        shell.route("/graph") { it.respond(200, graphJson(), "application/json") }
+        shell.route("/op") { handleOp(it) }
+        shell.sse("/events") { graphJson() }
     }
 
     private fun graphJson(): String = Json.encodeToString(
@@ -148,40 +144,15 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
         }
     }
 
-    private fun handleEvents(exchange: HttpExchange) {
-        exchange.responseHeaders.add("Content-Type", "text/event-stream")
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(200, 0)
-        val out = exchange.responseBody
-        clients += out
-        send(out, graphJson()) // a fresh tab catches up immediately
-    }
+    // Behaves identically to the former guarded broadcast (`if (clients.isEmpty())
+    // return`): graphJson() is pure, and forEach over an empty client list is
+    // already a no-op — dropping the guard costs one wasted computation with
+    // no observable difference.
+    private fun broadcast() = shell.broadcast { graphJson() }
 
-    private fun broadcast() {
-        if (clients.isEmpty()) return
-        val json = graphJson()
-        clients.forEach { send(it, json) }
-    }
+    fun start(): AgoraApp = apply { shell.start() }
 
-    private fun send(out: OutputStream, json: String) {
-        try {
-            out.write("data: $json\n\n".toByteArray())
-            out.flush()
-        } catch (_: Exception) {
-            clients -= out
-        }
-    }
-
-    private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
-        responseHeaders.add("Content-Type", contentType)
-        val bytes = body.toByteArray()
-        sendResponseHeaders(status, bytes.size.toLong())
-        responseBody.use { it.write(bytes) }
-    }
-
-    fun start(): AgoraApp = apply { server.start() }
-
-    fun stop() = server.stop(0)
+    fun stop() = shell.stop()
 }
 
 fun main(args: Array<String>) {
@@ -190,8 +161,7 @@ fun main(args: Array<String>) {
         return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
     }
 
-    val port = args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
-        ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+    val port = demoPort(args)
     val journalDir = value("--journal")?.let { File(it).apply { mkdirs() } }
 
     val app = AgoraApp(port, journalDir).start()

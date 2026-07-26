@@ -2,7 +2,6 @@ package civictech.demo.shell
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
-import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -22,7 +21,15 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class DemoShell(port: Int) {
     private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
-    private val clients = CopyOnWriteArrayList<OutputStream>()
+    private val clients = CopyOnWriteArrayList<HttpExchange>()
+
+    // Set by sse() for its one registration (no demo registers more than one
+    // SSE endpoint). slotfinder is the one demo whose page JS relies on the
+    // browser EventSource's onerror-reconnect, which only fires once the
+    // connection is actually closed — so its failed sends must close the
+    // exchange, not just drop it from the broadcast list. Every other demo
+    // is content to drop silently, matching their original `send`.
+    private var closeOnSendFailure = false
 
     val boundPort: Int get() = server.address.port
 
@@ -39,16 +46,18 @@ class DemoShell(port: Int) {
      * Register an SSE endpoint at [path]. Each connecting client is added to
      * the broadcast list and immediately sent [initialFrame] (computed at
      * connect time) so a fresh tab catches up without waiting for the next
-     * change.
+     * change. [closeOnFailure] preserves slotfinder's original behavior of
+     * closing the exchange on a failed write (see [closeOnSendFailure]);
+     * every other demo leaves it at the default `false`.
      */
-    fun sse(path: String, initialFrame: () -> String) {
+    fun sse(path: String, closeOnFailure: Boolean = false, initialFrame: () -> String) {
+        closeOnSendFailure = closeOnFailure
         server.createContext(path) { exchange ->
             exchange.responseHeaders.add("Content-Type", "text/event-stream")
             exchange.responseHeaders.add("Cache-Control", "no-cache")
             exchange.sendResponseHeaders(200, 0)
-            val out = exchange.responseBody
-            clients += out
-            send(out, initialFrame())
+            clients += exchange
+            send(exchange, initialFrame())
         }
     }
 
@@ -58,16 +67,17 @@ class DemoShell(port: Int) {
         clients.forEach { send(it, json) }
     }
 
-    private fun send(out: OutputStream, json: String) {
+    private fun send(exchange: HttpExchange, json: String) {
         try {
-            // per-stream lock: concurrent broadcasts (hubs fire on virtual
+            // per-exchange lock: concurrent broadcasts (hubs fire on virtual
             // threads) must not interleave bytes into one SSE frame
-            synchronized(out) {
-                out.write("data: $json\n\n".toByteArray())
-                out.flush()
+            synchronized(exchange) {
+                exchange.responseBody.write("data: $json\n\n".toByteArray())
+                exchange.responseBody.flush()
             }
         } catch (_: Exception) {
-            clients -= out
+            clients -= exchange
+            if (closeOnSendFailure) try { exchange.close() } catch (_: Exception) {}
         }
     }
 

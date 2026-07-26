@@ -10,21 +10,21 @@ import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.demo.shell.DemoShell
+import civictech.demo.shell.demoPort
+import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.OutputStream
 import java.io.Serializable
-import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.*
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.io.path.extension
 import kotlin.io.path.nameWithoutExtension
 import civictech.cell.data.op.FlatMapSetCell
@@ -161,10 +161,9 @@ class TriageApp(port: Int = 8080, private val journalPath: Path? = null) {
     // adopt it when the pipeline stops being static.
     private var journal: OutputStream? = null   // null while replaying → record() no-ops
 
-    private val clients = CopyOnWriteArrayList<OutputStream>()
-    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
+    private val shell = DemoShell(port)
 
-    val boundPort: Int get() = server.address.port
+    val boundPort: Int get() = shell.boundPort
 
     init {
         fun <E> setHub(ref: CellRef, sink: (Set<E>) -> Unit) {
@@ -195,16 +194,15 @@ class TriageApp(port: Int = 8080, private val journalPath: Path? = null) {
             )
         }
 
-        server.createContext("/") { ex ->
+        shell.route("/") { ex ->
             if (ex.requestURI.path == "/") ex.respond(200, PAGE, "text/html; charset=utf-8")
             else ex.respond(404, "not found")
         }
-        server.createContext("/features") { handleFeatures(it) }
-        server.createContext("/triage") { handleTriage(it) }
-        server.createContext("/prefer") { handlePrefer(it) }
-        server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
-        server.createContext("/events") { handleEvents(it) }
-        server.executor = null
+        shell.route("/features") { handleFeatures(it) }
+        shell.route("/triage") { handleTriage(it) }
+        shell.route("/prefer") { handlePrefer(it) }
+        shell.route("/state") { it.respond(200, stateJson(), "application/json") }
+        shell.sse("/events") { stateJson() }
     }
 
     // ── ops (shared by HTTP handlers, --seed, and journal replay) ────────
@@ -374,31 +372,7 @@ class TriageApp(port: Int = 8080, private val journalPath: Path? = null) {
         exchange.respond(200, """{"ok":true}""", "application/json")
     }
 
-    private fun handleEvents(exchange: HttpExchange) {
-        exchange.responseHeaders.add("Content-Type", "text/event-stream")
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(200, 0)
-        val out = exchange.responseBody
-        clients += out
-        send(out, stateJson())
-    }
-
-    private fun broadcast() {
-        val json = stateJson()
-        clients.forEach { send(it, json) }
-    }
-
-    private fun send(out: OutputStream, json: String) {
-        try {
-            // per-stream lock: concurrent broadcasts must not interleave bytes
-            synchronized(out) {
-                out.write("data: $json\n\n".toByteArray())
-                out.flush()
-            }
-        } catch (_: Exception) {
-            clients -= out
-        }
-    }
+    private fun broadcast() = shell.broadcast { stateJson() }
 
     // ── json ─────────────────────────────────────────────────────────────
 
@@ -442,17 +416,10 @@ class TriageApp(port: Int = 8080, private val journalPath: Path? = null) {
     private fun Map<String, kotlinx.serialization.json.JsonElement>.str(key: String, max: Int): String? =
         (this[key] as? JsonPrimitive)?.content?.trim()?.takeIf { it.isNotEmpty() && it.length <= max }
 
-    private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
-        responseHeaders.add("Content-Type", contentType)
-        val bytes = body.toByteArray()
-        sendResponseHeaders(status, bytes.size.toLong())
-        responseBody.use { it.write(bytes) }
-    }
-
-    fun start(): TriageApp = apply { server.start() }
+    fun start(): TriageApp = apply { shell.start() }
 
     fun stop() {
-        server.stop(0)
+        shell.stop()
         journal?.close()
     }
 }
@@ -475,8 +442,7 @@ fun main(args: Array<String>) {
     fun flag(name: String): String? =
         args.indexOf(name).takeIf { it >= 0 && it + 1 < args.size }?.let { args[it + 1] }
 
-    val port = args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
-        ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+    val port = demoPort(args)
     val app = TriageApp(port, journalPath = flag("--journal")?.let { Path.of(it) }).start()
     flag("--seed")?.let { seedFrom(app, Path.of(it)) }
     println("computenet backlog-triage: http://localhost:${app.boundPort}")

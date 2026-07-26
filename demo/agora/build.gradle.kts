@@ -10,6 +10,7 @@ dependencies {
     implementation(libs.kotlinx.serialization)
     implementation(project(":gen"))
     ksp(project(":gen"))
+    implementation(project(":demo:shell"))
 
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.junit)

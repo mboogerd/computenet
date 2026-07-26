@@ -11,12 +11,12 @@ import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.observe.observeAll
+import civictech.demo.shell.DemoShell
+import civictech.demo.shell.demoPort
+import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
 import java.io.Serializable
-import java.net.InetSocketAddress
 import java.net.URLDecoder
-import java.util.concurrent.CopyOnWriteArrayList
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.FilterSetApi
 import civictech.cell.data.op.GroupByCell
@@ -122,20 +122,21 @@ class SlotFinderApp(port: Int = 8080) {
         count("byDay", refs.byDay.ref)
     }
 
-    private val clients = CopyOnWriteArrayList<HttpExchange>()
+    private val shell = DemoShell(port)
 
-    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
-
-    val boundPort: Int get() = server.address.port
+    val boundPort: Int get() = shell.boundPort
 
     init {
         view.onChange { broadcast() }
 
-        server.createContext("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
-        server.createContext("/state") { it.respond(200, stateJson(), "application/json") }
-        server.createContext("/op") { handleOp(it) }
-        server.createContext("/events") { handleEvents(it) }
-        server.executor = null
+        shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
+        shell.route("/state") { it.respond(200, stateJson(), "application/json") }
+        shell.route("/op") { handleOp(it) }
+        // closeOnFailure: one user op fans out through 7 hubs, each on its own
+        // scheduler thread, each calling broadcast(); a failed write must close
+        // the exchange so the browser's EventSource sees the close and
+        // reconnects (rather than sitting OPEN forever on a half-dead stream).
+        shell.sse("/events", closeOnFailure = true) { stateJson() }
     }
 
     private fun handleOp(exchange: HttpExchange) {
@@ -160,34 +161,7 @@ class SlotFinderApp(port: Int = 8080) {
         exchange.respond(200, "ok")
     }
 
-    private fun handleEvents(exchange: HttpExchange) {
-        exchange.responseHeaders.add("Content-Type", "text/event-stream")
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(200, 0)
-        clients += exchange
-        send(exchange, stateJson()) // a fresh tab catches up immediately
-    }
-
-    private fun broadcast() {
-        val json = stateJson()
-        clients.forEach { send(it, json) }
-    }
-
-    // One user op fans out through 7 hubs, each on its own scheduler thread, each calling
-    // broadcast(); those writes must not interleave on a shared stream, and a failed write must
-    // close the exchange so the browser's EventSource sees the close and reconnects (rather than
-    // sitting OPEN forever on a half-dead stream). Lock per-exchange; drop-and-close on failure.
-    private fun send(ex: HttpExchange, json: String) {
-        try {
-            synchronized(ex) {
-                ex.responseBody.write("data: $json\n\n".toByteArray())
-                ex.responseBody.flush()
-            }
-        } catch (_: Exception) {
-            clients -= ex
-            try { ex.close() } catch (_: Exception) {}
-        }
-    }
+    private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
         val snapshot = view.current()
@@ -209,22 +183,13 @@ class SlotFinderApp(port: Int = 8080) {
         return """{$sets,"byDay":$counts}"""
     }
 
-    private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
-        responseHeaders.add("Content-Type", contentType)
-        val bytes = body.toByteArray()
-        sendResponseHeaders(status, bytes.size.toLong())
-        responseBody.use { it.write(bytes) }
-    }
+    fun start(): SlotFinderApp = apply { shell.start() }
 
-    fun start(): SlotFinderApp = apply { server.start() }
-
-    fun stop() = server.stop(0)
+    fun stop() = shell.stop()
 }
 
 fun main(args: Array<String>) {
-    val port = args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
-        ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
-    val app = SlotFinderApp(port).start()
+    val app = SlotFinderApp(demoPort(args)).start()
     println("computenet slotfinder: http://localhost:${app.boundPort}")
 }
 

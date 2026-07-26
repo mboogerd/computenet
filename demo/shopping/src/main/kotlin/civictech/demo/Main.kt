@@ -18,15 +18,14 @@ import civictech.cell.observe.observe
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.wire.Peering
+import civictech.demo.shell.DemoShell
+import civictech.demo.shell.demoPort
+import civictech.demo.shell.respond
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
-import com.sun.net.httpserver.HttpServer
-import java.io.OutputStream
-import java.net.InetSocketAddress
 import java.net.URI
 import java.net.URLDecoder
 import java.util.*
-import java.util.concurrent.CopyOnWriteArrayList
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
@@ -70,7 +69,6 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     private var produce: Set<String> = emptySet()
     private var wanted: Set<String> = emptySet()
     private var voteCount: Long = 0
-    private val clients = CopyOnWriteArrayList<OutputStream>()
 
     private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
     private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
@@ -91,9 +89,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         },
     )
 
-    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
+    private val shell = DemoShell(port)
 
-    val boundPort: Int get() = server.address.port
+    val boundPort: Int get() = shell.boundPort
 
     init {
         manage.spawn(itemsUnion)
@@ -166,10 +164,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         // then replays the shared WAL exactly once — the one correct ordering.
         if (journalDir != null) writerCells.recover()
 
-        server.createContext("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }
-        server.createContext("/op") { exchange -> handleOp(exchange) }
-        server.createContext("/events") { exchange -> handleEvents(exchange) }
-        server.executor = null
+        shell.route("/") { exchange -> exchange.respond(200, PAGE, "text/html; charset=utf-8") }
+        shell.route("/op") { exchange -> handleOp(exchange) }
+        shell.sse("/events") { stateJson() }
     }
 
     /**
@@ -221,32 +218,11 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         exchange.respond(200, "ok")
     }
 
-    private fun handleEvents(exchange: HttpExchange) {
-        exchange.responseHeaders.add("Content-Type", "text/event-stream")
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(200, 0)
-        val out = exchange.responseBody
-        clients += out
-        send(out, stateJson()) // a fresh tab catches up immediately
-    }
-
     // ponytail: fires once per hub update, so a single op can push a few frames
     // whose four views are momentarily out of step (e.g. the filtered aisle
     // updates one frame before the master list) before converging. Fine for the
     // full-state SSE transport; coalescing to one frame per wave is M6+ material.
-    private fun broadcast() {
-        val json = stateJson()
-        clients.forEach { send(it, json) }
-    }
-
-    private fun send(out: OutputStream, json: String) {
-        try {
-            out.write("data: $json\n\n".toByteArray())
-            out.flush()
-        } catch (_: Exception) {
-            clients -= out
-        }
-    }
+    private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String = synchronized(state) {
         fun arr(values: Set<String>) =
@@ -254,16 +230,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount}"""
     }
 
-    private fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/plain") {
-        responseHeaders.add("Content-Type", contentType)
-        val bytes = body.toByteArray()
-        sendResponseHeaders(status, bytes.size.toLong())
-        responseBody.use { it.write(bytes) }
-    }
+    fun start(): DemoApp = apply { shell.start() }
 
-    fun start(): DemoApp = apply { server.start() }
-
-    fun stop() = server.stop(0)
+    fun stop() = shell.stop()
 }
 
 fun main(args: Array<String>) {
@@ -272,8 +241,7 @@ fun main(args: Array<String>) {
         return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
     }
 
-    val port = args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
-        ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+    val port = demoPort(args)
     val wire = value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
         ?: value("--peer")?.let { DemoApp.Wire.Dial(it) }
     val journalDir = value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
