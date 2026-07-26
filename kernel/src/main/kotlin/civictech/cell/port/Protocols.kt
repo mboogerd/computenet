@@ -93,10 +93,18 @@ object Protocols {
  * threaded production host. Endpoint objects are in-process only — generic
  * protocols do not cross the wire yet (bridged links have null endpoints).
  */
-class ProtocolSupport private constructor(private val port: Port) {
+// PN-9 (leak fix): the constructor param is NOT stored, and [ownerRef] is weak.
+// [registries] is a WeakHashMap keyed on the port; a stored `port` field, or a
+// strong `owner` ref (owner → its ports = the keys), would pin every port's
+// ProtocolSupport and its handler closures for the JVM lifetime — hosted cells
+// then never collect, so the whole suite's ports accumulate in one test JVM. The
+// `port` field was dead (never read); a GC'd owner means the cell is dead, so
+// relay correctly stops (a live cell is always strongly held by its host). PN-9's
+// extra per-inlet policy state made this latent leak exceed the default test heap.
+class ProtocolSupport private constructor(port: Port) {
     private val handlers = mutableMapOf<ProtocolId, (Link, Any) -> Unit>()
     private val relays = mutableMapOf<ProtocolId, (Any) -> Boolean>()
-    @Volatile private var owner: Any? = null
+    @Volatile private var ownerRef: java.lang.ref.WeakReference<Any>? = null
 
     /**
      * Boundary-policy hook (spec 40/43 seam 3, decided 93 I-28, W4.1): applied
@@ -137,7 +145,7 @@ class ProtocolSupport private constructor(private val port: Port) {
         val terminal = relays[id] ?: return
         if (terminal(traversal.payload)) return
         val descriptor = requireNotNull(ProtocolRegistry.protocol(id.name))
-        val cell = owner ?: return
+        val cell = ownerRef?.get() ?: return
         PortRegistry.of(cell).names().forEach { name ->
             val linkedPort = PortRegistry.of(cell)[name] as? Linked ?: return@forEach
             linkedPort.linking.links.forEach { next ->
@@ -165,7 +173,19 @@ class ProtocolSupport private constructor(private val port: Port) {
         /** Associates every currently registered port with its owning cell. */
         fun bind(owner: Any) {
             val ports = PortRegistry.of(owner)
-            ports.names().forEach { name -> ports[name]?.let { of(it).owner = owner } }
+            val ref = java.lang.ref.WeakReference(owner)
+            ports.names().forEach { name -> ports[name]?.let { of(it).ownerRef = ref } }
+        }
+
+        /**
+         * PN-9 (leak bound): drop a despawned cell's ports from [registries]. The
+         * map's values (handler closures) reference their port keys, so a bare
+         * WeakHashMap never reclaims them; explicit eviction on teardown keeps
+         * retention proportional to live cells rather than every cell ever hosted.
+         */
+        fun unbind(owner: Any) {
+            val ports = PortRegistry.of(owner)
+            ports.names().forEach { name -> ports[name]?.let { registries.remove(it) } }
         }
 
         private fun send(link: Link, id: ProtocolId, traversal: ProtocolTraversal, upstream: Boolean) {

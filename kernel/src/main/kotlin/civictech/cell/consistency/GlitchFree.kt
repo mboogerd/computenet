@@ -9,6 +9,7 @@ import civictech.cell.Timestamp
 import civictech.cell.data.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.PullOnOpen
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.Invocation
 import java.util.*
@@ -62,7 +63,13 @@ class GlitchFreeCell<Api : Any>(
         // release target: a wave the frontier admits flows straight to the outlet,
         // each replayed invocation re-stamped reactively under its own context.
         inlet.serve(outlet.call)
-        inlet.frontierPolicy = frontier
+        // PN-9: the sugar installs the ALIGN frontier + the ADMIT-slot PullOnOpen
+        // together — pull-on-open was welded inside WaveFrontier before; the
+        // emitted StateRequest sequence is identical (one StateRequest per inlink,
+        // now issued from the link-lifecycle multicast rather than the frontier's
+        // EdgeOpen handler). Frontier first so its edge is tracked before pull.
+        inlet.install(frontier)
+        inlet.install(PullOnOpen())
     }
 
     /**

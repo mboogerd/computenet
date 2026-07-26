@@ -15,6 +15,8 @@ fun <Api : Any> FanOutlet<Api>.streamTo(target: Api, at: PortRef = PortRef.gener
     subscribe(Use.fixed(target, at))
     val link = PortLink(ref, at) { unsubscribe(at) }
     linking.register(link)
-    linking.onLinked(link)
+    // PN-9: fire the full on-link multicast (catch-up moved to onLinkedListeners),
+    // not just the single onLinked slot, so a streamTo'd link still catches up.
+    linking.fireLinked(link)
     return link
 }

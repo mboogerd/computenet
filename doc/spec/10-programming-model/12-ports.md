@@ -263,6 +263,59 @@ retraction across damped hops, disinterest quiescing remote producer cones,
 stall/progress watermarks reaching deep joins, and requestState forwarding
 through stateless cells (93 I-1/I-4/I-9/I-16/I-18).
 
+## Policies
+
+A port's behaviour beyond bare dispatch is a **stack of policies**, not a set of
+single slots that overwrite one another (PN-9). Policies are *installed* in any
+order; they *run* in a fixed tier order. Install order is never significant —
+only tier order is authoritative.
+
+### Inlet policy tiers
+
+An inlet routes each inbound invocation through an ordered chain of tiers:
+
+1. **ADMIT** — may drop an invocation, **never holds** one. A dropping ADMIT
+   that sits above an ALIGN tier MUST mint a metadata-plane `Progress`
+   absorb-ack for every *waved* invocation it drops (the CP-A3 law): the
+   dropped edge otherwise never settles and the downstream frontier stalls
+   forever waiting for the contribution. A policy declares whether it satisfies
+   this obligation (`mintsProgressAck`).
+2. **GATE** — holds invocations FIFO (suspension / backpressure), draining in
+   arrival order when released. Never drops, never reorders.
+3. **ALIGN** — reorders/buffers for wave completeness (the wave frontier,
+   20/22). **At most one ALIGN per inlet** — a second is rejected at install
+   time.
+4. **ACTIVATE** — cold-park until a handler is installed (10/15 §Admission vs
+   activation). This tier is intrinsic to the port (its parked tail); it is the
+   terminal of every chain, not an installable policy.
+
+`FanInlet.at(portRef)` — targeted catch-up / pull-reply delivery — is
+**policy-exempt** (PN-9 decision): it carries a topology-versioned baseline, not
+a wave position, so it bypasses the chain and dispatches straight to the handler.
+Routing it through ADMIT/GATE/ALIGN would be wrong — none of drop, hold, or
+reorder is admissible for state transfer, and the ALIGN frontier already
+releases such deliveries immediately.
+
+### Outlet policies
+
+An outlet composes two families:
+
+- **FILTER** — pure `Delta → Delta` projections applied to every emission
+  (broadcast and single-target alike): interest slicing ∪ disclosure
+  projection, unified, with **disclosure pinned last** (a trust-scoped replica's
+  effective interest = declared interest ∩ disclosure; 40/43 seam 3). Identity
+  by default — byte-for-byte today's behaviour.
+- **ON-LINK multicast** — late-join catch-up, pull-serve, and infrastructure
+  re-announce all register as independent hooks on the link-lifecycle multicast
+  (`onLinkedListeners`), so none overwrites another. Before PN-9 these shared a
+  single `onLinked` slot: the last writer won, and catch-up was silently lost
+  whenever any other on-link behaviour was installed.
+
+Pull-serve (answering a `StateRequest` with a single-wave state-as-delta
+baseline) and pull-on-open (issuing a `StateRequest` when an inlink opens) are
+themselves installable policies — composed, not welded into the frontier or a
+data cell's constructor.
+
 ## What ports are not
 
 - Not mailboxes: a port never stores messages in steady state (buffering is a

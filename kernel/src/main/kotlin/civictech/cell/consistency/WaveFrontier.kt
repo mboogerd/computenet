@@ -12,7 +12,6 @@ import civictech.cell.port.Link
 import civictech.cell.port.PortRef
 import civictech.cell.port.ProtocolSupport
 import civictech.cell.port.Protocols
-import civictech.cell.port.StateRequest
 import civictech.cell.proxy.Invocation
 import java.util.*
 
@@ -55,6 +54,9 @@ class WaveFrontier(
     private val onDropped: (Invocation) -> Unit = {},
     private val onViolation: (GlitchViolation) -> Unit = {},
 ) : InletFrontier {
+
+    // PN-9: the wave-completeness fold is the ALIGN tier (reorders/buffers).
+    override val tier get() = civictech.cell.port.PolicyTier.ALIGN
 
     private lateinit var release: (Invocation) -> Unit
 
@@ -132,16 +134,16 @@ class WaveFrontier(
 
     override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
         this.release = release
-        ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
-            when (event as EdgeEvent) {
+        // PN-9: register through the inlet's edge-event fan-out (not directly on
+        // ProtocolSupport) so a sibling PullOnOpen policy can also observe EdgeOpen.
+        inlet.onEdgeEvent { link, event ->
+            when (event) {
                 EdgeOpen -> {
                     edges[link.id] = EdgeState(link, flushedHighWater.toMap())
-                    // On-demand pull (spec 20/21 §Pull, G-18 residual, decided in 93
-                    // I-16): a fresh link issues a StateRequest so a subscriber-side
-                    // subscription is caught up regardless of which side observes the
-                    // install; idempotence (observed-remove tags, 24) makes racing the
-                    // producer's own onLinked push harmless.
-                    Protocols.sendUpstream(link, Protocols.StateRequest, StateRequest(link.to, since = null))
+                    // PN-9: on-demand pull-on-open is no longer welded here — it is
+                    // the separately installable [civictech.cell.port.PullOnOpen]
+                    // policy (GlitchFreeCell installs both). The frontier now only
+                    // tracks the edge; a plain WaveFrontier no longer auto-pulls.
                 }
                 EdgeClose -> edges[link.id]?.open = false
             }

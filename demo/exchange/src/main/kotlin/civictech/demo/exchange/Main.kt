@@ -207,7 +207,10 @@ class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: 
             // hook so the full state-as-delta flows again; tag idempotence makes
             // the repeat free.
             registry.onPublish { ref ->
-                chained[ref]?.let { (cell, linkHandle) -> cell.outlet.linking.onLinked(linkHandle) }
+                // PN-9: catch-up moved to the onLinkedListeners multicast, so a manual
+                // re-announce must fire the full on-link fan-out, not just the single
+                // onLinked slot (the same reconciliation the kernel re-announce sites use).
+                chained[ref]?.let { (cell, linkHandle) -> cell.outlet.linking.fireLinked(linkHandle) }
             }
         }
 

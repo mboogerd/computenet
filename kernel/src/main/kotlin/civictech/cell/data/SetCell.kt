@@ -220,15 +220,17 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         // I-16/I-24): a single-wave state-as-delta reply, stamped as a catch-
         // up baseline (MessageContext.baseline) and delivered only to the
         // requester — never broadcast, never admitted to wave completeness.
-        ProtocolSupport.of(outlet).handle(Protocols.StateRequest) { _, message ->
-            val request = message as StateRequest
+        // PN-9: pull-serve is now an installable outlet policy (extracted from the
+        // hand-rolled handler this cell carried) — it composes with catchUpOnLinked
+        // rather than living as a one-off StateRequest handler.
+        outlet.pullServe { request ->
             // scope filter (PN-3c): restrict the reply to the requester's
             // interest slice. scope absent/Total ⇒ the maps and the reported
             // frontier are the pre-scope values, so the reply is verbatim.
             val addsOut = scopedTo(sinceFilter(adds, request.since), request.scope)
             val delsOut = scopedTo(sinceFilter(dels, request.since), request.scope)
-            if (addsOut.isEmpty() && delsOut.isEmpty()) return@handle
-            outlet.baselineTo(request.replyTo, currentFrontier(request.scope)) {
+            if (addsOut.isEmpty() && delsOut.isEmpty()) return@pullServe
+            baselineTo(request.replyTo, currentFrontier(request.scope)) {
                 propagate(SetDelta(addsOut, delsOut))
             }
         }
