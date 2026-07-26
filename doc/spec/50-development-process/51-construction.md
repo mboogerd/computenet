@@ -81,6 +81,38 @@ property of the container's type (G-9), never a step. The litmus: **the DSL
 gains parameters, not verbs** — every step MUST lower to a management
 invocation the host already accepts.
 
+### `InstanceSetStep` — declaring a heterogeneous instance set (PN-13, implemented)
+
+`InstanceSetStep(handle, logicalId, factory, instances)` is the composed-node
+declaration (spec 40/42 §Interest-scoped instance sets): one logical id and a
+set of instances, `instances = f(interestPartition, replicationFactor)`, each
+an `InstanceSpec` carrying `(interest, placement, journalId, frontierPolicy,
+instanceId)`. It ends the status quo of hand-wiring N mechanisms per composed
+node — a single declaration is the whole set.
+
+It is a step in the recorded `GraphSpec` (graphs-as-data) that **lowers** to
+`N × SpawnStep` under `IdentityBinding.NewInstanceOf(logicalId)` — the litmus
+holds: the DSL gained *parameters* (per-instance interest and hints), not a new
+verb. The N interest assignments are the per-instance factories'
+construction-time formation assignments (PN-6 made assignment a management
+invocation; the declaration folds the *initial* assignment into construction,
+and a later journaled *re*assignment is the runtime counterpart, not a
+declaration). Apply and replay run over the lowered form (`GraphSpec.lowered()`);
+because memberships and links are interest-determined, replay onto fresh hosts
+yields identical memberships (instanceId → interest) and link sets (the overlap
+graph) regardless of step order — the parameters-not-verbs payoff, and the
+control that a fully-default declaration `lower`s to a `GraphSpec` `equals` to
+the hand-written N × `SpawnStep` form.
+
+The declaration is the natural home for the cold structural pre-validation the
+core apply path leaves research-gated (G-51, 93 I-21/I-26): a mis-composition is
+refused loudly at declaration, naming the offending axis — **partitioning a
+SINGLETON cell** (one whose manifest lacks `PARTITIONED`) is refused on the
+`INSTANCE_SCOPING` axis, and a **`DURABLE` cell declared journal-less** (a null
+`journalId`) is refused on the `DURABLE` nature. This is stricter than PN-12's
+host-level *soft* durability count (23 §Negotiation) on purpose: a declaration
+surface can refuse what a bare spawn only surfaces.
+
 ⚠ GAP (G-57): a client holding only a logicalId has no defined
 instance-selection policy (nearest replica for reads, leader for writes,
 active candidate during promotion), and instanceId minting has no stated
