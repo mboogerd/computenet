@@ -33,8 +33,3 @@ fun interface SaturationProtocol { fun saturation(message: SaturationSignal) }
 
 class IntakeSaturatedException(val hostRef: CellRef) :
     IllegalStateException("host $hostRef intake is saturated")
-
-/** Payloads declaring the associative merge used by a saturated intake. */
-interface MergeablePayload {
-    fun mergeWith(other: MergeablePayload): MergeablePayload
-}

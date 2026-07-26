@@ -9,7 +9,7 @@ import civictech.cell.UuidSerializer
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
-import civictech.cell.host.MergeablePayload
+import civictech.cell.MergeablePayload
 
 @Contract
 interface PnCounterOps {

@@ -5,7 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
-import civictech.cell.host.MergeablePayload
+import civictech.cell.MergeablePayload
 import civictech.cell.port.*
 import civictech.cell.UuidSerializer
 import java.io.Serializable

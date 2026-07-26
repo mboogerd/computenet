@@ -10,7 +10,7 @@ import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
-import civictech.cell.host.MergeablePayload
+import civictech.cell.MergeablePayload
 
 @Contract
 interface CounterOps {
