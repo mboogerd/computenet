@@ -4,9 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.GroupByCell
-import civictech.cell.data.JoinSetCell
 import civictech.cell.Propagate
-import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.mapFold
@@ -28,6 +26,8 @@ import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.mapSet
+import civictech.cell.data.op.JoinSetCell
+import civictech.cell.data.op.SemiJoinCell
 
 /**
  * M11 exit test: the full operations suite composed end-to-end across two

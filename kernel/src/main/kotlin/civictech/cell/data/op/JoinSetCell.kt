@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
@@ -10,8 +10,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.absorbAck
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.delta.TagState
 import civictech.cell.data.delta.MintedTags
 
 @CellBase
@@ -42,22 +42,17 @@ class JoinSetCell<A, B, K, C>(
     private val rightKey: (B) -> K,
     private val combine: (A, B) -> C,
 ) : JoinSetCellBase<A, B, C>(ref), Stateful {
-    private val leftState = TagState<A>()
-    private val rightState = TagState<B>()
-    private val minted = MintedTags<Pair<A, B>>(ref, "join")
-
-    // derived indexes (rebuilt on restore): live rows per key, per side
-    private val leftIndex = mutableMapOf<K, MutableSet<A>>()
-    private val rightIndex = mutableMapOf<K, MutableSet<B>>()
+    private val join = KeyedBinarySetJoin<A, B, K>()
+    private val ledger: JoinLedger<Pair<A, B>> = MintedLedger(ref, "join")
 
     init {
         // late-join catch-up (G-22): advertised pairs folded under combine
         outlet.catchUpOnLinked {
-            if (minted.isEmpty) null
+            if (ledger.isEmpty) null
             else {
                 val adds = mutableMapOf<C, MutableSet<Timestamp>>()
-                minted.entries.forEach { (pair, tag) ->
-                    adds.getOrPut(combine(pair.first, pair.second)) { mutableSetOf() } += tag
+                ledger.entries.forEach { (pair, tags) ->
+                    adds.getOrPut(combine(pair.first, pair.second)) { mutableSetOf() } += tags
                 }
                 SetDelta(adds = adds)
             }
@@ -65,35 +60,37 @@ class JoinSetCell<A, B, K, C>(
     }
 
     override fun onLeft(value: SetDelta<A>) {
-        val effective = leftState.apply(value)
+        val effective = join.leftState.apply(value)
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
         (effective.adds.keys + effective.dels.keys).forEach { a ->
             val k = leftKey(a)
-            index(leftIndex, k, a, live = a in leftState)
-            rightIndex[k]?.forEach { b -> reconcile(a, b, adds, dels) }
+            join.index(join.leftIndex, k, a, live = a in join.leftState)
+            join.rightIndex[k]?.forEach { b -> reconcile(a, b, adds, dels) }
         }
-        emit(adds, dels)
+        join.emitOrAbsorb(
+            adds,
+            dels,
+            propagate = { outlet.call.propagate(it) },
+            absorbAck = { outlet.absorbAck() }, // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
+        )
     }
 
     override fun onRight(value: SetDelta<B>) {
-        val effective = rightState.apply(value)
+        val effective = join.rightState.apply(value)
         val adds = mutableMapOf<C, MutableSet<Timestamp>>()
         val dels = mutableMapOf<C, MutableSet<Timestamp>>()
         (effective.adds.keys + effective.dels.keys).forEach { b ->
             val k = rightKey(b)
-            index(rightIndex, k, b, live = b in rightState)
-            leftIndex[k]?.forEach { a -> reconcile(a, b, adds, dels) }
+            join.index(join.rightIndex, k, b, live = b in join.rightState)
+            join.leftIndex[k]?.forEach { a -> reconcile(a, b, adds, dels) }
         }
-        emit(adds, dels)
-    }
-
-    private fun <R> index(into: MutableMap<K, MutableSet<R>>, key: K, row: R, live: Boolean) {
-        if (live) {
-            into.getOrPut(key) { mutableSetOf() } += row
-        } else {
-            into[key]?.let { it -= row; if (it.isEmpty()) into -= key }
-        }
+        join.emitOrAbsorb(
+            adds,
+            dels,
+            propagate = { outlet.call.propagate(it) },
+            absorbAck = { outlet.absorbAck() }, // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
+        )
     }
 
     private fun reconcile(
@@ -102,34 +99,23 @@ class JoinSetCell<A, B, K, C>(
         adds: MutableMap<C, MutableSet<Timestamp>>,
         dels: MutableMap<C, MutableSet<Timestamp>>,
     ) {
-        val wanted = a in leftState && b in rightState // keys match by index construction
+        val wanted = a in join.leftState && b in join.rightState // keys match by index construction
         if (wanted) {
-            minted.enter(a to b)?.let { adds.getOrPut(combine(a, b)) { mutableSetOf() } += it }
+            ledger.enter(a to b) { emptySet() }?.let { adds.getOrPut(combine(a, b)) { mutableSetOf() } += it }
         } else {
-            minted.exit(a to b)?.let { dels.getOrPut(combine(a, b)) { mutableSetOf() } += it }
-        }
-    }
-
-    private fun emit(adds: Map<C, Set<Timestamp>>, dels: Map<C, Set<Timestamp>>) {
-        if (adds.isNotEmpty() || dels.isNotEmpty()) {
-            outlet.call.propagate(SetDelta(adds, dels))
-        } else {
-            outlet.absorbAck() // a row entering an empty opposite side — ack the swallowed wave (CP-A3)
+            ledger.exit(a to b)?.let { dels.getOrPut(combine(a, b)) { mutableSetOf() } += it }
         }
     }
 
     override fun snapshot(): Serializable =
-        arrayListOf(leftState.snapshot(), rightState.snapshot(), minted.snapshot())
+        arrayListOf(join.leftState.snapshot(), join.rightState.snapshot(), ledger.snapshot())
 
     override fun restore(state: Serializable) {
         val (l, r, m) = state as ArrayList<Serializable>
-        leftState.restore(l)
-        rightState.restore(r)
-        minted.restore(m)
-        leftIndex.clear()
-        rightIndex.clear()
-        leftState.elements.forEach { a -> leftIndex.getOrPut(leftKey(a)) { mutableSetOf() } += a }
-        rightState.elements.forEach { b -> rightIndex.getOrPut(rightKey(b)) { mutableSetOf() } += b }
+        join.leftState.restore(l)
+        join.rightState.restore(r)
+        ledger.restore(m)
+        join.rebuildIndexes(leftKey, rightKey)
     }
 }
 

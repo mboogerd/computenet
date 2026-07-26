@@ -20,6 +20,7 @@ import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.CountCell
 import civictech.cell.data.op.mapSet
+import civictech.cell.data.op.IntersectSetCell
 
 class OperatorTest {
 

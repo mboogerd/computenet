@@ -5,12 +5,8 @@ import civictech.cell.data.CombineLatestApi
 import civictech.cell.data.CombineLatestCell
 import civictech.cell.data.GroupByApi
 import civictech.cell.data.GroupByCell
-import civictech.cell.data.JoinSetApi
-import civictech.cell.data.JoinSetCell
 import civictech.cell.data.LookupJoinApi
 import civictech.cell.data.LookupJoinCell
-import civictech.cell.data.SemiJoinApi
-import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.graph.TypedRef
@@ -29,6 +25,10 @@ import java.io.Serializable
 import java.net.InetSocketAddress
 import java.net.URLDecoder
 import java.util.concurrent.CopyOnWriteArrayList
+import civictech.cell.data.op.JoinSetCell
+import civictech.cell.data.op.JoinSetApi
+import civictech.cell.data.op.SemiJoinCell
+import civictech.cell.data.op.SemiJoinApi
 
 /**
  * Skill matching: candidates declare skills, jobs declare required skills.

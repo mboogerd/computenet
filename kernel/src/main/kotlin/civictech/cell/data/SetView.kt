@@ -5,6 +5,7 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.CountCell
+import civictech.cell.data.op.IntersectSetCell
 
 /**
  * Consumer-side materialized read model over a [SetDelta] stream: folds the

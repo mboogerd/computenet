@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
@@ -10,8 +10,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.absorbAck
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.delta.TagState
 import civictech.cell.data.delta.MintedTags
 
 @CellBase
@@ -42,83 +42,69 @@ class SemiJoinCell<A, B, K>(
     private val rightKey: (B) -> K,
     private val negated: Boolean = false,
 ) : SemiJoinCellBase<A, B>(ref), Stateful {
-    private val leftState = TagState<A>()
-    private val rightState = TagState<B>()
-    private val minted = MintedTags<A>(ref, "semijoin")
-
-    // derived indexes (rebuilt on restore): live left rows per key, live right rows per key
-    private val leftIndex = mutableMapOf<K, MutableSet<A>>()
-    private val rightRows = mutableMapOf<K, MutableSet<B>>()
+    private val join = KeyedBinarySetJoin<A, B, K>()
+    private val ledger: JoinLedger<A> = MintedLedger(ref, "semijoin")
 
     init {
         // late-join catch-up (G-22): the advertised output as a delta-from-empty
-        outlet.catchUpOnLinked { if (minted.isEmpty) null else minted.asDelta() }
+        outlet.catchUpOnLinked { if (ledger.isEmpty) null else ledger.asDelta() }
     }
 
     override fun onLeft(value: SetDelta<A>) {
-        val effective = leftState.apply(value)
+        val effective = join.leftState.apply(value)
         val adds = mutableMapOf<A, Set<Timestamp>>()
         val dels = mutableMapOf<A, Set<Timestamp>>()
         (effective.adds.keys + effective.dels.keys).forEach { a ->
-            index(leftIndex, leftKey(a), a, live = a in leftState)
+            join.index(join.leftIndex, leftKey(a), a, live = a in join.leftState)
             reconcile(a, adds, dels)
         }
-        emit(adds, dels)
+        join.emitOrAbsorb(
+            adds,
+            dels,
+            propagate = { outlet.call.propagate(it) },
+            // frontier-gated antijoin/semijoin emission (CP-A3): a wave that flips
+            // no membership still advances the downstream frontier by an absorb-ack.
+            absorbAck = { outlet.absorbAck() },
+        )
     }
 
     override fun onRight(value: SetDelta<B>) {
-        val effective = rightState.apply(value)
+        val effective = join.rightState.apply(value)
         val adds = mutableMapOf<A, Set<Timestamp>>()
         val dels = mutableMapOf<A, Set<Timestamp>>()
         (effective.adds.keys + effective.dels.keys).forEach { b ->
             val k = rightKey(b)
-            index(rightRows, k, b, live = b in rightState)
+            join.index(join.rightIndex, k, b, live = b in join.rightState)
             // key presence may have flipped: reconcile is idempotent,
             // so visiting unflipped keys' rows is just a no-op
-            leftIndex[k]?.forEach { a -> reconcile(a, adds, dels) }
+            join.leftIndex[k]?.forEach { a -> reconcile(a, adds, dels) }
         }
-        emit(adds, dels)
-    }
-
-    private fun <R> index(into: MutableMap<K, MutableSet<R>>, key: K, row: R, live: Boolean) {
-        if (live) {
-            into.getOrPut(key) { mutableSetOf() } += row
-        } else {
-            into[key]?.let { it -= row; if (it.isEmpty()) into -= key }
-        }
+        join.emitOrAbsorb(
+            adds,
+            dels,
+            propagate = { outlet.call.propagate(it) },
+            absorbAck = { outlet.absorbAck() },
+        )
     }
 
     private fun reconcile(a: A, adds: MutableMap<A, Set<Timestamp>>, dels: MutableMap<A, Set<Timestamp>>) {
-        val wanted = a in leftState && ((leftKey(a) in rightRows) xor negated)
+        val wanted = a in join.leftState && ((leftKey(a) in join.rightIndex) xor negated)
         if (wanted) {
-            minted.enter(a)?.let { adds[a] = setOf(it) }
+            ledger.enter(a) { emptySet() }?.let { adds[a] = it }
         } else {
-            minted.exit(a)?.let { dels[a] = setOf(it) }
-        }
-    }
-
-    private fun emit(adds: Map<A, Set<Timestamp>>, dels: Map<A, Set<Timestamp>>) {
-        if (adds.isNotEmpty() || dels.isNotEmpty()) {
-            outlet.call.propagate(SetDelta(adds, dels))
-        } else {
-            // frontier-gated antijoin/semijoin emission (CP-A3): a wave that flips
-            // no membership still advances the downstream frontier by an absorb-ack.
-            outlet.absorbAck()
+            ledger.exit(a)?.let { dels[a] = it }
         }
     }
 
     override fun snapshot(): Serializable =
-        arrayListOf(leftState.snapshot(), rightState.snapshot(), minted.snapshot())
+        arrayListOf(join.leftState.snapshot(), join.rightState.snapshot(), ledger.snapshot())
 
     override fun restore(state: Serializable) {
         val (l, r, m) = state as ArrayList<Serializable>
-        leftState.restore(l)
-        rightState.restore(r)
-        minted.restore(m)
-        leftIndex.clear()
-        rightRows.clear()
-        leftState.elements.forEach { a -> leftIndex.getOrPut(leftKey(a)) { mutableSetOf() } += a }
-        rightState.elements.forEach { b -> rightRows.getOrPut(rightKey(b)) { mutableSetOf() } += b }
+        join.leftState.restore(l)
+        join.rightState.restore(r)
+        ledger.restore(m)
+        join.rebuildIndexes(leftKey, rightKey)
     }
 }
 

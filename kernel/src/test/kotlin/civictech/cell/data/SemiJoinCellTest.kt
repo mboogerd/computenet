@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test
 import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MintedTags
+import civictech.cell.data.op.SemiJoinCell
+import civictech.cell.data.op.differenceSet
 
 class SemiJoinCellTest {
 

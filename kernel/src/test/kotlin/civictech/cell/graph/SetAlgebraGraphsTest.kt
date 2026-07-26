@@ -1,7 +1,6 @@
 package civictech.cell.graph
 
 import civictech.cell.CellRef
-import civictech.cell.data.IntersectSetCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -23,6 +22,7 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.CountCell
+import civictech.cell.data.op.IntersectSetCell
 
 class SetAlgebraGraphsTest {
 

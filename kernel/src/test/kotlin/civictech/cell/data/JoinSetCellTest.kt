@@ -11,6 +11,9 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.*
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.JoinSetCell
+import civictech.cell.data.op.joinSet
+import civictech.cell.data.op.crossProduct
 
 class JoinSetCellTest {
 
