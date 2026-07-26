@@ -63,11 +63,19 @@ object Shadow {
         val ports = PortRegistry.of(cell)
         ports.names().forEach { name ->
             val port = ports[name]
-            if (port is FanInlet<*>) {
-                @Suppress("UNCHECKED_CAST")
-                (port as FanInlet<Any>).serve(suppressionProxy(port.clazz as Class<Any>))
-            }
+            if (port is FanInlet<*>) suppress(port)
         }
+    }
+
+    /**
+     * NoOp-serve a single fan-in [inlet] (spec 52's "NoOp-served sinks") — the
+     * per-inlet form [suppress]`(cell)` applies to every inlet. Reused by
+     * PN-17's follower effect-suppression (spec 31 §Effects on instance sets):
+     * a `SingleWriterReplication` follower suppresses exactly its effect inlet
+     * while the leader keeps serving the real, effect-firing api.
+     */
+    fun <T : Any> suppress(inlet: FanInlet<T>) {
+        inlet.serve(suppressionProxy(inlet.clazz))
     }
 
     private fun <T : Any> suppressionProxy(clazz: Class<T>): T =

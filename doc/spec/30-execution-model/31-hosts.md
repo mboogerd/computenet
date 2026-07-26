@@ -217,6 +217,44 @@ checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
    payloads — mergeable parked traffic is already covered end-to-end by the
    M10 journal + anti-entropy pair (93 I-7/I-22/I-12).
 
+## Effects on instance sets
+
+An `Effectful` cell (a cell that writes, notifies, or actuates the outside
+world — 31, G-59) replicated across an instance set is otherwise undefined:
+every replica applies the delta, so every replica fires the external effect.
+PN-17 resolves the two interest settings (40/42 §Interest-scoped instance sets)
+separately:
+
+- **Disjoint interest** is **effect-once by construction.** Each logical delta
+  is admitted by exactly one covering instance (partitioning — no two interests
+  overlap), so only that instance fires; the per-inlet processed-frontier
+  (G-59, fixes C-9) additionally dedups a replayed frame at the same
+  `(sourceId, counter)`. No authority is declared and none is needed.
+
+- **Total / overlapping interest** requires a declared **effect authority.** A
+  delta rides *every* covering instance's link (the replication setting), so an
+  authority names the single instance permitted to act on the world: the
+  `SingleWriterReplication` leader serves the real, effect-firing implementation
+  on its effect inlet, while every follower **suppresses** that inlet through
+  the Shadow NoOp-serve machinery (52 §"NoOp-served sinks",
+  `Shadow.suppress(inlet)`) — the delta still arrives and keeps the replica warm,
+  but the effect does not fire. Leadership is the `LeaderMark` epoch fold (42):
+  a handoff demotes the old leader (its inlet re-suppressed) and promotes the
+  new one (its inlet re-served) under a strictly greater epoch, and a stale
+  (`<= current`) mark is fenced inert — so the effect fires **exactly once per
+  logical delta across a handoff**, never zero (a gap) and never twice (a
+  resurrected deposed leader).
+
+**Formation refusal.** Combining `Effectful` with Total/overlapping interest
+and **no** declared authority is refused at instance-set formation
+(`SingleWriterReplication.requireEffectAuthority`), the same loud typed refusal
+family as the OWNERSHIP corollary (23 §SPSC corollary) and the non-idempotent
+overlap refusal (42, CP-G1) — moved to the moment the combination is formed
+rather than discovered as N duplicate effects on the world later. A
+non-effectful cell, a disjoint assignment, or a single-writer set never raises,
+so no existing instance set changes and a single non-replicated `Effectful`
+cell is unaffected.
+
 ## Colors of hosts
 
 Hosts come in colors (32): virtual-thread hosts (🔵 hosting blocking/pure) and
