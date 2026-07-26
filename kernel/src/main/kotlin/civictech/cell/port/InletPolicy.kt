@@ -2,6 +2,7 @@ package civictech.cell.port
 
 import civictech.cell.attention.Progress
 import civictech.cell.proxy.Invocation
+import civictech.gen.wire.PullService
 
 /**
  * Fixed processing tiers of a [FanInlet] policy chain (PN-9, spec 12 §Policies).
@@ -146,8 +147,22 @@ class Gate : InletPolicy {
  * event the frontier tracks — for a bridged consumer that arrives in-band once
  * the bridge is wired, so the emitted StateRequest sequence is identical to
  * pre-PN-9 (local and bridged alike). Data-transparent: [offer] is a pass-through.
+ *
+ * FU-5 — [requireServing] opts this inlet into the `PULL_SERVICE` refusing axis.
+ * Pull-on-open is *not* by itself a hard dependency on a serving producer: a
+ * [GlitchFreeCell] installs it against ordinary (non-serving) upstreams and
+ * converges fine via its ALIGN frontier and upstream waves — the emitted
+ * StateRequest is opportunistic there, tolerated-unanswered. Only a consumer
+ * whose baseline arrives *solely* through the pull genuinely starves when the
+ * producer cannot answer; such a consumer sets [requireServing] = true, folding
+ * `BASELINE_SERVING` onto its inlet so a non-serving producer is refused at the
+ * handshake instead of silently starving. Default false keeps every existing
+ * install (glitch-free's included) DEFAULT on the axis ⇒ byte-identical.
  */
-class PullOnOpen(private val since: () -> civictech.cell.TagFrontier? = { null }) : InletPolicy {
+class PullOnOpen(
+    private val since: () -> civictech.cell.TagFrontier? = { null },
+    private val requireServing: Boolean = false,
+) : InletPolicy {
     // Occupies the ADMIT slot as a data-transparent pass-through: it observes
     // links, not waves, so its position in the chain is immaterial.
     override val tier get() = PolicyTier.ADMIT
@@ -156,6 +171,14 @@ class PullOnOpen(private val since: () -> civictech.cell.TagFrontier? = { null }
 
     override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
         this.release = release
+        // FU-5: opting in IS the requirement. Fold BASELINE_SERVING onto the inlet's
+        // declared vector so a non-serving producer refuses at handshake instead of
+        // leaving the StateRequest below unanswered (starved). Off by default so a
+        // tolerant puller (e.g. a glitch-free inlet with its own catch-up path)
+        // stays DEFAULT on the axis and reconciles exactly as today.
+        if (requireServing) {
+            PortNatures.stamp(inlet, PortNatures.of(inlet).with(PullService.BASELINE_SERVING))
+        }
         inlet.onEdgeEvent { link, event ->
             if (event == EdgeOpen) {
                 Protocols.sendUpstream(link, Protocols.StateRequest, StateRequest(link.to, since = since()))
