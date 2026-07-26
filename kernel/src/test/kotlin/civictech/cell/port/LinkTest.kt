@@ -99,19 +99,6 @@ class LinkTest {
     }
 
     @Test
-    fun `point-to-point inlet frees its slot on unlink`() {
-        val inlet = Inlet.withNoOp<Consumer<String>>()
-        val outlet1 = FanOutlet.create<Consumer<String>>()
-        val outlet2 = FanOutlet.create<Consumer<String>>()
-
-        val link = (outlet1.linkTo(inlet as LinkFrom<Consumer<String>>) as LinkResult.Connected).link
-        (outlet2.linkTo(inlet as LinkFrom<Consumer<String>>) is LinkResult.Rejected) shouldBe true
-
-        link.unlink()
-        (outlet2.linkTo(inlet as LinkFrom<Consumer<String>>) is LinkResult.Connected) shouldBe true
-    }
-
-    @Test
     fun `fan ports track multiple links`() {
         val outlet = FanOutlet.create<Consumer<String>>()
         val a = collectingInlet(mutableListOf())

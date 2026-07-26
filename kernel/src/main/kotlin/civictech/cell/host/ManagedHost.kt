@@ -935,7 +935,6 @@ open class ManagedHost(
                     val supersedes = PortRegistry.of(cell).names().mapNotNull { name ->
                         when (val port = PortRegistry.of(cell)[name]) {
                             is FanOutlet<*> -> port.mintFreshEpoch()
-                            is Outlet<*> -> port.mintFreshEpoch()
                             else -> null
                         }
                     }.toSet()
@@ -1264,7 +1263,6 @@ open class ManagedHost(
         if (port !is Use<*>) return RoutedInletResolution.NotUsable
         val apiClass = when (port) {
             is FanInlet<*> -> port.clazz
-            is Inlet<*> -> port.clazz
             else -> null // e.g. FeedbackInlet carries no erased api class — skip the wrapper check
         }
         return RoutedInletResolution.Usable(apiClass)

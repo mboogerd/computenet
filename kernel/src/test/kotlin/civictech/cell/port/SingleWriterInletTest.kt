@@ -21,10 +21,10 @@ class SingleWriterInletTest {
     fun `single-writer inlet admits the first Consume producer and refuses a second`() {
         val port = inlet(singleWriter = true)
 
-        val first = port.linkFrom(Outlet.withNoOp<Consumer<String>>())
+        val first = port.linkFrom(FanOutlet.create<Consumer<String>>())
         first.shouldBeInstanceOf<LinkResult.Connected>()
 
-        val second = port.linkFrom(Outlet.withNoOp<Consumer<String>>())
+        val second = port.linkFrom(FanOutlet.create<Consumer<String>>())
         second.shouldBeInstanceOf<LinkResult.Rejected>()
     }
 
@@ -35,7 +35,7 @@ class SingleWriterInletTest {
         // A negotiated tap (Observe) registers on the inlet — read cardinality
         // is unrestricted, so it does not count as a producer.
         val tap = handshake(
-            portOut = Outlet.withNoOp<Consumer<String>>(),
+            portOut = FanOutlet.create<Consumer<String>>(),
             target = port,
             targetRef = port.ref,
             role = LinkRole.Observe,
@@ -45,12 +45,12 @@ class SingleWriterInletTest {
         tap.shouldBeInstanceOf<LinkResult.Connected>()
 
         // With only an Observe link present, a Consume producer is still admitted.
-        port.linkFrom(Outlet.withNoOp<Consumer<String>>())
+        port.linkFrom(FanOutlet.create<Consumer<String>>())
             .shouldBeInstanceOf<LinkResult.Connected>()
 
         // A further tap remains admitted even now that a producer exists.
         val secondTap = handshake(
-            portOut = Outlet.withNoOp<Consumer<String>>(),
+            portOut = FanOutlet.create<Consumer<String>>(),
             target = port,
             targetRef = port.ref,
             role = LinkRole.Observe,
@@ -60,7 +60,7 @@ class SingleWriterInletTest {
         secondTap.shouldBeInstanceOf<LinkResult.Connected>()
 
         // But a second producer is refused — the single-writer slot is taken.
-        port.linkFrom(Outlet.withNoOp<Consumer<String>>())
+        port.linkFrom(FanOutlet.create<Consumer<String>>())
             .shouldBeInstanceOf<LinkResult.Rejected>()
     }
 
@@ -68,15 +68,15 @@ class SingleWriterInletTest {
     fun `single-writer slot frees after unlink, admitting a replacement writer`() {
         val port = inlet(singleWriter = true)
 
-        val first = port.linkFrom(Outlet.withNoOp<Consumer<String>>())
+        val first = port.linkFrom(FanOutlet.create<Consumer<String>>())
         val link = first.shouldBeInstanceOf<LinkResult.Connected>().link
 
-        port.linkFrom(Outlet.withNoOp<Consumer<String>>())
+        port.linkFrom(FanOutlet.create<Consumer<String>>())
             .shouldBeInstanceOf<LinkResult.Rejected>()
 
         link.unlink()
 
-        port.linkFrom(Outlet.withNoOp<Consumer<String>>())
+        port.linkFrom(FanOutlet.create<Consumer<String>>())
             .shouldBeInstanceOf<LinkResult.Connected>()
     }
 
@@ -86,8 +86,8 @@ class SingleWriterInletTest {
         val port = inlet(singleWriter = false)
         port.serve(served)
 
-        val a = Outlet.withNoOp<Consumer<String>>()
-        val b = Outlet.withNoOp<Consumer<String>>()
+        val a = FanOutlet.create<Consumer<String>>()
+        val b = FanOutlet.create<Consumer<String>>()
 
         port.linkFrom(a).shouldBeInstanceOf<LinkResult.Connected>()
         port.linkFrom(b).shouldBeInstanceOf<LinkResult.Connected>()
