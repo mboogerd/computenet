@@ -1,0 +1,30 @@
+# Concord pilot scenario (W0). Canonical schema shape — see concord/schema/scenario.md.
+# NOTE: `value-view` (a scalar view fold) has no kernel binding yet — see the W0
+# report / cell-catalog.md. W1-A must add a scalar View alongside set/map/count.
+id: 22-GF-DIAMOND-01
+title: Fork-join observer never sees a torn wave
+covers: [22-GF-01]
+profile: core
+kind: example
+narrative:
+  given: one counter source forked through two identity arms into a summing join
+  when: the source is incremented repeatedly
+  then: every observed sum is even — no observation mixes arms across a wave
+graph:
+  cells:
+    - {id: n, type: counter-source}
+    - {id: l, type: map, fn: identity}
+    - {id: r, type: map, fn: identity}
+    - {id: s, type: combine-latest, fn: sum, glitch-free: true}
+    - {id: v, type: value-view}
+  links:
+    - {from: n, to: l}
+    - {from: n, to: r}
+    - {from: l, to: s, inlet: left}
+    - {from: r, to: s, inlet: right}
+    - {from: s, to: v}
+script:
+  - {type: apply, on: n, op: increment, times: 50}
+checks:
+  - {type: observations-all-satisfy, view: v, fn: even}
+  - {type: final-view, view: v, equals: 100}

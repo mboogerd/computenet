@@ -13,6 +13,7 @@ include(":gen")
 include(":gen-test")
 
 include(":kernel")
+include(":concord")
 include(":wire")
 include(":demo:shopping")
 include(":demo:exchange")

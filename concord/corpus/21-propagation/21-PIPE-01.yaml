@@ -1,0 +1,25 @@
+# Concord pilot scenario (W0). Canonical schema shape — see concord/schema/scenario.md.
+id: 21-PIPE-01
+title: Linear source to map to view pushes every delta through
+covers: [21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: a set source feeding a map operator, observed through a set view
+  when: adds flow through the linear pipeline
+  then: at quiescence the view equals the mapped batch of accepted adds
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: m, type: map, fn: identity}
+    - {id: v, type: set-view}
+  links:
+    - {from: s, to: m}
+    - {from: m, to: v}
+script:
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: beta}
+checks:
+  - {type: final-view, view: v, equals: [alpha, beta]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

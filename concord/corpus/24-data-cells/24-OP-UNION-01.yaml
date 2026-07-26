@@ -1,0 +1,30 @@
+# Concord pilot scenario (W0). Canonical schema shape — see concord/schema/scenario.md.
+# `covers` ids are provisional until W1-C assigns L0 EARS ids in the spec chapters.
+id: 24-OP-UNION-01
+title: Union of two set sources equals batch union
+covers: [24-OP-03, 21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: two set sources feeding a union operator, observed through a set view
+  when: adds and removes are applied concurrently to both sources
+  then: at quiescence the view equals the batch union of the final source sets
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: b, type: set-source, of: string}
+    - {id: u, type: union}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: u, inlet: left}
+    - {from: b, to: u, inlet: right}
+    - {from: u, to: v}
+script:
+  - {type: apply, on: a, op: add, value: apple}
+  - {type: apply, on: b, op: add, value: pear}
+  - {type: apply, on: a, op: add, value: plum}
+  - {type: apply, on: a, op: remove, value: apple}
+checks:
+  - {type: final-view, view: v, equals: [pear, plum]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

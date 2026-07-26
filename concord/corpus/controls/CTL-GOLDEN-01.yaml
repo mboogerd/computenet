@@ -1,0 +1,27 @@
+# Concord pilot CONTROL scenario (W0). kind: control — it MUST fail; the runner
+# (W2) asserts its failure (Concord P7 — the harness must be able to fail).
+# Correct graph, deliberately wrong final-view golden.
+id: CTL-GOLDEN-01
+title: Control — correct union graph with a deliberately wrong final-view golden
+covers: [24-OP-03]
+profile: core
+kind: control
+narrative:
+  given: the same union graph as 24-OP-UNION-01, wired correctly
+  when: the same adds are applied
+  then: the deliberately wrong golden makes final-view fail — the runner asserts this control fails
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: b, type: set-source, of: string}
+    - {id: u, type: union}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: u, inlet: left}
+    - {from: b, to: u, inlet: right}
+    - {from: u, to: v}
+script:
+  - {type: apply, on: a, op: add, value: apple}
+  - {type: apply, on: b, op: add, value: pear}
+checks:
+  - {type: final-view, view: v, equals: [this, is, deliberately, wrong]}
