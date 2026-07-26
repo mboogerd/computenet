@@ -9,8 +9,13 @@
 > `AttentionPolicy` (band dispatch, stride floor, NONE-window park/replay);
 > magnitude-band dispatch in `ManagedHost.stage/dispatchOne` over `cell.data.Magnitude`
 > (opt-in via `AttentionPolicy.magnitudeBands`, M17);
-> `GlitchFreeCell.WaveMode` WAIT/DEGRADE. Verified: `AttentionGenerativeTest`
-> (100 seeds + starvation control), `GlitchFreeSuspensionTest`, `MagnitudeSchedulingTest`.
+> `GlitchFreeCell.WaveMode` WAIT/DEGRADE; interest scatter in
+> `AttentionSupport.scatter`; the covering-quorum DEGRADE shrink on the
+> delivered-watermark lattice (`WatermarkCell.suspend`/`resume`,
+> `Replication.replicaFrontier(degrade)`, PN-19). Verified: `AttentionGenerativeTest`
+> (100 seeds + starvation control), `GlitchFreeSuspensionTest`,
+> `PartitionedAttentionTest` (scatter park + DEGRADE covering-quorum shrink across
+> park/resume, 100 seeds, both controls diverging), `MagnitudeSchedulingTest`.
 > Remaining: notices are single-hop (a join sees only direct upstream
 > parks, not transitive ones — G-36 below). Attention crossing the wire is
 > resolved (G-35, W3.2, see below and 41 point 4).
@@ -171,8 +176,9 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    the veto is a marker interface, and a notice is an ordinary
    generic-protocol message.
 
-   The notice generalizes (decided in 93 I-18, unimplemented):
-   the shipped suspended/resumed pair becomes a typed `Stall(reason,
+   The notice generalizes (decided in 93 I-18, **implemented** — the
+   direct-edge family in `WaveFrontier`, the covering-quorum extension in
+   PN-19): the shipped suspended/resumed pair is a typed `Stall(reason,
    recoverable)` / `Resume` frontier-event family covering suspension,
    supervision RESTART, dead-letter, and exactly-once loss; a join disposes
    per edge keyed on recoverability — **WAIT** (the default, park-not-drop)
@@ -180,6 +186,31 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
    **RE-SCOPE** (advance past the lost wave, evaluate over the reduced set,
    and surface a `GlitchViolation`) as the only admissible disposition for
    terminal ones (dead-lettered, lost).
+
+   **PN-19 — interest scatter, per-instance park, and the covering-quorum
+   `Stall` shrink** (plan §3b; closes PN-7's documented DEGRADE gap):
+   - **(a) attention scatters by interest.** Attention travelling upstream
+     through a partitioned/replicated node reaches only the instances whose
+     interest overlaps the attending consumer's scope — the metadata plane
+     reuses the data plane's overlap rule (`Interest.overlaps`) via the
+     per-link `AttentionSupport.scatter` predicate; a link outside the scope
+     learns an explicit NONE (distinct from neutral NORMAL). The per-key
+     economics beyond this stays G-62/M16.
+   - **(b) an unattended instance parks like any cell.** A shard/replica with
+     no covering consumer falls to band NONE and parks through the ordinary
+     NONE-window suspension gate — the router/mesh treat a parked peer as
+     *stalled, not dead* (its intake parks, never drops; resume replays it).
+   - **(c) the covering-quorum DEGRADE shrink.** Under sharded replication a
+     wave settles on the *covering subset* of the delivered-watermark lattice
+     (PN-7). A suspended or departing covering instance publishes the
+     recoverable `Stall` on that lattice as a resumable per-slot suspend epoch
+     (`WatermarkCell.suspend`/`resume`, the analogue of the grow-only `closed`
+     marker); a **WAIT** consumer holds on it (today's behaviour), a
+     **DEGRADE** consumer drops it from the covering quorum
+     (`Replication.replicaFrontier(degrade = true)`) and restores it on
+     `Resume`, its frozen row catching up as a PN-2 baseline. **PN-0c's
+     `WatermarkCell.close()` is the degenerate terminal case** of this family —
+     a suspension whose epoch never turns even again.
 
    ⚠ GAP (G-40): a glitch-free join cannot distinguish an
    effective-only-silent arm from a dead one — wave completeness blocks

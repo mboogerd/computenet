@@ -135,15 +135,23 @@ class Replication(
      * cannot be waited on here — that residual (a converged membership barrier /
      * the DEGRADE quorum-shrink) is sequenced to PN-19, documented not hidden.
      */
-    fun replicaFrontier(logicalId: UUID, creationFence: Boolean = true): ReplicaFrontier =
+    fun replicaFrontier(logicalId: UUID, creationFence: Boolean = true, degrade: Boolean = false): ReplicaFrontier =
         ReplicaFrontier { source, counter, key ->
             val companion = watermarks[logicalId]
             val members = registry.instancesOf(logicalId)
             if (companion == null || members.isEmpty()) return@ReplicaFrontier false
             val rows = companion.rows()
             val closed = companion.closed()
+            // PN-19 DEGRADE quorum-shrink (closes PN-7's documented gap): a
+            // recoverably-suspended covering member ([WatermarkCell.suspend], odd
+            // epoch) is dropped from the quorum under DEGRADE — the resumable
+            // analogue of a `closed` (terminal) departure — and restored on
+            // [WatermarkCell.resume]. Under WAIT (the default) suspended members
+            // stay required and hold the wave, exactly as pre-PN-19.
+            val suspended = if (degrade) companion.suspended() else emptySet()
             val covering = members
                 .filter { key == null || registry.interestOf(it).admits(key) }
+                .filter { WatermarkCell.slotId(watermarkRef(it)) !in suspended }
                 .filter { ref ->
                     // R13: with the fence on, EVERY covering member is required (a
                     // rowless one holds on bottom); with it off, a member is only
@@ -267,7 +275,13 @@ class Replication(
     fun evict(cell: Replicable<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
         val reachablePeers = registry.replicasOf(cell.ref.id) - cell.ref
         if (reachablePeers.isEmpty()) {
-            if (partitionSuspended.add(cell.ref)) host.managementInlet.call.suspend(cell.ref)
+            if (partitionSuspended.add(cell.ref)) {
+                host.managementInlet.call.suspend(cell.ref)
+                // PN-19: publish the recoverable Stall on the watermark mesh so a
+                // DEGRADE covering-quorum read drops this parked member (restored
+                // by resume on heal); WAIT reads still hold on it.
+                watermarks[cell.ref.id]?.suspend()
+            }
             return false
         }
         host.managementInlet.call.suspend(cell.ref)
@@ -372,6 +386,10 @@ class Replication(
             if (local.ref in partitionSuspended && (registry.replicasOf(local.ref.id) - local.ref).isNotEmpty()) {
                 partitionSuspended -= local.ref
                 hostOf[local.ref]?.managementInlet?.call?.resume(local.ref)
+                // PN-19: retract the recoverable Stall — the DEGRADE covering quorum
+                // re-admits this member; its post-resume catch-up (PN-2 baseline /
+                // anti-entropy) advances the row it froze while parked.
+                watermarks[local.ref.id]?.resume()
             }
         }
     }
