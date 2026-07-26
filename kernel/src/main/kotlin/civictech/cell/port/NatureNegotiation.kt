@@ -2,6 +2,7 @@ package civictech.cell.port
 
 import civictech.cell.Cell
 import civictech.gen.wire.ContractRegistry
+import civictech.gen.wire.MergeClass
 import civictech.gen.wire.NatureAxis
 import civictech.gen.wire.NatureMismatch
 import civictech.gen.wire.NatureVector
@@ -84,6 +85,28 @@ object NatureNegotiation {
             }
         }
         return Reconciliation.Direct
+    }
+
+    /**
+     * PN-8 — the instance-set **formation** refusal (plan §4 PN-8, spec 42).
+     * Overlapping interest across an instance set IS sharded replication: a delta
+     * touching the overlap rides *every* covering instance's gossip link, so the
+     * structure MUST fold those redeliveries idempotently or it silently
+     * double-counts (a counted `+` accumulator inflates; only max/min/set-union
+     * converge — CP-G1). Assigning an interest that [overlaps] an already-assigned
+     * one to a [structure] whose declared [NatureAxis.MERGE_IDEMPOTENCE] is below
+     * [MergeClass.IDEMPOTENT] is therefore `Refuse`d on that axis — the *same*
+     * typed refusal a non-idempotent replicated *link* raises (CP-F3, [reconcile]),
+     * moved to the moment the overlap is decided rather than discovered as a wrong
+     * board later. A disjoint assignment ([overlaps] == false) is plain
+     * partitioning — the merge is never exercised — so it always composes, exactly
+     * as a default (empty) requirement never refuses at a link.
+     */
+    fun reconcileOverlap(structure: NatureVector, overlaps: Boolean): Reconciliation {
+        if (!overlaps) return Reconciliation.Direct
+        val merge = structure.level(NatureAxis.MERGE_IDEMPOTENCE)
+        return if (merge.rank >= MergeClass.IDEMPOTENT.rank) Reconciliation.Direct
+        else Reconciliation.Refuse(NatureMismatch(NatureAxis.MERGE_IDEMPOTENCE, merge, MergeClass.IDEMPOTENT))
     }
 }
 
