@@ -13,12 +13,12 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.NatureNegotiation
 import civictech.cell.port.Reconciliation
 import civictech.cell.proxy.Invocation
-import civictech.gen.wire.Color
-import civictech.gen.wire.ContractRegistry
-import civictech.gen.wire.Manifest
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.NatureVector
-import civictech.gen.wire.WaveParticipation
+import civictech.nature.Color
+import civictech.nature.ContractRegistry
+import civictech.nature.Manifest
+import civictech.nature.NatureAxis
+import civictech.nature.NatureVector
+import civictech.nature.WaveParticipation
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -28,7 +28,7 @@ import java.util.UUID
 
 /**
  * PN-12 (plan §4). The exchange cells report their **composed structural natures**
- * as a [Manifest] set on the generated [civictech.gen.wire.CellDescriptor] —
+ * as a [Manifest] set on the generated [civictech.nature.CellDescriptor] —
  * KSP-derived from the marker interfaces each cell implements. This is the
  * declaration surface for structural natures (glitch-free / durable / replicated /
  * partitioned), which — unlike a link-flow [NatureAxis] — are **deliberately never

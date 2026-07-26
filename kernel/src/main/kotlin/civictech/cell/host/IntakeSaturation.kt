@@ -4,8 +4,8 @@ import civictech.cell.CellRef
 import civictech.cell.port.PortRef
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.gen.wire.ProtocolCardinality
-import civictech.gen.wire.ProtocolDirection
+import civictech.nature.ProtocolCardinality
+import civictech.nature.ProtocolDirection
 
 enum class IntakeState { OPEN, SATURATED, CLOSED }
 

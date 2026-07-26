@@ -1,5 +1,17 @@
 package civictech.gen.wire
 
+import civictech.nature.CellColor
+import civictech.nature.CellDescriptor
+import civictech.nature.ContractDescriptor
+import civictech.nature.ContractModule
+import civictech.nature.JvmDescriptors
+import civictech.nature.MethodDescriptor
+import civictech.nature.PortDescriptor
+import civictech.nature.PortDirection
+import civictech.nature.ProtocolCardinality
+import civictech.nature.ProtocolDescriptor
+import civictech.nature.ProtocolDirection
+import civictech.nature.StableHash
 import com.google.devtools.ksp.KspExperimental
 import com.google.devtools.ksp.getAnnotationsByType
 import com.google.devtools.ksp.getVisibility
@@ -291,7 +303,7 @@ class ContractProcessor(
             .build()
             .writeTo(codeGenerator, sources)
 
-        codeGenerator.createNewFileByPath(sources, "META-INF/services/civictech.gen.wire.ContractModule", "")
+        codeGenerator.createNewFileByPath(sources, "META-INF/services/civictech.nature.ContractModule", "")
             .bufferedWriter()
             .use { it.write("$GENERATED_PACKAGE.$moduleName\n") }
 
@@ -793,15 +805,15 @@ class ContractProcessor(
         const val PARTITIONED_MARKER = "civictech.cell.data.Partitioned"
 
         // Nature scan (CP-F2): generated level-enum references, folded into
-        // PortDescriptor.natures. These live in :gen alongside NatureVector.
-        val NATURE_VECTOR = ClassName("civictech.gen.wire", "NatureVector")
-        val NATURE_COLOR = ClassName("civictech.gen.wire", "Color")
-        val NATURE_MERGE = ClassName("civictech.gen.wire", "MergeClass")
-        val NATURE_OWNERSHIP = ClassName("civictech.gen.wire", "Ownership")
-        val NATURE_MONOTONICITY = ClassName("civictech.gen.wire", "Monotonicity")
-        val NATURE_WAVE = ClassName("civictech.gen.wire", "WaveParticipation")
-        val NATURE_SCOPING = ClassName("civictech.gen.wire", "InstanceScoping")
-        val MANIFEST = ClassName("civictech.gen.wire", "Manifest")
+        // PortDescriptor.natures. These live in :nature (shared by :gen and :kernel).
+        val NATURE_VECTOR = ClassName("civictech.nature", "NatureVector")
+        val NATURE_COLOR = ClassName("civictech.nature", "Color")
+        val NATURE_MERGE = ClassName("civictech.nature", "MergeClass")
+        val NATURE_OWNERSHIP = ClassName("civictech.nature", "Ownership")
+        val NATURE_MONOTONICITY = ClassName("civictech.nature", "Monotonicity")
+        val NATURE_WAVE = ClassName("civictech.nature", "WaveParticipation")
+        val NATURE_SCOPING = ClassName("civictech.nature", "InstanceScoping")
+        val MANIFEST = ClassName("civictech.nature", "Manifest")
 
         // Proxy generation (W4.6, C-5 completion)
         val INVOCATION_HANDLER: ClassName = ClassName("java.lang.reflect", "InvocationHandler")

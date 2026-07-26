@@ -6,7 +6,7 @@ plugins {
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":wire"))
-    implementation(project(":gen")) // PN-15: the Manifest nature vocabulary for the composed-manifest assertion
+    implementation(project(":nature")) // PN-15: the Manifest nature vocabulary for the composed-manifest assertion
 
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.junit)

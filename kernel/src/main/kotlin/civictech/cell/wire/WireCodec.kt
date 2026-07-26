@@ -23,10 +23,10 @@ import civictech.cell.host.SaturationSignal
 import civictech.cell.host.TopologyLink
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
-import civictech.gen.wire.ContractRegistry
-import civictech.gen.wire.JvmDescriptors
-import civictech.gen.wire.natureVectorFromWire
-import civictech.gen.wire.toWire
+import civictech.nature.ContractRegistry
+import civictech.nature.JvmDescriptors
+import civictech.nature.natureVectorFromWire
+import civictech.nature.toWire
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.Polymorphic
@@ -86,12 +86,12 @@ data class WireFrame(
      */
     val routingEpoch: Long? = null,
     /**
-     * The sending endpoint's declared [civictech.gen.wire.NatureVector], sparse
+     * The sending endpoint's declared [civictech.nature.NatureVector], sparse
      * (CP-G2, spec §Nature typing): only populated on a link-establishing
      * `PORT_PROTOCOL` frame (the `EdgeOpen` a producer's `bridgeTo` fires), and
      * only for its *declared* axes — a fully-default vector is the empty list,
      * which `encodeDefaults=false` omits entirely (zero bytes, no version bump).
-     * Absent ⇒ [civictech.gen.wire.NatureVector.DEFAULT] ⇒ today's behavior, so
+     * Absent ⇒ [civictech.nature.NatureVector.DEFAULT] ⇒ today's behavior, so
      * a peer that predates this field still links (additive default). The
      * receiver reconstructs it onto the decoded [WireEdgeLink] so the bridged
      * handshake can reconcile the real cross-host natures instead of DEFAULT.

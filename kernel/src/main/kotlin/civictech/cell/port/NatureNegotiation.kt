@@ -1,12 +1,12 @@
 package civictech.cell.port
 
 import civictech.cell.Cell
-import civictech.gen.wire.ContractRegistry
-import civictech.gen.wire.MergeClass
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.NatureMismatch
-import civictech.gen.wire.NatureVector
-import civictech.gen.wire.Ownership
+import civictech.nature.ContractRegistry
+import civictech.nature.MergeClass
+import civictech.nature.NatureAxis
+import civictech.nature.NatureMismatch
+import civictech.nature.NatureVector
+import civictech.nature.Ownership
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -150,7 +150,7 @@ internal object PortNatures {
     private val table = Collections.synchronizedMap(WeakHashMap<Port, NatureVector>())
 
     /**
-     * Projects the generated [civictech.gen.wire.PortDescriptor.natures] of
+     * Projects the generated [civictech.nature.PortDescriptor.natures] of
      * [name] onto [port] when it is registered on a [Cell] with a generated
      * descriptor (CP-F2). Ports on a non-cell owner, or cells the processor
      * never saw, carry no descriptor and stay DEFAULT — [of] returns DEFAULT.

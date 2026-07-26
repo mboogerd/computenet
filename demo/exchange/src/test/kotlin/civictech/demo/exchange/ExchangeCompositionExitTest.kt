@@ -37,7 +37,7 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.replication.Interest
 import civictech.cell.replication.Replication
 import civictech.cell.wire.Peering
-import civictech.gen.wire.Manifest
+import civictech.nature.Manifest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue

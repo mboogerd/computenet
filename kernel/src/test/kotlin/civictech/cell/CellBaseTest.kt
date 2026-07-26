@@ -63,7 +63,7 @@ class CellBaseTest {
     fun `base-derived cells get descriptor rows like any other cell`() {
         // two-round generation: EchoCellBase emits in round 1, so round 2's
         // cell scan resolves EchoCell's supertype and emits its ports.
-        val descriptor = civictech.gen.wire.ContractRegistry.cellDescriptor(EchoCell::class.java)
+        val descriptor = civictech.nature.ContractRegistry.cellDescriptor(EchoCell::class.java)
         descriptor?.ports?.map { it.name }?.toSet() shouldBe setOf("inlet", "ops", "outlet")
     }
 

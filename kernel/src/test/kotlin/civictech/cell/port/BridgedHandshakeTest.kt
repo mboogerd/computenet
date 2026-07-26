@@ -1,8 +1,8 @@
 package civictech.cell.port
 
 import civictech.cell.Consumer
-import civictech.gen.wire.MergeClass
-import civictech.gen.wire.NatureVector
+import civictech.nature.MergeClass
+import civictech.nature.NatureVector
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.util.UUID

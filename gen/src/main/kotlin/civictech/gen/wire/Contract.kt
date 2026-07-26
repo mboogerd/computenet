@@ -1,5 +1,8 @@
 package civictech.gen.wire
 
+import civictech.nature.ProtocolCardinality
+import civictech.nature.ProtocolDirection
+
 /**
  * Marks a port contract interface for wire identity (G-15, C-5): the KSP
  * [ContractProcessor] emits a [ContractDescriptor] with stable contract and
@@ -32,6 +35,3 @@ annotation class Protocol(
     val lane: String,
     val cardinality: ProtocolCardinality,
 )
-
-enum class ProtocolDirection { UPSTREAM, DOWNSTREAM }
-enum class ProtocolCardinality { FAN_IN_MERGE, FAN_OUT_BROADCAST }

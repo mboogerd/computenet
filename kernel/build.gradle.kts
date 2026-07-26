@@ -7,6 +7,10 @@ plugins {
 dependencies {
     implementation(libs.kotlinx.coroutines)
     implementation(libs.kotlinx.serialization)
+    api(project(":nature"))
+    // Still needed beyond ksp(project(":gen")): kernel cell/port authors apply the
+    // @Contract/@CellBase/@Key/@Protocol annotations (processor input, stays in
+    // :gen) and civictech.gen.wire.ProxyRegistry (generated-proxy lookup).
     implementation(project(":gen"))
     ksp(project(":gen"))
 

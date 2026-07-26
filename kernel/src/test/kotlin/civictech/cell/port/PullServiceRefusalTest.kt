@@ -1,9 +1,9 @@
 package civictech.cell.port
 
 import civictech.cell.Propagate
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.NatureVector
-import civictech.gen.wire.PullService
+import civictech.nature.NatureAxis
+import civictech.nature.NatureVector
+import civictech.nature.PullService
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf

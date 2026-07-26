@@ -24,9 +24,9 @@ import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
-import civictech.gen.wire.MergeClass
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.NatureVector
+import civictech.nature.MergeClass
+import civictech.nature.NatureAxis
+import civictech.nature.NatureVector
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe

@@ -1,6 +1,6 @@
 package civictech.cell.port
 
-import civictech.gen.wire.NatureVector
+import civictech.nature.NatureVector
 import java.util.*
 
 /**
@@ -90,7 +90,7 @@ sealed interface LinkResult {
      * site — and their asserted strings — byte-for-byte intact.
      */
     data class Rejected(
-        val mismatch: civictech.gen.wire.NatureMismatch?,
+        val mismatch: civictech.nature.NatureMismatch?,
         val reason: String,
     ) : LinkResult {
         constructor(reason: String) : this(null, reason)

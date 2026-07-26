@@ -5,8 +5,8 @@ import civictech.cell.TagFrontier
 import civictech.cell.replication.Interest
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.gen.wire.ProtocolCardinality
-import civictech.gen.wire.ProtocolDirection
+import civictech.nature.ProtocolCardinality
+import civictech.nature.ProtocolDirection
 
 /**
  * On-demand pull (spec 20/21 §Pull, the G-18 residual, decided in 93 I-16): a

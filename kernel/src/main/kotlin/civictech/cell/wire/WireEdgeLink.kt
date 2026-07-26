@@ -15,8 +15,8 @@ import civictech.cell.port.natures
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink
-import civictech.gen.wire.NatureVector
-import civictech.gen.wire.ProtocolRegistry
+import civictech.nature.NatureVector
+import civictech.nature.ProtocolRegistry
 import java.util.UUID
 
 /**
@@ -118,7 +118,7 @@ fun <T> T.bridgeTo(
      * over the reverse leg). DEFAULT ⇒ today's behavior — the producer accepts
      * the link without knowing the consumer's requirement. Supplying the real
      * vector turns a genuine cross-host mismatch into a link-time refusal, the
-     * same typed [civictech.gen.wire.NatureMismatch] the consumer side reaches.
+     * same typed [civictech.nature.NatureMismatch] the consumer side reaches.
      */
     counterpart: NatureVector = NatureVector.DEFAULT,
 ): LinkResult where T : Linked, T : Port {

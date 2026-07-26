@@ -8,9 +8,9 @@ import civictech.cell.data.Magnitude
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.gen.wire.MergeClass
-import civictech.gen.wire.Monotonicity
-import civictech.gen.wire.NatureVector
+import civictech.nature.MergeClass
+import civictech.nature.Monotonicity
+import civictech.nature.NatureVector
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf

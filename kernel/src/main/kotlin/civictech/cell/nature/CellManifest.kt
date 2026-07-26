@@ -5,7 +5,7 @@ import civictech.cell.Stateful
 import civictech.cell.consistency.GlitchFree
 import civictech.cell.data.Partitioned
 import civictech.cell.data.Replicable
-import civictech.gen.wire.Manifest
+import civictech.nature.Manifest
 
 /**
  * PN-12 — the runtime twin of the KSP `manifestOf` scan in

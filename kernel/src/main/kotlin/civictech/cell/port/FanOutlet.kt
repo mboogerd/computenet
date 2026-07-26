@@ -9,7 +9,7 @@ import civictech.cell.ReplayScope
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.proxy.Proxy
-import civictech.gen.wire.ContractRegistry
+import civictech.nature.ContractRegistry
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 

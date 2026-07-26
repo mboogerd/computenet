@@ -1,4 +1,4 @@
-package civictech.gen.wire
+package civictech.nature
 
 /**
  * Wire identity of one contract method:
@@ -295,6 +295,13 @@ data class CellDescriptor(
      */
     val manifest: Set<Manifest> = emptySet(),
 )
+
+// Moved from :gen's Contract.kt with ProtocolDescriptor (RS-3.1): the
+// `@Protocol` annotation (civictech.gen.wire.Protocol, still in :gen) carries
+// these as its `direction`/`cardinality` parameters, so :gen imports them
+// back from here.
+enum class ProtocolDirection { UPSTREAM, DOWNSTREAM }
+enum class ProtocolCardinality { FAN_IN_MERGE, FAN_OUT_BROADCAST }
 
 data class ProtocolDescriptor(
     val protocolId: String,

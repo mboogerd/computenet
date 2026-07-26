@@ -18,7 +18,7 @@ import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.broadcast
 import civictech.gen.wire.Contract
-import civictech.gen.wire.ContractRegistry
+import civictech.nature.ContractRegistry
 import civictech.gen.wire.Key
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe

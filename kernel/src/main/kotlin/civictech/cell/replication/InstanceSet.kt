@@ -135,7 +135,7 @@ class InstanceSet(
      * (typed, naming `OWNERSHIP`) under a Total/overlapping one; a `SHARED`
      * (DEFAULT) port always composes.
      */
-    fun admitExclusive(routed: civictech.gen.wire.NatureVector): Reconciliation =
+    fun admitExclusive(routed: civictech.nature.NatureVector): Reconciliation =
         NatureNegotiation.admitToInstanceSet(routed, isDisjoint())
 
     private fun onGossip(delta: AssignmentDelta) {

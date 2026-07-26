@@ -25,7 +25,7 @@ class GlitchViolation(message: String) : Exception(message)
 /**
  * PN-12 structural marker (`Manifest.GLITCH_FREE`): the cell surfaces one aligned
  * wave per completeness step (an ALIGN-tier `WaveFrontier` on an inlet). KSP folds
- * it into [civictech.gen.wire.CellDescriptor.manifest] and stamps
+ * it into [civictech.nature.CellDescriptor.manifest] and stamps
  * `WaveParticipation.WAVED` onto the cell's outlets. A pure marker — no methods,
  * no new annotation.
  */

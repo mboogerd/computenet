@@ -4,9 +4,9 @@ import civictech.cell.CellRef
 import civictech.cell.Frozen
 import civictech.cell.Owned
 import civictech.cell.port.Reconciliation
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.NatureVector
-import civictech.gen.wire.Ownership
+import civictech.nature.NatureAxis
+import civictech.nature.NatureVector
+import civictech.nature.Ownership
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe

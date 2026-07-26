@@ -37,10 +37,10 @@ import civictech.cell.data.Magnitude
 import civictech.cell.Propagate
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.ParkQueue
-import civictech.gen.wire.MergeClass
-import civictech.gen.wire.Monotonicity
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.ProtocolRegistry
+import civictech.nature.MergeClass
+import civictech.nature.Monotonicity
+import civictech.nature.NatureAxis
+import civictech.nature.ProtocolRegistry
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
 import java.util.*
@@ -227,7 +227,7 @@ open class ManagedHost(
     private val restartCount = AtomicLong()
 
     /**
-     * PN-12 — spawn-time consumption of the [civictech.gen.wire.CellDescriptor.manifest]:
+     * PN-12 — spawn-time consumption of the [civictech.nature.CellDescriptor.manifest]:
      * a `Manifest.DURABLE` cell placed on this host with a journal selector that
      * returns `null` for it is volatile — a previously *silent* durability gap
      * (data lost on restart with nothing to replay from). Counted here so the
@@ -857,7 +857,7 @@ open class ManagedHost(
                         link
                     } else {
                         val descriptor = ProtocolRegistry.protocol(id.name)
-                        DirectedProtocolLink(link, port, localIsFrom = descriptor?.direction == civictech.gen.wire.ProtocolDirection.UPSTREAM)
+                        DirectedProtocolLink(link, port, localIsFrom = descriptor?.direction == civictech.nature.ProtocolDirection.UPSTREAM)
                     }
                     ProtocolSupport.of(port).deliver(id, directed, hostedInvocation.protocolMessage as Any)
                 }
@@ -1018,7 +1018,7 @@ open class ManagedHost(
                 // this cell's ports, every declared port must be registered under
                 // its property name — the KSP-unlintable half of G-17, enforced
                 // here. Subset check: dynamic extra ports stay legal.
-                val descriptor = civictech.gen.wire.ContractRegistry.cellDescriptor(cell.javaClass)
+                val descriptor = civictech.nature.ContractRegistry.cellDescriptor(cell.javaClass)
                 descriptor?.ports?.takeIf { it.isNotEmpty() }?.let { declared ->
                     val registered = PortRegistry.of(cell).names()
                     val missing = declared.map { it.name }.filterNot { it in registered }
@@ -1029,7 +1029,7 @@ open class ManagedHost(
                 }
                 // PN-12: surface a durable cell placed volatile (see [volatileDurableSpawnCount]).
                 if (descriptor != null &&
-                    civictech.gen.wire.Manifest.DURABLE in descriptor.manifest &&
+                    civictech.nature.Manifest.DURABLE in descriptor.manifest &&
                     journalSelector(cell.ref) == null
                 ) volatileDurableSpawnCount.incrementAndGet()
                 cell.onActivate(ctx)

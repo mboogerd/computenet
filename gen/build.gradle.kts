@@ -4,6 +4,7 @@ plugins {
 }
 
 dependencies {
+    implementation(project(":nature"))
     implementation(libs.kotlin.poet)
     implementation(libs.kotlin.poet.ksp)
     implementation(libs.kotlinx.coroutines)

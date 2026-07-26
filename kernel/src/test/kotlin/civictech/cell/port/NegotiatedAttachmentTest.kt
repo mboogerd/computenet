@@ -6,9 +6,9 @@ import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.WaveFrontier
 import civictech.cell.proxy.Invocation
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.NatureVector
-import civictech.gen.wire.Ownership
+import civictech.nature.NatureAxis
+import civictech.nature.NatureVector
+import civictech.nature.Ownership
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe

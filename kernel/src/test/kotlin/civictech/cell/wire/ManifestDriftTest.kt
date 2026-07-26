@@ -4,14 +4,14 @@ import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.nature.manifestOf
-import civictech.gen.wire.ContractRegistry
+import civictech.nature.ContractRegistry
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 
 /**
  * PN-12. The **declared** manifest (KSP-derived, on the generated
- * [civictech.gen.wire.CellDescriptor]) must equal the **installed** manifest (the
+ * [civictech.nature.CellDescriptor]) must equal the **installed** manifest (the
  * runtime marker scan [manifestOf]) for every registered cell — the two are twin
  * scans over the same marker interfaces, and this pins that they never drift. It
  * also exercises the spawn-time consumption of the manifest (a durable cell placed

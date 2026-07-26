@@ -6,11 +6,11 @@ import civictech.cell.data.Magnitude
 import civictech.cell.data.Replicable
 import civictech.cell.data.SetOps
 import civictech.cell.proxy.Invocation
-import civictech.gen.wire.ContractRegistry
-import civictech.gen.wire.CellColor
+import civictech.nature.ContractRegistry
+import civictech.nature.CellColor
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Key
-import civictech.gen.wire.StableHash
+import civictech.nature.StableHash
 import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe

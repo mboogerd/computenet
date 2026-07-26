@@ -1,12 +1,12 @@
 package civictech.cell.port
 
-import civictech.gen.wire.Color
-import civictech.gen.wire.MergeClass
-import civictech.gen.wire.Monotonicity
-import civictech.gen.wire.NatureAxis
-import civictech.gen.wire.NatureMismatch
-import civictech.gen.wire.NatureVector
-import civictech.gen.wire.Ownership
+import civictech.nature.Color
+import civictech.nature.MergeClass
+import civictech.nature.Monotonicity
+import civictech.nature.NatureAxis
+import civictech.nature.NatureMismatch
+import civictech.nature.NatureVector
+import civictech.nature.Ownership
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe

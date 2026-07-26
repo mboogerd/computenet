@@ -2,8 +2,8 @@ package civictech.cell.proxy
 
 import civictech.cell.Leased
 import civictech.cell.Owned
-import civictech.gen.wire.ContractRegistry
-import civictech.gen.wire.JvmDescriptors
+import civictech.nature.ContractRegistry
+import civictech.nature.JvmDescriptors
 import civictech.gen.wire.ProxyRegistry
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.ParameterizedType

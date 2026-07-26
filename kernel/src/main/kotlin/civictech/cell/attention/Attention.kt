@@ -7,8 +7,8 @@ import civictech.cell.port.PortRegistry
 import civictech.cell.port.ProtocolSupport
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.gen.wire.ProtocolCardinality
-import civictech.gen.wire.ProtocolDirection
+import civictech.nature.ProtocolCardinality
+import civictech.nature.ProtocolDirection
 import civictech.cell.port.Protocols
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap

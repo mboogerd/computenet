@@ -2,7 +2,7 @@ package civictech.cell.proxy
 
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
-import civictech.gen.wire.ContractRegistry
+import civictech.nature.ContractRegistry
 import java.lang.reflect.Method
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn

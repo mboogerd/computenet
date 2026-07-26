@@ -1,4 +1,4 @@
-package civictech.gen.wire
+package civictech.nature
 
 import java.lang.reflect.Method
 import java.util.ServiceLoader

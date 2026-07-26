@@ -7,13 +7,13 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
-import civictech.gen.wire.CellColor
-import civictech.gen.wire.CellDescriptor
-import civictech.gen.wire.ContractModule
-import civictech.gen.wire.ContractRegistry
-import civictech.gen.wire.PortDescriptor
-import civictech.gen.wire.PortDirection
-import civictech.gen.wire.StableHash
+import civictech.nature.CellColor
+import civictech.nature.CellDescriptor
+import civictech.nature.ContractModule
+import civictech.nature.ContractRegistry
+import civictech.nature.PortDescriptor
+import civictech.nature.PortDirection
+import civictech.nature.StableHash
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -47,7 +47,7 @@ class PortDescriptorSpawnCheckTest {
     fun `spawn rejects a cell whose registry names miss a declared port`() {
         val fqn = MisregisteredCell::class.java.name.replace('$', '.')
         ContractRegistry.register(object : ContractModule {
-            override val contracts = emptyList<civictech.gen.wire.ContractDescriptor>()
+            override val contracts = emptyList<civictech.nature.ContractDescriptor>()
             override val cells = listOf(
                 CellDescriptor(
                     fqn, CellColor.PURE,

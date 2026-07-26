@@ -2,7 +2,7 @@ package civictech.cell.port
 
 import civictech.cell.attention.Progress
 import civictech.cell.proxy.Invocation
-import civictech.gen.wire.PullService
+import civictech.nature.PullService
 
 /**
  * Fixed processing tiers of a [FanInlet] policy chain (PN-9, spec 12 §Policies).

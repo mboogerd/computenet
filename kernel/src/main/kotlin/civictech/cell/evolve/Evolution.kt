@@ -11,7 +11,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.proxy.Proxy
-import civictech.gen.wire.ContractRegistry
+import civictech.nature.ContractRegistry
 import java.io.Serializable
 
 /**

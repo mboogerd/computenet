@@ -2,9 +2,9 @@ package civictech.cell.port
 
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.gen.wire.ProtocolCardinality
-import civictech.gen.wire.ProtocolDirection
-import civictech.gen.wire.ProtocolRegistry
+import civictech.nature.ProtocolCardinality
+import civictech.nature.ProtocolDirection
+import civictech.nature.ProtocolRegistry
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 

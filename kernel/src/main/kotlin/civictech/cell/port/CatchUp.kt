@@ -1,7 +1,7 @@
 package civictech.cell.port
 
 import civictech.cell.Propagate
-import civictech.gen.wire.PullService
+import civictech.nature.PullService
 
 /**
  * Late-join catch-up (G-22): on every new link, send the current state as a
