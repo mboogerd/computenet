@@ -9,8 +9,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
-import civictech.cell.data.MapDiffPublisher
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.view.MapDiffPublisher
 
 @CellBase
 interface CombineLatestApi<K, V, W, R> {

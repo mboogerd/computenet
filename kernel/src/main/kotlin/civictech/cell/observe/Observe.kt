@@ -3,10 +3,7 @@ package civictech.cell.observe
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
-import civictech.cell.data.CountView
-import civictech.cell.data.MapView
 import civictech.cell.Propagate
-import civictech.cell.data.SetView
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
@@ -20,6 +17,9 @@ import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.view.MapView
+import civictech.cell.data.view.SetView
+import civictech.cell.data.view.CountView
 
 /**
  * The read/observe dual of the `graph { }` builder (spec

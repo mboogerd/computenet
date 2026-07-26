@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import kotlin.math.abs
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.view.MapDiffPublisher
 
 class MapDiffPublisherTest {
 

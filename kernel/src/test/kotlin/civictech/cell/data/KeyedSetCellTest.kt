@@ -17,6 +17,7 @@ import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.view.SetView
 
 class KeyedSetCellTest {
 

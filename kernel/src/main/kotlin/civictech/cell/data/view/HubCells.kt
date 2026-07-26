@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.view
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate

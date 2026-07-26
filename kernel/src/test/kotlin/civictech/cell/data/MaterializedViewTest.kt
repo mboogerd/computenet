@@ -13,6 +13,9 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
 import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.view.MapView
+import civictech.cell.data.view.SetView
+import civictech.cell.data.view.CountView
 
 /**
  * The consumer-side read models ([SetView] / [MapView] / [CountView]): the

@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.view
 
 import java.io.Serializable
 import civictech.cell.data.delta.MapDelta

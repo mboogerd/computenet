@@ -18,6 +18,7 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.IntersectSetCell
 import civictech.cell.data.op.QuorumSetCell
+import civictech.cell.data.view.SetView
 
 class QuorumSetCellTest {
 

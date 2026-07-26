@@ -15,6 +15,7 @@ import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.CombineLatestCell
+import civictech.cell.data.view.MapView
 
 class CombineLatestCellTest {
 

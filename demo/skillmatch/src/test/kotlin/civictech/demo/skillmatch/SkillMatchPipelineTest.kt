@@ -1,8 +1,6 @@
 package civictech.demo.skillmatch
 
-import civictech.cell.data.MapView
 import civictech.cell.Propagate
-import civictech.cell.data.SetView
 import civictech.cell.graph.lookup
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -13,6 +11,8 @@ import org.junit.jupiter.api.Test
 import java.util.Random
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.view.MapView
+import civictech.cell.data.view.SetView
 
 /**
  * Seeded incremental-vs-batch equivalence over the exact pipeline the app
