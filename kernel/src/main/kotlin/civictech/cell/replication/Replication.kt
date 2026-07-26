@@ -288,6 +288,74 @@ class Replication(
     }
 
     /**
+     * Rolling replicated promotion (PN-14, spec 53 §Replicated promotion): swap
+     * the local [incumbent] replica for [candidate] **behind the same CellRef**,
+     * one instance at a time. This is the replicated analogue of
+     * [civictech.cell.evolve.Promotion.promote] — see
+     * [civictech.cell.evolve.Promotion.promoteReplica], which wraps it with
+     * PRECHECK. It is *additive*: single-instance `promote` is untouched.
+     *
+     * Because every mesh identity derives from the [CellRef] — the tag lane
+     * ([civictech.cell.data.SetCell] mints under a ref-derived `tagSource`), the
+     * delivered-watermark row ([watermarkRef]), and every port ref (PN-1) — a
+     * candidate that REUSES the incumbent's ref makes the swap indistinguishable
+     * from **crash-recovery**, and that is the mechanism: peers' inbound gossip
+     * links keep resolving to the ref (now the candidate) with no re-link, this
+     * peer's delivered-watermark companion (and its row) is retained so a
+     * downstream replica-frontier read never sees the member vanish, and the
+     * candidate re-syncs by the same anti-entropy catch-up a recovered replica
+     * uses. The surviving replicas on other peers play the retained incumbent —
+     * the state source — so no cross-peer coordination is needed. Set-atomic
+     * promotion (every replica at once) is consensus and out of scope.
+     *
+     * Two halves of recovery run here:
+     *  - **journal replay** ([carryTagState], default on): the incumbent's
+     *    [Stateful.snapshot] is restored into the candidate synchronously, before
+     *    the swap. `SetCell`'s tag *counter* is snapshot state, so this is what
+     *    continues the ref-derived tag lane without a restart — a fresh mint
+     *    never collides with an already-emitted tag. It is idempotent under the
+     *    mergeable merge, so the anti-entropy catch-up below cannot double-count.
+     *    Off is the PN-14 control seam only (reproduces the T2 fresh-epoch
+     *    collision — the tag lane restarts under the same source).
+     *  - **anti-entropy**: [replicate] re-establishes this peer's outbound gossip
+     *    and re-points delivered-watermark tracking to the candidate, **reusing**
+     *    the existing companion (keyed by logical id, [trackDeliveries]) so the
+     *    row survives; the re-announce fires the [maybeLink] catch-up at every
+     *    known peer and the candidate's own `catchUpOnLinked` re-syncs it.
+     *
+     * The incumbent's local bookkeeping and outbound links are dropped WITHOUT
+     * closing the delivered-watermark row (unlike [evict]): this peer stays a
+     * member — the same ref returns — so the row must keep constraining. Inbound
+     * gossip that arrives during the object swap parks at the registry on the
+     * despawn's unpublish and replays on the candidate's republish, so no peer
+     * delta is lost.
+     */
+    fun rebind(
+        incumbent: Replicable<*>,
+        candidate: Replicable<*>,
+        host: ManagedHost,
+        carryTagState: Boolean = true,
+    ) {
+        require(candidate.ref == incumbent.ref) {
+            "replicated promotion reuses the incumbent's CellRef (the crash-recovery mechanism that " +
+                "continues the tag lane and the watermark row); candidate ${candidate.ref} != incumbent ${incumbent.ref}"
+        }
+        val ref = incumbent.ref
+        if (carryTagState && incumbent is civictech.cell.Stateful && candidate is civictech.cell.Stateful) {
+            candidate.restore(incumbent.snapshot())
+        }
+        // drop the incumbent's local bookkeeping + outbound gossip, but NEVER the
+        // watermark row (this peer is not departing — the same ref returns).
+        localReplicas[ref.id]?.remove(incumbent)
+        hostOf.remove(ref)
+        linked.keys.filter { it.first == ref }.toList().forEach { linked.remove(it) }
+        host.managementInlet.call.despawn(ref)
+        // recovery: republish the candidate under the SAME ref and re-establish
+        // this peer's gossip + watermark tracking (companion reused).
+        replicate(candidate, host)
+    }
+
+    /**
      * How many gossip links the linker has formed among [refs] (PN-6 test seam):
      * the number of ordered `(local, other)` pairs, both in [refs], that overlap
      * and therefore linked. Filtered to [refs] so the count excludes the delivered-
