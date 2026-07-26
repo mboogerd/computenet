@@ -210,8 +210,29 @@ class FanOutlet<Api : Any>(
      * [civictech.cell.Leased.borrow], never [civictech.cell.Owned.take] /
      * [civictech.cell.Leased.release].
      */
-    fun tap(port: Use<Api>) {
+    fun tap(port: Use<Api>, negotiated: Boolean = false): LinkResult {
+        // PN-10: opt-in negotiation. When [negotiated], the tap runs the same
+        // target-side handshake every Consume link runs — policies + peer
+        // allowlist + nature reconcile + EdgeOpen — with [LinkRole.Observe], so
+        // it announces itself (and refuses on a mismatch where today it dropped
+        // silently) yet never gates a wave. Default [false] keeps the historic
+        // bypass byte-for-byte: no handshake, no policies, always admitted.
+        if (negotiated) {
+            val target = port as? Linked
+                ?: return LinkResult.Rejected("negotiated tap requires a Linked target (spec 20/23 §Taps)")
+            return handshake(
+                portOut = this,
+                target = target,
+                targetRef = port.ref,
+                role = LinkRole.Observe,
+                install = { taps += port.ref to port },
+                uninstall = { taps.remove(port.ref) },
+            )
+        }
         taps += port.ref to port
+        return LinkResult.Connected(
+            PortLink(ref, port.ref, this, port as? Port, LinkRole.Observe) { taps.remove(port.ref) },
+        )
     }
 
     /** Detaches a tap previously installed with [tap]. Idempotent. */

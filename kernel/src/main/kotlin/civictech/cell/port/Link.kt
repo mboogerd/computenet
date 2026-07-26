@@ -31,6 +31,17 @@ interface Link {
     val to: PortRef
 
     /**
+     * Consume vs Observe (spec 20/23 §Taps, 10/12 §Cardinality rule 2; PN-10).
+     * A **Consume** link bears the consume-once/release obligation and is
+     * counted by the completeness frontier ([civictech.cell.consistency.WaveFrontier]);
+     * an **Observe** link (a negotiated `tap`/`streamTo`) announces itself so it
+     * negotiates like any edge, yet is **never** an expected sibling — it must
+     * not gate a wave's release. Defaults to [LinkRole.Consume]: zero caller
+     * churn, byte-for-byte today's behavior for every existing link.
+     */
+    val role: LinkRole get() = LinkRole.Consume
+
+    /**
      * Endpoint objects where known in-process (G-13 minimal): the producer-
      * and consumer-side ports, used by generic protocols (12) to travel along
      * the link. Null for endpoints that are not reachable as objects
@@ -242,7 +253,7 @@ internal fun <Api> handshake(
         ?.let { return it }
 
     val sourceLinking = (portOut as? Linked)?.linking
-    val link = PortLink(portOut.ref, targetRef, portOut, target as? Port) { link ->
+    val link = PortLink(portOut.ref, targetRef, portOut, target as? Port, role) { link ->
         // The close is terminal on the link's in-process protocol/data FIFO:
         // announce it while both endpoints are still reachable, then detach.
         link.toPort?.let { port ->
@@ -348,6 +359,7 @@ internal class PortLink(
     override val to: PortRef,
     override val fromPort: Port? = null,
     override val toPort: Port? = null,
+    override val role: LinkRole = LinkRole.Consume,
     private val doUnlink: (PortLink) -> Unit,
 ) : Link {
     override val id: UUID = UUID.randomUUID()
