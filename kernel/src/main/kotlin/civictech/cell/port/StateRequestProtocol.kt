@@ -29,11 +29,25 @@ import civictech.gen.wire.ProtocolDirection
  * fresh wave from the producer outlet's own counter (FIFO/sequencing) and a
  * non-null [civictech.cell.MessageContext.baseline], delivered only to
  * [replyTo] — never broadcast.
+ *
+ * Wire crossing (PN-5, spec 20/24 §Partitioned state): a `StateRequest` rides a
+ * `PORT_PROTOCOL` frame so the scatter-gather router can fan it to shards behind
+ * a bridge (`WireCodec` registers it in the polymorphic protocol-message
+ * module). [replyTo] and [since] are `@Serializable` and cross verbatim; [scope]
+ * is `@Transient` — an [Interest] is only `java.io.Serializable`, not
+ * kotlinx-serializable, so a partial-interest scope does not yet cross. This is
+ * exactly enough for the partitioned pull: a shard already holds only its own
+ * interest-slice, so a scope-absent (⇒ [Interest.Total]) request returns that
+ * shard's whole slice — the correct leg for a `Total` scatter-gather requester.
+ * Carrying a partial [scope] across the wire (kotlinx-serializing the [Interest]
+ * algebra) is a follow-on; in-process callers pass [scope] unchanged.
  */
+@kotlinx.serialization.Serializable
+@kotlinx.serialization.SerialName("StateRequest")
 data class StateRequest(
     val replyTo: PortRef,
     val since: TagFrontier?,
-    val scope: Interest? = null,
+    @kotlinx.serialization.Transient val scope: Interest? = null,
 )
 
 /**

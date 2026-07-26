@@ -205,6 +205,14 @@ class LocationRegistry {
         held += ref
     }
 
+    /**
+     * Is [ref] currently held (mid-migration)? Read-only view of the same
+     * flip-window set (spec 20/24 §Partitioned state, PN-5): a scatter-gather
+     * pull leg to a migrating shard defers rather than reading torn state — the
+     * consumer's per-shard `since` makes the deferred leg's later pull fresh.
+     */
+    fun isHeld(ref: CellRef): Boolean = ref in held
+
     /** Stop holding [ref] and drain everything parked during the window, in park order. */
     fun release(ref: CellRef) {
         held -= ref

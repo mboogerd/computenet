@@ -361,3 +361,38 @@ Nothing in layers 10–30 may assume a cell has exactly one live instance,
 except where single-writer is declared. This is already respected by the
 current design (refs, links, and invocations are instance-agnostic), and MUST
 be preserved as G-8 (ref model) is implemented.
+
+## Scatter-gather pull over an instance set (PN-5)
+
+A pull against a *partitioned* logical id has no single answerer. A router
+serving it from a total-interest ledger of its own would hold O(total state) at
+one node — the very thing partitioning exists to avoid. So a pull **fans out**:
+the router sends a state request to every instance whose interest overlaps the
+requester's scope, and each instance answers **its own slice** with **its own
+frontier**. The requester unions the disjoint-key slices into the board. No
+node ever materializes the whole board; each leg is bounded by one shard's
+range (O(shard-count) legs, never O(total) at one place).
+
+**Freshness contract — per-shard-consistent, cross-shard-arbitrary.** Each leg
+is internally consistent: a shard's slice is a coherent snapshot of *its* range
+at *its* frontier. Across shards there is no joint cut — legs are independent
+and may reflect different moments, and a shard that is unreachable (mid-
+migration, its ref held on the funnel) simply defers its leg to a later pull.
+This is honest and sufficient because **a baseline is never a wave**: a leg
+carries `MessageContext.baseline` (a catch-up frontier), not a live wave, so it
+is excluded from wave-completeness and imposes no cross-shard ordering
+obligation the union could violate. Glitch-freedom is a within-source property
+(spec 20/22); a scatter-gather board, assembled from disjoint sources, never
+promises a single global wave and so cannot be torn by the absence of one.
+
+**Per-instance retained currency.** The requester retains the frontier it has
+caught up to **per instance** it pulls from (`RetainedFrontiers`), never one
+frontier merged across instances. Shard holdings of a shared upstream source
+are non-contiguous by construction (instance A holds counters {1,3,5}, B holds
+{2,4}); a single pointwise-max `since` merged across instances carries A's high
+water into B's next incremental request, so B reports its own unseen counters as
+already-seen and silently drops them — most visibly for a deferred (migrated)
+shard pulled for the first time under a sibling's accumulated water. A
+per-instance `since` is monotone within its instance and never contaminated by a
+sibling's progress, so an incremental scatter-gather pull returns exactly the
+tags that instance has not yet delivered.
