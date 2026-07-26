@@ -22,6 +22,7 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
 import civictech.cell.control.AttentionBand
+import civictech.cell.control.AttentionScheduler
 import civictech.cell.control.AttentionSupport
 import civictech.cell.control.NonSuspendable
 import civictech.cell.control.StallNotice
@@ -259,22 +260,30 @@ open class ManagedHost(
      * keeps drain's phase 2 (priority 30) behind every accepted message.
      */
     private val dataLock = Any()
-    private val dataQueues = LinkedHashMap<CellRef, ArrayDeque<Pair<Long, HostedPortInvocation>>>()
-    private var dataSequence = 0L
-    private var dispatchStep = 0L
-    private var strideCount = 0
-    private val lastAttended = mutableMapOf<CellRef, Long>()
-
-    /** Attention-parked traffic (spec 34 decision 2): parked, never dropped. */
-    private val attentionParked = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
 
     /**
-     * Magnitude-band boost (spec 34, M17): per cell, the band its largest
-     * staged [Magnitude] payload maps to under the policy's `magnitudeBands`.
-     * Lifetime is the pending queue — cleared when it drains (or parks), so a
-     * despawned cell's entry drains out through ordinary dead-letter dispatch.
+     * Attention-driven dispatch (spec 34, M6.3/M17) — per-cell FIFO staging,
+     * band selection, the stride floor, magnitude boost, and attention
+     * parking — extracted to [civictech.cell.control.AttentionScheduler]
+     * (RS-8.1). It shares [dataLock] with this host rather than owning an
+     * independent lock: [clearSupervision] and [beginDrain] still touch its
+     * [AttentionScheduler.attentionParked] directly inside
+     * `synchronized(dataLock)`, and [intakeLowWaterCheck] runs the intake
+     * bookkeeping below from inside the scheduler's own dequeue critical
+     * section — the same one shared monitor keeps every critical section
+     * byte-identical to before the extraction.
      */
-    private val magnitudeBoost = mutableMapOf<CellRef, AttentionBand>()
+    private val attentionScheduler = AttentionScheduler(
+        attention = attention,
+        dataLock = dataLock,
+        bandOf = ::bandOf,
+        suspensionRegionOf = ::suspensionRegionOf,
+        notifyParked = ::notifyParked,
+        notifyResumed = ::notifyResumed,
+        intakeLowWaterCheck = ::intakeLowWaterCheck,
+        deliver = ::deliver,
+        submit = ::enqueueHostedInvocation,
+    )
 
     /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
     private fun clearSupervision(cellRef: CellRef) {
@@ -285,7 +294,7 @@ open class ManagedHost(
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
-        synchronized(dataLock) { attentionParked.remove(cellRef) }?.forEach {
+        synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach {
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", it)
         }
@@ -313,7 +322,7 @@ open class ManagedHost(
             // attention-parked traffic is accepted work: flush it before
             // deactivation, same guarantee as the ordinary queue (spec 33/34)
             val parked = synchronized(dataLock) {
-                attentionParked.values.flatten().also { attentionParked.clear() }
+                attentionScheduler.attentionParked.values.flatten().also { attentionScheduler.attentionParked.clear() }
             }
             parked.forEach { deliver(it) }
             snapshots.clear()
@@ -445,9 +454,9 @@ open class ManagedHost(
         // selection has something to choose between; one dispatcher task per
         // message keeps message count <= task count (a task may find nothing)
         synchronized(dataLock) {
-            stage(hostedInvocation)
+            attentionScheduler.stage(hostedInvocation)
             intakeBound?.let { bound ->
-                if (!isManagement && dataQueuedCount() >= bound.highWater) {
+                if (!isManagement && attentionScheduler.dataQueuedCount() >= bound.highWater) {
                     if (intakeState != IntakeState.SATURATED) {
                         intakeState = IntakeState.SATURATED
                         saturationOrigin = hostedInvocation.cellRef to hostedInvocation.portName
@@ -456,18 +465,42 @@ open class ManagedHost(
                 }
             }
         }
-        enqueue(20) { dispatchOne() }
+        enqueue(20) { attentionScheduler.dispatchOne() }
     }
 
-    private fun dataQueuedCount(): Int = dataQueues.values.sumOf { queue ->
-        queue.count { (_, invocation) -> invocation.type != HostedPortInvocation.Type.PORT_MANAGEMENT }
+    /**
+     * Runs inside [AttentionScheduler]'s own `dataLock` critical section,
+     * right after it dequeues a message (RS-8.1) — preserves the original
+     * atomicity of the low-water intake transition, which used to happen
+     * inline in the same `synchronized(dataLock)` block as the dequeue.
+     */
+    private fun intakeLowWaterCheck(): List<() -> Unit> {
+        intakeBound?.let { bound ->
+            if (intakeState == IntakeState.SATURATED && attentionScheduler.dataQueuedCount() <= bound.lowWater) {
+                intakeState = IntakeState.OPEN
+                announceSaturation(false)
+                saturationOrigin = null
+                val listeners = lowWaterListeners.toList()
+                lowWaterListeners.clear()
+                return listeners
+            }
+        }
+        return emptyList()
+    }
+
+    private fun notifyParked(cellRef: CellRef) {
+        cells[cellRef]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
+    }
+
+    private fun notifyResumed(cellRef: CellRef) {
+        cells[cellRef]?.let { notifyDownstream(it, StallNotice.Resume) }
     }
 
     /** Caller holds dataLock. Same source+wave slot preserves wave identity and source FIFO. */
     private fun coalesce(incoming: HostedPortInvocation): Boolean {
         val payload = incoming.invocation.args.singleOrNull() as? MergeablePayload ?: return false
         val context = incoming.invocation.context ?: return false
-        val queue = dataQueues[incoming.cellRef] ?: return false
+        val queue = attentionScheduler.dataQueues[incoming.cellRef] ?: return false
         val index = queue.indexOfLast { (_, old) ->
             old.portName == incoming.portName &&
                 old.invocation.methodId == incoming.invocation.methodId &&
@@ -613,90 +646,9 @@ open class ManagedHost(
         processedFrontier.getOrPut(cellRef to portName) { mutableMapOf() }[timestamp.sourceId] = timestamp.counter
     }
 
-    /** Callers hold [dataLock]: append to the target cell's FIFO (or its attention park). */
-    private fun stage(hostedInvocation: HostedPortInvocation) {
-        val cellRef = hostedInvocation.cellRef
-        attentionParked[cellRef]?.let {
-            it += hostedInvocation // parked cells accumulate in arrival order
-            return // no boost: magnitude is urgency, interest owns park/resume
-        }
-        dataQueues.getOrPut(cellRef) { ArrayDeque() }.addLast(++dataSequence to hostedInvocation)
-        attention?.magnitudeBands?.let { bands ->
-            hostedInvocation.invocation.args.filterIsInstance<Magnitude>()
-                .maxOfOrNull { it.size() }
-                ?.let { magnitudeBoost.merge(cellRef, bands(it), ::maxOf) }
-        }
-    }
-
     private fun bandOf(cellRef: CellRef): AttentionBand = when {
         attention == null -> AttentionBand.NORMAL
         else -> cells[cellRef]?.let { AttentionSupport.of(it).band } ?: AttentionBand.NORMAL
-    }
-
-    /**
-     * Run (at most) one staged message: highest band first, oldest head as
-     * tiebreaker; the stride floor (spec 34 decision 2) bounds how long
-     * lower-band work can be passed over; a cell at NONE past the policy
-     * window parks instead of running (park, never drop).
-     */
-    private suspend fun dispatchOne() {
-        var toPark: Set<CellRef>? = null
-        var listeners: List<() -> Unit> = emptyList()
-        val next: HostedPortInvocation? = synchronized(dataLock) {
-            if (dataQueues.isEmpty()) return
-            dispatchStep++
-            // effective band = interest ⊔ staged urgency (spec 34, M17): the
-            // boost is a data-region sub-priority — it can never lift a task
-            // above the router/management bands, and the stride floor below
-            // bounds what it can starve
-            val bands = dataQueues.keys.associateWith {
-                maxOf(bandOf(it), magnitudeBoost[it] ?: AttentionBand.NONE)
-            }
-            bands.forEach { (cellRef, band) ->
-                if (band > AttentionBand.NONE) lastAttended[cellRef] = dispatchStep
-            }
-            val maxBand = bands.values.max()
-            val lower = bands.filterValues { it < maxBand }.keys
-            val stride = attention?.stride ?: Int.MAX_VALUE
-            val pickFrom: Collection<CellRef> = if (strideCount >= stride && lower.isNotEmpty()) {
-                strideCount = 0
-                lower
-            } else {
-                if (lower.isNotEmpty()) strideCount++ else strideCount = 0
-                bands.filterValues { it == maxBand }.keys
-            }
-            val pick = pickFrom.minByOrNull { dataQueues.getValue(it).first().first }!!
-            val suspendAfter = attention?.suspendAfter
-            val region = if (suspendAfter != null && bands.getValue(pick) == AttentionBand.NONE &&
-                dispatchStep - (lastAttended[pick] ?: 0L) > suspendAfter
-            ) suspensionRegionOf(pick) else null
-            if (region != null) {
-                toPark = region
-                null
-            } else {
-                // runnable — or its region vetoed suspension (spec 34 decision 3):
-                // a vetoed cell keeps running, it does not strand its queue
-                val queue = dataQueues.getValue(pick)
-                val head = queue.removeFirst().second
-                if (queue.isEmpty()) {
-                    dataQueues.remove(pick)
-                    magnitudeBoost.remove(pick) // boost lifetime = the pending queue
-                }
-                intakeBound?.let { bound ->
-                    if (intakeState == IntakeState.SATURATED && dataQueuedCount() <= bound.lowWater) {
-                        intakeState = IntakeState.OPEN
-                        announceSaturation(false)
-                        saturationOrigin = null
-                        listeners = lowWaterListeners.toList()
-                        lowWaterListeners.clear()
-                    }
-                }
-                head
-            }
-        }
-        listeners.forEach { it() }
-        toPark?.forEach { parkForAttention(it) }
-        next?.let { deliver(it) }
     }
 
     /** Emits the host intake state on every inbound data edge; G-36 relays it producer-ward. */
@@ -792,23 +744,6 @@ open class ManagedHost(
                 }
             }
         }
-    }
-
-    private fun parkForAttention(cellRef: CellRef) {
-        synchronized(dataLock) {
-            val queue = dataQueues.remove(cellRef) ?: ArrayDeque()
-            magnitudeBoost.remove(cellRef) // re-staged on unpark replay
-            attentionParked[cellRef] = queue.map { it.second }.toMutableList()
-        }
-        cells[cellRef]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
-    }
-
-    private fun unparkForAttention(cellRef: CellRef) {
-        val parked = synchronized(dataLock) {
-            attentionParked.remove(cellRef)?.also { lastAttended[cellRef] = dispatchStep }
-        } ?: return
-        cells[cellRef]?.let { notifyDownstream(it, StallNotice.Resume) }
-        parked.forEach { enqueueHostedInvocation(it) }
     }
 
     /** spec 34 decision 3, 20/22 (G-40): typed Stall/Resume notices travel downstream, with data. */
@@ -1041,11 +976,11 @@ open class ManagedHost(
                     // renewed interest resumes a parked cell (spec 34): the listener
                     // may fire on any thread, so hop through the management band
                     AttentionSupport.of(cell).onBandChange { band ->
-                        if (band > AttentionBand.NONE) enqueue(0) { unparkForAttention(cell.ref) }
+                        if (band > AttentionBand.NONE) enqueue(0) { attentionScheduler.unparkForAttention(cell.ref) }
                     }
                     // scheduling-step clock for time-aware aggregators (decay);
                     // racy read is fine — attention is advisory metadata (34)
-                    AttentionSupport.of(cell).ticks = { dispatchStep }
+                    AttentionSupport.of(cell).ticks = { attentionScheduler.dispatchStep }
                 }
                 // location becomes visible only after activation, so replayed
                 // parked invocations find served ports (spec 33 step 7)
