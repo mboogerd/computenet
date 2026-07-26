@@ -240,6 +240,127 @@ class BatchOracleTest {
     }
 
     @Test
+    fun `counter increment amount comes from value (or a unit step)`() {
+        val sc = scenario(
+            cells = listOf(cell("n", "counter-source"), cell("v", "value-view")),
+            links = listOf(link("n", "v")),
+            // value:50 is a single +50; a bare unit step then adds 1 more.
+            script = listOf(apply("n", "increment", i(50)), apply("n", "increment")),
+        )
+        BatchOracle(sc).view("v") shouldBe i(51)
+    }
+
+    @Test
+    fun `lookup-join enriches each left element with the matched right value`() {
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"), cell("b", "set-source"), cell("lj", "lookup-join", fn = "key-of"), cell("v", "set-view"),
+            ),
+            links = listOf(link("a", "lj", "left"), link("b", "lj", "right"), link("lj", "v")),
+            script = listOf(
+                apply("a", "add", list(s("k1"), s("v1"))),
+                apply("a", "add", list(s("k2"), s("v2"))), // no right match -> dropped (inner)
+                apply("b", "add", list(s("k1"), s("d1"))),
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe list(list(list(s("k1"), s("v1")), s("d1")))
+    }
+
+    @Test
+    fun `group-by sum folds the group's value components`() {
+        val sc = scenario(
+            cells = listOf(cell("a", "set-source"), cell("g", "group-by", fn = "key-of", agg = "sum"), cell("v", "count-view")),
+            links = listOf(link("a", "g"), link("g", "v")),
+            script = listOf(
+                apply("a", "add", list(s("a"), i(1))),
+                apply("a", "add", list(s("a"), i(2))),
+                apply("a", "add", list(s("b"), i(3))),
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe map("a" to i(3), "b" to i(3))
+    }
+
+    @Test
+    fun `group-by max folds the group's largest value`() {
+        val sc = scenario(
+            cells = listOf(cell("a", "set-source"), cell("g", "group-by", fn = "key-of", agg = "max"), cell("v", "count-view")),
+            links = listOf(link("a", "g"), link("g", "v")),
+            script = listOf(
+                apply("a", "add", list(s("a"), i(1))),
+                apply("a", "add", list(s("a"), i(9))),
+                apply("a", "add", list(s("b"), i(3))),
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe map("a" to i(9), "b" to i(3))
+    }
+
+    @Test
+    fun `partition folds identically to its unpartitioned group-by twin`() {
+        fun countByKey(type: String) = BatchOracle(
+            scenario(
+                cells = listOf(cell("a", "set-source"), cell("g", type, fn = "key-of"), cell("v", "count-view")),
+                links = listOf(link("a", "g"), link("g", "v")),
+                script = listOf(
+                    apply("a", "add", list(s("a"), i(1))),
+                    apply("a", "add", list(s("a"), i(2))),
+                    apply("a", "add", list(s("b"), i(3))),
+                ),
+            ),
+        ).view("v")
+        countByKey("partition") shouldBe countByKey("group-by")
+        countByKey("partition") shouldBe map("a" to i(2), "b" to i(1))
+    }
+
+    @Test
+    fun `quorum-set admits elements met by k of n live sources`() {
+        val sc = scenario(
+            cells = listOf(
+                cell("a", "set-source"), cell("b", "set-source"), cell("c", "set-source"),
+                cell("q", "quorum-set", k = 2), cell("v", "set-view"),
+            ),
+            links = listOf(link("a", "q"), link("b", "q"), link("c", "q"), link("q", "v")),
+            script = listOf(
+                apply("a", "add", i(1)), apply("a", "add", i(2)),
+                apply("b", "add", i(2)), apply("b", "add", i(3)),
+                apply("c", "add", i(2)),
+            ),
+        )
+        // 2 is asserted by all three sources (>=2); 1 and 3 by one each (<2).
+        BatchOracle(sc).view("v") shouldBe list(i(2))
+    }
+
+    @Test
+    fun `keyed-set folds keyed upserts to the current elements`() {
+        val sc = scenario(
+            cells = listOf(cell("ks", "keyed-set"), cell("v", "set-view")),
+            links = listOf(link("ks", "v")),
+            script = listOf(
+                apply("ks", "put", list(s("k1"), s("x"))),
+                apply("ks", "put", list(s("k1"), s("y"))), // last-writer-wins: k1 -> y
+                apply("ks", "put", list(s("k2"), s("z"))),
+                apply("ks", "remove", s("k1")),
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe list(s("z"))
+    }
+
+    @Test
+    fun `list-source honours insert set and remove-at by index`() {
+        val sc = scenario(
+            cells = listOf(cell("l", "list-source"), cell("v", "list-view")),
+            links = listOf(link("l", "v")),
+            script = listOf(
+                apply("l", "append", s("a")),
+                apply("l", "append", s("c")),
+                apply("l", "insert", list(i(1), s("b"))), // [a, b, c]
+                apply("l", "set", list(i(0), s("A"))),     // [A, b, c]
+                apply("l", "remove-at", i(2)),             // [A, b]
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe list(s("A"), s("b"))
+    }
+
+    @Test
     fun `presence-count equals count for a set in v1`() {
         val sc = scenario(
             cells = listOf(cell("a", "set-source"), cell("p", "presence-count"), cell("v", "value-view")),

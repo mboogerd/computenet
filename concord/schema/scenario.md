@@ -59,11 +59,18 @@ optional descriptor param the driver binds. The v1 named params:
 | param | meaning |
 |---|---|
 | `of` | element/scalar type hint (`string`, `int`) |
-| `fn` | pure-function id (filter/map/combine cells) — see `function-catalog.md` |
+| `fn` | pure-function id (filter/map/join/group-by cells) — see `function-catalog.md` |
+| `agg` | aggregator id (`count`\|`sum`\|`min`\|`max`) a `group-by`/`partition` folds each group with — see `function-catalog.md`. **Optional, default `count`** (W3-0) |
+| `k` | the `k` of a `quorum-set`'s k-of-n admission — an element is emitted once `k` of the `n` live source links assert it. **Optional, default `n`** (all live sources ⇒ an intersection) (W3-0) |
 | `glitch-free` | request wave-aligned semantics on a fan-in cell (`true`) |
 | `inlet-mode` | inlet admission policy (`single-writer`, `fan-in`) |
 | `host` | host placement (dist profile) |
 | `replica-of` | logical replica-group id (dist profile) |
+
+`agg` and `k` are **additive** (W3-0): existing files deserialize unchanged (both
+optional with the defaults above). The parser stays lenient — an unknown key is
+ignored — so promoting a further param to a typed field remains a schema-change
+ticket.
 
 The parser runs **lenient** (unknown keys ignored) so a future param does not
 break older files; promoting a new param to a typed field is a schema-change

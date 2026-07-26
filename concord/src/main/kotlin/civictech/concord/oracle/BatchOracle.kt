@@ -34,17 +34,23 @@ class OracleUnsupported(message: String) : RuntimeException(message)
  *   to disambiguate history-vs-presence; the oracle folds both to the **current
  *   membership cardinality**. Needs a dedicated scenario + a stream-history model
  *   to separate them.
- * - **`group-by` aggregator.** The catalog lists `fn (key-of), agg`, but [CellSpec]
- *   carries a single `fn` field. The oracle reads `fn` as the key extractor and
- *   defaults the per-group aggregator to **`count`** (cardinality). Selecting a
- *   different aggregator needs a second descriptor param (schema-change ticket).
- * - **`quorum-set` k-of-n.** The witnessing shape is not frozen (cell-catalog.md
- *   note 4) and `k` is not expressible on [CellSpec] v1, so the oracle folds a
- *   quorum-set as a plain set (every `add` admits). k-of-n admission needs the
- *   descriptor param before the oracle can honour it.
- * - **`window` / `partition`.** The window descriptor is deferred (note 5);
- *   `partition` is specified to equal its unpartitioned twin. The oracle folds both
- *   as **pass-through** of the upstream set.
+ * - **`group-by` aggregator.** The catalog lists `fn (key-of), agg`. `fn` is the
+ *   key extractor; the aggregator is the additive `agg` [CellSpec] field (W3-0,
+ *   `count`|`sum`|`min`|`max`, default `count`). Non-count aggregators fold the
+ *   group's element VALUE components (`valueOf`), matching the kernel binding.
+ * - **`quorum-set` k-of-n (operator, not source).** The kernel QuorumSetCell is a
+ *   **fan-in operator**, not an add/remove source: an element is admitted once `k`
+ *   of the `n` live source links assert it. `k` is the additive [CellSpec] field
+ *   (W3-0); absent ⇒ `n` (intersection). The catalog's source framing was refined
+ *   to match the kernel (§5).
+ * - **`keyed-set` (keyed upsert, not partitioned set).** The kernel KeyedSetCell is
+ *   a keyed upsert (`put(key, element)` last-writer-wins per key, `remove(key)`),
+ *   whose output is the flat set of currently-held elements (a set-view) — NOT the
+ *   per-key partitions the v1 catalog implied. Refined to match the kernel (§5).
+ * - **`window` / `partition`.** `window` has no kernel cell (deferred, note 5) and
+ *   is folded as pass-through (untested — unbound in the driver). `partition` is a
+ *   sharded group-by (PartitionedCell) whose union of shard aggregates equals the
+ *   unpartitioned group-by twin, so it folds identically to `group-by`.
  * - **`join` family element shape.** With no pilot pinning the joined element, the
  *   oracle treats elements as pairs `[k, v]` (`key-of` = first component): `join`
  *   emits `[k, leftVal, rightVal]`, `lookup-join` emits `[leftElem, rightVal]`,
@@ -103,7 +109,7 @@ class BatchOracle(private val scenario: Scenario) {
     private fun sourceFold(cell: CellSpec): Fold {
         val ops = scenario.script.filterIsInstance<ApplyStep>().filter { it.on == cell.id }
         return when (cell.type) {
-            "set-source", "quorum-set" -> {
+            "set-source" -> {
                 val members = LinkedHashSet<Value>()
                 for (op in ops) repeat(op.times ?: 1) {
                     when (op.op) {
@@ -116,12 +122,16 @@ class BatchOracle(private val scenario: Scenario) {
             }
 
             "counter-source", "pn-counter" -> {
+                // A step is `value` (the increment amount, default 1) repeated `times`,
+                // matching the driver: `increment value:50` is +50, `increment times:50`
+                // is fifty unit steps — both fold to +50.
                 var c = 0L
                 for (op in ops) {
-                    val n = (op.times ?: 1).toLong()
+                    val amount = op.value?.let { Values.asLong(it) } ?: 1L
+                    val step = amount * (op.times ?: 1).toLong()
                     when (op.op) {
-                        "increment" -> c += n
-                        "decrement" -> c -= n
+                        "increment" -> c += step
+                        "decrement" -> c -= step
                         else -> error("${cell.id} (${cell.type}): unsupported op '${op.op}'")
                     }
                 }
@@ -129,18 +139,24 @@ class BatchOracle(private val scenario: Scenario) {
             }
 
             "list-source" -> {
+                // Index-addressed ops mirroring the kernel ListCell (append / insert[i,e]
+                // / set[i,e] / remove-at[i]); there is no remove-by-value.
                 val items = ArrayList<Value>()
                 for (op in ops) repeat(op.times ?: 1) {
                     when (op.op) {
                         "append" -> items.add(op.value ?: error("${cell.id}: append needs a value"))
                         "insert" -> {
-                            // value is [index, elem]
-                            val v = op.value
-                            require(v is Value.ListVal && v.items.size == 2) { "${cell.id}: insert needs [index, elem]" }
-                            val idx = (Values.asLong(v.items[0]) ?: 0L).toInt().coerceIn(0, items.size)
-                            items.add(idx, v.items[1])
+                            val (idx, elem) = indexElem(cell.id, op.value)
+                            items.add(idx.coerceIn(0, items.size), elem)
                         }
-                        "remove" -> items.remove(op.value)
+                        "set" -> {
+                            val (idx, elem) = indexElem(cell.id, op.value)
+                            if (idx in items.indices) items[idx] = elem
+                        }
+                        "remove-at" -> {
+                            val idx = (op.value?.let { Values.asLong(it) } ?: -1L).toInt()
+                            if (idx in items.indices) items.removeAt(idx)
+                        }
                         else -> error("${cell.id} (list-source): unsupported op '${op.op}'")
                     }
                 }
@@ -163,19 +179,22 @@ class BatchOracle(private val scenario: Scenario) {
             }
 
             "keyed-set" -> {
-                // Set partitioned by an extracted key -> map key -> its member set.
-                val partitions = LinkedHashMap<Value, LinkedHashSet<Value>>()
-                for (op in ops) repeat(op.times ?: 1) {
-                    val el = op.value ?: error("${cell.id}: ${op.op} needs a value")
-                    val k = Functions.keyOf(el)
-                    val bucket = partitions.getOrPut(k) { LinkedHashSet() }
+                // Keyed upsert bridge (kernel KeyedSetCell): `put(key, element)` sets the
+                // element under a key (last-writer-wins per key), `remove(key)` drops it;
+                // membership is the set of currently-held elements (observed through a
+                // set-view), NOT per-key partitions.
+                val current = LinkedHashMap<Value, Value>()
+                for (op in ops) {
                     when (op.op) {
-                        "add" -> bucket.add(el)
-                        "remove" -> bucket.remove(el)
-                        else -> error("${cell.id} (keyed-set): unsupported op '${op.op}'")
+                        "put" -> {
+                            val (k, e) = keyValue(op.value ?: error("${cell.id}: put needs a value"))
+                            current[k] = e
+                        }
+                        "remove", "remove-key" -> op.value?.let { current.remove(it) }
+                        else -> error("${cell.id} (keyed-set): unsupported op '${op.op}' (put/remove(key))")
                     }
                 }
-                Fold.MapF(partitions.mapValues { (_, s) -> Value.ListVal(Values.sortedList(s)) })
+                Fold.SetF(LinkedHashSet(current.values))
             }
 
             else -> throw OracleUnsupported("source type '${cell.type}' has no oracle fold")
@@ -195,9 +214,13 @@ class BatchOracle(private val scenario: Scenario) {
             "semi-join" -> semiJoinFold(cell, ins)
             "lookup-join" -> lookupJoinFold(cell, ins)
             "group-by" -> groupByFold(cell, single())
+            // partition is a sharded group-by (kernel PartitionedCell); its union of
+            // shard aggregates equals the unpartitioned group-by twin (spec 24).
+            "partition" -> groupByFold(cell, single())
+            "quorum-set" -> quorumFold(cell, ins)
             "combine-latest" -> Fold.ScalarF(Functions.aggregate(fn(cell), ins.map { asScalar(foldOf(it.from)) }))
             "count", "presence-count" -> Fold.ScalarF(Value.IntVal(asSet(single()).size.toLong()))
-            "window", "partition" -> single() // pass-through (documented v1 semantics)
+            "window" -> single() // pass-through (documented v1 semantics; unbound in the driver)
             // Views are pass-throughs of their upstream fold; renderView converts to Value.
             in Values.VIEW_TYPES -> single()
             else -> throw OracleUnsupported("operator type '${cell.type}' has no oracle fold")
@@ -259,14 +282,35 @@ class BatchOracle(private val scenario: Scenario) {
         val members = asSet(input)
         val groups = LinkedHashMap<Value, MutableList<Value>>()
         for (el in members) groups.getOrPut(Functions.keyOf(el)) { ArrayList() }.add(el)
-        // Aggregator param is not expressible on CellSpec v1 -> default `count` (documented gap).
-        return Fold.MapF(groups.mapValues { (_, g) -> Functions.aggregate("count", g) })
+        // Aggregator id from the additive `agg` CellSpec field (W3-0); absent ⇒ `count`.
+        // Non-count aggregators fold the group's element VALUE components (`valueOf`),
+        // matching the kernel binding's `sumOf/minOf/maxOf { valueOf(it) }`.
+        val aggId = cell.agg ?: "count"
+        return Fold.MapF(groups.mapValues { (_, g) -> Functions.aggregate(aggId, g.map { Functions.valueOf(it) }) })
+    }
+
+    /**
+     * Quorum over a fan-in of set sources (kernel QuorumSetCell): an element is
+     * emitted once it is asserted by at least `k` of the `n` live source links.
+     * `k` from the additive `k` CellSpec field (W3-0); absent ⇒ `n` (all sources,
+     * an intersection).
+     */
+    private fun quorumFold(cell: CellSpec, ins: List<LinkSpec>): Fold {
+        val sources = ins.map { asSet(foldOf(it.from)) }
+        val target = cell.k ?: sources.size
+        val counts = LinkedHashMap<Value, Int>()
+        sources.forEach { s -> s.forEach { counts.merge(it, 1, Int::plus) } }
+        return Fold.SetF(counts.filterValues { it >= target }.keys.toCollection(LinkedHashSet()))
     }
 
     // --- rendering ----------------------------------------------------------
 
     private fun renderView(type: String, fold: Fold): Value = when (type) {
         "set-view" -> Value.ListVal(Values.sortedList(asSet(fold)))
+        "list-view" -> when (fold) {
+            is Fold.ListF -> Value.ListVal(fold.items)
+            else -> Value.ListVal(Values.sortedList(asSet(fold)))
+        }
         "map-view" -> mapToValue(asMap(fold))
         "count-view" -> when (fold) {
             is Fold.MapF -> mapToValue(fold.entries)
@@ -299,7 +343,12 @@ class BatchOracle(private val scenario: Scenario) {
         v is Value.ListVal && v.items.size == 2 -> v.items[0] to v.items[1]
         v is Value.MapVal && v.entries.containsKey("key") && v.entries.containsKey("value") ->
             v.entries.getValue("key") to v.entries.getValue("value")
-        else -> error("map-source put needs [key, value] or {key:, value:}, got $v")
+        else -> error("put needs [key, value] or {key:, value:}, got $v")
+    }
+
+    private fun indexElem(cellId: String, v: Value?): Pair<Int, Value> {
+        require(v is Value.ListVal && v.items.size == 2) { "$cellId: insert/set needs [index, element], got $v" }
+        return (Values.asLong(v.items[0]) ?: 0L).toInt() to v.items[1]
     }
 
     private fun asSet(f: Fold): Set<Value> = when (f) {

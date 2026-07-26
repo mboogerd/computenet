@@ -82,6 +82,21 @@ data class CellSpec(
     val of: String? = null,
     /** Pure-function id from `concord/schema/function-catalog.md` (for filter/map/combine cells). */
     val fn: String? = null,
+    /**
+     * Aggregator id (`count` | `sum` | `min` | `max`) a `group-by`/`partition`
+     * cell folds each group with (function-catalog.md aggregators). Optional and
+     * additive (W3-0): absent ⇒ **`count`**, the pre-W3-0 hard default, so every
+     * existing scenario deserializes and folds unchanged. The catalog lists
+     * `group-by` as `fn (key-of), agg`; `fn` is the key extractor, this is the agg.
+     */
+    val agg: String? = null,
+    /**
+     * The `k` of a `quorum-set`'s k-of-n admission (function-catalog.md / spec 24
+     * quorum): an element is emitted once `k` distinct live source links assert
+     * it. Optional and additive (W3-0): absent ⇒ **all live sources** (`n`, an
+     * intersection), so a quorum-set with no `k` is a well-defined intersection.
+     */
+    val k: Int? = null,
     /** Request wave-aligned (glitch-free) semantics on a fan-in cell. */
     @SerialName("glitch-free") val glitchFree: Boolean? = null,
     /** Inlet admission policy, e.g. `single-writer`, `fan-in`. */

@@ -17,9 +17,13 @@ no ops (they react to their inlets).
 | `map-source` | `put`, `remove` | A keyed map; last-writer-wins per key within a stream; emits map deltas. |
 | `list-source` | `append`, `insert`, `remove` | An ordered list; emits positional list deltas. |
 | `counter-source` | `increment`, `decrement` | A single integer counter; emits counter deltas. |
-| `pn-counter` | `increment`, `decrement` | A replicated increment/decrement counter that converges across replicas. |
-| `keyed-set` | `add`, `remove` | A set partitioned by an extracted key; emits per-key set deltas. |
-| `quorum-set` | `add`, `remove` | A set whose membership is admitted only on k-of-n witnessing (quorum). |
+| `pn-counter` | `increment`, `decrement` | A replicated increment/decrement counter that converges across replicas. Observed through a `value-view`. |
+| `keyed-set` | `put`, `remove` | A **keyed upsert** to a set (kernel `KeyedSetCell`): `put(key, element)` sets the element under a key (last-writer-wins per key), `remove(key)` drops it; the output is the flat set of currently-held elements, observed through a `set-view`. (W3-0 refinement — this is NOT an add/remove-by-value partitioned set; see note 6.) |
+
+`counter-source`/`pn-counter`: `increment`/`decrement` take an optional `value:` amount
+(default a unit step), or repeat a unit step with `times:` — both fold to the same total.
+
+`quorum-set` is an **operator**, not a source — see Operators below.
 
 ## Operators
 
@@ -33,12 +37,13 @@ no ops (they react to their inlets).
 | `join` | `fn` (`key-of`) | Inner-joins two keyed streams on a shared key. |
 | `semi-join` | `fn` (`key-of`) | Emits left elements whose key is present on the right. |
 | `lookup-join` | `fn` (`key-of`) | Enriches a stream with values looked up from a keyed side. |
-| `group-by` | `fn` (`key-of`), agg | Partitions elements by key and folds each group with an aggregator. |
-| `combine-latest` | `fn`, `glitch-free?` | Combines the latest value of each inlet with a pure function. |
+| `group-by` | `fn` (`key-of`), `agg` | Partitions elements by key and folds each group with an aggregator (`agg` = `count`\|`sum`\|`min`\|`max`, default `count`; non-count aggregators fold the elements' value components). Observed through a `count-view`/`map-view`. |
+| `combine-latest` | `fn`, `glitch-free?` | Combines the latest value of each inlet with a pure function. **Only `fn: sum` is bound, final-view only** — see note 1. |
 | `count` | — | Distinct-element count of a set stream; emits a counter delta. |
 | `presence-count` | — | Count of currently-present elements (presence, not distinct history). |
-| `window` | (window spec) | Step-windowed fold over the stream (step-count windows only — nothing timer-driven). |
-| `partition` | `fn` (`key-of`) | Splits a stream into partitions; a partitioned view equals its unpartitioned twin. |
+| `quorum-set` | `k` | **Fan-in operator** over set streams (kernel `QuorumSetCell`): one link per source; an element is emitted once `k` of the `n` live source links assert it. `k` optional, default `n` (all sources ⇒ an intersection). k-of-n admission observable (24-OP-QUORUM-01). |
+| `window` | (window spec) | Step-windowed fold over the stream. **Unbound** — no kernel cell + no frozen descriptor; see note 5. |
+| `partition` | `fn` (`key-of`), `agg` | A **sharded group-by** (kernel `PartitionedCell`): partitions elements by key across shards and folds each with `agg`; the union of shard aggregates equals the unpartitioned `group-by` twin. Observed through a `count-view`. |
 
 ## Views (terminal sinks the checks read)
 
@@ -47,47 +52,79 @@ no ops (they react to their inlets).
 | `set-view` | Folds a set-delta stream into live membership (`readView` → a set). |
 | `map-view` | Folds a map-delta stream into a queryable map. |
 | `count-view` | Folds a per-key count stream into queryable counts. |
-| `value-view` | Folds a scalar stream (counter/combine output) into a single value. |
+| `value-view` | Folds a scalar stream (`counter-source`/`combine-latest`/`pn-counter`/`feedback` output) into a single value. |
+| `list-view` | Folds a positional list-delta stream (`list-source`) into an ordered list (W3-0). |
+
+## Cycles (34-CYCLE)
+
+| id | params | semantic |
+|---|---|---|
+| `feedback` | — | A `CycleHead` (kernel `FeedbackInlet`) making a damped feedback loop drivable. Ports: `inlet` (seed, a `counter-source` outlet), `loopOutlet` → `feedbackInput` (the cycle-closing self-loop edge), `outlet` (running total → `value-view`). The loop laps carry a Magnitude payload that halves each iteration and decays to a fixpoint; the payload is the **damping witness**, so the closing edge is admitted. Seeding with a single `increment value:S` yields the total `S + ⌊S/2⌋ + … + 1` (`S=64 → 127`). |
+| `feedback-undamped` | — | The same head with a **non-Magnitude** lap payload and no witness, so the cycle-closing edge is **rejected** at connect (`CycleWithoutDamping`, FU-8) — for `34-CYCLE-REJECT-01`. Author the closing edge as a `connect` step with `expect: rejected`. |
+
+The cycle-closing edge names its ports explicitly: `{from: fb, to: fb, outlet: loopOutlet, inlet: feedbackInput}`.
 
 ---
 
-## Kernel-binding notes and gaps (for W1-A / W1-C / W3)
+## Kernel-binding status (W3-0 — the driver is catalog-complete)
 
-These are the places where a v1 catalog id does **not** map cleanly to an existing
-`civictech.cell.data` / `civictech.cell.host` cell as of the pinned commit. W1-A
-(driver) and the corpus authors must know them:
+The kernel driver (`civictech.concord.driver.kernel`) binds every catalog id below
+except the two honest gaps in bold. Sources bind to `civictech.cell.data` cells;
+views and the two adapters (`map fn:identity`, scalar `combine-latest`) and the
+scalar/list view folds and the `feedback` head live in the driver's
+`KernelAdapters`.
 
-1. **`value-view` has no kernel binding.** `Observe.kt` ships only
-   `View.set()` / `View.map()` / `View.count()` — there is **no scalar view fold**.
-   The diamond exemplar (`22-GF-DIAMOND-01`) and any scalar golden (a `count`
-   output, a `combine-latest` sum) need one. **W1-A must add a scalar `View`**
-   (fold a counter/scalar delta stream to a single `Value`) to bind `value-view`.
+**Bound directly**: `set-source`→`SetCell`, `counter-source`→`CounterCell`,
+`map-source`→`MapCell`, `list-source`→`ListCell`, `pn-counter`→`PnCounterCell`,
+`keyed-set`→`KeyedSetCell`, `filter`→`FilterCell`, `union`→`UnionSetCell`,
+`intersect`→`IntersectSetCell`, `count`→`CountCell`,
+`presence-count`→`PresenceCountCell`, `group-by`→`GroupByCell`,
+`partition`→`PartitionedCell`, `quorum-set`→`QuorumSetCell`,
+`set-view`/`map-view`/`count-view`→`View.set/map/count`.
 
-2. **`map` (element-wise transform operator) has no dedicated cell.** The kernel
-   has `FlatMapSetCell` (flatMap over a *set* stream) but no plain element-map,
-   and the diamond exemplar applies `map, fn: identity` to a **counter** stream
-   (identity arms of a fork). W1-A must decide the binding: `flatmap` singleton
-   for set streams, and for identity/pass-through arms a trivial identity binding
-   (or the corpus models identity arms as bare links). Flag for W3-2 (`24-OP-MAPFN`).
+**Bound via a driver adapter** (kernel unmodified): `map fn:identity`→`IdentityCell`
+(pass-through, works for set *and* scalar arms); `map fn:<other>`/`flatmap`→
+`FlatMapSetCell` (singleton / general); `join`/`lookup-join`→`JoinSetCell` (over set
+streams of pairs, with different `combine`); `semi-join`→`SemiJoinCell`;
+`combine-latest fn:sum`→`ScalarSumCombineCell`; `value-view`→a scalar `View` folding
+both `CounterDelta` and `PnCounterDelta`; `list-view`→a list `View`; `feedback`/
+`feedback-undamped`→`FeedbackCell` (a `CycleHead`).
 
-3. **Source op verbs are provisional.** The neutral verbs above (`add`/`remove`/
-   `put`/`increment`/…) are named here for the corpus; W1-A maps each to the
-   kernel cell's contract op (`MapOps.put`, `CounterCell.increment`, …). `map-source`
-   remove is keyed (`remove(key)`), distinct from `set-source` `remove(value)`.
+The `join` family binds over **set streams of pairs `[k, v]`** (matching the batch
+oracle), not the kernel's map-stream `JoinCell`/`LookupJoinCell` — those are keyed
+map joins with a different element shape, and the corpus's join operators consume
+set sources.
 
-4. **`quorum-set` k-of-n admission** (`QuorumSetCell`) is observable (24-OP-QUORUM-01),
-   but the witnessing shape (how a scenario supplies k witnesses) is a §3 authoring
-   question for W3-2 — the descriptor param is not yet frozen here.
+### The two honest gaps (§5 — corpus disputes)
 
-5. **`window`** binds to `Windows` (step-count windows only — 52: nothing
-   timer-driven exists); the window-spec descriptor param is deferred to W3-2.
+1. **No wave-aligned scalar `combine-latest`.** `ScalarSumCombineCell` is
+   order-independent at quiescence (`final-view` holds) but **not** wave-aligned:
+   intermediate mid-wave sums may be observed, so `observations-all-satisfy(even)`
+   is NOT guaranteed for a nested diamond. A genuine glitch-free scalar combine
+   does not exist in the kernel. `22-GF-NESTED-01` (product/even invariant over the
+   stream) is a kernel gap; treat it as a dispute. `combine-latest` with any `fn`
+   other than `sum` throws `UnsupportedCatalogBinding`.
 
-Everything else in the table maps directly: `set-source`→`SetCell`,
-`map-source`→`MapCell`, `list-source`→`ListCell`, `counter-source`→`CounterCell`,
-`pn-counter`→`PnCounterCell`, `keyed-set`→`KeyedSetCell`, `quorum-set`→
-`QuorumSetCell`, `filter`→`FilterCell`, `flatmap`→`FlatMapSetCell`,
-`union`→`UnionSetCell`, `intersect`→`IntersectSetCell`, `join`→`JoinCell`,
-`semi-join`→`SemiJoinCell`, `lookup-join`→`LookupJoinCell`, `group-by`→`GroupByCell`
-(mergeable variant `MergeableGroupByCell`), `combine-latest`→`CombineLatestCell`,
-`count`→`CountCell`, `presence-count`→`PresenceCountCell`, `partition`→
-`PartitionedCell`, `set-view`/`map-view`/`count-view`→`View.set/map/count`.
+2. **`window` is unbound.** `Windows` ships only event-time key functions
+   (tumbling/sliding), not a cell, and no window-spec descriptor param is frozen on
+   the schema. A step-window operator needs a frozen window descriptor **and** an
+   oracle model before it can be bound. `24-OP-WINDOW-01` is blocked pending a
+   schema-change ticket; `window` throws `UnsupportedCatalogBinding`.
+
+### W3-0 catalog refinements (the driver made the catalog honest)
+
+- **`keyed-set`** is a keyed **upsert** (`put(key, element)` LWW-per-key /
+  `remove(key)`) whose output is the flat set of current elements (a `set-view`) —
+  the kernel `KeyedSetCell` reality, not the "partitioned per-key set" the v1 table
+  implied. Ops changed `add`/`remove` → `put`/`remove`.
+- **`quorum-set`** is a fan-in **operator** (one link per source; `k` of `n` live
+  sources), not an add/remove **source**. The k-of-n threshold is the new `k`
+  descriptor field.
+- **`group-by`/`partition`** take the new `agg` descriptor field
+  (`count`\|`sum`\|`min`\|`max`, default `count`). `partition` is a sharded
+  group-by, folding identically to its unpartitioned twin.
+- **`list-view`** was added (the kernel `View` companion has no list fold).
+- **`feedback`/`feedback-undamped`** were added for the cycle scenarios.
+
+`counter-source`/`pn-counter` `increment`/`decrement` take the amount from `value:`
+(default a unit step), repeated by `times:` — the oracle and driver agree.

@@ -17,7 +17,7 @@ import civictech.concord.value.Value
 object Values {
 
     /** The catalog ids of terminal view cells (CONCORD-PLAN cell-catalog §Views). */
-    val VIEW_TYPES: Set<String> = setOf("set-view", "map-view", "count-view", "value-view")
+    val VIEW_TYPES: Set<String> = setOf("set-view", "map-view", "count-view", "value-view", "list-view")
 
     /** A stable textual rendering — used for map keys (which must be strings) and as the total-order tiebreak. */
     fun render(v: Value): String = when (v) {

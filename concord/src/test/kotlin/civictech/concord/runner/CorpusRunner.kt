@@ -144,10 +144,10 @@ class CorpusRunner {
                     assertExpect(step.expect, result, "connect ${step.from}->${step.to}")
                 }
                 is DisconnectStep -> {
-                    // The schema names a disconnect by endpoints; W1-A does not track the
-                    // endpoint→linkRef map (no pilot disconnects), so this is a no-op stub
-                    // beyond honouring an explicit expect. Endpoint-keyed disconnect is W3.
-                    if (step.expect == Expect.REJECTED) error("disconnect expect:rejected not modelled in W1-A")
+                    // W3-0: the driver holds the endpoint→linkRef map, so a disconnect
+                    // named by endpoints resolves and unlinks the exact link.
+                    val result = (driver as KernelDriver).disconnectEndpoint(step.from, step.to, step.inlet, step.outlet)
+                    assertExpect(step.expect, result, "disconnect ${step.from}->${step.to}")
                 }
                 is SnapshotStep -> snapshots[step.alias] = driver.snapshot(step.on)
                 is RestoreStep -> driver.restore(step.host ?: "", step.on, snapshots.getValue(step.from))
@@ -169,6 +169,8 @@ class CorpusRunner {
     private fun params(cell: CellSpec): Map<String, Value> = buildMap {
         cell.of?.let { put("of", Value.StrVal(it)) }
         cell.fn?.let { put("fn", Value.StrVal(it)) }
+        cell.agg?.let { put("agg", Value.StrVal(it)) }
+        cell.k?.let { put("k", Value.IntVal(it.toLong())) }
         cell.glitchFree?.let { put("glitch-free", Value.BoolVal(it)) }
         cell.inletMode?.let { put("inlet-mode", Value.StrVal(it)) }
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }

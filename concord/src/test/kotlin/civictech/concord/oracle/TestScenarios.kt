@@ -13,7 +13,8 @@ import civictech.concord.value.Value
 
 /** Terse in-code builders for oracle/check fixtures — no YAML, no kernel. */
 object Fx {
-    fun cell(id: String, type: String, fn: String? = null): CellSpec = CellSpec(id = id, type = type, fn = fn)
+    fun cell(id: String, type: String, fn: String? = null, agg: String? = null, k: Int? = null): CellSpec =
+        CellSpec(id = id, type = type, fn = fn, agg = agg, k = k)
 
     fun link(from: String, to: String, inlet: String? = null): LinkSpec =
         LinkSpec(from = from, to = to, inlet = inlet)
