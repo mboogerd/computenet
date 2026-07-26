@@ -38,6 +38,7 @@ import civictech.cell.data.Magnitude
 import civictech.cell.data.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.ParkQueue
 import civictech.cell.proxy.RoutedInletResolution
 import civictech.gen.wire.ProtocolRegistry
 import civictech.cell.proxy.Invocation
@@ -206,7 +207,7 @@ open class ManagedHost(
     /** Supervision (G-26): per-cell failure policies, spawn-time checkpoints, and suspended-cell parking. */
     private val policies = mutableMapOf<CellRef, SupervisionPolicy>()
     private val checkpoints = mutableMapOf<CellRef, Serializable>()
-    private val suspendedCells = mutableMapOf<CellRef, MutableList<HostedPortInvocation>>()
+    private val suspendedCells = mutableMapOf<CellRef, ParkQueue<HostedPortInvocation>>()
 
     /**
      * Host-held per-instance recovery generation (spec 00/03 glossary
@@ -278,7 +279,7 @@ open class ManagedHost(
         policies.remove(cellRef)
         checkpoints.remove(cellRef)
         generations.remove(cellRef)
-        suspendedCells.remove(cellRef)?.forEach {
+        suspendedCells.remove(cellRef)?.drain()?.forEach {
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while suspended", it)
         }
@@ -826,7 +827,7 @@ open class ManagedHost(
         // catch-up protocols must not deadlock behind what they unpark.
         if (hostedInvocation.type != HostedPortInvocation.Type.PORT_PROTOCOL) {
             suspendedCells[cellRef]?.let {
-                it += hostedInvocation
+                it.park(hostedInvocation)
                 return
             }
         }
@@ -945,7 +946,7 @@ open class ManagedHost(
                     notifyDownstream(cell, StallNotice.Resume)
                 }
                 SupervisionPolicy.SUSPEND -> {
-                    suspendedCells[cellRef] = mutableListOf()
+                    suspendedCells[cellRef] = ParkQueue()
                     notifyDownstream(cell, StallNotice.Stall(StallReason.SUSPENDED))
                 }
             }
@@ -1090,8 +1091,8 @@ open class ManagedHost(
             }
 
             override fun resume(ref: CellRef) {
-                val parked = suspendedCells.remove(ref)
-                    ?: throw IllegalArgumentException("Cell not suspended: $ref")
+                val parked = (suspendedCells.remove(ref)
+                    ?: throw IllegalArgumentException("Cell not suspended: $ref")).drain()
                 cells[ref]?.let { notifyDownstream(it, StallNotice.Resume) }
                 // re-enqueue at data priority: replay order = park order (sequence tiebreaker)
                 parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
@@ -1100,7 +1101,7 @@ open class ManagedHost(
             override fun suspend(ref: CellRef) {
                 require(cells.containsKey(ref)) { "Cell not found: $ref" }
                 if (ref !in suspendedCells) {
-                    suspendedCells[ref] = mutableListOf()
+                    suspendedCells[ref] = ParkQueue()
                     cells[ref]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
                 }
             }

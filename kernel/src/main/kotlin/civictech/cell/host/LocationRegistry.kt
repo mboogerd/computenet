@@ -3,6 +3,7 @@ package civictech.cell.host
 import civictech.cell.CellRef
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
+import civictech.cell.proxy.ParkQueue
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -27,7 +28,7 @@ class LocationRegistry {
     data class Remote(val sink: InvocationSink) : Location
 
     private val locations = ConcurrentHashMap<CellRef, Location>()
-    private val parked = ConcurrentHashMap<CellRef, MutableList<HostedPortInvocation>>()
+    private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
 
     /**
      * Instances-by-logical-id index (PN-7 perf cliff): the interest-scoped
@@ -167,11 +168,11 @@ class LocationRegistry {
      */
     fun deliver(invocation: HostedPortInvocation) {
         if (invocation.cellRef !in held && send(locations[invocation.cellRef], invocation)) return
-        val queue = parked.computeIfAbsent(invocation.cellRef) { mutableListOf() }
+        val queue = parked.computeIfAbsent(invocation.cellRef) { ParkQueue() }
         synchronized(queue) {
             // re-check under the per-ref lock so a concurrent publish can't strand this invocation
             if (invocation.cellRef !in held && send(locations[invocation.cellRef], invocation)) return
-            queue.add(invocation)
+            queue.park(invocation)
             // Register after parking as well as on the failed offer. If the
             // target crossed low-water between those operations, runNow
             // replays the newly parked tail instead of stranding it.
@@ -209,10 +210,7 @@ class LocationRegistry {
         val queue = parked[ref] ?: return
         synchronized(queue) {
             if (locations[ref] != expected) return
-            while (queue.isNotEmpty()) {
-                if (!send(expected, queue.first())) return
-                queue.removeAt(0)
-            }
+            queue.drainWhile { send(expected, it) }
         }
     }
 
@@ -276,10 +274,9 @@ class LocationRegistry {
     }
 
     private fun install(ref: CellRef, location: Location) {
-        val queue = parked.computeIfAbsent(ref) { mutableListOf() }
+        val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         synchronized(queue) {
-            queue.forEach { check(send(location, it)) { "replay into fresh location failed for $ref" } }
-            queue.clear()
+            queue.drain().forEach { check(send(location, it)) { "replay into fresh location failed for $ref" } }
             locations[ref] = location
             indexAdd(ref)
         }

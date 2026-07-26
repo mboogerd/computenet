@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.proxy.Buffering
 import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.ParkQueue
 import civictech.cell.proxy.Proxy
 import civictech.cell.port.PortRef
 
@@ -64,7 +65,7 @@ class FanInlet<Api : Any>(
     override val linking = LinkSupport()
 
     /** Parked tail (G-55): invocations that arrive cold, awaiting activation. */
-    private val parked = mutableListOf<Invocation>()
+    private val parked = ParkQueue<Invocation>()
 
     /** Cold-state sink: every method call parks instead of dispatching or throwing. */
     private val parkingImplementation: Api = Proxy.fromClass(clazz, Buffering(parked))
@@ -212,10 +213,7 @@ class FanInlet<Api : Any>(
      * post-activation send can land ahead of it (10/15 §Admission vs activation).
      */
     private fun replayParked() {
-        if (parked.isEmpty()) return
-        val tail = parked.toList()
-        parked.clear()
-        tail.forEach { it.invoke(call) }
+        parked.drain().forEach { it.invoke(call) }
     }
 
     override fun linkFrom(portOut: LinkTo<Api>): LinkResult = handshake(

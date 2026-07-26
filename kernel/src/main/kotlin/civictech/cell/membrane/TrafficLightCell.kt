@@ -9,6 +9,7 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.Buffering
 import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.ParkQueue
 import civictech.cell.proxy.Proxy
 import civictech.gen.wire.Contract
 import java.util.*
@@ -44,16 +45,15 @@ class TrafficLightCell<T : Any>(
     override val dataOutlet = registerPort("dataOutlet", FanOutlet(clazz))
 
     private var isStopped = true
-    private val buffer = mutableListOf<Invocation>()
+    private val buffer = ParkQueue<Invocation>()
 
     init {
         controlInlet.serve(object : TrafficLightControl {
             override fun setGreen() {
                 if (!isStopped) return
-                buffer.forEach { invocation ->
+                buffer.drain().forEach { invocation ->
                     invocation.invoke(dataOutlet.call)
                 }
-                buffer.clear()
                 dataInlet.delegate(dataOutlet)
                 isStopped = false
             }
