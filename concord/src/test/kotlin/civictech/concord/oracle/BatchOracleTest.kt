@@ -361,13 +361,39 @@ class BatchOracleTest {
     }
 
     @Test
-    fun `presence-count equals count for a set in v1`() {
+    fun `presence-count folds per-element live-source-link counts, not scalar cardinality`() {
+        // The 24-OP-PRESENCE-01 pilot's shape: two set sources fan into one
+        // presence-count. Hand-computed: "p" is currently asserted by BOTH
+        // sources (a added it and never withdrew it; b added it) -> count 2.
+        // "q" was asserted then withdrawn by "a" and never asserted by "b" ->
+        // its live-source-link count drops to 0 -> group-death, absent from
+        // the map entirely (not emitted as a zero entry).
         val sc = scenario(
-            cells = listOf(cell("a", "set-source"), cell("p", "presence-count"), cell("v", "value-view")),
+            cells = listOf(
+                cell("a", "set-source"), cell("b", "set-source"), cell("p", "presence-count"), cell("v", "map-view"),
+            ),
+            links = listOf(link("a", "p"), link("b", "p"), link("p", "v")),
+            script = listOf(
+                apply("a", "add", s("p")),
+                apply("a", "add", s("q")),
+                apply("b", "add", s("p")),
+                apply("a", "remove", s("q")),
+            ),
+        )
+        BatchOracle(sc).view("v") shouldBe map("p" to i(2))
+    }
+
+    @Test
+    fun `presence-count group-death removes an element once every asserting link withdraws it`() {
+        // Single source, two adds/one remaining after a remove: the element
+        // that both sources drop entirely never appears; the one still
+        // asserted by its one live link counts 1.
+        val sc = scenario(
+            cells = listOf(cell("a", "set-source"), cell("p", "presence-count"), cell("v", "map-view")),
             links = listOf(link("a", "p"), link("p", "v")),
             script = listOf(apply("a", "add", s("x")), apply("a", "add", s("y")), apply("a", "remove", s("x"))),
         )
-        BatchOracle(sc).view("v") shouldBe i(1)
+        BatchOracle(sc).view("v") shouldBe map("y" to i(1))
     }
 
     @Test

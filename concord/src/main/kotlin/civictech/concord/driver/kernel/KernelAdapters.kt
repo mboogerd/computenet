@@ -3,10 +3,11 @@ package civictech.concord.driver.kernel
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.Owned
 import civictech.cell.Stateful
 import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.delta.ListDelta
-import civictech.cell.data.Magnitude
+import civictech.cell.control.Magnitude
 import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.Propagate
 import civictech.cell.observe.ObservationSink
@@ -15,6 +16,16 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.FeedbackInlet
 import civictech.cell.port.registerPort
+import civictech.nature.CellColor
+import civictech.nature.CellDescriptor
+import civictech.nature.ContractDescriptor
+import civictech.nature.ContractModule
+import civictech.nature.ContractRegistry
+import civictech.nature.MergeClass
+import civictech.nature.MethodDescriptor
+import civictech.nature.NatureVector
+import civictech.nature.PortDescriptor
+import civictech.nature.PortDirection
 import java.io.Serializable
 import java.util.UUID
 
@@ -264,7 +275,7 @@ class FeedbackCell(
  * Rejected" (13-LINK-05, exemplar (d)) needs this driver variant — the kernel is
  * not modified. Identical fold/observation/state behaviour to `ObserveCell`; the
  * only difference is `FanInlet.create(singleWriter = true)`, so `linkFrom` refuses
- * a second [civictech.cell.port.LinkRole.Consume] producer while Observe taps stay
+ * a second [civictech.cell.link.LinkRole.Consume] producer while Observe taps stay
  * unrestricted.
  */
 class SingleWriterObserveCell<D : Any, S>(
@@ -309,5 +320,185 @@ class SingleWriterObserveCell<D : Any, S>(
             view.restore(state)
             latest = view.current()
         }
+    }
+}
+
+/**
+ * Binds the catalog `nature-gate` sink (12-NEGOTIATE-01, resolving the
+ * `12-NEGOTIATE-01` schema-gap): an inlet that DECLARES a required nature (CP-F2),
+ * so a plain default-nature producer's `connect` is refused at link time by the
+ * kernel's own [civictech.cell.nature.NatureNegotiation] (CP-F3) — the same real
+ * mechanism `TypedRefusalTest`/`NegotiatedAttachmentTest` exercise.
+ *
+ * The dispute's suggested binding — the driver calling the kernel-internal
+ * `civictech.cell.port.PortNatures.stamp(...)` directly — is not reachable:
+ * `PortNatures` is `internal` to the `:kernel` Gradle module, invisible from
+ * `:concord` (a different module; `internal` is module-scoped, not
+ * package-scoped, and there is no friend-path between the two). The **honest**
+ * substitute below drives the identical kernel code path through a different,
+ * equally-real *public* seam: [civictech.nature.ContractRegistry.register] — the
+ * same registry a KSP-generated `@Contract` module populates at real-cell
+ * compile time — is public API (the `:nature` module is `api`-exposed through
+ * `:kernel`). Registering a [CellDescriptor] for this class's own fqn, once, at
+ * class-load (the `companion object` `init` block, which the JVM runs before any
+ * instance is constructed) makes `registerPort`'s existing, unconditional
+ * `PortNatures.project(this, name, port)` call (see `PortRegistry.kt`) pick it up
+ * and project the declared [NatureVector] onto the live port — *exactly* the
+ * projection a KSP-generated descriptor would drive, just registered at runtime
+ * instead of compile time (`:concord` cannot depend on the kernel's `:gen` KSP
+ * processor without adopting kernel-internal build machinery, which the scope
+ * fence forbids). From there the real `handshake`/`NatureNegotiation.reconcile`
+ * path runs unmodified: no fake, no driver-side rejection — the refusal is the
+ * kernel's.
+ *
+ * Requires [MergeClass.IDEMPOTENT] on `MERGE_IDEMPOTENCE` (the same axis
+ * `TypedRefusalTest`'s first case exercises); a plain source's outlet (e.g.
+ * `counter-source` → `CounterCell`, which does not implement `Replicable`) stays
+ * at the axis default `NON_IDEMPOTENT`, so the mismatch is real, not staged.
+ */
+class NatureGatedSinkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    companion object {
+        private const val FQN = "civictech.concord.driver.kernel.NatureGatedSinkCell"
+
+        init {
+            ContractRegistry.register(object : ContractModule {
+                override val contracts: List<ContractDescriptor> = emptyList()
+                override val cells: List<CellDescriptor> = listOf(
+                    CellDescriptor(
+                        fqn = FQN,
+                        color = CellColor.PURE,
+                        ports = listOf(
+                            PortDescriptor(
+                                name = "inlet",
+                                direction = PortDirection.IN,
+                                contractFqn = "civictech.cell.Propagate",
+                                contractId = civictech.nature.StableHash.of("civictech.cell.Propagate"),
+                                natures = NatureVector.of(MergeClass.IDEMPOTENT),
+                            ),
+                        ),
+                    ),
+                )
+            })
+        }
+    }
+
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<Any>>())
+
+    init {
+        // A gate, not a view: the scenario only asserts the connect's admission
+        // (Rejected) — nothing needs to be observed downstream of it.
+        inlet.serve(Propagate<Any> { })
+    }
+}
+
+/**
+ * The SPSC-exclusive outlet contract used by [ExclusiveSourceCell]/
+ * [ExclusiveSinkCell] (23-SPSC-01, resolving the `23-SPSC-01` schema-gap): a
+ * method carrying an [Owned] parameter, which is exactly the shape
+ * `OwnershipTest`'s `OwnedPush` exercises — the KSP `@Contract` processor would
+ * mark this method's [MethodDescriptor.exclusive] `true` from that parameter
+ * shape alone (see `carriesExclusive` in `ContractProcessor.kt`). `:concord` has
+ * no KSP step, so [ExclusiveSourceCell]'s companion registers the identical
+ * descriptor by hand (same public [ContractRegistry.register] seam as
+ * [NatureGatedSinkCell]) — the `exclusive` flag [FanOutlet] reads at
+ * construction (`FanOutlet.kt`: `ContractRegistry.descriptor(clazz)?.methods?.any
+ * { it.exclusive }`) is the kernel's own field, not a driver-side simulation.
+ * From there the real SPSC rule runs unmodified: [FanOutlet.linkTo] refuses a
+ * second Consume subscriber with a genuine `LinkResult.Rejected` — the same path
+ * `OwnershipTest`'s `the handshake path returns Rejected for the second link`
+ * exercises.
+ */
+interface ExclusivePush {
+    fun push(payload: Owned<Any>)
+}
+
+/** The command port `apply(..., op: push, value:)` routes to (source-side, not exclusive itself). */
+interface ExclusiveSourceOps {
+    fun push(value: Any?)
+}
+
+/**
+ * Binds the catalog `exclusive-source` id: a source whose `outlet` carries
+ * [ExclusivePush] — an `Owned`-payload, single-consumer (SPSC) contract — fed by
+ * the plain `push` command on its `inlet`. Each `apply … op: push` wraps the
+ * value in a fresh [Owned] (a `take()`-once handle), mirroring the kernel's own
+ * `Owned`-carrying producers (`OwnershipTest`).
+ */
+class ExclusiveSourceCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+    companion object {
+        private const val FQN = "civictech.concord.driver.kernel.ExclusivePush"
+
+        init {
+            ContractRegistry.register(object : ContractModule {
+                override val contracts: List<ContractDescriptor> = listOf(
+                    ContractDescriptor(
+                        contractId = civictech.nature.StableHash.of(FQN),
+                        fqn = FQN,
+                        management = false,
+                        methods = listOf(
+                            MethodDescriptor(
+                                methodId = civictech.nature.StableHash.of("$FQN#push(Lcivictech/cell/Owned;)V"),
+                                name = "push",
+                                jvmDescriptor = "(Lcivictech/cell/Owned;)V",
+                                exclusive = true,
+                            ),
+                        ),
+                    ),
+                )
+            })
+        }
+    }
+
+    val outlet = registerPort("outlet", FanOutlet.create<ExclusivePush>())
+    val inlet = registerPort("inlet", FanInlet.create<ExclusiveSourceOps>())
+
+    init {
+        inlet.serve(object : ExclusiveSourceOps {
+            override fun push(value: Any?) {
+                requireNotNull(value) { "exclusive-source push requires a non-null value" }
+                outlet.call.push(Owned(value))
+            }
+        })
+    }
+}
+
+/**
+ * Binds the catalog `exclusive-sink` id: a consumer of [ExclusivePush] that
+ * `take()`s each payload and folds a running count, observed through a
+ * `count-view`-shaped [ObservationSink] (so `final-view`/`readView` can assert
+ * "still exactly one delivery" after the rejected second connect).
+ */
+class ExclusiveSinkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Stateful, ObservationSink<Long> {
+    val inlet = registerPort("inlet", FanInlet.create<ExclusivePush>())
+
+    private val lock = Any()
+    private var count = 0L
+    private val listeners = mutableListOf<(Long) -> Unit>()
+
+    init {
+        inlet.serve(object : ExclusivePush {
+            override fun push(payload: Owned<Any>) {
+                payload.take()
+                synchronized(lock) {
+                    count++
+                    listeners.forEach { it(count) }
+                }
+            }
+        })
+    }
+
+    override fun current(): Long = count
+
+    override fun onChange(listener: (Long) -> Unit) {
+        synchronized(lock) {
+            listeners += listener
+            listener(count)
+        }
+    }
+
+    override fun snapshot(): Serializable = count
+
+    override fun restore(state: Serializable) {
+        count = state as Long
     }
 }

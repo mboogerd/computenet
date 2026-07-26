@@ -1,0 +1,50 @@
+# Concord corpus scenario (W4-A, profile: dist). Canonical schema — see concord/schema/scenario.md.
+# Resolves DISPUTES.md `42-REPL-DEPART-01` (check-vocabulary-gap): `replicas-converge`
+# now scopes itself to LIVE replicas (civictech.concord.check.Checks.replicasConverge
+# drops any declared replica whose `readView` no longer resolves — the departed-cell
+# signal the driver SPI already gives once `despawn` retires a cell), matching the
+# kernel's own departed-stream rule (spec 42 §G-45, `42-REPL-06`;
+# civictech.cell.verify.ReplicaConvergence: "a departed replica's frozen last fold is
+# simply excluded rather than treated as a stalled disagreement").
+id: 42-REPL-DEPART-01
+title: A replica that departs orderly is excluded from convergence; survivors keep converging
+covers: [42-REPL-06]
+profile: dist
+kind: example
+narrative:
+  given: three set-source replicas of one logical cell, one per host, two of them observed through their own set view
+  when: one replica departs via an orderly despawn while writes (including a remove of that replica's own contribution) keep landing on the two survivors
+  then: the survivors converge with each other — the departed replica's frozen fold is excluded, not compared — and no dead letters are produced
+graph:
+  hosts: [h1, h2, h3]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared}
+    - {id: r3, type: set-source, of: string, host: h3, replica-of: shared}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: add, value: before-1}
+  - {type: apply, on: r3, op: add, value: before-3}
+  - {type: quiesce}
+  - {type: despawn, on: r3}
+  # settle the despawn (unpublish reconciles the gossip mesh, spec 42 G-45)
+  # before any further write — otherwise a survivor's write can race the
+  # despawn's own management call through the departed replica's host queue
+  # (enqueued while its registry location was still valid, delivered after
+  # its cell table entry is gone) and land as a spurious dead letter, an
+  # artifact of that race rather than of the departure itself.
+  - {type: quiesce}
+  - {type: apply, on: r2, op: add, value: after-2}
+  # a survivor removes the departed replica's own contribution — r3's frozen
+  # fold still holds before-3, so comparing against it (the pre-fix behavior)
+  # would false-fail; excluding it is the whole point of the departed-stream rule.
+  - {type: apply, on: r1, op: remove, value: before-3}
+  - {type: quiesce}
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: no-dead-letters}

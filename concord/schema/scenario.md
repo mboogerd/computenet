@@ -66,11 +66,40 @@ optional descriptor param the driver binds. The v1 named params:
 | `inlet-mode` | inlet admission policy (`single-writer`, `fan-in`) |
 | `host` | host placement (dist profile) |
 | `replica-of` | logical replica-group id (dist profile) |
+| `interest` | interest-scoped instance-set assignment (dist profile) — see below |
 
 `agg` and `k` are **additive** (W3-0): existing files deserialize unchanged (both
 optional with the defaults above). The parser stays lenient — an unknown key is
 ignored — so promoting a further param to a typed field remains a schema-change
 ticket.
+
+#### `interest` (W4-A followup, `42-INTEREST-01`)
+
+A `replica-of` cell may additionally declare an interest-scoped instance-set
+assignment (spec 40/42 §Interest-scoped instance sets) — the demand predicate the
+kernel's gossip linker consults to decide whether a link forms between two
+replicas of the same logical id, and to filter each emission to the target's
+interest. Absent ⇒ the kernel default, `Interest.Total` (plain replication,
+byte-identical to a `replica-of` cell with no `interest:`).
+
+```yaml
+- {id: r1, type: set-source, of: string, host: h1, replica-of: shared, interest: {slots: [0], total-slots: 2}}
+```
+
+A small, closed neutral grammar mirroring the kernel's `Interest` algebra —
+exactly one of these per cell:
+
+| form | meaning |
+|---|---|
+| `{total: true}` | every key, every delta (the replication setting; same as omitting `interest:`) |
+| `{empty: true}` | no key, no delta |
+| `{slots: [..], total-slots: N}` | a hash-slot subset out of `N` slots (the partitioning setting when two instances' slot sets are pairwise disjoint) |
+| `{ranges: [[lo, hi], ...]}` | half-open `[lo, hi)` integer ranges over a numeric key |
+
+The driver (`KernelDriverDist.spawnReplica`) parses this into a real
+`civictech.cell.link.Interest` and calls `LocationRegistry.setInterest` **before**
+the replica joins the replication mesh — matching the ordering
+`InterestScopedGossipTest`'s own harness uses ("assign, then replicate").
 
 The parser runs **lenient** (unknown keys ignored) so a future param does not
 break older files; promoting a new param to a typed field is a schema-change

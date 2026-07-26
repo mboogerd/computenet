@@ -164,6 +164,17 @@ internal object KernelCatalog {
             "feedback" -> Built(FeedbackCell(damped = true))
             "feedback-undamped" -> Built(FeedbackCell(damped = false))
 
+            // ---- nature/ownership disputes (12-NEGOTIATE-01 / 23-SPSC-01) ---
+            // `nature-gate`: an inlet DECLARING a required nature (CP-F2), so a
+            // plain default-nature producer's connect is refused by the kernel's
+            // real NatureNegotiation (CP-F3) — see KernelAdapters.NatureGatedSinkCell.
+            "nature-gate" -> Built(NatureGatedSinkCell())
+            // `exclusive-source`/`exclusive-sink`: an Owned-carrying SPSC outlet
+            // (M5.6) — a second Consume link is refused by the kernel's own
+            // FanOutlet exclusivity check, not a driver-side fake.
+            "exclusive-source" -> Built(ExclusiveSourceCell())
+            "exclusive-sink" -> exclusiveSink()
+
             else -> throw UnsupportedCatalogBinding("no kernel binding for catalog cell type '$type'")
         }
         // `glitch-free: true` (spec 20/22): flag the built cell so the driver spawns
@@ -186,6 +197,12 @@ internal object KernelCatalog {
 
     private fun <ACC : Serializable> partitioned(a: Aggregator<Any?, Long, ACC>): PartitionedCell<Any?, Any?, Long, ACC> =
         PartitionedCell(initialShardCount = 4, keyFn = { KernelFunctions.keyOf(it) }, aggregator = a)
+
+    /** `exclusive-sink`: a running-count view over `ExclusivePush` deliveries (23-SPSC-01). */
+    private fun exclusiveSink(): Built {
+        val cell = ExclusiveSinkCell()
+        return Built(cell, cell, ViewKind.COUNT)
+    }
 
     private fun <D : Any, S> observeCell(view: View<D, S>, kind: ViewKind, singleWriter: Boolean = false): Built {
         return if (singleWriter) {
@@ -259,6 +276,10 @@ internal object KernelCatalog {
                 "list-source op '$op' unbound — the kernel ListCell is index-addressed " +
                     "(append / insert[i,e] / set[i,e] / remove-at[i]); there is no remove-by-value (§5)",
             )
+        }
+        "exclusive-source" -> when (op) {
+            "push" -> OpCall("push", OBJECT, listOf(unwrap(value)))
+            else -> throw UnsupportedCatalogBinding("exclusive-source op '$op' unbound")
         }
         else -> throw UnsupportedCatalogBinding("no op binding for '$op' on catalog type '$type'")
     }

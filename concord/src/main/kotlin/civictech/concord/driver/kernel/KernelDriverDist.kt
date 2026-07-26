@@ -70,8 +70,20 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
      * kernel's `Replicable` OR-set. A non-set `replica-of` type is a real gap
      * (single-writer/pn-counter replication is decided-but-unbuilt or out of the
      * corpus's set-shaped checks), surfaced loudly.
+     *
+     * [interest] (42-INTEREST-01, resolving the schema-gap in DISPUTES.md) is the
+     * scenario's `interest:` descriptor, still in its neutral [Value] form; parsed
+     * by [parseInterest] and staged on the shared [LocationRegistry][civictech.cell.host.LocationRegistry]
+     * via `setInterest` **before** [Replication.replicate] — the gossip linker
+     * ([civictech.cell.replication.Replication.maybeLink]) consults the interest
+     * at link time, so it must already be recorded when `replicate` wires this
+     * replica to its peers (`InterestScopedGossipTest`'s own `Mesh.start` does the
+     * same "assign, then replicate" ordering). Absent/unparseable ⇒ no call is
+     * made and the registry's own default (`Interest.Total`) applies — byte-
+     * identical to a `replica-of` cell with no `interest:` (42-REPL-01/`42-REPL-LATE-01`
+     * keep passing unchanged).
      */
-    fun spawnReplica(hostId: HostId, cellId: CellId, type: String, logical: String) {
+    fun spawnReplica(hostId: HostId, cellId: CellId, type: String, logical: String, interest: Value? = null) {
         if (type != "set-source") {
             throw UnsupportedCatalogBinding(
                 "replica-of is only bound for 'set-source' (the kernel's Replicable OR-set SetCell); " +
@@ -84,6 +96,9 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         val instanceId = (instanceCounters[logical] ?: 0L).also { instanceCounters[logical] = it + 1 }
 
         val replica = SetCell<Any?>(CellRef(logicalId, instanceId))
+        // 42-INTEREST-01: stage the interest assignment BEFORE replicate — the
+        // linker reads it at link time, so it must be recorded first.
+        parseInterest(interest)?.let { driver.registry.setInterest(replica.ref, it) }
         // `replicate` spawns the replica on the host and wires the gossip mesh to
         // every peer already published under this logical id (and, via onPublish,
         // every peer that joins later).
@@ -188,5 +203,39 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         // Re-point the moved cells' bindings so later apply/readView route to the
         // target host (Bound is immutable — replace with a host-updated copy).
         moving.forEach { id -> driver.cells[id] = driver.cells.getValue(id).copy(host = target) }
+    }
+
+    /**
+     * Parse a scenario's `interest:` [Value] (the [civictech.concord.schema.InterestSpec]
+     * descriptor, lowered to the neutral value model by the runner) into a real
+     * `civictech.cell.link.Interest` (42-INTEREST-01). `null`/unrecognized ⇒ `null`
+     * (no [civictech.cell.host.LocationRegistry.setInterest] call — the registry's
+     * own default, [civictech.cell.link.Interest.Total], applies). Precedence when
+     * more than one field is present: `total` > `empty` > `slots` > `ranges`.
+     */
+    private fun parseInterest(value: Value?): civictech.cell.link.Interest? {
+        val fields = (value as? Value.MapVal)?.entries ?: return null
+        fun bool(key: String) = (fields[key] as? Value.BoolVal)?.value == true
+        return when {
+            bool("total") -> civictech.cell.link.Interest.Total
+            bool("empty") -> civictech.cell.link.Interest.Empty
+            fields["slots"] is Value.ListVal -> {
+                val slots = (fields["slots"] as Value.ListVal).items.map { (it as Value.IntVal).value.toInt() }.toSet()
+                val totalSlots = (fields["total-slots"] as? Value.IntVal)?.value?.toInt()
+                    ?: error("interest: slots given without total-slots")
+                civictech.cell.link.Interest.Slots(slots, totalSlots)
+            }
+            fields["ranges"] is Value.ListVal -> {
+                val ranges = (fields["ranges"] as Value.ListVal).items.map { r ->
+                    val bounds = (r as Value.ListVal).items
+                    civictech.cell.link.Interest.Ranges.Range(
+                        (bounds[0] as Value.IntVal).value,
+                        (bounds[1] as Value.IntVal).value,
+                    )
+                }
+                civictech.cell.link.Interest.Ranges(ranges)
+            }
+            else -> null
+        }
     }
 }

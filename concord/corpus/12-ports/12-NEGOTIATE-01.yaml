@@ -1,0 +1,35 @@
+# Concord corpus scenario (W4-A followup, profile: core). Canonical schema —
+# see concord/schema/scenario.md. Resolves the `12-NEGOTIATE-01` schema-gap
+# (concord/corpus/DISPUTES.md): the kernel's link-time typed nature refusal
+# (NatureNegotiation, CP-F3) was always real (TypedRefusalTest/
+# NegotiatedAttachmentTest) but no catalog cell declared a non-default nature
+# that would trigger a mismatch through ordinary scenario wiring. The new
+# `nature-gate` catalog id (a fixed-nature sink — see cell-catalog.md and
+# KernelAdapters.NatureGatedSinkCell) closes that gap without a schema field:
+# its inlet DECLARES a required nature (idempotent merge), so a plain
+# default-nature source's connect is refused by the kernel's own reconciler.
+id: 12-NEGOTIATE-01
+title: A contract/nature-incompatible connect is rejected without disturbing existing topology
+covers: [13-LINK-05]
+profile: core
+kind: example
+narrative:
+  given: a plain counter source already feeding one working view, and a nature-gated sink requiring idempotent-merge input
+  when: the source attempts to connect to the nature-gated sink too
+  then: the incompatible connect is rejected (typed nature mismatch, CP-F3) and the existing topology keeps flowing undisturbed
+graph:
+  cells:
+    - {id: src, type: counter-source}
+    - {id: ok-view, type: value-view}
+    - {id: strict-sink, type: nature-gate}
+  links:
+    - {from: src, to: ok-view}
+script:
+  # strict-sink's inlet requires MergeClass.IDEMPOTENT (MERGE_IDEMPOTENCE axis);
+  # a plain CounterCell outlet stays at the axis default (NON_IDEMPOTENT) — a
+  # real CP-F3 mismatch, not a staged one.
+  - {type: connect, from: src, to: strict-sink, expect: rejected}
+  - {type: apply, on: src, op: increment, value: 5}
+checks:
+  - {type: final-view, view: ok-view, equals: 5}
+  - {type: no-dead-letters}

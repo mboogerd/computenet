@@ -1,0 +1,40 @@
+# Concord corpus scenario (W4-A followup, profile: dist). Canonical schema — see
+# concord/schema/scenario.md. Resolves the `42-INTEREST-01` schema-gap
+# (concord/corpus/DISPUTES.md): the kernel's Interest-scoped instance sets were
+# always real (`LocationRegistry.setInterest` + `Replication.replicate`,
+# `InterestScopedGossipTest`/`ShardedReplicationTest`) but the frozen W0 schema
+# had no `interest:` descriptor to drive it. The new `interest:` field on
+# CellSpec (Scenario.kt) closes that gap.
+id: 42-INTEREST-01
+title: Two disjoint-slot replicas of one logical set each hold exactly their admitted slice
+covers: [42-INT-01]
+profile: dist
+kind: example
+narrative:
+  given: two set-source replicas of one logical set, each assigned a disjoint hash-slot interest (2 slots, one each)
+  when: writes routed by slot land on each replica's own admitting side
+  then: each replica's final-view equals exactly its own filtered slice — a delta never crosses to the non-admitting side
+graph:
+  hosts: [h1, h2]
+  cells:
+    # r1 owns slot 0 of 2, r2 owns slot 1 — pairwise disjoint slot SETS, so
+    # Interest.overlaps(r1, r2) is false and Replication.replicate forms NO
+    # gossip link between them at all (spec 42's partitioning setting; the same
+    # disjoint-set decision InterestScopedGossipTest's first case exercises).
+    # With no link, each replica's own local writes are exactly its final
+    # content — the interest-admitted subset, holding nothing else by construction.
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared, interest: {slots: [0], total-slots: 2}}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared, interest: {slots: [1], total-slots: 2}}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: add, value: alpha}
+  - {type: apply, on: r2, op: add, value: beta}
+  - {type: quiesce}
+checks:
+  - {type: final-view, view: v1, equals: [alpha]}
+  - {type: final-view, view: v2, equals: [beta]}
+  - {type: no-dead-letters}

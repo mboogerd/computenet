@@ -142,18 +142,46 @@ object Checks {
         return CheckResult.Passed
     }
 
-    /** All live replicas of the logical id hold equal folds. */
+    /**
+     * All *live* replicas of the logical id hold equal folds (spec 42 §G-45
+     * departed-stream rule, `42-REPL-06`). The scenario graph only names the
+     * *declared* replica set — it says nothing about which of them are still
+     * live after the run, so a replica that departed mid-run (`despawn`/evict)
+     * must be excluded from the comparison rather than compared against its
+     * frozen last fold (that comparison is exactly the false-positive G-45
+     * forbids: survivors are expected to keep advancing past whatever the
+     * departed replica last held).
+     *
+     * The neutral [Driver] SPI has no "list live replicas" verb (adding one is
+     * a driver change out of this check's scope — see DISPUTES.md
+     * `42-REPL-DEPART-01`), so liveness is read off the SPI verb that already
+     * carries the signal: [Driver.readView] is documented as "the current
+     * materialized value of a view cell" — a cell `despawn` has retired is no
+     * longer one, and the in-process binding's own bookkeeping (a plain cell
+     * table keyed by id) throws [NoSuchElementException] reading a removed
+     * key. Catching *only* that — not every exception — excludes a genuinely
+     * departed replica while still surfacing any other failure as a real bug.
+     * This mirrors the kernel's own harness equivalent
+     * (`cell.verify.ReplicaConvergence.liveRefs`, which intersects the
+     * attached set against `LocationRegistry.replicasOf`) using only the
+     * neutral SPI this package is allowed to touch.
+     */
     fun replicasConverge(check: ReplicasConverge, ctx: CheckContext): CheckResult {
-        val replicas = ctx.scenario.graph?.cells.orEmpty().filter { it.replicaOf == check.logical }.map { it.id }
-        if (replicas.size < 2) return CheckResult.Passed
-        val ref = replicas.first()
-        val refType = viewType(ctx.scenario, ref)
-        val refVal = ctx.driver.readView(ref)
-        for (other in replicas.drop(1)) {
-            val v = ctx.driver.readView(other)
+        val declared = ctx.scenario.graph?.cells.orEmpty().filter { it.replicaOf == check.logical }.map { it.id }
+        val live = declared.mapNotNull { id ->
+            try {
+                id to ctx.driver.readView(id)
+            } catch (e: NoSuchElementException) {
+                null // departed (despawned/evicted) — excluded, not compared (G-45)
+            }
+        }
+        if (live.size < 2) return CheckResult.Passed
+        val (refId, refVal) = live.first()
+        val refType = viewType(ctx.scenario, refId)
+        for ((otherId, v) in live.drop(1)) {
             if (!Values.equalForView(refVal, v, refType)) {
                 return CheckResult.Failed(
-                    "replicas-converge(${check.logical}): $ref=${Values.render(refVal)} but $other=${Values.render(v)}",
+                    "replicas-converge(${check.logical}): $refId=${Values.render(refVal)} but $otherId=${Values.render(v)}",
                 )
             }
         }

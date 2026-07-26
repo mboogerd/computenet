@@ -1,0 +1,41 @@
+# Concord corpus scenario (W4-A followup, profile: core). Canonical schema —
+# see concord/schema/scenario.md. Resolves the `23-SPSC-01` schema-gap
+# (concord/corpus/DISPUTES.md), REJECT HALF ONLY: the kernel's M5.6
+# exclusive-bit SPSC rule was always real (OwnershipTest: a second subscriber
+# on an Owned/Leased-carrying FanOutlet is rejected) but no catalog cell
+# emitted an exclusive (Owned/Leased) payload, so "second consume-link on an
+# exclusive outlet rejected" had no scenario surface. The new
+# `exclusive-source`/`exclusive-sink` catalog ids (KernelAdapters.kt:
+# ExclusiveSourceCell/ExclusiveSinkCell) close that gap: the source's outlet
+# genuinely carries an `Owned` payload, so a second Consume link is refused by
+# the kernel's own FanOutlet exclusivity check (`FanOutlet.linkTo`), not a
+# driver-side fake.
+#
+# NOTE — the observe/tap ADMIT half is deliberately NOT attempted here. Per
+# DISPUTES.md, a `role: observe`/`consume`-differentiated tap admitted onto the
+# same exclusive outlet is the unbuilt G-47 gap (the driver does not yet
+# distinguish `role: observe` from a Consume link at connect time — see
+# `13-TAP-01`). Only the reject half (a second *Consume* link refused) is
+# covered by this scenario.
+id: 23-SPSC-01
+title: A second consume-link on an exclusive (Owned-carrying) outlet is rejected
+covers: [12-EXCL-01]
+profile: core
+kind: example
+narrative:
+  given: an exclusive-outlet source already linked to one consumer
+  when: a second consumer attempts to connect to the same exclusive outlet
+  then: the second connect is rejected (SPSC, M5.6) and the first consumer keeps receiving deliveries undisturbed
+graph:
+  cells:
+    - {id: src, type: exclusive-source}
+    - {id: c1, type: exclusive-sink}
+    - {id: c2, type: exclusive-sink}
+  links:
+    - {from: src, to: c1}
+script:
+  - {type: connect, from: src, to: c2, expect: rejected}
+  - {type: apply, on: src, op: push, value: still-flows}
+checks:
+  - {type: final-view, view: c1, equals: 1}
+  - {type: no-dead-letters}

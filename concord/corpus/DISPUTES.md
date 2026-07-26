@@ -37,15 +37,47 @@ need a deeper kernel capability (a wave-coalescing operator) and remain filed.
   positive stream assertion (`observations-all-satisfy`) — a genuinely deeper
   gap, re-filed below.
 
+## Resolved by R1 (dispute-resolution wave)
+
+Five entries below were closed in dispute-resolution wave R1 (two parallel
+tickets, file-merged onto `main`). Each gap named a *real* kernel/oracle
+mechanism that had no scenario surface; R1 built the missing surface (a catalog
+cell, a schema descriptor, or a harness fold) without weakening any check. Their
+full by-scenario entries below are now marked **RESOLVED (R1)**.
+
+- `42-INTEREST-01` — **RESOLVED** (`schema-gap`). New `interest:` descriptor
+  (`InterestSpec` on `CellSpec`, `Scenario.kt`); `CorpusRunner` lowers it to a
+  neutral `Value`, `KernelDriverDist.spawnReplica` stages it via
+  `LocationRegistry.setInterest(...)` **before** `Replication.replicate`. Two
+  disjoint-slot replicas each hold exactly their admitted slice.
+- `12-NEGOTIATE-01` — **RESOLVED** (`schema-gap`). New `nature-gate` catalog cell
+  (`KernelAdapters.NatureGatedSinkCell`) registers a fixed inlet nature
+  (`MergeClass.IDEMPOTENT`) via the public `ContractRegistry` seam, so a plain
+  default-nature source's `connect` is refused by the kernel's own
+  `NatureNegotiation` reconciler (CP-F3) — no schema field, no driver-side fake.
+- `23-SPSC-01` — **RESOLVED, REJECT HALF ONLY** (`schema-gap`). New
+  `exclusive-source`/`exclusive-sink` catalog cells
+  (`KernelAdapters.ExclusiveSourceCell`/`ExclusiveSinkCell`) emit a genuine
+  `Owned` payload, so a second `Consume` link is refused by the kernel's own
+  `FanOutlet` exclusivity check (M5.6). **The observe/tap ADMIT half remains
+  deferred to G-47** (the driver still does not differentiate `role: observe`
+  from a Consume link — see `13-TAP-01`).
+- `42-REPL-DEPART-01` — **RESOLVED** (`check-vocabulary-gap`).
+  `Checks.replicasConverge` now scopes to *live* replicas — it drops any declared
+  replica whose `readView` no longer resolves (the departed-cell signal `despawn`
+  already yields), matching the kernel's departed-stream rule (spec 42 §G-45,
+  `42-REPL-06`). Survivors converge; the departed frozen fold is excluded, not
+  false-failed.
+- `24-OP-PRESENCE-01` — **RESOLVED** (`oracle-gap`). `BatchOracle.presenceCountFold`
+  now models `presence-count` as a per-element live-source-link count
+  (`MapDelta<E,Int>`, group-death at 0) matching `PresenceCountCell`, so
+  `incremental-equals-batch` is restored rather than omitted.
+
 ## Category index (worklist, cheapest first)
 
 **`schema-gap` — a descriptor surface the frozen W0 schema does not expose;
 needs a between-waves schema-change ticket:**
 
-- `12-NEGOTIATE-01` — no `nature:`/`requires:` descriptor to drive a
-  `PortNatures.stamp` mismatch; contract/nature refusal is unexpressible.
-- `23-SPSC-01` — no `outlet-mode: exclusive` descriptor and no exclusive-payload
-  catalog cell; exclusive-outlet fan-out rejection is unexpressible.
 - `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — no window-spec descriptor (also
   `kernel-gap`: no `window` cell binding — see entry).
 - `22-WAVE-FANIN-01` — no set-shaped per-wave predicate in the frozen function
@@ -53,12 +85,8 @@ needs a between-waves schema-change ticket:**
   stream (the glitch-free *wiring* landed W3-4; this check-shape gap did not —
   see entry).
 
-**`oracle-gap` — the harness-side batch oracle's fold model is missing;
-harness work, not corpus or kernel:**
-
-- `24-OP-PRESENCE-01` — the oracle folds `presence-count` as a scalar
-  cardinality, but the kernel cell is a per-element fan-in lane count;
-  `incremental-equals-batch` is omitted until the oracle models it.
+*(`12-NEGOTIATE-01`, `23-SPSC-01` (reject half), `24-OP-PRESENCE-01` — resolved
+in R1, see the "Resolved by R1" section above.)*
 
 **`kernel-gap` / `spec-gap` — capability absent from the kernel, or the decided
 design is unimplemented; deep, implementation-ticket work:**
@@ -150,40 +178,45 @@ design is unimplemented; deep, implementation-ticket work:**
   - {type: observations-all-satisfy, view: v, fn: mod-eq(4,0)} # 22-GF-NESTED-01
   ```
 
-### `12-NEGOTIATE-01` — **`schema-gap`**
+### `12-NEGOTIATE-01` — **RESOLVED (R1, `schema-gap`)**
 
 - **Requirement**: `13-LINK-05` (rejection reasons include schema/contract
   mismatch), plus the "admission… contract compatibility (`portName`,
   `contractId`)" prose in `13-links.md`.
-- **Gap**: the kernel has a genuine link-time typed-refusal mechanism —
-  `NatureNegotiation` (CP-F3), exercised by `TypedRefusalTest` /
-  `NegotiatedAttachmentTest` — but it operates on `NatureVector`s stamped onto
-  ports via the kernel-internal `PortNatures.stamp(...)`. No `CellSpec`/`LinkSpec`
-  field in the frozen W0 schema exposes a nature requirement/offering, and no
-  catalog cell declares a non-default nature that would trigger a mismatch
-  through ordinary wiring. Plain generic-contract mismatches are not rejected at
-  `connect` either (erased-generic `Propagate<Any>` adapters accept whatever is
-  routed).
-- **Resolves**: a schema-change ticket exposing a `nature:`/`requires:`
-  descriptor the driver translates into a `PortNatures.stamp(...)` call — or a
-  catalog cell pair whose fixed natures already conflict (none at W3-0).
+- **How resolved**: the gap was "the `NatureNegotiation` (CP-F3) typed-refusal
+  mechanism is real (`TypedRefusalTest`/`NegotiatedAttachmentTest`) but no
+  catalog cell declared a non-default nature to trigger it through ordinary
+  wiring." R1 added the `nature-gate` catalog cell
+  (`KernelAdapters.NatureGatedSinkCell`): its companion registers a fixed inlet
+  nature (`MergeClass.IDEMPOTENT` on the `MERGE_IDEMPOTENCE` axis) via the
+  *public* `ContractRegistry.register(...)` seam — the same projection
+  `PortNatures` reads at construction — so a plain `CounterCell` source
+  (axis-default `NON_IDEMPOTENT`) is a real CP-F3 mismatch and its `connect` is
+  refused by the kernel's own reconciler, no schema field required. Scenario
+  `12-NEGOTIATE-01.yaml` authored (`connect … expect: rejected` + `final-view` on
+  the undisturbed existing view + `no-dead-letters`); passes the sweep.
 
-### `23-SPSC-01` — **`schema-gap`**
+### `23-SPSC-01` — **RESOLVED (R1, `schema-gap`) — reject half only; ADMIT half still deferred to G-47**
 
 - **Requirement**: `12-EXCL-01` (fan-out MUST be rejected at link time when the
   contract's payload carries exclusive ownership — `Owned`/`Leased`).
-- **Gap**: the M5.6 exclusive-bit mechanism is real and kernel-tested
-  (`OwnershipTest`: a second subscriber on an `Owned`/`Leased`-carrying
-  `FanOutlet` is rejected), but every catalog-bound cell emits a plain
-  non-exclusive `Propagate<Delta>`, and the schema has no `outlet-mode`
-  descriptor requesting an exclusive outlet (unlike `inlet-mode`). So "second
-  consume-link on an exclusive outlet rejected" is unexpressible in catalog
-  vocabulary (P5) without a new catalog cell or descriptor param. The observe/tap
-  **admit** half is separately deferred to G-47 (`role: observe`/`consume` is not
-  yet differentiated by the driver — see `13-TAP-01`).
-- **Resolves**: a schema-change ticket adding an exclusive-payload catalog cell
-  (or `outlet-mode: exclusive` bound to an existing source) plus driver wiring,
-  deferred alongside G-47.
+- **How resolved (reject half)**: the gap was "the M5.6 exclusive-bit mechanism
+  is real and kernel-tested (`OwnershipTest`) but every catalog cell emitted a
+  plain non-exclusive `Propagate<Delta>`, so no scenario surface." R1 added the
+  `exclusive-source`/`exclusive-sink` catalog cells
+  (`KernelAdapters.ExclusiveSourceCell`/`ExclusiveSinkCell`): the source's outlet
+  genuinely carries an `Owned<Any>` payload (its companion registers the
+  `Owned`-parameter contract via the same public `ContractRegistry` seam, so the
+  `exclusive` flag `FanOutlet` reads at construction is set), and a second
+  `Consume` link is refused by the kernel's own `FanOutlet.linkTo` exclusivity
+  check — not a driver-side fake. Scenario `23-SPSC-01.yaml` authored (`connect …
+  expect: rejected` + first consumer `final-view` + `no-dead-letters`); passes
+  the sweep.
+- **Still deferred (ADMIT half) — G-47**: the observe/tap ADMIT half (a
+  `role: observe`-differentiated tap admitted onto the same exclusive outlet)
+  remains unbuilt: the driver still does not distinguish `role: observe` from a
+  `Consume` link at connect time (see `13-TAP-01`). Only the reject half is
+  covered.
 
 ### `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — **`kernel-gap`** + **`schema-gap`**
 
@@ -201,28 +234,22 @@ design is unimplemented; deep, implementation-ticket work:**
   key derivation over `Windows.tumbling`/`sliding`) the oracle can model
   identically. Open coverage gap until then.
 
-### `24-OP-PRESENCE-01` — **`oracle-gap`** (harness-side)
+### `24-OP-PRESENCE-01` — **RESOLVED (R1, `oracle-gap`)** (harness-side)
 
 - **Requirement**: no dedicated EARS id (see the coverage note in
   `24-OP-PRESENCE-01.yaml`); a genuine oracle/driver semantic mismatch, not a
   missing-id gap.
-- **Gap**: `BatchOracle` folds both `count` and `presence-count` to "current
-  membership cardinality" (a documented v1 simplification). That is a reasonable
-  stand-in for `count`, but `PresenceCountCell` shares its `PresenceLanes`
-  substrate with `QuorumSetCell` — it is a **fan-in** cell keeping one
-  `TagState` per open source link, emitting `MapDelta<E, Int>` keyed by element
-  (value = number of distinct live source links asserting that element,
-  group-death at 0). It is not a scalar count.
-- **Resolved without forcing**: `24-OP-PRESENCE-01.yaml` was redesigned around
-  the real fan-in shape (two set sources into one `presence-count`, read through
-  a `map-view`); `incremental-equals-batch` is deliberately omitted (only
-  `final-view` + `no-dead-letters` asserted) because the oracle's scalar model
-  has no fold for the per-element lane-count semantics.
-- **Resolves**: an oracle-model update (`BatchOracle.presenceFold` / a
-  `Fold.MapF`) folding `presence-count` as a per-element live-source-link count,
-  at which point `incremental-equals-batch` can be restored. Oracle code lives
-  in `concord/src/main/kotlin/civictech/concord/oracle/` — harness work, out of
-  the corpus scope fence.
+- **How resolved**: the gap was "`BatchOracle` folded `presence-count` to a
+  scalar membership cardinality, but `PresenceCountCell` (a `PresenceLanes`
+  fan-in sharing the `QuorumSetCell` substrate) emits `MapDelta<E, Int>` keyed by
+  element — the count of distinct live source links asserting it, group-death at
+  0 — so `incremental-equals-batch` had to be omitted." R1 added
+  `BatchOracle.presenceCountFold`, folding `presence-count` as exactly that
+  per-element live-source-link count, so the oracle now matches the kernel cell.
+  `24-OP-PRESENCE-01.yaml` keeps its real fan-in shape (two set sources into one
+  `presence-count`, read through a `map-view`) and now asserts
+  `incremental-equals-batch` alongside `final-view` + `no-dead-letters`; passes
+  the sweep. `BatchOracleTest` gained coverage of the new fold.
 
 ### `21-REBASE-01` / `15-RESTART-01` — **`kernel-gap`** + **`spec-gap`**
 
@@ -274,51 +301,42 @@ W4-A bound the honestly-drivable dist scenarios (`42-REPL-01`, `42-REPL-LATE-01`
 `streamTo` cross-host edges, `ManagedHost.migrate`). Two of the plan's §3 rows
 resist the *frozen driver SPI / schema*, not the kernel, and are filed here.
 
-### `42-REPL-DEPART-01` — **`check-vocabulary-gap`** (+ SPI-gap)
+### `42-REPL-DEPART-01` — **RESOLVED (R1, `check-vocabulary-gap`)**
 
 - **Requirement**: `42-REPL-06` (IF a replica departs orderly while peers keep
   accepting writes, THEN survivors converge and the departed replica's frozen
   stream is not counted as a divergence — spec 42 §G-45 departed-stream rule).
-- **Gap**: the `replicas-converge(logical)` check reads `readView` over **every
-  cell declared `replica-of: <logical>` in the graph** — a static set. Departing
-  a replica through the SPI means `despawn` (or evict), which removes it from the
-  driver's cell table, so `readView(departed)` throws; and even if its last fold
-  were retained, the check would compare that frozen value against advancing
-  survivors and **false-fail** — the exact G-45 false-positive the requirement
-  says must not happen. The check has no notion of a *live* replica subset, and
-  the departed-stream rule that fixes this lives in a kernel-internal harness
-  (`cell.verify.ReplicaConvergence`, 50/52), below the boundary (P1). A
-  no-post-departure-writes variant would pass but exercise nothing — the whole
-  point is survivor advance after departure — so it is not authored (the iron
-  rule forbids a check that asserts nothing).
-- **Resolves**: a schema-change ticket giving `replicas-converge` a live/survivor
-  scope (e.g. `replicas-converge(logical, excluding: [<departed>])`, or a
-  driver-reported liveness set), after which author `42-REPL-DEPART-01.yaml`:
-  three replicas, despawn one, keep writing to the survivors,
-  `{type: replicas-converge, logical: shared}` over the live set.
+- **How resolved**: the gap was "`replicas-converge(logical)` read `readView`
+  over every statically-declared `replica-of` cell, so a `despawn`ed replica
+  either threw on `readView` or false-failed its frozen fold against advancing
+  survivors — the exact G-45 false-positive." R1 gave
+  `Checks.replicasConverge` a *live* scope: it `mapNotNull`s the declared
+  replicas, dropping any whose `readView` no longer resolves (the departed-cell
+  signal the neutral SPI already carries once `despawn` retires a cell — no new
+  SPI verb), matching the kernel's own departed-stream rule
+  (`cell.verify.ReplicaConvergence.liveRefs`, kept below the P1 boundary).
+  Scenario `42-REPL-DEPART-01.yaml` authored (three replicas, orderly `despawn`
+  of one, survivors keep writing incl. a remove of the departed replica's own
+  contribution, `replicas-converge` + `views-converge` + `no-dead-letters`);
+  passes the `dist` sweep.
 
-### `42-INTEREST-01` — **`schema-gap`**
+### `42-INTEREST-01` — **RESOLVED (R1, `schema-gap`)**
 
 - **Requirement**: `42-INT-01` (WHERE an instance declares a partial `Interest`,
   it holds exactly the interest-admitted subset — spec 42 §Interest-scoped
   instance sets).
-- **Gap**: the **kernel supports this fully** — `LocationRegistry.setInterest(ref,
-  Interest.Slots/Ranges/…)` before `Replication.replicate` gives an
-  interest-scoped replica that links (and holds) only the admitted slice
-  (`InterestScopedGossipTest`/`ShardedReplicationTest`). But the **frozen W0
-  scenario schema has no `interest` descriptor param** on `CellSpec` (only `of`,
-  `fn`, `agg`, `k`, `glitch-free`, `inlet-mode`, `host`, `replica-of`), and the
-  parser drops unknown keys, so a scenario cannot express an interest assignment
-  and the driver never receives one. Adding an `interest:` field (with a neutral
-  interest sub-grammar — total/empty/slots/ranges) is a schema-types change,
-  outside the W4-A corpus/driver fence.
-- **Resolves**: a schema-change ticket freezing an `interest:` descriptor param
-  and its neutral value grammar, plus a `final-view`-vs-filtered-oracle check
-  (or reuse `final-view` against a hand-computed slice). The driver binding is
-  ready (`registry.setInterest(replica.ref, …)` in `KernelDriverDist.spawnReplica`
-  before `replicate`); only the scenario surface is missing. Then author
-  `42-INTEREST-01.yaml`: two disjoint-slot replicas of one logical set,
-  `final-view` on each equal to its filtered slice.
+- **How resolved**: the gap was "the kernel supports interest-scoped replicas
+  fully (`LocationRegistry.setInterest` before `Replication.replicate`,
+  `InterestScopedGossipTest`/`ShardedReplicationTest`) but the frozen W0 schema
+  had no `interest:` descriptor, so the driver never received one." R1 froze the
+  `interest:` field on `CellSpec` (`InterestSpec` in `Scenario.kt`) with a
+  neutral closed sub-grammar (total/empty/slots/ranges); `CorpusRunner` lowers it
+  to a neutral `Value`, and `KernelDriverDist.spawnReplica` parses it and stages
+  it via `registry.setInterest(replica.ref, …)` **before** `replicate` (the
+  gossip linker then consults it). Scenario `42-INTEREST-01.yaml` authored (two
+  disjoint-slot replicas of one logical set — pairwise-disjoint slots form no
+  gossip link — each `final-view` equal to its filtered slice + `no-dead-letters`);
+  passes the `dist` sweep. Absent `interest:` stays byte-identical to `Interest.Total`.
 
 ---
 

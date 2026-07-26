@@ -29,11 +29,17 @@ class OracleUnsupported(message: String) : RuntimeException(message)
  * sibling [Functions]/[Values] only — never `civictech.cell.*`.
  *
  * ## Documented semantic assumptions (catalog gaps at v1, flagged for the spec)
- * - **`count` vs `presence-count`.** cell-catalog.md contrasts "distinct-element
- *   count of a set stream" with "currently-present count", but v1 pins no scenario
- *   to disambiguate history-vs-presence; the oracle folds both to the **current
- *   membership cardinality**. Needs a dedicated scenario + a stream-history model
- *   to separate them.
+ * - **`presence-count`** is a **fan-in** operator, not a `count`-shaped scalar
+ *   (resolves the `24-OP-PRESENCE-01` oracle-gap, DISPUTES.md): the kernel's
+ *   `PresenceCountCell` shares its `PresenceLanes` substrate with
+ *   `QuorumSetCell` — one `TagState` per *open source link*, emitting
+ *   `MapDelta<E, Int>` keyed by element, value = the number of distinct live
+ *   source links currently asserting that element (group-death when a count
+ *   drops to 0). [presenceCountFold] folds each inbound link's source to its
+ *   *current* membership set (same per-source fold every other operator
+ *   uses) and counts, per element, how many of those sets currently hold it —
+ *   an element whose count reaches 0 is simply absent from the resulting map,
+ *   matching the kernel's group-death.
  * - **`group-by` aggregator.** The catalog lists `fn (key-of), agg`. `fn` is the
  *   key extractor; the aggregator is the additive `agg` [CellSpec] field (W3-0,
  *   `count`|`sum`|`min`|`max`, default `count`). Non-count aggregators fold the
@@ -219,7 +225,8 @@ class BatchOracle(private val scenario: Scenario) {
             "partition" -> groupByFold(cell, single())
             "quorum-set" -> quorumFold(cell, ins)
             "combine-latest" -> Fold.ScalarF(Functions.aggregate(fn(cell), ins.map { asScalar(foldOf(it.from)) }))
-            "count", "presence-count" -> Fold.ScalarF(Value.IntVal(asSet(single()).size.toLong()))
+            "count" -> Fold.ScalarF(Value.IntVal(asSet(single()).size.toLong()))
+            "presence-count" -> presenceCountFold(ins)
             "window" -> single() // pass-through (documented v1 semantics; unbound in the driver)
             // Views are pass-throughs of their upstream fold; renderView converts to Value.
             in Values.VIEW_TYPES -> single()
@@ -301,6 +308,23 @@ class BatchOracle(private val scenario: Scenario) {
         val counts = LinkedHashMap<Value, Int>()
         sources.forEach { s -> s.forEach { counts.merge(it, 1, Int::plus) } }
         return Fold.SetF(counts.filterValues { it >= target }.keys.toCollection(LinkedHashSet()))
+    }
+
+    /**
+     * `presence-count` (kernel `PresenceCountCell`, a `PresenceLanes` fan-in
+     * peer of `quorum-set`, not a `count`-shaped scalar — DISPUTES.md
+     * `24-OP-PRESENCE-01`): folds each inbound source link to its own current
+     * membership set, then for every element counts how many of those sets
+     * currently hold it — one live source link asserting an element is one
+     * count. An element no source currently holds has count 0 and is simply
+     * absent from the map (the kernel's group-death), never emitted as a 0.
+     */
+    private fun presenceCountFold(ins: List<LinkSpec>): Fold {
+        val counts = LinkedHashMap<Value, Int>()
+        for (link in ins) {
+            asSet(foldOf(link.from)).forEach { el -> counts.merge(el, 1, Int::plus) }
+        }
+        return Fold.MapF(counts.mapValues { (_, c) -> Value.IntVal(c.toLong()) })
     }
 
     // --- rendering ----------------------------------------------------------

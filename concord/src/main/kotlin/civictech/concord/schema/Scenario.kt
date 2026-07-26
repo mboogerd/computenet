@@ -105,6 +105,40 @@ data class CellSpec(
     val host: String? = null,
     /** Logical replica group this cell is a member of (dist profile). */
     @SerialName("replica-of") val replicaOf: String? = null,
+    /**
+     * Interest-scoped instance-set assignment (dist profile, spec 40/42
+     * §Interest-scoped instance sets, `42-INTEREST-01`). Optional and additive
+     * (W4-A followup): absent ⇒ the kernel's own default (total interest —
+     * plain replication, byte-identical to a `replica-of` cell with no
+     * `interest:`). The driver translates this into a real
+     * `civictech.cell.link.Interest` and calls `LocationRegistry.setInterest`
+     * before the replica joins the mesh (`KernelDriverDist.spawnReplica`).
+     */
+    val interest: InterestSpec? = null,
+)
+
+/**
+ * The neutral interest sub-grammar (`42-INTEREST-01`): a small, closed vocabulary
+ * mirroring the kernel's `civictech.cell.link.Interest` algebra (spec 40/42) —
+ * `total` (every key, the replication setting), `empty` (no key), `slots` (a
+ * hash-slot subset out of `total-slots` slots — the partitioning setting when two
+ * instances' slot sets are disjoint), or `ranges` (half-open `[lo, hi)` integer
+ * ranges over a numeric key). Exactly one of these is expected to be set per
+ * instance; the driver resolves precedence `total` > `empty` > `slots` > `ranges`
+ * when more than one is present. All fields optional (additive, lenient parse).
+ */
+@Serializable
+data class InterestSpec(
+    /** Total interest — every key, every delta (the replication default). */
+    val total: Boolean? = null,
+    /** Empty interest — no key, no delta. */
+    val empty: Boolean? = null,
+    /** A hash-slot subset this instance admits, out of [totalSlots] slots. */
+    val slots: List<Int>? = null,
+    /** The hash-slot space size `slots` is drawn from (required alongside [slots]). */
+    @SerialName("total-slots") val totalSlots: Int? = null,
+    /** Half-open `[lo, hi)` integer ranges this instance admits, over a numeric key. */
+    val ranges: List<List<Long>>? = null,
 )
 
 /**

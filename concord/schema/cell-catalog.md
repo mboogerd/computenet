@@ -55,6 +55,14 @@ no ops (they react to their inlets).
 | `value-view` | Folds a scalar stream (`counter-source`/`combine-latest`/`pn-counter`/`feedback` output) into a single value. |
 | `list-view` | Folds a positional list-delta stream (`list-source`) into an ordered list (W3-0). |
 
+## Nature / ownership sinks (W4-A followup, `12-NEGOTIATE-01`/`23-SPSC-01`)
+
+| id | ops | semantic |
+|---|---|---|
+| `nature-gate` | — | A sink whose inlet **declares a required nature** (idempotent merge). A plain default-nature producer's `connect` to it is refused at link time by the kernel's real `NatureNegotiation` (CP-F3) — resolves `12-NEGOTIATE-01`. |
+| `exclusive-source` | `push` | A source whose `outlet` carries an `Owned` (exclusive, SPSC) payload — resolves `23-SPSC-01`. `push` wraps `value:` in a fresh `Owned`. |
+| `exclusive-sink` | — | Consumes `exclusive-source`'s `Owned` payload; a **second** consume-link to the same `exclusive-source` outlet is rejected by the kernel's own FanOutlet exclusivity check (M5.6). Observed through a count (`final-view`/`readView` → the running delivery count). Only the reject half is covered — the observe/tap ADMIT half is the unbuilt G-47 gap (see `23-SPSC-01.yaml`). |
+
 ## Cycles (34-CYCLE)
 
 | id | params | semantic |
@@ -88,7 +96,11 @@ scalar/list view folds and the `feedback` head live in the driver's
 streams of pairs, with different `combine`); `semi-join`→`SemiJoinCell`;
 `combine-latest fn:sum`→`ScalarSumCombineCell`; `value-view`→a scalar `View` folding
 both `CounterDelta` and `PnCounterDelta`; `list-view`→a list `View`; `feedback`/
-`feedback-undamped`→`FeedbackCell` (a `CycleHead`).
+`feedback-undamped`→`FeedbackCell` (a `CycleHead`); `nature-gate`→
+`NatureGatedSinkCell` (a hand-registered `ContractRegistry` descriptor projects a
+required nature onto its inlet — CP-F2/F3, W4-A followup); `exclusive-source`/
+`exclusive-sink`→`ExclusiveSourceCell`/`ExclusiveSinkCell` (an `Owned`-carrying
+`FanOutlet` contract, likewise hand-registered — M5.6, W4-A followup).
 
 The `join` family binds over **set streams of pairs `[k, v]`** (matching the batch
 oracle), not the kernel's map-stream `JoinCell`/`LookupJoinCell` — those are keyed

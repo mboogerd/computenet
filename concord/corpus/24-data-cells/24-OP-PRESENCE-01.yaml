@@ -1,18 +1,15 @@
-# Real semantic finding (W3-2), not the coverage gap it first looks like: the
-# batch oracle documents "count vs presence-count" as an open v1 ambiguity and
-# folds both to scalar current-membership cardinality (BatchOracle.kt). But the
-# KERNEL binding is not that at all: `PresenceCountCell` (kernel/.../data/
+# Real semantic finding (W3-2): `PresenceCountCell` (kernel/.../data/
 # PresenceCountCell.kt) is a per-element FAN-IN lane counter sharing its
 # substrate (`PresenceLanes`) with `QuorumSetCell` — it emits `MapDelta<E, Int>`
 # keyed by element, one entry per element counting how many distinct LIVE
 # SOURCE LINKS currently assert it (group-death when a count drops to 0), not a
 # single scalar over one source. A scalar `value-view` on a single set-source
 # (mirroring `count`) is simply the wrong shape for what the kernel builds.
-# This scenario therefore uses the real fan-in shape (two set sources) and a
-# `map-view`, and narrows the checks to `final-view` (per-element lane counts)
-# — `incremental-equals-batch` is omitted because the oracle's scalar model
-# does not describe this cell; reconciling it is an oracle-model update, a
-# schema/oracle-change ticket, not something a corpus author decides silently.
+# This scenario uses the real fan-in shape (two set sources) and a `map-view`.
+# Resolved (DISPUTES.md `24-OP-PRESENCE-01`, oracle-gap): `BatchOracle`
+# (civictech.concord.oracle.BatchOracle.presenceCountFold) now models
+# `presence-count` as this same per-element live-source-link count fold, so
+# `incremental-equals-batch` is restored below rather than narrowed.
 id: 24-OP-PRESENCE-01
 title: Presence-count emits, per element, how many live source links currently assert it
 covers: [21-PROP-01]
@@ -39,4 +36,5 @@ script:
   - {type: apply, on: a, op: remove, value: q}
 checks:
   - {type: final-view, view: v, equals: {p: 2}}
+  - {type: incremental-equals-batch, view: v}
   - {type: no-dead-letters}

@@ -229,5 +229,17 @@ class CorpusRunner {
         cell.glitchFree?.let { put("glitch-free", Value.BoolVal(it)) }
         cell.inletMode?.let { put("inlet-mode", Value.StrVal(it)) }
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }
+        cell.interest?.let { put("interest", interestValue(it)) }
     }
+
+    /** Lower a scenario's `interest:` descriptor to the neutral [Value] model (42-INTEREST-01). */
+    private fun interestValue(spec: civictech.concord.schema.InterestSpec): Value = Value.of(
+        buildMap<String, Any?> {
+            spec.total?.let { put("total", it) }
+            spec.empty?.let { put("empty", it) }
+            spec.slots?.let { put("slots", it) }
+            spec.totalSlots?.let { put("total-slots", it) }
+            spec.ranges?.let { put("ranges", it) }
+        },
+    )
 }
