@@ -28,6 +28,7 @@ import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.mapSet
 import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.SemiJoinCell
+import civictech.cell.data.op.GroupByCell
 
 /**
  * CP-A3 (spec 20/22 §Completeness over silent or stuck edges, G-40): the

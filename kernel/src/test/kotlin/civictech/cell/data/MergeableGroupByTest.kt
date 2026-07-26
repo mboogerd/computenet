@@ -13,6 +13,8 @@ import java.util.Random
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.MergeableGroupByCell
 
 /**
  * CP-G1 — the mergeable, [Replicable] group-by. Three concerns:

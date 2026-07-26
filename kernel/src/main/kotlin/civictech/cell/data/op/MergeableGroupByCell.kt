@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
@@ -10,6 +10,7 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.Replicable
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 

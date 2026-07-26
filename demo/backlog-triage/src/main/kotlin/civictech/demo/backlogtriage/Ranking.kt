@@ -8,6 +8,7 @@ import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.sqrt
+import civictech.cell.data.op.GroupByCell
 
 /**
  * Incremental aggregate ranking engines over a stream of pairwise

@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
@@ -8,6 +8,7 @@ import civictech.cell.port.Subscribe
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.MapDiffPublisher
 import civictech.cell.data.delta.MapDelta
 
 @CellBase
@@ -38,7 +39,11 @@ interface LookupJoinApi<K, V, J, D, R> {
  * single dimension change fans out to one wave-grouped output delta.
  *
  * Emission is **effective-only** by value equality of `R` (21): a change leaving
- * a fact's `R` unchanged emits nothing for that fact.
+ * a fact's `R` unchanged emits nothing for that fact. The diff/emit fold is
+ * [MapDiffPublisher] (RS-5.4: adopted here since it was a byte-for-byte copy of
+ * that helper's `publish`/`catchUpDelta`) — the catch-up DELIVERY mechanism
+ * stays the original per-link `onLinked` unicast, only its delta content now
+ * comes from the publisher.
  *
  * Single writer of its output stream, like [GroupByCell] / [CombineLatestCell]:
  * the enriched map is a deterministic function of the two convergent inputs, so
@@ -55,7 +60,7 @@ class LookupJoinCell<K, V, J, D, R>(
     private val facts = mutableMapOf<K, V>()
     private val dims = mutableMapOf<J, D>()
     private val byDim = mutableMapOf<J, MutableSet<K>>() // reverse index J -> facts referencing it
-    private val emitted = mutableMapOf<K, R>() // last published R per fact key (the enriched map)
+    private val publisher = MapDiffPublisher<K, R>() // last-published R per fact key (the enriched map)
 
     /** Convenience: ref-optional, `fk`/`combine`-only. */
     constructor(fk: (K) -> J, combine: (K, V, D?) -> R?) : this(CellRef(UUID.randomUUID()), fk, combine)
@@ -63,9 +68,7 @@ class LookupJoinCell<K, V, J, D, R>(
     init {
         // late-join catch-up (G-22): the current enriched map as a delta-from-empty
         outlet.linking.onLinked = { link ->
-            if (emitted.isNotEmpty()) {
-                outlet.at(link.to).propagate(MapDelta(emitted.toMap(), emptySet()))
-            }
+            publisher.catchUpDelta()?.let { outlet.at(link.to).propagate(it) }
         }
     }
 
@@ -111,19 +114,7 @@ class LookupJoinCell<K, V, J, D, R>(
     }
 
     private fun emitChanges(touched: Set<K>) {
-        val puts = mutableMapOf<K, R>()
-        val removals = mutableSetOf<K>()
-        touched.forEach { k ->
-            val old = emitted[k]
-            when (val now = recompute(k)) {
-                null -> if (old != null) { emitted.remove(k); removals += k } // combine→null or fact gone
-                old -> Unit // effective-only: value-equals gates emission
-                else -> { emitted[k] = now; puts[k] = now }
-            }
-        }
-        if (puts.isNotEmpty() || removals.isNotEmpty()) {
-            outlet.call.propagate(MapDelta(puts, removals))
-        }
+        publisher.publish(touched, ::recompute)?.let { outlet.call.propagate(it) }
     }
 
     override fun snapshot(): Serializable = arrayListOf(HashMap(facts), HashMap(dims))
@@ -137,7 +128,8 @@ class LookupJoinCell<K, V, J, D, R>(
         // inputs — fk is a pure function of K, so byDim is derivable from facts
         byDim.clear()
         facts.keys.forEach { k -> byDim.getOrPut(fk(k)) { mutableSetOf() }.add(k) }
-        emitted.clear()
-        facts.keys.forEach { k -> recompute(k)?.let { emitted[k] = it } }
+        val rebuilt = mutableMapOf<K, R>()
+        facts.keys.forEach { k -> recompute(k)?.let { rebuilt[k] = it } }
+        publisher.reset(rebuilt)
     }
 }

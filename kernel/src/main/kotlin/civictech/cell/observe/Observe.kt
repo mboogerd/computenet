@@ -19,6 +19,7 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.GroupByCell
 
 /**
  * The read/observe dual of the `graph { }` builder (spec

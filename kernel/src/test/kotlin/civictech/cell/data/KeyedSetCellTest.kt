@@ -16,6 +16,7 @@ import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByCell
 
 class KeyedSetCellTest {
 

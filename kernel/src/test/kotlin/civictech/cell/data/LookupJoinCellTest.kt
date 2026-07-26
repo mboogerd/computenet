@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.LookupJoinCell
 
 class LookupJoinCellTest {
 

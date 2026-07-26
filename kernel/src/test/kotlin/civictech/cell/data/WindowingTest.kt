@@ -12,6 +12,7 @@ import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByCell
 
 data class Reading(val sensor: String, val at: Long, val value: Long) : Serializable
 

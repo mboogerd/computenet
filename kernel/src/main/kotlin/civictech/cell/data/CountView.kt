@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import java.io.Serializable
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.GroupByCell
 
 /**
  * Consumer-side materialized read model over a per-key count stream (the

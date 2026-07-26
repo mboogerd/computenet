@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
@@ -9,6 +9,7 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.MapDiffPublisher
 import civictech.cell.data.delta.MapDelta
 
 @CellBase
@@ -31,6 +32,8 @@ interface CombineLatestApi<K, V, W, R> {
  * Emission is **effective-only** by value equality of `R` (21): a delta that
  * leaves a key's combined value unchanged emits nothing for that key. All keys
  * touched by one input delta emit as one [MapDelta] under that input's wave (22).
+ * The diff/emit fold is [MapDiffPublisher] (RS-5.4: adopted here since it was a
+ * byte-for-byte copy of that helper's `publish`/`catchUpDelta`).
  *
  * Single writer of its output stream — so not `Replicable`, like [GroupByCell]:
  * the combined map is a deterministic function of the two convergent inputs, so
@@ -45,11 +48,11 @@ class CombineLatestCell<K, V, W, R>(
 ) : CombineLatestCellBase<K, V, W, R>(ref), Stateful {
     private val leftMap = mutableMapOf<K, V>()
     private val rightMap = mutableMapOf<K, W>()
-    private val emitted = mutableMapOf<K, R>() // last published R per key (the combined map)
+    private val publisher = MapDiffPublisher<K, R>() // last-published R per key (the combined map)
 
     init {
         // late-join catch-up (G-22): the current combined map as a delta-from-empty
-        outlet.catchUpOnLinked { if (emitted.isEmpty()) null else MapDelta(emitted.toMap(), emptySet()) }
+        outlet.catchUpOnLinked { publisher.catchUpDelta() }
     }
 
     override fun onLeft(value: MapDelta<K, V>) {
@@ -70,19 +73,7 @@ class CombineLatestCell<K, V, W, R>(
         if (k in leftMap || k in rightMap) combine(k, leftMap[k], rightMap[k]) else null
 
     private fun emitChanges(touched: Set<K>) {
-        val puts = mutableMapOf<K, R>()
-        val removals = mutableSetOf<K>()
-        touched.forEach { k ->
-            val old = emitted[k]
-            when (val now = recompute(k)) {
-                null -> if (old != null) { emitted.remove(k); removals += k } // combine→null or absent-both
-                old -> Unit // effective-only: value-equals gates emission
-                else -> { emitted[k] = now; puts[k] = now }
-            }
-        }
-        if (puts.isNotEmpty() || removals.isNotEmpty()) {
-            outlet.call.propagate(MapDelta(puts, removals))
-        }
+        publisher.publish(touched, ::recompute)?.let { outlet.call.propagate(it) }
     }
 
     override fun snapshot(): Serializable = arrayListOf(HashMap(leftMap), HashMap(rightMap))
@@ -93,7 +84,8 @@ class CombineLatestCell<K, V, W, R>(
         leftMap.clear(); leftMap.putAll(l as Map<K, V>)
         rightMap.clear(); rightMap.putAll(r as Map<K, W>)
         // rebuild the published map by recomputation over the restored inputs
-        emitted.clear()
-        (leftMap.keys + rightMap.keys).forEach { k -> recompute(k)?.let { emitted[k] = it } }
+        val rebuilt = mutableMapOf<K, R>()
+        (leftMap.keys + rightMap.keys).forEach { k -> recompute(k)?.let { rebuilt[k] = it } }
+        publisher.reset(rebuilt)
     }
 }

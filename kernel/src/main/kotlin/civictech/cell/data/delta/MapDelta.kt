@@ -1,6 +1,8 @@
 package civictech.cell.data.delta
 
 import java.io.Serializable
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.MergeableGroupByCell
 
 /**
  * Convergence limit (G-23, documented): unlike [SetDelta], map deltas carry no

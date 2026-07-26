@@ -6,8 +6,6 @@ import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.data.Aggregators
-import civictech.cell.data.GroupByCell
-import civictech.cell.data.MergeableGroupByCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -45,6 +43,8 @@ import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.mapSet
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.MergeableGroupByCell
 
 /**
  * CP-E2 — the composition **phase exit** ("the Agora for composition").

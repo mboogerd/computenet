@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.op
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
@@ -9,6 +9,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.Aggregator
+import civictech.cell.data.absorbAck
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState

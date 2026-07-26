@@ -13,6 +13,7 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByCell
 
 /**
  * Keyed upsert input (F-3): the latest element under a [key] replaces the

@@ -1,12 +1,6 @@
 package civictech.demo.skillmatch
 
 import civictech.cell.data.Aggregators
-import civictech.cell.data.CombineLatestApi
-import civictech.cell.data.CombineLatestCell
-import civictech.cell.data.GroupByApi
-import civictech.cell.data.GroupByCell
-import civictech.cell.data.LookupJoinApi
-import civictech.cell.data.LookupJoinCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.graph.TypedRef
@@ -29,6 +23,12 @@ import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.JoinSetApi
 import civictech.cell.data.op.SemiJoinCell
 import civictech.cell.data.op.SemiJoinApi
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.GroupByApi
+import civictech.cell.data.op.LookupJoinCell
+import civictech.cell.data.op.LookupJoinApi
+import civictech.cell.data.op.CombineLatestCell
+import civictech.cell.data.op.CombineLatestApi
 
 /**
  * Skill matching: candidates declare skills, jobs declare required skills.

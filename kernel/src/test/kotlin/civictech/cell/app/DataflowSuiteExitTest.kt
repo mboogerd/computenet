@@ -3,7 +3,6 @@ package civictech.cell.app
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
-import civictech.cell.data.GroupByCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
@@ -28,6 +27,7 @@ import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.mapSet
 import civictech.cell.data.op.JoinSetCell
 import civictech.cell.data.op.SemiJoinCell
+import civictech.cell.data.op.GroupByCell
 
 /**
  * M11 exit test: the full operations suite composed end-to-end across two

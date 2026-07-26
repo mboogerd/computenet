@@ -14,6 +14,7 @@ import java.util.*
 import kotlin.math.abs
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.CombineLatestCell
 
 /**
  * RatingCell — hosts one incremental [RatingEngine] as a dataflow cell.

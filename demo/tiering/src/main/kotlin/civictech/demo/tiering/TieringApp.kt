@@ -1,10 +1,6 @@
 package civictech.demo.tiering
 
 import civictech.cell.data.Aggregators
-import civictech.cell.data.CombineLatestCell
-import civictech.cell.data.GroupByApi
-import civictech.cell.data.GroupByCell
-import civictech.cell.data.CombineLatestApi
 import civictech.cell.data.KeyedSetApi
 import civictech.cell.data.KeyedSetCell
 import civictech.cell.data.SetApi
@@ -27,6 +23,10 @@ import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.GroupByApi
+import civictech.cell.data.op.CombineLatestCell
+import civictech.cell.data.op.CombineLatestApi
 
 /**
  * Incremental tiering: agents emit absolute tier valuations (S..F per item)

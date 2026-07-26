@@ -18,6 +18,8 @@ import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.GroupByApi
 
 /**
  * W4.2 (G-56, realizes G-24, 20/24 §Partitioned state): a [PartitionedCell]

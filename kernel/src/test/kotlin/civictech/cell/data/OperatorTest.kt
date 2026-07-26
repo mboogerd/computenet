@@ -21,6 +21,7 @@ import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.op.CountCell
 import civictech.cell.data.op.mapSet
 import civictech.cell.data.op.IntersectSetCell
+import civictech.cell.data.op.JoinCell
 
 class OperatorTest {
 

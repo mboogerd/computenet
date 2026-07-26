@@ -17,6 +17,7 @@ import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.IntersectSetCell
+import civictech.cell.data.op.QuorumSetCell
 
 class QuorumSetCellTest {
 

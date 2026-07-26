@@ -30,6 +30,8 @@ import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
+import civictech.cell.data.op.GroupByCell
+import civictech.cell.data.op.GroupByApi
 
 /**
  * PN-12 structural marker (`Manifest.PARTITIONED`): the cell holds its state

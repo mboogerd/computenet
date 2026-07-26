@@ -2,7 +2,6 @@ package civictech.demo.backlogtriage
 
 import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
-import civictech.cell.data.GroupByCell
 import civictech.cell.data.MapHubCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -31,6 +30,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.io.path.extension
 import kotlin.io.path.nameWithoutExtension
 import civictech.cell.data.op.FlatMapSetCell
+import civictech.cell.data.op.GroupByCell
 
 /**
  * backlog-triage: agents submit backlog features and pairwise value
