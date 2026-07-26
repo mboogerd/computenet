@@ -35,7 +35,9 @@ Replicating a cell = running an instance of the same **logical cell**
 1. **State convergence** via the cell's declared merge semantics — only cells
    of the *concurrent/mergeable* mutability class (10/11) replicate freely;
    single-writer cells replicate as leader + followers (followers serve reads
-   / hold warm state).
+   / hold warm state). [42-REPL-04] WHERE a cell is replicated, replicas of one
+   logical cell SHALL converge to equal folds at quiescence regardless of which
+   replica accepted each write.
 2. **Delta gossip between replicas**: replicas link each other's delta
    outlets/inlets over ordinary network bridges (41) — replication reuses
    dataflow; there is no second sync protocol.
@@ -70,6 +72,10 @@ Replicating a cell = running an instance of the same **logical cell**
 - **Anti-entropy**: partition ⇒ Remote locations drop ⇒ gossip parks
   (spec 33); heal ⇒ re-announce ⇒ parked replay + idempotent catch-up.
   Verified, not rebuilt — the late-join path (21) doubles as recovery.
+  [42-REPL-05] WHEN a consumer links to a replica after deltas have already
+  gossiped through the mesh, the replica SHALL bring it current (state-as-delta
+  catch-up) such that its fold is indistinguishable from a consumer linked to
+  any replica from the start.
   **M10**: a *re*-announce of an already-linked replica re-fires the
   catch-up unicast through the existing link (`Replication.maybeLink`) —
   a crashed-and-recovered peer regains whatever its dying transport
@@ -126,7 +132,10 @@ above is new; what is new is one predicate.
   their interests overlap, and each emission is filtered to the *target's*
   interest before it rides the link: a delta a peer has no interest in never
   crosses. Interest is the demand signal P6 already names (30/34) made concrete
-  per instance and per link.
+  per instance and per link. [42-INT-01] WHERE an instance declares a partial
+  `Interest`, that instance SHALL hold exactly the subset of the logical cell's
+  state its interest admits — no more (a delta outside its interest never links)
+  and no less (every admitted delta gossips in).
 
 - **Union is the merge.** Convergence is still the cell's declared merge over
   the instance set. The three named regimes below are exactly three profiles of
@@ -276,6 +285,9 @@ half is built (above: suspend-when-partitioned, drain-gated despawn, peer
 reconciliation) and the convergence-invariant harness now carries a
 departed-stream rule (`cell.verify.ReplicaConvergence`, 50/52), so a
 replica's orderly departure no longer false-positives a live divergence.
+[42-REPL-06] IF a replica departs orderly (evict/despawn) while its peers keep
+accepting writes, THEN the surviving replicas SHALL still converge and the
+departed replica's frozen final stream SHALL NOT be counted as a divergence.
 Proposal: state the bounded-gossip-hop reconciliation argument
 (duplicate/stale mesh links safe by tag idempotence) with a generative
 membership-churn harness (R1, 95); define graceful

@@ -5,6 +5,7 @@ import civictech.concord.check.CheckResult
 import civictech.concord.check.Checks
 import civictech.concord.driver.Driver
 import civictech.concord.driver.kernel.KernelDriver
+import civictech.concord.generator.ScenarioGenerator
 import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.CellSpec
 import civictech.concord.schema.ConnectStep
@@ -49,6 +50,8 @@ class CorpusRunner {
     private companion object {
         const val QUIESCE_BUDGET = 5_000_000
         const val DEFAULT_RUNS = 20
+        /** Default generative instance count when a `generator:` block omits `instances:`. */
+        const val DEFAULT_GEN_INSTANCES = 40
         /** Where the runner's working directory sees the corpus (Gradle sets cwd = module dir). */
         val CORPUS = File("corpus")
     }
@@ -80,6 +83,15 @@ class CorpusRunner {
     }
 
     private fun runScenario(scenario: Scenario) {
+        // Generative scenarios (§0, §1.2 exemplar (f)) stand in a `generator:` block
+        // for a fixed graph: the harness synthesizes one concrete graph per instance
+        // (seeded by instance index) and drives it exactly like a hand-authored
+        // example. The generation lives in `civictech.concord.generator`; the driver,
+        // checks, and batch oracle are the same shared machinery used below.
+        if (scenario.kind == Kind.GENERATIVE) {
+            runGenerative(scenario)
+            return
+        }
         val runs = scenario.runs ?: DEFAULT_RUNS
 
         // Per run: build a fresh seeded driver, replay the graph + script, quiesce,
@@ -120,6 +132,49 @@ class CorpusRunner {
                     "${scenario.id}: check(s) failed on ${failuresByRun.size} of $runs run(s). " +
                         "First failing run ($run): ${msgs.joinToString("; ")}"
                 }
+        }
+    }
+
+    /**
+     * Run a `kind: generative` scenario: sweep [DEFAULT_GEN_INSTANCES] (or the
+     * block's `instances:`, or `-Pconcord.gen.instances`) distinct pipelines, each
+     * synthesized by [ScenarioGenerator] from the instance index. Instance index
+     * seeds both the generation and the [KernelDriver] schedule, so a failure is
+     * one reproducible (graph, schedule) pair. Every generated instance must pass
+     * all four standard property checks (`incremental-equals-batch`,
+     * `views-converge`, `late-join-equals-early`, `no-dead-letters`) — a generated
+     * graph that only passes by being trivial is worthless (honesty rule), so the
+     * generator builds real depth from the vocabulary.
+     */
+    private fun runGenerative(scenario: Scenario) {
+        val gen = scenario.generator
+            ?: error("${scenario.id}: kind is generative but no generator: block is present")
+        val instances = System.getProperty("concord.gen.instances")?.toIntOrNull()
+            ?: gen.instances
+            ?: DEFAULT_GEN_INSTANCES
+
+        val failuresByInstance = LinkedHashMap<Int, List<String>>()
+        for (i in 0 until instances) {
+            val concrete = ScenarioGenerator.generate(scenario, i)
+            val driver = KernelDriver(i.toLong())
+            buildGraph(driver, concrete)
+            runScript(driver, concrete.script)
+            driver.quiesce(QUIESCE_BUDGET)
+            val ctx = RunContext(driver, concrete)
+            val failures = concrete.checks.mapNotNull { check ->
+                when (val r = Checks.evaluate(check, ctx)) {
+                    CheckResult.Passed -> null
+                    is CheckResult.Failed -> r.message
+                    is CheckResult.NotImplemented -> "check '${r.check}' is not implemented"
+                }
+            }
+            if (failures.isNotEmpty()) failuresByInstance[i] = failures
+        }
+
+        assertTrue(failuresByInstance.isEmpty()) {
+            val (instance, msgs) = failuresByInstance.entries.first().let { it.key to it.value }
+            "${scenario.id}: generative check(s) failed on ${failuresByInstance.size} of $instances instance(s). " +
+                "First failing instance ($instance): ${msgs.joinToString("; ")}"
         }
     }
 

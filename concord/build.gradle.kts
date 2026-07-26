@@ -32,6 +32,9 @@ dependencies {
 // leaves behaviour unchanged; `-Pconcord.profiles=dist` runs zero pilots.
 tasks.withType<Test>().configureEach {
     systemProperty("concord.profiles", (project.findProperty("concord.profiles") as String?) ?: "core")
+    // W4-C: the generative sweep (24-GEN-01) defaults to its `generator: instances:`
+    // count; `-Pconcord.gen.instances=N` overrides it for a deeper local sweep.
+    (project.findProperty("concord.gen.instances") as String?)?.let { systemProperty("concord.gen.instances", it) }
 }
 
 // W1-D: the concordance generator (Concord §1.5 / `concord/schema/provenance.md`).

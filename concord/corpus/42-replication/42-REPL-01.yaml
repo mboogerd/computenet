@@ -1,0 +1,29 @@
+# Concord corpus scenario (W4-A, profile: dist). Canonical schema — see concord/schema/scenario.md.
+# CONCORD-PLAN §1.2 exemplar (e), authored in canonical (type-discriminated) form.
+id: 42-REPL-01
+title: Two replicas converge under concurrent writes on both sides
+covers: [42-REPL-04]
+profile: dist
+kind: example
+narrative:
+  given: two set-source replicas of one logical cell, one per host, each observed through its own set view
+  when: adds land on both replicas concurrently and one side removes the other side's element
+  then: at quiescence both replicas hold equal folds and both views agree — convergence, not a fixed golden
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared}
+    - {id: v1, type: set-view, host: h1}
+    - {id: v2, type: set-view, host: h2}
+  links:
+    - {from: r1, to: v1}
+    - {from: r2, to: v2}
+script:
+  - {type: apply, on: r1, op: add, value: from-h1}
+  - {type: apply, on: r2, op: add, value: from-h2}
+  - {type: apply, on: r1, op: remove, value: from-h2}   # concurrent remove of the other side's add (observed-remove ⇒ still converges)
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: views-converge, views: [v1, v2]}
+  - {type: no-dead-letters}

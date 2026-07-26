@@ -6,9 +6,14 @@
 
 ## Requirement
 
-Linking two ports MUST behave identically whether the cells share a thread, a
-process, or nothing but a network. Only cost differs (P2 tiers, 10/14):
-direct call → queue hop → serialized send.
+[41-LOC-01] Linking two ports MUST behave identically whether the cells share a
+thread, a process, or nothing but a network: the graph SHALL compute the same
+observable result for a pipeline split across hosts as for its single-host twin.
+Only cost differs (P2 tiers, 10/14): direct call → queue hop → serialized send.
+*(Boundary-observable half: two folds are equal. The negotiation-parity half —
+that a bridged link runs the same handshake, policies, and allowlist as a local
+one — is real but currently violated by ⚠ CONFLICT C-13 below and is not part of
+this id's checkable surface.)*
 
 ⚠ One shipped path violates this today: bridged links bypass the handshake, so
 local and remote links negotiate differently — a location-transparency bug

@@ -263,3 +263,137 @@ same root cause, consolidated here.)*
   mode). Then author `21-REBASE-01.yaml`: a rebased source reconciling
   mid-stream vs a delta-only twin, `{type: views-converge, views:
   [<rebased-view>, <twin-view>]}`.
+
+---
+
+## W4-A additions (dist profile — distribution, 41/42/33)
+
+W4-A bound the honestly-drivable dist scenarios (`42-REPL-01`, `42-REPL-LATE-01`,
+`41-SPLIT-01`, `33-MIGRATE-01`) against the kernel's real multi-host mesh
+(`SimulationController` N-host, `cell.replication.Replication` gossip, routed
+`streamTo` cross-host edges, `ManagedHost.migrate`). Two of the plan's §3 rows
+resist the *frozen driver SPI / schema*, not the kernel, and are filed here.
+
+### `42-REPL-DEPART-01` — **`check-vocabulary-gap`** (+ SPI-gap)
+
+- **Requirement**: `42-REPL-06` (IF a replica departs orderly while peers keep
+  accepting writes, THEN survivors converge and the departed replica's frozen
+  stream is not counted as a divergence — spec 42 §G-45 departed-stream rule).
+- **Gap**: the `replicas-converge(logical)` check reads `readView` over **every
+  cell declared `replica-of: <logical>` in the graph** — a static set. Departing
+  a replica through the SPI means `despawn` (or evict), which removes it from the
+  driver's cell table, so `readView(departed)` throws; and even if its last fold
+  were retained, the check would compare that frozen value against advancing
+  survivors and **false-fail** — the exact G-45 false-positive the requirement
+  says must not happen. The check has no notion of a *live* replica subset, and
+  the departed-stream rule that fixes this lives in a kernel-internal harness
+  (`cell.verify.ReplicaConvergence`, 50/52), below the boundary (P1). A
+  no-post-departure-writes variant would pass but exercise nothing — the whole
+  point is survivor advance after departure — so it is not authored (the iron
+  rule forbids a check that asserts nothing).
+- **Resolves**: a schema-change ticket giving `replicas-converge` a live/survivor
+  scope (e.g. `replicas-converge(logical, excluding: [<departed>])`, or a
+  driver-reported liveness set), after which author `42-REPL-DEPART-01.yaml`:
+  three replicas, despawn one, keep writing to the survivors,
+  `{type: replicas-converge, logical: shared}` over the live set.
+
+### `42-INTEREST-01` — **`schema-gap`**
+
+- **Requirement**: `42-INT-01` (WHERE an instance declares a partial `Interest`,
+  it holds exactly the interest-admitted subset — spec 42 §Interest-scoped
+  instance sets).
+- **Gap**: the **kernel supports this fully** — `LocationRegistry.setInterest(ref,
+  Interest.Slots/Ranges/…)` before `Replication.replicate` gives an
+  interest-scoped replica that links (and holds) only the admitted slice
+  (`InterestScopedGossipTest`/`ShardedReplicationTest`). But the **frozen W0
+  scenario schema has no `interest` descriptor param** on `CellSpec` (only `of`,
+  `fn`, `agg`, `k`, `glitch-free`, `inlet-mode`, `host`, `replica-of`), and the
+  parser drops unknown keys, so a scenario cannot express an interest assignment
+  and the driver never receives one. Adding an `interest:` field (with a neutral
+  interest sub-grammar — total/empty/slots/ranges) is a schema-types change,
+  outside the W4-A corpus/driver fence.
+- **Resolves**: a schema-change ticket freezing an `interest:` descriptor param
+  and its neutral value grammar, plus a `final-view`-vs-filtered-oracle check
+  (or reuse `final-view` against a hand-computed slice). The driver binding is
+  ready (`registry.setInterest(replica.ref, …)` in `KernelDriverDist.spawnReplica`
+  before `replicate`); only the scenario surface is missing. Then author
+  `42-INTEREST-01.yaml`: two disjoint-slot replicas of one logical set,
+  `final-view` on each equal to its filtered slice.
+
+---
+
+## W4-B durability (`profile: dur`) — what landed, and the one honest boundary
+
+The `dur` profile is genuinely drivable against the kernel's real durability
+machinery (per-cell `journalFor` selector, `checkpoint`/`recoverFrom`, and the
+`Effectful` processed-frontier; kernel `EffectfulRecoveryTest`/`CrashRecoveryTest`).
+Two scenarios pass the 20-run sweep under `-Pconcord.profiles=core,dur`:
+
+- `DUR-REPLAY-01` (`24-DUR-01/02/05`) — crash → journal replay → continue.
+  `effect-count(esink, exactly: 1)` is **honestly exercised, not trivial**:
+  instrumentation confirmed the WAL held the sink's frames + processed-frontier
+  records, and `recoverFrom` re-delivered them while the restored frontier
+  suppressed every already-applied `(sourceId, counter)` — the external effect
+  log stayed at its pre-crash size across replay, then advanced only for the
+  post-recovery key. `incremental-equals-batch(dview)` recovers the data view
+  through its own snapshot/restore (the checkpoint half of durable recovery).
+- `DUR-SNAPTAIL-01` (`24-DUR-02/03`) — checkpoint + journal-tail replay of a
+  journaled source→view equals an uninterrupted twin (`views-converge`).
+
+### The boundary (`kernel-gap` / design ceiling, G-59 / C-9) — not faked, respected
+
+The `Effectful` frontier keys on `MessageContext.timestamp.sourceId`, which the
+**producing `FanOutlet` mints with a random per-instance `sourceId`** (not
+ref-derived; `SetCell.restore` restores its OR-set tag counter but *not* its
+outlet wave state). Consequence, verified by construction: a **journaled source
+that feeds an effectful sink would double-fire** on recovery — its replayed
+re-emission carries a fresh `sourceId` the sink's restored frontier cannot match.
+So exactly-once effect delivery is drivable only when the effect subgraph's source
+is **volatile** (it dies on the crash and is re-delivered nothing — exactly how
+`EffectfulRecoveryTest`'s unhosted source is discarded), and the sink recovers
+from its *own* journaled frames. This is the recorded G-59 gap ("spontaneously-
+emitting sources … `Effectful` sinks without idempotency keys are unhandled") and
+the C-9 boundary; the M10 mechanism is sound for the replay-stable idempotent
+vocabulary, and the "external-idempotency ceiling" (93 I-7) is a stated limit, not
+a bug. It is why `DUR-REPLAY-01` keeps the data-recovery path (journaled/snapshot,
+`incremental-equals-batch`) and the effect-once path (`effect-count`) as **two
+independent subgraphs**: a single cell cannot be both frontier-suppressed (never
+re-applied) *and* state-rebuilt-by-replay.
+
+- **Resolves**: an output-mode / ref-derived wave identity for spontaneously-
+  emitting sources (or a captured-entropy WAL record), so a journaled source's
+  replayed emissions carry the identity the sink's frontier already recorded —
+  then a journaled source could feed an effectful sink and re-emit without
+  double-firing, and `DUR-REPLAY-01` could fold both concerns onto one subgraph.
+
+### Not covered (deferred, honestly out of reach at W4-B)
+
+- `24-DUR-04` (replay-stable identity, no resurrected removals) is exercised
+  *indirectly* — `DUR-SNAPTAIL-01`'s recovered `SetCell` re-mints ref-derived
+  tags, so its recovered membership equals the twin's with no double-count — but
+  it is not asserted head-on (a directed add/remove/replay control belongs in a
+  kernel unit test; the OR-set tag plane is not boundary-observable per P1).
+- `24-REPLAY-01` (a journaled mid-graph cell's replayed frames flagged
+  `MessageContext.baseline` so a downstream **glitch-free join** installs them as
+  arm state) is **not** authored: the `dur` corpus has no glitch-free join, and
+  the scalar/set glitch-free observation gap is itself filed above
+  (`22-GF-DIAMOND-01`). Author it once a wave-coalescing operator lands and a
+  durable arm can feed it.
+- `FileJournal` segmentation/rotation and **cross-host** recovery-frontier drift
+  are single-in-process-host out of scope here (the driver runs the durable
+  subgraph on one reserved host; cross-host is W4-A `dist` territory).
+
+### How it is driven (modeling notes, not disputes)
+
+No new script verbs or schema fields (the W0 seam holds). A durable subgraph
+lives on the reserved host id `dur`; a `journal`-typed controller pseudo-cell is
+the crash handle (`despawn` of it = crash + `recoverFrom` in one step); a
+`snapshot` of a journaled cell lowers to `host.checkpoint`. Catalog additions
+(driver-only, `KernelDriverDur.kt`): `journal-set-source`, `journal-set-view`,
+`effect-sink`, `journal`. Durable links are wired **through the host intake** (a
+`HostedCellProxy` subscribed to the source outlet), never a raw
+`managementInlet.connect`: the kernel journals + enforces the `Effectful`
+frontier only at `enqueueHostedInvocation`, and a raw port `linkTo` bypasses that
+funnel entirely (a silent no-journal path — caught only because instrumentation
+showed a zero-length WAL). Reserved-host caveat for the merge: `host: dur` is a
+`dur`-profile convention; a `dist` scenario (W4-A) must not name a host `dur`.

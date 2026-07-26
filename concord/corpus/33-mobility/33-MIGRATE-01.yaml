@@ -1,0 +1,40 @@
+# Concord corpus scenario (W4-A, profile: dist). Canonical schema — see concord/schema/scenario.md.
+# The migrating cell is placed ALONE on host h1: the kernel's unit of mobility is the host
+# (spec 33), so migrating one cell means migrating its (single-cell) host.
+id: 33-MIGRATE-01
+title: A cell migrated to another host mid-script ends equal to its stay-put twin
+covers: [33-MOVE-01]
+profile: dist
+kind: example
+narrative:
+  given: a source→view pipeline whose source sits alone on host h1 (view on another host), and an identical stay-put twin
+  when: mid-script the source is migrated to a fresh host and the same further writes are applied to it and the twin
+  then: at quiescence the migrated pipeline's view equals the stay-put twin's view, with no lost or dead-lettered deltas
+graph:
+  hosts: [h1, hv]
+  cells:
+    # migrating pipeline: source alone on h1, view on hv (m -> v is a routed cross-host edge that re-resolves on move)
+    - {id: m, type: set-source, of: string, host: h1}
+    - {id: v, type: set-view, host: hv}
+    # stay-put twin (implicit default host)
+    - {id: mt, type: set-source, of: string}
+    - {id: vt, type: set-view}
+  links:
+    - {from: m, to: v}
+    - {from: mt, to: vt}
+script:
+  - {type: apply, on: m, op: add, value: x1}
+  - {type: apply, on: mt, op: add, value: x1}
+  - {type: apply, on: m, op: add, value: x2}
+  - {type: apply, on: mt, op: add, value: x2}
+  - {type: quiesce}
+  - {type: snapshot, on: m, as: blobM}
+  - {type: restore, on: m, from: blobM, host: h3}   # migrate m's (single-cell) host h1 -> fresh host h3
+  - {type: apply, on: m, op: add, value: x3}
+  - {type: apply, on: mt, op: add, value: x3}
+  - {type: apply, on: m, op: remove, value: x1}
+  - {type: apply, on: mt, op: remove, value: x1}
+checks:
+  - {type: views-converge, views: [v, vt]}
+  - {type: final-view, view: v, equals: [x2, x3]}
+  - {type: no-dead-letters}

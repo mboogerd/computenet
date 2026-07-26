@@ -1,0 +1,60 @@
+id: DUR-REPLAY-01
+title: Crash, journal replay, and continue — the data view converges to batch and the effectful sink fires once per key
+covers: [24-DUR-01, 24-DUR-02, 24-DUR-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying two independent subgraphs — a data source feeding a
+    view, and a (volatile) source feeding a journaled effectful sink whose every
+    added element fires one externally-observed effect — plus a journal
+    controller. The effectful sink journals a processed-frontier per applied
+    invocation (spec 24-DUR-05); the data view is recovered from its own
+    pre-crash snapshot (the checkpoint half of durable recovery).
+  when: >
+    after some adds on both subgraphs, the whole durable host crashes and is
+    rebuilt from its surviving journal (recoverFrom replays the frame tail), then
+    more adds are applied and the graph is driven to quiescence
+  then: >
+    the data view equals the batch fold of every add it accepted, AND the
+    effectful sink fired exactly once for each key — the replayed pre-crash
+    invocations were dropped at or behind the sink's restored processed-frontier
+    rather than re-driving the effect
+graph:
+  cells:
+    # data subgraph — recovers its view state across the crash (raw snapshot/restore)
+    - {id: dsource, type: set-source, host: dur}
+    - {id: dview, type: set-view, host: dur}
+    # effect subgraph — the source is VOLATILE (dies on crash, re-delivered nothing,
+    # 24-DUR-03) so it never re-drives the journaled effectful sink on replay; the
+    # sink recovers exactly-once from its own journaled frames + processed-frontier
+    - {id: esource, type: set-source, host: dur}
+    - {id: esink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: dsource, to: dview}
+    - {from: esource, to: esink}
+script:
+  - {type: apply, on: dsource, op: add, value: alpha}
+  - {type: apply, on: dsource, op: add, value: beta}
+  - {type: apply, on: dsource, op: add, value: gamma}
+  - {type: apply, on: esource, op: add, value: k1}
+  - {type: apply, on: esource, op: add, value: k2}
+  - {type: quiesce}
+  # checkpoint the volatile data view's state (its half of recovery is a snapshot)
+  - {type: snapshot, on: dview, as: dv}
+  # CRASH + journal replay: discard every instance, rebuild with the same refs,
+  # recoverFrom the surviving journal (the sink's frontier suppresses its own frames)
+  - {type: despawn, on: ctl}
+  # restore the data view's pre-crash state, then continue
+  - {type: restore, on: dview, from: dv}
+  - {type: apply, on: dsource, op: add, value: delta}
+  - {type: apply, on: esource, op: add, value: k3}
+  - {type: quiesce}
+checks:
+  # dview accepted {alpha,beta,gamma,delta}; equals the batch oracle over dsource's ops
+  - {type: incremental-equals-batch, view: dview}
+  # k1,k2 fired pre-crash and were NOT re-fired on replay; k3 fired post-recovery — each exactly once
+  - {type: effect-count, sink: esink, exactly: 1}
+  - {type: no-dead-letters}

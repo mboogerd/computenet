@@ -82,6 +82,11 @@ Ordering invariant: for any link, messages accepted before closure are
 delivered before messages sent after re-resolution (matches 13's no-loss
 invariant; per-link FIFO preserved end-to-end).
 
+[33-MOVE-01] WHEN a cell is migrated to another host mid-stream, the framework
+SHALL preserve its state and in-flight deltas — no loss, no duplication, per-link
+FIFO — such that its downstream consumers' folds at quiescence equal those of an
+identical cell that never moved (a stay-put twin).
+
 How the implementation realizes the steps (`HostManagementApi`):
 
 - **`drainHost()`** is two-phase: the management task (priority 0) closes the

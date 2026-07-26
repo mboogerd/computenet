@@ -1,0 +1,31 @@
+# Concord corpus scenario (W4-A, profile: dist). Canonical schema — see concord/schema/scenario.md.
+# P8 interaction: late-join (spec 21) × replication (spec 42).
+id: 42-REPL-LATE-01
+title: A view joining a replicated cell mid-run catches up to the fully-gossiped state
+covers: [42-REPL-05, 42-REPL-04]
+profile: dist
+kind: example
+narrative:
+  given: two set-source replicas of one logical cell (one per host) with an early view on the first replica
+  when: writes land on both replicas, then a late view links to the second replica, then a further write flows
+  then: the late view catches up to the gossiped state and ends equal to the early view; both replicas converge
+graph:
+  hosts: [h1, h2]
+  cells:
+    - {id: r1, type: set-source, of: string, host: h1, replica-of: shared}
+    - {id: r2, type: set-source, of: string, host: h2, replica-of: shared}
+    - {id: ve, type: set-view, host: h1}   # early view, linked from the start
+    - {id: vl, type: set-view, host: h2}   # late view, linked mid-script (below)
+  links:
+    - {from: r1, to: ve}
+script:
+  - {type: apply, on: r1, op: add, value: before-1}
+  - {type: apply, on: r2, op: add, value: before-2}
+  - {type: quiesce}
+  - {type: connect, from: r2, to: vl}      # late join: link a view to the second replica after deltas have flowed
+  - {type: apply, on: r1, op: add, value: after-1}
+checks:
+  - {type: replicas-converge, logical: shared}
+  - {type: late-join-equals-early, early: ve, late: vl}
+  - {type: views-converge, views: [ve, vl]}
+  - {type: no-dead-letters}

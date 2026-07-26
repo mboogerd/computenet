@@ -1,0 +1,56 @@
+# Concord generative scenario (W4-C) — exemplar (f) of CONCORD-PLAN §1.2.
+#
+# Instead of a fixed `graph:`, this scenario carries a `generator:` block: the
+# harness (civictech.concord.generator.ScenarioGenerator, dispatched from the
+# CorpusRunner's `runGenerative`) synthesizes one concrete pipeline per instance,
+# seeded by the instance index, and drives it through the SAME kernel driver,
+# checks, and batch oracle a hand-authored example uses. Instance index seeds both
+# the pipeline shape AND the SimulationController schedule, so a failure is one
+# reproducible (graph, schedule) pair.
+#
+# What an instance realizes (§0 generative layer, honesty rule — real depth, real
+# ops, never a trivial graph):
+#   - a random pipeline of `pipeline-depth` operator cells drawn from `vocabulary`,
+#     over one of three shape-consistent families (unary chain / fan-in / join),
+#   - `ops` random add/remove steps distributed across the pipeline's sources,
+#   - a late joiner: a second view linked only after a mid-stream quiesce barrier,
+#   - the four standard property checks below, realized against the generated views
+#     (`incremental-equals-batch` over every view, `views-converge` + `late-join-
+#     equals-early` across the early/late pair, `no-dead-letters`).
+#
+# Vocabulary note: `vocabulary` lists the source/operator catalog ids the builder
+# draws from — every one is bound by the W3-0 kernel driver AND modelled by the
+# batch oracle, so incremental == batch holds honestly. Observation views
+# (set-view / count-view / value-view) are chosen by the harness to match each
+# terminal's element shape, so they are not listed here. Deliberately EXCLUDED (the
+# honesty rule — these are not honestly checkable generatively at v1):
+#   - `window`  — no kernel cell binding and no oracle model (cell-catalog.md n.5).
+#   - `combine-latest` — only the scalar fn=sum arm binds, and it is final-view-only
+#     (not wave-aligned), so it cannot satisfy views-converge under the sweep (§5).
+#   - keyed/counter/list/map sources and the semi/lookup-join and partition/quorum
+#     operators are covered by their dedicated 24-OP-* scenarios; the generative
+#     sweep stays on the set-algebra core where all four properties hold on every
+#     generated graph.
+#
+# Instance count is modest (40) for test speed; override with
+# `-Pconcord.gen.instances=N` (the runner reads the system property first).
+id: 24-GEN-01
+title: Random pipelines from the operator vocabulary keep the standard properties
+covers: [21-PROP-01, 21-CATCHUP-02, 24-CATCHUP-01, 24-OP-FILTER-01, 24-OP-MAP-01, 24-OP-UNION-01, 24-OP-INTERSECT-01, 24-OP-JOINSET-01, 24-OP-GROUPBY-01, 24-OP-COUNT-01]
+profile: core
+kind: generative
+narrative:
+  given: random pipelines drawn from the set-algebra operator vocabulary, each with an early and a late view
+  when: a stream of random adds and removes is driven through the sources, with the late view linking mid-stream
+  then: on every generated instance the incremental result equals the batch oracle, the two views converge, the late view is indistinguishable from the early one, and no host emits a dead letter
+generator:
+  pipeline-depth: [1, 4]
+  vocabulary: [set-source, filter, map, union, intersect, join, group-by, count]
+  ops: 200
+  late-joiner: true
+  instances: 40
+checks:
+  - {type: incremental-equals-batch, view: '*'}
+  - {type: views-converge, views: ['*']}
+  - {type: late-join-equals-early}
+  - {type: no-dead-letters}

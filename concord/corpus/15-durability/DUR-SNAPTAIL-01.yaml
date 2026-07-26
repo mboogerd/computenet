@@ -1,0 +1,53 @@
+id: DUR-SNAPTAIL-01
+title: Restore from a snapshot plus the journal tail equals an uninterrupted twin
+covers: [24-DUR-02, 24-DUR-03]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a journaled source feeding a journaled view on a durable host, and an
+    untouched twin (a volatile source feeding a view on a separate host) driven
+    with the identical op history
+  when: >
+    after an initial burst the durable cells are checkpointed (Stateful snapshot
+    plus WAL compaction), a further burst is applied (the journal tail), then the
+    durable host crashes and recovers — recoverFrom restores the checkpoint and
+    replays the frame tail on top of it
+  then: >
+    the recovered view equals the twin's — a snapshot plus its journal tail
+    reconstructs exactly the state an uninterrupted run holds, losing and
+    duplicating nothing
+graph:
+  cells:
+    # durable subgraph (crashes + recovers): checkpoint restores the prefix, the
+    # tail frames replay on top of it (spec 24-DUR-02)
+    - {id: dsource, type: journal-set-source, host: dur}
+    - {id: dview, type: journal-set-view, host: dur}
+    - {id: ctl, type: journal, host: dur}
+    # uninterrupted twin on a separate volatile host — it never crashes
+    - {id: tsource, type: set-source, host: twin}
+    - {id: tview, type: set-view, host: twin}
+  links:
+    - {from: dsource, to: dview}
+    - {from: tsource, to: tview}
+script:
+  # initial burst — checkpoint prefix
+  - {type: apply, on: dsource, op: add, value: o1}
+  - {type: apply, on: tsource, op: add, value: o1}
+  - {type: apply, on: dsource, op: add, value: o2}
+  - {type: apply, on: tsource, op: add, value: o2}
+  - {type: quiesce}
+  # checkpoint the journaled cells (Stateful snapshot + WAL compaction)
+  - {type: snapshot, on: dsource, as: ck}
+  # journal tail — applied after the checkpoint, replayed on recovery
+  - {type: apply, on: dsource, op: add, value: o3}
+  - {type: apply, on: tsource, op: add, value: o3}
+  - {type: apply, on: dsource, op: add, value: o4}
+  - {type: apply, on: tsource, op: add, value: o4}
+  - {type: quiesce}
+  # CRASH + recover: rebuild the durable host, restore checkpoint, replay the tail
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+checks:
+  - {type: views-converge, views: [dview, tview]}
+  - {type: no-dead-letters}

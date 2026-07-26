@@ -1,0 +1,39 @@
+# Concord corpus scenario (W4-A, profile: dist). Canonical schema — see concord/schema/scenario.md.
+id: 41-SPLIT-01
+title: A pipeline split across two hosts equals its single-host twin
+covers: [41-LOC-01]
+profile: dist
+kind: example
+narrative:
+  given: a source→union→view pipeline whose view is placed on a second host, and an identical single-host twin
+  when: the same adds and a remove are applied to both the split source and the twin source
+  then: at quiescence the cross-host view and the co-hosted twin view hold equal folds — linking is location-transparent
+graph:
+  hosts: [h1, h2]
+  cells:
+    # split pipeline: source + operator on h1, view on h2 (the split is the u -> v host boundary)
+    - {id: s, type: set-source, of: string, host: h1}
+    - {id: u, type: union, host: h1}
+    - {id: v, type: set-view, host: h2}
+    # single-host twin (implicit default host)
+    - {id: st, type: set-source, of: string}
+    - {id: ut, type: union}
+    - {id: vt, type: set-view}
+  links:
+    - {from: s, to: u, inlet: left}
+    - {from: u, to: v}          # cross-host edge (h1 -> h2), installed as a routed stream
+    - {from: st, to: ut, inlet: left}
+    - {from: ut, to: vt}
+script:
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: st, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: bravo}
+  - {type: apply, on: st, op: add, value: bravo}
+  - {type: apply, on: s, op: add, value: charlie}
+  - {type: apply, on: st, op: add, value: charlie}
+  - {type: apply, on: s, op: remove, value: alpha}
+  - {type: apply, on: st, op: remove, value: alpha}
+checks:
+  - {type: views-converge, views: [v, vt]}
+  - {type: final-view, view: v, equals: [bravo, charlie]}
+  - {type: no-dead-letters}

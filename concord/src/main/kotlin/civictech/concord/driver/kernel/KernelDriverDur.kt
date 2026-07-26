@@ -1,0 +1,359 @@
+package civictech.concord.driver.kernel
+
+import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.Propagate
+import civictech.cell.Stateful
+import civictech.cell.data.SetApi
+import civictech.cell.data.SetCell
+import civictech.cell.data.SetOps
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.durability.InMemoryJournal
+import civictech.cell.durability.Journal
+import civictech.cell.evolve.Effectful
+import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
+import civictech.cell.host.SimulationController
+import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.ObserveCell
+import civictech.cell.observe.View
+import civictech.cell.port.FanInlet
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
+import civictech.cell.port.registerPort
+import civictech.concord.driver.CellId
+import civictech.concord.driver.DeadLetter
+import civictech.concord.driver.Effect
+import civictech.concord.driver.HostId
+import civictech.concord.driver.LinkResult
+import civictech.concord.value.Value
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.ObjectInputStream
+import java.io.ObjectOutputStream
+import java.util.UUID
+
+/**
+ * The `dur`-profile driver capability (CONCORD-PLAN W4-B, §3 Durability): the
+ * journal / crash-restart / effectful-sink surface the core [KernelDriver] does
+ * not carry. It composes the kernel's real durability machinery — a per-cell
+ * write-ahead [Journal] selector on [ManagedHost], `checkpoint`/`recoverFrom`,
+ * and the `Effectful` processed-frontier (spec 24 §Durability spectrum,
+ * `24-DUR-01…05`; kernel `EffectfulRecoveryTest`/`CrashRecoveryTest`) — so the
+ * kernel is **not** modified. This file is the only durability-specific code;
+ * [KernelDriver] delegates a handful of verbs here (see its `dur` field).
+ *
+ * ## What is honestly drivable (and what is not)
+ *
+ * The kernel implements exactly-once effect firing across crash+replay **for
+ * real** (`EffectfulRecoveryTest`): an [Effectful] inlet journals a durable
+ * processed-frontier — the last applied `(sourceId, counter)` per inlet — and a
+ * replayed invocation at or behind that frontier is dropped as already-acted
+ * (`24-DUR-05`). The frontier keys on the invocation's `MessageContext.timestamp`,
+ * which is minted by the **producing outlet's** wave (a random `sourceId` per
+ * cell instance, not ref-derived). That has one honest consequence the corpus
+ * respects: a *journaled source* re-emits on recovery under a **fresh** outlet
+ * `sourceId`, which the sink's restored frontier cannot match — so journaling a
+ * source that feeds an effectful sink would double-fire (the G-59 boundary:
+ * "spontaneously-emitting sources … Effectful sinks without idempotency keys").
+ * Therefore the effect subgraph keeps its source **volatile** (it dies on the
+ * crash, exactly as `EffectfulRecoveryTest`'s unhosted source is discarded), and
+ * the sink recovers exactly-once from its **own** journaled frames + frontier.
+ * See `concord/corpus/DISPUTES.md` for the full boundary note.
+ *
+ * ## Scenario surface (neutral, expressed through the existing script verbs)
+ *
+ * Durability rides the frozen W0 script vocabulary (no new steps): a durable
+ * subgraph lives on the reserved host id [DUR_HOST] (`host: dur`), and a
+ * `journal`-typed **controller** pseudo-cell is the crash handle —
+ * `despawn`-ing it crashes and recovers the whole durable host in one step
+ * (discard every live instance, rebuild the graph with the same [CellRef]s,
+ * `recoverFrom` the surviving journal). Catalog types:
+ *
+ *  - `journal-set-source` — a journaled [SetCell] (its accepted ops tee to the WAL).
+ *  - `journal-set-view`   — a journaled [ObserveCell] set fold (recovers checkpoint+tail).
+ *  - `effect-sink`        — a journaled [Effectful] sink; each added element fires an
+ *                           [Effect] into [effectLog] (the `effect-count` surface).
+ *  - `set-source` / `set-view` on `host: dur` — **volatile** members of the durable
+ *                           host: rebuilt fresh on crash, never journaled/replayed
+ *                           (per-cell durability, `24-DUR-01`/`24-DUR-03`).
+ *  - `journal`            — the crash/recover controller (no kernel cell).
+ *
+ * A `snapshot` of a journaled cell lowers to `host.checkpoint(journal)` (state +
+ * frontier compaction); a `snapshot`/`restore` of a volatile durable cell is the
+ * ordinary raw [Stateful] round-trip (the checkpoint half of a view's recovery).
+ */
+internal class KernelDriverDur(
+    private val controller: SimulationController,
+    private val registry: LocationRegistry,
+    /** Dead letters observed on the durable host flow into the driver's shared list. */
+    private val onDeadLetter: (DeadLetter) -> Unit,
+) {
+
+    /** The reserved host id a scenario places its durable subgraph on. */
+    companion object {
+        const val DUR_HOST: HostId = "dur"
+        private val JOURNALED_TYPES = setOf("journal-set-source", "journal-set-view", "effect-sink")
+    }
+
+    /** One surviving write-ahead journal, shared across crashes (it *is* "the disk"). */
+    private val journal: Journal = InMemoryJournal()
+
+    /** The refs whose accepted invocations tee to [journal] (per-cell selector, `24-DUR-01`). */
+    private val journaledRefs = HashSet<CellRef>()
+
+    /** Spec of every durable-host cell, replayed verbatim to rebuild the graph after a crash. */
+    private data class Spec(val cellId: CellId, val ref: CellRef, val type: String, val params: Map<String, Value>)
+
+    private val specs = LinkedHashMap<CellId, Spec>()
+
+    /** Links among durable-host cells, re-established on rebuild before `recoverFrom`. */
+    private data class LinkRec(val from: CellId, val to: CellId, val inlet: String?, val outlet: String?, val role: String?)
+
+    private val linkRecs = mutableListOf<LinkRec>()
+
+    /** Controller (`journal`) pseudo-cells — the crash handles; not real kernel cells. */
+    private val controllers = mutableSetOf<CellId>()
+
+    private data class Bound(
+        val ref: CellRef,
+        val type: String,
+        val cell: Cell,
+        val sink: ObservationSink<*>?,
+        val viewKind: KernelCatalog.ViewKind,
+    )
+
+    private val cells = LinkedHashMap<CellId, Bound>()
+
+    /** Observation streams, keyed by cell id so they survive a crash+rebuild. */
+    private val logs = LinkedHashMap<CellId, MutableList<Value>>()
+
+    /** External effect logs (outside any cell instance, so a true double-fire is catchable). */
+    private val effectLogs = LinkedHashMap<CellId, MutableList<Effect>>()
+
+    private var host: ManagedHost = newHost()
+
+    private fun newHost(): ManagedHost =
+        ManagedHost(
+            scheduler = controller.scheduler(),
+            registry = registry,
+            journalFor = { ref -> if (ref in journaledRefs) journal else null },
+        ).also { h ->
+            h.deadLetterOutlet.subscribe(
+                Use.fixed(
+                    Propagate<civictech.cell.host.DeadLetter> { dl ->
+                        onDeadLetter(DeadLetter(host = DUR_HOST, cell = null, reason = dl.description))
+                    },
+                    PortRef.generate(),
+                ),
+            )
+        }
+
+    /** True iff [cellId] is a durability-managed cell (routed here by [KernelDriver]). */
+    fun owns(cellId: CellId): Boolean = cellId in specs || cellId in controllers
+
+    fun spawn(cellId: CellId, type: String, params: Map<String, Value>) {
+        if (type == "journal") {
+            controllers += cellId
+            return
+        }
+        val ref = specs[cellId]?.ref ?: CellRef(UUID.randomUUID())
+        specs[cellId] = Spec(cellId, ref, type, params)
+        if (type in JOURNALED_TYPES) journaledRefs += ref
+        instantiate(specs.getValue(cellId))
+    }
+
+    /** Build + spawn one durable cell on the current [host] and register its bookkeeping. */
+    private fun instantiate(spec: Spec) {
+        val built = build(spec)
+        host.managementInlet.call.spawn(built.cell)
+        cells[spec.cellId] = built
+        built.sink?.let { sink ->
+            val log = logs.getOrPut(spec.cellId) { mutableListOf() }
+            sink.onChange { snapshot -> log += KernelCatalog.readView(built.viewKind, snapshot) }
+        }
+    }
+
+    private fun build(spec: Spec): Bound = when (spec.type) {
+        "set-source", "journal-set-source" ->
+            Bound(spec.ref, spec.type, SetCell<Any?>(spec.ref), null, KernelCatalog.ViewKind.NONE)
+
+        "set-view", "journal-set-view" -> {
+            val cell = ObserveCell(View.set<Any?>(), spec.ref)
+            Bound(spec.ref, spec.type, cell, cell, KernelCatalog.ViewKind.SET)
+        }
+
+        "effect-sink" -> {
+            val cell = EffectSinkCell(spec.ref, effectLogs.getOrPut(spec.cellId) { mutableListOf() })
+            Bound(spec.ref, spec.type, cell, null, KernelCatalog.ViewKind.NONE)
+        }
+
+        else -> throw UnsupportedCatalogBinding("no durable kernel binding for catalog type '${spec.type}'")
+    }
+
+    /**
+     * A durable link is wired **through the host intake** (subscribe the source's
+     * outlet to a [HostedCellProxy] of the sink), never as a raw port `linkTo`.
+     * The intake ([ManagedHost.enqueueHostedInvocation]) is the single funnel that
+     * (a) tees a wire frame to a journaled sink's WAL and (b) enforces the
+     * `Effectful` processed-frontier — a direct `managementInlet.connect` bypasses
+     * both, so nothing would be journaled or deduped (this is exactly how the
+     * kernel's `EffectfulRecoveryTest` wires its sink). Admission checks
+     * (single-writer/cycle) are not exercised on the `dur` profile, so no
+     * [LinkResult.Rejected] arises here.
+     */
+    fun connect(from: CellId, to: CellId, inlet: String?, outlet: String?, role: String?): LinkResult {
+        wire(cells.getValue(from), cells.getValue(to))
+        linkRecs += LinkRec(from, to, inlet, outlet, role)
+        return LinkResult.Connected("dur:$from->$to")
+    }
+
+    /** Subscribe [src]'s outlet to an intake-routed proxy of [dst]'s inlet. */
+    private fun wire(src: Bound, dst: Bound) {
+        val sinkInlet = (HostedCellProxy.create(dst.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
+        @Suppress("UNCHECKED_CAST")
+        (src.cell as SetApi<Any?>).outlet.subscribe(Use.fixed(sinkInlet, PortRef.generate()))
+    }
+
+    /**
+     * A durable source op is driven **through the host intake** via a
+     * [HostedCellProxy] too, so a journaled source's accepted `add`/`remove` is
+     * teed to the WAL (a raw `routerInlet.route` invokes the inlet directly and is
+     * never journaled). The op reuses the neutral set-source verbs.
+     */
+    fun apply(cellId: CellId, op: String, value: Value?) {
+        @Suppress("UNCHECKED_CAST")
+        val ops = (HostedCellProxy.create(cells.getValue(cellId).ref, host, SetApi::class.java) as SetApi<Any?>).inlet.call
+        when (op) {
+            "add" -> ops.add(KernelCatalog.unwrap(value))
+            "remove" -> ops.remove(KernelCatalog.unwrap(value))
+            else -> throw UnsupportedCatalogBinding("durable source op '$op' unbound (set add/remove only)")
+        }
+    }
+
+    fun readView(cellId: CellId): Value {
+        val bound = cells.getValue(cellId)
+        val sink = bound.sink ?: error("durable cell '$cellId' (${bound.type}) is not a view")
+        return KernelCatalog.readView(bound.viewKind, sink.current())
+    }
+
+    fun observationLog(cellId: CellId): List<Value> = logs[cellId]?.toList() ?: emptyList()
+
+    fun effectLog(cellId: CellId): List<Effect> = effectLogs[cellId]?.toList() ?: emptyList()
+
+    /**
+     * `snapshot` of a **journaled** durable cell is a kernel checkpoint (state +
+     * processed-frontier compaction of the WAL, `24-DUR-02`); of a **volatile**
+     * durable cell it is the ordinary raw [Stateful] round-trip a view uses to
+     * recover its own state across the crash. The returned blob is opaque; a
+     * checkpoint's tag is a sentinel (recovery reads the journal, not the blob).
+     */
+    fun snapshot(cellId: CellId): ByteArray {
+        if (cellId in controllers) return byteArrayOf(CTRL_MARKER)
+        val bound = cells.getValue(cellId)
+        if (bound.ref in journaledRefs) {
+            host.checkpoint(journal)
+            drain()
+            return byteArrayOf(CHECKPOINT_MARKER)
+        }
+        val state = (bound.cell as? Stateful)?.snapshot()
+            ?: error("durable cell '$cellId' is not Stateful; cannot snapshot")
+        return ByteArrayOutputStream().also { ObjectOutputStream(it).use { o -> o.writeObject(state) } }.toByteArray()
+    }
+
+    fun restore(cellId: CellId, blob: ByteArray) {
+        // A journaled cell recovers through the crash-controller's `recoverFrom`, and
+        // the controller's own restore is a no-op (the despawn already recovered it).
+        if (cellId in controllers) return
+        if (blob.size == 1 && (blob[0] == CHECKPOINT_MARKER || blob[0] == CTRL_MARKER)) return
+        val cell = cells.getValue(cellId).cell as? Stateful
+            ?: error("durable cell '$cellId' is not Stateful; cannot restore")
+        cell.restore(ObjectInputStream(ByteArrayInputStream(blob)).readObject() as java.io.Serializable)
+    }
+
+    /**
+     * `despawn` of the `journal` controller is the crash+restart verb (`24-DUR-02`,
+     * `EffectfulRecoveryTest` structure): discard the whole durable host and every
+     * live instance, rebuild the graph with the **same** [CellRef]s, re-establish
+     * the links, then `recoverFrom` the surviving journal. A journaled cell
+     * restores its checkpoint and replays the frame tail; a volatile cell comes
+     * back empty (re-delivered nothing, `24-DUR-03`); an effectful sink's restored
+     * frontier suppresses every already-applied frame (`24-DUR-05`).
+     */
+    fun despawn(cellId: CellId) {
+        if (cellId in controllers) {
+            crashAndRecover()
+            return
+        }
+        cells.remove(cellId)?.let { host.managementInlet.call.despawn(it.ref) }
+        specs.remove(cellId)
+        linkRecs.removeAll { it.from == cellId || it.to == cellId }
+    }
+
+    private fun crashAndRecover() {
+        // CRASH: the old host, registry entries, and every live instance vanish; only
+        // the journal survives. A fresh host re-derives the same per-cell selector.
+        host = newHost()
+        cells.clear()
+        // Rebuild the graph (spawn the same cells with the same refs), then re-link —
+        // recovery replays onto a wired graph so a source's restored deltas reach its view.
+        specs.values.forEach { instantiate(it) }
+        linkRecs.toList().forEach { l -> wire(cells.getValue(l.from), cells.getValue(l.to)) }
+        host.recoverFrom(journal)
+        drain()
+    }
+
+    /** Drive the shared controller to quiescence (checkpoint tasks / replayed frames settle). */
+    private fun drain() {
+        controller.runToIdle()
+    }
+}
+
+/** Sentinel snapshot tags: recovery of these reads the journal, not the blob body. */
+private const val CHECKPOINT_MARKER: Byte = 1
+private const val CTRL_MARKER: Byte = 2
+
+/**
+ * Proxy view of a durable sink's set-delta `inlet` (an [ObserveCell] or an
+ * [EffectSinkCell]). A [HostedCellProxy] built against it routes each delivered
+ * delta through the host intake — the journaling + `Effectful`-frontier funnel —
+ * rather than a raw port link.
+ */
+private interface DeltaSink {
+    val inlet: Use<Propagate<SetDelta<Any?>>>
+}
+
+/**
+ * A durable effect-boundary sink (CONCORD-PLAN §1.4 `effect-count`; spec
+ * `24-DUR-05`): an [Effectful] cell that, for every element it is delivered,
+ * records one [Effect] into an **external** [effectLog] (a list owned by
+ * [KernelDriverDur], outside this instance's lifecycle — so a crashed instance is
+ * discarded entirely and only a re-fire the recovered instance performs can be
+ * caught, exactly as `EffectfulRecoveryTest`'s external `world`).
+ *
+ * Being `Effectful`, its host journals a processed-frontier per applied
+ * invocation and suppresses any replayed (or post-recovery) invocation at or
+ * behind it — so across a crash+journal-replay each `(sourceId, counter)` fires
+ * exactly once. The dedup key the [Effect] carries is the element itself, so
+ * `effect-count(sink, exactly: 1)` reads "each element acted on exactly once".
+ */
+internal class EffectSinkCell(
+    override val ref: CellRef,
+    private val effectLog: MutableList<Effect>,
+) : Cell, Effectful {
+
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Any?>>>())
+
+    init {
+        inlet.serve(
+            Propagate<SetDelta<Any?>> { delta ->
+                // Every newly-added element is one effect; the host's Effectful
+                // frontier is what guarantees a replayed add does not re-fire.
+                delta.adds.keys.forEach { element ->
+                    effectLog += Effect(key = element?.toString(), payload = Value.of(element))
+                }
+            },
+        )
+    }
+}
