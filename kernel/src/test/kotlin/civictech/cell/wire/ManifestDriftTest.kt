@@ -3,7 +3,7 @@ package civictech.cell.wire
 import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.durability.InMemoryJournal
-import civictech.cell.manifestOf
+import civictech.cell.nature.manifestOf
 import civictech.gen.wire.ContractRegistry
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe

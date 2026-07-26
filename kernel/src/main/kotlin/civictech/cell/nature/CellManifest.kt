@@ -1,5 +1,7 @@
-package civictech.cell
+package civictech.cell.nature
 
+import civictech.cell.ReBaselineEmitting
+import civictech.cell.Stateful
 import civictech.cell.consistency.GlitchFree
 import civictech.cell.data.Partitioned
 import civictech.cell.data.Replicable

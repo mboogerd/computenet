@@ -23,7 +23,7 @@ import civictech.cell.onEach
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
-import civictech.cell.manifestOf
+import civictech.cell.nature.manifestOf
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom

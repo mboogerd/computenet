@@ -2,7 +2,7 @@ package civictech.cell.graph
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.manifestOf
+import civictech.cell.nature.manifestOf
 import civictech.cell.host.HostManagementApi
 import civictech.cell.replication.Interest
 import civictech.gen.wire.Manifest
