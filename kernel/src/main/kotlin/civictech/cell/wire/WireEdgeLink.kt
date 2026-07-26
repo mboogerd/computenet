@@ -6,11 +6,11 @@ import civictech.cell.link.LinkResult
 import civictech.cell.link.Linked
 import civictech.cell.link.ProtocolBridge
 import civictech.cell.link.handshake
-import civictech.cell.port.EdgeClose
+import civictech.cell.protocol.EdgeClose
 import civictech.cell.port.Port
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolId
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.ProtocolId
+import civictech.cell.protocol.Protocols
 import civictech.cell.port.natures
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation

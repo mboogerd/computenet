@@ -11,9 +11,9 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.Protocols
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.StateRequest
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.StateRequest
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import civictech.cell.replication.Assignment

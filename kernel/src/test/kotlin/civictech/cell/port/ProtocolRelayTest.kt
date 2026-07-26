@@ -6,6 +6,8 @@ import civictech.cell.Propagate
 import civictech.cell.host.SaturationSignal
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID

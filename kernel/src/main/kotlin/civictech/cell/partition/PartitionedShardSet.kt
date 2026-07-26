@@ -8,8 +8,8 @@ import civictech.cell.data.delta.TagState
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.port.PortRef
-import civictech.cell.port.Protocols
-import civictech.cell.port.StateRequest
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.StateRequest
 import civictech.cell.port.Use
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.proxy.ParkQueue
@@ -318,7 +318,7 @@ class PartitionedShardSet<E>(
      * is that shard's frontier — a baseline is never a wave, so a live routed
      * delta on the same subscription is not mistaken for a pull leg). The
      * consumer retains the frontier **per instance**
-     * ([civictech.cell.port.RetainedFrontiers]).
+     * ([civictech.cell.protocol.RetainedFrontiers]).
      *
      * Freshness is per-shard-consistent, cross-shard-arbitrary: each leg is a
      * baseline (never a wave), and legs are independent — a shard that is
@@ -326,7 +326,7 @@ class PartitionedShardSet<E>(
      * here and its leg deferred to a later pull rather than read torn.
      *
      * [sinceOf] supplies the currency to pull each instance from — the consumer's
-     * **per-instance** retained frontier ([civictech.cell.port.RetainedFrontiers.sinceFor]).
+     * **per-instance** retained frontier ([civictech.cell.protocol.RetainedFrontiers.sinceFor]).
      * Feeding one frontier merged across instances instead silently loses a
      * deferred shard's non-contiguous tags (control a): its counters read as
      * already-seen under a sibling's higher water.

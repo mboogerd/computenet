@@ -5,10 +5,10 @@ import civictech.cell.CurrentContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.port.EdgeClose
-import civictech.cell.port.EdgeOpen
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.EdgeClose
+import civictech.cell.protocol.EdgeOpen
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.gen.wire.CellBase

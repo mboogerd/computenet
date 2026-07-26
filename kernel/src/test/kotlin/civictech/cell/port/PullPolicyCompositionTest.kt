@@ -5,6 +5,9 @@ import civictech.cell.link.LinkSupport
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.link.pullServe
 import civictech.cell.onEach
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.StateRequest
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 

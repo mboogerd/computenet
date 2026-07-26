@@ -4,6 +4,7 @@ package civictech.cell.host
 
 import civictech.cell.link.*
 import civictech.cell.port.*
+import civictech.cell.protocol.*
 import civictech.cell.BlockingCell
 import civictech.cell.Cell
 import civictech.cell.CellContext

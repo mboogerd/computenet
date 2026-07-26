@@ -17,7 +17,7 @@ import civictech.cell.port.LinkFrom
 import civictech.cell.link.LinkResult
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.Protocols
 import civictech.cell.port.Use
 import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort

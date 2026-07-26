@@ -11,7 +11,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
-import civictech.cell.port.RetainedFrontiers
+import civictech.cell.protocol.RetainedFrontiers
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy

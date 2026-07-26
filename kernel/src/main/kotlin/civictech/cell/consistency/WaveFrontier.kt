@@ -3,16 +3,16 @@ package civictech.cell.consistency
 import civictech.cell.Timestamp
 import civictech.cell.attention.Progress
 import civictech.cell.attention.StallNotice
-import civictech.cell.port.EdgeClose
-import civictech.cell.port.EdgeEvent
-import civictech.cell.port.EdgeOpen
+import civictech.cell.protocol.EdgeClose
+import civictech.cell.protocol.EdgeEvent
+import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.InletFrontier
 import civictech.cell.link.Link
 import civictech.cell.link.LinkRole
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.Invocation
 import java.util.*
 

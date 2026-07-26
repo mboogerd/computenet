@@ -3,12 +3,12 @@ package civictech.cell.consistency
 import civictech.cell.Consumer
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
-import civictech.cell.port.EdgeOpen
+import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.link.Link
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test

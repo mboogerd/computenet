@@ -2,13 +2,13 @@ package civictech.cell.wire
 
 import civictech.cell.CellRef
 import civictech.cell.Propagate
-import civictech.cell.port.EdgeOpen
+import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.LinkResult
 import civictech.cell.port.PortNatures
 import civictech.cell.port.PortRef
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.InvocationSink

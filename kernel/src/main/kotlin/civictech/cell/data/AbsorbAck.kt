@@ -3,7 +3,7 @@ package civictech.cell.data
 import civictech.cell.CurrentContext
 import civictech.cell.attention.Progress
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.Protocols
 
 /**
  * Metadata-plane absorb-ack (spec 20/22 §Completeness over silent or stuck

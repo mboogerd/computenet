@@ -1,14 +1,14 @@
 package civictech.cell.link
 
-import civictech.cell.port.EdgeClose
-import civictech.cell.port.EdgeOpen
+import civictech.cell.protocol.EdgeClose
+import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.LinkTo
 import civictech.cell.port.NatureNegotiation
 import civictech.cell.port.Port
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolId
-import civictech.cell.port.Protocols
-import civictech.cell.port.ProtocolSupport
+import civictech.cell.protocol.ProtocolId
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.port.Reconciliation
 import civictech.cell.port.natures
 import civictech.nature.NatureVector

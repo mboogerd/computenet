@@ -11,9 +11,9 @@ import civictech.cell.link.Link
 import civictech.cell.port.LinkFrom
 import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.Protocols
-import civictech.cell.port.StateRequest
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.StateRequest
 import civictech.cell.port.Use
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.nulls.shouldBeNull

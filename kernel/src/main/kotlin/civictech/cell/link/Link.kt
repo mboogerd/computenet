@@ -2,7 +2,7 @@ package civictech.cell.link
 
 import civictech.cell.port.Port
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolId
+import civictech.cell.protocol.ProtocolId
 import java.util.*
 
 /**

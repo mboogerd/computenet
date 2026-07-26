@@ -7,9 +7,9 @@ import civictech.cell.Timestamp
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.link.LinkResult
-import civictech.cell.port.Protocols
-import civictech.cell.port.RetainedFrontiers
-import civictech.cell.port.StateRequest
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.RetainedFrontiers
+import civictech.cell.protocol.StateRequest
 import civictech.cell.replication.Interest
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test

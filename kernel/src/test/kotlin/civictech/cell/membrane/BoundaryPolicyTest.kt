@@ -13,8 +13,8 @@ import civictech.cell.link.CurrentPeer
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.LinkResult
 import civictech.cell.link.PeerId
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe

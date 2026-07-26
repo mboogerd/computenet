@@ -4,12 +4,12 @@ import civictech.cell.link.Link
 import civictech.cell.link.Linked
 import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
-import civictech.cell.port.ProtocolSupport
+import civictech.cell.protocol.ProtocolSupport
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
 import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.Protocols
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList

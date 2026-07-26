@@ -15,7 +15,7 @@ import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.replication.Stamped
 import civictech.cell.port.PortRef
-import civictech.cell.port.ProtocolId
+import civictech.cell.protocol.ProtocolId
 import civictech.cell.attention.Attention
 import civictech.cell.attention.StallNotice
 import civictech.cell.attention.Progress
@@ -166,12 +166,12 @@ object WireCodec {
                 subclass(StallNotice.Resume::class)
                 subclass(Progress::class)
                 subclass(SaturationSignal::class)
-                subclass(civictech.cell.port.EdgeOpen::class)
-                subclass(civictech.cell.port.EdgeClose::class)
+                subclass(civictech.cell.protocol.EdgeOpen::class)
+                subclass(civictech.cell.protocol.EdgeClose::class)
                 // on-demand pull request (spec 20/21 §Pull, 20/24 §Partitioned
                 // state, PN-5): the scatter-gather router fans a StateRequest to
                 // shards behind a bridge, so it crosses as a PORT_PROTOCOL message.
-                subclass(civictech.cell.port.StateRequest::class)
+                subclass(civictech.cell.protocol.StateRequest::class)
                 // interest reassignment (PN-6, spec 40/42 §Interest-scoped instance
                 // sets): a journaled, ref-addressed hosted invocation to a shard's
                 // assignInlet — so it rides the WAL and crosses a bridge.

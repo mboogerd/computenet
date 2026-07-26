@@ -31,7 +31,7 @@ data class RoutedCommand<E>(
  * §Interest-scoped instance sets): the [delta] slice one [instance] shard
  * answered a pull with, plus the [frontier] that slice is current to. The
  * consumer unions the deltas into the board and retains the frontier **per
- * instance** ([civictech.cell.port.RetainedFrontiers]) — merging one scalar
+ * instance** ([civictech.cell.protocol.RetainedFrontiers]) — merging one scalar
  * `since` across instances silently loses each shard's non-contiguous tags.
  */
 data class PullReply<E>(

@@ -4,7 +4,7 @@ import civictech.cell.attention.AttentionBand
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkPolicy
 import civictech.cell.link.PeerId
-import civictech.cell.port.ProtocolId
+import civictech.cell.protocol.ProtocolId
 
 /**
  * Identity every crossing carries (spec 40/43 "Identity", decided 93 I-28

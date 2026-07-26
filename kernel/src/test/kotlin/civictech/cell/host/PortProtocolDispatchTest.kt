@@ -6,8 +6,8 @@ import civictech.cell.attention.AttentionProtocol
 import civictech.cell.attention.SuspensionProtocol
 import civictech.cell.host.SaturationProtocol
 import civictech.cell.link.Link
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.nature.ProtocolCardinality

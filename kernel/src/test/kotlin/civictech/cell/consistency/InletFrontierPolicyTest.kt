@@ -15,7 +15,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.link.LinkResult
 import civictech.cell.port.PortRef
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.Protocols
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy

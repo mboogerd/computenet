@@ -5,6 +5,8 @@ import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
 import civictech.cell.link.handshake
 import civictech.cell.link.pullServe
+import civictech.cell.protocol.Protocols
+import civictech.cell.protocol.StateRequest
 import civictech.nature.NatureAxis
 import civictech.nature.NatureVector
 import civictech.nature.PullService

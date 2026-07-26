@@ -2,7 +2,7 @@ package civictech.cell.proxy
 
 import civictech.cell.CellRef
 import civictech.cell.link.Link
-import civictech.cell.port.ProtocolId
+import civictech.cell.protocol.ProtocolId
 
 /**
  * An invocation on a port of a hosted cell.

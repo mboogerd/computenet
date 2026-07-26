@@ -8,7 +8,7 @@ import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.link.PeerId
 import civictech.cell.port.FanOutlet
-import civictech.cell.port.ProtocolId
+import civictech.cell.protocol.ProtocolId
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink

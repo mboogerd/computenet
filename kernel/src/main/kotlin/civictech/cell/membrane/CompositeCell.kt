@@ -7,9 +7,9 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.Linked
 import civictech.cell.port.Port
-import civictech.cell.port.ProtocolId
-import civictech.cell.port.ProtocolSupport
-import civictech.cell.port.Protocols
+import civictech.cell.protocol.ProtocolId
+import civictech.cell.protocol.ProtocolSupport
+import civictech.cell.protocol.Protocols
 import civictech.cell.port.registerPort
 import civictech.cell.proxy.Proxy
 import java.util.UUID
