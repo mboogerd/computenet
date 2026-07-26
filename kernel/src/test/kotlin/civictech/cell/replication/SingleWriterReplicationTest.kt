@@ -4,7 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Leased
 import civictech.cell.Stateful
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost

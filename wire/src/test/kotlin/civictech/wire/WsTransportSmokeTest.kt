@@ -3,7 +3,7 @@ package civictech.wire
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps

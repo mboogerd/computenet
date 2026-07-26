@@ -2,7 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.port.FanInlet
@@ -35,7 +35,7 @@ class PortDescriptorSpawnCheckTest {
             "outlet" to PortDirection.OUT,
             "deltaInlet" to PortDirection.IN,
         )
-        descriptor.ports.map { it.contractFqn } shouldContain "civictech.cell.data.Propagate"
+        descriptor.ports.map { it.contractFqn } shouldContain "civictech.cell.Propagate"
     }
 
     /** Deliberately mis-registered: property `left`, registry name `lft`. */
@@ -54,7 +54,7 @@ class PortDescriptorSpawnCheckTest {
                     ports = listOf(
                         PortDescriptor(
                             "left", PortDirection.IN,
-                            "civictech.cell.data.Propagate", StableHash.of("civictech.cell.data.Propagate"),
+                            "civictech.cell.Propagate", StableHash.of("civictech.cell.Propagate"),
                         )
                     ),
                 )

@@ -2,7 +2,7 @@ package civictech.cell.port
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.host.SaturationSignal
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test

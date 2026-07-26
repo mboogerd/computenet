@@ -1,7 +1,7 @@
 package civictech.cell.verify
 
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.host.LocationRegistry
 import civictech.cell.port.PortRef

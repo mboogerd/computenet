@@ -46,7 +46,7 @@ class ContractIdentityTest {
             "civictech.cell.data.CounterOps",
             "civictech.cell.data.ListOps",
             "civictech.cell.data.MapOps",
-            "civictech.cell.data.Propagate",
+            "civictech.cell.Propagate",
             "civictech.cell.membrane.TrafficLightControl",
             "civictech.cell.host.HostManagementApi",
             "civictech.cell.host.HostRoutingApi",

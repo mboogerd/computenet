@@ -35,7 +35,7 @@ import civictech.cell.graph.CellFactory
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.requireBoundRef
 import civictech.cell.data.Magnitude
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.ParkQueue

@@ -9,7 +9,7 @@ import civictech.cell.Timestamp
 import civictech.cell.attention.Progress
 import civictech.cell.attention.StallNotice
 import civictech.cell.attention.StallReason
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Link
 import civictech.cell.port.LinkFrom

@@ -1,7 +1,7 @@
 package civictech.demo.slotfinder
 
 import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetView
 import civictech.cell.graph.lookup

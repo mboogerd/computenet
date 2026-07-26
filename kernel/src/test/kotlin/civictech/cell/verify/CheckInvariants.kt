@@ -1,6 +1,6 @@
 package civictech.cell.verify
 
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.host.SimulationController
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use

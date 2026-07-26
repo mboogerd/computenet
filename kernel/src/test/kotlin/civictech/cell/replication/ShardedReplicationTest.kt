@@ -6,7 +6,7 @@ import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.data.MapDelta
 import civictech.cell.data.MergeableGroupByCell
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps

@@ -1,7 +1,7 @@
 package civictech.cell.graph
 
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps

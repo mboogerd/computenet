@@ -1,7 +1,7 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.host.DeadLetter

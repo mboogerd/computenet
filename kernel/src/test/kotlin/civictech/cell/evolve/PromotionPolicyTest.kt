@@ -13,7 +13,7 @@ import civictech.cell.port.Use
 import civictech.cell.port.feedbackInlet
 import civictech.cell.port.output
 import civictech.cell.port.registerPort
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
 import io.kotest.assertions.throwables.shouldThrow

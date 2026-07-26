@@ -6,7 +6,7 @@ import civictech.cell.Consumer
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetDelta
 import civictech.cell.data.UnionSetCell
 import civictech.cell.port.FanInlet

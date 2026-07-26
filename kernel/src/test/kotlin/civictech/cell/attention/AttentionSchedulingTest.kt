@@ -51,7 +51,7 @@ class AttentionSchedulingTest {
         val cold = SinkCell()
 
         init {
-            host.deadLetterOutlet.subscribe(Use.fixed(object : civictech.cell.data.Propagate<DeadLetter> {
+            host.deadLetterOutlet.subscribe(Use.fixed(object : civictech.cell.Propagate<DeadLetter> {
                 override fun propagate(value: DeadLetter) {
                     deadLetters += value
                 }

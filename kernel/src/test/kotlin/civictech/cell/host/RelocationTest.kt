@@ -1,7 +1,7 @@
 package civictech.cell.host
 
 import civictech.cell.*
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.port.*
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.proxy.HostedPortInvocation

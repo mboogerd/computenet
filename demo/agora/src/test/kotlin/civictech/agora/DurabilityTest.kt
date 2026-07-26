@@ -5,7 +5,7 @@ import civictech.agora.cell.InfluenceDelta
 import civictech.agora.cell.Polarity
 import civictech.agora.cell.StanceDelta
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.durability.FileJournal
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost

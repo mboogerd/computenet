@@ -3,7 +3,7 @@ package civictech.cell.replication
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet

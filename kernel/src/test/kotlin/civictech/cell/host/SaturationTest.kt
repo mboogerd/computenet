@@ -6,7 +6,7 @@ import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Timestamp
 import civictech.cell.data.CounterDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom

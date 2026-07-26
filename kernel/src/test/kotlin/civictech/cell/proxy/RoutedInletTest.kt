@@ -3,7 +3,7 @@ package civictech.cell.proxy
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

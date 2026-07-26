@@ -2,7 +2,7 @@ package civictech.cell.proxy
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import java.lang.reflect.Method

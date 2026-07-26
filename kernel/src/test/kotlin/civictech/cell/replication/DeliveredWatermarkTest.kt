@@ -1,7 +1,7 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.PnCounterCell
 import civictech.cell.data.PnCounterDelta
 import civictech.cell.data.PnCounterOps

@@ -1,7 +1,7 @@
 package civictech.cell.port
 
-import civictech.cell.data.Propagate
-import civictech.cell.data.onEach
+import civictech.cell.Propagate
+import civictech.cell.onEach
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 

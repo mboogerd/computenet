@@ -1,5 +1,6 @@
 package civictech.cell.data
 
+import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom

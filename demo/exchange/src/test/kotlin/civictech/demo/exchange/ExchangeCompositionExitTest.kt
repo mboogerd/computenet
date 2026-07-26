@@ -11,7 +11,7 @@ import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.MapDelta
 import civictech.cell.data.MergeableGroupByCell
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
@@ -19,7 +19,7 @@ import civictech.cell.data.ShardCell
 import civictech.cell.data.PartitionedShardSet
 import civictech.cell.data.UnionSetCell
 import civictech.cell.data.WatermarkCell
-import civictech.cell.data.onEach
+import civictech.cell.onEach
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

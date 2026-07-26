@@ -1,5 +1,6 @@
 package civictech.cell.data
 
+import civictech.cell.Propagate
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.LinkResult
 import org.junit.jupiter.api.Assertions.assertEquals

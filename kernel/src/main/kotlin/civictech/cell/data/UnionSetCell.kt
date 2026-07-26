@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.Propagate
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.port.Serve

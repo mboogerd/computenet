@@ -2,7 +2,7 @@ package civictech.demo.skillmatch
 
 import civictech.cell.data.MapDelta
 import civictech.cell.data.MapView
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetView
 import civictech.cell.graph.lookup

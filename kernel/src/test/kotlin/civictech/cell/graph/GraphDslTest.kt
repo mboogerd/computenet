@@ -3,7 +3,7 @@ package civictech.cell.graph
 import civictech.cell.data.CountCell
 import civictech.cell.data.CountSetApi
 import civictech.cell.data.CounterDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.UnionSetCell

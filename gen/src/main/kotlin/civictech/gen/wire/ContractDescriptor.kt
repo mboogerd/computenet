@@ -270,7 +270,7 @@ enum class PortDirection { IN, OUT }
 data class PortDescriptor(
     val name: String,
     val direction: PortDirection,
-    /** Raw port Api interface, e.g. `civictech.cell.data.Propagate`. */
+    /** Raw port Api interface, e.g. `civictech.cell.Propagate`. */
     val contractFqn: String,
     /** `StableHash.of(contractFqn)` — joins to [ContractDescriptor.contractId]. */
     val contractId: Long,

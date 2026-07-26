@@ -1,7 +1,7 @@
 package civictech.demo.tiering
 
 import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.graph.lookup
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

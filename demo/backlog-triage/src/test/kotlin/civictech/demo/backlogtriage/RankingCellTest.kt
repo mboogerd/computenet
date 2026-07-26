@@ -4,9 +4,9 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
 import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetDelta
-import civictech.cell.data.onEach
+import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.port.PortRef

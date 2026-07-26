@@ -2,7 +2,7 @@ package civictech.cell.verify
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.registerPort

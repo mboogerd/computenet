@@ -273,7 +273,7 @@ class ContractProcessorTest {
         fun <P : Any> Any.registerPort(name: String, port: P): P = port
         """.trimIndent()
     private val cellBaseDataStubs = """
-        package civictech.cell.data
+        package civictech.cell
         import civictech.cell.port.Serve
         fun interface Propagate<T> { fun propagate(value: T) }
         fun <T> Serve<Propagate<T>>.onEach(handler: (T) -> Unit) {}
@@ -286,7 +286,7 @@ class ContractProcessorTest {
             """
             package example
             import civictech.gen.wire.CellBase
-            import civictech.cell.data.Propagate
+            import civictech.cell.Propagate
             import civictech.cell.port.Serve
             import civictech.cell.port.Subscribe
             import civictech.cell.port.Use

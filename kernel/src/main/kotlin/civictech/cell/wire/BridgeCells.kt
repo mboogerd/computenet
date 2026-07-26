@@ -4,7 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Leased
 import civictech.cell.Owned
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PeerId
 import civictech.cell.port.FanOutlet

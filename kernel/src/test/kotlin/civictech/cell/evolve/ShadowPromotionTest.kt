@@ -14,7 +14,7 @@ import civictech.cell.port.registerPort
 import civictech.cell.proxy.HostedCellProxy
 import civictech.cell.verify.InvariantCell
 import civictech.cell.verify.Violation
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.port.PortRef
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeTrue

@@ -771,14 +771,14 @@ class ContractProcessor(
         const val USE_ROLE = "civictech.cell.port.Use"
         const val SUBSCRIBE_ROLE = "civictech.cell.port.Subscribe"
         val PORT_ROLES = setOf(SERVE_ROLE, USE_ROLE, SUBSCRIBE_ROLE)
-        const val PROPAGATE_MARKER = "civictech.cell.data.Propagate"
+        const val PROPAGATE_MARKER = "civictech.cell.Propagate"
         val CELL_IFACE: ClassName = ClassName("civictech.cell", "Cell")
         val CELL_REF: ClassName = ClassName("civictech.cell", "CellRef")
         val JAVA_UUID: ClassName = ClassName("java.util", "UUID")
         val FAN_INLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanInlet")
         val FAN_OUTLET_CLASS: ClassName = ClassName("civictech.cell.port", "FanOutlet")
         val REGISTER_PORT = MemberName("civictech.cell.port", "registerPort")
-        val ON_EACH = MemberName("civictech.cell.data", "onEach")
+        val ON_EACH = MemberName("civictech.cell", "onEach")
         const val MAGNITUDE_MARKER = "civictech.cell.data.Magnitude"
         const val REPLICABLE_MARKER = "civictech.cell.data.Replicable"
         const val BLOCKING_MARKER = "civictech.cell.BlockingCell"

@@ -1,6 +1,7 @@
 package civictech.cell.data
 
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.port.Use
 import civictech.gen.wire.CellBase
 import java.util.UUID

@@ -7,7 +7,7 @@ import civictech.cell.data.CounterDelta
 import civictech.cell.data.CounterOps
 import civictech.cell.data.ListDelta
 import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.port.PortRef

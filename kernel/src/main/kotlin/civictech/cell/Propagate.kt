@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell
 
 import civictech.cell.port.Serve
 import civictech.gen.wire.Contract

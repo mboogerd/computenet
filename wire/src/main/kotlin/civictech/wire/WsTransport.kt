@@ -1,7 +1,7 @@
 package civictech.wire
 
 import civictech.cell.CellRef
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.port.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use

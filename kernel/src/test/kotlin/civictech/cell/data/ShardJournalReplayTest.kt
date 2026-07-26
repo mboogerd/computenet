@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.Timestamp
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.host.LocationRegistry

@@ -7,7 +7,7 @@ import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.JoinSetCell
 import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta

@@ -1,5 +1,6 @@
 package civictech.cell.data
 
+import civictech.cell.Propagate
 import civictech.cell.port.Use
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.buffering

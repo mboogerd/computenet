@@ -23,7 +23,7 @@ class GraphSpecRemoteApplyTest {
 
     private fun deadLettersOf(host: ManagedHost): MutableList<DeadLetter> {
         val letters = mutableListOf<DeadLetter>()
-        host.deadLetterOutlet.subscribe(Use.fixed(object : civictech.cell.data.Propagate<DeadLetter> {
+        host.deadLetterOutlet.subscribe(Use.fixed(object : civictech.cell.Propagate<DeadLetter> {
             override fun propagate(value: DeadLetter) {
                 letters += value
             }

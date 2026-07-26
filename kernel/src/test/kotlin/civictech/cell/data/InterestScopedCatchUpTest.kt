@@ -1,6 +1,7 @@
 package civictech.cell.data
 
 import civictech.cell.CurrentContext
+import civictech.cell.Propagate
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.port.FanInlet

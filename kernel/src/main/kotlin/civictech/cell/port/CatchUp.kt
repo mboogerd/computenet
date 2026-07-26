@@ -1,6 +1,6 @@
 package civictech.cell.port
 
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.gen.wire.PullService
 
 /**

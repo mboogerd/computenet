@@ -5,7 +5,7 @@ import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.Aggregators
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetCell

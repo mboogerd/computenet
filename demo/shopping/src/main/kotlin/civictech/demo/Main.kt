@@ -3,7 +3,7 @@ package civictech.demo
 import civictech.cell.CellRef
 import civictech.cell.data.FilterCell
 import civictech.cell.data.IntersectSetCell
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta

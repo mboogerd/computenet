@@ -2,7 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.Timestamp
 import civictech.cell.data.MapDelta
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta

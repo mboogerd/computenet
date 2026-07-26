@@ -3,7 +3,7 @@ package civictech.cell.replication
 import civictech.cell.CellRef
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.data.DeliveryTracking
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.data.WatermarkCell
 import civictech.cell.data.WatermarkDelta

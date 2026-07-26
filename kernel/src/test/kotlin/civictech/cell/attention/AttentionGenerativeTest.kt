@@ -1,7 +1,7 @@
 package civictech.cell.attention
 
 import civictech.cell.*
-import civictech.cell.data.Propagate
+import civictech.cell.Propagate
 import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.ManagedHost
