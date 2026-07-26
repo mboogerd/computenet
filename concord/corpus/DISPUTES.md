@@ -450,14 +450,26 @@ re-applied) *and* state-rebuilt-by-replay.
   kernel unit test; the OR-set tag plane is not boundary-observable per P1).
 - `24-REPLAY-01` (a journaled mid-graph cell's replayed frames flagged
   `MessageContext.baseline` so a downstream **glitch-free join** installs them as
-  arm state) is **not yet authored but now UNBLOCKED** (as of R2): the
-  set-glitch-free observation gap that blocked it is resolved — a real SET
-  glitch-free `quorum-set` join now exists (`22-WAVE-FANIN-01` et al.) and can
-  feed a durable arm, and `observations-whole-waves` can assert the replayed
-  frames install as baseline arm state without tearing. Authorable in a follow-up
-  (wire a journaled durable arm into a `quorum-set` and assert
-  `observations-whole-waves`); no longer waits on a wave-coalescing scalar
-  operator.
+  arm state) — **`kernel-gap`, empirically confirmed by R3** (not authored; the
+  R2 "UNBLOCKED" note above was optimistic and is superseded). The PN-2 baseline
+  path works for the *generic* glitch-free join — `HostDurability.recoverFrom`
+  stamps replayed mid-graph frames `MessageContext.baseline` and
+  `WaveFrontier.offer()` releases a baseline delivery immediately, bypassing
+  wave-completeness (proven by the kernel's own `DurableGlitchFreeReplayTest`,
+  100 seeds). **But `QuorumSetCell`/`PresenceLanes` never consult
+  `MessageContext.baseline`** (grep: zero references) — they are a lane-counting
+  fan-in, an architecturally different mechanism from `WaveFrontier`'s
+  wave-buffer-and-release, and PN-2 patched only the latter. Verified with a
+  throwaway kernel test: one journaled arm + one volatile arm into a `quorum-set`
+  (k=2); pre-crash view `[e1,e2]`; post-`recoverFrom` the replayed frames stick
+  at lane-count 1 (< threshold 2) forever and the view is **empty** — recovered
+  state is silently dropped, not installed as baseline arm state. k=1 would pass
+  trivially regardless of baseline handling (uninformative), so the honest test
+  genuinely tears/loses data. **Resolves**: `PresenceLanes.fold` /
+  `QuorumSetCell.evaluate` must consult `CurrentContext.get()?.baseline` and, when
+  set, install the delta as authoritative recovered arm state bypassing the
+  live-threshold — the SET-fan-in analogue of `WaveFrontier.offer()`'s baseline
+  branch. Not a driver-wiring gap (no `KernelDriverDur.kt` change would fix it).
 - `FileJournal` segmentation/rotation and **cross-host** recovery-frontier drift
   are single-in-process-host out of scope here (the driver runs the durable
   subgraph on one reserved host; cross-host is W4-A `dist` territory).
