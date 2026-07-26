@@ -33,20 +33,39 @@ data class WatermarkDelta(
         Map<@kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID, Long>,
         > = emptyMap(),
     val closed: Set<@kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID> = emptySet(),
+    /**
+     * PN-19 (spec 34 decision 3, 40/42 §Delivered watermarks): the resumable
+     * analogue of [closed] — a per-slot **suspend epoch**, merged pointwise by
+     * `max`. A slot is currently suspended iff its epoch is odd (each
+     * [WatermarkCell.suspend] bumps to the next odd, each [WatermarkCell.resume]
+     * to the next even). Only a slot's own owner writes it, so the max-merge is a
+     * genuine monotone join (single-writer, alternating) that converges over the
+     * gossip mesh exactly as [rows]/[closed] do — the covering-quorum read
+     * ([civictech.cell.replication.Replication.replicaFrontier] `degrade`) drops
+     * an odd-epoch member from the quorum and restores it when the epoch turns
+     * even. `closed` is the degenerate terminal case (an epoch that never turns
+     * even again). Defaulted empty ⇒ pre-PN-19 deltas round-trip unchanged.
+     */
+    val suspended: Map<
+        @kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID,
+        Long,
+        > = emptyMap(),
 ) : Serializable, MergeablePayload {
 
     fun merge(other: WatermarkDelta): WatermarkDelta =
-        WatermarkDelta(mergeRows(rows, other.rows), closed + other.closed)
+        WatermarkDelta(mergeRows(rows, other.rows), closed + other.closed, mergeSuspend(suspended, other.suspended))
 
     override fun mergeWith(other: MergeablePayload): MergeablePayload = merge(other as WatermarkDelta)
 
     /**
      * Lattice order: `this ⊒ other` iff every counter in `other` is met or
-     * exceeded here and `other`'s closed replicas are all closed here. Used by
-     * the monotonicity law and to reason about echo termination.
+     * exceeded here, `other`'s closed replicas are all closed here, and every
+     * suspend epoch here is at least `other`'s. Used by the monotonicity law and
+     * to reason about echo termination.
      */
     fun dominates(other: WatermarkDelta): Boolean {
         if (!closed.containsAll(other.closed)) return false
+        if (other.suspended.any { (slot, epoch) -> (suspended[slot] ?: Long.MIN_VALUE) < epoch }) return false
         return other.rows.all { (replica, cols) ->
             val mine = rows[replica] ?: emptyMap()
             cols.all { (source, thru) -> (mine[source] ?: Long.MIN_VALUE) >= thru }
@@ -54,6 +73,9 @@ data class WatermarkDelta(
     }
 
     companion object {
+        private fun mergeSuspend(a: Map<UUID, Long>, b: Map<UUID, Long>): Map<UUID, Long> =
+            (a.keys + b.keys).associateWith { maxOf(a[it] ?: Long.MIN_VALUE, b[it] ?: Long.MIN_VALUE) }
+
         private fun mergeRows(
             a: Map<UUID, Map<UUID, Long>>,
             b: Map<UUID, Map<UUID, Long>>,
@@ -95,6 +117,8 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     // full converged state: every replica's row, unioned by pointwise max.
     private val rows: MutableMap<UUID, MutableMap<UUID, Long>> = mutableMapOf()
     private val closed: MutableSet<UUID> = mutableSetOf()
+    // PN-19: per-slot suspend epoch (odd = suspended); the resumable analogue of closed.
+    private val suspendEpoch: MutableMap<UUID, Long> = mutableMapOf()
 
     /** Highest counter this cell has absorbed for [source] from any replica. */
     fun watermark(source: UUID): Long? =
@@ -102,6 +126,9 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
 
     fun rows(): Map<UUID, Map<UUID, Long>> = rows.mapValues { it.value.toMap() }
     fun closed(): Set<UUID> = closed.toSet()
+
+    /** Slots currently suspended (odd epoch) — the covering-quorum shrink set (PN-19, DEGRADE). */
+    fun suspended(): Set<UUID> = suspendEpoch.filterValues { it % 2L != 0L }.keys.toSet()
 
     /**
      * Advance this replica's delivered watermark for [source] to [thru]
@@ -120,6 +147,29 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         outlet.call.propagate(WatermarkDelta(closed = setOf(slotId)))
     }
 
+    /**
+     * Mark this replica recoverably suspended (PN-19, spec 34 decision 3): a
+     * DEGRADE covering-quorum read drops it while suspended, restoring it on
+     * [resume]. Bumps the slot's suspend epoch to the next odd value and gossips
+     * it (effective-only — a re-suspend of an already-suspended slot is a no-op).
+     */
+    fun suspend() {
+        val current = suspendEpoch[slotId] ?: 0L
+        if (current % 2L != 0L) return // already suspended (effective-only)
+        val next = current + 1L
+        suspendEpoch[slotId] = next
+        outlet.call.propagate(WatermarkDelta(suspended = mapOf(slotId to next)))
+    }
+
+    /** Retract a [suspend]: bump the slot's epoch to the next even value (resumed) and gossip it. */
+    fun resume() {
+        val current = suspendEpoch[slotId] ?: 0L
+        if (current % 2L == 0L) return // not suspended (effective-only)
+        val next = current + 1L
+        suspendEpoch[slotId] = next
+        outlet.call.propagate(WatermarkDelta(suspended = mapOf(slotId to next)))
+    }
+
     /** Merge a peer's delta; re-emit exactly the entries that raised a watermark. */
     private fun applyRemote(delta: WatermarkDelta) {
         val raised = mutableMapOf<UUID, MutableMap<UUID, Long>>()
@@ -134,8 +184,15 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         }
         val newlyClosed = delta.closed - closed
         closed += newlyClosed
-        if (raised.isEmpty() && newlyClosed.isEmpty()) return // echo terminates here
-        outlet.originate { propagate(WatermarkDelta(raised, newlyClosed)) }
+        val raisedSuspend = mutableMapOf<UUID, Long>()
+        for ((slot, epoch) in delta.suspended) {
+            if (epoch > (suspendEpoch[slot] ?: Long.MIN_VALUE)) {
+                suspendEpoch[slot] = epoch
+                raisedSuspend[slot] = epoch
+            }
+        }
+        if (raised.isEmpty() && newlyClosed.isEmpty() && raisedSuspend.isEmpty()) return // echo terminates here
+        outlet.originate { propagate(WatermarkDelta(raised, newlyClosed, raisedSuspend)) }
     }
 
     init {
@@ -145,8 +202,8 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         // late-join catch-up (G-22) / replica initial sync + anti-entropy (M7.4):
         // full per-replica state as one delta; pointwise max makes replays harmless.
         outlet.catchUpOnLinked {
-            if (rows.isEmpty() && closed.isEmpty()) null
-            else WatermarkDelta(rows(), closed())
+            if (rows.isEmpty() && closed.isEmpty() && suspendEpoch.isEmpty()) null
+            else WatermarkDelta(rows(), closed(), suspendEpoch.toMap())
         }
     }
 
@@ -176,6 +233,7 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         HashMap(mapOf<String, Serializable>(
             "rows" to HashMap(rows.mapValues { HashMap(it.value) }),
             "closed" to HashSet(closed),
+            "suspended" to HashMap(suspendEpoch),
         ))
 
     @Suppress("UNCHECKED_CAST")
@@ -183,10 +241,12 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         val map = state as Map<String, Serializable>
         rows.clear()
         closed.clear()
+        suspendEpoch.clear()
         (map.getValue("rows") as Map<UUID, Map<UUID, Long>>).forEach { (r, c) ->
             rows[r] = c.toMutableMap()
         }
         closed += map.getValue("closed") as Set<UUID>
+        (map["suspended"] as? Map<UUID, Long>)?.let { suspendEpoch.putAll(it) }
     }
 
     companion object {

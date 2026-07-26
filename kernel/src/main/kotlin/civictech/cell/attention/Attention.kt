@@ -268,6 +268,29 @@ class AttentionSupport private constructor(private val owner: Any) {
     @Volatile
     var ticks: () -> Long = { 0L }
 
+    /**
+     * Interest scatter (PN-19, spec 34 decisions 3/5; plan §3b (a)). The metadata
+     * plane reuses the data plane's overlap rule: attention travels upstream only
+     * to inbound links this predicate accepts; a rejected link instead receives an
+     * explicit [AttentionBand.NONE] — "outside my interest scope", distinct from
+     * "nobody said anything" (neutral NORMAL) — so an upstream instance whose
+     * interest does not overlap the attending consumer's scope is left unattended
+     * and parks like any cell (an unattended shard). The predicate is supplied by
+     * the caller so the attention package stays free of a dependency on the
+     * `replication.Interest` algebra (which would cycle through `data`); a
+     * consumer scatters by passing `{ link -> shardInterest(link).overlaps(scope) }`
+     * — the same [civictech.cell.replication.Interest.overlaps] the gossip linker
+     * uses. Default accepts every link ⇒ byte-identical to pre-PN-19 broadcast, so
+     * a non-scattering (non-opting) graph is unchanged. Assigning a scatter
+     * immediately re-emits the current band under the new scope.
+     */
+    @Volatile
+    var scatter: (Link) -> Boolean = { true }
+        set(value) {
+            field = value
+            emitUpstream(band)
+        }
+
     /** Step of the last signal (attend / link report / unlink), for time-aware aggregators. */
     @Volatile
     private var lastSignalTick: Long = 0L
@@ -319,13 +342,19 @@ class AttentionSupport private constructor(private val owner: Any) {
         emitUpstream(newBand)
     }
 
-    /** Push the current band up every inbound link (consumer → producer), minting a fresh version. */
+    /**
+     * Push the current band up every inbound link (consumer → producer), minting a
+     * fresh version. PN-19: a link the [scatter] predicate rejects receives an
+     * explicit [AttentionBand.NONE] instead of [band] — the interest scatter, so an
+     * out-of-scope upstream instance is left unattended (default accepts all ⇒
+     * broadcast, unchanged).
+     */
     private fun emitUpstream(band: AttentionBand) {
-        val update = Attention(band.level, versionMinter.next())
         forEachLinkedPort { port ->
             port.linking.links.forEach { link ->
                 if (link.toPort === port) {
-                    Protocols.sendUpstream(link, Protocols.Attention, update)
+                    val effective = if (scatter(link)) band else AttentionBand.NONE
+                    Protocols.sendUpstream(link, Protocols.Attention, Attention(effective.level, versionMinter.next()))
                 }
             }
         }
@@ -347,10 +376,12 @@ class AttentionSupport private constructor(private val owner: Any) {
                 // and re-folds the remainder; inbound links leaving need no action here.
                 if (link.fromPort === port && frontier.onUnlink(link.id)) signal()
             }
-            // inlet face: a fresh inbound link learns our current band at once
+            // inlet face: a fresh inbound link learns our current band at once —
+            // scattered (PN-19): a link outside the interest scope learns NONE.
             port.linking.onLinkedListeners += { link ->
                 if (link.toPort === port) {
-                    Protocols.sendUpstream(link, Protocols.Attention, Attention(band.level, versionMinter.next()))
+                    val effective = if (scatter(link)) band else AttentionBand.NONE
+                    Protocols.sendUpstream(link, Protocols.Attention, Attention(effective.level, versionMinter.next()))
                 }
             }
         }
