@@ -12,6 +12,7 @@ plugins {
 include(":gen")
 include(":gen-test")
 include(":nature")
+include(":testkit")
 
 include(":kernel")
 include(":concord")

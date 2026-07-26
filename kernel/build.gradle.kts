@@ -18,6 +18,7 @@ dependencies {
     testImplementation(libs.junit)
     testRuntimeOnly(libs.junit.platform)
     testImplementation(kotlin("test"))
+    testImplementation(project(":testkit"))
 }
 
 kotlin {
