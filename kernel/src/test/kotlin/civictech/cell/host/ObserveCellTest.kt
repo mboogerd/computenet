@@ -8,6 +8,10 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
+import civictech.cell.observe.ObserveCell
+import civictech.cell.observe.View
+import civictech.cell.observe.observe
+import civictech.cell.observe.observeAll
 import civictech.cell.port.Use
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder

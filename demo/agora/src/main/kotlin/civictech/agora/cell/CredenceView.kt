@@ -1,9 +1,9 @@
 package civictech.agora.cell
 
 import civictech.cell.CellRef
-import civictech.cell.host.ObservationSink
-import civictech.cell.host.ObserveCell
-import civictech.cell.host.View
+import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.ObserveCell
+import civictech.cell.observe.View
 import java.io.Serializable
 
 /**

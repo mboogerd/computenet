@@ -1,4 +1,4 @@
-package civictech.cell.host
+package civictech.cell.observe
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
@@ -9,6 +9,8 @@ import civictech.cell.data.MapView
 import civictech.cell.Propagate
 import civictech.cell.data.SetDelta
 import civictech.cell.data.SetView
+import civictech.cell.host.HostManagementApi
+import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkResult
 import civictech.cell.port.Use

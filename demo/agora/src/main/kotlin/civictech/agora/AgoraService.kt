@@ -56,7 +56,7 @@ class AgoraService(
     private val manage = host.managementInlet.call
 
     // deterministic ref: journaled hub frames re-deliver after a restart
-    val hub = civictech.cell.host.ObserveCell(
+    val hub = civictech.cell.observe.ObserveCell(
         CredenceView(onCredence),
         ref = CellRef(java.util.UUID.nameUUIDFromBytes("agora:hub".toByteArray())),
     )

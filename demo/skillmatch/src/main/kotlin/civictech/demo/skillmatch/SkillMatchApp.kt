@@ -19,9 +19,9 @@ import civictech.cell.graph.lookup
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
-import civictech.cell.host.ObservationSink
-import civictech.cell.host.View
-import civictech.cell.host.observe
+import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.View
+import civictech.cell.observe.observe
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.OutputStream
