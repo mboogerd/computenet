@@ -7,6 +7,7 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.buffering
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import civictech.cell.data.delta.CounterDelta
 
 class CounterCellTest {
 

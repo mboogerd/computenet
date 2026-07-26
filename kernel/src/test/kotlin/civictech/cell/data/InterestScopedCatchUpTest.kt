@@ -15,6 +15,8 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
 import kotlin.random.Random
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * PN-3c (spec 42 §Interest-scoped instance sets): [StateRequest] carries a

@@ -27,6 +27,9 @@ import civictech.cell.wire.PortAddress
 import civictech.cell.wire.WireEdgeLink
 import java.io.Serializable
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.delta.TagState
 
 /**
  * PN-12 structural marker (`Manifest.PARTITIONED`): the cell holds its state

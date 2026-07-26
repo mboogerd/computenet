@@ -6,24 +6,16 @@ import civictech.cell.Stateful
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
 import civictech.cell.port.catchUpOnLinked
+import civictech.cell.data.delta.CounterDelta
 import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
-import civictech.cell.MergeablePayload
 
 @Contract
 interface CounterOps {
     fun increment(amount: Long)
     fun decrement(amount: Long)
-}
-
-/** Commutative by construction: merging is addition, any arrival order converges (G-23). */
-@kotlinx.serialization.Serializable
-@kotlinx.serialization.SerialName("CounterDelta")
-data class CounterDelta(val amount: Long) : Serializable, MergeablePayload {
-    fun merge(other: CounterDelta): CounterDelta = CounterDelta(amount + other.amount)
-    override fun mergeWith(other: MergeablePayload): MergeablePayload = merge(other as CounterDelta)
 }
 
 @CellBase

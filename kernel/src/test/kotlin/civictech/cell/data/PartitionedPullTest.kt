@@ -22,6 +22,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 /**
  * PN-5 (spec 20/24 §Partitioned state, 40/42 §Interest-scoped instance sets):

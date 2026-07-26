@@ -4,10 +4,8 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.data.CountView
-import civictech.cell.data.MapDelta
 import civictech.cell.data.MapView
 import civictech.cell.Propagate
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetView
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.ManagedHost
@@ -17,6 +15,8 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * The read/observe dual of the `graph { }` builder (spec

@@ -4,7 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.Stateful
 import civictech.cell.port.*
-import civictech.cell.IndexedValueSerializer
+import civictech.cell.data.delta.ListDelta
 import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable
@@ -17,20 +17,6 @@ interface ListOps<E> {
     fun set(index: Int, element: E)
     fun removeAt(index: Int)
 }
-
-/**
- * Convergence limit (G-23, documented): index-addressed deltas are only
- * meaningful in the emission order of a single FIFO stream — concurrent
- * multi-writer edits do not converge. Stable multi-writer sequences need
- * position identifiers (RGA/LSEQ style), out of scope until replication (42).
- */
-@kotlinx.serialization.Serializable
-@kotlinx.serialization.SerialName("ListDelta")
-data class ListDelta<E>(
-    val adds: List<@kotlinx.serialization.Serializable(with = IndexedValueSerializer::class) IndexedValue<E>> = emptyList(),
-    val updates: List<@kotlinx.serialization.Serializable(with = IndexedValueSerializer::class) IndexedValue<E>> = emptyList(),
-    val removals: List<Int> = emptyList()
-) : Serializable
 
 @CellBase
 interface ListApi<E> {

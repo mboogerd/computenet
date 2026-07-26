@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * W4.2 (G-56, realizes G-24, 20/24 §Partitioned state): a [PartitionedCell]

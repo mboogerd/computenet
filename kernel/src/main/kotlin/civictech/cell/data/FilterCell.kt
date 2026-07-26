@@ -9,6 +9,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.TagState
 
 @CellBase
 interface FilterSetApi<E> {

@@ -4,6 +4,7 @@ import civictech.cell.data.CountCell
 import civictech.cell.data.FilterCell
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.UnionSetCell
+import civictech.cell.data.delta.CounterDelta
 
 /**
  * The everyday set-algebra operators as graph compositions (M4): sugar only —
@@ -29,7 +30,7 @@ fun <E> CellHandle.filter(name: String, pred: (E) -> Boolean): CellHandle {
     return filtered
 }
 
-/** Distinct-element count of this set: a [CounterDelta][civictech.cell.data.CounterDelta] stream. */
+/** Distinct-element count of this set: a [CounterDelta][civictech.cell.data.delta.CounterDelta] stream. */
 fun <E> CellHandle.count(name: String): CellHandle {
     val counted = builder.spawn(name) { ref -> CountCell<E>(ref = ref) }
     builder.connect(this, "outlet", counted, "inlet")

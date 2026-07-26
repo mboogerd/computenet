@@ -4,11 +4,9 @@ import civictech.cell.CellRef
 import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.ReplicaFrontier
-import civictech.cell.data.MapDelta
 import civictech.cell.data.MergeableGroupByCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.WatermarkCell
 import civictech.cell.host.LocationRegistry
@@ -32,6 +30,8 @@ import io.kotest.matchers.collections.shouldContainAll
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * PN-8 — sharded replication end-to-end (plan §4 PN-8, spec 42). "Overlapping

@@ -25,6 +25,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 /**
  * FU-3 (spec 53 §Replicated promotion, the G-50 partitioned residual): the PN-14

@@ -7,6 +7,7 @@ import civictech.cell.proxy.buffering
 import civictech.cell.port.PortRef
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import civictech.cell.data.delta.ListDelta
 
 class ListCellTest {
 

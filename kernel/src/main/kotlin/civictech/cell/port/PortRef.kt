@@ -5,6 +5,7 @@ import civictech.cell.UuidSerializer
 import kotlinx.serialization.SerialName
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.MintedTags
 
 /**
  * Immutable identifier of a [Port]. [cell] is the owning cell where known;
@@ -22,7 +23,7 @@ data class PortRef(
         /**
          * Replay-stable port identity (PN-1, plan §2 F1 root): DERIVED from the
          * owning cell's ref and the registered port name, mirroring the M10.1
-         * derivation of `SetCell.tagSource` / [civictech.cell.data.MintedTags] /
+         * derivation of `SetCell.tagSource` / [civictech.cell.data.delta.MintedTags] /
          * the replication watermark ref. A hosted cell rebuilt with the same
          * `(cellRef, name)` re-mints the exact `PortRef` the network observed, so
          * `MessageContext.sourcePort` keys the same durable identity the wave

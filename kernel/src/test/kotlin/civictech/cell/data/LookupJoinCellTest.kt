@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.MapDelta
 
 class LookupJoinCellTest {
 

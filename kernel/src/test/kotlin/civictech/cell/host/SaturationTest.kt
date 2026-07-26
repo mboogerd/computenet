@@ -5,7 +5,6 @@ import civictech.cell.CellRef
 import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Timestamp
-import civictech.cell.data.CounterDelta
 import civictech.cell.Propagate
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -20,6 +19,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import civictech.cell.data.delta.CounterDelta
 
 class SaturationTest {
     private class RelayStage(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {

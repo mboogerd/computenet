@@ -19,6 +19,9 @@ import civictech.cell.port.Subscribe
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.delta.TagState
 
 /**
  * Per-source-link membership for a dynamic `SetDelta<E>` fan-in (the shared core

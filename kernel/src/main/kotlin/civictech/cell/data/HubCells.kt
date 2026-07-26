@@ -5,6 +5,8 @@ import civictech.cell.Propagate
 import civictech.cell.port.Use
 import civictech.gen.wire.CellBase
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 @CellBase
 interface SetHubApi<E> {

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.SetDelta
 
 data class Reading(val sensor: String, val at: Long, val value: Long) : Serializable
 

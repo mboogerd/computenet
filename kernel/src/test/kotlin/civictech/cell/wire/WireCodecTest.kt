@@ -3,12 +3,8 @@ package civictech.cell.wire
 import civictech.cell.CellRef
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
-import civictech.cell.data.CounterDelta
 import civictech.cell.data.CounterOps
-import civictech.cell.data.ListDelta
-import civictech.cell.data.MapDelta
 import civictech.cell.Propagate
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.port.PortRef
 import civictech.cell.proxy.HostedPortInvocation
@@ -18,6 +14,10 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.delta.ListDelta
 
 /**
  * M5.2 (G-15): the wire envelope round-trips every M4 payload type — ids

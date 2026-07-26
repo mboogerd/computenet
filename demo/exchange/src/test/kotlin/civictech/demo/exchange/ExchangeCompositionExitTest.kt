@@ -9,11 +9,9 @@ import civictech.cell.data.Aggregators
 import civictech.cell.data.FilterCell
 import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
-import civictech.cell.data.MapDelta
 import civictech.cell.data.MergeableGroupByCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.ShardCell
 import civictech.cell.data.PartitionedShardSet
@@ -44,6 +42,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * CP-E2 — the composition **phase exit** ("the Agora for composition").

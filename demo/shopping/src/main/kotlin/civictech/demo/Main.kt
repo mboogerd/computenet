@@ -6,7 +6,6 @@ import civictech.cell.data.IntersectSetCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.graph.TypedCellHandle
@@ -31,6 +30,7 @@ import java.net.URI
 import java.net.URLDecoder
 import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
+import civictech.cell.data.delta.SetDelta
 
 // The UI transport is still JDK httpserver + SSE pushing full state (an
 // incremental browser client is M6+ material); the *peer* transport is the

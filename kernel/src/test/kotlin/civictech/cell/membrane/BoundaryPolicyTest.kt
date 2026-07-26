@@ -6,7 +6,6 @@ import civictech.cell.attention.Attention
 import civictech.cell.attention.AttentionBand
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -22,6 +21,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 /** Redacts any element whose key starts with "secret" — a named, registered `Delta -> Delta` transform (P9). */
 private val redactSecrets = ProjectionId("redact-secrets-test")

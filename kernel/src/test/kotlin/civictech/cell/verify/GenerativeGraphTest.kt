@@ -4,7 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.CollectorCell
 import civictech.cell.data.CountCell
-import civictech.cell.data.CounterDelta
 import civictech.cell.data.FilterCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
@@ -14,7 +13,6 @@ import civictech.cell.data.tagFold
 import civictech.cell.graph.CellHandle
 import civictech.cell.graph.GraphSpec
 import civictech.cell.graph.graph
-import civictech.cell.data.SetDelta
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -29,6 +27,8 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.CounterDelta
 
 /**
  * The G-31 harness: seeded random pipelines from the data-cell vocabulary,

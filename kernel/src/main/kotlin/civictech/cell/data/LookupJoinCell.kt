@@ -8,6 +8,7 @@ import civictech.cell.port.Subscribe
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.MapDelta
 
 @CellBase
 interface LookupJoinApi<K, V, J, D, R> {

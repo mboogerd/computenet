@@ -6,11 +6,9 @@ import civictech.cell.data.Aggregators
 import civictech.cell.data.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.JoinSetCell
-import civictech.cell.data.MapDelta
 import civictech.cell.Propagate
 import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.data.mapFold
@@ -27,6 +25,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * M11 exit test: the full operations suite composed end-to-end across two

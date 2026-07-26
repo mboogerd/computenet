@@ -7,6 +7,8 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /** Records tagged set deltas in arrival order. */
 class CollectorCell(

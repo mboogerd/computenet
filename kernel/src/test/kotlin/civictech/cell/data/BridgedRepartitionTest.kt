@@ -12,6 +12,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.Random
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 /**
  * PN-6, CP-G4's exit folded in (spec 20/24 §Partitioned state, 40/42

@@ -6,7 +6,6 @@ import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -23,6 +22,7 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
 
 /**
  * FU-2 — converged-membership barrier: the unknown-joiner half of the

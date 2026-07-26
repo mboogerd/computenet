@@ -6,7 +6,6 @@ import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.WatermarkCell
 import civictech.cell.host.LocationRegistry
@@ -24,6 +23,7 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
 
 /**
  * PN-7 — interest-scoped settlement (plan §3 Rule of settlement, spec 22

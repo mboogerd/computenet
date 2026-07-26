@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.delta
 
 import civictech.cell.CellRef
 import civictech.cell.Timestamp

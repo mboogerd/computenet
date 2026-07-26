@@ -1,4 +1,4 @@
-package civictech.cell.data
+package civictech.cell.data.delta
 
 import civictech.cell.ReBaselineNotice
 import civictech.cell.Timestamp

@@ -2,11 +2,9 @@ package civictech.cell.replication
 
 import civictech.cell.CellRef
 import civictech.cell.consistency.ReplicaFrontier
-import civictech.cell.data.DeliveryTracking
 import civictech.cell.Propagate
 import civictech.cell.data.Replicable
 import civictech.cell.data.WatermarkCell
-import civictech.cell.data.WatermarkDelta
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanOutlet
@@ -16,6 +14,8 @@ import civictech.cell.port.Use
 import civictech.cell.port.streamTo
 import civictech.cell.host.HostedCellProxy
 import java.util.*
+import civictech.cell.data.delta.WatermarkDelta
+import civictech.cell.data.delta.DeliveryTracking
 
 /**
  * Replica wiring (spec 42, G-7, M7.3). A replica is an instance of the same

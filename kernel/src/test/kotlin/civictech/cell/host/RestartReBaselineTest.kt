@@ -7,7 +7,6 @@ import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.Propagate
-import civictech.cell.data.SetDelta
 import civictech.cell.data.UnionSetCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -18,6 +17,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 /**
  * W2.1 (G-42 + G-43, fixes C-12): a producer's outlet mints a fresh emission

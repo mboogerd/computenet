@@ -4,10 +4,10 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Stateful
-import civictech.cell.data.CounterDelta
-import civictech.cell.data.ListDelta
+import civictech.cell.data.delta.CounterDelta
+import civictech.cell.data.delta.ListDelta
 import civictech.cell.data.Magnitude
-import civictech.cell.data.PnCounterDelta
+import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.Propagate
 import civictech.cell.observe.View
 import civictech.cell.port.FanInlet

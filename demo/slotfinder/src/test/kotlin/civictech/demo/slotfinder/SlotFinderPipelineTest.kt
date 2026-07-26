@@ -1,8 +1,6 @@
 package civictech.demo.slotfinder
 
-import civictech.cell.data.MapDelta
 import civictech.cell.Propagate
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetView
 import civictech.cell.graph.lookup
 import civictech.cell.host.ManagedHost
@@ -12,6 +10,8 @@ import civictech.cell.port.Use
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.util.Random
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * Seeded incremental-vs-batch equivalence over the exact pipeline the app

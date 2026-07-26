@@ -4,11 +4,9 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.CollectorCell
 import civictech.cell.data.CountCell
-import civictech.cell.data.CounterDelta
 import civictech.cell.data.FilterCell
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.data.tagFold
@@ -37,6 +35,8 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.CounterDelta
 
 /**
  * The M5 exit criterion: the M4 collaborative session — same cells, same

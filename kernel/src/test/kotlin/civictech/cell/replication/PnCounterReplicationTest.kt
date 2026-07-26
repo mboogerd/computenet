@@ -12,6 +12,7 @@ import civictech.cell.wire.Peering
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.CounterDelta
 
 /**
  * Session delta 4 (spec 24/42): the second CRDT family under gossip. PN-counter

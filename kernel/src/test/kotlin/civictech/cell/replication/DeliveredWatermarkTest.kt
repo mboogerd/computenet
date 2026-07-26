@@ -3,7 +3,6 @@ package civictech.cell.replication
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.PnCounterCell
-import civictech.cell.data.PnCounterDelta
 import civictech.cell.data.PnCounterOps
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -17,6 +16,7 @@ import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.PnCounterDelta
 
 /**
  * CP-B2 / milestone E3.3 (spec 40/42 §Delivered watermarks): replica delivery

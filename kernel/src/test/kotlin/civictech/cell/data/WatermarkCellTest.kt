@@ -5,6 +5,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
 import kotlin.random.Random
+import civictech.cell.data.delta.WatermarkDelta
 
 /**
  * E3.2 lattice laws for the delivered-watermark [WatermarkDelta].

@@ -1,10 +1,8 @@
 package civictech.cell.verify
 
 import civictech.cell.data.CountCell
-import civictech.cell.data.CounterDelta
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.LinkFrom
@@ -14,6 +12,8 @@ import io.kotest.assertions.throwables.shouldThrow
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.CounterDelta
 
 class InvariantCellTest {
 

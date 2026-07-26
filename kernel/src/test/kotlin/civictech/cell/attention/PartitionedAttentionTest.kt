@@ -7,7 +7,6 @@ import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.LocationRegistry
@@ -30,6 +29,7 @@ import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
 
 /**
  * PN-19 (plan §3b, spec 34 decisions 3/5) — attention scatter by interest, the

@@ -3,7 +3,6 @@ package civictech.cell.graph
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.tagFold
 import civictech.cell.host.ManagedHost
@@ -14,6 +13,7 @@ import civictech.cell.port.Use
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
 
 class RelationalGraphsTest {
 

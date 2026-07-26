@@ -9,6 +9,7 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.MapDelta
 
 @CellBase
 interface JoinApi<K, V, W> {

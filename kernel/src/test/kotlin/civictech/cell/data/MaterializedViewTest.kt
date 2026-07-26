@@ -9,6 +9,9 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.delta.TagState
 
 /**
  * The consumer-side read models ([SetView] / [MapView] / [CountView]): the

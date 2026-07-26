@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import civictech.cell.data.delta.PnCounterDelta
 
 class PnCounterCellTest {
     @Test

@@ -5,6 +5,8 @@ import civictech.cell.port.PortIdentity
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.port.identity
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.CounterDelta
 
 /**
  * Typed wiring over [HostManagementApi.connect] (typed-port-links, 05): connects

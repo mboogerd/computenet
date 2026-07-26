@@ -3,9 +3,7 @@ package civictech.demo.backlogtriage
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
-import civictech.cell.data.MapDelta
 import civictech.cell.Propagate
-import civictech.cell.data.SetDelta
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.LinkFrom
@@ -18,6 +16,8 @@ import java.util.*
 import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 class RankingCellTest {
 

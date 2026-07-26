@@ -3,7 +3,6 @@ package civictech.cell.replication
 import civictech.cell.CellRef
 import civictech.cell.attention.AttentionSupport
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.LocationRegistry
@@ -18,6 +17,7 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
 
 /**
  * M7.3–M7.5: replicas of one logical set converge by delta gossip over

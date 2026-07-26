@@ -1,11 +1,9 @@
 package civictech.cell.host
 
 import civictech.cell.Timestamp
-import civictech.cell.data.MapDelta
 import civictech.cell.Propagate
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.observe.ObserveCell
@@ -22,6 +20,8 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * The observation sink's HOSTING concern (spec

@@ -3,10 +3,8 @@ package civictech.demo.backlogtriage
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Timestamp
-import civictech.cell.data.MapDelta
 import civictech.cell.data.MapDiffPublisher
 import civictech.cell.Propagate
-import civictech.cell.data.SetDelta
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -14,6 +12,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.util.*
 import kotlin.math.abs
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * RatingCell — hosts one incremental [RatingEngine] as a dataflow cell.

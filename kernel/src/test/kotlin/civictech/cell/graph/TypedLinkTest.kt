@@ -4,10 +4,8 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.data.CountCell
-import civictech.cell.data.CounterDelta
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.UnionSetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -25,6 +23,8 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.CounterDelta
 
 /**
  * Typed port wiring (typed-port-links, 05): `link(a.outlet, b.inlet)` connects

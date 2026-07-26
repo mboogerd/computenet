@@ -20,6 +20,7 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
+import civictech.cell.data.delta.SetDelta
 
 /**
  * W2.2 (G-37 + G-38, closes G-18): on-demand `StateRequest` pull and the

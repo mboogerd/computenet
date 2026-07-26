@@ -5,7 +5,6 @@ import civictech.cell.CellRef
 import civictech.cell.Timestamp
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.data.SetOps
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -20,6 +19,7 @@ import org.opentest4j.AssertionFailedError
 import java.net.URI
 import java.util.Collections
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 /**
  * M10.3 smoke: a client survives its listener dying and coming back on the

@@ -4,7 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.data.CollectorCell
 import civictech.cell.data.CountCell
-import civictech.cell.data.CounterDelta
 import civictech.cell.data.DeltaInletProxy
 import civictech.cell.data.FilterCell
 import civictech.cell.Propagate
@@ -28,6 +27,7 @@ import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.CounterDelta
 
 /**
  * M5.3: the generative harness (G-31) over the wire. Two registries model two

@@ -4,7 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
-import civictech.cell.data.SetDelta
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
 import civictech.nature.CellColor
@@ -21,6 +20,7 @@ import io.kotest.matchers.string.shouldContain as shouldContainText
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 class PortDescriptorSpawnCheckTest {
 

@@ -10,6 +10,8 @@ import civictech.cell.port.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.*
+import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.MapDelta
 
 /**
  * Replicable grouped aggregation (CP-G1): the mergeable sibling of

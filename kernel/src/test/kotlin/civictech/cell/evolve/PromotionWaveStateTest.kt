@@ -6,7 +6,6 @@ import civictech.cell.Consumer
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.Propagate
-import civictech.cell.data.SetDelta
 import civictech.cell.data.UnionSetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -21,6 +20,7 @@ import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.io.Serializable
 import java.util.UUID
+import civictech.cell.data.delta.SetDelta
 
 /**
  * W2.1 (G-42 + G-43): a promotion whose state transfer carries the outlet's

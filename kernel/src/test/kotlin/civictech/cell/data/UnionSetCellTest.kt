@@ -9,6 +9,7 @@ import civictech.cell.proxy.buffering
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.util.*
+import civictech.cell.data.delta.SetDelta
 
 class UnionSetCellTest {
 

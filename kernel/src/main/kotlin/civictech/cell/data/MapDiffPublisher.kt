@@ -1,5 +1,7 @@
 package civictech.cell.data
 
+import civictech.cell.data.delta.MapDelta
+
 /**
  * Effective-only diff-and-emit state for a `MapDelta<K, V>` publisher: owns
  * the published map, recomputes touched keys, and returns only the delta
