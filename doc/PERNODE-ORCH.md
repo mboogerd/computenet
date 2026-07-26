@@ -48,8 +48,14 @@ Spec 24-data-cells.md conflicts (3 EOF-appended sections) resolved by union.
 | PN-9 | merged | comp/PN-9 | 6d2b267 | inlet tier chain ADMIT/GATE/ALIGN/ACTIVATE; PullOnOpen/PullServe extracted; large diff (on-link multicast to StreamTo/Replication/demos); Protocols leak fix; validator found+fixed a shopping-demo silent-drop |
 | PN-5 | merged | comp/PN-5 | (post-9) | scatter-gather pull. **Reworked**: v1 read co-located shard objects (decorative "bridges"); v2 fans serialized StateRequest over registry::deliver, shards reply baselineTo over reverse bridge — re-validated genuinely distributed. Residuals: scope rides @Transient (Total-only over wire; partial=follow-on) |
 
-### Wave 4 — PN-6+G4 (γ CONT) ∥ PN-10 (ε CONT)
+### Wave 4 — PN-6+G4 (γ CONT) ∥ PN-10 (ε CONT) — **COMPLETE** (gate green)
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-6  | pending | comp/PN-6  | | one linker, one assignment (subsumes CP-G3; folds CP-G4 exit) |
-| PN-10 | pending | comp/PN-10 | | Link.role; handshake bypasses negotiable (opt-in) |
+| PN-6  | merged | comp/PN-6  | (W4) | one linker (shared sliceTo); `routed` deleted, `ledger` scoped (leaderless replay=R1 out of scope); journaled assignment closes PN-4 shed residual; Interest arms now kotlinx-@Serializable (also closes PN-5 @Transient scope). Residual: InstanceSet lattice unit-tested but not wired into runtime router (R13/R1 deferred) |
+| PN-10 | merged | comp/PN-10 | (W4) | Link.role (default Consume); expectedLocalEdges counts Consume only; tap/streamTo negotiated=false unflipped (byte-for-byte); validator READY |
+
+### Wave 5 — PN-7 (δ FRESH) ∥ PN-12 (ζ FRESH — THE behavior change)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-7  | pending | comp/PN-7  | | interest-scoped settlement (+R13 creation fence) |
+| PN-12 | pending | comp/PN-12 | | two refusing axes, CellManifest, negotiated-default flip |
