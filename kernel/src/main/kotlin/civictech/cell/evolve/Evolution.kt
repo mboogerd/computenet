@@ -239,6 +239,85 @@ object Promotion {
         host.managementInlet.call.despawn(incumbent.ref)
     }
 
+    /**
+     * Rolling replicated (and, shard-by-shard, partitioned) promotion (PN-14,
+     * spec 53 §Replicated promotion). A replicated cell has no single upstream
+     * gate to red — its inputs are local writes and peer gossip — and its
+     * incumbent is not retired but RETAINED on every surviving peer. Promotion
+     * is therefore a per-instance **rebind behind a reused CellRef**, rolled one
+     * instance at a time by the caller (the ordering/abort policy is
+     * [PromotionPolicy] data, consulted via [judge] exactly as in [promote]).
+     * This is additive: single-instance [promote] is unchanged.
+     *
+     * PRECHECK (no side effects, freely abortable), then COMMIT via
+     * [Replication.rebind]:
+     *  - [judge], when supplied, must return [PromotionVerdict.Accept] (same
+     *    contract as [promote]).
+     *  - the candidate MUST reuse the incumbent's [CellRef]. A fresh ref re-mints
+     *    the ref-derived tag lane and the delivered-watermark slot, orphaning the
+     *    incumbent's row (the retired row would hold frontiers forever) and
+     *    breaking crash-recovery equivalence — refused here.
+     *  - the fresh-epoch **T2 fallback is refused** for a replicated cell: its
+     *    state re-syncs by anti-entropy over the *same* ref-derived lane, so a
+     *    fresh source is never sound. A candidate declaring
+     *    [NonIdempotentCatchUp] (the T2-soundness marker) is refused outright,
+     *    exactly as in the single-instance path.
+     *  - structural port sameness (93 I-2) on the delta [outletName] outlet.
+     *
+     * The same rolling form extends shard-by-shard to a partitioned node: each
+     * shard is a ref-addressed instance, and promoting it is this same rebind
+     * (promotion is a rebind, re-running link-time authority). Set-atomic
+     * promotion (all replicas at once) is consensus and out of scope.
+     */
+    fun promoteReplica(
+        host: ManagedHost,
+        replication: civictech.cell.replication.Replication,
+        incumbent: civictech.cell.data.Replicable<*>,
+        candidate: civictech.cell.data.Replicable<*>,
+        outletName: String = "outlet",
+        judge: PromotionJudge? = null,
+    ) {
+        // PRECHECK — decided strictly before any state mutation.
+        if (judge != null) {
+            when (val verdict = judge.verdict()) {
+                is PromotionVerdict.Accept -> {}
+                is PromotionVerdict.Pending -> throw PromotionAborted(
+                    "PRECHECK",
+                    "promotion policy's observation window is not yet filled (verdict: Pending)",
+                )
+                is PromotionVerdict.Reject -> throw PromotionAborted("PRECHECK", verdict.reason)
+            }
+        }
+        if (candidate.ref != incumbent.ref) {
+            throw PromotionAborted(
+                "PRECHECK",
+                "replicated promotion must reuse the incumbent's CellRef (the crash-recovery mechanism: " +
+                    "identity — tag lane, watermark row, port refs — derives from the ref); candidate " +
+                    "${candidate.ref} != incumbent ${incumbent.ref} (spec 53 §Replicated promotion)",
+            )
+        }
+        if (candidate is NonIdempotentCatchUp) {
+            throw PromotionAborted(
+                "PRECHECK",
+                "replicated promotion has no sound T2 (fresh-epoch) fallback: the candidate re-syncs by " +
+                    "anti-entropy over the same ref-derived lane, so a fresh source would double-count " +
+                    "(spec 53 §Replicated promotion; §Three handoff tiers)",
+            )
+        }
+        val from = outlet(incumbent, outletName)
+        val to = outlet(candidate, outletName)
+        if (from.clazz != to.clazz) {
+            throw PromotionAborted(
+                "PRECHECK",
+                "candidate outlet '$outletName' contract ${to.clazz.name} " +
+                    "does not match incumbent's ${from.clazz.name} (structural port sameness, 93 I-2)",
+            )
+        }
+        // COMMIT — the rebind (reuse-ref crash-recovery); surviving replicas play
+        // the retained incumbent and re-feed the candidate.
+        replication.rebind(incumbent, candidate, host)
+    }
+
     private fun outlet(cell: Cell, name: String): FanOutlet<*> =
         PortRegistry.of(cell)[name] as? FanOutlet<*>
             ?: error("no fan-out outlet '$name' on ${cell.ref}")

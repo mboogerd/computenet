@@ -288,3 +288,80 @@ layer under federated governance (see §Trust boundary); a small-blast-radius
 canary staged-promotion path for unshadowable closed-loop candidates; and an
 ordering/monitoring/abort policy for partitioned rolling promotion (93
 I-21/I-17/I-27) — M15.5 in the roadmap.
+
+## Replicated promotion (PN-14, resolved for the rolling form)
+
+`Promotion.promote` is single-instance: its swap set is the incumbent's
+`downstream` outlet subscriptions behind one gate. A **replicated** cell (spec
+42) has no such shape — its inputs are local writes and peer *gossip* links
+(never enumerated in `downstream`), it has no single upstream gate, and its
+"incumbent" is not one cell but a live instance set. Promoting it as a single
+transaction fails three ways: the gossip mesh is not relinked, a candidate's
+fresh `CellRef` re-mints the tag lane (`SetCell.tagSource` is derived from
+`(id, instanceId)`) and the delivered-watermark slot (`watermarkRef`), and the
+retired incumbent's watermark row then holds downstream frontiers forever.
+
+Set-atomic promotion (every replica swapped as one transaction) is a
+distributed consensus barrier — the P4-forbidden global lock — and is **out of
+scope**. What is decided and built is the **rolling** form:
+
+**Rolling, by constraint — one instance at a time, the swap IS crash-recovery.**
+`Promotion.promoteReplica` promotes a single replica; the caller rolls the set
+peer by peer. The candidate **reuses the incumbent's `CellRef`**. Because every
+mesh identity derives from the ref — the ref-derived tag lane, the
+delivered-watermark row, and every port ref (PN-1) — reusing it makes the swap
+**indistinguishable from crash-recovery, and that is the mechanism**:
+
+- peers' inbound gossip links keep resolving to the ref (now the candidate)
+  with no relink — a routed proxy resolves by ref at call time;
+- this peer's delivered-watermark companion (and its row) is **retained** — the
+  swap never closes it (unlike an `evict` departure), so a downstream
+  replica-frontier read never sees the member vanish;
+- the candidate re-syncs by the same two halves a recovered replica uses:
+  **journal replay** (`Stateful.snapshot`/`restore` carries the incumbent's tag
+  *counter* forward, so a fresh mint never collides with an already-emitted tag)
+  and **anti-entropy** (the re-announce fires the gossip catch-up at every known
+  peer). The **surviving replicas play the retained incumbent** — they are the
+  state source, so no cross-peer coordination is needed.
+
+`Promotion.promoteReplica` is PRECHECK-then-COMMIT like `promote`, and
+`Replication.rebind` is **additive** — single-instance `promote` is byte-for-byte
+unchanged, and a graph that never opts into replicated promotion is unaffected.
+PRECHECK (no side effects, freely abortable):
+
+- consults the `PromotionJudge` (the same declarative policy as `promote`);
+- **refuses a candidate with a different ref** — a fresh ref breaks
+  crash-recovery equivalence, orphaning the incumbent's watermark row and
+  restarting the tag lane;
+- **refuses the T2 fresh-epoch fallback** — a replicated cell re-syncs by
+  anti-entropy over the *same* ref-derived lane, so a fresh source is never
+  sound (a `NonIdempotentCatchUp` candidate is refused outright);
+- checks structural port sameness (93 I-2) on the delta outlet.
+
+COMMIT is the rebind (reuse-ref crash-recovery). Inbound gossip arriving during
+the object swap parks at the registry on the despawn's unpublish and replays on
+the candidate's republish, so no peer delta is lost.
+
+**Partitioned nodes extend by the same rolling form, shard-by-shard.** A
+partitioned node's shards are ref-addressed instances (PN-6); promoting one is
+this same rebind. **Promotion is a rebind**, so each swap re-runs link-time
+authority — the coverage/interest check the linker already applies (PN-6/PN-7)
+is exactly the re-authorization the swap needs, no separate protocol. The
+**ordering and abort policy** for a roll (which shard/replica next, when to
+halt) is `PromotionPolicy` **data** consulted per instance via the judge — not
+new control flow. This resolves the *mechanism* half of the G-50 residual's
+"ordering/monitoring/abort policy for partitioned rolling promotion"; the
+*authority* half (who may trigger a roll) stays open under §Trust boundary, and
+a converged-membership barrier for the flip window remains the R13/PN-19
+residual (a covering member the local view has not yet learned of cannot be
+waited on).
+
+Verified in `ReplicatedPromotionTest`: a three-peer mesh, a
+`GlitchFreeCell.useReplicaFrontier` consumer gating on the merged replica
+frontier, a rolling promotion across peer 0 then peer 1 while the others write —
+100 seeds converge to the batch union and surface no undelivered element across
+both swaps. Controls diverge: **(a)** the T2 fresh-epoch fallback (the tag lane
+restarts, so a mint collides with an already-emitted tag) tears the frontier;
+**(b)** a fresh `CellRef` orphans the watermark row and re-mints the tag/slot
+identity — the removes-fail-to-cover / resurrection failure the reused ref
+prevents.
