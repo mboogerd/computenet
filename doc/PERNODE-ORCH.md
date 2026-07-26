@@ -54,8 +54,20 @@ Spec 24-data-cells.md conflicts (3 EOF-appended sections) resolved by union.
 | PN-6  | merged | comp/PN-6  | (W4) | one linker (shared sliceTo); `routed` deleted, `ledger` scoped (leaderless replay=R1 out of scope); journaled assignment closes PN-4 shed residual; Interest arms now kotlinx-@Serializable (also closes PN-5 @Transient scope). Residual: InstanceSet lattice unit-tested but not wired into runtime router (R13/R1 deferred) |
 | PN-10 | merged | comp/PN-10 | (W4) | Link.role (default Consume); expectedLocalEdges counts Consume only; tap/streamTo negotiated=false unflipped (byte-for-byte); validator READY |
 
-### Wave 5 — PN-7 (δ FRESH) ∥ PN-12 (ζ FRESH — THE behavior change)
+### Wave 5 — PN-7 (δ FRESH) ∥ PN-12 (ζ FRESH — THE behavior change) — **COMPLETE** (gate green)
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-7  | pending | comp/PN-7  | | interest-scoped settlement (+R13 creation fence) |
-| PN-12 | pending | comp/PN-12 | | two refusing axes, CellManifest, negotiated-default flip |
+| PN-7  | merged | comp/PN-7  | (W5) | covering-subset quorum resolves F2; R13 read-side fence (known-rowless→hold), safety verified 600 seeds; unknown-member window = PN-19 race (documented); defaults byte-identical |
+| PN-12 | merged | comp/PN-12 | (W5) | WAVE_PARTICIPATION+INSTANCE_SCOPING refusing axes; CellManifest (disjoint from reconcile); **negotiated-default FLIPPED to true**, demo gate green post-flip; DURABLE spawn = counted diagnostic (not hard refuse — the COLOR principle); INSTANCE_SCOPING e2e untested (rides axis-agnostic reconcile) |
+
+### Wave 6 — PN-8 (δ CONT) ∥ PN-18→PN-13 (ζ CONT bundle) ∥ PN-14 (η FRESH) ∥ PN-11 (solo) ∥ PN-16 (λ research)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-8  | pending | comp/PN-8    | | sharded replication end-to-end |
+| PN-18 | pending | comp/PN-1813 | | ownership × instance set refusal (bundled w/ PN-13) |
+| PN-13 | pending | comp/PN-1813 | | InstanceSetStep in GraphSpec |
+| PN-14 | pending | comp/PN-14   | | rolling replicated/partitioned promotion |
+| PN-11 | pending | comp/PN-11   | | ParkQueue extraction (mechanical, byte-identical) |
+| PN-16 | pending | comp/PN-16   | | research spike (decision/spec paragraph; may or may not merge) |
+
+Only real W6 file collision: NatureNegotiation.kt (PN-8 + PN-18) — resolve union at merge.
