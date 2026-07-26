@@ -130,12 +130,28 @@ class Replication(
      * premature release. An empty covering subset always holds (never a vacuous
      * release).
      *
-     * Membership itself ([LocationRegistry.instancesOf]) remains eventually
-     * consistent: a covering member the local view has not yet learned of at all
-     * cannot be waited on here — that residual (a converged membership barrier /
-     * the DEGRADE quorum-shrink) is sequenced to PN-19, documented not hidden.
+     * **FU-2 converged-membership barrier** ([membershipBarrier], default on).
+     * Membership itself ([LocationRegistry.instancesOf]) is eventually consistent:
+     * a covering member the local view has not learned of *at all* is absent from
+     * the quorum above, so the wave could release before that member's data for the
+     * key arrives — the unknown-joiner premature release (PN-7's residual; PN-19
+     * closed only the known-suspended half). The barrier closes it by reading the
+     * companion's [WatermarkCell.members] set — announced on join and gossiped over
+     * the *transitively* converging companion CRDT, which is more complete than the
+     * point-to-point topology announcements feeding `instancesOf`. A member slot the
+     * companion knows but this node's `instancesOf` view has not accounted for (nor
+     * `closed`, nor — under DEGRADE — `suspended`) forces a conservative HOLD of
+     * every keyed wave, never a premature release, and releases the moment the view
+     * converges. A `null` [key] (no covering quorum) is never held, so the default
+     * settlement stays byte-identical; a converged membership never holds, so a
+     * covering-quorum graph settles exactly as it did once everyone is known.
      */
-    fun replicaFrontier(logicalId: UUID, creationFence: Boolean = true, degrade: Boolean = false): ReplicaFrontier =
+    fun replicaFrontier(
+        logicalId: UUID,
+        creationFence: Boolean = true,
+        degrade: Boolean = false,
+        membershipBarrier: Boolean = true,
+    ): ReplicaFrontier =
         ReplicaFrontier { source, counter, key ->
             val companion = watermarks[logicalId]
             val members = registry.instancesOf(logicalId)
@@ -149,6 +165,27 @@ class Replication(
             // [WatermarkCell.resume]. Under WAIT (the default) suspended members
             // stay required and hold the wave, exactly as pre-PN-19.
             val suspended = if (degrade) companion.suspended() else emptySet()
+            // FU-2 converged-membership barrier (closes PN-7's unknown-joiner
+            // residual; PN-19 closed only the known-suspended half). The covering
+            // quorum above is read off `instancesOf`, which is eventually consistent:
+            // a covering member this node has not learned of *at all* is absent from
+            // the quorum, so the wave could release before that member's data for the
+            // key arrives — a torn read. The delivered-watermark companion, being a
+            // transitively-gossiped CRDT, converges membership more completely than
+            // the point-to-point topology announcements that feed `instancesOf`: it
+            // may list a member slot ([WatermarkCell.announceMember]) this node's
+            // `instancesOf` view has not yet caught up to. If so — and only for keyed
+            // (covering-quorum) waves — HOLD conservatively, never release early. A
+            // slot already `closed` (cleanly departed, PN-0c) or (under DEGRADE)
+            // `suspended` is accounted for and does not hold. Once `instancesOf`
+            // converges the unaccounted set empties and the wave releases (liveness);
+            // an unkeyed wave (`key == null`, no covering quorum) is never held, so
+            // the default settlement is byte-identical.
+            if (membershipBarrier && key != null) {
+                val known = members.mapTo(mutableSetOf()) { WatermarkCell.slotId(watermarkRef(it)) }
+                val accounted = known + closed + suspended
+                if (companion.members().any { it !in accounted }) return@ReplicaFrontier false
+            }
             val covering = members
                 .filter { key == null || registry.interestOf(it).admits(key) }
                 .filter { WatermarkCell.slotId(watermarkRef(it)) !in suspended }
@@ -253,6 +290,11 @@ class Replication(
         val companion = watermarks.getOrPut(cell.ref.id) {
             WatermarkCell(watermarkRef(cell.ref)).also { replicate(it, host) }
         }
+        // FU-2 converged-membership barrier: announce this covering member's
+        // existence on the companion mesh (a transitively-gossiped CRDT), so a
+        // settling peer holds keyed waves until its own membership view has caught
+        // up to this join — the unknown-joiner analogue of the R13 creation fence.
+        companion.announceMember()
         // Per-origin delivered frontier (E3.3(a), E3.4's read): the fold reports
         // each raised ORIGIN prefix from inside applyRemote / local mints, where
         // the origin tags survive — the substrate E3.4's cross-track read needs.

@@ -50,21 +50,45 @@ data class WatermarkDelta(
         @kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID,
         Long,
         > = emptyMap(),
+    /**
+     * FU-2 (spec 22 §Converged-membership barrier): a **grow-only set of covering
+     * member slots** — the [WatermarkCell.slotId] each replica announces on join
+     * ([WatermarkCell.announceMember]). It is the coverage-completeness half of the
+     * delivered-watermark companion: a member's *existence* rides the same
+     * transitively-gossiped, idempotent CRDT as its delivered frontier, so it
+     * converges more completely than the point-to-point topology announcements that
+     * feed [civictech.cell.host.LocationRegistry.instancesOf] (which mirror only
+     * direct peers). A settling node whose companion lists a member slot its own
+     * `instancesOf` view has not accounted for holds every keyed wave
+     * ([civictech.cell.replication.Replication.replicaFrontier] `membershipBarrier`)
+     * — the same conservative asymmetry the R13 creation fence gives a *known*
+     * rowless member, extended to an *unknown* one. Union-merged (grow-only), so it
+     * gossips over the mesh with no second protocol; defaulted empty ⇒ pre-FU-2
+     * deltas round-trip unchanged.
+     */
+    val members: Set<@kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID> = emptySet(),
 ) : Serializable, MergeablePayload {
 
     fun merge(other: WatermarkDelta): WatermarkDelta =
-        WatermarkDelta(mergeRows(rows, other.rows), closed + other.closed, mergeSuspend(suspended, other.suspended))
+        WatermarkDelta(
+            mergeRows(rows, other.rows),
+            closed + other.closed,
+            mergeSuspend(suspended, other.suspended),
+            members + other.members,
+        )
 
     override fun mergeWith(other: MergeablePayload): MergeablePayload = merge(other as WatermarkDelta)
 
     /**
      * Lattice order: `this ⊒ other` iff every counter in `other` is met or
-     * exceeded here, `other`'s closed replicas are all closed here, and every
-     * suspend epoch here is at least `other`'s. Used by the monotonicity law and
-     * to reason about echo termination.
+     * exceeded here, `other`'s closed replicas are all closed here, every suspend
+     * epoch here is at least `other`'s, and `other`'s announced members are all
+     * announced here. Used by the monotonicity law and to reason about echo
+     * termination.
      */
     fun dominates(other: WatermarkDelta): Boolean {
         if (!closed.containsAll(other.closed)) return false
+        if (!members.containsAll(other.members)) return false
         if (other.suspended.any { (slot, epoch) -> (suspended[slot] ?: Long.MIN_VALUE) < epoch }) return false
         return other.rows.all { (replica, cols) ->
             val mine = rows[replica] ?: emptyMap()
@@ -119,6 +143,8 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     private val closed: MutableSet<UUID> = mutableSetOf()
     // PN-19: per-slot suspend epoch (odd = suspended); the resumable analogue of closed.
     private val suspendEpoch: MutableMap<UUID, Long> = mutableMapOf()
+    // FU-2: grow-only set of covering member slots that have announced their existence.
+    private val members: MutableSet<UUID> = mutableSetOf()
 
     /** Highest counter this cell has absorbed for [source] from any replica. */
     fun watermark(source: UUID): Long? =
@@ -129,6 +155,28 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
 
     /** Slots currently suspended (odd epoch) — the covering-quorum shrink set (PN-19, DEGRADE). */
     fun suspended(): Set<UUID> = suspendEpoch.filterValues { it % 2L != 0L }.keys.toSet()
+
+    /**
+     * Covering member slots the companion has learned of (FU-2): every replica that
+     * has [announceMember]ed its existence, merged over the mesh. The
+     * converged-membership barrier ([civictech.cell.replication.Replication.replicaFrontier])
+     * holds a keyed wave while this set names a slot the settling node's
+     * [civictech.cell.host.LocationRegistry.instancesOf] view has not yet accounted for.
+     */
+    fun members(): Set<UUID> = members.toSet()
+
+    /**
+     * Announce this replica as a covering member (FU-2): add its [slotId] to the
+     * grow-only [members] set and gossip it (effective-only). Because the marker
+     * rides the transitively-gossiped companion CRDT, it converges to peers that
+     * have not yet learned of this replica through the point-to-point topology
+     * announcements — so a settling node can hold on an *unknown* covering member,
+     * the asymmetry the R13 creation fence gives a known rowless one.
+     */
+    fun announceMember() {
+        if (!members.add(slotId)) return // effective-only
+        outlet.call.propagate(WatermarkDelta(members = setOf(slotId)))
+    }
 
     /**
      * Advance this replica's delivered watermark for [source] to [thru]
@@ -191,8 +239,12 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
                 raisedSuspend[slot] = epoch
             }
         }
-        if (raised.isEmpty() && newlyClosed.isEmpty() && raisedSuspend.isEmpty()) return // echo terminates here
-        outlet.originate { propagate(WatermarkDelta(raised, newlyClosed, raisedSuspend)) }
+        val newMembers = delta.members - members
+        members += newMembers
+        if (raised.isEmpty() && newlyClosed.isEmpty() && raisedSuspend.isEmpty() && newMembers.isEmpty()) {
+            return // echo terminates here
+        }
+        outlet.originate { propagate(WatermarkDelta(raised, newlyClosed, raisedSuspend, newMembers)) }
     }
 
     init {
@@ -202,8 +254,8 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         // late-join catch-up (G-22) / replica initial sync + anti-entropy (M7.4):
         // full per-replica state as one delta; pointwise max makes replays harmless.
         outlet.catchUpOnLinked {
-            if (rows.isEmpty() && closed.isEmpty() && suspendEpoch.isEmpty()) null
-            else WatermarkDelta(rows(), closed(), suspendEpoch.toMap())
+            if (rows.isEmpty() && closed.isEmpty() && suspendEpoch.isEmpty() && members.isEmpty()) null
+            else WatermarkDelta(rows(), closed(), suspendEpoch.toMap(), members())
         }
     }
 
@@ -234,6 +286,7 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
             "rows" to HashMap(rows.mapValues { HashMap(it.value) }),
             "closed" to HashSet(closed),
             "suspended" to HashMap(suspendEpoch),
+            "members" to HashSet(members),
         ))
 
     @Suppress("UNCHECKED_CAST")
@@ -242,11 +295,13 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
         rows.clear()
         closed.clear()
         suspendEpoch.clear()
+        members.clear()
         (map.getValue("rows") as Map<UUID, Map<UUID, Long>>).forEach { (r, c) ->
             rows[r] = c.toMutableMap()
         }
         closed += map.getValue("closed") as Set<UUID>
         (map["suspended"] as? Map<UUID, Long>)?.let { suspendEpoch.putAll(it) }
+        (map["members"] as? Set<UUID>)?.let { members += it }
     }
 
     companion object {
