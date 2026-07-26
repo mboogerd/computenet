@@ -49,4 +49,25 @@ class TopologyIndex {
             byCell.computeIfPresent(ref) { _, ids -> ids.apply { remove(link.id) }.takeIf { it.isNotEmpty() } }
         }
     }
+
+    /**
+     * Would a `from -> to` edge close a cycle already visible in this index?
+     * True exactly when [to] can already reach [from] by following existing
+     * outbound edges (spec 10/13 rare-path cycle walk; P2 permits expensive
+     * linking). Moved from `ManagedHost` (RS-8.4) — verbatim, only the call
+     * shape changed from `wouldCloseCycle(topology, from, to)` to
+     * `topology.wouldCloseCycle(from, to)`.
+     */
+    fun wouldCloseCycle(from: CellRef, to: CellRef): Boolean {
+        if (from == to) return true
+        val visited = mutableSetOf<CellRef>()
+        val stack = ArrayDeque<CellRef>().apply { add(to) }
+        while (stack.isNotEmpty()) {
+            val current = stack.removeLast()
+            if (!visited.add(current)) continue
+            if (current == from) return true
+            outbound(current).forEach { link -> link.to.cell?.let(stack::add) }
+        }
+        return false
+    }
 }
