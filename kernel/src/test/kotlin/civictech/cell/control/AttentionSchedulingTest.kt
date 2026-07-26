@@ -1,4 +1,4 @@
-package civictech.cell.attention
+package civictech.cell.control
 
 import civictech.cell.Cell
 import civictech.cell.CellContext

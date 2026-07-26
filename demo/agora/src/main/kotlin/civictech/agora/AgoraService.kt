@@ -238,11 +238,11 @@ class AgoraService(
          * almost everything unboosted. Dramatic shifts outrank the neutral
          * band, noticeable ones match it, micro-adjustments yield to it.
          */
-        val MAGNITUDE_BANDS: (Double) -> civictech.cell.attention.AttentionBand = {
+        val MAGNITUDE_BANDS: (Double) -> civictech.cell.control.AttentionBand = {
             when {
-                it >= 0.2 -> civictech.cell.attention.AttentionBand.HIGH
-                it >= 0.05 -> civictech.cell.attention.AttentionBand.NORMAL
-                else -> civictech.cell.attention.AttentionBand.LOW
+                it >= 0.2 -> civictech.cell.control.AttentionBand.HIGH
+                it >= 0.05 -> civictech.cell.control.AttentionBand.NORMAL
+                else -> civictech.cell.control.AttentionBand.LOW
             }
         }
     }

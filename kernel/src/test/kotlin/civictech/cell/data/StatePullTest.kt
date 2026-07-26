@@ -3,7 +3,7 @@ package civictech.cell.data
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
-import civictech.cell.attention.Progress
+import civictech.cell.control.Progress
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet

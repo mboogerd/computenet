@@ -2,7 +2,7 @@ package civictech.cell.wire
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.attention.Attention
+import civictech.cell.control.Attention
 import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost

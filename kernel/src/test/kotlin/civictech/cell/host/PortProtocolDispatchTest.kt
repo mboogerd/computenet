@@ -1,9 +1,9 @@
 package civictech.cell.host
 
 import civictech.cell.HostTest
-import civictech.cell.attention.Attention
-import civictech.cell.attention.AttentionProtocol
-import civictech.cell.attention.SuspensionProtocol
+import civictech.cell.control.Attention
+import civictech.cell.control.AttentionProtocol
+import civictech.cell.control.SuspensionProtocol
 import civictech.cell.host.SaturationProtocol
 import civictech.cell.link.Link
 import civictech.cell.protocol.ProtocolSupport

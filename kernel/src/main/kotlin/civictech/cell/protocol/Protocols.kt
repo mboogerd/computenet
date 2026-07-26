@@ -115,7 +115,7 @@ class ProtocolSupport private constructor(port: Port) {
      * to every arriving `PORT_PROTOCOL` message before this port's own local
      * [handlers] see it — e.g. an attention `ceiling` clamp
      * (`slot.level = min(asserted, ceiling)`, the fold/band-gating in
-     * [civictech.cell.attention.AttentionSupport] left untouched) or a
+     * [civictech.cell.control.AttentionSupport] left untouched) or a
      * `minAuth`/`ratePerWindow` refusal. Returning null dead-letters the
      * message for local handling (relay to further hops, if any, still sees
      * the original). Identity by default — zero cost, today's behavior,

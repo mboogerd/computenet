@@ -1,6 +1,6 @@
 package civictech.cell.port
 
-import civictech.cell.attention.Progress
+import civictech.cell.control.Progress
 import civictech.cell.protocol.EdgeEvent
 import civictech.cell.protocol.EdgeOpen
 import civictech.cell.protocol.ProtocolSupport

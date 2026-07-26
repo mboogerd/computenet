@@ -1,6 +1,6 @@
 package civictech.cell.host
 
-import civictech.cell.attention.AttentionBand
+import civictech.cell.control.AttentionBand
 
 /**
  * Host mapping of attention to resources (spec 34, M6.3). Absent (null on

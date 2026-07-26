@@ -21,11 +21,11 @@ import java.io.ByteArrayOutputStream
 import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
-import civictech.cell.attention.AttentionBand
-import civictech.cell.attention.AttentionSupport
-import civictech.cell.attention.NonSuspendable
-import civictech.cell.attention.StallNotice
-import civictech.cell.attention.StallReason
+import civictech.cell.control.AttentionBand
+import civictech.cell.control.AttentionSupport
+import civictech.cell.control.NonSuspendable
+import civictech.cell.control.StallNotice
+import civictech.cell.control.StallReason
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
 import civictech.cell.ReplayScope

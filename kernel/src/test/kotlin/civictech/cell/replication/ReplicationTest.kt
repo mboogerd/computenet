@@ -1,7 +1,7 @@
 package civictech.cell.replication
 
 import civictech.cell.CellRef
-import civictech.cell.attention.AttentionSupport
+import civictech.cell.control.AttentionSupport
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.host.AttentionPolicy

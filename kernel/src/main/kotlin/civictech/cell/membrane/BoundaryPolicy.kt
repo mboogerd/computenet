@@ -1,6 +1,6 @@
 package civictech.cell.membrane
 
-import civictech.cell.attention.AttentionBand
+import civictech.cell.control.AttentionBand
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkPolicy
 import civictech.cell.link.PeerId
@@ -59,7 +59,7 @@ data class ProtocolAuthority(
 
 /**
  * A named, registered pure `Delta -> Delta` transform (spec 40/43): never a
- * lambda on the wire (P9), parallel to attention's [civictech.cell.attention.AttentionAggregator]
+ * lambda on the wire (P9), parallel to attention's [civictech.cell.control.AttentionAggregator]
  * registration style.
  */
 data class ProjectionId(val name: String)

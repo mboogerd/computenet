@@ -6,7 +6,7 @@ import civictech.cell.Consumer
 import civictech.cell.CurrentContext
 import civictech.cell.MapperCell
 import civictech.cell.Timestamp
-import civictech.cell.attention.Progress
+import civictech.cell.control.Progress
 import civictech.cell.Propagate
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

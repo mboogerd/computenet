@@ -5,9 +5,9 @@ import civictech.cell.Consumer
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
-import civictech.cell.attention.Progress
-import civictech.cell.attention.StallNotice
-import civictech.cell.attention.StallReason
+import civictech.cell.control.Progress
+import civictech.cell.control.StallNotice
+import civictech.cell.control.StallReason
 import civictech.cell.Propagate
 import civictech.cell.host.CellError
 import civictech.cell.port.FanOutlet

@@ -2,7 +2,7 @@ package civictech.cell.membrane
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.attention.Attention
+import civictech.cell.control.Attention
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.Linked

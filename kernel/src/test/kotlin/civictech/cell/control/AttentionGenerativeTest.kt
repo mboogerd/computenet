@@ -1,4 +1,4 @@
-package civictech.cell.attention
+package civictech.cell.control
 
 import civictech.cell.*
 import civictech.cell.Propagate

@@ -1,8 +1,8 @@
 package civictech.cell.consistency
 
 import civictech.cell.Timestamp
-import civictech.cell.attention.Progress
-import civictech.cell.attention.StallNotice
+import civictech.cell.control.Progress
+import civictech.cell.control.StallNotice
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeEvent
 import civictech.cell.protocol.EdgeOpen

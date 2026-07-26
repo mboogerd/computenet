@@ -1,8 +1,8 @@
 package civictech.cell.consistency
 
 import civictech.cell.*
-import civictech.cell.attention.AttentionSupport
-import civictech.cell.attention.NonSuspendable
+import civictech.cell.control.AttentionSupport
+import civictech.cell.control.NonSuspendable
 import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

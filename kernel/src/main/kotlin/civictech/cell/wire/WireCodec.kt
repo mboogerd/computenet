@@ -16,9 +16,9 @@ import civictech.cell.data.delta.SetDelta
 import civictech.cell.replication.Stamped
 import civictech.cell.port.PortRef
 import civictech.cell.protocol.ProtocolId
-import civictech.cell.attention.Attention
-import civictech.cell.attention.StallNotice
-import civictech.cell.attention.Progress
+import civictech.cell.control.Attention
+import civictech.cell.control.StallNotice
+import civictech.cell.control.Progress
 import civictech.cell.host.SaturationSignal
 import civictech.cell.host.TopologyLink
 import civictech.cell.proxy.HostedPortInvocation
