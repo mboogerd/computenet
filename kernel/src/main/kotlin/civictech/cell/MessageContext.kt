@@ -1,7 +1,6 @@
 package civictech.cell
 
 import civictech.cell.port.PortRef
-import civictech.cell.wire.UuidSerializer
 import kotlinx.coroutines.asContextElement
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName

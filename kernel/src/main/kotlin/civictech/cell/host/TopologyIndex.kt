@@ -2,7 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.CellRef
 import civictech.cell.port.PortRef
-import civictech.cell.wire.UuidSerializer
+import civictech.cell.UuidSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.util.UUID

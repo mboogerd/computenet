@@ -86,7 +86,7 @@ fun interface SuspensionProtocol { fun suspension(message: StallNotice) }
 @kotlinx.serialization.Serializable
 @kotlinx.serialization.SerialName("Progress")
 data class Progress(
-    @kotlinx.serialization.Serializable(with = civictech.cell.wire.UuidSerializer::class) val sourceId: UUID,
+    @kotlinx.serialization.Serializable(with = civictech.cell.UuidSerializer::class) val sourceId: UUID,
     val thru: Long,
 )
 

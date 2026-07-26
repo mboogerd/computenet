@@ -6,6 +6,7 @@ import civictech.cell.Frozen
 import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Timestamp
+import civictech.cell.UuidSerializer
 import civictech.cell.data.CounterDelta
 import civictech.cell.data.PnCounterDelta
 import civictech.cell.data.WatermarkDelta

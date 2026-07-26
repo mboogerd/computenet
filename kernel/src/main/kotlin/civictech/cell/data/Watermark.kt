@@ -6,7 +6,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.Stateful
 import civictech.cell.host.MergeablePayload
 import civictech.cell.port.*
-import civictech.cell.wire.UuidSerializer
+import civictech.cell.UuidSerializer
 import java.io.Serializable
 import java.util.*
 

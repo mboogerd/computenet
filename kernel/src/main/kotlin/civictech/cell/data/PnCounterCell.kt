@@ -4,7 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.port.*
-import civictech.cell.wire.UuidSerializer
+import civictech.cell.UuidSerializer
 import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*

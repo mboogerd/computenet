@@ -3,7 +3,7 @@ package civictech.cell.data
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.port.*
-import civictech.cell.wire.IndexedValueSerializer
+import civictech.cell.IndexedValueSerializer
 import civictech.gen.wire.CellBase
 import civictech.gen.wire.Contract
 import java.io.Serializable

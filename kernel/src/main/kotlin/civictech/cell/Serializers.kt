@@ -1,4 +1,4 @@
-package civictech.cell.wire
+package civictech.cell
 
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
