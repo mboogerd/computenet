@@ -58,6 +58,10 @@ object NatureNegotiation {
         // delta, rather than dropping/over-delivering unseen.
         NatureAxis.WAVE_PARTICIPATION,
         NatureAxis.INSTANCE_SCOPING,
+        // FU-5: a pull-on-open consumer requires a pull-serving producer. Wired
+        // onto a non-serving producer its StateRequest is answered by no one and
+        // its state starves *silently* today — as a link-flow axis it refuses.
+        NatureAxis.PULL_SERVICE,
     )
 
     fun reconcile(offered: NatureVector, required: NatureVector): Reconciliation =

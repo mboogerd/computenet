@@ -1,6 +1,7 @@
 package civictech.cell.port
 
 import civictech.cell.data.Propagate
+import civictech.gen.wire.PullService
 
 /**
  * Late-join catch-up (G-22): on every new link, send the current state as a
@@ -44,4 +45,7 @@ fun <Api : Any> FanOutlet<Api>.pullServe(serve: FanOutlet<Api>.(StateRequest) ->
     ProtocolSupport.of(this).handle(Protocols.StateRequest) { _, message ->
         serve(message as StateRequest)
     }
+    // FU-5: the handler registration IS the offer. Fold BASELINE_SERVING onto the
+    // outlet's declared vector so a PullOnOpen consumer's requirement reconciles.
+    PortNatures.stamp(this, PortNatures.of(this).with(PullService.BASELINE_SERVING))
 }

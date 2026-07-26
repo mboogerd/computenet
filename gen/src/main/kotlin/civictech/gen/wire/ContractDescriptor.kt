@@ -58,6 +58,16 @@ enum class NatureAxis {
      * axis it becomes a loud typed refusal.
      */
     INSTANCE_SCOPING,
+    /**
+     * FU-5 refusing axis. A producer either serves on-demand pulls (registers a
+     * [civictech.cell.port.Protocols.StateRequest] handler via
+     * `FanOutlet.pullServe`) or it does not. A consumer that pulls-on-open
+     * (installs `PullOnOpen`) requires BASELINE_SERVING — wired onto a
+     * non-serving producer today its StateRequest is answered by no one and the
+     * consumer *starves silently* (its state never arrives). As a link-flow axis
+     * it becomes a loud typed refusal at handshake (in-process).
+     */
+    PULL_SERVICE,
 }
 
 /**
@@ -138,6 +148,17 @@ enum class InstanceScoping : NatureLevel {
     override val rank get() = ordinal
 }
 
+/** Whether a producer answers on-demand pulls with a state baseline (FU-5, spec 20/21 §Pull). */
+enum class PullService : NatureLevel {
+    /** Registers no StateRequest handler — a pull goes unanswered — the DEFAULT. */
+    NONE,
+    /** `pullServe`d: answers a StateRequest with a single-wave state baseline. */
+    BASELINE_SERVING;
+
+    override val axis get() = NatureAxis.PULL_SERVICE
+    override val rank get() = ordinal
+}
+
 /**
  * PN-12 — the **structural** natures of a whole cell, sparse. Unlike a
  * [NatureAxis] (a *link-flow* property reconciled at a link), these describe
@@ -186,6 +207,7 @@ value class NatureVector(val levels: Map<NatureAxis, NatureLevel>) {
             NatureAxis.MONOTONICITY -> Monotonicity.NON_MONOTONE
             NatureAxis.WAVE_PARTICIPATION -> WaveParticipation.UNWAVED
             NatureAxis.INSTANCE_SCOPING -> InstanceScoping.SINGLETON
+            NatureAxis.PULL_SERVICE -> PullService.NONE
         }
     }
 }
@@ -234,6 +256,7 @@ private fun natureLevelOf(axis: NatureAxis, rank: Int): NatureLevel? = when (axi
     NatureAxis.MONOTONICITY -> Monotonicity.entries.getOrNull(rank)
     NatureAxis.WAVE_PARTICIPATION -> WaveParticipation.entries.getOrNull(rank)
     NatureAxis.INSTANCE_SCOPING -> InstanceScoping.entries.getOrNull(rank)
+    NatureAxis.PULL_SERVICE -> PullService.entries.getOrNull(rank)
 }
 
 enum class PortDirection { IN, OUT }
