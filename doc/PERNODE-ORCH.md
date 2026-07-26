@@ -42,8 +42,14 @@ Legend: pending · impl-running · validating · READY · merged · escalated
 
 Spec 24-data-cells.md conflicts (3 EOF-appended sections) resolved by union.
 
-### Wave 3 — PN-5 (γ CONT) ∥ PN-9 (ε FRESH)
+### Wave 3 — PN-5 (γ CONT) ∥ PN-9 (ε FRESH) — **COMPLETE** (gate green @ [PN-5 merge])
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
-| PN-5 | pending | comp/PN-5 | | scatter-gather pull |
-| PN-9 | pending | comp/PN-9 | | policy tiers on inlets; policy lists on outlets |
+| PN-9 | merged | comp/PN-9 | 6d2b267 | inlet tier chain ADMIT/GATE/ALIGN/ACTIVATE; PullOnOpen/PullServe extracted; large diff (on-link multicast to StreamTo/Replication/demos); Protocols leak fix; validator found+fixed a shopping-demo silent-drop |
+| PN-5 | merged | comp/PN-5 | (post-9) | scatter-gather pull. **Reworked**: v1 read co-located shard objects (decorative "bridges"); v2 fans serialized StateRequest over registry::deliver, shards reply baselineTo over reverse bridge — re-validated genuinely distributed. Residuals: scope rides @Transient (Total-only over wire; partial=follow-on) |
+
+### Wave 4 — PN-6+G4 (γ CONT) ∥ PN-10 (ε CONT)
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| PN-6  | pending | comp/PN-6  | | one linker, one assignment (subsumes CP-G3; folds CP-G4 exit) |
+| PN-10 | pending | comp/PN-10 | | Link.role; handshake bypasses negotiable (opt-in) |
