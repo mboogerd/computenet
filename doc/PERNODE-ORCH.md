@@ -106,3 +106,15 @@ Per-ticket: Opus impl in an isolated worktree (TDD, Bash-timeout-bounded tests, 
 - PN-12: DURABLE spawn check is a counted diagnostic, not a hard refusal (a durable-capable cell run volatile is legitimate — the COLOR principle); INSTANCE_SCOPING refusal rides the axis-agnostic reconcile loop but has no dedicated e2e test.
 - PN-14: partitioned rolling promotion is documented + accepted by the same code path (ShardCell is Replicable), but only the replicated case has a test (the ticket's named test is ReplicatedPromotionTest only).
 - PN-16: decision (B) — static-link frontier model is sufficient; no G-13 multiplex ticket needed.
+
+## Follow-up run (FU-1..FU-3) — **COMPLETE** (combined gate green @ db235ae)
+
+Tickets: [PERNODE-FOLLOWUP-TICKETS.md](PERNODE-FOLLOWUP-TICKETS.md). FU-4 (adapter synthesis) is deliberately NOT run here — it's the collaborative exploration the user is driving (untracked ADR + spike present in the working tree, left untouched).
+
+| Ticket | State | Branch | Merged | Notes |
+|--------|-------|--------|--------|-------|
+| FU-1 | merged | comp/FU-1 | 60d881d | partial-interest pull crosses the wire — `StateRequest.scope` now `@Polymorphic` (PN-6 had already made Interest wire-serializable); shard narrows to `shardInterest ∩ scope` cross-host; null⇒Total byte-identical; validator READY |
+| FU-2 | merged | comp/FU-2 | b74932c | converged-membership barrier closes the unknown-joiner premature-release race; grow-only `members` set on the delivered-watermark companion (transitively gossiped); safety (0/100 torn on, control ~43/100 off) + liveness (releases on convergence) verified; default `key==null` untouched; residual = Byzantine/announce-then-vanish (WAIT's existing contract) |
+| FU-3 | merged | comp/FU-3 | db235ae | partitioned rolling promotion test coverage (`PartitionedPromotionTest`, shard-by-shard over real bridges, 100 seeds, both controls diverge); one minimal additive fix `PartitionedShardSet.rebindShard` (repoints the one non-ref-resolved `memberships()` handle); ReplicatedPromotionTest unchanged |
+
+Changelog updated: FU-1/FU-2/FU-3 limitation lines removed/rewritten to "closed". Remaining documented residuals: instance-set epoch lattice unwired (R1), DURABLE-diagnostic-not-refusal, no adapter synthesis (→ FU-4 exploration), frontier decided-as-is (PN-16).
