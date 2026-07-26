@@ -97,25 +97,67 @@ class Replication(
 
     /**
      * Cross-track settlement read (spec 20/22 §Completeness — cross-replica
-     * extension, E3.4): the JoinBarrier "has every replica-set member delivered
-     * origin wave `(source, counter)`" answered off the local merged
-     * [WatermarkCell]. Membership is the [LocationRegistry.replicasOf] fold
-     * (eventually consistent — the R13 caveat); a member's row is read at its
-     * derived [WatermarkCell.slotId]. A `closed` slot (cleanly departed) stops
-     * constraining; a member whose row has not yet gossiped in holds the wave
-     * (WAIT), never releases it early — the honest R13 boundary.
+     * extension, E3.4; interest-scoped in PN-7, plan §3 Rule of settlement,
+     * spec 22 §Interest-scoped settlement): the JoinBarrier "has the covering
+     * subset delivered origin wave `(source, counter)` touching `key`" answered
+     * off the local merged [WatermarkCell].
+     *
+     * **Quorum = the covering subset** (PN-7, resolving F2): the live members
+     * whose [Interest] ADMITS `key` — not every member. A disjoint-interest
+     * instance never delivers waves outside its slice, so its row stays at
+     * bottom forever; quantifying over it (the pre-PN-7 `members.all`) stalls a
+     * WAIT consumer the moment shards join the mesh. Filtering to the covering
+     * subset collapses to today's behavior when every interest is [Interest.Total]
+     * (all members cover every key) and to the sharded-replication quorum under
+     * overlap. A `null` `key` (a consumer that extracts no origin keys) is
+     * unfiltered — every member — byte-identical to pre-PN-7.
+     *
+     * Membership is the [LocationRegistry.instancesOf] fold; a member's row is
+     * read at its derived [WatermarkCell.slotId]. A `closed` slot (cleanly
+     * departed) stops constraining; a member whose row has not yet gossiped in
+     * holds the wave (WAIT), never releases it early.
+     *
+     * **R13 creation fence** ([creationFence], default on — promoted from optional
+     * to blocking in PN-7). Because filtering *shrinks* the quorum, a joining
+     * covering member that has not yet established its delivered-watermark row is
+     * the premature-release hazard: dropping it from the quorum releases a wave it
+     * has not delivered. The fence is the requirement that such a member **holds**
+     * the wave — a covering member with no row for [source] reads as bottom
+     * (`Long.MIN_VALUE`) and fails the predicate, exactly as a lagging member
+     * does, so the wave waits until it catches up. With the fence OFF a covering
+     * member is admitted to the quorum only once it has *some* row for [source] —
+     * a rowless (freshly-joined) member is silently skipped, reproducing the
+     * premature release. An empty covering subset always holds (never a vacuous
+     * release).
+     *
+     * Membership itself ([LocationRegistry.instancesOf]) remains eventually
+     * consistent: a covering member the local view has not yet learned of at all
+     * cannot be waited on here — that residual (a converged membership barrier /
+     * the DEGRADE quorum-shrink) is sequenced to PN-19, documented not hidden.
      */
-    fun replicaFrontier(logicalId: UUID): ReplicaFrontier = ReplicaFrontier { source, counter ->
-        val companion = watermarks[logicalId]
-        val members = registry.replicasOf(logicalId)
-        if (companion == null || members.isEmpty()) return@ReplicaFrontier false
-        val rows = companion.rows()
-        val closed = companion.closed()
-        members.all { ref ->
-            val slot = WatermarkCell.slotId(watermarkRef(ref))
-            slot in closed || (rows[slot]?.get(source) ?: Long.MIN_VALUE) >= counter
+    fun replicaFrontier(logicalId: UUID, creationFence: Boolean = true): ReplicaFrontier =
+        ReplicaFrontier { source, counter, key ->
+            val companion = watermarks[logicalId]
+            val members = registry.instancesOf(logicalId)
+            if (companion == null || members.isEmpty()) return@ReplicaFrontier false
+            val rows = companion.rows()
+            val closed = companion.closed()
+            val covering = members
+                .filter { key == null || registry.interestOf(it).admits(key) }
+                .filter { ref ->
+                    // R13: with the fence on, EVERY covering member is required (a
+                    // rowless one holds on bottom); with it off, a member is only
+                    // required once it has published a row for this source, so a
+                    // freshly-joined covering member is skipped — the premature hazard.
+                    creationFence ||
+                        WatermarkCell.slotId(watermarkRef(ref)) in closed ||
+                        rows[WatermarkCell.slotId(watermarkRef(ref))]?.containsKey(source) == true
+                }
+            covering.isNotEmpty() && covering.all { ref ->
+                val slot = WatermarkCell.slotId(watermarkRef(ref))
+                slot in closed || (rows[slot]?.get(source) ?: Long.MIN_VALUE) >= counter
+            }
         }
-    }
 
     /**
      * Poke [listener] whenever [logicalId]'s merged watermark advances (E3.4):

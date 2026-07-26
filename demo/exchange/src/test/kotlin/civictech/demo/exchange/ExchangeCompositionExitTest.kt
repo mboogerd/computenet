@@ -385,7 +385,7 @@ class ExchangeCompositionExitTest {
 
         val frontier: ReplicaFrontier =
             if (replicaFrontierOn) p0.replication.replicaFrontier(logicalId)
-            else ReplicaFrontier { _, _ -> true }
+            else ReplicaFrontier { _, _, _ -> true }
         board.useReplicaFrontier(frontier, originTags)
         p0.replication.onWatermarkAdvance(logicalId) { board.recheck() }
 

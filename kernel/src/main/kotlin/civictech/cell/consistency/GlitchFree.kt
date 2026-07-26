@@ -80,8 +80,12 @@ class GlitchFreeCell<Api : Any>(
      * completeness. The owner must poke [recheck] when the merged watermark
      * advances (peer watermark gossip is invisible to this inlet's events).
      */
-    fun useReplicaFrontier(replicaFrontier: ReplicaFrontier, originTags: (Invocation) -> Collection<Timestamp>) {
-        frontier.installReplicaGate(WaveFrontier.ReplicaGate(replicaFrontier, originTags))
+    fun useReplicaFrontier(
+        replicaFrontier: ReplicaFrontier,
+        originTags: (Invocation) -> Collection<Timestamp>,
+        originKeys: (Invocation) -> Map<Any?, Collection<Timestamp>> = { emptyMap() },
+    ) {
+        frontier.installReplicaGate(WaveFrontier.ReplicaGate(replicaFrontier, originTags, originKeys))
     }
 
     /**
@@ -95,8 +99,9 @@ class GlitchFreeCell<Api : Any>(
         fromOutlet: civictech.cell.port.PortRef,
         replicaFrontier: ReplicaFrontier,
         originTags: (Invocation) -> Collection<Timestamp>,
+        originKeys: (Invocation) -> Map<Any?, Collection<Timestamp>> = { emptyMap() },
     ) {
-        frontier.markReplicaFed(fromOutlet, WaveFrontier.ReplicaGate(replicaFrontier, originTags))
+        frontier.markReplicaFed(fromOutlet, WaveFrontier.ReplicaGate(replicaFrontier, originTags, originKeys))
     }
 
     /** Re-run settlement after the merged replica watermark advanced (E3.4). */

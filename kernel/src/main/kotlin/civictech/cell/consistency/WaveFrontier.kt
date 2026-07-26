@@ -26,7 +26,13 @@ import java.util.*
  * traffic (the lattice is the only wire).
  */
 fun interface ReplicaFrontier {
-    fun completeAt(source: UUID, counter: Long): Boolean
+    /**
+     * Has the covering subset for origin wave `(source, counter)` touching [key]
+     * delivered it? (PN-7, plan §3 Rule of settlement.) [key] `null` ⇒ unfiltered
+     * (every member) ⇒ pre-PN-7 behavior verbatim; a non-null [key] scopes the
+     * quorum to members whose interest admits it.
+     */
+    fun completeAt(source: UUID, counter: Long, key: Any?): Boolean
 }
 
 /**
@@ -99,10 +105,23 @@ class WaveFrontier(
     private val replicaFedBy = mutableMapOf<PortRef, ReplicaGate>()
     private var blanketGate: ReplicaGate? = null
 
-    /** Configuration for a replica-fed edge: the cross-replica read plus a payload origin-tag extractor. */
+    /**
+     * Configuration for a replica-fed edge: the cross-replica read plus payload
+     * extractors.
+     *
+     * [originTags] lists the origin waves a payload carries (the unfiltered read,
+     * pre-PN-7). [originKeys] (PN-7, plan §3 Rule of settlement) is the
+     * *interest-scoped* extractor: it maps each key the payload touches to the
+     * origin waves attached to it, so the settlement quorum for each wave is the
+     * covering subset of members whose interest admits that key. The default is
+     * empty ⇒ the gate falls back to [originTags] with a `null` key ⇒ the quorum
+     * is every member, byte-identical to pre-PN-7 behavior (an
+     * `originKeys`-unaware graph is unfiltered).
+     */
     class ReplicaGate(
         val frontier: ReplicaFrontier,
         val originTags: (Invocation) -> Collection<Timestamp>,
+        val originKeys: (Invocation) -> Map<Any?, Collection<Timestamp>> = { emptyMap() },
     )
 
     /** The gate governing [edge], if it is replica-fed (per-outlet declaration, else the blanket). */
@@ -326,12 +345,28 @@ class WaveFrontier(
         }
         if (replicaFed.isNotEmpty()) {
             // Replica-fed wave: gate purely on the merged watermark, no phantom siblings.
-            return replicaFed.all { (gate, invocation) ->
-                gate.originTags(invocation).all { tag -> gate.frontier.completeAt(tag.sourceId, tag.counter) }
-            }
+            return replicaFed.all { (gate, invocation) -> gateReady(gate, invocation) }
         }
         // Local wave: the ordinary cross-inlink frontier over local expected edges.
         return expectedLocalEdges(timestamp).all { isSettled(it, timestamp) }
+    }
+
+    /**
+     * Is a replica-fed wave complete under [gate]? (PN-7, plan §3 Rule of
+     * settlement.) When the gate extracts origin keys, each origin wave is read
+     * *interest-scoped* to the key it is attached to — the quorum is the covering
+     * subset of members whose interest admits that key. With no keys extracted
+     * (the default) the read is unfiltered (`null` key ⇒ every member), so an
+     * `originKeys`-unaware graph settles exactly as it did pre-PN-7.
+     */
+    private fun gateReady(gate: ReplicaGate, invocation: Invocation): Boolean {
+        val keyed = gate.originKeys(invocation)
+        if (keyed.isEmpty()) {
+            return gate.originTags(invocation).all { tag -> gate.frontier.completeAt(tag.sourceId, tag.counter, null) }
+        }
+        return keyed.all { (key, tags) ->
+            tags.all { tag -> gate.frontier.completeAt(tag.sourceId, tag.counter, key) }
+        }
     }
 
     private fun flushReady() {

@@ -30,6 +30,24 @@ class LocationRegistry {
     private val parked = ConcurrentHashMap<CellRef, MutableList<HostedPortInvocation>>()
 
     /**
+     * Instances-by-logical-id index (PN-7 perf cliff): the interest-scoped
+     * settlement read ([civictech.cell.replication.Replication.replicaFrontier])
+     * calls [instancesOf] once per buffered wave per `recheck`, so a linear scan
+     * of every published ref would be quadratic in a large mesh. This index keeps
+     * the membership read O(instances-of-one-id). Maintained in lockstep with
+     * [locations] on every install/removal.
+     */
+    private val byLogicalId = ConcurrentHashMap<java.util.UUID, MutableSet<CellRef>>()
+
+    private fun indexAdd(ref: CellRef) {
+        byLogicalId.computeIfAbsent(ref.id) { ConcurrentHashMap.newKeySet() }.add(ref)
+    }
+
+    private fun indexRemove(ref: CellRef) {
+        byLogicalId[ref.id]?.let { set -> set.remove(ref); if (set.isEmpty()) byLogicalId.remove(ref.id, set) }
+    }
+
+    /**
      * Per-instance [civictech.cell.replication.Interest] (spec 40/42
      * §Interest-scoped instance sets, CP-D2): the demand predicate the gossip
      * linker consults to decide whether a link forms and to filter each
@@ -117,9 +135,16 @@ class LocationRegistry {
         }
     }
 
+    /**
+     * Every published instance (ref) sharing [logicalId] — local and remote (spec
+     * 42). Served off the [byLogicalId] index (PN-7): O(instances-of-one-id), not
+     * a full scan of every published ref.
+     */
+    fun instancesOf(logicalId: java.util.UUID): Set<CellRef> =
+        byLogicalId[logicalId]?.toSet() ?: emptySet()
+
     /** Every published ref sharing [logicalId] — replicas, local and remote (spec 42). */
-    fun replicasOf(logicalId: java.util.UUID): Set<CellRef> =
-        locations.keys.filterTo(mutableSetOf()) { it.id == logicalId }
+    fun replicasOf(logicalId: java.util.UUID): Set<CellRef> = instancesOf(logicalId)
 
     /** The host currently serving [ref] on this registry, if local. */
     fun locate(ref: CellRef): ManagedHost? = (locations[ref] as? Local)?.host
@@ -256,6 +281,7 @@ class LocationRegistry {
             queue.forEach { check(send(location, it)) { "replay into fresh location failed for $ref" } }
             queue.clear()
             locations[ref] = location
+            indexAdd(ref)
         }
     }
 
@@ -270,6 +296,7 @@ class LocationRegistry {
     fun unpublish(ref: CellRef) {
         val wasLocal = locations[ref] is Local
         locations.remove(ref)
+        indexRemove(ref)
         if (wasLocal) onLocalUnpublish.forEach { notify(it, ref) }
         onUnpublish.forEach { notify(it, ref) }
     }
@@ -277,6 +304,7 @@ class LocationRegistry {
     /** Announcement-fed remote unpublish; deliberately does not re-announce (mirrors [mirrorLink]). */
     fun mirrorUnpublish(ref: CellRef) {
         locations.remove(ref)
+        indexRemove(ref)
         onUnpublish.forEach { notify(it, ref) }
     }
 
@@ -285,6 +313,8 @@ class LocationRegistry {
      * disconnect hook (M5.5): senders park until the peer re-announces.
      */
     fun unpublishRemotes(via: InvocationSink) {
-        locations.entries.removeIf { (it.value as? Remote)?.sink === via }
+        locations.entries.removeIf { entry ->
+            ((entry.value as? Remote)?.sink === via).also { if (it) indexRemove(entry.key) }
+        }
     }
 }
