@@ -1,9 +1,7 @@
 package civictech.cell.app
 
 import civictech.cell.Cell
-import civictech.cell.CellError
 import civictech.cell.CellRef
-import civictech.cell.ErrorReporting
 import civictech.cell.data.CollectorCell
 import civictech.cell.data.CountCell
 import civictech.cell.data.CounterDelta
@@ -15,7 +13,9 @@ import civictech.cell.data.SetOps
 import civictech.cell.data.UnionSetCell
 import civictech.cell.data.tagFold
 import civictech.cell.graph.graph
+import civictech.cell.host.CellError
 import civictech.cell.host.DeadLetter
+import civictech.cell.host.ErrorReporting
 import civictech.cell.host.HostColor
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost

@@ -6,9 +6,7 @@ import civictech.cell.port.*
 import civictech.cell.BlockingCell
 import civictech.cell.Cell
 import civictech.cell.CellContext
-import civictech.cell.CellError
 import civictech.cell.CellRef
-import civictech.cell.ErrorReporting
 import civictech.cell.Leased
 import civictech.cell.MergeablePayload
 import civictech.cell.Owned

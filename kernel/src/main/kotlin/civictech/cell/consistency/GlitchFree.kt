@@ -2,11 +2,11 @@ package civictech.cell.consistency
 
 import civictech.cell.Cell
 import civictech.cell.CellContext
-import civictech.cell.CellError
 import civictech.cell.CellRef
-import civictech.cell.ErrorReporting
 import civictech.cell.Timestamp
 import civictech.cell.Propagate
+import civictech.cell.host.CellError
+import civictech.cell.host.ErrorReporting
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PullOnOpen

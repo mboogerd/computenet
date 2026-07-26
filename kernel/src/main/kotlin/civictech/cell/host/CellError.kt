@@ -1,5 +1,6 @@
-package civictech.cell
+package civictech.cell.host
 
+import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.port.FanOutlet
 import civictech.cell.proxy.HostedPortInvocation

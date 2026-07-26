@@ -1,7 +1,6 @@
 package civictech.cell.consistency
 
 import civictech.cell.CellContext
-import civictech.cell.CellError
 import civictech.cell.Consumer
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
@@ -10,6 +9,7 @@ import civictech.cell.attention.Progress
 import civictech.cell.attention.StallNotice
 import civictech.cell.attention.StallReason
 import civictech.cell.Propagate
+import civictech.cell.host.CellError
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Link
 import civictech.cell.port.LinkFrom
