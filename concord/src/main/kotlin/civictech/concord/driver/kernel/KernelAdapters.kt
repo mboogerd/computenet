@@ -9,6 +9,7 @@ import civictech.cell.data.delta.ListDelta
 import civictech.cell.data.Magnitude
 import civictech.cell.data.delta.PnCounterDelta
 import civictech.cell.Propagate
+import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -16,7 +17,6 @@ import civictech.cell.port.FeedbackInlet
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.UUID
-import civictech.cell.data.op.FlatMapSetCell
 
 /**
  * Driver-internal adapter cells and view folds (W1-A/W3-0). These live **only**
@@ -30,13 +30,13 @@ import civictech.cell.data.op.FlatMapSetCell
 
 /**
  * Binds the catalog `map` operator with `fn: identity` — a pass-through arm.
- * The kernel ships no element-map cell (only [civictech.cell.data.op.FlatMapSetCell]
+ * The kernel ships no element-map cell (only [civictech.cell.data.FlatMapSetCell]
  * over set streams), and the diamond exemplar applies `map, fn: identity` to a
  * *counter* stream, so no set-shaped cell fits either. This trivial pass-through
  * re-propagates every delta unchanged and is type-agnostic (erased `Propagate`),
  * so it binds identity arms over both `SetDelta` (21-PIPE-01) and `CounterDelta`
  * (22-GF-DIAMOND-01) streams. A *non-identity* element map binds to
- * [civictech.cell.data.op.FlatMapSetCell] with a singleton transform (see
+ * [civictech.cell.data.FlatMapSetCell] with a singleton transform (see
  * [KernelCatalog]).
  */
 class IdentityCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
@@ -59,10 +59,13 @@ class IdentityCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cel
  * all emitted deltas equals `left + right` regardless of arrival order, so the
  * final value is order-independent (final-view only — see the report).
  *
- * NOTE / gap: this is **not** wave-aligned. `glitch-free: true` in the descriptor
- * is accepted but not honoured — intermediate (odd) sums may be observed mid-wave,
- * so `observations-all-satisfy(even)` is NOT guaranteed. Only `final-view` is.
- * A genuine glitch-free scalar combine is a §5 kernel gap.
+ * NOTE / gap: this is **not** wave-aligned. `glitch-free: true` now spawns a
+ * downstream GlitchFreeCell (W3-4 driver wiring), but that does not rescue the
+ * scalar case: each arm emits its own CounterDelta under a distinct source wave
+ * and GlitchFreeCell replays per-invocation, so intermediate (odd) sums are still
+ * observable mid-wave — `observations-all-satisfy(even)` is NOT guaranteed, only
+ * `final-view` is. A genuine wave-coalescing scalar combine (one delta per
+ * completed wave) is a §5 kernel gap.
  */
 class ScalarSumCombineCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Stateful {
     val left = registerPort("left", FanInlet.create<Propagate<CounterDelta>>())
@@ -250,5 +253,61 @@ class FeedbackCell(
 
     override fun restore(state: Serializable) {
         total = state as Long
+    }
+}
+
+/**
+ * A [civictech.cell.observe.ObserveCell] whose inlet is a **single-writer** (strict
+ * point-to-point) [FanInlet] (FU-6). Binds a view/cell declaring
+ * `inlet-mode: single-writer`: the kernel `ObserveCell` always constructs a plain
+ * multi-writer inlet, so a scenario asserting "a second writer's `connect` is
+ * Rejected" (13-LINK-05, exemplar (d)) needs this driver variant — the kernel is
+ * not modified. Identical fold/observation/state behaviour to `ObserveCell`; the
+ * only difference is `FanInlet.create(singleWriter = true)`, so `linkFrom` refuses
+ * a second [civictech.cell.port.LinkRole.Consume] producer while Observe taps stay
+ * unrestricted.
+ */
+class SingleWriterObserveCell<D : Any, S>(
+    private val view: View<D, S>,
+    override val ref: CellRef = CellRef(UUID.randomUUID()),
+) : Cell, Stateful, ObservationSink<S> {
+
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<D>>(singleWriter = true))
+
+    private val lock = Any()
+    private val listeners = mutableListOf<(S) -> Unit>()
+
+    @Volatile
+    private var latest: S = view.current()
+
+    init {
+        inlet.serve(object : Propagate<D> {
+            override fun propagate(value: D) {
+                synchronized(lock) {
+                    if (view.apply(value)) {
+                        latest = view.current()
+                        listeners.forEach { it(latest) }
+                    }
+                }
+            }
+        })
+    }
+
+    override fun current(): S = latest
+
+    override fun onChange(listener: (S) -> Unit) {
+        synchronized(lock) {
+            listeners += listener
+            listener(latest)
+        }
+    }
+
+    override fun snapshot(): Serializable = synchronized(lock) { view.snapshot() }
+
+    override fun restore(state: Serializable) {
+        synchronized(lock) {
+            view.restore(state)
+            latest = view.current()
+        }
     }
 }

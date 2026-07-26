@@ -9,31 +9,35 @@ check to restore once the capability lands.
 This file is the **consolidated worklist** for the W3 corpus wave — merged from
 the three parallel corpus tickets (W3-1 propagation/consistency, W3-2 operators,
 W3-3 ports/links/lifecycle/cycles/ownership/controls). Entries are organized by
-scenario id and tagged with a category. The next ticket picks up the
-`driver-wiring-gap` / `driver-bug` items first: they are cheap (the kernel
-already has the capability, or the fix is a line or two of driver binding) and
-each unblocks a real conformance check.
+scenario id and tagged with a category. W3-4 took the cheap
+`driver-wiring-gap` / `driver-bug` items: the `intersect` port bug and the
+single-writer wiring resolved cleanly (scenarios authored & passing); the
+glitch-free *wiring* landed too, but its stream-invariant checks turned out to
+need a deeper kernel capability (a wave-coalescing operator) and remain filed.
+
+## Resolved by W3-4 (driver-wiring gaps)
+
+- `24-OP-INTERSECT-01` — **RESOLVED** (`driver-bug`). `KernelCatalog.inletName`
+  no longer collapses `intersect` to a nonexistent `"inlet"`; it routes the two
+  inputs to the `left`/`right` ports `IntersectSetCell` exposes. Scenario
+  `24-OP-INTERSECT-01.yaml` authored and passing (golden +
+  `incremental-equals-batch` + `no-dead-letters`). `quorum-set`/`union` did NOT
+  share the bug — they are genuinely single-`inlet` fan-ins (`QuorumSetCell`/
+  `UnionSetCell` expose one `inlet`), so only `intersect` moved branches.
+- `13-LINK-REJECT-01` — **RESOLVED** (`driver-wiring-gap`). `inlet-mode:
+  single-writer` now binds a strict point-to-point (FU-6) `FanInlet` on the
+  view's inlet (driver adapter `SingleWriterObserveCell`), so a second writer's
+  `connect` is `Rejected`. Scenario authored per exemplar (d) and passing.
+- **glitch-free wiring** (`driver-wiring-gap`) — **RESOLVED** for the wiring
+  itself: `glitch-free: true` was inert (silently ignored); the W3-4 driver now
+  spawns a downstream kernel `GlitchFreeCell` and routes the operator's output
+  through it over a real host link (GlitchFreeOperatorSuiteTest construction),
+  de-inerting the param. `22-WAVE-FANIN-01`'s `incremental-equals-batch` /
+  `no-dead-letters` now pass *through* that wrapper. What did NOT resolve is the
+  positive stream assertion (`observations-all-satisfy`) — a genuinely deeper
+  gap, re-filed below.
 
 ## Category index (worklist, cheapest first)
-
-**`driver-bug` — a landed driver defect; fix and author the blocked scenario:**
-
-- `24-OP-INTERSECT-01` — `KernelCatalog.inletName` collapses `intersect`'s
-  `left`/`right` ports to a nonexistent `"inlet"` port; `intersect` is
-  unconstructible from any scenario. One-line fix.
-
-**`driver-wiring-gap` — kernel has the capability, driver doesn't wire the
-descriptor param through; no schema or kernel change needed:**
-
-- `13-LINK-REJECT-01` — `inlet-mode: single-writer` is inert; kernel gained the
-  single-writer `FanInlet` (FU-6) but `KernelCatalog` never selects it.
-- `22-WAVE-FANIN-01` — `glitch-free: true` is inert in `KernelCatalog.build`
-  for every fan-in operator; kernel's `GlitchFreeCell` can wrap them. (Also
-  carries a `schema-gap` for the wave-completeness check shape — see entry.)
-- `22-GF-NESTED-01` (and pilot `22-GF-DIAMOND-01`) — the scalar `combine-latest`
-  output is not wave-aligned; wrapping it in `GlitchFreeCell` is driver wiring,
-  though a genuinely wave-aligned scalar combine binding may need constructing
-  (borderline `kernel-gap` — see entry).
 
 **`schema-gap` — a descriptor surface the frozen W0 schema does not expose;
 needs a between-waves schema-change ticket:**
@@ -44,8 +48,10 @@ needs a between-waves schema-change ticket:**
   catalog cell; exclusive-outlet fan-out rejection is unexpressible.
 - `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — no window-spec descriptor (also
   `kernel-gap`: no `window` cell binding — see entry).
-- `22-WAVE-FANIN-01` — a "this observation is a complete wave" check shape is
-  absent from the vocabulary (secondary tag; primary is `driver-wiring-gap`).
+- `22-WAVE-FANIN-01` — no set-shaped per-wave predicate in the frozen function
+  catalog, so "this observation is a complete wave" is unassertable over a set
+  stream (the glitch-free *wiring* landed W3-4; this check-shape gap did not —
+  see entry).
 
 **`oracle-gap` — the harness-side batch oracle's fold model is missing;
 harness work, not corpus or kernel:**
@@ -62,105 +68,87 @@ design is unimplemented; deep, implementation-ticket work:**
   (conflict C-12). `kernel-gap` + `spec-gap`.
 - `24-OP-WINDOW-01` / `24-OP-WINDOW-02` — no `window` cell in the kernel
   (`Windows` ships key functions only). `kernel-gap` (+ `schema-gap`).
-- `22-GF-NESTED-01` — a wave-aligned scalar combine may not exist in the kernel
-  (`ScalarSumCombineCell` is quiescence-correct only). `kernel-gap`-adjacent.
+- `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — no wave-**coalescing** operator in the
+  kernel. The W3-4 glitch-free wiring wraps outputs in `GlitchFreeCell`, but that
+  replays per-invocation and every catalog operator emits one delta per element,
+  so a scalar observer still folds the torn intermediate (verified: `even` fails
+  on event #1 of the diamond). A version-buffered combine that emits once per
+  completed wave is absent. `kernel-gap`.
 
 ---
 
 ## By scenario id
 
-### `24-OP-INTERSECT-01` — **`driver-bug`**
+### `24-OP-INTERSECT-01` — **RESOLVED (W3-4, `driver-bug`)**
 
-- **Requirement**: `24-OP-INTERSECT-01`
-  (`doc/spec/20-dataflow-semantics/24-data-cells.md`, "Operator library").
-- **Defect**: `IntersectSetCell` is constructed correctly by
-  `KernelCatalog.build("intersect", …)`, but link wiring is wrong.
-  `KernelCatalog.inletName(targetType, scenarioInlet)` collapses
-  `"union", "intersect", "quorum-set"` to a single hardcoded `"inlet"` port —
-  correct for `union`/`quorum-set` (one collapsed fan-in port) but wrong for
-  `IntersectSetCell`, whose contract has two distinct named ports `left` and
-  `right` and no `"inlet"` port. Any scenario connecting two sources into an
-  `intersect` fails at `connect` with `IllegalArgumentException: Inlet not found
-  or not linkable: inlet on CellRef(...)`, regardless of how the scenario names
-  its links. This contradicts the `cell-catalog.md` W3-0 "catalog-complete"
-  claim for `intersect`. No scenario is authored (a scenario that always throws
-  at `connect` is not a passing corpus entry).
-- **Fix (one line, driver code —
-  `concord/src/main/kotlin/.../driver/kernel/KernelCatalog.kt`)**: remove
-  `"intersect"` from the `"union", "intersect", "quorum-set" -> "inlet"` branch
-  and route it through the `left`/`right` branch alongside
-  `combine-latest`/`join`/`semi-join`/`lookup-join`, i.e. `scenarioInlet ?:
-  "left"`.
-- **Author when fixed**: `24-OP-INTERSECT-01.yaml` — two set sources
-  (`a`: add x,y,z; `b`: add y,z,w; then `a` removes y) into `intersect` on
-  `left`/`right`, expecting `[z]` (design drafted and oracle-verified during
-  W3-2).
+- `KernelCatalog.inletName` no longer collapses `intersect` to a nonexistent
+  `"inlet"` — it routes `intersect`'s two inputs to `left`/`right` (the ports
+  `IntersectSetCell` exposes), alongside `combine-latest`/`join`/`semi-join`/
+  `lookup-join`. `union`/`quorum-set` stayed on the single `inlet` branch (they
+  are genuine single-port fan-ins, they did NOT share the bug).
+- Scenario `24-OP-INTERSECT-01.yaml` authored (`a`={x,y,z} on `left`, `b`={y,z,w}
+  on `right`, then `a` removes y → `[z]`) with `final-view` +
+  `incremental-equals-batch` + `no-dead-letters`; passes the 20-run sweep.
 
-### `13-LINK-REJECT-01` — **`driver-wiring-gap`**
+### `13-LINK-REJECT-01` — **RESOLVED (W3-4, `driver-wiring-gap`)**
 
-- **Requirement**: `13-LINK-05` (a connect violating the inlet's admission
-  policy — a second writer on a single-writer inlet — SHALL be `Rejected`).
-- **Gap**: `CellSpec.inlet-mode: single-writer` (schema, CONCORD-PLAN exemplar
-  (d)) round-trips through the schema and `CorpusRunner` forwards it into
-  `spawn` params, but `KernelCatalog.build` never reads `params["inlet-mode"]`
-  for any catalog cell — the param is inert. Every catalog inlet binds to a
-  plain multi-writer `FanInlet`. The kernel now has an opt-in single-writer
-  `FanInlet` (FU-6, strict point-to-point write side), so this is pure driver
-  wiring, not a kernel gap. Verified: authoring exemplar (d) verbatim gives
-  `Connected` for the second writer, not `Rejected`.
-- **Fix**: wire `inlet-mode: single-writer` in `KernelCatalog`/the driver onto
-  the single-writer `FanInlet` admission policy. Then author
-  `13-LINK-REJECT-01.yaml` (CONCORD-PLAN exemplar (d)) with
-  `{connect: {from: w2, to: sink}, expect: rejected}`.
+- `inlet-mode: single-writer` is now honoured: a view declaring it binds the
+  driver adapter `SingleWriterObserveCell`, whose inlet is a strict
+  point-to-point (FU-6) `FanInlet` (`singleWriter = true`). A second
+  `LinkRole.Consume` producer's `connect` is `Rejected`; Observe taps stay
+  unrestricted.
+- Scenario `13-LINK-REJECT-01.yaml` authored per CONCORD-PLAN exemplar (d) (first
+  writer flows, second writer `expect: rejected`, `final-view: [still-flows]` +
+  `no-dead-letters`); passes the sweep.
 
-### `22-WAVE-FANIN-01` — **`driver-wiring-gap`** (+ `schema-gap`)
+### `22-WAVE-FANIN-01` — wiring **RESOLVED (W3-4)**, check-shape **`schema-gap`** remains
 
 - **Requirement**: `22-GF-01` (while a single-source wave is partially delivered
   across a fork-join, a glitch-free cell shall not expose derived state mixing
   pre-wave and post-wave inputs).
-- **Gap (driver-wiring)**: `CellSpec.glitchFree` is plumbed into
-  `CorpusRunner.params` (`cell.glitchFree?.let { put("glitch-free", ...) }`),
-  but `KernelCatalog.build` never reads `glitch-free` for **any** catalog id —
-  `union`, `intersect`, `quorum-set`, `join`, `semi-join`, `lookup-join` are all
-  built as plain non-wave-buffered cells regardless of `glitch-free: true`. The
-  kernel supports wrapping an arbitrary `Propagate<X>` in a `GlitchFreeCell`
-  (see `kernel/.../GlitchFreeOperatorSuiteTest.kt`), so this is driver wiring
-  the corpus cannot fix.
-- **Gap (schema/check-vocabulary)**: even once wired, asserting "no observation
-  mixes pre-wave/post-wave inputs" over a **set-shaped** observation stream
-  needs a check the vocabulary lacks — `observations-all-satisfy(fn)` evaluates
-  one element predicate per observation and has no notion of wave completeness.
-- **Filed scenario**: `22-WAVE-FANIN-01.yaml` is authored (one source forked
-  through two identity arms into a 2-of-2 `quorum-set`) but narrowed to
-  `final-view` + `incremental-equals-batch`. Restore when `KernelCatalog.build`
-  wraps a fan-in set operator in `GlitchFreeCell` on `params["glitch-free"] ==
-  true` **and** a wave-completeness check shape lands.
+- **Wiring (resolved)**: `glitch-free: true` was inert; the W3-4 driver now
+  spawns a downstream kernel `GlitchFreeCell` and routes the operator's output
+  through it over a real host link (so the frontier sees `EdgeOpen`/`Progress` —
+  the GlitchFreeOperatorSuiteTest construction). The wrapper is
+  correctness-preserving: this scenario's `final-view` /
+  `incremental-equals-batch` / `no-dead-letters` pass *through* it.
+- **Remaining gap (schema/check-vocabulary)**: asserting "no observation mixes
+  pre-wave/post-wave inputs" over a **set-shaped** observation stream still needs
+  a predicate the frozen function catalog lacks — the scalar
+  `even`/`odd`/`mod-eq`/`eq`/`gt`/`lt` predicates all return false on a set
+  (`ListVal`) observation, and `observations-all-satisfy(fn)` evaluates one
+  element predicate per observation with no notion of wave completeness. A scalar
+  recast does not rescue it either — see the `22-GF-DIAMOND-01` kernel-gap below.
+- **Filed scenario**: `22-WAVE-FANIN-01.yaml` (one source forked through two
+  identity arms into a 2-of-2 glitch-free `quorum-set`) keeps `final-view` +
+  `incremental-equals-batch` + `no-dead-letters`. Restore
+  `observations-all-satisfy` when a set-shaped per-wave predicate lands in the
+  function catalog (schema-change ticket).
 
-### `22-GF-NESTED-01` — **`driver-wiring-gap`** (borderline `kernel-gap`)
+### `22-GF-DIAMOND-01` / `22-GF-NESTED-01` — wiring **RESOLVED (W3-4)**, wave-coalescing **`kernel-gap`** remains
 
-- **Requirement**: `22-GF-02` (glitch-freedom composes across nested/chained
-  fork-joins).
-- **Gap**: the kernel driver's only `combine-latest` binding is
-  `ScalarSumCombineCell` (`KernelAdapters.kt`) — order-independent at quiescence
-  but explicitly **not** wave-aligned (intermediate, non-multiple-of-4 sums may
-  be observed mid-wave); `combine-latest` with any `fn` other than `sum` throws
-  `UnsupportedCatalogBinding`. Wrapping the scalar output in `GlitchFreeCell` is
-  driver wiring, but a genuinely wave-aligned scalar combine (version-buffered,
-  evaluating once per completed wave) may need constructing in the kernel first —
-  hence borderline `kernel-gap` (cell-catalog.md "the two honest gaps", gap 1).
-- **Filed scenario**: `22-GF-NESTED-01.yaml` (double-diamond: two inner diamonds
-  into an outer combine) is authored but narrowed to `final-view` only.
-  Disabled check to restore verbatim:
+- **Requirement**: `22-GF-01` / `22-GF-02` (glitch-freedom, composing across
+  nested/chained fork-joins).
+- **Wiring (resolved)**: `glitch-free: true` now spawns the downstream
+  `GlitchFreeCell` wrapper (as above). But this does **not** make the scalar
+  diamond glitch-free-observable: the only scalar `combine-latest` binding is
+  `ScalarSumCombineCell`, which emits a `CounterDelta` per input arm; the two
+  arms of one source wave arrive as distinct waves and `GlitchFreeCell` replays
+  per-invocation, so an observer still folds the odd (torn) intermediate sum.
+  **Verified**: adding `observations-all-satisfy(v, even)` back fails on every
+  run with `event #1 = 1` (the torn intermediate).
+- **Remaining gap (kernel)**: a genuinely wave-aligned / wave-**coalescing**
+  scalar combine (version-buffered, emitting one delta per completed wave) does
+  not exist in the kernel (cell-catalog.md "the two honest gaps", gap 1). This is
+  the same shape blocking the set case (every catalog operator emits one delta
+  per element), so it is the general blocker for observing glitch-freedom.
+- **Filed scenarios**: `22-GF-DIAMOND-01.yaml` and `22-GF-NESTED-01.yaml` keep
+  `final-view` only. Disabled checks to restore verbatim once a wave-coalescing
+  operator lands:
   ```yaml
-  - {type: observations-all-satisfy, view: v, fn: mod-eq(4,0)}
+  - {type: observations-all-satisfy, view: v, fn: even}       # 22-GF-DIAMOND-01
+  - {type: observations-all-satisfy, view: v, fn: mod-eq(4,0)} # 22-GF-NESTED-01
   ```
-- **Also restore**: pilot `22-GF-DIAMOND-01.yaml` narrows the same way one
-  nesting level up; its disabled check:
-  ```yaml
-  - {type: observations-all-satisfy, view: v, fn: even}
-  ```
-- **Restore when**: a `combine-latest` binding wraps (or replaces
-  `ScalarSumCombineCell` with) an actually wave-aligned scalar combine.
 
 ### `12-NEGOTIATE-01` — **`schema-gap`**
 

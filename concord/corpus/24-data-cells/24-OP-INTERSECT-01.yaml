@@ -1,0 +1,36 @@
+# Concord corpus scenario (W3-4). Canonical schema shape — see concord/schema/scenario.md.
+# Unblocked by the W3-4 `intersect` port fix: `KernelCatalog.inletName` used to
+# collapse `intersect` to a nonexistent `"inlet"` port, so any scenario feeding
+# two sources into an `intersect` threw at `connect`. `intersect` now routes its
+# two inputs to the `left`/`right` ports IntersectSetCell actually exposes.
+id: 24-OP-INTERSECT-01
+title: Intersect emits exactly the elements live on both sides, tracking removals
+covers: [21-PROP-01]
+profile: core
+kind: example
+narrative:
+  given: two set sources fed into an intersect on its left/right ports, observed through a set view
+  when: the left side holds {x,y,z} and the right {y,z,w}, then the left drops y
+  then: at quiescence the view holds exactly the elements live on both sides — {z} after y leaves the left
+graph:
+  cells:
+    - {id: a, type: set-source, of: string}
+    - {id: b, type: set-source, of: string}
+    - {id: s, type: intersect}
+    - {id: v, type: set-view}
+  links:
+    - {from: a, to: s, inlet: left}
+    - {from: b, to: s, inlet: right}
+    - {from: s, to: v}
+script:
+  - {type: apply, on: a, op: add, value: x}
+  - {type: apply, on: a, op: add, value: y}
+  - {type: apply, on: a, op: add, value: z}
+  - {type: apply, on: b, op: add, value: y}
+  - {type: apply, on: b, op: add, value: z}
+  - {type: apply, on: b, op: add, value: w}
+  - {type: apply, on: a, op: remove, value: y}
+checks:
+  - {type: final-view, view: v, equals: [z]}
+  - {type: incremental-equals-batch, view: v}
+  - {type: no-dead-letters}

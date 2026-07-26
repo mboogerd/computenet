@@ -26,12 +26,14 @@ graph:
 script:
   - {type: apply, on: n, op: increment, times: 50}
 checks:
-  # Narrowed to the check the driver can honor today (P2/P7: narrow the scenario,
-  # never weaken the evaluator). `observations-all-satisfy(v, even)` — the real
-  # glitch-freedom invariant this scenario exists to assert — is deliberately
-  # omitted for now: W1-A's `combine-latest`/`sum` binding computes a scalar sum
-  # that is NOT wave-aligned, so an observer can transiently see an odd (torn)
-  # sum mid-wave. Restore the check below once a wave-aligned scalar combine
-  # lands (W3 corpus / kernel item):
+  # Narrowed (P2/P7: narrow the scenario, never weaken the evaluator).
+  # `observations-all-satisfy(v, even)` — the real glitch-freedom invariant — stays
+  # omitted. W3-4 wired `glitch-free: true` to a downstream GlitchFreeCell, but that
+  # does NOT rescue the scalar diamond: `ScalarSumCombineCell` emits a CounterDelta
+  # per input arm, the two arms of one source wave arrive as distinct waves, and
+  # GlitchFreeCell replays per-invocation — so an observer still sees the odd
+  # (torn) intermediate sum (verified: event #1 = 1 fails `even`). A genuinely
+  # wave-aligned / wave-coalescing scalar combine (one delta per completed wave) is
+  # a kernel gap. Restore once it lands (see DISPUTES.md):
   #   - {type: observations-all-satisfy, view: v, fn: even}
   - {type: final-view, view: v, equals: 100}

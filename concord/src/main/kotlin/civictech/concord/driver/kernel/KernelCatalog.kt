@@ -2,7 +2,10 @@ package civictech.concord.driver.kernel
 
 import civictech.cell.Cell
 import civictech.cell.data.Aggregator
+import civictech.cell.data.op.CountCell
 import civictech.cell.data.CounterCell
+import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.FlatMapSetCell
 import civictech.cell.data.GroupByCell
 import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.JoinSetCell
@@ -15,15 +18,12 @@ import civictech.cell.data.PresenceCountCell
 import civictech.cell.data.QuorumSetCell
 import civictech.cell.data.SemiJoinCell
 import civictech.cell.data.SetCell
+import civictech.cell.data.op.UnionSetCell
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.View
 import civictech.concord.value.Value
 import java.io.Serializable
-import civictech.cell.data.op.FilterCell
-import civictech.cell.data.op.UnionSetCell
-import civictech.cell.data.op.FlatMapSetCell
-import civictech.cell.data.op.CountCell
 
 /**
  * The neutral cell-catalog → kernel-cell binding (W1-A/W3-0, CONCORD-PLAN §1.4
@@ -50,6 +50,12 @@ internal object KernelCatalog {
         val cell: Cell,
         val sink: ObservationSink<*>? = null,
         val viewKind: ViewKind = ViewKind.NONE,
+        /**
+         * `glitch-free: true` was requested: the driver spawns a downstream
+         * [civictech.cell.consistency.GlitchFreeCell] and routes [cell]'s output
+         * through it, so downstream links read the wave-aligned outlet.
+         */
+        val glitchFree: Boolean = false,
     )
 
     /**
@@ -62,7 +68,10 @@ internal object KernelCatalog {
         val fn = (params["fn"] as? Value.StrVal)?.value
         val agg = (params["agg"] as? Value.StrVal)?.value ?: "count"
         val k = (params["k"] as? Value.IntVal)?.value?.toInt()
-        return when (type) {
+        // FU-6: a view/cell declaring `inlet-mode: single-writer` binds a strict
+        // point-to-point (single-writer) FanInlet, so a second writer's connect is Rejected.
+        val singleWriter = (params["inlet-mode"] as? Value.StrVal)?.value == "single-writer"
+        val built = when (type) {
             // ---- sources ----------------------------------------------------
             "set-source" -> Built(SetCell<Any?>())
             "counter-source" -> Built(CounterCell())
@@ -137,11 +146,11 @@ internal object KernelCatalog {
             )
 
             // ---- views ------------------------------------------------------
-            "set-view" -> observeCell(View.set<Any?>(), ViewKind.SET)
-            "value-view" -> observeCell(scalarView(), ViewKind.VALUE)
-            "map-view" -> observeCell(View.map<Any?, Any?>(), ViewKind.MAP)
-            "count-view" -> observeCell(View.count<Any?>(), ViewKind.COUNT)
-            "list-view" -> observeCell(listView(), ViewKind.LIST)
+            "set-view" -> observeCell(View.set<Any?>(), ViewKind.SET, singleWriter)
+            "value-view" -> observeCell(scalarView(), ViewKind.VALUE, singleWriter)
+            "map-view" -> observeCell(View.map<Any?, Any?>(), ViewKind.MAP, singleWriter)
+            "count-view" -> observeCell(View.count<Any?>(), ViewKind.COUNT, singleWriter)
+            "list-view" -> observeCell(listView(), ViewKind.LIST, singleWriter)
 
             // ---- cycles -----------------------------------------------------
             // A CycleHead: its `feedbackInput` (a FeedbackInlet) is the only inlet a
@@ -157,6 +166,13 @@ internal object KernelCatalog {
 
             else -> throw UnsupportedCatalogBinding("no kernel binding for catalog cell type '$type'")
         }
+        // `glitch-free: true` (spec 20/22): flag the built cell so the driver spawns
+        // a downstream kernel GlitchFreeCell wrapper and routes this operator's
+        // output through it — the wave-completeness gate the kernel packages
+        // (GlitchFreeOperatorSuiteTest construction). The wrap lives in the driver
+        // (it needs a real host link so the frontier sees EdgeOpen/Progress), not
+        // here — build only records the request via [Built.glitchFree].
+        return if ((params["glitch-free"] as? Value.BoolVal)?.value == true) built.copy(glitchFree = true) else built
     }
 
     private fun requireFn(type: String, fn: String?): String =
@@ -171,9 +187,14 @@ internal object KernelCatalog {
     private fun <ACC : Serializable> partitioned(a: Aggregator<Any?, Long, ACC>): PartitionedCell<Any?, Any?, Long, ACC> =
         PartitionedCell(initialShardCount = 4, keyFn = { KernelFunctions.keyOf(it) }, aggregator = a)
 
-    private fun <D : Any, S> observeCell(view: View<D, S>, kind: ViewKind): Built {
-        val cell = ObserveCell(view)
-        return Built(cell, cell, kind)
+    private fun <D : Any, S> observeCell(view: View<D, S>, kind: ViewKind, singleWriter: Boolean = false): Built {
+        return if (singleWriter) {
+            val cell = SingleWriterObserveCell(view)
+            Built(cell, cell, kind)
+        } else {
+            val cell = ObserveCell(view)
+            Built(cell, cell, kind)
+        }
     }
 
     /**
@@ -186,8 +207,11 @@ internal object KernelCatalog {
      * `feedbackInput` and a seed edge default to `inlet`.
      */
     fun inletName(targetType: String, scenarioInlet: String?): String = when (targetType) {
-        "union", "intersect", "quorum-set" -> "inlet" // single fan-in port: left/right merge
-        "combine-latest", "join", "semi-join", "lookup-join" -> scenarioInlet ?: "left"
+        // union/quorum-set are single fan-in ports (one `inlet`, left/right merge on it);
+        // intersect is NOT — IntersectSetCell exposes distinct `left`/`right` ports (its
+        // contract has no `inlet` port), so it routes through the two-input branch.
+        "union", "quorum-set" -> "inlet"
+        "intersect", "combine-latest", "join", "semi-join", "lookup-join" -> scenarioInlet ?: "left"
         else -> scenarioInlet ?: "inlet"
     }
 

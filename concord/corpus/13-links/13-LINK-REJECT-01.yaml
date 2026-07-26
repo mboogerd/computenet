@@ -1,0 +1,26 @@
+# Concord corpus scenario (W3-4). Canonical schema shape — see concord/schema/scenario.md.
+# Unblocked by the W3-4 single-writer wiring: `inlet-mode: single-writer` now
+# binds a strict point-to-point (FU-6) FanInlet on the view's inlet, so a second
+# writer's `connect` is Rejected while the first writer keeps flowing.
+id: 13-LINK-REJECT-01
+title: Second writer on a single-writer inlet is rejected without disturbing the first
+covers: [13-LINK-05]
+profile: core
+kind: example
+narrative:
+  given: two set sources and a single-writer set-view sink; the first writer is linked
+  when: a second writer attempts to connect to the same single-writer inlet
+  then: the second connect is rejected and the first writer's deltas still flow to the view
+graph:
+  cells:
+    - {id: w1, type: set-source, of: string}
+    - {id: w2, type: set-source, of: string}
+    - {id: sink, type: set-view, inlet-mode: single-writer}
+  links:
+    - {from: w1, to: sink}
+script:
+  - {type: connect, from: w2, to: sink, expect: rejected}
+  - {type: apply, on: w1, op: add, value: still-flows}
+checks:
+  - {type: final-view, view: sink, equals: [still-flows]}
+  - {type: no-dead-letters}
