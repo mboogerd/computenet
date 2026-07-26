@@ -442,8 +442,50 @@ joined covering member is silently skipped — reproducing the premature release
 
 **Honest boundary.** `instancesOf` membership is itself only eventually
 consistent: a covering member the *local* view has not yet learned of at all
-cannot be waited on here (the read cannot conjure an unknown member). A converged
-membership barrier and the DEGRADE quorum-shrink analogue (DEGRADE has none under
-sharded replication — it behaves as WAIT) are **sequenced to PN-19**, documented
-not hidden. Clean departure remains the `WatermarkCell.close()` `closed` marker
-(PN-0c), which the covering read still honors.
+cannot be waited on by the quorum read (the read cannot conjure an unknown
+member). The DEGRADE quorum-shrink analogue landed in PN-19 (a recoverably
+suspended member is dropped, restored on resume); the *unknown-joiner* half is
+closed by the converged-membership barrier below. Clean departure remains the
+`WatermarkCell.close()` `closed` marker (PN-0c), which the covering read still
+honors.
+
+## Converged-membership barrier (FU-2)
+
+The quorum read closes the *known*-covering-member hazard (a rowless member holds
+via R13; a suspended member drops via DEGRADE). It cannot close the
+*unknown*-joiner hazard on its own: a covering member the settling node has not
+learned of *at all* is absent from `instancesOf`, so the wave releases on a quorum
+that silently omits it — a torn read for that key, in the window between the
+member joining and its existence reaching this node.
+
+**Invariant.** An *unannounced* covering member must cause a **conservative hold**,
+never a premature release — the same asymmetry R13 gives a known-but-rowless
+member, extended to an unknown one.
+
+**Mechanism (reuse, not a new protocol).** Each replica announces its existence
+on the **delivered-watermark companion** (`WatermarkCell.announceMember()`): its
+`slotId` is added to a grow-only `members` set carried in `WatermarkDelta` and
+union-merged over the ordinary gossip mesh. The companion is a *transitively*
+gossiped, idempotent CRDT — it merges over the whole mesh and self-heals — so it
+converges membership **more completely** than the point-to-point topology
+announcements that feed `instancesOf` (each registry mirrors only its *direct*
+peers' local publishes; it does not relay second-hand locations). A node can
+therefore learn *that a covering member exists* over the companion before, or even
+without, learning *where it lives* over the topology.
+
+**Read.** For a keyed wave (`key != null`, i.e. a covering-quorum graph),
+`replicaFrontier(membershipBarrier = true)` — the default — computes the slots it
+has *accounted for*: the members in its `instancesOf` view, plus `closed`, plus
+(under DEGRADE) `suspended`. If the companion's `members()` set names any slot
+outside that accounted set, the node holds **every** keyed wave (a deliberately
+coarse, conservative hold — it need not resolve *which* range the unknown member
+covers). The hold clears the instant `instancesOf` converges (the unaccounted set
+empties), so it is a latency bound, not a wedge.
+
+**Boundaries.** An unkeyed wave (`key == null`, no covering quorum) is never held
+— the default settlement path is byte-identical. A fully-converged membership
+never holds — a covering-quorum graph settles exactly as it did once everyone is
+known. The residual is the Byzantine/permanent-partition case: a member that
+announces then vanishes without a clean `close()` holds keyed waves until the
+WAIT board's latency-unbounded contract (or DEGRADE / a `close`) resolves it —
+the same standing property clean departure already relies on, not a new gap.
