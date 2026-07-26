@@ -23,8 +23,15 @@ object ConcordanceScanner {
     /** A corpus scenario's provenance-relevant fields. */
     data class CorpusScenario(val id: String?, val covers: List<String>, val sourceFile: String)
 
-    /** Matches the id scheme in provenance.md §1: `«chapter»-«slug»-«nn»`, e.g. `21-PROP-01`. */
-    private val idPattern = Regex("""\[(\d{2}-[A-Z][A-Z0-9]*-\d{2})]""")
+    /**
+     * Matches the id scheme in provenance.md §1: `«chapter»-«slug»-«nn»`, e.g.
+     * `21-PROP-01`. The slug may itself be multi-segment — the minted operator
+     * ids carry a compound slug (`24-OP-UNION-01`, `24-OP-GROUPBY-01`), so a
+     * single `[A-Z][A-Z0-9]*` run is not enough; one or more `-SEGMENT` runs are
+     * allowed before the trailing `-nn` ordinal. `[93]` (no slug/ordinal) is
+     * still ignored.
+     */
+    private val idPattern = Regex("""\[(\d{2}-[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-\d{2})]""")
 
     /**
      * Scans every `.md` file under [specRoot] for inline `[NN-SLUG-nn]` tags.

@@ -50,6 +50,26 @@ class ConcordanceTest {
     }
 
     @Test
+    fun `scanRequirements recognizes multi-segment slug ids`() {
+        // The minted operator ids carry a compound slug (24-OP-UNION-01); the
+        // scanner must recognize them, not just single-segment ids (21-PROP-01).
+        val spec = specDir()
+        writeSpecChapter(
+            spec,
+            "24-fake.md",
+            """
+            # 24 — Data cells
+            `[24-OP-UNION-01]` UnionSetCell SHALL track the union.
+            `[24-OP-GROUPBY-01]` GroupByCell SHALL partition by key.
+            And a single-segment one still works: [21-PROP-01].
+            """.trimIndent(),
+        )
+
+        ConcordanceScanner.scanRequirements(spec).map { it.id }.sorted() shouldContainExactly
+            listOf("21-PROP-01", "24-OP-GROUPBY-01", "24-OP-UNION-01")
+    }
+
+    @Test
     fun `scanRequirements deduplicates an id referenced more than once`() {
         val spec = specDir()
         writeSpecChapter(

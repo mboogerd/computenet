@@ -1,16 +1,18 @@
 package civictech.concord.runner
 
+import civictech.concord.check.CheckContext
+import civictech.concord.check.CheckResult
+import civictech.concord.check.Checks
 import civictech.concord.driver.Driver
 import civictech.concord.driver.kernel.KernelDriver
 import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.CellSpec
-import civictech.concord.schema.Check
 import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.DespawnStep
 import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.Expect
-import civictech.concord.schema.FinalView
 import civictech.concord.schema.Kind
+import civictech.concord.schema.Profile
 import civictech.concord.schema.QuiesceStep
 import civictech.concord.schema.RestoreStep
 import civictech.concord.schema.Scenario
@@ -24,16 +26,23 @@ import org.junit.jupiter.api.TestFactory
 import java.io.File
 
 /**
- * The Concord runner (W1-A): a JUnit dynamic-test harness that discovers every
- * scenario YAML under `concord/corpus`, parses it through the reused [ConcordYaml] factory,
- * and runs each scenario across the schedule sweep against the [KernelDriver].
+ * The Concord runner: a JUnit dynamic-test harness that discovers every scenario
+ * YAML under `concord/corpus`, parses it through the reused [ConcordYaml] factory,
+ * filters by the active profile set (`-Pconcord.profiles`), and runs each surviving
+ * scenario across the schedule sweep against the [KernelDriver].
  *
- * **W1-A scope — `final-view` only.** The full check vocabulary (batch oracle,
- * convergence, glitch-freedom, …) lands in W1-B and is wired in W2; here the
- * runner evaluates only [FinalView] inline. `kind: control` scenarios (P7) are
- * asserted to *fail* their `final-view`; `kind: example` scenarios must *pass*
- * on every run of the sweep. Scenarios with no `final-view` check still execute
- * end to end (the driver binding is exercised) but assert nothing yet.
+ * **W2 — full check dispatch.** Every declared `checks:` entry is routed through
+ * W1-B's [Checks] evaluator vocabulary (`civictech.concord.check`) against the
+ * driver's observed outputs (views, observation logs, dead letters, effect logs).
+ * A scenario passes a run only if *all* its declared checks pass; the scenario
+ * passes only if all runs of the sweep pass. `kind: control` scenarios (P7) are
+ * asserted to *fail* — at least one declared check must fail on some run.
+ *
+ * **Profile filter (P9).** `-Pconcord.profiles=core,dist,dur` (default `core`)
+ * selects which scenarios execute by their `profile:` field; the build passes
+ * `concord.profiles` through as a system property. Filtering the corpus to the
+ * empty set (e.g. `-Pconcord.profiles=dist` with only `core` pilots) yields zero
+ * dynamic tests, not an error.
  */
 class CorpusRunner {
 
@@ -44,46 +53,72 @@ class CorpusRunner {
         val CORPUS = File("corpus")
     }
 
+    /** A [CheckContext] pairing one run's already-quiesced [driver] with its [scenario]. */
+    private class RunContext(override val driver: Driver, override val scenario: Scenario) : CheckContext
+
     @TestFactory
     fun `every corpus scenario runs against the kernel driver`(): List<DynamicTest> {
         val files = CORPUS.walkTopDown().filter { it.isFile && it.extension == "yaml" }.sorted().toList()
         assertTrue(files.isNotEmpty()) { "no corpus scenarios discovered under ${CORPUS.absolutePath}" }
-        return files.map { file ->
+        val active = activeProfiles()
+        return files.mapNotNull { file ->
             val scenario = ConcordYaml.instance.decodeFromString(Scenario.serializer(), file.readText())
+            if (scenario.profile.slug() !in active) return@mapNotNull null
             DynamicTest.dynamicTest("${scenario.id} (${file.parentFile.name})") { runScenario(scenario) }
         }
     }
 
+    /** The profile set the build activated via `-Pconcord.profiles` (default `core`). */
+    private fun activeProfiles(): Set<String> =
+        (System.getProperty("concord.profiles") ?: "core")
+            .split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+
+    private fun Profile.slug(): String = when (this) {
+        Profile.CORE -> "core"
+        Profile.DIST -> "dist"
+        Profile.DUR -> "dur"
+    }
+
     private fun runScenario(scenario: Scenario) {
         val runs = scenario.runs ?: DEFAULT_RUNS
-        val finalViews = scenario.checks.filterIsInstance<FinalView>()
 
         // Per run: build a fresh seeded driver, replay the graph + script, quiesce,
-        // then evaluate every final-view. A run "passes" iff all its final-views hold.
-        val runPassed = BooleanArray(runs)
+        // then route every declared check through the W1-B evaluator vocabulary.
+        // A run passes iff every declared check passes; failures are collected per
+        // run for the report. incremental-equals-batch stays wired to the batch
+        // oracle inside Checks.incrementalEqualsBatch.
+        val failuresByRun = LinkedHashMap<Int, List<String>>()
         for (run in 0 until runs) {
             val driver = KernelDriver(run.toLong())
             buildGraph(driver, scenario)
             runScript(driver, scenario.script)
             driver.quiesce(QUIESCE_BUDGET)
-            runPassed[run] = finalViews.all { fv ->
-                canonical(driver.readView(fv.view)) == canonical(fv.expected)
+            val ctx = RunContext(driver, scenario)
+            val failures = scenario.checks.mapNotNull { check ->
+                when (val r = Checks.evaluate(check, ctx)) {
+                    CheckResult.Passed -> null
+                    is CheckResult.Failed -> r.message
+                    is CheckResult.NotImplemented -> "check '${r.check}' is not implemented"
+                }
             }
+            if (failures.isNotEmpty()) failuresByRun[run] = failures
         }
 
+        val passedAllRuns = failuresByRun.isEmpty()
         when (scenario.kind) {
             Kind.CONTROL ->
-                // P7: a control carries a deliberately wrong expectation and MUST fail.
-                // W1-A asserts this minimally over final-view; the full P7 gate is W2.
-                assertTrue(finalViews.isNotEmpty() && runPassed.any { !it }) {
-                    "${scenario.id}: control scenario was expected to FAIL its final-view but every run passed"
+                // P7 (the harness must be able to fail): a control carries a
+                // deliberately wrong expectation and MUST fail at least one of its
+                // real, routed checks on some run.
+                assertTrue(scenario.checks.isNotEmpty() && !passedAllRuns) {
+                    "${scenario.id}: control scenario was expected to FAIL a declared check " +
+                        "but every check passed on every one of $runs run(s)"
                 }
             else ->
-                assertTrue(runPassed.all { it }) {
-                    val failed = (0 until runs).filter { !runPassed[it] }
-                    "${scenario.id}: final-view failed on run(s) $failed of $runs. " +
-                        "Actual vs expected on run ${failed.first()}: " +
-                        describeFailure(scenario, failed.first(), finalViews)
+                assertTrue(passedAllRuns) {
+                    val (run, msgs) = failuresByRun.entries.first().let { it.key to it.value }
+                    "${scenario.id}: check(s) failed on ${failuresByRun.size} of $runs run(s). " +
+                        "First failing run ($run): ${msgs.joinToString("; ")}"
                 }
         }
     }
@@ -137,27 +172,5 @@ class CorpusRunner {
         cell.glitchFree?.let { put("glitch-free", Value.BoolVal(it)) }
         cell.inletMode?.let { put("inlet-mode", Value.StrVal(it)) }
         cell.replicaOf?.let { put("replica-of", Value.StrVal(it)) }
-    }
-
-    /**
-     * Order-insensitive comparison of a view value against a golden: set-views
-     * are unordered, so [Value.ListVal]s are sorted before comparing (W1-A
-     * pilots are set/scalar views only). The order-aware / true set semantics is
-     * W1-B's real evaluator.
-     */
-    private fun canonical(value: Value): Value = when (value) {
-        is Value.ListVal -> Value.ListVal(value.items.map { canonical(it) }.sortedBy { it.toString() })
-        is Value.MapVal -> Value.MapVal(value.entries.mapValues { canonical(it.value) })
-        else -> value
-    }
-
-    private fun describeFailure(scenario: Scenario, run: Int, finalViews: List<FinalView>): String {
-        val driver = KernelDriver(run.toLong())
-        buildGraph(driver, scenario)
-        runScript(driver, scenario.script)
-        driver.quiesce(QUIESCE_BUDGET)
-        return finalViews.joinToString("; ") { fv ->
-            "view '${fv.view}' = ${driver.readView(fv.view)} (expected ${fv.expected})"
-        }
     }
 }

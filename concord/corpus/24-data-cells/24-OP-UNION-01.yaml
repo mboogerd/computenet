@@ -1,8 +1,7 @@
 # Concord pilot scenario (W0). Canonical schema shape — see concord/schema/scenario.md.
-# `covers` ids are provisional until W1-C assigns L0 EARS ids in the spec chapters.
 id: 24-OP-UNION-01
 title: Union of two set sources equals batch union
-covers: [24-OP-03, 21-PROP-01]
+covers: [24-OP-UNION-01, 21-PROP-01]
 profile: core
 kind: example
 narrative:

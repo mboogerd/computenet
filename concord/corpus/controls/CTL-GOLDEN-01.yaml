@@ -3,7 +3,11 @@
 # Correct graph, deliberately wrong final-view golden.
 id: CTL-GOLDEN-01
 title: Control — correct union graph with a deliberately wrong final-view golden
-covers: [24-OP-03]
+# Covers the union requirement whose final-view this control deliberately gets
+# wrong (P7 — the harness must be able to fail). A real, non-dangling covers id
+# keeps the concordance orphan/dangling lints clean; the wrongness is in the
+# golden below, not in the lineage.
+covers: [24-OP-UNION-01]
 profile: core
 kind: control
 narrative:

@@ -7,9 +7,9 @@ import civictech.cell.data.IntersectSetCell
 import civictech.cell.data.PresenceCountCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.UnionSetCell
-import civictech.cell.host.ObserveCell
-import civictech.cell.host.ObservationSink
-import civictech.cell.host.View
+import civictech.cell.observe.ObserveCell
+import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.View
 import civictech.concord.value.Value
 
 /**

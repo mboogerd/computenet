@@ -5,7 +5,7 @@ import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.data.CounterDelta
 import civictech.cell.Propagate
-import civictech.cell.host.View
+import civictech.cell.observe.View
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.registerPort

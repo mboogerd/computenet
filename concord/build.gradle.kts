@@ -25,14 +25,21 @@ dependencies {
     testImplementation(kotlin("test"))
 }
 
+// W2 profile filter: the corpus runner reads `concord.profiles` (default `core`)
+// to select which scenarios execute by their `profile:` field (P9). Threaded
+// from the Gradle project property `-Pconcord.profiles=core,dist,dur` into the
+// test JVM as a system property. All four W2 pilots are `core`, so the default
+// leaves behaviour unchanged; `-Pconcord.profiles=dist` runs zero pilots.
+tasks.withType<Test>().configureEach {
+    systemProperty("concord.profiles", (project.findProperty("concord.profiles") as String?) ?: "core")
+}
+
 // W1-D: the concordance generator (Concord §1.5 / `concord/schema/provenance.md`).
 // A JavaExec (not a custom Gradle task type) running civictech.concord.provenance's
 // main(), so the lint/scan logic stays plain Kotlin in `main` — unit-testable on its
 // own and free of the Gradle API. Report-only by default; pass
 // `-Pconcord.fatal=true` to fail the build when dangling/orphan lints fire.
-// Deliberately NOT wired into `check` here — the corpus is mid-construction and the
-// pilot `covers:` ids are provisional (see provenance.md's note), so fatal-on-`check`
-// is W2's job once the pilots' covers are reconciled against real EARS ids.
+// Writes the human-facing concordance to doc/spec/CONCORDANCE.md.
 tasks.register<JavaExec>("concordance") {
     group = "verification"
     description = "Generates doc/spec/CONCORDANCE.md from L0 requirement ids and corpus " +
@@ -47,4 +54,29 @@ tasks.register<JavaExec>("concordance") {
         rootProject.layout.projectDirectory.file("doc/spec/CONCORDANCE.md").asFile.path,
         fatal.toString(),
     )
+}
+
+// W2: wire the concordance lint into the build gate. `concordanceGate` runs the
+// same scanner in FATAL mode — a dangling `covers:` id or an orphan (empty
+// covers) scenario fails the build; coverage-gap notes stay non-fatal. Output
+// goes to the throwaway build dir (not the tracked doc/spec copy) so the gate
+// never dirties the working tree. `check` depends on it, so `:concord:check`
+// (and any `:concord:build`) enforces a clean corpus lineage now that the pilots'
+// covers are reconciled to real EARS ids.
+val concordanceGate = tasks.register<JavaExec>("concordanceGate") {
+    group = "verification"
+    description = "Fails the build on dangling/orphan covers lints (concordance in FATAL mode); " +
+        "coverage-gap notes remain non-fatal. Wired into `check`."
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("civictech.concord.provenance.ConcordanceKt")
+    args(
+        rootProject.layout.projectDirectory.dir("doc/spec").asFile.path,
+        layout.projectDirectory.dir("corpus").asFile.path,
+        layout.buildDirectory.file("concordance/CONCORDANCE.md").get().asFile.path,
+        "true",
+    )
+}
+
+tasks.named("check") {
+    dependsOn(concordanceGate)
 }
