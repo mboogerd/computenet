@@ -5,10 +5,12 @@ import civictech.cell.CellRef
 import civictech.cell.Leased
 import civictech.cell.Stateful
 import civictech.cell.Propagate
+import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.link.Interest
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.Use
@@ -111,6 +113,98 @@ class SingleWriterReplicationTest {
         }
     }
 
+    /**
+     * A single-writer replicated SET (T07 finding 1, Divergence A test
+     * fixture): unlike [SwCounterCell]'s `Long` (not [civictech.cell.link.Scoped]),
+     * the delta type here is [SetDelta] — the same [civictech.cell.link.Scoped]
+     * carrier `Replication`'s own interest tests use — so a partial-interest
+     * follower genuinely receives a *slice*, not an all-or-nothing refusal
+     * (see [civictech.cell.link.sliceTo]'s refusal path for the non-Scoped
+     * case, already pinned by [civictech.cell.link.SliceToRefusalTest]).
+     * Apply is idempotent (plain set union), so re-applying a resent catch-up
+     * baseline after a rebuilt link is harmless — deliberately unlike
+     * [SwCounterCell], which stays reserved for tests that need a genuinely
+     * non-idempotent single-writer stream.
+     */
+    @Contract
+    interface SwSetOps {
+        fun add(element: String)
+    }
+
+    interface WriteSetInletHolder {
+        val writeInlet: Use<SwSetOps>
+    }
+
+    class SwSetCell(override val ref: CellRef) : SingleWriterReplicable<SetDelta<String>>, Cell {
+        val writeInlet = registerPort("writeInlet", FanInlet.create<SwSetOps>())
+        override val deltaOutlet = registerPort("deltaOutlet", FanOutlet.create<Propagate<Stamped<SetDelta<String>>>>())
+        private val deltaInletPort = registerPort("deltaInlet", FanInlet.create<Propagate<Stamped<SetDelta<String>>>>())
+        override val deltaInlet: Use<Propagate<Stamped<SetDelta<String>>>> get() = deltaInletPort
+
+        private val elements = mutableSetOf<String>()
+        val membership: Set<String> get() = elements.toSet()
+        var leading: Boolean = false
+            private set
+        var currentEpoch: Long = -1
+            private set
+
+        private val realApi = object : SwSetOps {
+            override fun add(element: String) {
+                check(leading) { "not the leader" }
+                if (elements.add(element)) {
+                    deltaOutlet.call.propagate(
+                        Stamped(currentEpoch, SetDelta(adds = mapOf(element to emptySet<civictech.cell.Timestamp>()))),
+                    )
+                }
+            }
+        }
+
+        init {
+            deltaInletPort.serve(object : Propagate<Stamped<SetDelta<String>>> {
+                override fun propagate(value: Stamped<SetDelta<String>>) {
+                    if (value.epoch < currentEpoch) return
+                    currentEpoch = maxOf(currentEpoch, value.epoch)
+                    elements += value.delta.adds.keys
+                }
+            })
+            // late-join / re-announce catch-up (G-22 idiom): the current
+            // membership as a from-empty baseline, funneled through the SAME
+            // per-target `at(link.to)` path shipTo's interest slice wraps —
+            // so a partial-interest follower's catch-up is sliced exactly
+            // like its live stream (CP-D2).
+            deltaOutlet.linking.onLinked = { link ->
+                if (leading && elements.isNotEmpty()) {
+                    deltaOutlet.at(link.to)
+                        .propagate(
+                            Stamped(
+                                currentEpoch,
+                                SetDelta(adds = elements.associateWith { emptySet<civictech.cell.Timestamp>() }),
+                            ),
+                        )
+                }
+            }
+        }
+
+        override fun becomeLeader(epoch: Long) {
+            leading = true
+            currentEpoch = epoch
+            writeInlet.serve(realApi)
+        }
+
+        override fun becomeFollower(leaderRef: CellRef, epoch: Long, registry: LocationRegistry) {
+            leading = false
+            currentEpoch = epoch
+            writeInlet.delegate(forwardWrites(writeInlet.clazz, "writeInlet", leaderRef, registry))
+        }
+
+        override fun currentState(): SetDelta<String> =
+            SetDelta(adds = elements.associateWith { emptySet<civictech.cell.Timestamp>() })
+        override fun adoptState(state: SetDelta<String>) {
+            elements.clear()
+            elements += state.adds.keys
+        }
+    }
+
     private class Peer(val controller: SimulationController) {
         val registry = LocationRegistry()
         val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
@@ -124,6 +218,13 @@ class SingleWriterReplicationTest {
         fun ops(replica: SwCounterCell): SwCounterOps =
             (civictech.cell.host.HostedCellProxy.create(replica.ref, registry, WriteInletHolder::class.java)
                     as WriteInletHolder).writeInlet.call
+
+        fun setReplica(logicalId: UUID, instanceId: Long, mark: LeaderMark): SwSetCell =
+            SwSetCell(CellRef(logicalId, instanceId)).also { replication.replicate(it, host, mark) }
+
+        fun setOps(replica: SwSetCell): SwSetOps =
+            (civictech.cell.host.HostedCellProxy.create(replica.ref, registry, WriteSetInletHolder::class.java)
+                    as WriteSetInletHolder).writeInlet.call
     }
 
     @Test
@@ -264,5 +365,116 @@ class SingleWriterReplicationTest {
 
         restartCatchUp(restarted, donor = onQ)
         restarted.total shouldBe 42 // peer catch-up wins over the stale checkpoint
+    }
+
+    // ---- T07 finding 1: SWR minimal-correctness patch (Divergence A + B) ----
+
+    @Test
+    fun `finding 1a - a disjoint-interest follower forms no shipping link and receives nothing`() {
+        val controller = SimulationController()
+        val p = Peer(controller)
+        val q = Peer(controller)
+        Peering.loopback(p.side, q.side)
+        val logicalId = UUID.randomUUID()
+        val leaderRef = CellRef(logicalId, 0)
+        val followerRef = CellRef(logicalId, 1)
+        val mark = LeaderMark(logicalId, epoch = 0, leaderRef = leaderRef)
+
+        // disjoint slot-interest (CP-D2, mirrors InterestScopedGossipTest's
+        // Replication-side control) — set on the LEADER's own registry, which
+        // is what `shipTo`'s gate consults (interest is not wire-propagated;
+        // each peer's registry independently holds the assignment table, the
+        // same setup ShardedReplicationTest uses).
+        p.registry.setInterest(leaderRef, Interest.Slots(setOf(0), 2))
+        p.registry.setInterest(followerRef, Interest.Slots(setOf(1), 2))
+
+        val leader = SwCounterCell(leaderRef).also { p.replication.replicate(it, p.host, mark) }
+        val follower = SwCounterCell(followerRef).also { q.replication.replicate(it, q.host, mark) }
+        controller.runToIdle()
+
+        p.ops(leader).increment(7)
+        controller.runToIdle()
+
+        leader.total shouldBe 7
+        follower.total shouldBe 0 // never shipped — the disjoint gate refuses the link entirely
+        p.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 0
+    }
+
+    @Test
+    fun `finding 1a - a partial-interest follower receives only its admitted slice`() {
+        val controller = SimulationController()
+        val p = Peer(controller)
+        val q = Peer(controller)
+        Peering.loopback(p.side, q.side)
+        val logicalId = UUID.randomUUID()
+        val leaderRef = CellRef(logicalId, 0)
+        val followerRef = CellRef(logicalId, 1)
+        val mark = LeaderMark(logicalId, epoch = 0, leaderRef = leaderRef)
+        val totalSlots = 4
+
+        // overlapping partial interest: the follower wants only slot 0 (CP-D2)
+        p.registry.setInterest(followerRef, Interest.Slots(setOf(0), totalSlots))
+
+        val leader = SwSetCell(leaderRef).also { p.replication.replicate(it, p.host, mark) }
+        val follower = SwSetCell(followerRef).also { q.replication.replicate(it, q.host, mark) }
+        controller.runToIdle()
+
+        val inSlot0 = generateSequence(0) { it + 1 }.map { "e$it" }
+            .first { Interest.Slots.slotOf(it, totalSlots) == 0 }
+        val inSlot1 = generateSequence(0) { it + 1 }.map { "e$it" }
+            .first { Interest.Slots.slotOf(it, totalSlots) == 1 }
+
+        val ops = p.setOps(leader)
+        ops.add(inSlot0)
+        ops.add(inSlot1)
+        controller.runToIdle()
+
+        leader.membership shouldBe setOf(inSlot0, inSlot1)
+        // the follower's own slice: slot-0 element ships, slot-1 element is
+        // filtered before it ever crosses (Divergence A — was previously
+        // shipped WHOLE since SWR had zero interest handling)
+        follower.membership shouldBe setOf(inSlot0)
+    }
+
+    @Test
+    fun `finding 1b - a departed follower's re-announce rebuilds the shipping link, catch-up converges`() {
+        val controller = SimulationController()
+        val p = Peer(controller)
+        val q = Peer(controller)
+        Peering.loopback(p.side, q.side)
+        val logicalId = UUID.randomUUID()
+        val leaderRef = CellRef(logicalId, 0)
+        val followerRef = CellRef(logicalId, 1)
+        val mark = LeaderMark(logicalId, epoch = 0, leaderRef = leaderRef)
+
+        val leader = SwSetCell(leaderRef).also { p.replication.replicate(it, p.host, mark) }
+        val follower = SwSetCell(followerRef).also { q.replication.replicate(it, q.host, mark) }
+        controller.runToIdle()
+
+        p.setOps(leader).add("a")
+        controller.runToIdle()
+        follower.membership shouldBe setOf("a")
+        p.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 1
+
+        // the follower departs (G-45-style eviction/crash): its own local
+        // unpublish relays over the wire to the leader's mirror, firing
+        // onUnpublish there — Divergence B's fix drops the now-stale shipping
+        // link instead of leaving it dangling (SWR previously had NO
+        // onUnpublish handler at all, unlike Replication.kt:227).
+        q.registry.unpublish(followerRef)
+        controller.runToIdle()
+        p.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 0
+
+        // a write while the follower is departed — nothing is subscribed to
+        // ship it to right now, so it simply isn't shipped until the link rebuilds
+        p.setOps(leader).add("b")
+        controller.runToIdle()
+
+        // the follower re-announces (a returning peer) — shipTo rebuilds a fresh link
+        q.registry.publish(followerRef, q.host)
+        controller.runToIdle()
+
+        p.replication.shipCountAmong(setOf(leaderRef, followerRef)) shouldBe 1
+        follower.membership shouldBe setOf("a", "b") // the rebuilt link's catch-up delivers both
     }
 }

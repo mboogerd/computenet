@@ -8,7 +8,9 @@ import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanOutlet
+import civictech.cell.link.Interest
 import civictech.cell.link.Link
+import civictech.cell.link.sliceTo
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.streamTo
@@ -139,7 +141,19 @@ fun <D> restartCatchUp(leader: SingleWriterReplicable<D>, donor: SingleWriterRep
  * same membership-discovery machinery the mergeable mesh already built
  * (M7.2), just wired asymmetrically instead of into a full mesh.
  */
-class SingleWriterReplication(private val registry: LocationRegistry) {
+class SingleWriterReplication(
+    private val registry: LocationRegistry,
+    /**
+     * How the shipper projects a delta element to the key an [Interest] is
+     * scoped over (T07 finding 1, mirroring [Replication]'s `keyOf`).
+     * Identity by default. Kept as a constructor parameter — not yet used by
+     * any caller in this ticket's scope — for the same reason `Replication`
+     * carries it: a future partitioned single-writer substrate supplies the
+     * group key through the identical [sliceTo] primitive rather than a
+     * second slicing mechanism.
+     */
+    private val keyOf: (Any?) -> Any? = { it },
+) {
 
     private data class Local(val cell: SingleWriterReplicable<*>)
 
@@ -155,6 +169,19 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
 
     init {
         registry.onPublish { ref -> onPeerPublished(ref) }
+        // T07 finding 1 (Divergence B): mirrors Replication.kt's onUnpublish
+        // reconciliation (G-45) — a follower's despawn/eviction drops the now-
+        // stale outbound shipping link rather than leaving it targeting a gone
+        // ref; its next re-announce ([onPeerPublished]) rebuilds via the
+        // ordinary [shipTo] construction path. Unlike `Replication`'s mesh
+        // (idempotent merge tolerates a lingering duplicate subscriber), a
+        // single-writer follower's apply is explicitly NOT idempotent
+        // (`SwCounterOps`'s doc), so the stale link is also [Link.unlink]ed —
+        // not just dropped from bookkeeping — so a rebuilt link never doubles
+        // up a live subscription and double-applies future shipments.
+        registry.onUnpublish { ref ->
+            shipped.keys.filter { it.second == ref }.toList().forEach { key -> shipped.remove(key)?.unlink() }
+        }
     }
 
     fun leaderOf(logicalId: UUID): LeaderMark? = leaderMarks[logicalId]
@@ -209,6 +236,15 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
 
     private fun shipTo(leader: SingleWriterReplicable<*>, followerRef: CellRef) {
         if (followerRef == leader.ref) return
+        // Interest gate (T07 finding 1, Divergence A; spec 40/42 §Interest-
+        // scoped instance sets, CP-D2; mirrors Replication.maybeLink's gate):
+        // a shipping link forms only where the leader's and the follower's
+        // interests overlap — a disjoint-interest follower never links at
+        // all, so a delta cannot even reach an instance that doesn't want it.
+        // Default (unset) interest is Total on both sides, so overlap is
+        // always true and this is byte-identical to pre-interest shipping.
+        val targetInterest = registry.interestOf(followerRef)
+        if (!registry.interestOf(leader.ref).overlaps(targetInterest)) return
         val key = leader.ref to followerRef
         shipped[key]?.let { link ->
             @Suppress("UNCHECKED_CAST")
@@ -217,9 +253,31 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
         }
         val routed = (HostedCellProxy.create(followerRef, registry, DeltaInletHolder::class.java)
                 as DeltaInletHolder).deltaInlet.call
+        // Per-emission interest filter (T07 finding 1, Divergence A; mirrors
+        // Replication.maybeLink's `sink`): every delta — the live stream and
+        // the onLinked catch-up baked into the link below — is restricted to
+        // the *target's* interest before it ships, by slicing the STAMPED
+        // envelope's payload and re-stamping under the same epoch. A delta a
+        // partial-interest follower has no interest in never crosses. Total
+        // interest short-circuits to the bare routed sink, so the default
+        // shipping path is unwrapped and byte-identical.
+        val sink: Propagate<Stamped<Any?>> = if (targetInterest is Interest.Total) routed
+        else Propagate { stamped ->
+            sliceTo(stamped.delta, targetInterest, keyOf)?.let { routed.propagate(Stamped(stamped.epoch, it)) }
+        }
         @Suppress("UNCHECKED_CAST")
-        shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).streamTo(routed)
+        shipped[key] = (leader.deltaOutlet as FanOutlet<Propagate<Stamped<Any?>>>).streamTo(sink)
     }
+
+    /**
+     * How many leader→follower shipping links exist among [refs] (T07 finding
+     * 1 test seam, mirroring [Replication.linkCountAmong]): used to pin
+     * finding 1's Divergence B fix — the count drops to 0 on a follower's
+     * unpublish and rebuilds to 1 on its re-announce, rather than leaving a
+     * stale entry forever.
+     */
+    internal fun shipCountAmong(refs: Set<CellRef>): Int =
+        shipped.keys.count { it.first in refs && it.second in refs }
 
     companion object {
         /**
