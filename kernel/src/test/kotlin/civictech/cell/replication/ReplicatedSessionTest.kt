@@ -12,6 +12,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
@@ -92,7 +93,7 @@ class ReplicatedSessionTest {
 
     @Test
     fun `three replicas converge under 100 seeds with a mid-run partition and heal`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val run = runSession(seed, heal = true)
             run.memberships.toSet().size shouldBe 1 // all replicas identical
             run.deadLetters.shouldBeEmpty()

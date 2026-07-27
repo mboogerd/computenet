@@ -3,6 +3,7 @@ package civictech.cell.host
 import civictech.cell.*
 import civictech.cell.Propagate
 import civictech.cell.port.*
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -75,7 +76,7 @@ class DrainAndMigrateTest {
     @Test
     fun `drain flushes accepted messages before deactivation, resume replays parked ones after`() {
         val waves = 30
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val controller = SimulationController(seed)
             val registry = LocationRegistry()
             val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
@@ -120,7 +121,7 @@ class DrainAndMigrateTest {
     @Test
     fun `migration under load moves state through a serialization round-trip with zero loss`() {
         val waves = 30
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val controller = SimulationController(seed)
             val registry = LocationRegistry()
             val hostA = ManagedHost(scheduler = controller.scheduler(), registry = registry)

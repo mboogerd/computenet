@@ -18,6 +18,7 @@ import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -154,7 +155,7 @@ class GlitchFreeReplicaFrontierTest {
 
     @Test
     fun `no join output at a wave a replica-set member has not delivered - 100 seeds with partition and heal`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val observations = runJoin(seed, replicaFrontierOn = true)
             // every write surfaced on the join (liveness) …
             observations.map { it.element }.toSet() shouldBe (1..30).map { "w$it" }.toSet()

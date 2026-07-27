@@ -5,6 +5,7 @@ import civictech.cell.Propagate
 import civictech.cell.port.*
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -54,7 +55,7 @@ class RelocationTest {
     @Test
     fun `closure parks, re-publication replays exactly once in order`() {
         val waves = 30
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val controller = SimulationController(seed)
             val registry = LocationRegistry()
             val host = ManagedHost(scheduler = controller.scheduler(), registry = registry)
@@ -93,7 +94,7 @@ class RelocationTest {
     @Test
     fun `spawning on a new host re-publishes and replays parked traffic there`() {
         val waves = 30
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val controller = SimulationController(seed)
             val registry = LocationRegistry()
             val hostA = ManagedHost(scheduler = controller.scheduler(), registry = registry)

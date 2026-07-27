@@ -19,6 +19,7 @@ import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldContainAll
 import org.junit.jupiter.api.Test
@@ -156,7 +157,7 @@ class MemberDepartureFrontierTest {
 
     @Test
     fun `post-departure waves keep settling once the evicted member's row is closed - 100 seeds`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val released = run(seed, closeOnEvict = true)
             released shouldContainAll (0 until 3).map { "pre$it" }
             released shouldContainAll (0 until 5).map { "post$it" }
@@ -165,7 +166,7 @@ class MemberDepartureFrontierTest {
 
     @Test
     fun `control - without the close call every post-departure wave wedges the consumer, on every seed`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val released = run(seed, closeOnEvict = false)
             // The consumer was producing before the departure …
             released shouldContainAll (0 until 3).map { "pre$it" }
