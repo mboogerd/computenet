@@ -16,6 +16,9 @@ import civictech.cell.host.HostedCellProxy
 import civictech.cell.wire.Peering
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
+import java.net.BindException
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.net.URI
 import java.util.Collections
 import java.util.UUID
@@ -62,12 +65,41 @@ class WsReconnectSmokeTest {
         return live.keys
     }
 
-    private fun await(what: String, timeoutMs: Long = 20_000, condition: () -> Boolean) {
+    // T12 finding 4: the reconnect loop's own backoff (WsTransport.DEFAULT_RECONNECT_BACKOFF)
+    // used to be the only thing standing between this test and a real wall-clock wait, so
+    // every await here carried a 20s deadline. Driving the connection's backoff to zero (see
+    // `connect` below) means reconnect is bounded only by scheduling, not sleep — 2s is ample.
+    private fun await(what: String, timeoutMs: Long = 2_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
             if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
             Thread.sleep(20)
         }
+    }
+
+    /**
+     * T12 finding 4: re-binding the exact port `listener.stop()` just freed races the OS
+     * (TIME_WAIT, or a concurrent process on this host grabbing it first — a documented
+     * reality in this environment) — a real flake source, not a hypothetical one. Probing
+     * with a throwaway `SO_REUSEADDR` [ServerSocket] bind+close first nudges the OS past a
+     * lingering TIME_WAIT; a bounded retry on [BindException] around the real listen absorbs
+     * whatever race remains, with a clear message if every attempt fails.
+     */
+    private fun relisten(port: Int, side: Peering.Side, attempts: Int = 20): WsTransport.WsListener {
+        var lastFailure: BindException? = null
+        repeat(attempts) { attempt ->
+            try {
+                ServerSocket().use { probe ->
+                    probe.reuseAddress = true
+                    probe.bind(InetSocketAddress(port))
+                }
+                return WsTransport.listen(port, side)
+            } catch (e: BindException) {
+                lastFailure = e
+                if (attempt < attempts - 1) Thread.sleep(50)
+            }
+        }
+        throw IllegalStateException("could not re-bind port $port after $attempts attempts", lastFailure)
     }
 
     private class Stack {
@@ -83,7 +115,9 @@ class WsReconnectSmokeTest {
         var server = Stack()
         var listener = WsTransport.listen(0, server.side)
         val port = listener.port
-        val connection = WsTransport.connect(URI("ws://localhost:$port"), client.side)
+        // zero reconnect backoff (T12 finding 4): reconnect timing is then bounded by
+        // scheduling, not sleep, so the awaits above can drop their 20s deadlines.
+        val connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
         try {
             var collector = CollectorCell()
             server.host.managementInlet.call.spawn(collector)
@@ -109,7 +143,7 @@ class WsReconnectSmokeTest {
             server = Stack()
             collector = CollectorCell(collector.ref)
             server.host.managementInlet.call.spawn(collector)
-            listener = WsTransport.listen(port, server.side)
+            listener = relisten(port, server.side)
 
             // no manual reconnect: the client's backoff loop finds the new
             // listener, re-hellos, announcements re-mirror, parked sends replay.

@@ -33,6 +33,17 @@ import java.util.concurrent.atomic.AtomicLong
  */
 object WsTransport {
 
+    /**
+     * The production reconnect backoff (M10.3): fixed doubling from 1s, capped at 30s,
+     * retries forever. `attempt` is 0-based (the delay *before* the (attempt+1)-th
+     * reconnect try). T12: pulled out to a default so tests can inject a near-zero
+     * schedule instead of paying the real wall-clock delay.
+     */
+    val DEFAULT_RECONNECT_BACKOFF: (attempt: Int) -> Long = { attempt ->
+        // guard overflow on a long-lived failing connection: cap the shift itself
+        (1_000L shl attempt.coerceAtMost(20)).coerceAtMost(30_000L)
+    }
+
     /** Serve peer connections on [port] (0 = ephemeral). Returns once accepting; `listener.port` is the bound port. */
     fun listen(port: Int, side: Peering.Side): WsListener {
         val listener = WsListener(port, side)
@@ -42,9 +53,14 @@ object WsTransport {
         return listener
     }
 
-    /** Connect to a listening peer. Returns once the socket is open (hello exchange proceeds asynchronously). */
-    fun connect(uri: URI, side: Peering.Side): WsConnection {
-        val connection = WsConnection(uri, side)
+    /**
+     * Connect to a listening peer. Returns once the socket is open (hello exchange
+     * proceeds asynchronously). [backoff] governs the delay before each reconnect
+     * attempt after an unplanned close (default: [DEFAULT_RECONNECT_BACKOFF]) — tests
+     * drive it down to make reconnect timing testable without wall-clock deadlines.
+     */
+    fun connect(uri: URI, side: Peering.Side, backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF): WsConnection {
+        val connection = WsConnection(uri, side, backoff)
         check(connection.connectBlocking(10, TimeUnit.SECONDS)) { "could not connect to $uri" }
         return connection
     }
@@ -169,7 +185,11 @@ object WsTransport {
         }
     }
 
-    class WsConnection internal constructor(uri: URI, side: Peering.Side) : WebSocketClient(uri) {
+    class WsConnection internal constructor(
+        uri: URI,
+        side: Peering.Side,
+        private val backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
+    ) : WebSocketClient(uri) {
 
         private val session = Session(side, { send(it) }, { shutdown() })
 
@@ -194,23 +214,23 @@ object WsTransport {
         override fun onClose(code: Int, reason: String?, remote: Boolean) {
             session.onClose() // unpublish: senders park until the re-hello re-announces
             if (!reconnect) return
-            // Reconnect with capped backoff (M10.3): the re-hello re-runs the
-            // announcement catch-up on both sides, parked traffic replays, and
-            // replicas anti-entropy through the ordinary catch-up path.
-            // ponytail: fixed doubling schedule, retries forever — jitter and
-            // liveness probing when real networks demand them.
+            // Reconnect on [backoff] (M10.3, injectable since T12): the re-hello
+            // re-runs the announcement catch-up on both sides, parked traffic
+            // replays, and replicas anti-entropy through the ordinary catch-up
+            // path. ponytail: retries forever — jitter and liveness probing when
+            // real networks demand them.
             Thread {
-                var delay = 1000L
+                var attempt = 0
                 while (reconnect && !isOpen) {
                     try {
-                        Thread.sleep(delay)
+                        Thread.sleep(backoff(attempt))
+                        attempt++
                         if (reconnect && reconnectBlocking()) break
                     } catch (_: InterruptedException) {
                         break
                     } catch (e: Exception) {
                         System.err.println("[WsConnection] reconnect attempt failed: $e")
                     }
-                    delay = (delay * 2).coerceAtMost(30_000L)
                 }
             }.apply { isDaemon = true; name = "ws-reconnect-${getURI()}" }.start()
         }
