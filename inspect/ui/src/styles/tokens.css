@@ -1,0 +1,112 @@
+/* Design tokens. Light values in :root; dark values applied both by an
+   explicit [data-theme="dark"] toggle and by the OS preference (agora/ui
+   precedent, demo/agora/ui/src/styles/tokens.css). Color never carries
+   meaning alone (10-target-v3.md node card: "letter glyph, never color
+   alone") — every color token below is paired with a glyph or label in the
+   components that use it. */
+
+:root {
+  color-scheme: light dark;
+
+  /* chrome */
+  --page: #f7f7f5;
+  --surface: #ffffff;
+  --surface-raised: #fbfbfa;
+  --text: #101113;
+  --text-secondary: #5a5d63;
+  --text-muted: #8b8e94;
+  --hairline: rgba(16, 17, 19, 0.12);
+  --hairline-strong: rgba(16, 17, 19, 0.28);
+  --focus-ring: #2563eb;
+
+  /* cell color (descriptor CellColor: PURE / BLOCKING / SUSPENDING) */
+  --cell-pure: #2563eb;
+  --cell-blocking: #b45309;
+  --cell-suspending: #7c3aed;
+  --cell-unknown: #8b8e94;
+
+  /* edges */
+  --edge-consume: #5a5d63;
+  --edge-observe: #8b8e94;
+  --edge-selected: #2563eb;
+
+  /* connection status */
+  --status-live: #059669;
+  --status-pending: #b45309;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Segoe UI Mono", monospace;
+
+  --ghost-opacity: 0.5;
+}
+
+:root[data-theme="dark"] {
+  --page: #101113;
+  --surface: #17181b;
+  --surface-raised: #1e1f23;
+  --text: #f3f4f6;
+  --text-secondary: #b3b6bd;
+  --text-muted: #7b7e85;
+  --hairline: rgba(255, 255, 255, 0.12);
+  --hairline-strong: rgba(255, 255, 255, 0.28);
+  --focus-ring: #5b8def;
+  --cell-pure: #5b8def;
+  --cell-blocking: #d99646;
+  --cell-suspending: #a480f0;
+  --cell-unknown: #7b7e85;
+  --edge-consume: #b3b6bd;
+  --edge-observe: #7b7e85;
+  --edge-selected: #5b8def;
+  --status-live: #34d399;
+  --status-pending: #d99646;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #101113;
+    --surface: #17181b;
+    --surface-raised: #1e1f23;
+    --text: #f3f4f6;
+    --text-secondary: #b3b6bd;
+    --text-muted: #7b7e85;
+    --hairline: rgba(255, 255, 255, 0.12);
+    --hairline-strong: rgba(255, 255, 255, 0.28);
+    --focus-ring: #5b8def;
+    --cell-pure: #5b8def;
+    --cell-blocking: #d99646;
+    --cell-suspending: #a480f0;
+    --cell-unknown: #7b7e85;
+    --edge-consume: #b3b6bd;
+    --edge-observe: #7b7e85;
+    --edge-selected: #5b8def;
+    --status-live: #34d399;
+    --status-pending: #d99646;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--page);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
