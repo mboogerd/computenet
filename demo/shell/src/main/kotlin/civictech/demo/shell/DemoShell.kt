@@ -53,9 +53,7 @@ class DemoShell(port: Int) {
     fun sse(path: String, closeOnFailure: Boolean = false, initialFrame: () -> String) {
         closeOnSendFailure = closeOnFailure
         server.createContext(path) { exchange ->
-            exchange.responseHeaders.add("Content-Type", "text/event-stream")
-            exchange.responseHeaders.add("Cache-Control", "no-cache")
-            exchange.sendResponseHeaders(200, 0)
+            exchange.beginSse()
             clients += exchange
             send(exchange, initialFrame())
         }
@@ -69,12 +67,7 @@ class DemoShell(port: Int) {
 
     private fun send(exchange: HttpExchange, json: String) {
         try {
-            // per-exchange lock: concurrent broadcasts (hubs fire on virtual
-            // threads) must not interleave bytes into one SSE frame
-            synchronized(exchange) {
-                exchange.responseBody.write("data: $json\n\n".toByteArray())
-                exchange.responseBody.flush()
-            }
+            exchange.sseFrame(json)
         } catch (_: Exception) {
             clients -= exchange
             if (closeOnSendFailure) try { exchange.close() } catch (_: Exception) {}
@@ -84,6 +77,30 @@ class DemoShell(port: Int) {
     fun start(): DemoShell = apply { server.start() }
 
     fun stop() = server.stop(0)
+}
+
+/**
+ * Open [this] exchange as an SSE stream: the `text/event-stream` headers and
+ * the open-ended 200 every SSE endpoint here starts with. Split out of [DemoShell.sse]
+ * (verbatim) so a server with its own per-client delivery policy — the inspector's
+ * bounded, drop-oldest queues — reuses the same framing instead of duplicating it.
+ */
+fun HttpExchange.beginSse() {
+    responseHeaders.add("Content-Type", "text/event-stream")
+    responseHeaders.add("Cache-Control", "no-cache")
+    sendResponseHeaders(200, 0)
+}
+
+/**
+ * Write one `data: <json>\n\n` frame. Per-exchange lock: concurrent broadcasts
+ * (hubs fire on virtual threads) must not interleave bytes into one SSE frame.
+ * Throws when the client is gone — the caller decides what that means.
+ */
+fun HttpExchange.sseFrame(json: String) {
+    synchronized(this) {
+        responseBody.write("data: $json\n\n".toByteArray())
+        responseBody.flush()
+    }
 }
 
 /** The byte-identical `respond` extension every demo hand-rolled privately. */
