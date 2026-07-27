@@ -866,60 +866,12 @@ open class ManagedHost(
                 snapshots.clear()
             }
 
-            override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult {
-                val fromCell = cells[from] ?: throw IllegalArgumentException("Source cell not found: $from")
-                val toCell = cells[to] ?: throw IllegalArgumentException("Target cell not found: $to")
-
-                val outlet = findPort(fromCell, outletName) as? LinkTo<*>
-                    ?: throw IllegalArgumentException("Outlet not found or not linkable: $outletName on $from")
-                val inlet = findPort(toCell, inletName) as? LinkFrom<*>
-                    ?: throw IllegalArgumentException("Inlet not found or not linkable: $inletName on $to")
-
-                // Cycle admission (spec 10/13 `CycleWithoutHead`, 20/21 §Cycles,
-                // 93 I-5): a connect that would close a cycle wholly visible to
-                // this host's topology index is rejected unless the closing
-                // inlet is a declared CycleHead (a FeedbackInlet). Cross-host
-                // cycles are not locally visible here; they fall to the runtime
-                // hop guard (20/22) instead.
-                registry?.let { reg ->
-                    if (reg.wouldCloseCycle(from, to)) {
-                        // Headedness (spec 10/13): the closing edge MUST land on a
-                        // declared CycleHead.
-                        if (inlet !is FeedbackInlet<*>) {
-                            return LinkResult.Rejected(
-                                "CycleWithoutHead: connecting $from.$outletName -> $to.$inletName would close a " +
-                                    "locally-visible cycle with no declared CycleHead (spec 10/13, 20/21 §Cycles)"
-                            )
-                        }
-                        // Damping (FU-8, ADR 1 feature 8): a head only *dampens* a
-                        // lap when the loop carries a damping witness. Without one a
-                        // properly-headed loop (non-Magnitude payload, non-idempotent
-                        // merge, no quiescence override) laps forever — the runaway
-                        // "magnitude-based throttling" was meant to exclude.
-                        if (!hasDampingWitness(outlet, inlet)) {
-                            return LinkResult.Rejected(
-                                "CycleWithoutDamping: connecting $from.$outletName -> $to.$inletName would close a " +
-                                    "locally-visible cycle whose head has no damping witness — the feedback payload " +
-                                    "is not Magnitude-typed, the producer declares neither MONOTONE nor IDEMPOTENT, " +
-                                    "and the head has no quiescence override (spec 21 §Cycles, ADR 1 feature 8)"
-                            )
-                        }
-                    }
-                }
-
-                @Suppress("UNCHECKED_CAST")
-                val result = (outlet as LinkTo<Any>).linkTo(inlet as LinkFrom<Any>)
-                if (result is LinkResult.Connected) {
-                    val edge = TopologyLink(
-                        result.link.id,
-                        result.link.from.copy(cell = from),
-                        result.link.to.copy(cell = to),
-                    )
-                    registry?.link(edge)
-                    result.link.onUnlink { registry?.unlink(it.id) }
-                }
-                return result
-            }
+            // Link admission (cycle detection, headedness, damping witness,
+            // topology recording) is extracted to [LinkAdmission] (T11-B):
+            // no dataLock interaction anywhere in that path, so the
+            // extraction is a pure delegation — no lock-order change.
+            override fun connect(from: CellRef, outletName: String, to: CellRef, inletName: String): LinkResult =
+                LinkAdmission.connect(cells, registry, from, outletName, to, inletName)
 
             override fun connect(from: CellRef, outletName: String, to: Use<*>) {
                 val fromCell = cells[from] ?: throw IllegalArgumentException("Source cell not found: $from")
