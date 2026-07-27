@@ -36,15 +36,6 @@ enum class AuthLevel { TransportVouched, Authenticated }
 fun currentPrincipal(): Principal =
     CurrentPeer.get()?.let { Principal.Peer(it, AuthLevel.TransportVouched) } ?: Principal.LocalTrusted
 
-/** Seam 1 predicate (spec 40/43): admits or refuses a [Principal] at the peering hello. */
-fun interface PeerPredicate {
-    fun admits(principal: Principal): Boolean
-
-    companion object {
-        val AllowAll = PeerPredicate { true }
-    }
-}
-
 /**
  * Per-[ProtocolId] flow-time authority (spec 40/43 seam 3): a floor on
  * [AuthLevel], an attention [ceiling] band (clamps an asserted level, the
@@ -111,11 +102,10 @@ sealed interface IntegrityPolicy {
  * one per dispatch class", decided 93 I-28): identity-keyed predicates
  * attached to a membrane [Exposure]. Every predicate defaults to today's
  * open behavior (P7/P6) — absent a declared [BoundaryPolicy], every crossing
- * is exactly as permissive as before this ticket.
+ * is exactly as permissive as before this ticket. Peer admission is enforced
+ * at the hello gate (`Peering.Allowlist`), not here.
  */
 data class BoundaryPolicy(
-    /** Seam 1 (peering hello / bridge ingress) — the landed G-29 gate's predicate slot. */
-    val admission: PeerPredicate = PeerPredicate.AllowAll,
     /** Seam 2 (`onLink`) — reuses the existing [LinkPolicy] mechanism (G-14), first-rejection-wins. */
     val linkAuthority: List<LinkPolicy> = emptyList(),
     /** Seam 3 (`PORT_PROTOCOL`), keyed per protocol. */
