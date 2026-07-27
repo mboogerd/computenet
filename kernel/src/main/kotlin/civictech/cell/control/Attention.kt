@@ -7,7 +7,6 @@ import civictech.cell.port.PortRegistry
 import civictech.cell.protocol.ProtocolSupport
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 import civictech.cell.protocol.Protocols
 import java.util.*
@@ -29,7 +28,7 @@ import kotlin.math.pow
 data class Attention(val level: Float, val version: Long = 0L)
 
 @Contract(management = true)
-@Protocol("attention", ProtocolDirection.UPSTREAM, band = 0, lane = "attention", cardinality = ProtocolCardinality.FAN_IN_MERGE)
+@Protocol("attention", ProtocolDirection.UPSTREAM, band = 0)
 fun interface AttentionProtocol { fun attention(message: Attention) }
 
 /**

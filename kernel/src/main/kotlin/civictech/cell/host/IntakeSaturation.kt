@@ -4,7 +4,6 @@ import civictech.cell.CellRef
 import civictech.cell.port.PortRef
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 
 enum class IntakeState { OPEN, SATURATED, CLOSED }
@@ -28,7 +27,7 @@ enum class SaturationPolicy { Coalesce, Park }
 data class SaturationSignal(val portRef: PortRef, val asserted: Boolean) : java.io.Serializable
 
 @Contract(management = true)
-@Protocol("saturation", ProtocolDirection.UPSTREAM, band = 0, lane = "saturation", cardinality = ProtocolCardinality.FAN_IN_MERGE)
+@Protocol("saturation", ProtocolDirection.UPSTREAM, band = 0)
 fun interface SaturationProtocol { fun saturation(message: SaturationSignal) }
 
 class IntakeSaturatedException(val hostRef: CellRef) :

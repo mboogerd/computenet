@@ -2,7 +2,6 @@ package civictech.cell.control
 
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 import java.util.UUID
 
@@ -21,7 +20,7 @@ data class Progress(
 )
 
 @Contract(management = true)
-@Protocol("progress", ProtocolDirection.DOWNSTREAM, band = 0, lane = "progress", cardinality = ProtocolCardinality.FAN_OUT_BROADCAST)
+@Protocol("progress", ProtocolDirection.DOWNSTREAM, band = 0)
 fun interface ProgressProtocol { fun progress(message: Progress) }
 
 /**

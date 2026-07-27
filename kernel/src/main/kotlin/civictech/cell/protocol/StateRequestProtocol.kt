@@ -6,7 +6,6 @@ import civictech.cell.port.PortRef
 import civictech.cell.link.Interest
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 
 /**
@@ -89,13 +88,7 @@ class RetainedFrontiers {
 }
 
 @Contract(management = true)
-@Protocol(
-    "state-request",
-    ProtocolDirection.UPSTREAM,
-    band = 0,
-    lane = "state-request",
-    cardinality = ProtocolCardinality.FAN_IN_MERGE,
-)
+@Protocol("state-request", ProtocolDirection.UPSTREAM, band = 0)
 fun interface StateRequestProtocol {
     fun stateRequest(message: StateRequest)
 }
