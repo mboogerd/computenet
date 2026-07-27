@@ -2,7 +2,7 @@
 
 What ComputeNet can borrow from Feldera/DBSP, Differential/Timely Dataflow,
 Materialize, and LASP + the CRDT/lattice lineage. Raw source documents are
-archived in `doc/archive/frontend/references/raw/` (see its README for the file↔URL manifest).
+archived in `doc/research/incremental-engines/raw/` (see its README for the file↔URL manifest).
 
 ## Method and provenance levels
 

@@ -3,7 +3,7 @@
 Research date: 2026-07-23. Method: research agent fetched and quoted the
 primary sources directly (single-agent verification — quotes checked against
 fetched text, not adversarially voted like docs 01/02). Archived copies in
-`doc/archive/frontend/references/raw/`.
+`doc/research/incremental-engines/raw/`.
 
 Sources:
 

@@ -288,7 +288,11 @@ An inlet routes each inbound invocation through an ordered chain of tiers:
    forever waiting for the contribution. A policy declares whether it satisfies
    this obligation (`mintsProgressAck`).
 2. **GATE** — holds invocations FIFO (suspension / backpressure), draining in
-   arrival order when released. Never drops, never reorders.
+   arrival order when released. Never drops, never reorders. **(specified,
+   unimplemented)** — `PolicyTier.GATE` and its `Gate` policy had zero
+   production installs and were deleted (remediation T03); real backpressure
+   today lives in `IntakeControl`/`ParkQueue`. A GATE tier can be
+   reintroduced with its first real user — see `91-gap-analysis.md`.
 3. **ALIGN** — reorders/buffers for wave completeness (the wave frontier,
    20/22). **At most one ALIGN per inlet** — a second is rejected at install
    time.

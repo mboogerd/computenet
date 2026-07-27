@@ -2,7 +2,7 @@
 
 > **Status**: Specified (this is the most implemented part of the system)
 > **Sources**: ADR 3, ADR — Task Connectivity; supersedes the lambda-first `Use.use` design
-> **Implementation**: `cell.proxy.Invocation`, `Proxy`, `HostedCellProxy`, `HostProxy`, `HostedPortInvocation`, `Buffering`, `Broadcast`, `NoOp`, `Throwing`, `Callback`; `cell.port.Serve/Use/Subscribe/Invalidating`
+> **Implementation**: `cell.proxy.Invocation`, `Proxy`, `HostedCellProxy`, `HostProxy`, `HostedPortInvocation`, `Buffering`, `NoOp`, `Callback`; `cell.port.Serve/Use/Subscribe` (`Invalidating` is specified, unimplemented — see below)
 
 ## The core move (ADR 3)
 
@@ -116,9 +116,11 @@ indirection. This same idiom is the suspension primitive (30/33).
 
 ### Standard proxy behaviors (implemented)
 
-`Buffering` (park invocations), `Broadcast` (fan-out to many uses), `NoOp`,
-`Throwing` (fail fast when unlinked), `Callback`. These compose with
+`Buffering` (park invocations), `NoOp`, `Callback`. These compose with
 serve/delegate to express boundary behaviors without touching cell logic.
+(`Broadcast` and `Throwing` were removed as dead alternatives — remediation
+T03 — superseded by `FanOutlet`'s live fan-out and `FanInlet`'s cold-park
+model respectively; see `91-gap-analysis.md`.)
 
 ## Context propagation
 
@@ -157,7 +159,7 @@ ServiceLoader into `gen.wire.ContractRegistry`. `Invocation.of` resolves and
 carries `contractId`/`methodId` at capture; the M5.2 wire form serializes only
 those ids. W4.6: each `@Contract` interface also gets a generated proxy class
 dispatching through the same `InvocationHandler` shape the existing proxy
-behaviors (`Buffering`, `Broadcast`, `NoOp`, `Throwing`, `Callback`, ...)
-already used, registered via `gen.wire.ProxyRegistry` — in-process dispatch
+behaviors (`Buffering`, `NoOp`, `Callback`, ...) already used, registered via
+`gen.wire.ProxyRegistry` — in-process dispatch
 for the `@Contract` surface is reflection-free at proxy *construction* time;
 `Invocation.invoke`'s per-call dispatch remains a reflective `Method.invoke`.)*

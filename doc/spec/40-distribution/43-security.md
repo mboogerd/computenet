@@ -2,7 +2,7 @@
 
 > **Status**: Partial (posture fixed; boundary-policy design decided in [93 I-28](../90-roadmap/93-feature-interactions.md) and landed for in-process membranes (W4.1); authentication strength and at-rest encryption open)
 > **Sources**: ADR 0 (§6), ADR 1 (§13), ADR — Anatomy of Cellular Programs (membranes as authority), ADR — Cellular Software Development Process (security model)
-> **Implementation**: G-29 phase 1 — `PeerId` stamping (`LinkRequest.identity`), `allowPeers(...)` link policy, ingress admission gate (`Peering.Side.allow` / `WsTransport`); verified by `TrustBoundaryTest`. W4.1 (G-54 core): `civictech.cell.membrane.BoundaryPolicy` (`Principal`/`AuthLevel`, the five predicates) bound to a `CompositeCell` `Exposure`; the three seams — `mediate()`'s `linkAuthority` (seam 2), `mediateOutlet()`'s `disclosureFilter`/`ProtocolSupport.inboundFilter` (seam 3 outbound/protocol), and `MediateProxy`'s `RequireSigned` verify-at-ingress (seam 3 inbound) — with `AuthLevel.TransportVouched` the only identity strength available (phase-2 keys/DIDs remain research, 95 §R7); verified by `BoundaryPolicyTest`/`MediateProxyIntegrityTest`. The wire-crossing bridge does not yet consult a `BoundaryPolicy` (still G-29 phase 1's `allowPeers`); disclosure-projection composition across hops, capability revocation, cross-membrane management authority, and encryption at rest remain open (93 I-28 §8).
+> **Implementation**: G-29 phase 1 — `PeerId` stamping (`LinkRequest.identity`), `allowPeers(...)` link policy, ingress admission gate (`Peering.Side.allow` / `WsTransport`); verified by `TrustBoundaryTest`. W4.1 (G-54 core): `civictech.cell.membrane.BoundaryPolicy` (`Principal`/`AuthLevel`, four predicates) bound to a `CompositeCell` `Exposure`; the three seams — `mediate()`'s `linkAuthority` (seam 2), `mediateOutlet()`'s `disclosureFilter`/`ProtocolSupport.inboundFilter` (seam 3 outbound/protocol), and `MediateProxy`'s `RequireSigned` verify-at-ingress (seam 3 inbound) — with `AuthLevel.TransportVouched` the only identity strength available (phase-2 keys/DIDs remain research, 95 §R7); verified by `BoundaryPolicyTest`/`MediateProxyIntegrityTest`. The wire-crossing bridge does not yet consult a `BoundaryPolicy` (still G-29 phase 1's `allowPeers`); disclosure-projection composition across hops, capability revocation, cross-membrane management authority, and encryption at rest remain open (93 I-28 §8).
 
 ## Posture
 
@@ -79,9 +79,8 @@ read `Principal`; only the strength that `AuthLevel` certifies changes
 across the upgrade — no CA, no global identity registry (P4, P10).
 
 **Vocabulary.** A `BoundaryPolicy` attaches to a membrane `Exposure` (93
-I-10) and holds five predicates, each defaulting to today's open behavior (P7/P6): `admission` (a
-`PeerPredicate`, default allow-all — `allowPeers(...)` is the landed
-instance), `linkAuthority` (a list of G-14 `LinkPolicy`, default empty),
+I-10) and holds four predicates, each defaulting to today's open behavior
+(P7/P6): `linkAuthority` (a list of G-14 `LinkPolicy`, default empty),
 `protocolAuthority` (per `ProtocolId`: a `minAuth` floor, an attention
 `ceiling` band, a per-`Principal` `ratePerWindow`), `disclosure` (`Full` |
 `Project(ProjectionId)` | `Deny`), and `integrity` (`None` |
@@ -92,8 +91,11 @@ redaction/scoping transform — never a lambda on the wire (P9).
 there is no fourth subsystem:
 
 1. **Admission** (`PORT_MANAGEMENT` peering): the transport hello / bridge
-   ingress MUST evaluate `admission`; a failing `Principal` is refused at
-   hello time and its traffic dead-lettered — the landed G-29 gate.
+   ingress MUST evaluate an admission predicate; a failing `Principal` is
+   refused at hello time and its traffic dead-lettered — the landed G-29
+   gate, enforced today at `Peering.Allowlist`/`allowPeers(...)`, not by a
+   `BoundaryPolicy` predicate (`BoundaryPolicy.admission` had zero read sites
+   and was deleted, remediation T03 — see `91-gap-analysis.md`).
 2. **Link-time** (`PORT_MANAGEMENT` link): every new full-ref link runs
    `linkAuthority` first-rejection-wins with `CurrentPeer` = the crossing's
    `Principal` (landed). Privileged ports SHOULD deny by default;
@@ -159,8 +161,8 @@ predicates (`integrity`, high-`minAuth` protocol authority) that
 transport-vouched identity cannot safely satisfy. Encryption in transit
 stays transport configuration (wss://); encryption at rest remains open.
 
-G-54 core is landed (W4.1): the `BoundaryPolicy` vocabulary (admission,
-linkAuthority, protocolAuthority, disclosure, integrity) attached to a
+G-54 core is landed (W4.1): the `BoundaryPolicy` vocabulary (linkAuthority,
+protocolAuthority, disclosure, integrity) attached to a
 `CompositeCell` `Exposure`, evaluated at the three seams, with a registered
 `ProjectionId → Projection` transform for `disclosure` and `RequireSigned`
 verify-at-ingress for `integrity` (`AuthLevel.TransportVouched` only — real

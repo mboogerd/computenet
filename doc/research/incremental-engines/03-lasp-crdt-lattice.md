@@ -3,7 +3,7 @@
 Research date: 2026-07-23. Method: research agent fetched primary sources and
 extracted verbatim-quoted facts (single-agent verification against fetched
 text; the initial workflow's adversarial-vote budget did not reach this area).
-Archived copies in `doc/archive/frontend/references/raw/`.
+Archived copies in `doc/research/incremental-engines/raw/`.
 
 Sources:
 
