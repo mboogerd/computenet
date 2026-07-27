@@ -39,6 +39,8 @@ import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
 import java.util.*
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -97,7 +99,16 @@ open class ManagedHost(
     /** Parent/child host relations (G-28): recorded when a host spawns a host. */
     internal var parentHost: ManagedHost? = null
         private set
-    private val childHosts = mutableListOf<ManagedHost>()
+
+    // T04 finding 4: writers are always the scheduler thread, but public
+    // readers (lookup, resolveInlet, subtreeCellCount from a *child* host's
+    // thread during the quota walk, IntakeControl/HostDurability's
+    // cellsView()) are not. A plain HashMap's concurrent resize can
+    // false-negative a containsKey or spin; ConcurrentHashMap (already
+    // LocationRegistry's choice throughout) makes those reads safe.
+    // Weakly-consistent iteration is acceptable here: the quota walk and
+    // checkpoint/state-capture paths already run on the scheduler thread.
+    private val childHosts = CopyOnWriteArrayList<ManagedHost>()
 
     /**
      * The effective per-cell journal selector (CP-C1). Explicit [journalFor]
@@ -119,18 +130,34 @@ open class ManagedHost(
      * only external coupling is [deadLetterOutlet] itself, since a registered
      * port belongs to this host, not to the collaborator.
      */
-    private val deadLetters = DeadLetters(hostRef = ref, emit = { deadLetterOutlet.call.propagate(it) })
+    // T04 finding 6: emission is routed through the host scheduler instead of
+    // running synchronously on the raising thread — DeadLetters.deadLetter's
+    // stderr print and counter increment stay synchronous (thread-safe by
+    // construction: println and AtomicLong), only the outlet propagate
+    // (which mutates subscriber state) is deferred. Before this, the
+    // enqueueHostedInvocation hop-bound guard dead-lettered directly on the
+    // caller's thread (a WS read thread, in the traced production path),
+    // and DeadLetters.emit -> propagate dispatched synchronously into
+    // subscribed cells, mutating their state concurrently with the
+    // scheduler thread.
+    private val deadLetters = DeadLetters(
+        hostRef = ref,
+        // this.scheduler (not the bare constructor parameter): the scheduler
+        // MEMBER is declared below, but this lambda only runs after
+        // construction completes, once the member is initialized.
+        emit = { dl -> this.scheduler.submit(0) { deadLetterOutlet.call.propagate(dl) } },
+    )
 
     private val scheduler: HostScheduler = scheduler ?: VirtualThreadScheduler("ManagedHost-${ref.id}")
 
     /** The concurrency color of this host's execution context (spec 32). */
     val color: HostColor get() = scheduler.color
 
-    private val cells = mutableMapOf<CellRef, Cell>()
+    private val cells = ConcurrentHashMap<CellRef, Cell>()
 
     /** `spawnBound`'s recorded `parent` association (93 I-21 §4.3): bookkeeping only —
      * membrane/exposure enforcement over this is G-9, unbuilt. */
-    private val cellParents = mutableMapOf<CellRef, CellRef>()
+    private val cellParents = ConcurrentHashMap<CellRef, CellRef>()
     private val ctx = object : CellContext {
         // CycleHead fusion barrier (spec 21 §Fusion, 93 I-6): route
         // re-origination through the real host queue instead of the default
@@ -331,7 +358,13 @@ open class ManagedHost(
         scheduler.submit(priority) {
             try {
                 action()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // T04 finding 5.3: was `catch (e: Exception)` — a TODO()
+                // (NotImplementedError IS an Error), StackOverflowError, or
+                // NoClassDefFoundError from a generated proxy escaped this,
+                // so supervision/dead-letter accounting never saw it.
+                // VirtualMachineError (OOM etc.) stays fatal.
+                if (e is VirtualMachineError) throw e
                 deadLetter(e, "invocation failed: $e")
             }
         }
@@ -402,14 +435,33 @@ open class ManagedHost(
         // order = acceptance order = per-cell FIFO on replay. The tee is
         // per-cell (CP-C1): a volatile cell's selector returns null and it is
         // never written.
-        if (!hostDurability.recovering) journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(hostedInvocation))
+        //
+        // T04 finding 2: the append now runs INSIDE the same synchronized
+        // block as staging (below), adjacent to it — matching the coalesce
+        // branch above, which already appended inside its own dataLock
+        // block. Before this, two threads sending to one cell could
+        // interleave append/stage so replay re-drove a different order than
+        // the live run; journal order = acceptance order is now actually
+        // true, not just documented.
+        //
+        // ponytail: append holds dataLock so journal order == acceptance
+        // order; decouple via accept-sequence + async append if fsync
+        // contention matters.
+        //
         // stage at SEND time (not dispatch time) so a backlog can form and band
         // selection has something to choose between; one dispatcher task per
         // message keeps message count <= task count (a task may find nothing)
-        synchronized(dataLock) {
+        //
+        // T04 finding 1: checkSaturationOnAccept returns a deferred announce
+        // instead of running Protocols.sendUpstream's relay traversal here —
+        // that traversal can reach another host's enqueueHostedInvocation
+        // and ITS dataLock, so it must run only after this lock releases.
+        val announce = synchronized(dataLock) {
+            if (!hostDurability.recovering) journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(hostedInvocation))
             attentionScheduler.stage(hostedInvocation)
             intakeControl.checkSaturationOnAccept(hostedInvocation, isManagement)
         }
+        announce?.invoke()
         enqueue(20) { attentionScheduler.dispatchOne() }
     }
 
@@ -537,7 +589,12 @@ open class ManagedHost(
                     }
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // T04 finding 5.3: was `catch (e: Exception)` — widened to
+            // Throwable so supervision, the dead letter, and the
+            // DEAD_LETTERED stall notice fire for a TODO()/StackOverflowError
+            // /NoClassDefFoundError too. VirtualMachineError stays fatal.
+            if (e is VirtualMachineError) throw e
             // every policy dead-letters — observability is not a policy (G-26)
             deadLetter(e, "invocation failed: $e", hostedInvocation)
             // a declared error outlet additionally receives the failure as data
@@ -716,9 +773,14 @@ open class ManagedHost(
                 registry?.unpublish(ref)
                 clearSupervision(ref)
                 cell.onDeactivate(ctx)
-                // PN-9 (leak bound): release the cell's ProtocolSupport entries so a
-                // despawned cell's ports (and their handler closures) can be collected.
-                ProtocolSupport.unbind(cell)
+                // PN-9 (leak bound), widened by T04 finding 3: release the cell's
+                // ProtocolSupport + PortRegistry entries so a despawned cell's ports
+                // (and their handler closures) can be collected. When the despawned
+                // cell is itself a nested ManagedHost (G-28), recurse into every cell
+                // IT hosts too — before this, unbind only ran for the host-cell's own
+                // three ports (managementInlet/routerInlet/deadLetterOutlet), so a
+                // dropped host leaked every port of every cell it ever hosted.
+                unbindPortsRecursively(cell)
             }
 
             override fun supervise(ref: CellRef, policy: SupervisionPolicy) {
@@ -878,6 +940,19 @@ open class ManagedHost(
             enqueue(10) { invocation.invoke() }
             null
         })
+    }
+
+    /**
+     * T04 finding 3 (leak mitigation until instance-scoping, T02's marker):
+     * release [cell]'s [ProtocolSupport]/[PortRegistry] entries, recursing
+     * into a nested [ManagedHost]'s own hosted cells (G-28) — a host-as-cell
+     * only ever exposed its OWN three ports to [ProtocolSupport.unbind]
+     * before, leaving every cell it hosted internally permanently bound.
+     */
+    private fun unbindPortsRecursively(cell: Cell) {
+        ProtocolSupport.unbind(cell)
+        PortRegistry.release(cell)
+        if (cell is ManagedHost) cell.cells.values.forEach { unbindPortsRecursively(it) }
     }
 
     private fun findPort(cell: Cell, name: String): Port? = PortRegistry.of(cell)[name]

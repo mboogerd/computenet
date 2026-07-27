@@ -45,6 +45,10 @@ class GraphSpecRemoteApplyTest {
         )
 
         val report = spec.applyRemote(host.managementInlet)
+        // T04 finding 6: dead-letter emission now runs through the host
+        // scheduler (deferred), not synchronously on the raising thread —
+        // drain the queued propagate before observing `letters`.
+        controller.runToIdle()
 
         // loud: observably dead-lettered on the target host...
         letters.size shouldBe 1
@@ -57,6 +61,7 @@ class GraphSpecRemoteApplyTest {
         // idempotent: re-applying again is *still* just one more observed rejection —
         // no crash, no duplicate, no change in host state.
         val secondReport = spec.applyRemote(host.managementInlet)
+        controller.runToIdle()
         (secondReport.results.getValue("dup") is StepResult.Rejected) shouldBe true
         letters.size shouldBe 2
     }
@@ -80,6 +85,10 @@ class GraphSpecRemoteApplyTest {
         )
 
         val report = spec.applyRemote(host.managementInlet)
+        // T04 finding 6: dead-letter emission now runs through the host
+        // scheduler (deferred), not synchronously on the raising thread —
+        // drain the queued propagate before observing `letters`.
+        controller.runToIdle()
 
         (report.results.getValue("dup") is StepResult.Rejected) shouldBe true
         val countResult = report.results.getValue("count")
@@ -95,6 +104,7 @@ class GraphSpecRemoteApplyTest {
         val redup = spec.copy(
             steps = listOf(SpawnStep("count2", CellFactory { ref -> CountCell<String>(ref = ref) }, IdentityBinding.Exact(countRef))),
         ).applyRemote(host.managementInlet)
+        controller.runToIdle()
         (redup.results.getValue("count2") is StepResult.Rejected) shouldBe true
         letters.size shouldBe 2
     }

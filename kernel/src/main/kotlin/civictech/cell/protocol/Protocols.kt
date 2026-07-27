@@ -179,7 +179,12 @@ class ProtocolSupport private constructor(port: Port) {
         // ponytail: JVM-global weak map, same pattern as PortRegistry
         private val registries = Collections.synchronizedMap(WeakHashMap<Port, ProtocolSupport>())
 
-        fun of(port: Port): ProtocolSupport = registries.getOrPut(port) { ProtocolSupport(port) }
+        // T04 finding 3: getOrPut on a synchronizedMap is two monitor
+        // acquisitions (get, then put), not atomic — a racing constructor can
+        // discard the first instance (and the Saturation relay/ownerRef it
+        // carries). Explicit synchronized(registries) matches Attention.kt's
+        // existing correct form (control/Attention.kt companion `of`).
+        fun of(port: Port): ProtocolSupport = synchronized(registries) { registries.getOrPut(port) { ProtocolSupport(port) } }
 
         /** Associates every currently registered port with its owning cell. */
         fun bind(owner: Any) {

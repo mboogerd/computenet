@@ -17,6 +17,8 @@ import civictech.cell.link.handshake
 import civictech.cell.proxy.Proxy
 import civictech.nature.ContractRegistry
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -48,15 +50,49 @@ class FanOutlet<Api : Any>(
 
     override val linking = LinkSupport()
 
-    /** Consume-role attachments: SPSC-checked, receive the declared payload form. */
-    private val consumers: MutableMap<PortRef, Use<Api>> = mutableMapOf()
+    /**
+     * Consume-role attachments: SPSC-checked, receive the declared payload
+     * form. T04 finding 6: a `ConcurrentHashMap` (was a plain `mutableMapOf`)
+     * — [subscribe]/[unsubscribe] (management-band `handshake`) race against
+     * the every-emit iteration below on a threaded host; a snapshot
+     * iteration is only genuinely safe once the underlying map itself
+     * tolerates concurrent structural mutation. Keyed through [keyOf]:
+     * `ConcurrentHashMap` forbids a null key, but a cross-host
+     * [HostedCellProxy]-backed `Use.ref` genuinely reports null (the real
+     * ref lives on the remote side) — [keyOf] substitutes a stable sentinel,
+     * preserving the prior plain map's "at most one null-ref entry, last
+     * write wins" behavior. [consumerOrder] tracks insertion order
+     * separately — `ConcurrentHashMap` (unlike the prior `LinkedHashMap`-
+     * backed `mutableMapOf`) does not preserve it, and taps/consumers fire
+     * in a documented order (spec 20/23 "taps-fire-first", emission order).
+     */
+    private val consumers: MutableMap<PortRef, Use<Api>> = ConcurrentHashMap()
+    private val consumerOrder = CopyOnWriteArrayList<PortRef>()
 
     /**
      * Observe-role attachments — taps (spec 20/23 §Taps, G-47): uncounted by
      * the SPSC funnel, always admitted regardless of the exclusive bit. Fire
-     * before consumers on emit ("taps-fire-first").
+     * before consumers on emit ("taps-fire-first"). T04 finding 6: same
+     * `ConcurrentHashMap` + [keyOf] + order-tracking rationale as [consumers].
      */
-    private val taps: MutableMap<PortRef, Use<Api>> = mutableMapOf()
+    private val taps: MutableMap<PortRef, Use<Api>> = ConcurrentHashMap()
+    private val tapOrder = CopyOnWriteArrayList<PortRef>()
+
+    private fun putConsumer(key: PortRef, port: Use<Api>) {
+        if (consumers.put(key, port) == null) consumerOrder += key
+    }
+
+    private fun removeConsumer(key: PortRef) {
+        if (consumers.remove(key) != null) consumerOrder.remove(key)
+    }
+
+    private fun putTap(key: PortRef, port: Use<Api>) {
+        if (taps.put(key, port) == null) tapOrder += key
+    }
+
+    private fun removeTap(key: PortRef) {
+        if (taps.remove(key) != null) tapOrder.remove(key)
+    }
 
     private val waveCounter = AtomicLong()
 
@@ -104,9 +140,11 @@ class FanOutlet<Api : Any>(
             // snapshot: link/unlink during a wave must not fail the broadcast
             // Taps fire first, in emission order (spec 20/23 "taps-fire-first"),
             // then consumers — no tap view can alias the buffer once a consumer
-            // mutates or moves it.
-            taps.values.toList().forEach { target -> invoke(target, method, args) }
-            consumers.values.toList().forEach { target -> invoke(target, method, args) }
+            // mutates or moves it. Order comes from consumerOrder/tapOrder
+            // (T04 finding 6): ConcurrentHashMap's own iteration order is not
+            // insertion order.
+            tapOrder.toList().forEach { key -> taps[key]?.let { target -> invoke(target, method, args) } }
+            consumerOrder.toList().forEach { key -> consumers[key]?.let { target -> invoke(target, method, args) } }
         }
         null
     }
@@ -184,7 +222,7 @@ class FanOutlet<Api : Any>(
         // (spec 40/43 seam 3, 20/21 §Pull) — targeted delivery still bypasses
         // taps/consumers fan-out, unchanged.
         return Proxy.fromClass(clazz) { _, method, args ->
-            val target = consumers[portRef]?.call ?: taps[portRef]?.call ?: Proxy.noop(clazz)
+            val target = consumers[keyOf(portRef)]?.call ?: taps[keyOf(portRef)]?.call ?: Proxy.noop(clazz)
             val filtered = disclosureFilter(args ?: emptyArray()) ?: return@fromClass null
             Proxy.unwrapInvocationTarget {
                 method.invoke(target, *filtered)
@@ -197,10 +235,10 @@ class FanOutlet<Api : Any>(
         // cross-host and bridge links alike — "rejectable everywhere". SPSC
         // (spec 23) counts Consume links only — taps are a separate, always-
         // admitted funnel (see [tap]).
-        check(!(exclusive && consumers.isNotEmpty() && port.ref !in consumers)) {
+        check(!(exclusive && consumers.isNotEmpty() && keyOf(port.ref) !in consumers)) {
             "SPSC (spec 23): ${clazz.name} carries Owned/Leased payloads; a second subscriber is not allowed"
         }
-        consumers += port.ref to port
+        putConsumer(keyOf(port.ref), port)
     }
 
     /**
@@ -229,19 +267,19 @@ class FanOutlet<Api : Any>(
                 target = target,
                 targetRef = port.ref,
                 role = LinkRole.Observe,
-                install = { taps += port.ref to port },
-                uninstall = { taps.remove(port.ref) },
+                install = { putTap(keyOf(port.ref), port) },
+                uninstall = { removeTap(keyOf(port.ref)) },
             )
         }
-        taps += port.ref to port
+        putTap(keyOf(port.ref), port)
         return LinkResult.Connected(
-            PortLink(ref, port.ref, this, port as? Port, LinkRole.Observe) { taps.remove(port.ref) },
+            PortLink(ref, port.ref, this, port as? Port, LinkRole.Observe) { removeTap(keyOf(port.ref)) },
         )
     }
 
     /** Detaches a tap previously installed with [tap]. Idempotent. */
     fun untap(portRef: PortRef) {
-        taps.remove(portRef)
+        removeTap(keyOf(portRef))
     }
 
     /** Source-side rejection for the handshake path (mirrors Outlet's cardinality style). */
@@ -255,8 +293,8 @@ class FanOutlet<Api : Any>(
     }
 
     override fun unsubscribe(portRef: PortRef) {
-        consumers.remove(portRef)
-        taps.remove(portRef)
+        removeConsumer(keyOf(portRef))
+        removeTap(keyOf(portRef))
     }
 
     override fun linkFrom(portOut: LinkTo<Api>): LinkResult = handshake(
@@ -275,5 +313,25 @@ class FanOutlet<Api : Any>(
         inline fun <reified Api : Any> create(
             ref: PortRef = PortRef.generate()
         ): FanOutlet<Api> = FanOutlet(Api::class.java, ref)
+
+        /**
+         * T04 finding 6: `ConcurrentHashMap` ([consumers]/[taps]) forbids a
+         * null key. A `HostedCellProxy`-backed [Use.ref] genuinely reports
+         * null (`HostedCellProxy.portInvocation`'s `getRef` branch — the real
+         * ref lives on the remote side); this class-wide sentinel stands in
+         * for it, funnelled through [keyOf].
+         */
+        private val NULL_PORT_REF = PortRef.generate()
     }
+
+    /**
+     * Normalizes a possibly-null [Use.ref]/[PortRef] into a map key safe for
+     * [consumers]/[taps] (T04 finding 6). [PortRef] is declared non-null in
+     * Kotlin, but a value crossing the [Proxy.fromClass] dynamic-proxy
+     * boundary (e.g. a cross-host [HostedCellProxy]) can still be a runtime
+     * null despite that static type — hence the `?:` here despite the
+     * apparently-useless-elvis warning.
+     */
+    @Suppress("SENSELESS_COMPARISON", "USELESS_ELVIS")
+    private fun keyOf(candidate: PortRef): PortRef = candidate ?: NULL_PORT_REF
 }

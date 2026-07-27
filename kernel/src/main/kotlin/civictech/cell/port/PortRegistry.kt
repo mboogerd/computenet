@@ -25,7 +25,27 @@ class PortRegistry {
         // ponytail: JVM-global weak map; KSP-generated registries are the KMP path (C-5, M5)
         private val registries = Collections.synchronizedMap(WeakHashMap<Any, PortRegistry>())
 
-        fun of(owner: Any): PortRegistry = registries.getOrPut(owner) { PortRegistry() }
+        // T04 finding 3: getOrPut on a synchronizedMap is two monitor
+        // acquisitions (get, then put), not atomic — a racing scheduler-
+        // thread spawn vs. a WS-thread protocol delivery can both construct,
+        // and the second put silently discards the first instance. Explicit
+        // synchronized(registries) matches Attention.kt's existing correct
+        // form (control/Attention.kt companion `of`).
+        fun of(owner: Any): PortRegistry = synchronized(registries) { registries.getOrPut(owner) { PortRegistry() } }
+
+        /**
+         * T04 finding 3 (leak mitigation until instance-scoping, T02's new
+         * marker): explicit reclaim of [owner]'s registry entry, for callers
+         * that tear down a cell before it (and this weak key) would
+         * otherwise become GC-eligible on their own — e.g. a [ManagedHost]
+         * that hosted the cell is itself dropped, or despawn wants the
+         * registry (and the port objects it strongly holds) collectible
+         * immediately rather than waiting on GC to notice the weak key is
+         * unreachable.
+         */
+        internal fun release(owner: Any) {
+            synchronized(registries) { registries.remove(owner) }
+        }
     }
 }
 

@@ -2,6 +2,8 @@ package civictech.cell.proxy
 
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
+import civictech.cell.PendingReBaseline
+import civictech.cell.ReplayScope
 import civictech.nature.ContractRegistry
 import java.lang.reflect.Method
 import kotlin.coroutines.Continuation
@@ -43,6 +45,14 @@ data class Invocation(
      * (trailing [Continuation] parameter), call it with a real continuation so
      * it may park the host's task; otherwise fall back to [invoke]. The context
      * rides a coroutine element, surviving suspension (G-4).
+     *
+     * T04 finding 7: [PendingReBaseline] and [ReplayScope] compose alongside
+     * [CurrentContext] — all three are bare `ThreadLocal`s a `SuspendingCell`'s
+     * handler may read; without a coroutine context element for the two
+     * added here, a handler resuming after a genuine suspension on a
+     * different worker thread would see whatever (or nothing) that worker's
+     * thread-local happened to hold, instead of the value ambient at the
+     * point this delivery began.
      */
     suspend fun invokeSuspending(target: Any?): Any? {
         if (target == null) return null
@@ -54,9 +64,13 @@ data class Invocation(
         } ?: return invoke(target)
 
         return CurrentContext.withSuspending(context) {
-            suspendCoroutineUninterceptedOrReturn { cont ->
-                Proxy.unwrapInvocationTarget {
-                    method.invoke(target, *(args.toTypedArray()), cont)
+            PendingReBaseline.withSuspending(PendingReBaseline.get()) {
+                ReplayScope.withSuspending(ReplayScope.get()) {
+                    suspendCoroutineUninterceptedOrReturn { cont ->
+                        Proxy.unwrapInvocationTarget {
+                            method.invoke(target, *(args.toTypedArray()), cont)
+                        }
+                    }
                 }
             }
         }

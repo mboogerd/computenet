@@ -18,28 +18,49 @@ class VirtualThreadScheduler(name: String) : HostScheduler {
     private val queue = PriorityBlockingQueue<ScheduledTask>()
     private val sequencer = AtomicLong()
 
+    /**
+     * T04 finding 5: set once the drain loop exits for any reason, so a dead
+     * host fails loudly ([submit] throws) instead of silently accepting
+     * traffic that will never drain.
+     */
+    @Volatile
+    private var terminated = false
+
     private val thread: Thread = Thread.ofVirtual().name(name).start {
         // runBlocking only adapts the suspend-typed action contract; on a 🔵 host
         // actions never genuinely suspend (spawn validation, spec 32), so the
         // event loop never parks mid-task.
         runBlocking {
             try {
-                while (!Thread.interrupted()) {
-                    val task = queue.take()
-                    try {
-                        task.action()
-                    } catch (e: Exception) {
-                        // Backstop only; hosts wrap actions with their own error policy.
-                        e.printStackTrace()
+                try {
+                    while (!Thread.interrupted()) {
+                        val task = queue.take()
+                        try {
+                            task.action()
+                        } catch (t: VirtualMachineError) {
+                            // OOM etc. stay fatal — do not paper over a dying JVM.
+                            throw t
+                        } catch (t: Throwable) {
+                            // Backstop only (finding 5: was `catch (e: Exception)`,
+                            // so a TODO()/StackOverflowError/NoClassDefFoundError
+                            // escaped all backstops and killed the drain loop
+                            // silently while `submit` kept succeeding). Hosts wrap
+                            // actions with their own error policy; this is the last
+                            // line of defense that keeps the loop alive.
+                            t.printStackTrace()
+                        }
                     }
+                } catch (_: InterruptedException) {
+                    // stop thread
                 }
-            } catch (_: InterruptedException) {
-                // stop thread
+            } finally {
+                terminated = true
             }
         }
     }
 
     override fun submit(priority: Int, action: suspend () -> Unit) {
+        check(!terminated) { "host scheduler terminated" }
         queue.put(ScheduledTask(priority, sequencer.incrementAndGet(), action))
     }
 

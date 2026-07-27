@@ -108,6 +108,16 @@ object PendingReBaseline {
             local.set(previous)
         }
     }
+
+    /**
+     * Suspend-capable variant of [with] (T04 finding 7): the coroutine
+     * context element re-installs [notice] on every resumption, mirroring
+     * [CurrentContext.withSuspending] — a bare `ThreadLocal` loses this
+     * notice if a `SuspendingCell` resumes on a different worker thread
+     * mid-handler.
+     */
+    suspend fun <R> withSuspending(notice: ReBaselineNotice?, block: suspend () -> R): R =
+        withContext(local.asContextElement(notice)) { block() }
 }
 
 /**
@@ -137,6 +147,15 @@ object ReplayScope {
             local.set(previous)
         }
     }
+
+    /**
+     * Suspend-capable variant of [with] (T04 finding 7): the coroutine
+     * context element re-installs [frontier] on every resumption, mirroring
+     * [CurrentContext.withSuspending] — a bare `ThreadLocal` loses this scope
+     * if a `SuspendingCell` resumes on a different worker thread mid-replay.
+     */
+    suspend fun <R> withSuspending(frontier: TagFrontier?, block: suspend () -> R): R =
+        withContext(local.asContextElement(frontier)) { block() }
 }
 
 /**

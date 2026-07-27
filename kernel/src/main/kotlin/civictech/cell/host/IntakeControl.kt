@@ -95,17 +95,27 @@ internal class IntakeControl(
      * Caller holds dataLock — `ManagedHost.enqueueHostedInvocation`'s second
      * `synchronized(dataLock)` block, right after staging, exactly where this
      * check ran inline before the extraction.
+     *
+     * T04 finding 1 (ABBA deadlock): returns the announce as a **deferred
+     * action** instead of running it here. [Protocols.sendUpstream] runs
+     * registered handlers and a hop-by-hop relay traversal of the upstream
+     * graph — reaching, e.g., another host's `enqueueHostedInvocation` and
+     * *its* `dataLock` — so it must never run while this host's `dataLock`
+     * is held. The caller invokes the returned action after releasing the
+     * lock, mirroring [lowWaterCheck]'s existing listener-deferral pattern.
      */
-    fun checkSaturationOnAccept(hostedInvocation: HostedPortInvocation, isManagement: Boolean) {
+    fun checkSaturationOnAccept(hostedInvocation: HostedPortInvocation, isManagement: Boolean): (() -> Unit)? {
         intakeBound?.let { bound ->
             if (!isManagement && dataQueuedCount() >= bound.highWater) {
                 if (intakeState != IntakeState.SATURATED) {
                     intakeState = IntakeState.SATURATED
-                    saturationOrigin = hostedInvocation.cellRef to hostedInvocation.portName
-                    announceSaturation(true)
+                    val origin = hostedInvocation.cellRef to hostedInvocation.portName
+                    saturationOrigin = origin
+                    return { announceSaturation(true, origin) }
                 }
             }
         }
+        return null
     }
 
     /**
@@ -113,25 +123,35 @@ internal class IntakeControl(
      * wires this in as [AttentionScheduler]'s `intakeLowWaterCheck` callback,
      * invoked from `AttentionScheduler.dispatchOne`'s own dequeue critical
      * section (RS-8.1), preserving the original atomicity of the low-water
-     * intake transition.
+     * intake transition. T04 finding 1: the retraction announce is likewise
+     * returned as a deferred action, in the SAME list [AttentionScheduler]
+     * already fires post-unlock (`AttentionScheduler.kt`) — no caller change
+     * needed there, only here.
      */
     fun lowWaterCheck(): List<() -> Unit> {
         intakeBound?.let { bound ->
             if (intakeState == IntakeState.SATURATED && dataQueuedCount() <= bound.lowWater) {
                 intakeState = IntakeState.OPEN
-                announceSaturation(false)
+                val origin = saturationOrigin
                 saturationOrigin = null
                 val listeners = lowWaterListeners.toList()
                 lowWaterListeners.clear()
-                return listeners
+                val announce: List<() -> Unit> = origin?.let { listOf<() -> Unit>({ announceSaturation(false, it) }) } ?: emptyList()
+                return announce + listeners
             }
         }
         return emptyList()
     }
 
-    /** Emits the host intake state on every inbound data edge; G-36 relays it producer-ward. */
-    private fun announceSaturation(asserted: Boolean) {
-        val (cellRef, portName) = saturationOrigin ?: return
+    /**
+     * Emits the host intake state on every inbound data edge; G-36 relays it
+     * producer-ward. [origin] is passed explicitly (T04 finding 1) rather
+     * than re-read from [saturationOrigin] — by the time a caller invokes
+     * this deferred action, [saturationOrigin] may already have moved on to
+     * a later transition.
+     */
+    private fun announceSaturation(asserted: Boolean, origin: Pair<CellRef, String>) {
+        val (cellRef, portName) = origin
         val port = cellsView()[cellRef]?.let { PortRegistry.of(it)[portName] } as? Linked ?: return
         port.linking.links.forEach { link ->
             if (link.toPort === port) {
