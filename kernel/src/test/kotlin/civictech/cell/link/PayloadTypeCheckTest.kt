@@ -3,6 +3,7 @@ package civictech.cell.link
 import civictech.cell.data.MapCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.op.UnionSetCell
+import civictech.cell.data.view.MapHubCell
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.ConnectStep
 import civictech.cell.graph.GraphSpec
@@ -96,5 +97,41 @@ class PayloadTypeCheckTest {
 
         val error = shouldThrow<IllegalStateException> { spec.applyTo(host.managementInlet) }
         error.message shouldContain "payload mismatch"
+    }
+
+    // ---- KNOWN GAP: the case T08's own Solution-A text claimed was covered ----
+
+    /**
+     * **This test asserts a defect, on purpose.** T08-A's ticket text said the
+     * check "catches `SetDelta` vs `MapDelta`, not `SetDelta<A>` vs
+     * `SetDelta<B>`". It does not catch the first case either: both ports
+     * declare `Api` as `Propagate<D>`, and `Propagate<D>::class.java` is
+     * `Propagate::class.java` for every `D`, so `checkPayload` compares two
+     * identical classes and waves the link through. The delta then dies as a
+     * `ClassCastException` on the dispatch thread at first delivery — exactly
+     * the failure shape finding 1 set out to eliminate, for the commonest
+     * shape of miswire there is (two delta ports of different payloads).
+     *
+     * Tracked in `doc/remediation/COVERAGE.md` under "same-wrapper payload
+     * mismatch still unchecked". Closing it requires the port to carry a
+     * declared payload class independent of `Api` erasure — see that row.
+     *
+     * **When this test starts failing, the gap is closed**: replace it with
+     * the positive assertion (`Rejected`, message contains "payload
+     * mismatch") and drop the COVERAGE row.
+     */
+    @Test
+    fun `KNOWN GAP - a SetDelta outlet into a MapDelta inlet is NOT rejected (erasure)`() {
+        val controller = SimulationController(seed = 5)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val mgmt = host.managementInlet.call
+
+        val source = SetCell<String>()                              // outlet: Propagate<SetDelta<String>>
+        val sink = MapHubCell<String, Int>(onUpdate = {})           // inlet:  Propagate<MapDelta<String, Int>>
+        mgmt.spawn(source)
+        mgmt.spawn(sink)
+
+        mgmt.connect(source.ref, "outlet", sink.ref, "inlet")
+            .shouldBeInstanceOf<LinkResult.Connected>()
     }
 }
