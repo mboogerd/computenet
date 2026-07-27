@@ -187,7 +187,7 @@ class AttentionSupport private constructor(private val owner: Any) {
      * interest does not overlap the attending consumer's scope is left unattended
      * and parks like any cell (an unattended shard). The predicate is supplied by
      * the caller so the attention package stays free of a dependency on the
-     * `replication.Interest` algebra (which would cycle through `data`); a
+     * `link.Interest` algebra (which would cycle through `data`); a
      * consumer scatters by passing `{ link -> shardInterest(link).overlaps(scope) }`
      * — the same [civictech.cell.link.Interest.overlaps] the gossip linker
      * uses. Default accepts every link ⇒ byte-identical to pre-PN-19 broadcast, so
