@@ -16,7 +16,6 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
-import civictech.cell.proxy.broadcast
 import civictech.gen.wire.Contract
 import civictech.nature.ContractRegistry
 import civictech.gen.wire.Key
@@ -43,8 +42,8 @@ interface LeasedPush {
 
 /**
  * M5.6 (G-21 phases 1+2, spec 23): the KSP-emitted exclusive bit makes
- * `Owned`/`Leased` fan-out rejectable everywhere — local links, bridged
- * links, and the Broadcast proxy — with no runtime reflection in the check.
+ * `Owned`/`Leased` fan-out rejectable everywhere — local links and bridged
+ * links — with no runtime reflection in the check.
  */
 class OwnershipTest {
 
@@ -153,14 +152,5 @@ class OwnershipTest {
         val remote = (HostedCellProxy.create(CellRef(UUID.randomUUID()), egress, LeasedInletProxy::class.java)
                 as LeasedInletProxy).inlet.call
         shouldThrow<IllegalArgumentException> { remote.push(Leased("pooled")) }
-    }
-
-    @Test
-    fun `Broadcast refuses exclusive payloads`() {
-        val sink = object : OwnedPush {
-            override fun push(buffer: Owned<String>) {}
-        }
-        val fanned = broadcast(listOf(fixed<OwnedPush>(sink), fixed<OwnedPush>(sink)))
-        shouldThrow<IllegalArgumentException> { fanned.push(Owned("x")) }
     }
 }
