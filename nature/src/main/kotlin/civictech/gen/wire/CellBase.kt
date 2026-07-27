@@ -1,3 +1,5 @@
+// Lives in :nature (T09 §A) — see Contract.kt's header for why the package stays
+// `civictech.gen.wire` despite the module move.
 package civictech.gen.wire
 
 /**
