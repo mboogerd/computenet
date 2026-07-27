@@ -347,7 +347,7 @@ fails at graph build and `lookup(TypedRef)` round-trips through
 `HostedCellProxy` chokes on some Api property shape, fall back to a narrowed
 generated "client view" for that cell (reassess in Phase 3).
 
-### Phase 3 — KSP sweep: `PortDescriptor` + `<Cell>Ports` objects (aligns with G-60) — **LANDED** (generation only; call-site migration to `<Cell>Ports`/`PortIds` is out of scope for the restructure — see `doc/RESTRUCTURE-PLAN.md`'s explicitly-out-of-scope list)
+### Phase 3 — KSP sweep: `PortDescriptor` + `<Cell>Ports` objects (aligns with G-60) — **LANDED** (generation only; call-site migration to `<Cell>Ports`/`PortIds` is out of scope for the restructure — see `doc/archive/runs/RESTRUCTURE-PLAN.md`'s explicitly-out-of-scope list)
 
 - `gen/.../wire/ContractDescriptor.kt`: `PortDescriptor`, `PortDirection`,
   `CellDescriptor.ports` (additive default).

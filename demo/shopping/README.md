@@ -1,10 +1,10 @@
 # :demo — collaborative shopping list over the cell graph
 
-The M4 exit-criterion app ([spec 92](../doc/spec/90-roadmap/92-way-forward.md))
+The M4 exit-criterion app ([spec 92](../../doc/spec/90-roadmap/92-way-forward.md))
 with a face: a shared shopping list with votes, built purely from cells —
 per-user `SetCell` writers, `UnionSetCell` views, a DSL-built
 filter/count chain plus an `items ∩ votes` "still wanted" intersection
-([spec 51](../doc/spec/50-development-process/51-construction.md)) —
+([spec 51](../../doc/spec/50-development-process/51-construction.md)) —
 fronted by the JDK's built-in HTTP server with one static page and SSE.
 
 ```
@@ -17,7 +17,7 @@ edits order-independent — and a freshly opened tab is populated immediately.
 
 ## Two machines, one graph (M5)
 
-The same app spans two JVMs over the real wire ([spec 41](../doc/spec/40-distribution/41-location-transparency.md)):
+The same app spans two JVMs over the real wire ([spec 41](../../doc/spec/40-distribution/41-location-transparency.md)):
 
 ```
 ./gradlew :demo:shopping:run --args="8080 --listen 9090"                 # peer 1

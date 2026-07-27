@@ -1,7 +1,7 @@
 # ComputeNet — Composition Plan: the braided route to the vision
 
 > **Generated**: 2026-07-25 · companion to [COMPOSITION-STATUS.md](COMPOSITION-STATUS.md)
-> (problem statement) and [FEATURE-STATUS.md](FEATURE-STATUS.md) (feature ledger).
+> (problem statement) and [FEATURE-STATUS.md](../../FEATURE-STATUS.md) (feature ledger).
 > **Provenance**: three independently-briefed designers attacked the obstacle from
 > deliberately different angles — (1) a nature type-system with negotiated adapter
 > stacks, (2) substrate dissolution, (3) demand-driven empirical sequencing. Their

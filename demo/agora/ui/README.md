@@ -1,8 +1,8 @@
 # agora-ui
 
 Reactive frontend for the `agora` argumentation graph — SolidJS + Vite + TypeScript.
-Implements [`doc/agora-ui-design-spec.md`](../../doc/agora-ui-design-spec.md); sequenced by
-[`doc/agora-ui-implementation-plan.md`](../../doc/agora-ui-implementation-plan.md).
+Implements [`doc/archive/frontend/agora-ui-design-spec.md`](../../../doc/archive/frontend/agora-ui-design-spec.md); sequenced by
+[`doc/archive/frontend/agora-ui-implementation-plan.md`](../../../doc/archive/frontend/agora-ui-implementation-plan.md).
 
 ## Run
 

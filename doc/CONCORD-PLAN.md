@@ -19,7 +19,7 @@ Three consumers, in order of arrival:
    a spec bug before it is a code bug.
 2. **Refactor confidence.** The corpus asserts only boundary-observable properties,
    so it survives internal restructuring untouched (see §2.3 — the corpus is immune
-   to `doc/RESTRUCTURE-PLAN.md` by construction). It is the acceptance gate the
+   to `doc/archive/runs/RESTRUCTURE-PLAN.md` by construction). It is the acceptance gate the
    restructure run and later refactors push against.
 3. **The second implementation.** When a Rust (or other) implementation starts, the
    corpus is its driving test suite from day one. The only per-implementation work
@@ -302,7 +302,7 @@ concord/corpus/
   controls/                               # kind: control
 ```
 
-This is deliberate: `doc/RESTRUCTURE-PLAN.md` reshuffles packages
+This is deliberate: `doc/archive/runs/RESTRUCTURE-PLAN.md` reshuffles packages
 (`cell.link`, `cell.data.op`, …) with no behavior change — a corpus keyed to spec
 chapters and contract ids does not notice. The only Concord code that restructure
 touches is the kernel driver's imports (one file's worth; accept the churn, or land

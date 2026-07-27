@@ -4,7 +4,7 @@
 > **Method**: derived the intended feature set from the spec tree (`doc/spec/`)
 > and roadmap (`doc/spec/90-roadmap/`), then cross-checked each against actual
 > `kernel/`+`gen/` source, the named exit tests, and git history
-> (`doc/ORCHESTRATION.md` merge records). The full `./gradlew test` gate was run
+> (`doc/archive/runs/ORCHESTRATION.md` merge records). The full `./gradlew test` gate was run
 > and is **green (BUILD SUCCESSFUL)** as of this survey; all 21 milestone exit
 > tests exist and no test is `@Ignore`/`@Disabled`.
 
@@ -28,7 +28,7 @@ code + git + tests over the narrative prose:
 - `92-way-forward.md` labels **Milestones 12–16 "⚠ PROPOSED, NOT COMMITTED"** and
   `94-implementation-plan.md`'s header says *"Implementation: none — this document
   is the work list."*
-- **But `doc/ORCHESTRATION.md` records Waves 1–4 (tickets W1.1–W4.6) as all
+- **But `doc/archive/runs/ORCHESTRATION.md` records Waves 1–4 (tickets W1.1–W4.6) as all
   merged**, and I verified those merge commits (e.g. `aa47579`, `dc23b3c`,
   `a7658c3`) **are genuine ancestors of `main`**. The corresponding code exists
   (`PartitionedCell`, `BoundaryPolicy`, `CycleHead`, `SingleWriterReplication`/

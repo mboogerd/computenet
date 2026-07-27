@@ -7,7 +7,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The JDK-httpserver + SSE shell duplicated byte-for-byte across the seven
- * demo mains (see doc/RESTRUCTURE-PLAN.md, session RS-9): request routing,
+ * demo mains (see doc/archive/runs/RESTRUCTURE-PLAN.md, session RS-9): request routing,
  * one SSE client list with framed `data: ...\n\n` broadcast, and start/stop.
  *
  * Deliberately generic: [route] takes a raw `(HttpExchange) -> Unit` handler

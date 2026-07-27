@@ -2,7 +2,7 @@
 
 Research date: 2026-07-23. Method: multi-agent deep research; every claim below
 survived 3-vote adversarial verification against the primary sources unless
-marked otherwise. Archived copies in `doc/references/raw/`.
+marked otherwise. Archived copies in `doc/archive/frontend/references/raw/`.
 
 Primary sources:
 

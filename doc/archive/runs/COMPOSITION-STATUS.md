@@ -1,6 +1,6 @@
 # ComputeNet — Composition Status: how features pair, and where the algebra breaks
 
-> **Generated**: 2026-07-25 · read-only survey, companion to [FEATURE-STATUS.md](FEATURE-STATUS.md).
+> **Generated**: 2026-07-25 · read-only survey, companion to [FEATURE-STATUS.md](../../FEATURE-STATUS.md).
 > **Question answered**: not "which features exist" but "which *pairs* of natures
 > demonstrably compose", under the philosophy that same-nature cells link directly
 > and differing natures need (stackable) adapter ports — with unsurprising defaults

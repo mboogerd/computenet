@@ -109,7 +109,7 @@ Per-ticket: Opus impl in an isolated worktree (TDD, Bash-timeout-bounded tests, 
 
 ## Follow-up run (FU-1..FU-3) — **COMPLETE** (combined gate green @ db235ae)
 
-Tickets: [PERNODE-FOLLOWUP-TICKETS.md](PERNODE-FOLLOWUP-TICKETS.md). FU-4 (adapter synthesis) is deliberately NOT run here — it's the collaborative exploration the user is driving (untracked ADR + spike present in the working tree, left untouched).
+Tickets: [PERNODE-FOLLOWUP-TICKETS.md](../../PERNODE-FOLLOWUP-TICKETS.md). FU-4 (adapter synthesis) is deliberately NOT run here — it's the collaborative exploration the user is driving (untracked ADR + spike present in the working tree, left untouched).
 
 | Ticket | State | Branch | Merged | Notes |
 |--------|-------|--------|--------|-------|
