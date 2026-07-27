@@ -256,3 +256,259 @@ is scoped to axes with a semantics-preserving lift, not a blanket "never refuse.
 **Explicitly NOT in scope for phase 1.** General multi-axis adapter chains,
 synthesis (as opposed to registry lookup), and automatic silent insertion. Those
 are follow-ons gated on the phase-1 review.
+
+**Status (2026-07-26).** Phase 1 delivered: `doc/adr/ADR - Adapter Synthesis.md`
+(recommendation: **no-go**, demand gate still reads zero; revisit at ≥3 real
+hand-written wavers) + green spike `AdaptWaveParticipationSpikeTest`. Awaiting
+review.
+
+---
+
+# ADR-1 re-read batch — FU-5 .. FU-9
+
+From re-reading `doc/adr/ADR 1 - A collaborative dataflow graph abstraction.md`
+through the link-conflict lens (analysis in the FU-4 review session, 2026-07-26).
+Baseline: `main` @ `4cfbb83`. ADR 1's fourteen features triage into four levels —
+node natures, edge semantics, placement/execution, operations — and only the
+first two can carry link conflicts. Most were correctly dissolved into universal
+runtime protocols (waves, catch-up, parking, suspension) or spawn-time checks
+(COLOR); these five tickets are what genuinely remains. Same house style as
+above; each ticket is self-contained.
+
+---
+
+## FU-5 — `PULL_SERVICE` axis: a pull-needing inlet onto a non-serving producer must refuse, not silently starve — P2 · Low/Medium · `link`+`repl`
+
+**Origin**: ADR 1 features 1 (push/pull) + 3 (stateful recovery).
+**Context**: FRESH · **After**: — · **Files**: `gen/.../wire/ContractDescriptor.kt`
+(`NatureAxis`, new `PullService` level enum, `NatureVector.defaultOf`),
+`kernel/.../cell/port/NatureNegotiation.kt` (`LINK_FLOW_AXES`),
+`kernel/.../cell/port/CatchUp.kt` (`pullServe`), `kernel/.../cell/port/InletPolicy.kt`
+(`PullOnOpen`), test.
+
+**Problem — a live silent-failure class, the exact shape PN-12 fixed for waves.**
+A consumer that needs catch-up — an inlet with `PullOnOpen` installed
+(`InletPolicy.kt:150`), which fires a `StateRequest` upstream on every `EdgeOpen` —
+linked to a producer that never registered a `Protocols.StateRequest` handler,
+waits forever *silently*: `ProtocolSupport.deliver` is a null-safe no-op when no
+handler exists (`Protocols.kt:143`, `handlers[id]?.invoke(...)`). The pull request
+vanishes; the consumer's baseline never arrives; nothing is counted or refused.
+`PULL_SERVING` exists as a `Manifest` tag but manifests deliberately never refuse
+— and the KSP manifest scan doesn't even derive it (`ContractProcessor.manifestOf`
+emits only GLITCH_FREE/DURABLE/REPLICATED/PARTITIONED).
+
+**Implement — no KSP change needed; both declaration surfaces are existing
+runtime calls.**
+- New axis `PULL_SERVICE` with levels `NONE` (DEFAULT) `< BASELINE_SERVING`,
+  registered in `NatureAxis`, `NatureVector.defaultOf`, and `LINK_FLOW_AXES`.
+- `FanOutlet.pullServe` (`CatchUp.kt:43`) additionally stamps
+  `PullService.BASELINE_SERVING` onto the outlet via `PortNatures.stamp` — the
+  handler registration IS the offer declaration.
+- `PullOnOpen.attach` stamps the *requirement* onto its inlet the same way
+  (fold `BASELINE_SERVING` into the inlet's existing vector with
+  `NatureVector.with`). Installing the policy IS the requirement declaration.
+  Policies install before links form (the established order), so the handshake's
+  reconcile (`Link.kt:252`) sees both vectors with zero new plumbing.
+- Non-pulling inlets and non-serving outlets keep DEFAULT on the axis ⇒ every
+  existing link reconciles `Direct` verbatim — no behavior change for
+  non-opting graphs.
+
+**Test.** `PullServiceRefusalTest` — an inlet with `PullOnOpen` linked to (i) a
+producer with `pullServe` ⇒ `Connected`, catch-up arrives (byte-identical to
+today); (ii) a producer without ⇒ `LinkResult.Rejected` with
+`mismatch.axis == PULL_SERVICE`. **Controls**: (a) `PULL_SERVICE` removed from
+`LINK_FLOW_AXES` ⇒ the link forms and the `StateRequest` no-ops silently — the
+consumer's state stays empty across the whole run (today's starvation,
+executable); (b) plain inlet (no `PullOnOpen`) onto a non-serving producer ⇒
+`Direct`, unchanged.
+
+**Watch.** Bridged links currently reconcile against `DEFAULT` for the remote
+endpoint (`Link.kt:326-332` — carrying the peer's vector across the wire is a
+known follow-on), so this refusal is live in-process only; note it in the test,
+don't fix it here.
+
+**Done when.** Named test green, both controls diverge, full `./gradlew test`
+green.
+
+---
+
+## FU-6 — Single-writer inlet: the SPSC mirror — P3 · Low · `link`
+
+**Origin**: ADR 1 feature 14 (mutability: single-writer vs concurrent).
+**Context**: FRESH · **After**: — · **Files**: `kernel/.../cell/port/FanInlet.kt`, test.
+
+**Problem.** The outlet side has SPSC: an exclusive-carrying `FanOutlet` refuses a
+second Consume subscriber (`FanOutlet.kt:198`, `linkTo:247`). The inlet side has
+no mirror: `FanInlet` is unconditionally multi-producer, so a cell whose state is
+single-writer-serialized cannot *declare* that a second writer link is an error —
+concurrent writers silently interleave. ADR 1 names this mutability subclass
+explicitly; today it is unenforceable. In-repo precedent: `FeedbackInlet.linkFrom`
+already refuses a second producer (`Cycle.kt:117-119`, "strict point-to-point").
+
+**Implement.** A `singleWriter: Boolean = false` constructor flag on `FanInlet`
+(+ `create` overload). In `linkFrom`, before the handshake: if `singleWriter` and
+an active `LinkRole.Consume` link exists (`linking.links`), return
+`LinkResult.Rejected("single-writer inlet already has a producer …")`. Observe
+links (negotiated taps) stay admitted — read cardinality is unrestricted.
+Default `false` ⇒ byte-identical for every existing inlet. No KSP surface until a
+generated cell needs to declare it (that follow-on mirrors how `exclusive` rides
+`MethodDescriptor`).
+
+**Test.** `SingleWriterInletTest` — a `singleWriter` inlet: first Consume link
+`Connected`, second `Rejected`; a tap on the same inlet still admitted; after
+`unlink`, a replacement writer is admitted (the slot frees, mirroring
+`FeedbackInlet`'s uninstall). **Controls**: (a) guard off (default inlet) ⇒ both
+writers connect and their writes interleave (today, executable); (b) default
+multi-producer inlet behavior byte-identical (existing fan-in tests unchanged).
+
+**Done when.** Named test green, controls diverge, full gate green.
+
+---
+
+## FU-7 — Delta↔snapshot type adapters: the registry's likely first real tenant — P2 · Medium · `link`+`gen` — **EXPLORATORY / COLLABORATIVE**
+
+**Origin**: ADR 1 feature 4 (incremental vs complete propagation).
+**Context**: FRESH · **After**: reads `doc/adr/ADR - Adapter Synthesis.md` (FU-4
+phase 1) · **This is a design exploration in the FU-4 mold: design note + spike,
+review before building. Bring questions back.**
+
+**Background.** FU-4 explored adapters at the *nature* level and recommended
+no-go — demand was zero. But ADR 1 feature 4 (incremental vs complete) points at
+a mismatch living one level up, in the **API type**: a delta-emitting producer
+(`Consumer<SetDelta<T>>`) and a snapshot-expecting consumer (`Consumer<Set<T>>`)
+don't reach `reconcile` at all — the link doesn't typecheck, so the developer
+hand-writes a fold (delta→state) or diff (state→delta) cell. Unlike the waver,
+this plausibly has *real* demand: every UI/backend boundary wants "deltas in,
+snapshots out" or the reverse. The kernel's own posture — "a snapshot IS a delta"
+(`FanOutlet.baselineTo`) — covers the wire, not a consumer whose declared contract
+is the folded form.
+
+**Explore.**
+1. **Demand first (the FU-4 lesson).** Sweep `demo/**` (agora's backend↔frontend
+   boundary especially) for hand-written fold/diff/scan glue between delta-typed
+   cells and snapshot-typed consumers. Count real instances. If zero, exit
+   no-go with the evidence, exactly like FU-4.
+2. **Keying.** A type-level registry is keyed by contract *pair*
+   `(fromApi, toApi)` — e.g. `(Consumer<SetDelta<T>>, Consumer<Set<T>>)` — not by
+   `(axis, level, level)`. Does the FU-4 registry sketch generalize, or is this a
+   sibling registry? (Expect: sibling — the lookup key and the insertion helper
+   differ; the `Adapt`-is-offered-never-silent posture carries over verbatim.)
+3. **The two canonical adapters.** fold: subscribe to deltas, accumulate, emit
+   snapshots (choice: every delta, or wave-aligned?); diff: subscribe to
+   snapshots, diff against previous, emit deltas. Both generic over the payload's
+   merge structure — what does the adapter need declared (a `Replicable`?
+   a `Magnitude`?) to be truly payload-generic?
+4. **Interaction with natures.** A fold adapter's outlet is UNWAVED unless it
+   re-originates (the FU-4 waver observation) — a fold into an ALIGN inlet needs
+   both lifts. Phase 1 explicitly punts on stacking (FU-4's "single-hop only");
+   note the composite case, don't build it.
+
+**Deliverable (phase 1).** An addendum section in
+`doc/adr/ADR - Adapter Synthesis.md` (demand table; keying decision; the two
+adapter sketches; go/no-go), plus spike `AdaptDeltaSnapshotSpikeTest`: a
+`SetDelta<String>` producer feeding a `Set<String>`-typed consumer through a
+registry-selected fold adapter, values converge to the folded set. **Control**:
+an unregistered pair (e.g. map-delta→set) yields no candidate — refusal stands.
+**Stop and review before any production code.**
+
+---
+
+## FU-8 — Cycle admission must check damping, not just headedness — P2 · Medium · `link`+`consistency`
+
+**Origin**: ADR 1 feature 8 ("cycles with magnitude-based throttling").
+**Context**: FRESH · **After**: — · **Files**: `kernel/.../cell/host/ManagedHost.kt`
+(`connect` cycle admission, ~:1150-1160), `kernel/.../cell/port/Cycle.kt`
+(`FeedbackInlet`), test.
+
+**Problem — headedness is enforced; *damping* is not.** `ManagedHost.connect`
+refuses a locally-visible cycle-closing edge unless it lands on a `FeedbackInlet`
+(`CycleWithoutHead`, `ManagedHost.kt:1157`). But a head only *dampens* laps via
+the weak tier — absorb when `Magnitude.size() <= quiescence` (`Cycle.kt:100-103`)
+— which is live **only for `Magnitude`-typed payloads**. A non-`Magnitude`
+payload always takes the strong tier, whose termination rests on idempotent
+merge reaching a fixpoint plus upstream effective-only emission. And the hop
+guard does NOT bound laps: each lap re-originates under a **fresh** timestamp
+with hop reset to 0 by construction (`Cycle.kt:44,105`). Net: a properly-headed
+cycle whose payload is non-`Magnitude` and whose merge is non-idempotent (a
+plain counter) laps forever — admitted today, unthrottled, the exact runaway
+ADR 1's "magnitude-based throttling" was meant to exclude. MONOTONICITY exists
+as an axis but nothing consults it at cycle admission: the dangerous property is
+per-*loop*, and this is the one handshake where the loop is visible.
+
+**Design direction (implementing agent firms up).** At the same admission site
+that checks headedness, additionally require a **damping witness** for the loop:
+the feedback payload is `Magnitude`-typed (quiescence damper live — the KSP
+`MAGNITUDE_MARKER` scan or a runtime `is`-check, matching how `FeedbackInlet`
+itself dispatches), OR the closing edge's producer declares
+`MONOTONicity.MONOTONE` / `MergeClass.IDEMPOTENT` (fixpoint convergence), OR the
+`FeedbackInlet` was constructed with an explicit quiescence override. None ⇒
+`Rejected("CycleWithoutDamping: …")`, same family as `CycleWithoutHead`.
+Cross-host loops stay out of scope (invisible topology; the existing
+`CycleError` hop/ownership backstops remain the guard there) — as today for
+headedness.
+
+**Test.** `CycleDampingAdmissionTest` — (i) a `Magnitude`-payload loop with
+quiescence ⇒ admitted, quiesces (today's `FeedbackInlet` behavior, unchanged);
+(ii) an idempotent/monotone loop ⇒ admitted, reaches fixpoint; (iii) a plain
+counter loop (non-`Magnitude`, non-idempotent) ⇒ `Rejected`. 100 seeds where the
+loop bodies are generative. **Controls**: (a) damping check off ⇒ case (iii) is
+admitted and exceeds a lap budget (the runaway, executable with a lap-cap
+tripwire); (b) cases (i)/(ii) byte-identical to today — no new refusal for any
+existing demo/test cycle (`CycleHeadTest` unchanged).
+
+**Done when.** Named test green, controls diverge, `CycleHeadTest` and full gate
+green, no existing cycle refused.
+
+---
+
+## FU-9 — Confidentiality as a lattice: label propagation through the graph — P3 · High · `link`+`security` — **EXPLORATORY / RESEARCH**
+
+**Origin**: ADR 1 feature 13 (privacy & security controls).
+**Context**: FRESH · **After**: — · **Design exploration only; no production code.
+The propagation half is research-grade — the deliverable is an ADR, and the
+honest outcome may be "pairwise check yes, derivation later" or a full defer.**
+
+**Background (what exists).** The edge-local half of ADR 1's privacy story is
+built: peer allowlists (`allowPeers`, `Link.kt:166`, deny-by-default) and
+disclosure filters (`FanOutlet.disclosureFilter`, spec 40/43 seam 3 — one filter
+covering live stream and baseline alike). What does not exist: any way to say
+"this data must not reach a lower-trust sink," enforced at links. That obligation
+is *transitive* — it must survive every downstream hop — which is why it never
+fit the pairwise `reconcile`.
+
+**The observation to explore.** Classic information-flow (Denning-style) makes
+transitive confidentiality *pairwise-checkable*: give ports a label from a
+lattice (e.g. `PUBLIC < INTERNAL < SECRET`), and a link admits iff
+`consumer.clearance ≥ producer.label` — a rank compare, exactly the shape
+`reconcile` already runs (a `CONFIDENTIALITY` axis, inverted direction: the
+*consumer* must dominate). The hard part is not the check but the **operand**: a
+cell's *outlet* label is not declarable by KSP — it is the join of its inlet
+labels at wiring time (minus explicit declassification via a disclosure filter),
+so labels must be *derived through the graph as links form*, not read off a
+static descriptor.
+
+**Questions for the ADR.**
+1. Lattice vocabulary: fixed levels or user-defined lattice? (Recommend: tiny
+   fixed set first; generality is where these systems drown.)
+2. Derivation: eager (outlet label recomputed on each inlet link, pushed
+   downstream — a topology-order protocol already exists to ride) vs lazy
+   (checked on demand at each new link)? What happens when a *later* upstream
+   link raises a label above an already-linked downstream consumer's clearance —
+   refuse the new upstream link (preserves existing links) or revoke downstream?
+3. Declassification: is a non-`Full` disclosure filter (the Mediate exposure)
+   the declass point, and who is authorized to declare it?
+4. Encryption requirements (the ADR 1 bullet): transit encryption is a *bridge*
+   property (wire layer), storage encryption a *durable-cell* property
+   (manifest-adjacent) — neither is a link-flow axis; scope them out explicitly
+   or place them where they belong.
+5. Does any demo need this today? (agora is the only candidate with real
+   multi-party trust boundaries.) If not: is the pairwise-check half worth
+   landing alone with hand-stamped labels (small, honest, useful for bridges),
+   deferring derivation?
+
+**Deliverable.** `doc/adr/ADR - Confidentiality Lattice.md`: the lattice + check
+shape; the derivation decision with the re-label race resolved; explicit
+scoping-out of transit/storage encryption; a demand check; go/no-go. Optional
+micro-spike (test-local): hand-stamped labels on two ports + a spike reconcile
+refusing an under-cleared consumer — only if it sharpens the ADR. **Stop and
+review.**
