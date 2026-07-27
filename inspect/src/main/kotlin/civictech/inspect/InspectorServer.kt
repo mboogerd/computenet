@@ -7,6 +7,7 @@ import civictech.demo.shell.DemoShell
 import civictech.demo.shell.beginSse
 import civictech.demo.shell.respond
 import civictech.demo.shell.sseFrame
+import com.sun.net.httpserver.HttpExchange
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -125,16 +126,6 @@ class InspectorServer(
         shell.stop()
     }
 
-    /**
-     * The inspector runs on its own port, so the dev UI (Vite, another port) is
-     * cross-origin unless it proxies. `demo/agora/ui` proxies, and the inspector
-     * UI is expected to as well; this header only removes the failure mode where
-     * it does not. Read-only endpoints, no credentials, developer instrument.
-     */
-    private fun com.sun.net.httpserver.HttpExchange.allowCrossOrigin() {
-        responseHeaders.add("Access-Control-Allow-Origin", "*")
-    }
-
     companion object {
         const val DEFAULT_PORT = 7071
         const val BASE_PATH = "/api/inspect"
@@ -144,4 +135,14 @@ class InspectorServer(
         /** Contract §SSE: "Server sends `heartbeat` every 15 s". */
         const val HEARTBEAT_SECONDS = 15L
     }
+}
+
+/**
+ * The inspector runs on its own port, so a dev UI (Vite, another port) is
+ * cross-origin unless it proxies. `demo/agora/ui` proxies and the inspector UI
+ * is expected to as well; this header only removes the failure mode where it
+ * does not. Read-only endpoints, no credentials, developer instrument.
+ */
+private fun HttpExchange.allowCrossOrigin() {
+    responseHeaders.add("Access-Control-Allow-Origin", "*")
 }
