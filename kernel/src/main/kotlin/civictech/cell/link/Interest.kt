@@ -207,14 +207,25 @@ interface Scoped<D> {
 
 /**
  * T05 finding 6: a running count of [sliceTo] refusals — an emission whose
- * delta is not [Scoped] offered to a non-[Interest.Total] interest. Each
- * refusal also logs once via `System.err` (matching the current registry
- * style, e.g. [civictech.cell.host.LocationRegistry]'s hook-failure logging).
+ * delta is not [Scoped] offered to a non-[Interest.Total] interest. Every
+ * refusal counts here; the accompanying `System.err` line is emitted once per
+ * offending delta class (see [loggedRefusals]), matching the current registry
+ * style (e.g. [civictech.cell.port.FanOutlet]'s once-per-ref target-miss log).
  * The residual per-link-ack gap for a *legitimate* `Scoped`-slices-to-nothing
- * result is separate and tracked in `concord/corpus/DISPUTES.md` (finding 8)
- * — this counter is specifically the "shipped whole" bug, now refused.
+ * result is separate, and is filed as **G-66** in
+ * `doc/spec/90-roadmap/91-gap-analysis.md` (T05 finding 8) — this counter is
+ * specifically the "shipped whole" bug, now refused.
  */
 val refusedSliceCount = java.util.concurrent.atomic.AtomicLong()
+
+/**
+ * Delta classes already reported by [sliceTo]'s refusal path — log once per
+ * class, not once per emission. `sliceTo` runs on the per-emission gossip/
+ * shard-routing path, so an unconditional `println` turns a single
+ * misconfigured non-`Total` mesh into unbounded stderr traffic proportional
+ * to throughput; [refusedSliceCount] remains the exact, per-refusal signal.
+ */
+private val loggedRefusals = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
 /**
  * The **one** slice-and-route primitive (PN-6, plan §3 "keep exactly one
@@ -243,11 +254,15 @@ fun <D> sliceTo(delta: D, interest: Interest, keyOf: (Any?) -> Any?): D? = when 
     delta is Scoped<*> -> (delta as Scoped<D>).within(interest, keyOf)
     else -> {
         refusedSliceCount.incrementAndGet()
-        System.err.println(
-            "[sliceTo] refused: ${delta?.let { it::class.simpleName }} is not Scoped and interest is not " +
-                "Total (spec 40/42 §Interest-scoped instance sets) — a non-Total mesh requires a Scoped " +
-                "delta; dropping rather than shipping it whole across a partial-interest link"
-        )
+        val kind = delta?.let { it::class.simpleName } ?: "null"
+        if (loggedRefusals.add(kind)) {
+            System.err.println(
+                "[sliceTo] refused: $kind is not Scoped and interest is not " +
+                    "Total (spec 40/42 §Interest-scoped instance sets) — a non-Total mesh requires a Scoped " +
+                    "delta; dropping rather than shipping it whole across a partial-interest link " +
+                    "(logged once per delta class; see refusedSliceCount for the exact count)"
+            )
+        }
         null
     }
 }
