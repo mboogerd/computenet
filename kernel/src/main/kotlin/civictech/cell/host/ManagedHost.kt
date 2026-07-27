@@ -599,8 +599,19 @@ open class ManagedHost(
                         ) {
                             // suppressed: already-acted, dropped rather than re-acted
                         } else {
-                            // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32)
-                            hostedInvocation.invocation.invokeSuspending(port.call)
+                            // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32).
+                            // T04 finding 7 (extended, T06 §C1a): re-install the
+                            // replay scope HostDurability.recoverFrom captured at
+                            // stage time (HostedPortInvocation.replayFrontier) —
+                            // staging and this delivery run on different
+                            // scheduler tasks, so the ambient ReplayScope
+                            // thread-local from recoverFrom's own call frame is
+                            // long gone by now. withSuspending carries it across
+                            // any suspension the handler does, even to a
+                            // different worker thread.
+                            civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
+                                hostedInvocation.invocation.invokeSuspending(port.call)
+                            }
                             if (cell is Effectful && timestamp != null) {
                                 // per-cell tee (CP-C1): the frontier advance rides the same
                                 // journal as this cell's frames — volatile cells (null) skip it

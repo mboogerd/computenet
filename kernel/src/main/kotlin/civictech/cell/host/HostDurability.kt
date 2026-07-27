@@ -124,6 +124,18 @@ internal class HostDurability(
         // itself is stamped up front (below) so a reactive re-emission inherits
         // the baseline through the ordinary context copy across the async
         // dispatch that follows this synchronous re-injection.
+        //
+        // T04 finding 7 (extended, T06 §C1a): staging (this loop) and
+        // delivery (a later, independent scheduler task) are decoupled, so
+        // this ReplayScope.with block's dynamic extent never actually covers
+        // delivery — it only covers this synchronous submit() loop. A
+        // mid-graph frame's baseline survives that gap because it is
+        // stamped directly onto its own MessageContext (`frame.baselined`,
+        // below); a ROOT frame carries no context to stamp, so its baseline
+        // is carried instead via HostedPortInvocation.replayFrontier, which
+        // ManagedHost.deliver re-installs (via ReplayScope.withSuspending)
+        // around the handler call — surviving a suspension to a different
+        // worker thread too.
         val scope: TagFrontier? = if (replayAsBaseline) TagFrontier(emptyMap()) else null
         try {
             ReplayScope.with(scope) {
@@ -141,7 +153,8 @@ internal class HostDurability(
                         when (record[0]) {
                             RECORD_FRAME -> submit(
                                 WireCodec.decode(record.copyOfRange(1, record.size)).let { frame ->
-                                    if (scope == null) frame else frame.baselined(scope)
+                                    (if (scope == null) frame else frame.baselined(scope))
+                                        .copy(replayFrontier = scope)
                                 }
                             )
 
