@@ -1,9 +1,11 @@
 package civictech.cell.link
 
+import civictech.cell.control.Magnitude
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.FeedbackInlet
 import civictech.cell.port.LinkTo
 import civictech.cell.nature.NatureNegotiation
 import civictech.cell.port.Port
@@ -13,6 +15,9 @@ import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.nature.Reconciliation
 import civictech.cell.port.natures
+import civictech.nature.MergeClass
+import civictech.nature.Monotonicity
+import civictech.nature.NatureAxis
 import civictech.nature.NatureVector
 
 /** See [Link.protocolBridge]. */
@@ -91,6 +96,35 @@ private fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, targetR
         )
     }
     return null
+}
+
+/**
+ * FU-8 — is there a *damping witness* for a cycle closing on [head], fed by
+ * the closing edge's producer [outlet]? A head guarantees headedness but not
+ * termination; admit the loop only when at least one witness holds (spec 21
+ * §Cycles, ADR 1 feature 8). Any of:
+ *
+ *  1. **Magnitude payload** — the weak-tier quiescence damper is live. Tested
+ *     the same way [FeedbackInlet] dispatches at runtime (`is Magnitude`),
+ *     here against the reified payload class the [feedbackInlet] delegate
+ *     records; equivalently the KSP scan stamps such a producer MONOTONE (2).
+ *  2. **Fixpoint convergence** — the producer declares [Monotonicity.MONOTONE]
+ *     or an [MergeClass.IDEMPOTENT] merge, so laps fold to a fixpoint.
+ *  3. **Explicit quiescence override** — the head was constructed with a
+ *     `quiescence > 0` threshold, an intentional divergence damper.
+ *
+ * Moved from `ManagedHost` (T11-A): a link-admission-time predicate over
+ * nature vectors, the same shape as [reconcileNatures] above — both read a
+ * port's [natures] to decide whether a link (here, a cycle-closing one)
+ * proceeds. `internal` (not `private`): `ManagedHost.connect`, in
+ * `civictech.cell.host`, is still the only caller.
+ */
+internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
+    head.payloadType?.let { if (Magnitude::class.java.isAssignableFrom(it)) return true }
+    val natures = outlet.natures
+    if (natures.level(NatureAxis.MONOTONICITY).rank >= Monotonicity.MONOTONE.rank) return true
+    if (natures.level(NatureAxis.MERGE_IDEMPOTENCE).rank >= MergeClass.IDEMPOTENT.rank) return true
+    return head.quiescence > 0.0
 }
 
 /**

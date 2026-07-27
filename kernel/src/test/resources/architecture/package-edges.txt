@@ -10,6 +10,13 @@
 #
 # See kernel/src/test/kotlin/civictech/cell/architecture/ArchitectureRatchetTest.kt
 # and doc/spec/90-roadmap/91-gap-analysis.md G-63 for context.
+#
+# T11-A: link -> control ADDED — hasDampingWitness moved from ManagedHost
+# into link/Handshake.kt, next to reconcileNatures (the nature-reconciliation
+# code it belongs with); the predicate's Magnitude::class check needs
+# civictech.cell.control.Magnitude. host already had both host -> control
+# and host -> port for the pre-move code, so this is a relocation of an
+# existing dependency, not a new direction in the graph.
 cell -> port
 consistency -> cell
 consistency -> control
@@ -52,6 +59,7 @@ host -> protocol
 host -> proxy
 host -> wire
 link -> cell
+link -> control
 link -> nature
 link -> port
 link -> protocol

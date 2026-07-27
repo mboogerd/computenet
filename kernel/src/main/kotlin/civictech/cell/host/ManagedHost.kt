@@ -27,13 +27,9 @@ import civictech.cell.evolve.Effectful
 import civictech.cell.graph.CellFactory
 import civictech.cell.graph.IdentityBinding
 import civictech.cell.graph.requireBoundRef
-import civictech.cell.control.Magnitude
 import civictech.cell.Propagate
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.control.ParkQueue
-import civictech.nature.MergeClass
-import civictech.nature.Monotonicity
-import civictech.nature.NatureAxis
 import civictech.nature.ProtocolRegistry
 import civictech.cell.proxy.Invocation
 import civictech.cell.proxy.Proxy
@@ -1017,42 +1013,8 @@ open class ManagedHost(
     // LocationRegistry's read-only projection (T03) rather than the raw
     // TopologyIndex (which `LocationRegistry.topology` no longer exposes).
 
-    /**
-     * FU-8 — is there a *damping witness* for a cycle closing on [head], fed by
-     * the closing edge's producer [outlet]? A head guarantees headedness but not
-     * termination; admit the loop only when at least one witness holds (spec 21
-     * §Cycles, ADR 1 feature 8). Any of:
-     *
-     *  1. **Magnitude payload** — the weak-tier quiescence damper is live. Tested
-     *     the same way [FeedbackInlet] dispatches at runtime (`is Magnitude`),
-     *     here against the reified payload class the [feedbackInlet] delegate
-     *     records; equivalently the KSP scan stamps such a producer MONOTONE (2).
-     *  2. **Fixpoint convergence** — the producer declares [Monotonicity.MONOTONE]
-     *     or an [MergeClass.IDEMPOTENT] merge, so laps fold to a fixpoint.
-     *  3. **Explicit quiescence override** — the head was constructed with a
-     *     `quiescence > 0` threshold, an intentional divergence damper.
-     */
-    private fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
-        head.payloadType?.let { if (Magnitude::class.java.isAssignableFrom(it)) return true }
-        val natures = outlet.natures
-        if (natures.level(NatureAxis.MONOTONICITY).rank >= Monotonicity.MONOTONE.rank) return true
-        if (natures.level(NatureAxis.MERGE_IDEMPOTENCE).rank >= MergeClass.IDEMPOTENT.rank) return true
-        return head.quiescence > 0.0
-    }
-}
-
-/**
- * Overlays a delivery's real local [Port] onto a wire-reconstructed [base]
- * link (spec 41 point 4, G-35 phase B) so identity-gated protocol handlers
- * (`Attention.wire()`, `GlitchFreeCell`) treat it exactly like an in-process
- * link. Everything else — [protocolBridge]/[protocolCapabilities] for the
- * next hop — still comes from [base].
- */
-private class DirectedProtocolLink(
-    private val base: Link,
-    private val localPort: Port,
-    localIsFrom: Boolean,
-) : Link by base {
-    override val fromPort: Port? = if (localIsFrom) localPort else null
-    override val toPort: Port? = if (!localIsFrom) localPort else null
+    // hasDampingWitness: moved to civictech.cell.link.Handshake.kt (T11-A) —
+    // it reads nature vectors the same way Handshake's reconcileNatures does,
+    // and both are link-admission-time nature predicates; see that file for
+    // the FU-8 KDoc. Call site above is now the top-level `hasDampingWitness`.
 }
