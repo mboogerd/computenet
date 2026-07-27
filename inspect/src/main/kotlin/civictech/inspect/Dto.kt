@@ -2,6 +2,8 @@ package civictech.inspect
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -78,8 +80,84 @@ data class Edge(
 ) {
     companion object {
         const val CONSUME = "CONSUME"
+
+        /** The tap role. Never emitted yet — taps are not in the topology index. */
+        const val OBSERVE = "OBSERVE"
     }
 }
+
+/**
+ * `GET /api/inspect/cell/{ref}` — the contract's "[Node] plus" shape. The
+ * served body is built by *merging* the encoded [Node] with the two extra
+ * fields (see `InspectorModel.detailJson`), so the shared half can never drift
+ * from the snapshot's; this class is the decode-side mirror of that merge, and
+ * a [Node] field added without adding it here fails the detail test loudly.
+ */
+@Serializable
+data class CellDetail(
+    val ref: String,
+    val name: String? = null,
+    val typeFqn: String,
+    val color: String? = null,
+    val manifests: List<String> = emptyList(),
+    val ports: List<NodePort> = emptyList(),
+    val host: String? = null,
+    val net: String = Node.LOCAL_NET,
+    val lifecycle: String = Node.HOT,
+    val generation: Long = 0,
+    val graph: String? = null,
+    /**
+     * `"focus"` / `"idle"`, or null. **Always null in M1**: the attention band
+     * lives on the cell object (`AttentionSupport.of(cell).band`, reachable
+     * only through `ManagedHost`'s private `cells` map), and the ticket
+     * forbids adding kernel surface for it — so the contract's null is the
+     * honest answer rather than a guess.
+     */
+    val attention: String? = null,
+    val links: LinkCounts,
+)
+
+/** `CellDetail.links` — the per-cell link census. */
+@Serializable
+data class LinkCounts(
+    val inbound: Int,
+    val outbound: Int,
+    /**
+     * Observe-role edges. Always 0 in M1: `FanOutlet.tap` attachments are not
+     * recorded in the registry's `TopologyIndex` (only `ManagedHost.connect`
+     * writes there), so there is nothing to count — the same limitation M0
+     * reported as `Edge.role` always `CONSUME`.
+     */
+    val taps: Int,
+)
+
+/** `GET /api/inspect/cell/{ref}/state`. */
+@Serializable
+data class CellState(
+    val ref: String,
+    val frontier: WaveStamp? = null,
+    /** [VIEW], [SNAPSHOT] or [UNAVAILABLE]. */
+    val kind: String,
+    /** The contract's `Value` — see [ValueEncoder]. `null` when [kind] is [UNAVAILABLE]. */
+    val value: JsonElement = JsonNull,
+    /** Milliseconds since the reported value last effectively changed. */
+    val staleMs: Long = 0,
+) {
+    companion object {
+        /** Read from a live observation's materialized fold — torn-read-free. */
+        const val VIEW = "view"
+
+        /** Read from a host-routed `Stateful.snapshot()`. */
+        const val SNAPSHOT = "snapshot"
+
+        /** No observation and no snapshot source — nothing honest to report. */
+        const val UNAVAILABLE = "unavailable"
+    }
+}
+
+/** A wave position: `civictech.cell.Timestamp` on the wire. */
+@Serializable
+data class WaveStamp(val source: String, val counter: Long)
 
 /** The SSE envelope: `data: {"seq":…,"kind":…,"payload":{…}}\n\n`. */
 @Serializable
@@ -92,6 +170,7 @@ data class Event(
         const val TOPOLOGY_NODE = "topology.node"
         const val TOPOLOGY_LINK = "topology.link"
         const val LIFECYCLE = "lifecycle"
+        const val STATE_SUMMARY = "state.summary"
         const val HEARTBEAT = "heartbeat"
 
         const val ADDED = "added"

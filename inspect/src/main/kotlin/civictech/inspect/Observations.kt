@@ -1,0 +1,355 @@
+package civictech.inspect
+
+import civictech.cell.CellRef
+import civictech.cell.CurrentContext
+import civictech.cell.Timestamp
+import civictech.cell.data.KeyedSetApi
+import civictech.cell.data.MapApi
+import civictech.cell.data.SetApi
+import civictech.cell.data.op.CombineLatestApi
+import civictech.cell.data.op.FilterSetApi
+import civictech.cell.data.op.FlatMapSetApi
+import civictech.cell.data.op.GroupByApi
+import civictech.cell.data.op.IntersectSetApi
+import civictech.cell.data.op.JoinApi
+import civictech.cell.data.op.JoinSetApi
+import civictech.cell.data.op.LookupJoinApi
+import civictech.cell.data.op.QuorumSetApi
+import civictech.cell.data.op.SemiJoinApi
+import civictech.cell.data.op.UnionSetApi
+import civictech.cell.host.LocationRegistry
+import civictech.cell.host.ManagedHost
+import civictech.cell.link.Link
+import civictech.cell.link.LinkResult
+import civictech.cell.observe.ObservationSink
+import civictech.cell.observe.ObserveCell
+import civictech.cell.observe.View
+import civictech.nature.ContractRegistry
+import civictech.nature.PortDirection
+import java.io.Serializable
+
+/**
+ * One consistent read of a cell's state, plus the metadata the contract's
+ * `CellState` / `state.summary` carry alongside it.
+ */
+internal data class StateReading(
+    /** [CellState.VIEW] or [CellState.SNAPSHOT]. */
+    val kind: String,
+    val value: Any?,
+    val frontier: Timestamp?,
+    val staleMs: Long,
+)
+
+/**
+ * The `Stateful.snapshot()` fallback seam.
+ *
+ * **Not wired in M1, deliberately.** The ticket asks for a *host-routed*
+ * snapshot: `Stateful.snapshot()` must run on the owning host's execution
+ * context, because off-thread it races the cell's own fold. Routing it there
+ * needs one of two things the kernel does not expose today —
+ *
+ * - the hosted `Cell` instance (`ManagedHost.cells` is private, and
+ *   `LocationRegistry.describe` deliberately hands back only the `Class`), or
+ * - a way to run a block on the host's management band
+ *   (`ManagedHost.enqueueAwaiting` is private; `HostManagementApi` has no
+ *   general-purpose form, and `HostedCellProxy` answers `snapshot()` with
+ *   `null` because it is neither `getRef` nor a port accessor).
+ *
+ * Both are kernel edits, which this ticket excludes without orchestrator
+ * sign-off ("No kernel edits without orchestrator sign-off"). So the seam is
+ * declared, the whole `kind: "snapshot"` path behind it is implemented and
+ * tested, and the shipped default reports [CellState.UNAVAILABLE] rather than
+ * reading a live cell from the HTTP thread — the one thing the ticket
+ * explicitly warns against.
+ *
+ * When the accessor lands (a `ManagedHost.snapshotOf(ref): Serializable?`
+ * running `enqueueAwaiting(0) { (cells[ref] as? Stateful)?.snapshot() }` is the
+ * whole of it), wiring it is one line at [InspectorServer]'s construction.
+ */
+fun interface SnapshotSource {
+    /** [ref]'s snapshot, captured on its host's execution context, or null. */
+    fun snapshotOf(ref: CellRef): Serializable?
+
+    companion object {
+        /** The shipped default: no host-routed snapshot exists yet (see the interface doc). */
+        val Unavailable = SnapshotSource { null }
+    }
+}
+
+/**
+ * Server-side state observations — the explicit subscription model invariant P6
+ * demands ("browsing must not subscribe"). Nothing here runs unless a client
+ * asks for it: `POST /cell/{ref}/observe` creates one, `DELETE` releases it, an
+ * idle deadline releases the ones a client forgot.
+ *
+ * ### Why observing is not free
+ *
+ * An observation is a real `ObserveCell` spawned into the target's host and
+ * linked to its outlet. That link raises attention on the upstream cone and can
+ * un-park it (P6: "observation is causal"), so a leaked sink does not merely
+ * waste memory — it keeps a cone awake. Release therefore does both halves:
+ *
+ * 1. `link.unlink()` — `ManagedHost.connect` registers
+ *    `onUnlink { registry.unlink(id) }`, so this detaches the producer's
+ *    consumer entry *and* retracts the edge from the topology index (the
+ *    inspector's own `topology.link removed` delta follows);
+ * 2. `despawn(sinkRef)` — unpublishes the sink, runs `onDeactivate`, which is
+ *    `ObserveCell.close()` (its dispatch thread stops), and releases its ports.
+ *
+ * Both are needed. `despawn` alone leaves the outlet's consumer entry intact
+ * (`FanOutlet.consumers` is keyed by port ref and only `unsubscribe`/`unlink`
+ * removes it), so the producer would keep pushing into a despawned cell and the
+ * edge would linger in the topology.
+ *
+ * This is also why the sink is built here from [ObserveCell] + `connect` rather
+ * than through the `host.observe(...)` helper the ticket names: `observe`
+ * discards the `LinkResult`, and without the `Link` step 1 above is impossible.
+ * The two calls below are `observe`'s body verbatim, with the link kept.
+ */
+internal class Observations(
+    private val registry: LocationRegistry,
+    /** Fires on every settled effective change of an open observation. */
+    private val onChange: (CellRef, StateReading) -> Unit,
+    private val snapshots: SnapshotSource = SnapshotSource.Unavailable,
+    private val clock: () -> Long = System::currentTimeMillis,
+) : AutoCloseable {
+
+    private val lock = Any()
+    private val open = LinkedHashMap<CellRef, Observation>()
+
+    /** Refs with a live observation — diagnostics and tests. */
+    val openRefs: Set<CellRef> get() = synchronized(lock) { open.keys.toSet() }
+
+    /**
+     * Start observing [ref], or renew the idle deadline if it is already
+     * observed. False when the cell cannot be observed at all — it is not
+     * locally hosted, has no generated descriptor, exposes no outlet, or emits
+     * a delta shape no built-in [View] folds (a `CounterDelta`/`ListDelta`
+     * producer, or a sink like `ObserveCell` that has no outlet at all).
+     */
+    fun start(ref: CellRef): Boolean {
+        synchronized(lock) {
+            open[ref]?.let {
+                it.touch(clock())
+                return true
+            }
+        }
+
+        val host = registry.locate(ref) ?: return false
+        val type = registry.describe(ref) ?: return false
+        val descriptor = ContractRegistry.cellDescriptor(type) ?: return false
+        val outlet = outletName(descriptor.ports.filter { it.direction == PortDirection.OUT }.map { it.name })
+            ?: return false
+        val view = StampedView(viewFor(type) ?: return false, clock)
+
+        // `observe`'s body, with the link retained — see this class's doc.
+        val sink = ObserveCell(view)
+        val mgmt = host.managementInlet.call
+        mgmt.spawn(sink)
+        val result = mgmt.connect(ref, outlet, sink.ref, "inlet")
+        if (result !is LinkResult.Connected) {
+            mgmt.despawn(sink.ref)
+            return false
+        }
+
+        val observation = Observation(host, sink, sink.ref, result.link, view, clock())
+        val existing = synchronized(lock) {
+            open[ref] ?: run { open[ref] = observation; null }
+        }
+        if (existing != null) {
+            // lost a concurrent POST race: keep the winner, release this one
+            release(observation)
+            existing.touch(clock())
+            return true
+        }
+
+        // Registered last, exactly like `observe`'s optional listener: its
+        // built-in late-join catch-up then already carries the connected
+        // producer's current state, so a client sees one summary immediately.
+        sink.onChange { value -> onChange(ref, observation.reading(value, clock())) }
+        return true
+    }
+
+    /** Release [ref]'s observation. False when it had none. */
+    fun stop(ref: CellRef): Boolean {
+        val observation = synchronized(lock) { open.remove(ref) } ?: return false
+        release(observation)
+        return true
+    }
+
+    /** Renew [ref]'s idle deadline — the contract's "matching `GET state`". */
+    fun touch(ref: CellRef) {
+        synchronized(lock) { open[ref] }?.touch(clock())
+    }
+
+    /** A consistent read of [ref], or null when it is not observed. */
+    fun reading(ref: CellRef): StateReading? {
+        val observation = synchronized(lock) { open[ref] } ?: return null
+        return observation.reading(observation.sink.current(), clock())
+    }
+
+    /**
+     * The [SnapshotSource] fallback: a state read for a cell with no
+     * observation. Null when no source is wired (the shipped default).
+     */
+    fun snapshotReading(ref: CellRef): StateReading? {
+        val snapshot = snapshots.snapshotOf(ref) ?: return null
+        return StateReading(CellState.SNAPSHOT, snapshot, frontier = null, staleMs = 0)
+    }
+
+    /**
+     * Idle safety net: release observations no client has read for
+     * [IDLE_RELEASE_MS]. A tab closed without a `DELETE` (or a client that
+     * crashed mid-session) must not keep a cone's attention raised forever.
+     */
+    fun sweep() {
+        val now = clock()
+        val expired = synchronized(lock) {
+            open.entries.filter { now - it.value.lastTouchedMs >= IDLE_RELEASE_MS }
+                .onEach { open.remove(it.key) }
+                .map { it.value }
+        }
+        expired.forEach(::release)
+    }
+
+    override fun close() {
+        val all = synchronized(lock) { open.values.toList().also { open.clear() } }
+        all.forEach(::release)
+    }
+
+    /**
+     * Unlink then despawn — both halves, in that order, so the producer stops
+     * pushing before the sink stops existing. Failures are swallowed: a release
+     * racing a despawned target must not fail the request that asked for it.
+     */
+    private fun release(observation: Observation) {
+        runCatching { observation.link.unlink() }
+        runCatching { observation.host.managementInlet.call.despawn(observation.sinkRef) }
+    }
+
+    private class Observation(
+        val host: ManagedHost,
+        val sink: ObservationSink<*>,
+        val sinkRef: CellRef,
+        val link: Link,
+        private val view: StampedView<*, *>,
+        openedAtMs: Long,
+    ) {
+        @Volatile
+        var lastTouchedMs: Long = openedAtMs
+            private set
+
+        fun touch(now: Long) {
+            lastTouchedMs = now
+        }
+
+        fun reading(value: Any?, now: Long) = StateReading(
+            kind = CellState.VIEW,
+            value = value,
+            frontier = view.frontier,
+            staleMs = (now - view.changedAtMs).coerceAtLeast(0),
+        )
+    }
+
+    internal companion object {
+        /** Contract/ticket: "auto-release after 5 min without a matching `GET state`". */
+        const val IDLE_RELEASE_MS = 5 * 60 * 1000L
+
+        /**
+         * Which outlet to fold. The kernel's convention is a single outlet
+         * named `outlet` (every `@CellBase` API in `civictech.cell.data` and
+         * `.data.op` declares exactly that); a cell with one differently-named
+         * OUT port is still unambiguous, and one with several is not — folding
+         * an arbitrary choice of them would be a guess, so it is refused.
+         */
+        fun outletName(outPorts: List<String>): String? = when {
+            DEFAULT_OUTLET in outPorts -> DEFAULT_OUTLET
+            outPorts.size == 1 -> outPorts.single()
+            else -> null
+        }
+
+        private const val DEFAULT_OUTLET = "outlet"
+
+        private val SET_OUTLETS = listOf(
+            SetApi::class.java, KeyedSetApi::class.java, UnionSetApi::class.java,
+            IntersectSetApi::class.java, FilterSetApi::class.java, QuorumSetApi::class.java,
+            JoinSetApi::class.java, SemiJoinApi::class.java, FlatMapSetApi::class.java,
+        )
+
+        private val MAP_OUTLETS = listOf(
+            MapApi::class.java, JoinApi::class.java, LookupJoinApi::class.java,
+            CombineLatestApi::class.java,
+        )
+
+        /**
+         * The best-matching built-in fold for [type]'s outlet, keyed on the
+         * generated `@CellBase` API the cell implements — the delta *shape* the
+         * outlet emits, which is the only thing a `View` cares about:
+         *
+         * - `SetDelta` producers fold with `View.set()`;
+         * - `MapDelta` producers with `View.map()`, except a `GroupByApi`,
+         *   whose per-key aggregate is the shape `View.count()` names (its
+         *   `CountView` is a `MapView` with a zero-defaulting accessor, so the
+         *   fold is identical either way — this only keeps the sink honest
+         *   about what it is folding);
+         * - anything else (`CounterDelta`, `ListDelta`, a sink with no outlet)
+         *   has no built-in fold, and is reported unobservable rather than
+         *   forced into a mismatched one.
+         *
+         * The `Any?` type arguments mirror `ObserveAllBuilder`'s untyped
+         * overloads: the element type is erased in the fold, and the encoder
+         * takes `Any?` anyway.
+         */
+        fun viewFor(type: Class<*>): View<Any, Any?>? {
+            @Suppress("UNCHECKED_CAST")
+            return when {
+                GroupByApi::class.java.isAssignableFrom(type) -> View.count<Any?>()
+                MAP_OUTLETS.any { it.isAssignableFrom(type) } -> View.map<Any?, Any?>()
+                SET_OUTLETS.any { it.isAssignableFrom(type) } -> View.set<Any?>()
+                else -> null
+            } as View<Any, Any?>?
+        }
+    }
+}
+
+/**
+ * A [View] decorator that records *when* and *at which wave* the fold last
+ * effectively changed — the contract's `CellState.frontier` and `staleMs`.
+ *
+ * The frontier is read from the ambient [CurrentContext] rather than from the
+ * view: emission is the context-stamping point (`FanOutlet.call` wraps its
+ * whole fan-out in `CurrentContext.with(ctx)`), so at the instant the sink's
+ * fold runs, the ambient timestamp *is* the producing outlet's wave position
+ * for this delta. No built-in `View` exposes a frontier of its own, and the
+ * ticket's "when the view exposes one" is satisfied without widening the kernel
+ * interface.
+ *
+ * Per-cell only: nothing here claims cross-cell wave alignment (10-target-v3
+ * §Constraints 4, defect class F-5 — accepted).
+ */
+internal class StampedView<D : Any, S>(
+    private val delegate: View<D, S>,
+    private val clock: () -> Long,
+) : View<D, S> {
+
+    @Volatile
+    var frontier: Timestamp? = null
+        private set
+
+    @Volatile
+    var changedAtMs: Long = clock()
+        private set
+
+    override fun apply(delta: D): Boolean {
+        val changed = delegate.apply(delta)
+        if (changed) {
+            frontier = CurrentContext.get()?.timestamp
+            changedAtMs = clock()
+        }
+        return changed
+    }
+
+    override fun current(): S = delegate.current()
+    override fun snapshot(): Serializable = delegate.snapshot()
+    override fun restore(state: Serializable) = delegate.restore(state)
+}
