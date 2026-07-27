@@ -12,6 +12,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
+import civictech.demo.shell.esc
 import civictech.demo.shell.flag
 import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
@@ -377,7 +378,9 @@ class TriageApp(port: Int = 8080, private val journalPath: Path? = null) {
 
     // ── json ─────────────────────────────────────────────────────────────
 
-    private fun esc(s: String) = JsonPrimitive(s).toString()
+    // `esc` is :demo:shell's shared JsonPrimitive-backed escaper (T12 finding
+    // 5) — this file's private copy was its reference implementation and is
+    // now the shared one, imported above.
 
     private fun num(d: Double) = "%.4f".format(Locale.ROOT, d)
 
