@@ -14,9 +14,6 @@ import java.io.Serializable
 import java.util.UUID
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
-import civictech.cell.data.op.FilterCell
-import civictech.cell.data.op.UnionSetCell
-import civictech.cell.data.op.GroupByCell
 import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
 import civictech.cell.data.view.CountView

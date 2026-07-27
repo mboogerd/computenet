@@ -4,7 +4,6 @@ import civictech.cell.Timestamp
 import civictech.cell.control.Progress
 import civictech.cell.control.StallNotice
 import civictech.cell.protocol.EdgeClose
-import civictech.cell.protocol.EdgeEvent
 import civictech.cell.protocol.EdgeOpen
 import civictech.cell.port.FanInlet
 import civictech.cell.port.InletFrontier

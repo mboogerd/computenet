@@ -12,7 +12,6 @@ import java.io.Serializable
 import java.util.*
 import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.delta.MintedTags
 
 @CellBase
 interface JoinSetApi<A, B, C> {
@@ -24,7 +23,7 @@ interface JoinSetApi<A, B, C> {
 /**
  * Incremental relational equi-join over tagged set streams (M11.5): a pair
  * `(a, b)` is live iff both rows are live and their keys match; each live
- * pair carries one minted tag ([MintedTags] — pairs re-enter when a removed
+ * pair carries one minted tag (`MintedTags` — pairs re-enter when a removed
  * row returns, so input tags can't be borrowed), emitted under
  * `combine(a, b)`. Many-to-one `combine` collapses correctly: the output
  * element holds one tag per contributing pair and stays live until the last

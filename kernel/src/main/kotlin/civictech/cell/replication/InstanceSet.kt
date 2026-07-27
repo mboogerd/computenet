@@ -9,15 +9,10 @@ import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.nature.NatureNegotiation
 import civictech.cell.nature.Reconciliation
-import civictech.cell.port.PortRef
-import civictech.cell.port.Subscribe
-import civictech.cell.port.Use
 import civictech.cell.link.Interest
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
 import java.io.Serializable
-import civictech.cell.data.delta.SetDelta
-import civictech.cell.partition.ShardCell
 
 /**
  * One instance's interest assignment (PN-6, spec 40/42 §Interest-scoped instance

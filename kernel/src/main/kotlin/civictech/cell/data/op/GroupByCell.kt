@@ -14,7 +14,6 @@ import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.TagState
-import civictech.cell.partition.PartitionedCell
 
 @CellBase
 interface GroupByApi<E, K, A> {
@@ -99,7 +98,7 @@ class GroupByCell<E, K, A, ACC : Serializable>(
 
     /**
      * This shard's live input membership as a delta-from-empty (PN-6): the raw
-     * tagged elements it currently holds, tags verbatim. A [PartitionedCell]
+     * tagged elements it currently holds, tags verbatim. A `PartitionedCell`
      * repartition sources its replay from the shards' own contents instead of a
      * router-side `routed` ledger (deleted, PN-6 §one linker one assignment), so
      * the composite holds O(instances) routing state, never a second O(total)

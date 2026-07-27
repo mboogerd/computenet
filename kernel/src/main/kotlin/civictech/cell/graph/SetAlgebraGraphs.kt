@@ -1,6 +1,5 @@
 package civictech.cell.graph
 
-import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.op.FilterCell
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.CountCell

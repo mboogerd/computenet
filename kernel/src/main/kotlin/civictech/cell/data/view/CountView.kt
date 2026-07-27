@@ -2,14 +2,13 @@ package civictech.cell.data.view
 
 import java.io.Serializable
 import civictech.cell.data.delta.MapDelta
-import civictech.cell.data.op.GroupByCell
 
 /**
  * Consumer-side materialized read model over a per-key count stream (the
  * slotfinder `byDay` fold): folds a [MapDelta] of `K -> Long` into queryable
  * counts. A thin specialization of [MapView] with a zero-defaulting [count]
  * accessor; it shares MapView's last-writer-per-key semantics — upstream (a
- * [GroupByCell]-style fold) recomputes each count and re-puts it — so it does
+ * `GroupByCell`-style fold) recomputes each count and re-puts it — so it does
  * not diverge from the map fold. No ports, no host, no wave logic.
  *
  * Not thread-safe: apply deltas from one thread at a time, like the cells.

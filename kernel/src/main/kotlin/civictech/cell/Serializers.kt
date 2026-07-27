@@ -13,7 +13,6 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.encoding.encodeStructure
 import java.util.UUID
-import civictech.cell.data.delta.ListDelta
 
 object UuidSerializer : KSerializer<UUID> {
     override val descriptor = PrimitiveSerialDescriptor("Uuid", PrimitiveKind.STRING)

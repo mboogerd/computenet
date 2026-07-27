@@ -15,7 +15,6 @@ import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.view.SetView
 
 @CellBase
 interface QuorumSetApi<E> {
@@ -41,7 +40,7 @@ interface QuorumSetApi<E> {
  *
  * Output tag discipline is [IntersectSetCell]'s: on entry an element is
  * advertised downstream with its live input tags; on exit *exactly those*
- * advertised tags are deleted, so a downstream [SetView]/[UnionSetCell] tracks
+ * advertised tags are deleted, so a downstream `SetView`/[UnionSetCell] tracks
  * membership precisely and tag churn while membership holds is absorbed
  * (effective-only, spec 21). Because the threshold reads `n`, a link
  * opening/closing re-evaluates the quorum even for elements whose own count did

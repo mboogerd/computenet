@@ -3,7 +3,6 @@ package civictech.cell.partition
 import civictech.cell.CellRef
 import civictech.cell.TagFrontier
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.replication.Assignment
 import java.io.Serializable
 
 /**
@@ -11,11 +10,13 @@ import java.io.Serializable
  * instance sets, CP-D3): a key-range slice of a [SetDelta]. A shard whose
  * interest no longer admits a key drops the slice, so an in-flight command
  * crossing a repartition flip neither loses nor double-counts — admission checks
- * the shard's CURRENT interest, established by the journaled [Assignment].
+ * the shard's CURRENT interest, established by the journaled
+ * [civictech.cell.replication.Assignment].
  *
  * [epoch] is **deprecated (PN-6)**: it was decorative at the point of use
  * (admission never read it — the current interest is the authority), and PN-6
- * makes the assignment epoch durable on the [Assignment] lattice instead. The
+ * makes the assignment epoch durable on the [civictech.cell.replication.Assignment]
+ * lattice instead. The
  * field is retained for one release (old frames still decode); `WireCodec` no
  * longer sniffs it onto `WireFrame.routingEpoch`, and no reader consults it.
  */
