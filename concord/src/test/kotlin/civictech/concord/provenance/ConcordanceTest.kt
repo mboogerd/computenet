@@ -216,4 +216,57 @@ class ConcordanceTest {
         markdown shouldContain "| Requirement | Scenarios | Status |"
         markdown shouldContain "| 90-FAKE-01 | FAKE-01 | covered |"
     }
+
+    // --- T02-D: chapter denominator honesty --------------------------------------------
+
+    @Test
+    fun `scanNormativeChapterFiles lists chapter files under 00-50 but not 90-roadmap`() {
+        val spec = specDir()
+        writeSpecChapter(File(spec, "10-programming-model").apply { mkdirs() }, "11-cells.md", "no ids here")
+        writeSpecChapter(File(spec, "10-programming-model").apply { mkdirs() }, "12-ports.md", "[12-FAKE-01] an id")
+        writeSpecChapter(File(spec, "90-roadmap").apply { mkdirs() }, "91-gap-analysis.md", "not normative")
+
+        val chapters = ConcordanceScanner.scanNormativeChapterFiles(spec)
+
+        chapters shouldContainExactly listOf("10-programming-model/11-cells.md", "10-programming-model/12-ports.md")
+    }
+
+    @Test
+    fun `computeChapterDenominator partitions chapters by whether any id was found in them`() {
+        val chapterFiles = listOf(
+            "10-programming-model/11-cells.md",
+            "10-programming-model/12-ports.md",
+            "20-dataflow-semantics/23-ownership.md",
+        )
+        val requirements = listOf(
+            ConcordanceScanner.Requirement("12-FAKE-01", "10-programming-model/12-ports.md"),
+        )
+
+        val denominator = computeChapterDenominator(chapterFiles, requirements)
+
+        denominator.withIds shouldContainExactly listOf("10-programming-model/12-ports.md")
+        denominator.withoutIds shouldContainExactly listOf(
+            "10-programming-model/11-cells.md",
+            "20-dataflow-semantics/23-ownership.md",
+        )
+        denominator.total shouldBe 3
+    }
+
+    @Test
+    fun `renderConcordanceMarkdown with a denominator names the zero-id chapters`() {
+        val requirements = listOf(ConcordanceScanner.Requirement("12-FAKE-01", "10-programming-model/12-ports.md"))
+        val scenarios = listOf(
+            ConcordanceScanner.CorpusScenario("FAKE-01", listOf("12-FAKE-01"), "fake-01.yaml"),
+        )
+        val denominator = ChapterDenominator(
+            withIds = listOf("10-programming-model/12-ports.md"),
+            withoutIds = listOf("10-programming-model/11-cells.md"),
+        )
+
+        val markdown = renderConcordanceMarkdown(buildConcordance(requirements, scenarios), denominator)
+
+        markdown shouldContain "Denominator honesty"
+        markdown shouldContain "1 of 2"
+        markdown shouldContain "10-programming-model/11-cells.md"
+    }
 }
