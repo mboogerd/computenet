@@ -19,6 +19,7 @@ import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -222,7 +223,7 @@ class UnknownJoinerFenceTest {
 
     @Test
     fun `board never surfaces a value an unknown covering joiner has not delivered - 100 seeds`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val obs = run(seed, converged = false, membershipBarrier = true)
             // Safety: across the convergence window, never a post-join value a
             // ground-truth covering member — including the unknown joiner r4 — lacks.
@@ -249,7 +250,7 @@ class UnknownJoinerFenceTest {
 
     @Test
     fun `control b - fully-converged membership adds no holding and stays safe with the barrier on or off`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val on = run(seed, converged = true, membershipBarrier = true)
             val off = run(seed, converged = true, membershipBarrier = false)
             // No extra holding once everyone is known: the released value set is

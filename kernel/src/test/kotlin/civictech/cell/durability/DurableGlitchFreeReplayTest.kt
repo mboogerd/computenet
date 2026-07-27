@@ -18,6 +18,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -193,7 +194,7 @@ class DurableGlitchFreeReplayTest {
     @Test
     fun `replay re-enters as a baseline - durable glitch-free diamond recovers under 100 seeds`() {
         val journalFrames = preCrashWaves // one WAL frame per journaled arm-1 wave
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val obs = runSession(seed, replayAsBaseline = true, deriveStableRefs = true)
 
             val replay = obs.filter { it.baseline }
@@ -222,7 +223,7 @@ class DurableGlitchFreeReplayTest {
 
     @Test
     fun `control a - replay as ordinary waves stalls the asymmetric diamond on every seed`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val obs = runSession(seed, replayAsBaseline = false, deriveStableRefs = true)
             // the replayed arm-1 waves await an arm-2 contribution the volatile arm can never
             // replay: they stall in the join, never released. None of 1..preCrashWaves surface.
@@ -236,7 +237,7 @@ class DurableGlitchFreeReplayTest {
     @Test
     fun `control b - PN-1 derivation reverted but baseline on - recovery still green`() {
         val journalFrames = preCrashWaves
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val obs = runSession(seed, replayAsBaseline = true, deriveStableRefs = false)
 
             val replay = obs.filter { it.baseline }

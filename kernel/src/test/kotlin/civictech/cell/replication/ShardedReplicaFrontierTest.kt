@@ -20,6 +20,7 @@ import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -192,7 +193,7 @@ class ShardedReplicaFrontierTest {
 
     @Test
     fun `board over a sharded-and-replicated instance set never surfaces an uncovered value - 120 seeds`() {
-        for (seed in 0L until 120L) {
+        forEachSeed(0L until 120L) { seed ->
             val obs = run(seed, Variant.REAL)
             // safety: never a value a covering member has not delivered.
             obs.forEach { it.allCoveringDelivered.shouldBeTrue() }

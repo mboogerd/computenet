@@ -9,6 +9,7 @@ import civictech.cell.host.ManagedHost
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
+import civictech.demo.shell.value
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -156,13 +157,8 @@ class AgoraApp(port: Int = 8080, journalDir: File? = null) {
 }
 
 fun main(args: Array<String>) {
-    fun value(flag: String): String? {
-        val i = args.indexOf(flag)
-        return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
-    }
-
     val port = demoPort(args)
-    val journalDir = value("--journal")?.let { File(it).apply { mkdirs() } }
+    val journalDir = args.value("--journal")?.let { File(it).apply { mkdirs() } }
 
     val app = AgoraApp(port, journalDir).start()
     println("agora: http://localhost:${app.boundPort}")

@@ -12,6 +12,7 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
+import civictech.demo.shell.flag
 import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.json.Json
@@ -439,12 +440,9 @@ fun seedFrom(app: TriageApp, dir: Path) {
 }
 
 fun main(args: Array<String>) {
-    fun flag(name: String): String? =
-        args.indexOf(name).takeIf { it >= 0 && it + 1 < args.size }?.let { args[it + 1] }
-
     val port = demoPort(args)
-    val app = TriageApp(port, journalPath = flag("--journal")?.let { Path.of(it) }).start()
-    flag("--seed")?.let { seedFrom(app, Path.of(it)) }
+    val app = TriageApp(port, journalPath = args.flag("--journal")?.let { Path.of(it) }).start()
+    args.flag("--seed")?.let { seedFrom(app, Path.of(it)) }
     println("computenet backlog-triage: http://localhost:${app.boundPort}")
 }
 

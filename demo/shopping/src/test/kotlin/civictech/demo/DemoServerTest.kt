@@ -1,5 +1,6 @@
 package civictech.demo
 
+import civictech.testkit.HttpProbe
 import org.junit.jupiter.api.Test
 import java.net.URI
 import java.net.http.HttpClient
@@ -16,12 +17,9 @@ class DemoServerTest {
         try {
             val client = HttpClient.newHttpClient()
             val base = "http://localhost:${app.boundPort}"
+            val probe = HttpProbe(base)
 
-            val post = HttpRequest.newBuilder(URI("$base/op"))
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString("user=tester&action=add&item=apples"))
-                .build()
-            assertEquals(200, client.send(post, HttpResponse.BodyHandlers.ofString()).statusCode())
+            assertEquals(200, probe.post("user=tester&action=add&item=apples"))
 
             val events = client.send(
                 HttpRequest.newBuilder(URI("$base/events")).build(),
@@ -50,13 +48,8 @@ class DemoServerTest {
         try {
             val client = HttpClient.newHttpClient()
             val base = "http://localhost:${app.boundPort}"
-            fun op(action: String, item: String) = client.send(
-                HttpRequest.newBuilder(URI("$base/op"))
-                    .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString("user=tester&action=$action&item=$item"))
-                    .build(),
-                HttpResponse.BodyHandlers.ofString(),
-            )
+            val probe = HttpProbe(base)
+            fun op(action: String, item: String) = probe.post("user=tester&action=$action&item=$item")
 
             op("add", "milk")   // on the list, not yet wanted
             op("vote", "milk")  // now in items ∩ votes

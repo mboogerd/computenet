@@ -2,6 +2,7 @@ package civictech.demo.shell
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import kotlinx.serialization.json.JsonPrimitive
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -98,3 +99,27 @@ fun HttpExchange.respond(status: Int, body: String, contentType: String = "text/
 fun demoPort(args: Array<String>): Int =
     args.firstOrNull { !it.startsWith("--") }?.toIntOrNull()
         ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
+
+/**
+ * T12 finding 5: a correct JSON string escaper, replacing the byte-identical
+ * hand-rolled `esc` in `tiering`/`skillmatch` (backslash + quote only — no
+ * control-char/newline handling, a latent bug for any title/text containing
+ * one). `JsonPrimitive` already gets this right, and is what backlog-triage's
+ * `TriageApp.esc` used privately before this extraction.
+ */
+fun esc(s: String): String = JsonPrimitive(s).toString()
+
+/**
+ * `--name value` command-line pair lookup, hand-rolled per demo `main` (see
+ * `agora`, `backlog-triage`, and — pending T07's peering-scaffold merge —
+ * `shopping`/`exchange`). [flag] is the same lookup under the name that
+ * reads better where the call site is really asking "is this flag present,
+ * and with what value" (backlog-triage's `--seed`).
+ */
+fun Array<String>.value(name: String): String? {
+    val i = indexOf(name)
+    return if (i >= 0 && i + 1 < size) this[i + 1] else null
+}
+
+/** Alias for [value] — see its doc. */
+fun Array<String>.flag(name: String): String? = value(name)

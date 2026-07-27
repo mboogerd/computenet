@@ -22,6 +22,7 @@ import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import civictech.nature.MergeClass
 import civictech.nature.NatureAxis
 import civictech.nature.NatureVector
@@ -213,7 +214,7 @@ class ShardedReplicationTest {
 
     @Test
     fun `board over a sharded-and-replicated mergeable aggregate equals batch group-by - 100 seeds`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val r = runMain(seed)
             r.board shouldBe r.batch          // no key counted twice: set-union dedups the overlap
             r.perInstanceCoverageOk.shouldBeTrue() // replicas + overlap gossip converged; failover lost nothing
@@ -379,7 +380,7 @@ class ShardedReplicationTest {
 
     @Test
     fun `control c - failover keeps the board settling once PN-0c closes the departed row - 100 seeds`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val released = runFailover(seed, closeOnEvict = true)
             released shouldContainAll (0 until 3).map { "pre$it" }
             released shouldContainAll (0 until 5).map { "post$it" }
@@ -388,7 +389,7 @@ class ShardedReplicationTest {
 
     @Test
     fun `control c - reverting PN-0c wedges the board on failover, on every seed`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val released = runFailover(seed, closeOnEvict = false)
             released shouldContainAll (0 until 3).map { "pre$it" }
             (0 until 5).map { "post$it" }.filter { it in released }.isEmpty().shouldBeTrue()

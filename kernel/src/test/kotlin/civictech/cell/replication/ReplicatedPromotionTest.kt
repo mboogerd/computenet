@@ -20,6 +20,7 @@ import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -204,7 +205,7 @@ class ReplicatedPromotionTest {
 
     @Test
     fun `rolling promotion across the replica set converges and surfaces no undelivered element - 100 seeds`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val run = runRoll(seed, Mode.REUSE_REF)
             // convergence: every replica holds the full batch union of adds.
             run.memberships.forEach { it shouldBe run.universe }

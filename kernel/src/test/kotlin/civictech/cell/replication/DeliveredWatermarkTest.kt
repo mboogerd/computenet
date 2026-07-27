@@ -11,6 +11,7 @@ import civictech.cell.port.FanOutlet
 import civictech.cell.port.Use
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.wire.Peering
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -94,7 +95,7 @@ class DeliveredWatermarkTest {
 
     @Test
     fun `three-replica mesh converges under 100 seeds with a mid-run partition and heal`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val controller = SimulationController(seed)
             val rnd = Random(seed)
             val peers = List(3) { Peer(controller) }

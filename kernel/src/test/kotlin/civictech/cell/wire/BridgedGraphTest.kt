@@ -18,6 +18,7 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.proxy.InvocationSink
+import civictech.testkit.forEachSeed
 import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
@@ -217,7 +218,7 @@ class BridgedGraphTest {
 
     @Test
     fun `bridged views converge with all invariants on every seed`() {
-        for (seed in 0L until 100L) {
+        forEachSeed(0L until 100L) { seed ->
             val run = runBridged(seed, ops = 40)
 
             run.framesCrossed shouldBeGreaterThan 0 // the wire was actually on the path
