@@ -118,8 +118,8 @@ class SingleWriterReplicationTest {
         val side = Peering.Side(registry, bridgeHost)
         val replication = SingleWriterReplication(registry)
 
-        fun replica(logicalId: UUID, instanceId: Long, mark: LeaderMark, posture: WritePosture = WritePosture.AVAILABLE_FENCED): SwCounterCell =
-            SwCounterCell(CellRef(logicalId, instanceId)).also { replication.replicate(it, host, mark, posture) }
+        fun replica(logicalId: UUID, instanceId: Long, mark: LeaderMark): SwCounterCell =
+            SwCounterCell(CellRef(logicalId, instanceId)).also { replication.replicate(it, host, mark) }
 
         fun ops(replica: SwCounterCell): SwCounterOps =
             (civictech.cell.host.HostedCellProxy.create(replica.ref, registry, WriteInletHolder::class.java)

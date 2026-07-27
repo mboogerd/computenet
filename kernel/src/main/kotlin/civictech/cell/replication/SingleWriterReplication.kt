@@ -33,15 +33,6 @@ import java.util.UUID
 data class LeaderMark(val logicalId: UUID, val epoch: Long, val leaderRef: CellRef)
 
 /**
- * Declared per cell (spec 42 §`WritePosture` split). `AVAILABLE_FENCED`
- * (default) keeps serving through partition uncertainty — fencing by epoch
- * on heal is the only safety net. `SAFETY_PARK` (opt-in) instead parks the
- * leader's writes the moment it cannot confirm it is un-superseded — no
- * split-brain, no loss, unavailable for writes by design.
- */
-enum class WritePosture { AVAILABLE_FENCED, SAFETY_PARK }
-
-/**
  * An epoch-stamped unit on the leader→follower log (spec 42): "every leader
  * stamps its produced deltas with the epoch it applied under; deltas or
  * commands stamped below the current epoch are fenced (inert)".
@@ -150,7 +141,7 @@ fun <D> restartCatchUp(leader: SingleWriterReplicable<D>, donor: SingleWriterRep
  */
 class SingleWriterReplication(private val registry: LocationRegistry) {
 
-    private data class Local(val cell: SingleWriterReplicable<*>, val posture: WritePosture)
+    private data class Local(val cell: SingleWriterReplicable<*>)
 
     private val localReplicas = mutableMapOf<UUID, MutableList<Local>>()
     private val leaderMarks = mutableMapOf<UUID, LeaderMark>()
@@ -178,9 +169,8 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
         cell: SingleWriterReplicable<D>,
         host: ManagedHost,
         mark: LeaderMark,
-        posture: WritePosture = WritePosture.AVAILABLE_FENCED,
     ) {
-        localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += Local(cell, posture)
+        localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += Local(cell)
         host.managementInlet.call.spawn(cell)
         designateLeader(mark)
     }
@@ -208,25 +198,6 @@ class SingleWriterReplication(private val registry: LocationRegistry) {
             }
         }
         return true
-    }
-
-    /**
-     * `SAFETY_PARK` trigger (spec 42): park the leader's write inlet — the
-     * leader-targeted park/replay gate (30/33) already built for host
-     * suspend/resume, applied here instead of at eviction. No writes are
-     * lost; they park in [LocationRegistry]'s per-ref queue and replay on
-     * [resumeWrites]. Detecting *when* to call this automatically is the
-     * deferred liveness half (G-44); this is the explicit/orchestrated
-     * trigger the ticket ships.
-     */
-    fun parkWrites(logicalId: UUID, host: ManagedHost) {
-        val local = localReplicas[logicalId]?.firstOrNull { it.posture == WritePosture.SAFETY_PARK } ?: return
-        host.managementInlet.call.suspend(local.cell.ref)
-    }
-
-    fun resumeWrites(logicalId: UUID, host: ManagedHost) {
-        val local = localReplicas[logicalId]?.firstOrNull { it.posture == WritePosture.SAFETY_PARK } ?: return
-        host.managementInlet.call.resume(local.cell.ref)
     }
 
     private fun onPeerPublished(ref: CellRef) {
