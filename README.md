@@ -144,23 +144,32 @@ relational `leftJoin`/`rightJoin`/`fullJoin`.
 ### Defining your own cell
 
 Declare an Api interface with `@CellBase`; KSP generates a base class with
-ports registered and inlets bound:
+ports registered and inlets bound. Every kernel data cell/operator
+(`SetCell`, `MapCell`, `CounterCell`, `CountCell`, `GroupByCell`, ...) is
+written this way; `demo/backlog-triage`'s `RatingCell` is the app-level
+example (`demo/backlog-triage/.../RankingCells.kt`):
 
 ```kotlin
 @CellBase
-interface DoublerApi {
-    val inlet: Serve<Propagate<Int>>
-    val outlet: Subscribe<Propagate<Int>>
+interface RatingApi {
+    val inlet: Serve<Propagate<SetDelta<Pref>>>
+    val outlet: Subscribe<Propagate<MapDelta<String, Double>>>
 }
 
-class DoublerCell(ref: CellRef = CellRef(UUID.randomUUID())) : DoublerCellBase(ref) {
-    override fun onInlet(value: Int) = outlet.call.propagate(value * 2)
+class RatingCell(
+    private val engine: RatingEngine,
+    ref: CellRef = CellRef(UUID.randomUUID()),
+) : RatingCellBase(ref) {
+    override fun onInlet(value: SetDelta<Pref>) {
+        // fold the delta into `engine`, then outlet.call.propagate(...)
+    }
 }
 ```
 
 Requires the KSP plugin plus `ksp(project(":gen"))` — copy the setup from
-`demo/agora/build.gradle.kts`. Cells that should survive restarts implement
-`Stateful` (`snapshot()`/`restore()`).
+`demo/backlog-triage/build.gradle.kts` (or `kernel/build.gradle.kts` — every
+cell-authoring module applies `buildsrc.convention.ksp-cell`). Cells that
+should survive restarts implement `Stateful` (`snapshot()`/`restore()`).
 
 ## Project layout
 
