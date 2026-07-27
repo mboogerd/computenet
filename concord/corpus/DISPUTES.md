@@ -488,3 +488,50 @@ frontier only at `enqueueHostedInvocation`, and a raw port `linkTo` bypasses tha
 funnel entirely (a silent no-journal path — caught only because instrumentation
 showed a zero-length WAL). Reserved-host caveat for the merge: `host: dur` is a
 `dur`-profile convention; a `dist` scenario (W4-A) must not name a host `dur`.
+
+## Structural gap: 13 normative chapters carry no requirement ids at all (T02-D)
+
+**Category: `spec-gap` (id-authoring backlog).** Not a per-scenario dispute
+against a driver/kernel binding — filed because `provenance.md`'s "cannot be
+checked honestly" rule applies at the corpus level too: the L4 concordance
+matrix (`doc/spec/CONCORDANCE.md`) can only arbitrate a requirement that has an
+`[NN-SLUG-nn]` id, and 13 of the 22 normative chapters under
+`doc/spec/{00,10,20,30,40,50}-*` mint none. For those chapters the matrix is
+not "clean" or "gap-free" — it simply has no row to be either, so silence there
+is structural exclusion, not conformance. `:concord:concordance`'s new
+denominator preamble (T02-D) makes this explicit at the top of
+`CONCORDANCE.md`; this entry is the corresponding ledger record.
+
+Zero-id chapters as of `742f7ca` (13):
+
+- `00-foundations/01-vision.md`
+- `00-foundations/02-design-principles.md`
+- `00-foundations/03-glossary.md`
+- `10-programming-model/11-cells.md`
+- `10-programming-model/14-invocations.md`
+- `20-dataflow-semantics/23-ownership.md`
+- `30-execution-model/31-hosts.md`
+- `30-execution-model/32-concurrency-colors.md`
+- `30-execution-model/34-scheduling.md`
+- `40-distribution/43-security.md`
+- `50-development-process/51-construction.md`
+- `50-development-process/52-verification.md`
+- `50-development-process/53-evolution.md`
+
+Several of these hold invariants `AGENTS.md` calls core (ownership, scheduling,
+concurrency colors, construction, evolution) — the id gap is not concentrated
+in peripheral chapters. `00-foundations` is vision/principles/glossary prose
+that may never carry EARS-shaped ids (P1's "checkable through the driver SPI"
+gate is a poor fit for a naming-decision or a design-principle statement); the
+`10`/`20`/`30`/`40`/`50` entries are narrower and more plausibly mintable —
+`23-ownership`, `34-scheduling`, and `32-concurrency-colors` in particular
+already carry RFC-2119 `MUST`/`SHALL` language that reads as boundary-observable
+per P1 but was never templated into an id.
+
+**Resolves**: a follow-on id-authoring pass (W1-C-shaped) over the 13 chapters
+above — per chapter, decide id-worthy statements per the EARS templates
+(`concord/schema/provenance.md` §1), or record a P1/P4 boundary-observability
+exclusion (per `provenance.md` §4) for statements that genuinely resist a
+driver-SPI check (internals, scheduling order, protocol frames). Until that
+pass lands, `CONCORDANCE.md`'s coverage percentage must always be read against
+the denominator preamble, never against the row count alone.

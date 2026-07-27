@@ -98,7 +98,10 @@ Semantics (normative):
   the delegate target — the delegating cell is *not* on the per-message path.
 - **invalidate** is O(1): it marks leases stale; **re-resolution is lazy**,
   performed on next use. Cost of behavior change is proportional to the number
-  of re-definitions, not the number of messages (P2).
+  of re-definitions, not the number of messages (P2). **(specified,
+  unimplemented)** — no `Invalidating` type or `invalidate()` method exists in
+  `kernel/src/main`; today's `serve` re-registration is the only invalidation
+  path (see the glossary's `Invalidate` row, 00/03).
 - Chains of delegation MUST flatten on resolution (resolve to the final
   implementation, not a chain of forwarders). This rule governs `delegate`
   chains only: a membrane's Mediate crossing (10/11) is `serve(proxy)` — a

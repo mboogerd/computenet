@@ -72,6 +72,26 @@ val concordanceGate = tasks.register<JavaExec>("concordanceGate") {
     )
 }
 
+// T02-C: three small doc-integrity lints beside the concordance gate (same
+// idiom — plain Gradle/Kotlin JavaExec, fatal listing on failure).
+// Package-pointer resolution and Status-header vocabulary are fatal;
+// requirement-id density is report-only (visibility, not a forcing
+// function). Wired into `check` so a lying header (e.g. a `cell.attention.*`
+// reference to a package that does not exist) fails the build at the source
+// instead of drifting until an agent trips over it.
+val docLints = tasks.register<JavaExec>("docLints") {
+    group = "verification"
+    description = "Fails the build on unresolved cell.<pkg>.<Type> doc pointers or Status-header " +
+        "vocabulary violations; reports zero-id chapter density. Wired into `check`."
+    classpath = sourceSets.main.get().runtimeClasspath
+    mainClass.set("civictech.concord.lint.DocLintsKt")
+    args(
+        rootProject.layout.projectDirectory.dir("doc/spec").asFile.path,
+        rootProject.layout.projectDirectory.dir("kernel/src/main/kotlin/civictech/cell").asFile.path,
+        "true",
+    )
+}
+
 tasks.named("check") {
-    dependsOn(concordanceGate)
+    dependsOn(concordanceGate, docLints)
 }

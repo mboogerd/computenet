@@ -339,16 +339,11 @@ Snapshots and partly-executed plans (read with their dates in mind):
 history; W5 deferred), `doc/ksp-dx-catalog.md` (per-phase annotations
 authoritative; phase 5 not landed).
 
-Historical run records — do not treat as guidance; they cite pre-restructure
-paths: `doc/COMPOSITION-*.md`, `doc/PERNODE-*.md` (FU-4/7/9 in
-`PERNODE-FOLLOWUP-TICKETS.md` are still open), `doc/CHANGELOG-*.md`,
-`doc/RESTRUCTURE-PLAN.md`, `doc/ORCHESTRATION.md`,
-`doc/spec/90-roadmap/94-implementation-plan.md` (waves all merged; despite its
-header it is no longer the work list), `doc/spec/90-roadmap/92-way-forward.md`
-(M1–M11 history; stale about M12+). The agora-UI/design research cluster
-(`doc/gui-design-guide.md`, `doc/agora-ui-*.md`, `doc/references/`,
-`doc/frontend-research/`) predates the restructure and contains broken paths
-and false grounding claims. `doc/adr/` is the pre-spec decision record,
-consolidated into the spec (map in `doc/spec/README.md`); the untracked
-`ADR - Adapter Synthesis.md` is live but PROPOSED, not decided.
+`doc/archive/{runs,frontend,adr}/` — historical material, not guidance; each
+bucket carries its own README (`runs/`: completed COMPOSITION-*/PERNODE-*/
+CHANGELOG-*/RESTRUCTURE-PLAN/ORCHESTRATION records, `PERNODE-FOLLOWUP-TICKETS.md`
+excepted — it still has open FU items and stays at `doc/`; `frontend/`: the
+agora-UI/design research cluster, broken paths and false grounding claims;
+`adr/`: the pre-spec ADRs, consolidated into the spec — `doc/adr/ADR - Adapter
+Synthesis.md` is the one live exception, PROPOSED not decided, and stays put).
 `doc/research/incremental-engines/` is current background feeding plan 96.

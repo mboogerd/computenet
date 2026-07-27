@@ -80,8 +80,12 @@ throughput benchmarks or feature parity with existing silos.
 
 ## How principles interact
 
-- P1 + P2 together produce the layering: kernel (logic) → host (queues,
-  colors) → distribution (proxies, replication).
+- P1 + P2 together produce a **conceptual** layering: kernel (logic) → host
+  (queues, colors) → distribution (proxies, replication). This is a layering
+  of responsibilities, not of package dependencies — the kernel package graph
+  is not a DAG along this axis (all 20 non-leaf `civictech.cell.*` packages
+  form one strongly-connected component; see 90/91 G-63 for the divergence
+  and the two cheap first cuts on the table).
 - P3 + P8 make mobility tractable: because links are explicit, suspension =
   unlink-all, migration = unlink/move/relink (see 30/33).
 - P4 + P6 shape the consistency story: glitch-freedom frontiers instead of

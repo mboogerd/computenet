@@ -1,6 +1,6 @@
 # Per-node composition — follow-up tickets
 
-Follow-ups from the per-node run's honest residuals ([CHANGELOG-pernode.md](CHANGELOG-pernode.md)
+Follow-ups from the per-node run's honest residuals ([CHANGELOG-pernode.md](archive/runs/CHANGELOG-pernode.md)
 §Known limitations). Baseline: `main` @ `0a40faa` (whole per-node run merged +
 changelog). House style: make the cited code true; name the test up front;
 100-seed generative where applicable; **controls that must diverge**; no behavior

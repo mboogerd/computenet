@@ -55,6 +55,29 @@ object ConcordanceScanner {
         return seen.values.toList()
     }
 
+    /** The six normative chapter directory prefixes (00 foundations .. 50 process); 90-roadmap is not normative text. */
+    private val normativeChapterPrefixes = listOf("00-", "10-", "20-", "30-", "40-", "50-")
+
+    /**
+     * Every chapter file under a normative directory (00/10/20/30/40/50),
+     * whether or not it carries any requirement id — the full denominator
+     * `provenance.md` and the concordance table's coverage % implicitly range
+     * over (T02-D). A chapter directory currently holds chapter files
+     * directly (no nesting), but this scans one level deep defensively.
+     */
+    fun scanNormativeChapterFiles(specRoot: File): List<String> {
+        if (!specRoot.exists()) return emptyList()
+        val chapterDirs = specRoot.listFiles { f -> f.isDirectory && normativeChapterPrefixes.any { p -> f.name.startsWith(p) } }
+            ?.sortedBy { it.name }
+            ?: emptyList()
+        return chapterDirs.flatMap { dir ->
+            dir.listFiles { f -> f.isFile && f.extension == "md" }
+                ?.sortedBy { it.name }
+                ?.map { it.relativeTo(specRoot).path }
+                .orEmpty()
+        }
+    }
+
     private val idLine = Regex("""^id:\s*['"]?([^'"#]+?)['"]?\s*(#.*)?$""")
     private val coversInlineLine = Regex("""^covers:\s*\[(.*?)]\s*(#.*)?$""")
     private val coversBlockHeader = Regex("""^covers:\s*(#.*)?$""")
@@ -128,6 +151,29 @@ data class ConcordanceReport(val rows: List<ConcordanceRow>, val findings: List<
 }
 
 /**
+ * T02-D (denominator honesty): the concordance table below only ever ranges
+ * over chapters that carry at least one requirement id — a chapter with zero
+ * ids has no rows and cannot appear as a gap, so it reads as silently passing
+ * rather than as excluded. [withIds]/[withoutIds] are the normative chapter
+ * files (00/10/20/30/40/50; 90-roadmap is not normative text) partitioned by
+ * whether [ConcordanceScanner.scanRequirements] found any id in them, so the
+ * coverage percentage is never read against a bare, unexplained denominator.
+ */
+data class ChapterDenominator(val withIds: List<String>, val withoutIds: List<String>) {
+    val total: Int get() = withIds.size + withoutIds.size
+}
+
+fun computeChapterDenominator(
+    chapterFiles: List<String>,
+    requirements: List<ConcordanceScanner.Requirement>,
+): ChapterDenominator {
+    val filesWithIds = requirements.map { it.sourceFile }.toSet()
+    val withIds = chapterFiles.filter { it in filesWithIds }
+    val withoutIds = chapterFiles.filter { it !in filesWithIds }
+    return ChapterDenominator(withIds, withoutIds)
+}
+
+/**
  * Builds the concordance from a scan of L0 requirements and L2 scenarios
  * (provenance.md §2/§3). Pure function — no I/O — so it is unit-testable
  * against fixtures without touching the real, evolving corpus.
@@ -185,8 +231,14 @@ fun buildConcordance(
     return ConcordanceReport(rows, findings)
 }
 
-/** Renders [report] as the concordance table (provenance.md §2) plus a lint findings section. */
-fun renderConcordanceMarkdown(report: ConcordanceReport): String = buildString {
+/**
+ * Renders [report] as the concordance table (provenance.md §2) plus a lint
+ * findings section. [denominator], when supplied (T02-D), renders a preamble
+ * naming which normative chapters carry no requirement id at all — those
+ * chapters have no rows below and are invisible to the fatal/note lints, so
+ * the coverage number that follows is never read bare.
+ */
+fun renderConcordanceMarkdown(report: ConcordanceReport, denominator: ChapterDenominator? = null): String = buildString {
     appendLine("# Concordance — L0 requirements × L2 scenarios")
     appendLine()
     appendLine(
@@ -194,6 +246,41 @@ fun renderConcordanceMarkdown(report: ConcordanceReport): String = buildString {
             "Do not hand-edit — regenerate instead.",
     )
     appendLine()
+    if (denominator != null) {
+        appendLine("## Denominator honesty — normative chapters with vs without requirement ids")
+        appendLine()
+        appendLine(
+            "The table below only ever ranges over requirement ids that exist. A chapter with " +
+                "zero ids contributes no rows, cannot appear as a dangling/orphan/gap finding, and " +
+                "so reads as silently clean rather than as structurally excluded. Read the coverage " +
+                "count against this denominator, not against the row count alone.",
+        )
+        appendLine()
+        appendLine(
+            "**${denominator.withIds.size} of ${denominator.total}** normative chapters " +
+                "(`doc/spec/{00,10,20,30,40,50}-*`) carry at least one `[NN-SLUG-nn]` id.",
+        )
+        appendLine()
+        appendLine("With ids (${denominator.withIds.size}):")
+        appendLine()
+        if (denominator.withIds.isEmpty()) {
+            appendLine("- none")
+        } else {
+            denominator.withIds.forEach { appendLine("- `$it`") }
+        }
+        appendLine()
+        appendLine(
+            "Without ids (${denominator.withoutIds.size}) — structurally excluded from the table " +
+                "below; filed as a dispute, not silently passing (`concord/corpus/DISPUTES.md`):",
+        )
+        appendLine()
+        if (denominator.withoutIds.isEmpty()) {
+            appendLine("- none")
+        } else {
+            denominator.withoutIds.forEach { appendLine("- `$it`") }
+        }
+        appendLine()
+    }
     appendLine("| Requirement | Scenarios | Status |")
     appendLine("|---|---|---|")
     if (report.rows.isEmpty()) {
@@ -240,16 +327,23 @@ fun main(args: Array<String>) {
     val (specRootArg, corpusRootArg, outputArg, fatalArg) = args
     val fatalMode = fatalArg.toBooleanStrict()
 
-    val requirements = ConcordanceScanner.scanRequirements(File(specRootArg))
+    val specRoot = File(specRootArg)
+    val requirements = ConcordanceScanner.scanRequirements(specRoot)
     val scenarios = ConcordanceScanner.scanScenarios(File(corpusRootArg))
     val report = buildConcordance(requirements, scenarios)
+    val denominator = computeChapterDenominator(ConcordanceScanner.scanNormativeChapterFiles(specRoot), requirements)
 
     val outputFile = File(outputArg)
     outputFile.parentFile?.mkdirs()
-    outputFile.writeText(renderConcordanceMarkdown(report))
+    outputFile.writeText(renderConcordanceMarkdown(report, denominator))
 
     println("Concordance written to ${outputFile.path}")
     println("Requirements: ${requirements.size}, scenarios: ${scenarios.size}")
+    println(
+        "Normative chapter denominator: ${denominator.withIds.size} of ${denominator.total} carry " +
+            "at least one requirement id (${denominator.withoutIds.size} zero-id: " +
+            "${denominator.withoutIds.joinToString(", ")})",
+    )
     report.findings.forEach { println("[${it.severity}] ${it.message}") }
     println(
         "${report.fatalFindings.size} fatal finding(s), " +

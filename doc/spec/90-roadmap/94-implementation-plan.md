@@ -1,10 +1,10 @@
 # 94 — Implementation Plan (post-M11)
 
-> **Status**: living document — the ticket-shaped decomposition of everything the spec
-> now records as *decided design, unimplemented*
+> **Status**: Historical — all waves merged; not the work list (see
+> [96-incremental-engines-plan.md](96-incremental-engines-plan.md) for the forward queue)
 > **Sources**: [91-gap-analysis.md](91-gap-analysis.md) (G-34..G-62, C-9..C-12, open residuals),
 > [92-way-forward.md](92-way-forward.md) §Milestone 12+, [93-feature-interactions.md](93-feature-interactions.md)
-> **Implementation**: none — this document *is* the work list
+> **Implementation**: n/a — historical wave decomposition, not a live work list
 
 ## How to read this plan
 

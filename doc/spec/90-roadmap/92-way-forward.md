@@ -1,6 +1,6 @@
 # 92 — Proposed Way Forward
 
-> **Status**: proposal (the one document meant to be argued with and rewritten)
+> **Status**: Historical record of M1–M11; stale about M12+
 > Premise: the germ kernel validated the right things first — invocation capture, delegation, cross-host proxies, host queues, boundary buffering. The next work should **harden the four enablers** (context, links, port registry, drain) before widening scope, because every ambition in 40/50 lands on them.
 
 ## Milestone 1 — One kernel (consolidation) ✅ DONE
@@ -377,7 +377,7 @@ must diverge.*
 
 ## Milestone 12+ — Post-M11 sequencing ⚠ PROPOSED, NOT COMMITTED
 
-> **Status**: proposal only. Milestones 1–11 above are *records* of landed
+> Proposal only (see the document's top-level **Status** line). Milestones 1–11 above are *records* of landed
 > work; everything below is a *plan*, derived from the 93 feature-interaction
 > analysis (I-1..I-28), its gap sweep (G-34..G-62), and the four
 > code-vs-decided-design conflicts (C-9..C-12). Argue with it before building

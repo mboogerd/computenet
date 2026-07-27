@@ -4,10 +4,11 @@
 > (M17); decisions 5–6 and additions marked "(decided in 93 I-n)" are decided
 > design, unimplemented
 > **Sources**: ADR 0 (§5), ADR 1 (§6, §7, §8), ADR — Computelet Kernel (attention propagation as a generic protocol); 93 (I-4, I-6, I-9, I-16, I-18, I-28)
-> **Implementation**: `cell.attention.AttentionSupport`/`AttentionBand` over generic-protocol
-> sub-channels (`cell.port.Protocols`, G-13 minimal); host mapping in `ManagedHost` +
-> `AttentionPolicy` (band dispatch, stride floor, NONE-window park/replay);
-> magnitude-band dispatch in `ManagedHost.stage/dispatchOne` over `cell.data.Magnitude`
+> **Implementation**: `cell.control.AttentionSupport`/`AttentionBand`/`AttentionScheduler`
+> over generic-protocol sub-channels (`cell.protocol.Protocols`, G-13 minimal); host
+> mapping in `ManagedHost` + `cell.host.AttentionPolicy` (band dispatch, stride floor,
+> NONE-window park/replay); magnitude-band dispatch in `ManagedHost.stage/dispatchOne`
+> over `cell.control.Magnitude`
 > (opt-in via `AttentionPolicy.magnitudeBands`, M17);
 > `GlitchFreeCell.WaveMode` WAIT/DEGRADE; interest scatter in
 > `AttentionSupport.scatter`; the covering-quorum DEGRADE shrink on the
