@@ -188,12 +188,25 @@ class VirtualThreadHostConformanceTest {
         // dataLock, pre-fix) at the same instant for the deadlock to be
         // deterministic rather than a race that might not align.
         val barrier = CyclicBarrier(2)
+        // Review addendum: the barrier is the whole point of this test — it is
+        // what forces both announce handlers to be in flight simultaneously,
+        // which is what makes the pre-T04 ABBA cycle deterministic rather than
+        // lucky. But `barrier.await(timeout)` THROWING is a silent escape
+        // hatch: the exception unwinds the sender thread, the thread dies, and
+        // the `isAlive.shouldBeFalse()` assertions below are satisfied for
+        // entirely the wrong reason. These latches make the barrier rendezvous
+        // itself an asserted outcome, so a timed-out barrier fails loudly
+        // instead of masquerading as "no deadlock".
+        val crossedA = java.util.concurrent.CountDownLatch(1)
+        val crossedB = java.util.concurrent.CountDownLatch(1)
         ProtocolSupport.of(upstreamA.outlet).handle(Protocols.Saturation) { _, _ ->
             barrier.await(10, TimeUnit.SECONDS)
+            crossedA.countDown()
             runCatching { hostB.enqueueHostedInvocation(probe(sinkB.ref)) }
         }
         ProtocolSupport.of(upstreamB.outlet).handle(Protocols.Saturation) { _, _ ->
             barrier.await(10, TimeUnit.SECONDS)
+            crossedB.countDown()
             runCatching { hostA.enqueueHostedInvocation(probe(sinkA.ref)) }
         }
 
@@ -203,6 +216,13 @@ class VirtualThreadHostConformanceTest {
         t2.start()
         t1.join(15_000)
         t2.join(15_000)
+
+        // the rendezvous genuinely happened: both hosts saturated, both
+        // announce handlers ran, and both were in flight at the same instant —
+        // i.e. the configuration that ABBA-deadlocks pre-T04 was actually
+        // reached, so the liveness assertions below mean something.
+        crossedA.await(1, TimeUnit.SECONDS) shouldBe true
+        crossedB.await(1, TimeUnit.SECONDS) shouldBe true
 
         // pre-T04: both threads hang forever in the ABBA cycle, still alive
         // after the join timeout — that IS the failure this test detects.
