@@ -195,6 +195,105 @@ class ContractProcessorTest {
         class OutletId<Api>(val name: String)
         """.trimIndent()
 
+    // T09 §D: process() was one 301-line method interleaving round-1 gating,
+    // discovery, three inline buildCodeBlock table builders, and five inline
+    // lints. The lints moved to ContractLints (unit-tested directly below) and
+    // the table builders moved to contractTable()/protocolTable()/cellTable() —
+    // this test pins the full generated ContractTable_*.kt text (not just
+    // substrings, unlike the other generation tests in this file) so that
+    // extraction, or any future one, cannot silently reshape the emitted code.
+    @Test
+    fun `full ContractTable output is byte-for-byte pinned across contract, protocol, and cell tables`() {
+        val (compilation, result) = compileKeepingSources(
+            portStubs, portClassStubs, graphStubs,
+            """
+            package example
+
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Protocol
+            import civictech.nature.ProtocolDirection
+            import civictech.cell.Cell
+            import civictech.cell.port.FanInlet
+
+            @Contract
+            interface PingContract {
+                fun ping(id: String)
+            }
+
+            @Contract(management = true)
+            @Protocol("ping-protocol", ProtocolDirection.UPSTREAM, band = 0)
+            interface PingProtocol {
+                fun ping(id: String)
+            }
+
+            class PingCell : Cell {
+                val inlet: FanInlet<PingContract> = FanInlet()
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        // Independently re-derive the ids ContractProcessor computes (StableHash
+        // is pure/deterministic — pinned separately by StableHash's own tests) so
+        // this assertion doesn't read expected values out of the very output
+        // under test. KotlinPoet renders long literals with `_` digit-group
+        // separators, so the ids are formatted the same way it would.
+        val pingContractId = underscored(civictech.nature.StableHash.of("example.PingContract"))
+        val pingProtocolContractId = underscored(civictech.nature.StableHash.of("example.PingProtocol"))
+        val pingContractMethodId = underscored(civictech.nature.StableHash.of("example.PingContract#ping(Ljava/lang/String;)V"))
+        val pingProtocolMethodId = underscored(civictech.nature.StableHash.of("example.PingProtocol#ping(Ljava/lang/String;)V"))
+        val moduleHash = civictech.nature.StableHash.of(
+            "contract:example.PingContract,contract:example.PingProtocol,cell:example.PingCell"
+        )
+        val moduleClassName = "ContractTable_" + java.lang.Long.toHexString(moduleHash)
+
+        val table = generatedSource(compilation, "ContractTable_")
+        assertEquals(
+            "package civictech.gen.wire.generated\n" +
+                "\n" +
+                "import civictech.nature.CellColor\n" +
+                "import civictech.nature.CellDescriptor\n" +
+                "import civictech.nature.ContractDescriptor\n" +
+                "import civictech.nature.ContractModule\n" +
+                "import civictech.nature.MethodDescriptor\n" +
+                "import civictech.nature.PortDescriptor\n" +
+                "import civictech.nature.PortDirection\n" +
+                "import civictech.nature.ProtocolDescriptor\n" +
+                "import civictech.nature.ProtocolDirection\n" +
+                "import kotlin.collections.List\n" +
+                "\n" +
+                "public class $moduleClassName : ContractModule {\n" +
+                "  override val contracts: List<ContractDescriptor> = listOf(\n" +
+                "        ContractDescriptor(contractId = ${pingContractId}L, fqn = \"example.PingContract\", management = false, effect = false, methods = listOf(\n" +
+                "          MethodDescriptor(methodId = ${pingContractMethodId}L, name = \"ping\", jvmDescriptor = \"(Ljava/lang/String;)V\", exclusive = false, magnitude = false, idempotentMerge = false, keyIndex = -1),\n" +
+                "        )),\n" +
+                "        ContractDescriptor(contractId = ${pingProtocolContractId}L, fqn = \"example.PingProtocol\", management = true, effect = false, methods = listOf(\n" +
+                "          MethodDescriptor(methodId = ${pingProtocolMethodId}L, name = \"ping\", jvmDescriptor = \"(Ljava/lang/String;)V\", exclusive = false, magnitude = false, idempotentMerge = false, keyIndex = -1),\n" +
+                "        )),\n" +
+                "      )\n" +
+                "\n" +
+                "  override val cells: List<CellDescriptor> = listOf(\n" +
+                "        CellDescriptor(fqn = \"example.PingCell\", color = CellColor.PURE, ports = listOf(\n" +
+                "          PortDescriptor(\"inlet\", PortDirection.IN, \"example.PingContract\", ${pingContractId}L),\n" +
+                "        )),\n" +
+                "      )\n" +
+                "\n" +
+                "  override val protocols: List<ProtocolDescriptor> = listOf(\n" +
+                "        ProtocolDescriptor(\"ping-protocol\", ${pingProtocolContractId}L, ProtocolDirection.UPSTREAM, 0),\n" +
+                "      )\n" +
+                "}\n",
+            table,
+        )
+    }
+
+    /** KotlinPoet's `%L` long-literal rendering: `_` every three digits from the right. */
+    private fun underscored(value: Long): String {
+        val negative = value < 0
+        val digits = value.toString().removePrefix("-")
+        val grouped = digits.reversed().chunked(3).joinToString("_").reversed()
+        return if (negative) "-$grouped" else grouped
+    }
+
     @Test
     fun `generic cell gets a Ports object with type-parameterized accessors and port descriptors`() {
         val (compilation, result) = compileKeepingSources(
@@ -338,6 +437,169 @@ class ContractProcessorTest {
         )
         assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
         assertTrue(result.messages.contains("targets the cell's Api interface"))
+    }
+
+    // T09 §B: an unresolvable @CellBase port Api type used to be a warning — the
+    // member is left abstract, so a concrete subclass either fails to compile
+    // (fine) or someone hand-implements it outside the generated-port machinery
+    // (silently missing its descriptor row and static handler binding). `Serve<*>`
+    // is the simplest legal Kotlin that makes the Api type argument a star
+    // projection (`KSTypeArgument.type == null`), which is exactly what the
+    // processor treats as unresolvable.
+    @Test
+    fun `CellBase unresolvable port Api type is now an error, not a warning`() {
+        val result = compile(
+            cellBaseStubs,
+            cellBasePortStubs,
+            """
+            package example
+            import civictech.gen.wire.CellBase
+            import civictech.cell.port.Serve
+
+            @CellBase
+            interface StarApi {
+                val inlet: Serve<*>
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
+        assertTrue(result.messages.contains("StarApi.inlet: unresolvable port Api type — left abstract"), result.messages)
+    }
+
+    // T09 §B: an unresolvable Propagate<T> payload used to be a warning — the
+    // port is registered but its on<Name> handler is never generated or bound,
+    // so the inlet accepts messages and silently drops every one. `Propagate<*>`
+    // makes the payload argument a star projection, unresolvable the same way.
+    @Test
+    fun `CellBase unresolvable Propagate payload is now an error, not a warning`() {
+        val result = compile(
+            cellBaseStubs,
+            cellBasePortStubs,
+            cellBaseDataStubs,
+            """
+            package example
+            import civictech.gen.wire.CellBase
+            import civictech.cell.Propagate
+            import civictech.cell.port.Serve
+
+            @CellBase
+            interface StarPayloadApi {
+                val inlet: Serve<Propagate<*>>
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
+        assertTrue(
+            result.messages.contains("StarPayloadApi.inlet: unresolvable payload — not auto-bound"),
+            result.messages,
+        )
+    }
+
+    // T09 §B: the port scan's own "unresolvable Api type" diagnostic (distinct
+    // from the two @CellBase ones above — this one runs for every hand-rolled
+    // cell, not just @CellBase Api interfaces) stays a warning: the ticket only
+    // promotes the two @CellBase paths. A bare `FanInlet<*>` makes the port's Api
+    // type argument a star projection, so the port is skipped — no descriptor row
+    // — but compilation still succeeds.
+    @Test
+    fun `scanPorts unresolvable Api type still warns and drops the port's descriptor row`() {
+        val (compilation, result) = compileKeepingSources(
+            portStubs, portClassStubs, graphStubs,
+            """
+            package example
+            import civictech.cell.Cell
+            import civictech.cell.port.FanInlet
+
+            class StarCell : Cell {
+                val starInlet: FanInlet<*> = FanInlet<Any>()
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+        assertTrue(
+            result.messages.contains("StarCell.starInlet: unresolvable Api type — skipped"),
+            result.messages,
+        )
+        val table = generatedSource(compilation, "ContractTable_")
+        assertTrue("starInlet" !in table, table) // the port descriptor row was skipped
+        assertTrue("example.StarCell" in table, table) // the cell row itself is still emitted
+    }
+
+    // T09 §B: the three protocol-contract errors (spec 12) were already
+    // `logger.error`, but ContractProcessorTest asserted none of them.
+    @Test
+    fun `protocol contract must be management-class`() {
+        val result = compile(
+            """
+            package example
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Protocol
+            import civictech.nature.ProtocolDirection
+
+            @Contract
+            @Protocol("not-mgmt", ProtocolDirection.UPSTREAM, band = 0)
+            interface NotManagementProtocol {
+                fun push(id: String)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
+        assertTrue(
+            result.messages.contains("protocol contract example.NotManagementProtocol must be management-class (spec 12)"),
+            result.messages,
+        )
+    }
+
+    @Test
+    fun `protocol contract methods must be push-only`() {
+        val result = compile(
+            """
+            package example
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Protocol
+            import civictech.nature.ProtocolDirection
+
+            @Contract(management = true)
+            @Protocol("returns", ProtocolDirection.UPSTREAM, band = 0)
+            interface ReturnsProtocol {
+                fun query(id: String): String
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
+        assertTrue(
+            result.messages.contains("protocol contract example.ReturnsProtocol#query must be push-only"),
+            result.messages,
+        )
+    }
+
+    @Test
+    fun `protocol contract methods must not carry Owned or Leased`() {
+        val result = compile(
+            """
+            package civictech.cell
+            class Owned<T>
+            """.trimIndent(),
+            """
+            package example
+            import civictech.cell.Owned
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Key
+            import civictech.gen.wire.Protocol
+            import civictech.nature.ProtocolDirection
+
+            @Contract(management = true)
+            @Protocol("owned", ProtocolDirection.UPSTREAM, band = 0)
+            interface OwnedProtocol {
+                fun push(@Key payload: Owned<String>)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.COMPILATION_ERROR, result.exitCode)
+        assertTrue(
+            result.messages.contains("protocol contract example.OwnedProtocol#push must not carry Owned/Leased"),
+            result.messages,
+        )
     }
 
     private fun generatedSources(compilation: KotlinCompilation) =

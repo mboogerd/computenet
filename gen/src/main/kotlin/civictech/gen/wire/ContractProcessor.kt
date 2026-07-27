@@ -15,7 +15,6 @@ import civictech.nature.NatureVector
 import civictech.nature.Ownership
 import civictech.nature.PortDescriptor
 import civictech.nature.PortDirection
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDescriptor
 import civictech.nature.ProtocolDirection
 import civictech.nature.StableHash
@@ -62,6 +61,118 @@ import com.squareup.kotlinpoet.ksp.writeTo
 class ContractProcessorProvider : SymbolProcessorProvider {
     override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor =
         ContractProcessor(environment.codeGenerator, environment.logger)
+}
+
+// T09 §D: top-level (file-scope, not class members) so both [ContractProcessor]
+// and [ContractLints] can call them without threading an instance through.
+
+/** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
+private fun carriesExclusive(type: com.google.devtools.ksp.symbol.KSType): Boolean {
+    if (type.declaration.qualifiedName?.asString() in ContractProcessor.Companion.KernelFqn.EXCLUSIVE_MARKERS) return true
+    return type.arguments.any { it.type?.resolve()?.let(::carriesExclusive) == true }
+}
+
+private fun isSubtype(type: KSType, marker: String): Boolean {
+    if (type.declaration.qualifiedName?.asString() == marker) return true
+    return (type.declaration as? KSClassDeclaration)?.superTypes
+        ?.any { isSubtype(it.resolve(), marker) } == true
+}
+
+/** Descriptor scans include nested payloads, matching the established ownership scan. */
+private fun carriesMarker(type: KSType, marker: String): Boolean =
+    isSubtype(type, marker) || type.arguments.any { argument ->
+        argument.type?.resolve()?.let { carriesMarker(it, marker) } == true
+    }
+
+/**
+ * T09 §D: the five inline diagnostics `ContractProcessor.process()` ran while
+ * walking `@Contract`/`@Protocol` interfaces, extracted so each is
+ * independently unit-testable without driving the full two-round processor.
+ * Each lint re-derives what it needs from [contract] itself (its `@Contract`/
+ * `@Protocol` annotations, its abstract functions) rather than being handed
+ * precomputed state from the table builders that scan the same interface for
+ * codegen — the two concerns (validate vs. emit) no longer share a pass.
+ */
+@OptIn(KspExperimental::class)
+internal object ContractLints {
+
+    /** Push-only lint (spec 12, G-11 completed M9.1): a data contract's methods must return Unit. */
+    fun pushOnlyReturns(contract: KSClassDeclaration, logger: KSPLogger) {
+        val management = contract.getAnnotationsByType(Contract::class).first().management
+        if (management) return
+        val fqn = contract.qualifiedName!!.asString()
+        contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
+            val returns = fn.returnType?.resolve()?.declaration?.qualifiedName?.asString()
+            if (returns != null && returns != "kotlin.Unit") {
+                logger.error(
+                    "data contract $fqn#${fn.simpleName.asString()} returns $returns — " +
+                        "push-only on the data path (spec 12); mark management=true or return Unit",
+                    fn,
+                )
+            }
+        }
+    }
+
+    /** At most one `@Key` routing parameter per method. */
+    fun singleKeyParameter(contract: KSClassDeclaration, logger: KSPLogger) {
+        val fqn = contract.qualifiedName!!.asString()
+        contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
+            val name = fn.simpleName.asString()
+            val keyCount = fn.parameters.count { p ->
+                p.annotations.any {
+                    it.annotationType.resolve().declaration.qualifiedName?.asString() == ContractProcessor.KEY_ANNOTATION
+                }
+            }
+            if (keyCount > 1) logger.error("data contract $fqn#$name has more than one @Key parameter", fn)
+        }
+    }
+
+    /** An exclusive (`Owned`/`Leased`) payload must route through a `@Key` parameter (G-21). */
+    fun exclusiveRequiresKey(contract: KSClassDeclaration, logger: KSPLogger) {
+        val fqn = contract.qualifiedName!!.asString()
+        contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
+            val name = fn.simpleName.asString()
+            val exclusive = fn.parameters.any { carriesExclusive(it.type.resolve()) }
+            val hasKey = fn.parameters.any { p ->
+                p.annotations.any {
+                    it.annotationType.resolve().declaration.qualifiedName?.asString() == ContractProcessor.KEY_ANNOTATION
+                }
+            }
+            if (exclusive && !hasKey) {
+                logger.error(
+                    "data contract $fqn#$name broadcasts an exclusive Owned/Leased payload — annotate its routing parameter with @Key",
+                    fn,
+                )
+            }
+        }
+    }
+
+    /** A `@Protocol` contract must be management-class (spec 12). */
+    fun protocolIsManagement(contract: KSClassDeclaration, logger: KSPLogger) {
+        if (contract.getAnnotationsByType(Protocol::class).firstOrNull() == null) return
+        val management = contract.getAnnotationsByType(Contract::class).first().management
+        if (!management) {
+            logger.error(
+                "protocol contract ${contract.qualifiedName!!.asString()} must be management-class (spec 12)",
+                contract,
+            )
+        }
+    }
+
+    /** A `@Protocol` contract's methods must be push-only and carry no `Owned`/`Leased` payload. */
+    fun protocolMethodShape(contract: KSClassDeclaration, logger: KSPLogger) {
+        if (contract.getAnnotationsByType(Protocol::class).firstOrNull() == null) return
+        val fqn = contract.qualifiedName!!.asString()
+        contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
+            val returns = fn.returnType?.resolve()?.declaration?.qualifiedName?.asString()
+            if (returns != null && returns != "kotlin.Unit") {
+                logger.error("protocol contract $fqn#${fn.simpleName.asString()} must be push-only", fn)
+            }
+            if (fn.parameters.any { carriesExclusive(it.type.resolve()) }) {
+                logger.error("protocol contract $fqn#${fn.simpleName.asString()} must not carry Owned/Leased", fn)
+            }
+        }
+    }
 }
 
 /**
@@ -136,90 +247,6 @@ class ContractProcessor(
         val moduleName = "ContractTable_" + java.lang.Long.toHexString(moduleHash)
         logger.info("ContractProcessor: ${contracts.size} contracts -> $GENERATED_PACKAGE.$moduleName")
 
-        val table = buildCodeBlock {
-            add("listOf(\n⇥")
-            contracts.forEach { contract ->
-                val fqn = contract.qualifiedName!!.asString()
-                val management = contract.getAnnotationsByType(Contract::class).first().management
-                val effect = contract.getAnnotationsByType(Contract::class).first().effect
-                add(
-                    "%T(contractId·=·%LL, fqn·=·%S, management·=·%L, effect·=·%L, methods·=·listOf(\n⇥",
-                    ContractDescriptor::class.asClassName(), StableHash.of(fqn), fqn, management, effect,
-                )
-                // push-only lint (spec 12, G-11 completed M9.1): data contracts
-                // must not return values — returns are a management privilege
-                if (!management) {
-                    contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
-                        val returns = fn.returnType?.resolve()?.declaration?.qualifiedName?.asString()
-                        if (returns != null && returns != "kotlin.Unit") {
-                            logger.error(
-                                "data contract $fqn#${fn.simpleName.asString()} returns $returns — " +
-                                        "push-only on the data path (spec 12); mark management=true or return Unit",
-                                fn,
-                            )
-                        }
-                    }
-                }
-                contract.getAllFunctions().filter { it.isAbstract }
-                    .map { fn ->
-                        val name = fn.simpleName.asString()
-                        val descriptor = resolver.mapToJvmSignature(fn)
-                            ?: error("no JVM signature for $fqn#$name")
-                        val exclusive = fn.parameters.any { carriesExclusive(it.type.resolve()) }
-                        val keyIndexes = fn.parameters.mapIndexedNotNull { index, parameter ->
-                            index.takeIf { parameter.annotations.any { it.annotationType.resolve().declaration.qualifiedName?.asString() == KEY_ANNOTATION } }
-                        }
-                        if (keyIndexes.size > 1) logger.error("data contract $fqn#$name has more than one @Key parameter", fn)
-                        val keyIndex = keyIndexes.singleOrNull() ?: -1
-                        if (exclusive && keyIndex < 0) {
-                            logger.error(
-                                "data contract $fqn#$name broadcasts an exclusive Owned/Leased payload — annotate its routing parameter with @Key",
-                                fn,
-                            )
-                        }
-                        MethodDescriptor(
-                            StableHash.of("$fqn#$name$descriptor"), name, descriptor, exclusive,
-                            fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.MAGNITUDE_MARKER) },
-                            fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.REPLICABLE_MARKER) },
-                            keyIndex,
-                        )
-                    }
-                    .sortedBy { it.methodId }
-                    .forEach { m ->
-                        add(
-                            "%T(methodId·=·%LL, name·=·%S, jvmDescriptor·=·%S, exclusive·=·%L, magnitude·=·%L, idempotentMerge·=·%L, keyIndex·=·%L),\n",
-                            MethodDescriptor::class.asClassName(), m.methodId, m.name, m.jvmDescriptor, m.exclusive,
-                            m.magnitude, m.idempotentMerge, m.keyIndex,
-                        )
-                    }
-                add("⇤)),\n")
-            }
-            add("⇤)")
-        }
-
-        val protocolTable = buildCodeBlock {
-            add("listOf(\n⇥")
-            contracts.forEach { contract ->
-                val protocol = contract.getAnnotationsByType(Protocol::class).firstOrNull() ?: return@forEach
-                val fqn = contract.qualifiedName!!.asString()
-                val management = contract.getAnnotationsByType(Contract::class).first().management
-                if (!management) logger.error("protocol contract $fqn must be management-class (spec 12)", contract)
-                contract.getAllFunctions().filter { it.isAbstract }.forEach { fn ->
-                    val returns = fn.returnType?.resolve()?.declaration?.qualifiedName?.asString()
-                    if (returns != null && returns != "kotlin.Unit")
-                        logger.error("protocol contract $fqn#${fn.simpleName.asString()} must be push-only", fn)
-                    if (fn.parameters.any { carriesExclusive(it.type.resolve()) })
-                        logger.error("protocol contract $fqn#${fn.simpleName.asString()} must not carry Owned/Leased", fn)
-                }
-                add("%T(%S, %LL, %T.%L, %L, %S, %T.%L),\n",
-                    ProtocolDescriptor::class.asClassName(), protocol.id, StableHash.of(fqn),
-                    ProtocolDirection::class.asClassName(), protocol.direction.name,
-                    protocol.band, protocol.lane,
-                    ProtocolCardinality::class.asClassName(), protocol.cardinality.name)
-            }
-            add("⇤)")
-        }
-
         val moduleType = TypeSpec.classBuilder(moduleName)
             .addSuperinterface(ContractModule::class.asClassName())
             .addProperty(
@@ -227,75 +254,16 @@ class ContractProcessor(
                     "contracts",
                     LIST.parameterizedBy(ContractDescriptor::class.asClassName()),
                     KModifier.OVERRIDE,
-                ).initializer(table).build()
+                ).initializer(contractTable(contracts, resolver)).build()
             )
             .addProperty(
                 PropertySpec.builder(
                     "cells", LIST.parameterizedBy(CellDescriptor::class.asClassName()), KModifier.OVERRIDE,
-                ).initializer(buildCodeBlock {
-                    add("listOf(\n⇥")
-                    cells.forEach { cell ->
-                        val fqn = cell.qualifiedName!!.asString()
-                        val color = when {
-                            isSubtype(cell.asStarProjectedType(), KernelFqn.SUSPENDING_MARKER) -> CellColor.SUSPENDING
-                            isSubtype(cell.asStarProjectedType(), KernelFqn.BLOCKING_MARKER) -> CellColor.BLOCKING
-                            else -> CellColor.PURE
-                        }
-                        val ports = cellPorts[cell].orEmpty()
-                        val manifest = manifestOf(cell)
-                        // trailing `, manifest = setOf(...)` (omitted when empty ⇒ the default)
-                        val manifestSuffix: CodeBlock? = if (manifest.isEmpty()) null else buildCodeBlock {
-                            add(", manifest·=·setOf(")
-                            manifest.forEachIndexed { i, tag ->
-                                if (i > 0) add(", ")
-                                add("%T.%L", MANIFEST, tag)
-                            }
-                            add(")")
-                        }
-                        if (ports.isEmpty()) {
-                            add("%T(fqn·=·%S, color·=·%T.%L", CellDescriptor::class, fqn, CellColor::class, color.name)
-                            manifestSuffix?.let { add("%L", it) }
-                            add("),\n")
-                        } else {
-                            add(
-                                "%T(fqn·=·%S, color·=·%T.%L, ports·=·listOf(\n⇥",
-                                CellDescriptor::class, fqn, CellColor::class, color.name,
-                            )
-                            ports.forEach { p ->
-                                val natures = portNatureLevels(cell, color, p)
-                                if (natures.isEmpty()) {
-                                    add(
-                                        "%T(%S, %T.%L, %S, %LL),\n",
-                                        PortDescriptor::class.asClassName(), p.name,
-                                        PortDirection::class.asClassName(), p.direction.name,
-                                        p.contractFqn, StableHash.of(p.contractFqn),
-                                    )
-                                } else {
-                                    add(
-                                        "%T(%S, %T.%L, %S, %LL, natures·=·%T.of(",
-                                        PortDescriptor::class.asClassName(), p.name,
-                                        PortDirection::class.asClassName(), p.direction.name,
-                                        p.contractFqn, StableHash.of(p.contractFqn),
-                                        NATURE_VECTOR,
-                                    )
-                                    natures.forEachIndexed { i, (levelClass, levelName) ->
-                                        if (i > 0) add(", ")
-                                        add("%T.%L", levelClass, levelName)
-                                    }
-                                    add(")),\n")
-                                }
-                            }
-                            add("⇤)")
-                            manifestSuffix?.let { add("%L", it) }
-                            add("),\n")
-                        }
-                    }
-                    add("⇤)")
-                }).build()
+                ).initializer(cellTable(cells, cellPorts)).build()
             )
             .addProperty(
                 PropertySpec.builder("protocols", LIST.parameterizedBy(ProtocolDescriptor::class.asClassName()), KModifier.OVERRIDE)
-                    .initializer(protocolTable).build()
+                    .initializer(protocolTable(contracts)).build()
             )
             .build()
 
@@ -319,9 +287,9 @@ class ContractProcessor(
         // proxy class per contract, replacing java.lang.reflect.Proxy.newProxyInstance
         // for in-process cell API dispatch. Each generated class still dispatches
         // through the existing java.lang.reflect.InvocationHandler shape, so every
-        // Proxy/Buffering/Broadcast/NoOp/Throwing/Callback call site is untouched —
-        // only proxy *construction* moves from runtime bytecode generation to an
-        // ahead-of-time-compiled class.
+        // Proxy/Buffering/NoOp/Callback/HostProxy/MediateProxy call site is
+        // untouched — only proxy *construction* moves from runtime bytecode
+        // generation to an ahead-of-time-compiled class.
         // Proxy generation needs to *reference* the contract type (and its
         // method signatures) from generated code, unlike the reflective
         // descriptor table above — so file-private/local test fixtures (not
@@ -382,6 +350,148 @@ class ContractProcessor(
     }
 
     /**
+     * The `contracts: List<ContractDescriptor>` table (T09 §D extraction):
+     * one row per `@Contract` interface, methods sorted by [MethodDescriptor.methodId].
+     * Runs [ContractLints.pushOnlyReturns]/[ContractLints.singleKeyParameter]/
+     * [ContractLints.exclusiveRequiresKey] per contract before emitting its rows —
+     * validation and codegen no longer share a pass.
+     */
+    @OptIn(KspExperimental::class)
+    private fun contractTable(contracts: List<KSClassDeclaration>, resolver: Resolver): CodeBlock = buildCodeBlock {
+        add("listOf(\n⇥")
+        contracts.forEach { contract ->
+            ContractLints.pushOnlyReturns(contract, logger)
+            ContractLints.singleKeyParameter(contract, logger)
+            ContractLints.exclusiveRequiresKey(contract, logger)
+
+            val fqn = contract.qualifiedName!!.asString()
+            val management = contract.getAnnotationsByType(Contract::class).first().management
+            val effect = contract.getAnnotationsByType(Contract::class).first().effect
+            add(
+                "%T(contractId·=·%LL, fqn·=·%S, management·=·%L, effect·=·%L, methods·=·listOf(\n⇥",
+                ContractDescriptor::class.asClassName(), StableHash.of(fqn), fqn, management, effect,
+            )
+            contract.getAllFunctions().filter { it.isAbstract }
+                .map { fn ->
+                    val name = fn.simpleName.asString()
+                    val descriptor = resolver.mapToJvmSignature(fn)
+                        ?: error("no JVM signature for $fqn#$name")
+                    val exclusive = fn.parameters.any { carriesExclusive(it.type.resolve()) }
+                    val keyIndexes = fn.parameters.mapIndexedNotNull { index, parameter ->
+                        index.takeIf { parameter.annotations.any { it.annotationType.resolve().declaration.qualifiedName?.asString() == KEY_ANNOTATION } }
+                    }
+                    val keyIndex = keyIndexes.singleOrNull() ?: -1
+                    MethodDescriptor(
+                        StableHash.of("$fqn#$name$descriptor"), name, descriptor, exclusive,
+                        fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.MAGNITUDE_MARKER) },
+                        fn.parameters.any { carriesMarker(it.type.resolve(), KernelFqn.REPLICABLE_MARKER) },
+                        keyIndex,
+                    )
+                }
+                .sortedBy { it.methodId }
+                .forEach { m ->
+                    add(
+                        "%T(methodId·=·%LL, name·=·%S, jvmDescriptor·=·%S, exclusive·=·%L, magnitude·=·%L, idempotentMerge·=·%L, keyIndex·=·%L),\n",
+                        MethodDescriptor::class.asClassName(), m.methodId, m.name, m.jvmDescriptor, m.exclusive,
+                        m.magnitude, m.idempotentMerge, m.keyIndex,
+                    )
+                }
+            add("⇤)),\n")
+        }
+        add("⇤)")
+    }
+
+    /**
+     * The `protocols: List<ProtocolDescriptor>` table (T09 §D extraction): one row
+     * per `@Protocol`-annotated contract. Runs [ContractLints.protocolIsManagement]/
+     * [ContractLints.protocolMethodShape] per protocol contract before emitting its row.
+     */
+    @OptIn(KspExperimental::class)
+    private fun protocolTable(contracts: List<KSClassDeclaration>): CodeBlock = buildCodeBlock {
+        add("listOf(\n⇥")
+        contracts.forEach { contract ->
+            val protocol = contract.getAnnotationsByType(Protocol::class).firstOrNull() ?: return@forEach
+            ContractLints.protocolIsManagement(contract, logger)
+            ContractLints.protocolMethodShape(contract, logger)
+            val fqn = contract.qualifiedName!!.asString()
+            add("%T(%S, %LL, %T.%L, %L),\n",
+                ProtocolDescriptor::class.asClassName(), protocol.id, StableHash.of(fqn),
+                ProtocolDirection::class.asClassName(), protocol.direction.name,
+                protocol.band)
+        }
+        add("⇤)")
+    }
+
+    /**
+     * The `cells: List<CellDescriptor>` table (T09 §D extraction): one row per
+     * scanned `Cell` subclass, with its [portNatureLevels]-derived nature vectors
+     * and [manifestOf]-derived structural [Manifest] tags.
+     */
+    private fun cellTable(
+        cells: List<KSClassDeclaration>,
+        cellPorts: Map<KSClassDeclaration, List<ScannedPort>>,
+    ): CodeBlock = buildCodeBlock {
+        add("listOf(\n⇥")
+        cells.forEach { cell ->
+            val fqn = cell.qualifiedName!!.asString()
+            val color = when {
+                isSubtype(cell.asStarProjectedType(), KernelFqn.SUSPENDING_MARKER) -> CellColor.SUSPENDING
+                isSubtype(cell.asStarProjectedType(), KernelFqn.BLOCKING_MARKER) -> CellColor.BLOCKING
+                else -> CellColor.PURE
+            }
+            val ports = cellPorts[cell].orEmpty()
+            val manifest = manifestOf(cell)
+            // trailing `, manifest = setOf(...)` (omitted when empty ⇒ the default)
+            val manifestSuffix: CodeBlock? = if (manifest.isEmpty()) null else buildCodeBlock {
+                add(", manifest·=·setOf(")
+                manifest.forEachIndexed { i, tag ->
+                    if (i > 0) add(", ")
+                    add("%T.%L", MANIFEST, tag)
+                }
+                add(")")
+            }
+            if (ports.isEmpty()) {
+                add("%T(fqn·=·%S, color·=·%T.%L", CellDescriptor::class, fqn, CellColor::class, color.name)
+                manifestSuffix?.let { add("%L", it) }
+                add("),\n")
+            } else {
+                add(
+                    "%T(fqn·=·%S, color·=·%T.%L, ports·=·listOf(\n⇥",
+                    CellDescriptor::class, fqn, CellColor::class, color.name,
+                )
+                ports.forEach { p ->
+                    val natures = portNatureLevels(cell, color, p)
+                    if (natures.isEmpty()) {
+                        add(
+                            "%T(%S, %T.%L, %S, %LL),\n",
+                            PortDescriptor::class.asClassName(), p.name,
+                            PortDirection::class.asClassName(), p.direction.name,
+                            p.contractFqn, StableHash.of(p.contractFqn),
+                        )
+                    } else {
+                        add(
+                            "%T(%S, %T.%L, %S, %LL, natures·=·%T.of(",
+                            PortDescriptor::class.asClassName(), p.name,
+                            PortDirection::class.asClassName(), p.direction.name,
+                            p.contractFqn, StableHash.of(p.contractFqn),
+                            NATURE_VECTOR,
+                        )
+                        natures.forEachIndexed { i, (levelClass, levelName) ->
+                            if (i > 0) add(", ")
+                            add("%T.%L", levelClass, levelName)
+                        }
+                        add(")),\n")
+                    }
+                }
+                add("⇤)")
+                manifestSuffix?.let { add("%L", it) }
+                add("),\n")
+            }
+        }
+        add("⇤)")
+    }
+
+    /**
      * One abstract `<Name>CellBase` per `@CellBase` Api interface (see
      * [CellBase] for the authoring contract and the v1 single-round ceiling).
      * Port property names mirror the interface's, so G-17 holds by
@@ -419,7 +529,12 @@ class ContractProcessor(
             val api = propType?.arguments?.firstOrNull()?.type?.resolve()?.takeUnless { it.isError }
             val name = prop.simpleName.asString()
             if (propType == null || api == null || roleFqn !in KernelFqn.PORT_ROLES) {
-                if (roleFqn in KernelFqn.PORT_ROLES) logger.warn(
+                // T09 §B: an unresolvable port Api type is not survivable — the
+                // member stays abstract, so a concrete subclass either fails to
+                // compile (good) or hand-implements it outside the generated-port
+                // machinery (silently missing its descriptor row and static handler
+                // binding). Loud, not a warning.
+                if (roleFqn in KernelFqn.PORT_ROLES) logger.error(
                     "@CellBase ${iface.simpleName.asString()}.$name: unresolvable port Api type — left abstract", prop,
                 )
                 return@forEach // non-port members stay abstract for the subclass
@@ -442,7 +557,12 @@ class ContractProcessor(
                         val payload = api.arguments.firstOrNull()?.type?.resolve()
                         val payloadName = payload?.toTypeName(typeParamResolver)
                         if (payloadName == null) {
-                            logger.warn("@CellBase ${iface.simpleName.asString()}.$name: unresolvable payload — not auto-bound", prop)
+                            // T09 §B: an unresolvable Propagate<T> payload means the
+                            // port is declared and registered but no on<Name>
+                            // handler is generated or bound — the inlet accepts
+                            // messages and silently drops every one. Loud, not a
+                            // warning.
+                            logger.error("@CellBase ${iface.simpleName.asString()}.$name: unresolvable payload — not auto-bound", prop)
                         } else {
                             val handler = "on" + name.replaceFirstChar { it.uppercase() }
                             builder.addFunction(
@@ -536,6 +656,17 @@ class ContractProcessor(
                 PropertySpec.builder(nameConst, STRING, KModifier.CONST).initializer("%S", p.name).build()
             )
             val idClass = if (p.direction == PortDirection.IN) KernelFqn.INLET_ID else KernelFqn.OUTLET_ID
+            // T09 §B: audited but left as a warning, unlike the two @CellBase
+            // paths above. `p.apiType` already passed scanPorts's non-error,
+            // non-null check, so this guards KotlinPoet-ksp's KSType.toTypeName()
+            // itself: its only failure branches are (a) a KSTypeParameter lookup
+            // miss — structurally unreached here, since cell.typeParameters is the
+            // same resolver this call uses, and KSP's getAllProperties() already
+            // member-substitutes inherited generic properties — and (b) an
+            // `else -> error(...)` for declaration kinds no ordinary Kotlin/Java
+            // JVM source produces. No compileable fixture (star projections,
+            // F-bounded Java generics, inherited-generic properties) reached this
+            // catch in testing; kept defensive rather than promoted or deleted.
             val apiTypeName = try {
                 p.apiType.toTypeName(typeParamResolver)
             } catch (e: Exception) {
@@ -742,24 +873,6 @@ class ContractProcessor(
         if (isSubtype(type, KernelFqn.PARTITIONED_MARKER)) tags += "PARTITIONED"
         return tags
     }
-
-    /** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
-    private fun carriesExclusive(type: com.google.devtools.ksp.symbol.KSType): Boolean {
-        if (type.declaration.qualifiedName?.asString() in KernelFqn.EXCLUSIVE_MARKERS) return true
-        return type.arguments.any { it.type?.resolve()?.let(::carriesExclusive) == true }
-    }
-
-    private fun isSubtype(type: KSType, marker: String): Boolean {
-        if (type.declaration.qualifiedName?.asString() == marker) return true
-        return (type.declaration as? KSClassDeclaration)?.superTypes
-            ?.any { isSubtype(it.resolve(), marker) } == true
-    }
-
-    /** Descriptor scans include nested payloads, matching the established ownership scan. */
-    private fun carriesMarker(type: KSType, marker: String): Boolean =
-        isSubtype(type, marker) || type.arguments.any { argument ->
-            argument.type?.resolve()?.let { carriesMarker(it, marker) } == true
-        }
 
     private fun classesIn(declaration: com.google.devtools.ksp.symbol.KSDeclaration): Sequence<KSClassDeclaration> =
         sequence {
