@@ -24,7 +24,12 @@ object ContractRegistry {
 
     fun register(module: ContractModule) {
         module.contracts.forEach { contract ->
-            byId[contract.contractId] = contract
+            val existing = byId.putIfAbsent(contract.contractId, contract)
+            require(existing == null || existing == contract) {
+                "contractId collision: ${contract.contractId} already registered as " +
+                    "${existing?.fqn} (${existing}), cannot also register ${contract.fqn} " +
+                    "($contract) — the wire decodes ids only, so a silent repoint mis-decodes frames"
+            }
             byFqn[contract.fqn] = contract
             contract.methods.forEach { method ->
                 byMethodKey["${contract.fqn}#${method.name}${method.jvmDescriptor}"] = contract to method
@@ -50,8 +55,11 @@ object ContractRegistry {
         return byMethodKey[key]?.let { (c, m) -> c.contractId to m.methodId }
     }
 
-    val contracts: Collection<ContractDescriptor> get() = byId.values
-    val cells: Collection<CellDescriptor> get() = cellsByFqn.values
+    /** Defensive copy (T03): a live map view let a caller iterate a registry that mutates underneath it. */
+    val contracts: Collection<ContractDescriptor> get() = byId.values.toList()
+
+    /** Defensive copy (T03), same reasoning as [contracts]. */
+    val cells: Collection<CellDescriptor> get() = cellsByFqn.values.toList()
 }
 
 /** Runtime index of the generated, bounded metadata-protocol descriptors. */
@@ -66,13 +74,25 @@ object ProtocolRegistry {
     }
 
     fun register(descriptor: ProtocolDescriptor) {
-        byId[descriptor.protocolId] = descriptor
-        byContractId[descriptor.contractId] = descriptor
+        val existingById = byId.putIfAbsent(descriptor.protocolId, descriptor)
+        require(existingById == null || existingById == descriptor) {
+            "protocolId collision: ${descriptor.protocolId} already registered as $existingById, " +
+                "cannot also register $descriptor — the wire decodes ids only, so a silent repoint " +
+                "mis-decodes frames"
+        }
+        val existingByContractId = byContractId.putIfAbsent(descriptor.contractId, descriptor)
+        require(existingByContractId == null || existingByContractId == descriptor) {
+            "contractId collision: ${descriptor.contractId} already registered as $existingByContractId, " +
+                "cannot also register $descriptor — the wire decodes ids only, so a silent repoint " +
+                "mis-decodes frames"
+        }
     }
 
     fun protocol(id: String): ProtocolDescriptor? = byId[id]
     fun protocol(contractId: Long): ProtocolDescriptor? = byContractId[contractId]
-    val protocols: Collection<ProtocolDescriptor> get() = byId.values
+
+    /** Defensive copy (T03), same reasoning as [ContractRegistry.contracts]. */
+    val protocols: Collection<ProtocolDescriptor> get() = byId.values.toList()
 }
 
 /**
