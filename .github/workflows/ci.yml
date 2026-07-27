@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and check
+        run: ./gradlew build check
+
+      # A CI checkout is always a fresh clone, so this also enforces the
+      # clean-clone guard: any load-bearing file that was never committed (the
+      # class of bug this remediation fixed — CLAUDE.md, doc/ARCHITECTURE.md,
+      # etc. were untracked in every checkout until now) shows up here as an
+      # untracked file and fails the build.
+      - name: Fail on unexpected untracked files
+        run: test -z "$(git status --porcelain -uall -- doc '*/src')"
+
+  concord-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run full concord corpus (core, dist, dur)
+        run: ./gradlew :concord:test -Pconcord.profiles=core,dist,dur
+
+      - name: Regenerate concordance matrix
+        run: ./gradlew :concord:concordance
+
+      # Regeneration must be a no-op: if this diffs, doc/spec/CONCORDANCE.md
+      # drifted from the corpus and was hand-edited or left stale.
+      - name: Confirm concordance regeneration is a no-op
+        run: git diff --exit-code doc/spec/CONCORDANCE.md
