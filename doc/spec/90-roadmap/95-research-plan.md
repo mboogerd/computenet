@@ -1,6 +1,6 @@
 # 95 — Research Plan
 
-> **Status**: living document — the questions where no committed solution exists;
+> **Status**: Living document — the questions where no committed solution exists;
 > each entry proposes solution directions and concrete research actions
 > **Sources**: [91-gap-analysis.md](91-gap-analysis.md),
 > [93-feature-interactions.md](93-feature-interactions.md),
@@ -300,7 +300,7 @@ the redelivery claim.
 
 ## PN-16 — Frontier traversal: is the static-link model sufficient? — DECIDED (B: yes)
 
-> **Supersedes** CP-G7 ([COMPOSITION-TICKETS-NEXT.md](../../COMPOSITION-TICKETS-NEXT.md) §CP-G7).
+> **Supersedes** CP-G7 ([COMPOSITION-TICKETS-NEXT.md](../../archive/runs/COMPOSITION-TICKETS-NEXT.md) §CP-G7).
 > This entry closes the question rather than proposing directions: the outcome is
 > a spec paragraph to promote, not a mechanism to build. Decision recorded against
 > the post-PN-1/2/7/10 code; grounded by tests run read-only.

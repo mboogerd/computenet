@@ -1,9 +1,13 @@
 # ComputeNet Specification (Draft)
 
+> **Status**: Living — entry point and reading map for the chapters below; kept
+> in sync as chapters are added or restructured
+
 This is the draft specification for **ComputeNet**: a unified, decentralized dataflow
 graph framework built from Cells connected through explicit Ports and Links.
 
-It consolidates the ADRs under `doc/adr/` into a single coherent structure, ordered
+It consolidates the ADRs under `doc/archive/adr/` (plus the live
+`doc/adr/ADR - Adapter Synthesis.md`) into a single coherent structure, ordered
 from **broad (why)** → **what** → **narrow (how)**. Where the ADRs are inspirational
 or mutually inconsistent, this spec says so explicitly and proposes a way forward
 compatible with the established vision and constraints.
