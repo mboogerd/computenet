@@ -16,12 +16,12 @@ checks the implementation against requirement ids embedded in the spec.
 ## 1. Module graph
 
 ```
-                :nature  (descriptor vocabulary, no deps)
+                :nature  (descriptor + runtime wire vocabulary, no deps)
                  ▲    ▲
-     implementation    api
+        implementation api
          │              │
        :gen ───ksp────► :kernel ◄── api ── :testkit
-      (KSP)   impl ──►    ▲  ▲            (test helpers)
+      (KSP)              ▲  ▲            (test helpers)
                           │  │
                   :wire ──┘  └── :concord
                     ▲
@@ -31,28 +31,34 @@ checks the implementation against requirement ids embedded in the spec.
       :demo:{agora,slotfinder,skillmatch,tiering,backlog-triage}
 ```
 
+`:gen` is a `ksp(...)`-only (processor-time) dependency of `:kernel` and every
+other cell-authoring module (T09 §A) — it never lands on their compile or
+runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
+(`:gen`'s own dependencies) don't either.
+
 | Module | Purpose | Depends on (main scope) |
 |---|---|---|
-| `:nature` | Descriptor/nature vocabulary shared by `:gen` (processor-time) and `:kernel` (runtime): `ContractDescriptor`, `CellDescriptor`, `NatureVector`/`NatureAxis`, `Manifest`, `ContractRegistry`, `StableHash`. | — |
-| `:gen` | KSP processor: `@Contract`/`@CellBase`/`@Key`/`@Protocol` → generated descriptor tables, AOT proxies, port-id constants, `<Name>CellBase` classes. `:gen`'s own test suite (`ContractProcessorTest`, `NatureDescriptorSweepTest`) is the real generator-regression gate; `:kernel:compileKotlin` depends on `:gen:test`, so generator regressions fail before kernel compiles. | `:nature`, kotlinpoet, ksp-api |
-| `:kernel` | The entire cell model and runtime (see §2). Transport-dependency-free by policy. | `api(:nature)`, `:gen` (+ksp), coroutines, kotlinx-serialization |
+| `:nature` | Descriptor/nature vocabulary shared by `:gen` (processor-time) and `:kernel` (runtime): `ContractDescriptor`, `CellDescriptor`, `NatureVector`/`NatureAxis`, `Manifest`, `ContractRegistry`, `StableHash`. Also holds the `civictech.gen.wire` runtime vocabulary a cell author actually touches — `@Contract`/`@CellBase`/`@Key`/`@Protocol` and `ProxyRegistry` (T09 §A; package kept as `civictech.gen.wire` for import compatibility, module is `:nature`). | — |
+| `:gen` | KSP processor: `@Contract`/`@CellBase`/`@Key`/`@Protocol` → generated descriptor tables, AOT proxies, port-id constants, `<Name>CellBase` classes. `ContractProcessor.process()` delegates its five inline lints to `ContractLints` and its three descriptor-table builders to `contractTable()`/`protocolTable()`/`cellTable()` (T09 §D). `:gen`'s own test suite (`ContractProcessorTest`, `NatureDescriptorSweepTest`) is the real generator-regression gate; `:kernel:compileKotlin` depends on `:gen:test`, so generator regressions fail before kernel compiles. | `:nature`, kotlinpoet, ksp-api |
+| `:kernel` | The entire cell model and runtime (see §2). Transport-dependency-free by policy. `@CellBase` is landed and adopted here — every source cell/operator in `civictech.cell.data`/`.data.op` is authored this way. | `api(:nature)`, `ksp(:gen)` (processor-time only), coroutines, kotlinx-serialization |
 | `:testkit` | Shared test scaffolding: `SimWorld`, `awaitUntil`, `HttpProbe`, `JvmPeer`. Lives in `src/main` so a plain project dep reaches it from consumers' test source sets. | `api(:kernel)`, `api(junit)` |
 | `:wire` | The one concrete transport: `WsTransport` over Java-WebSocket. Another transport = another small module behind the same kernel bridge cells. | `:kernel`, Java-WebSocket |
 | `:concord` | Executable specification / conformance suite (see §5). | `:kernel`, kotlinx-serialization; kaml (test) |
 | `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo. Not an application itself. `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
-| `:demo:*` (7 apps) | Demo applications (see §6). Only `:demo:shopping` and `:demo:exchange` use `:wire`; only `:demo:agora` and `:demo:backlog-triage` define their own KSP cells; only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
+| `:demo:*` (7 apps) | Demo applications (see §6). Only `:demo:shopping` and `:demo:exchange` use `:wire`; only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
 
 Non-module directories: `buildSrc/` (two convention plugins —
 `buildsrc.convention.kotlin-jvm`: JDK 21 toolchain, JUnit platform, shared test
 stack (kotest-assertions, JUnit, kotlin-test), test heap 2g / forkEvery 80
 (bounded because `ProtocolSupport` keys ports in a JVM-global map), and a
 5-minute-per-test-method timeout backstop; `buildsrc.convention.ksp-cell`:
-the KSP plugin + `implementation`/`ksp(project(":gen"))` + the generated-source
-dir, for cell-authoring modules (`:kernel`, `:demo:agora`,
-`:demo:backlog-triage`)), `scripts/` (`stage-preview.sh`, `plan-orchestrator/`),
-`backlog/` (idea inbox, one file per prospective feature), `bugs/` (fixed-defect
-reports), `doc/` (see §7), `legacy/` and `runtime/` (**untracked, sources
-deleted — only stale build output; ignore them**).
+the KSP plugin + `ksp(project(":gen"))` (processor-time only — no
+`implementation` dependency, T09 §A) + the generated-source dir, for
+cell-authoring modules (`:kernel`, `:demo:backlog-triage`)), `scripts/`
+(`stage-preview.sh`, `plan-orchestrator/`), `backlog/` (idea inbox, one file
+per prospective feature), `bugs/` (fixed-defect reports), `doc/` (see §7),
+`legacy/` and `runtime/` (**untracked, sources deleted — only stale build
+output; ignore them**).
 
 ## 2. `:kernel` package map
 

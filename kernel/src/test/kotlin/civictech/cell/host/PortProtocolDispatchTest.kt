@@ -10,7 +10,6 @@ import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 import civictech.nature.ProtocolRegistry
 import io.kotest.matchers.shouldBe
@@ -25,18 +24,14 @@ class PortProtocolDispatchTest {
         attention.contractId shouldBe civictech.nature.ContractRegistry.descriptor(AttentionProtocol::class.java)!!.contractId
         attention.direction shouldBe ProtocolDirection.UPSTREAM
         attention.band shouldBe 0
-        attention.lane shouldBe "attention"
-        attention.cardinality shouldBe ProtocolCardinality.FAN_IN_MERGE
 
         val suspension = ProtocolRegistry.protocol(Protocols.Suspension.name)!!
         suspension.contractId shouldBe civictech.nature.ContractRegistry.descriptor(SuspensionProtocol::class.java)!!.contractId
         suspension.direction shouldBe ProtocolDirection.DOWNSTREAM
-        suspension.cardinality shouldBe ProtocolCardinality.FAN_OUT_BROADCAST
 
         val saturation = ProtocolRegistry.protocol(Protocols.Saturation.name)!!
         saturation.contractId shouldBe civictech.nature.ContractRegistry.descriptor(SaturationProtocol::class.java)!!.contractId
         saturation.direction shouldBe ProtocolDirection.UPSTREAM
-        saturation.cardinality shouldBe ProtocolCardinality.FAN_IN_MERGE
     }
 
     @Test

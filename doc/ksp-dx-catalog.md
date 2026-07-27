@@ -4,7 +4,17 @@ Status: design catalog. **Update (RS-10.1, post `restructure(RS-4.1)`): Phases
 0-4 and the §6b `@CellBase` extension have landed** (Phase 5 has not — see the
 per-phase annotations in §6 below). This header and the phase bodies otherwise
 describe the pre-implementation design as originally written; treat §6's
-phase annotations as the authoritative landed/pending status. Scope: developer experience for
+phase annotations as the authoritative landed/pending status. **T09 correction
+(status honesty, not design revision)**: "landed" in §6 means the generator/
+library machinery exists and works — it does not mean every call site adopted
+it. Two phases are landed-in-`:gen`/kernel but not call-site-complete: Phase
+0's raw-constructor→`.create<T>()` port migration (15 sites still use the raw
+form) and Phase 3's `<Cell>Ports`/`PortIds` adoption (generation only; the
+catalog already said so, restated here for emphasis). §6b's `@CellBase`
+extension, by contrast, genuinely is landed *and* adopted — every kernel
+source cell/operator in `civictech.cell.data`/`.data.op` uses it, and T09
+gave it its first adoption outside `:kernel` (`demo/backlog-triage`'s
+`RatingCell`). Scope: developer experience for
 *creating new cells* and *combining cells into larger dataflow graphs*. The
 spec's own codegen gaps (G-60, G-52, G-47) are catalogued as later phases but
 this document does not block on them.
@@ -284,7 +294,7 @@ runtime dispatch path changes. Phases 0–2 are pure library and remove most
 demo boilerplate before any processor code is written; Phase 3 is the only new
 generation and pays twice (G-60 metadata + typed ref-path wiring).
 
-### Phase 0 — library debloat + port-style migration (no KSP) — **LANDED**
+### Phase 0 — library debloat + port-style migration (no KSP) — **LANDED-IN-GEN, UNADOPTED AT 15 CALL SITES** (T09 status correction: the library/demo migration below landed, but 15 kernel sites still construct ports with the raw `FanInlet(SomeClass::class.java)` + unchecked-cast form the B1 bullet was meant to retire, against 56 sites already on `.create<T>()`; call-site migration is T11)
 
 - `Propagate` → Kotlin `fun interface` (`kernel/.../data/Propagate.kt`;
   binary-compatible; generated proxies unaffected). Optional sugar:
@@ -347,7 +357,7 @@ fails at graph build and `lookup(TypedRef)` round-trips through
 `HostedCellProxy` chokes on some Api property shape, fall back to a narrowed
 generated "client view" for that cell (reassess in Phase 3).
 
-### Phase 3 — KSP sweep: `PortDescriptor` + `<Cell>Ports` objects (aligns with G-60) — **LANDED** (generation only; call-site migration to `<Cell>Ports`/`PortIds` is out of scope for the restructure — see `doc/archive/runs/RESTRUCTURE-PLAN.md`'s explicitly-out-of-scope list)
+### Phase 3 — KSP sweep: `PortDescriptor` + `<Cell>Ports` objects (aligns with G-60) — **LANDED-IN-GEN, UNADOPTED AT CALL SITES** (T09 status correction: generation only — call-site migration to `<Cell>Ports`/`PortIds` is out of scope for the restructure — see `doc/archive/runs/RESTRUCTURE-PLAN.md`'s explicitly-out-of-scope list)
 
 - `gen/.../wire/ContractDescriptor.kt`: `PortDescriptor`, `PortDirection`,
   `CellDescriptor.ports` (additive default).
@@ -405,7 +415,7 @@ descriptor table are the prerequisites for both.
 - **Codegen for hub cells / catch-up / diff-emit** — rejected; library
   abstractions suffice (§4).
 
-## 6b. Landed extension: `@CellBase` static handler binding — **LANDED**
+## 6b. Landed extension: `@CellBase` static handler binding — **LANDED AND ADOPTED**
 
 For cells whose inlet behavior is fixed at authoring time, the imperative
 `init { inlet.onEach { … } }` step is ceremony. `@CellBase` on the Api
@@ -417,9 +427,22 @@ The cell is then just overridden methods — no `registerPort`, no `serve`,
 and the G-17 name==property invariant cannot be violated by construction.
 (KSP is additive-only, so a method-level annotation on the cell itself
 cannot inject the port members; the interface-driven base is the honest
-form of "declare the handler statically".) v1 ceiling: single-round
-processing means subclasses of generated bases miss descriptor/Ports rows
-— see `CellBase.kt`'s ponytail note for the upgrade path.
+form of "declare the handler statically".)
+
+T09 status correction: the "v1 ceiling" this entry previously claimed
+("single-round processing means subclasses of generated bases miss
+descriptor/Ports rows") is stale — generation is two-round (bases emit in
+round 1, so round 2's cell scan resolves subclasses of them like any other
+cell) and has been since `gen: two-round emission — cells extending
+generated bases resolve fully`. `kernel/src/test/kotlin/civictech/cell/
+CellBaseTest.kt` pins that base-derived cells get full descriptor/`Ports`
+rows. Adoption, not just generation, is landed: every source cell/operator
+in `civictech.cell.data`/`.data.op` (`SetCell`, `MapCell`, `ListCell`,
+`CounterCell`, `CountCell`, `GroupByCell`, the joins, …) is `@CellBase`-
+authored, and T09 gave the pattern its first consumer outside `:kernel`
+(`demo/backlog-triage`'s `RatingCell`; `MetaRankCell` in the same file stays
+hand-rolled — its ports are a runtime-sized map keyed by a constructor
+argument, which `@CellBase`'s fixed-Api-interface shape cannot express).
 
 ## 7. Open questions
 

@@ -19,9 +19,11 @@ import civictech.nature.Manifest
  * - [Replicable] or [ReBaselineEmitting] → [Manifest.REPLICATED]
  * - [Partitioned] → [Manifest.PARTITIONED]
  *
- * `PULL_SERVING` / `GATED` have no static marker (they are installed policies,
- * not implemented interfaces) and are left for a declaration surface to set — the
- * vocabulary exists; the scan stays honest about what it can derive.
+ * `PULL_SERVING`/`GATED` (installed-policy natures, not implemented interfaces)
+ * were removed from [Manifest] entirely (T09 §E, YAGNI audit): neither was
+ * producible here, and `GATED`'s would-be source — the Gate policy — was
+ * deleted in T03. The spec keeps the concepts; code re-adds the tags with
+ * their first real consumer.
  */
 fun manifestOf(clazz: Class<*>): Set<Manifest> = buildSet {
     if (GlitchFree::class.java.isAssignableFrom(clazz)) add(Manifest.GLITCH_FREE)

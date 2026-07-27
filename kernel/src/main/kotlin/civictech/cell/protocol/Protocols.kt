@@ -6,7 +6,6 @@ import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 import civictech.nature.ProtocolRegistry
 import java.util.*
@@ -24,7 +23,7 @@ data class ProtocolId(val name: String)
  * only the direct in-process `ProtocolSupport.deliver` path handshake() uses.
  */
 @Contract(management = true)
-@Protocol("topology-order", ProtocolDirection.DOWNSTREAM, band = 0, lane = "topology-order", cardinality = ProtocolCardinality.FAN_OUT_BROADCAST)
+@Protocol("topology-order", ProtocolDirection.DOWNSTREAM, band = 0)
 fun interface TopologyOrderProtocol {
     fun edgeEvent(message: EdgeEvent)
 }

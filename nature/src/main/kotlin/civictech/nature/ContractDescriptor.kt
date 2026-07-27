@@ -168,8 +168,13 @@ enum class PullService : NatureLevel {
  * durable producer is normal (the exchange demo is exactly that), so making them
  * refuse at links would repeat the COLOR mistake. They are consumed by spawn
  * checks, diagnostics, and drift assertions.
+ *
+ * `PULL_SERVING`/`GATED` (T09 §E, YAGNI audit): removed — neither was
+ * producible (`manifestOf` only ever derived the other four; `GATED`'s
+ * would-be source, the Gate policy, was deleted in T03). The spec keeps the
+ * concepts; code re-adds the tags with their first real consumer.
  */
-enum class Manifest { GLITCH_FREE, DURABLE, REPLICATED, PARTITIONED, PULL_SERVING, GATED }
+enum class Manifest { GLITCH_FREE, DURABLE, REPLICATED, PARTITIONED }
 
 /**
  * A **sparse** vector of declared natures. Absent axes read as their DEFAULT
@@ -297,19 +302,18 @@ data class CellDescriptor(
 )
 
 // Moved from :gen's Contract.kt with ProtocolDescriptor (RS-3.1): the
-// `@Protocol` annotation (civictech.gen.wire.Protocol, still in :gen) carries
-// these as its `direction`/`cardinality` parameters, so :gen imports them
-// back from here.
+// `@Protocol` annotation (civictech.gen.wire.Protocol, now also in :nature —
+// see T09 §A) carries this as its `direction` parameter.
 enum class ProtocolDirection { UPSTREAM, DOWNSTREAM }
-enum class ProtocolCardinality { FAN_IN_MERGE, FAN_OUT_BROADCAST }
 
+// T09 §E (YAGNI audit): `lane`/`cardinality` and the `ProtocolCardinality`
+// enum removed — declared at all six `@Protocol` sites, emitted into every
+// table, asserted by a test, consulted by nothing at runtime.
 data class ProtocolDescriptor(
     val protocolId: String,
     val contractId: Long,
     val direction: ProtocolDirection,
     val band: Int,
-    val lane: String,
-    val cardinality: ProtocolCardinality,
 )
 
 /** Implemented by generated per-module tables; discovered via `ServiceLoader`. */

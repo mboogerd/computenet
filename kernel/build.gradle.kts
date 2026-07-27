@@ -8,9 +8,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines)
     implementation(libs.kotlinx.serialization)
     api(project(":nature"))
-    // Beyond ksp-cell's implementation/ksp(project(":gen")): kernel cell/port authors
-    // apply the @Contract/@CellBase/@Key/@Protocol annotations (processor input,
-    // stays in :gen) and civictech.gen.wire.ProxyRegistry (generated-proxy lookup).
+    // civictech.gen.wire.{Contract,Key,Protocol,CellBase,ProxyRegistry} — the
+    // annotations cell/port authors apply and the generated-proxy lookup — live in
+    // :nature (T09 §A), reachable via the api dependency above. ksp-cell's
+    // `ksp(project(":gen"))` is processor-time only: :gen (KotlinPoet, KSP's
+    // symbol-processing-api, kotlin-reflect) never lands on kernel's classpath.
 
     testImplementation(project(":testkit"))
 }

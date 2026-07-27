@@ -1,3 +1,5 @@
+// Lives in :nature (T09 §A) — see Contract.kt's header for why the package stays
+// `civictech.gen.wire` despite the module move.
 package civictech.gen.wire
 
 import java.lang.reflect.InvocationHandler
@@ -24,9 +26,9 @@ interface ProxyModule {
  * `civictech.cell.proxy.Proxy.fromClass` never needs
  * `java.lang.reflect.Proxy.newProxyInstance` for a registered contract. Each
  * generated proxy class still dispatches through the same `InvocationHandler`
- * shape the existing proxy behaviors (`Buffering`, `Broadcast`, `NoOp`,
- * `Throwing`, `Callback`, `HostProxy`, `MediateProxy`, ...) already use, so
- * only proxy *construction* changes — call sites are untouched.
+ * shape the existing proxy behaviors (`Buffering`, `NoOp`, `Callback`,
+ * `HostProxy`, `MediateProxy`, ...) already use, so only proxy *construction*
+ * changes — call sites are untouched.
  */
 object ProxyRegistry {
     private val byInterface = ConcurrentHashMap<Class<*>, ProxyConstructor>()

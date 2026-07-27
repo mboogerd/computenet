@@ -1,12 +1,17 @@
+// Lives in :nature (T09 §A): runtime vocabulary :kernel imports (Contract/Key/
+// Protocol are processor input read by :gen's ContractProcessor, but the
+// annotations themselves must sit on :kernel's compile+runtime classpath without
+// dragging :gen's KotlinPoet/symbol-processing-api/kotlin-reflect along). Package
+// intentionally still `civictech.gen.wire`, not `civictech.nature` — this is what
+// generated code and every existing kernel import site already names.
 package civictech.gen.wire
 
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 
 /**
  * Marks a port contract interface for wire identity (G-15, C-5): the KSP
- * [ContractProcessor] emits a [ContractDescriptor] with stable contract and
- * method ids, so the serialized invocation form never carries reflection
+ * `ContractProcessor` (`:gen`) emits a [ContractDescriptor] with stable contract
+ * and method ids, so the serialized invocation form never carries reflection
  * artifacts (P9).
  *
  * [management] distinguishes management contracts (returns allowed, may
@@ -32,6 +37,4 @@ annotation class Protocol(
     val id: String,
     val direction: ProtocolDirection,
     val band: Int,
-    val lane: String,
-    val cardinality: ProtocolCardinality,
 )

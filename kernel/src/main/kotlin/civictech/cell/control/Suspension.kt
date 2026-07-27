@@ -2,7 +2,6 @@ package civictech.cell.control
 
 import civictech.gen.wire.Contract
 import civictech.gen.wire.Protocol
-import civictech.nature.ProtocolCardinality
 import civictech.nature.ProtocolDirection
 
 /**
@@ -46,7 +45,7 @@ sealed interface StallNotice {
 }
 
 @Contract(management = true)
-@Protocol("suspension", ProtocolDirection.DOWNSTREAM, band = 0, lane = "suspension", cardinality = ProtocolCardinality.FAN_OUT_BROADCAST)
+@Protocol("suspension", ProtocolDirection.DOWNSTREAM, band = 0)
 fun interface SuspensionProtocol { fun suspension(message: StallNotice) }
 
 /**
