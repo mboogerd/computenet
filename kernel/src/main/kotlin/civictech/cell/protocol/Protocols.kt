@@ -141,25 +141,32 @@ class ProtocolSupport private constructor(port: Port) {
     }
 
     fun deliver(id: ProtocolId, link: Link, message: Any) {
-        val traversal = (message as? ProtocolTraversal)
-            ?: ProtocolTraversal(UUID.randomUUID(), ConcurrentHashMap.newKeySet(), message)
-        if (!traversal.visitedEdges.add(link.id)) return
-        inboundFilter(id, traversal.payload)?.let { handlers[id]?.invoke(link, it) }
+        val incoming = message as? ProtocolTraversal
+        if (incoming != null && !incoming.visitedEdges.add(link.id)) return
+        val payload = incoming?.payload ?: message
+        inboundFilter(id, payload)?.let { handlers[id]?.invoke(link, it) }
 
         val terminal = relays[id] ?: return
-        if (terminal(traversal.payload)) return
+        if (terminal(payload)) return
         val descriptor = requireNotNull(ProtocolRegistry.protocol(id.name))
         val cell = ownerRef?.get() ?: return
+        // Lazy wrap (hot-path, T03): a leaf with no relay for [id] never builds a
+        // traversal at all. Only a relaying hop needs one — reuse the incoming
+        // traversal if this message already carries one, otherwise mint a fresh
+        // visited-edge set seeded with this hop so a later second edge into the
+        // same traversal is caught (G-36).
+        val outgoing = incoming
+            ?: ProtocolTraversal(ConcurrentHashMap.newKeySet<UUID>().also { it.add(link.id) }, payload)
         PortRegistry.of(cell).names().forEach { name ->
             val linkedPort = PortRegistry.of(cell)[name] as? Linked ?: return@forEach
             linkedPort.linking.links.forEach { next ->
-                if (next.id in traversal.visitedEdges) return@forEach
+                if (next.id in outgoing.visitedEdges) return@forEach
                 when (descriptor.direction) {
                     ProtocolDirection.UPSTREAM -> if (next.toPort === linkedPort) {
-                        send(next, id, traversal, upstream = true)
+                        send(next, id, outgoing, upstream = true)
                     }
                     ProtocolDirection.DOWNSTREAM -> if (next.fromPort === linkedPort) {
-                        send(next, id, traversal, upstream = false)
+                        send(next, id, outgoing, upstream = false)
                     }
                 }
             }
@@ -201,7 +208,6 @@ class ProtocolSupport private constructor(port: Port) {
 
 /** Metadata-only traversal state; deliberately unrelated to MessageContext. */
 private data class ProtocolTraversal(
-    val epoch: UUID,
     val visitedEdges: MutableSet<UUID>,
     val payload: Any,
 )
