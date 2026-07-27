@@ -6,7 +6,7 @@ finding is dropped silently — it is either **ticketed**, **deferred** (real
 work, consciously postponed, with a tracked marker), or **excluded** (judged
 not worth doing, with the reason).
 
-Status legend: ✅ ticketed · ⏸ deferred (tracked) · ✖ excluded (reasoned).
+Status legend: ✅ ticketed · 🟡 ticketed, landed only partially (residual tracked in the row below it) · ⏸ deferred (tracked) · ✖ excluded (reasoned).
 
 ## SRP / cohesion
 
@@ -116,8 +116,9 @@ nit ("~57" vs 55) → T02 general pass.
 
 | Finding | Status | Where / why |
 |---|---|---|
-| No payload-type check on links (incl. replay path) | ✅ | T08-A |
-| — descriptor-validated `ConnectStep` replay (M/L) | ⏸ | Better-than-erasure fidelity; blocked on descriptor coverage gaps (catalog open question 2). Handshake check covers the majority class now. |
+| No payload-type check on links (incl. replay path) | 🟡 | T08-A — **partial**, see below |
+| — same-wrapper payload mismatch still unchecked (H) | ⏸ | T08-A's handshake check compares `FanOutlet.clazz`/`FanInlet.clazz`, which is `Api::class.java`. Every delta port declares `Api` as `Propagate<D>`, and `Propagate<D>::class.java` erases to `Propagate::class.java` for all `D` — so the check catches only *genuinely different top-level port interfaces* (a delta outlet into a write inlet). It does **not** catch `SetDelta` vs `MapDelta`, which T08's own Solution-A text claimed it would. Verified at review time (Phase 2): `SetCell.outlet -> MapHubCell.inlet` still reports `Connected` and still dies as `ClassCastException: SetDelta cannot be cast to MapDelta` on the dispatch thread at first delivery — the exact failure shape finding 1 set out to eliminate, for its most common case. Pinned by `PayloadTypeCheckTest`'s known-gap test. Closing it needs the port to carry a *declared payload class* independent of `Api` erasure (constructor arg or KSP `PortDescriptor` field) — `reified typeOf<Api>()` at `create` does not work, since generic cells create their ports under a non-reified type parameter. Real API change across every port-declaration site; deliberately not attempted at review time. |
+| — descriptor-validated `ConnectStep` replay (M/L) | ⏸ | Better-than-erasure fidelity; blocked on descriptor coverage gaps (catalog open question 2). Would subsume the row above. |
 | `@CellBase` zero consumers + doc lies + silent warn | ✅ | T09-B/C |
 | `Serve`/`Use` split + `Consumer` retirement | ⏸ | Public-API churn across 34 interfaces + 53 test files; batched into one future API pass so call sites churn once. Convention decision recorded there, not piecemeal. |
 | Observation API type erasure | ✅ | T08-B |

@@ -21,6 +21,7 @@ import civictech.cell.wire.Peering
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
+import civictech.demo.shell.value
 import civictech.wire.WsTransport
 import com.sun.net.httpserver.HttpExchange
 import java.net.URI
@@ -230,15 +231,10 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 }
 
 fun main(args: Array<String>) {
-    fun value(flag: String): String? {
-        val i = args.indexOf(flag)
-        return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
-    }
-
     val port = demoPort(args)
-    val wire = value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
-        ?: value("--peer")?.let { DemoApp.Wire.Dial(it) }
-    val journalDir = value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
+    val wire = args.value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
+        ?: args.value("--peer")?.let { DemoApp.Wire.Dial(it) }
+    val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
 
     val app = DemoApp(port, wire, journalDir).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")

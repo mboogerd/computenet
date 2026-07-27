@@ -16,9 +16,9 @@ import java.io.File
  * and `.durability` (`FileJournal`, used by `:demo:agora`) — plus
  * `civictech.testkit`.
  *
- * The allowlist below is seeded from the actual current state of every
- * every `.kt` file under each demo module's `src/main` (verified by running this test); it is not a
- * design aspiration independent of the code. A new demo reaching into an
+ * The allowlist below is seeded from the actual current state of every `.kt`
+ * file under each demo module's `src/main` (verified by running this test);
+ * it is not a design aspiration independent of the code. A new demo reaching into an
  * unlisted package (e.g. `.protocol`, `.proxy`) fails here, naming the file,
  * the import, and this allowlist so the fix is either to route through an
  * already-allowed package or to extend [allowedCellPrefixes] in the same PR.
@@ -81,7 +81,16 @@ class DemoSurfaceAllowlistTest {
         val root = repoRoot()
         val violations = mutableListOf<String>()
 
-        demoMainKotlinFiles(root).forEach { file ->
+        val scanned = demoMainKotlinFiles(root)
+        // Non-vacuity: `demoMainKotlinFiles` degrades to an empty list when the
+        // demo tree cannot be located, which would make this gate pass forever
+        // while checking nothing.
+        assertTrue(scanned.size >= 10) {
+            "scanned only ${scanned.size} demo main sources under ${root.path}/demo — the walk is " +
+                "broken (wrong repo root?), not the demo tree"
+        }
+
+        scanned.forEach { file ->
             file.readLines().forEachIndexed { index, line ->
                 val match = cellImport.find(line) ?: return@forEachIndexed
                 val importPath = match.groupValues[1]

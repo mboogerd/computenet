@@ -14,8 +14,10 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
 import civictech.cell.data.MapApi
 import civictech.cell.data.SetApi
 import civictech.cell.data.delta.SetDelta
@@ -149,9 +151,12 @@ class ObserveCell<D : Any, S>(
     private val listeners = mutableListOf<(S) -> Unit>()
 
     /** T08 finding 4: single-consumer ⇒ FIFO submission order is delivery order. */
-    private val dispatcher = Executors.newSingleThreadExecutor { r ->
+    private fun newDispatcher(): ExecutorService = Executors.newSingleThreadExecutor { r ->
         Thread(r, "observe-cell-${ref.id}").apply { isDaemon = true }
     }
+
+    @Volatile
+    private var dispatcher: ExecutorService = newDispatcher()
 
     @Volatile
     private var closed = false
@@ -216,11 +221,48 @@ class ObserveCell<D : Any, S>(
      * shutdown instead.
      */
     fun close() {
-        synchronized(lock) {
+        val doomed = synchronized(lock) {
             if (closed) return
             closed = true
+            dispatcher
         }
-        dispatcher.shutdown()
+        doomed.shutdown()
+    }
+
+    /**
+     * Reopens a [close]d sink with a fresh [dispatcher]. Idempotent, and a
+     * no-op on an already-open sink.
+     *
+     * Necessary because [onDeactivate] is **not** only a despawn hook:
+     * `ManagedHost` calls it on the `SupervisionPolicy.RESTART` path (paired
+     * with an immediate [onActivate]) and on host drain before a migration
+     * re-activates the cell elsewhere. Without this, one restart or migration
+     * left the sink permanently deaf — the fold kept working, so [current]
+     * stayed correct, but every registered listener silently stopped firing
+     * forever, which is precisely the class of silent degrade T08 set out to
+     * remove.
+     *
+     * Ordering across the reopen: the new dispatcher's first act is to wait
+     * for the old one to drain, so a listener invocation queued before the
+     * restart can never be overtaken by one submitted after it — the
+     * total-order guarantee in this class's doc survives the boundary. A
+     * listener still blocked on the old dispatcher therefore also holds up
+     * the new one, which is the same "delays only its own sink" property,
+     * unchanged.
+     */
+    private fun reopen() {
+        val drained = synchronized(lock) {
+            if (!closed) return
+            val previous = dispatcher
+            dispatcher = newDispatcher()
+            closed = false
+            previous
+        }
+        dispatcher.execute { runCatching { drained.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) } }
+    }
+
+    override fun onActivate(ctx: CellContext) {
+        reopen()
     }
 
     override fun onDeactivate(ctx: CellContext) {
@@ -388,20 +430,38 @@ class CompositeSink internal constructor(
     private var snapshot: Map<String, Any?> = emptyMap()
 
     init {
-        sinks.forEach { (name, sink) ->
-            values[name] = null
-            // each sink's onChange fires immediately (catch-up) then on every
-            // settled change; both funnel through here under the composite lock
-            // — state assembly stays synchronous, only listener dispatch defers.
-            sink.onChange { v ->
-                synchronized(lock) {
-                    values[name] = v
-                    snapshot = LinkedHashMap(values)
-                    val fired = listeners.toList()
-                    val s = snapshot
-                    dispatchIfOpen { fired.forEach { it(s) } }
+        synchronized(lock) {
+            sinks.forEach { (name, sink) ->
+                // Seed each slot SYNCHRONOUSLY from the sink's materialized
+                // state. Before T08 finding 4 this seeding was implicit: the
+                // `onChange` registration below fired its catch-up inline, so
+                // the composite was fully populated by the time the
+                // constructor returned. Finding 4 made that catch-up an
+                // asynchronous submission on the per-sink dispatcher, which
+                // left `current()` an EMPTY map for a window after
+                // construction — `get(name)` threw "no observe named '<name>'
+                // (available: [])" and the README's "current() gives a
+                // consistent snapshot from any thread" was false at startup
+                // (e.g. slotfinder's `/state` before its first fold landed).
+                // The asynchronous catch-up still arrives and re-writes the
+                // same slot; being the FIRST submission on that sink's
+                // dispatcher it can never land after a newer change, so the
+                // no-stale-after-fresh ordering guarantee is unaffected.
+                values[name] = sink.current()
+                // each sink's onChange fires immediately (catch-up) then on every
+                // settled change; both funnel through here under the composite lock
+                // — state assembly stays serialized, only listener dispatch defers.
+                sink.onChange { v ->
+                    synchronized(lock) {
+                        values[name] = v
+                        snapshot = LinkedHashMap(values)
+                        val fired = listeners.toList()
+                        val s = snapshot
+                        dispatchIfOpen { fired.forEach { it(s) } }
+                    }
                 }
             }
+            snapshot = LinkedHashMap(values)
         }
     }
 

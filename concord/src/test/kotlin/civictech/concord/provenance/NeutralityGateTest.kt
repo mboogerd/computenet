@@ -46,7 +46,17 @@ class NeutralityGateTest {
     fun `only civictech-concord-driver-kernel may import civictech-cell`() {
         val violations = mutableListOf<String>()
 
-        concordKotlinFiles().forEach { file ->
+        val scanned = concordKotlinFiles()
+        // Non-vacuity: the source roots are resolved RELATIVE to the test task's
+        // working directory (`:concord`'s project dir). If that ever changes,
+        // `concordSourceRoots` filters both roots out and this gate would pass
+        // forever while reading nothing.
+        assertTrue(scanned.size >= 10) {
+            "scanned only ${scanned.size} :concord sources from working directory " +
+                "${File(".").absolutePath} — the walk is broken, not the corpus"
+        }
+
+        scanned.forEach { file ->
             val lines = file.readLines()
             val declaredPackage = lines.firstNotNullOfOrNull { packageLine.find(it)?.groupValues?.get(1) }
             val isDriverKernel = declaredPackage != null &&

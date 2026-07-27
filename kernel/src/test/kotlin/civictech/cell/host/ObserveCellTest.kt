@@ -216,11 +216,11 @@ class ObserveCellTest {
         }
         controller.runToIdle()
 
-        // catch-up seeds each named slot from materialized state — off-thread now
-        // (T08 finding 4), so poll rather than read synchronously.
-        awaitUntil("composite catch-up") {
-            view.current() == mapOf("alice" to setOf(1, 2), "bob" to setOf(9))
-        }
+        // Construction seeds each named slot from materialized state
+        // SYNCHRONOUSLY — `observeAll` never returns a composite whose
+        // `current()` is empty (dedicated regression test below). Only
+        // *listener* dispatch is off-thread (T08 finding 4).
+        view.current() shouldBe mapOf("alice" to setOf(1, 2), "bob" to setOf(9))
 
         // a composite listener catches up in one call, then tracks per-outlet changes
         val snapshots = java.util.Collections.synchronizedList(mutableListOf<Map<String, Any?>>())
@@ -234,6 +234,44 @@ class ObserveCellTest {
             view.current() == mapOf("alice" to setOf(1, 2), "bob" to setOf(9, 10))
         }
         (view.current()["alice"] as Set<*>).shouldContainExactlyInAnyOrder(1, 2)
+
+        view.close()
+    }
+
+    /**
+     * Regression for the T08 finding 4 follow-up: `CompositeSink` used to
+     * populate its named slots as a side effect of registering `onChange` on
+     * each per-outlet sink, which fired its catch-up INLINE. Finding 4 made
+     * that catch-up an asynchronous submission on the per-sink dispatcher, so
+     * for a window after `observeAll` returned, `current()` was `{}` — and
+     * `get(name)` threw `no observe named '<name>' (available: [])` rather
+     * than returning the state that was already materialized. `slotfinder`'s
+     * `/state` route reads exactly that way, so a request landing in the
+     * window 500'd. Construction now seeds each slot from `sink.current()`
+     * synchronously; this test reads with NO polling on purpose.
+     */
+    @Test
+    fun `observeAll seeds every named slot synchronously — current is never empty on return`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val mgmt = host.managementInlet.call
+
+        val alice = SetCell<Int>()
+        val bob = SetCell<Int>()
+        mgmt.spawn(alice); mgmt.spawn(bob)
+        host.lookup<IntSetInlet>(alice.ref)!!.inlet.call.add(1)
+        host.lookup<IntSetInlet>(bob.ref)!!.inlet.call.add(9)
+        controller.runToIdle()
+
+        val view = host.observeAll {
+            set("alice", alice.ref)
+            set("bob", bob.ref)
+        }
+
+        // no awaitUntil, no runToIdle: the composite is fully seeded the
+        // instant observeAll returns.
+        view.current() shouldBe mapOf("alice" to setOf(1), "bob" to setOf(9))
+        view.get<Set<Int>>("alice") shouldBe setOf(1)
 
         view.close()
     }
@@ -310,6 +348,39 @@ class ObserveCellTest {
         seen.toList() shouldBe listOf(setOf(1, 2), setOf(1, 2, 3), setOf(1, 2, 3, 4))
         // no gap (every effective change present), no duplicate (each exactly once)
         seen.toList().distinct().size shouldBe seen.size
+
+        sink.close()
+    }
+
+    /**
+     * `Cell.onDeactivate` is not only a despawn hook: `ManagedHost` calls it on
+     * the `SupervisionPolicy.RESTART` path (immediately followed by
+     * `onActivate`) and on host drain before a migration re-activates the cell
+     * elsewhere. T08 finding 4 wired `ObserveCell.close()` — which shuts the
+     * listener-dispatch executor down for good — straight into it, so ONE
+     * restart or migration left the sink permanently deaf: the fold kept
+     * working and `current()` stayed correct, but every registered listener
+     * silently stopped firing forever. Exactly the silent-degrade shape T08
+     * set out to remove. `onActivate` now reopens the dispatcher.
+     */
+    @Test
+    fun `a sink still notifies after the deactivate-reactivate cycle a restart or migration performs`() {
+        val host = ManagedHost()
+        val sink = ObserveCell(View.set<Int>())
+        host.managementInlet.call.spawn(sink)
+
+        val fires = java.util.Collections.synchronizedList(mutableListOf<Set<Int>>())
+        sink.onChange { fires += it }
+        awaitUntil("registration catch-up") { fires.isNotEmpty() }
+
+        val ctx = object : civictech.cell.CellContext {}
+        sink.onDeactivate(ctx)
+        sink.onActivate(ctx)
+
+        sink.inlet.call.propagate(SetDelta(adds = mapOf(1 to setOf(freshTag()))))
+        awaitUntil("post-reactivation change still reaches the listener") { fires.size >= 2 }
+        fires.last() shouldBe setOf(1)
+        sink.current() shouldBe setOf(1)
 
         sink.close()
     }

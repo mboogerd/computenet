@@ -72,6 +72,15 @@ private fun payloadClassOf(port: Any?): Class<*>? = when (port) {
  * or any other pair of genuinely different top-level port interfaces —
  * exactly the class of error the erased `connect` path cannot see coming
  * from its own signature.
+ *
+ * That leaves finding 1's *headline* case open: `SetCell.outlet` into
+ * `MapHubCell.inlet` still reports `Connected` and still dies as a
+ * `ClassCastException` at first delivery. Tracked as an open residual in
+ * `doc/remediation/COVERAGE.md` ("same-wrapper payload mismatch still
+ * unchecked") and pinned by `PayloadTypeCheckTest`'s KNOWN GAP test; closing
+ * it needs the port to carry a declared payload class independent of `Api`
+ * erasure, since generic cells create their ports under a non-reified type
+ * parameter and so cannot capture `typeOf<Api>()`.
  */
 private fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, targetRef: PortRef): LinkResult.Rejected? {
     val outClazz = payloadClassOf(portOut) ?: return null
