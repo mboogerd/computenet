@@ -70,22 +70,22 @@ class SseBroadcaster(private val capacity: Int = DEFAULT_CAPACITY) : AutoCloseab
 
     private inner class Client(private val writer: FrameWriter, private val onDetach: () -> Unit) {
         private val queue = ArrayBlockingQueue<String>(capacity)
-        private lateinit var pump: Thread
 
-        fun start() {
-            pump = Thread.ofVirtual().name("inspector-sse-client").start {
-                try {
-                    while (true) writer.write(queue.take())
-                } catch (_: InterruptedException) {
-                    // stop() — an orderly detach
-                } catch (_: Exception) {
-                    // the client is gone; drop it rather than retry
-                } finally {
-                    clients.remove(this)
-                    runCatching { onDetach() }
-                }
+        // created unstarted, so an attach racing close() has a thread to interrupt
+        private val pump: Thread = Thread.ofVirtual().name("inspector-sse-client").unstarted {
+            try {
+                while (true) writer.write(queue.take())
+            } catch (_: InterruptedException) {
+                // stop() — an orderly detach
+            } catch (_: Exception) {
+                // the client is gone; drop it rather than retry
+            } finally {
+                clients.remove(this)
+                runCatching { onDetach() }
             }
         }
+
+        fun start() = pump.start()
 
         fun stop() = pump.interrupt()
 
@@ -100,6 +100,8 @@ class SseBroadcaster(private val capacity: Int = DEFAULT_CAPACITY) : AutoCloseab
                 if (queue.offer(frame)) return
                 if (queue.poll() != null) dropped.incrementAndGet()
             }
+            // unreachable with a single producer; counted rather than hidden
+            dropped.incrementAndGet()
         }
     }
 
