@@ -8,9 +8,4 @@ plugins {
 dependencies {
     implementation(project(":kernel"))
     implementation(libs.java.websocket)
-
-    testImplementation(libs.kotest.assertions.core)
-    testImplementation(libs.junit)
-    testRuntimeOnly(libs.junit.platform)
-    testImplementation(kotlin("test"))
 }

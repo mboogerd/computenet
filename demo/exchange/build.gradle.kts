@@ -9,10 +9,6 @@ dependencies {
     implementation(project(":nature")) // PN-15: the Manifest nature vocabulary for the composed-manifest assertion
     implementation(project(":demo:shell"))
 
-    testImplementation(libs.kotest.assertions.core)
-    testImplementation(libs.junit)
-    testRuntimeOnly(libs.junit.platform)
-    testImplementation(kotlin("test"))
     testImplementation(project(":testkit"))
 }
 

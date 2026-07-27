@@ -1,41 +1,25 @@
 plugins {
-    // Shared code is located in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`.
-    id("buildsrc.convention.kotlin-jvm")
-    alias(libs.plugins.ksp)
+    // Shared code is located in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts` and
+    // `buildSrc/src/main/kotlin/ksp-cell.gradle.kts`.
+    id("buildsrc.convention.ksp-cell")
     alias(libs.plugins.kotlin.plugin.serialization)
 }
 dependencies {
     implementation(libs.kotlinx.coroutines)
     implementation(libs.kotlinx.serialization)
     api(project(":nature"))
-    // Still needed beyond ksp(project(":gen")): kernel cell/port authors apply the
-    // @Contract/@CellBase/@Key/@Protocol annotations (processor input, stays in
-    // :gen) and civictech.gen.wire.ProxyRegistry (generated-proxy lookup).
-    implementation(project(":gen"))
-    ksp(project(":gen"))
+    // Beyond ksp-cell's implementation/ksp(project(":gen")): kernel cell/port authors
+    // apply the @Contract/@CellBase/@Key/@Protocol annotations (processor input,
+    // stays in :gen) and civictech.gen.wire.ProxyRegistry (generated-proxy lookup).
 
-    testImplementation(libs.kotest.assertions.core)
-    testImplementation(libs.junit)
-    testRuntimeOnly(libs.junit.platform)
-    testImplementation(kotlin("test"))
     testImplementation(project(":testkit"))
 }
 
-kotlin {
-    sourceSets {
-        main {
-            kotlin.srcDir("build/generated/ksp/main/kotlin")
-        }
-    }
-}
-
+// :gen's own test suite (ContractProcessorTest, NatureDescriptorSweepTest) is the
+// real generator-regression gate; wiring it ahead of compileKotlin makes
+// doc/ARCHITECTURE.md's "generator regressions fail before kernel compiles" claim
+// true (the deleted :gen-test module was a verified no-op: zero sources, NO-SOURCE
+// on every task).
 tasks.named("compileKotlin") {
-    dependsOn(project(":gen-test").tasks.named("test"))
-}
-
-// The seed-sweep suites (100-seed bridged-mesh property tests, PN-5 scatter-gather
-// pull among them) allocate heavily; the default fork heap is marginal under
-// concurrent builds. Give the test JVM room so the gate is not memory-flaky.
-tasks.withType<Test>().configureEach {
-    maxHeapSize = "2g"
+    dependsOn(project(":gen").tasks.named("test"))
 }

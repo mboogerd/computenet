@@ -16,22 +16,14 @@ dependencies {
     // source set (the runner is a JUnit harness — W1-A), so kaml is test-scope.
     // 0.77.1 is built against kotlinx-serialization 1.9.0 (the version this repo
     // pins) and resolves cleanly under Kotlin 2.1.21.
-    testImplementation("com.charleskorn.kaml:kaml:0.77.1")
-
-    // Same test stack the kernel uses.
-    testImplementation(libs.kotest.assertions.core)
-    testImplementation(libs.junit)
-    testRuntimeOnly(libs.junit.platform)
-    testImplementation(kotlin("test"))
+    testImplementation(libs.kaml)
 }
 
-// W2 profile filter: the corpus runner reads `concord.profiles` (default `core`)
-// to select which scenarios execute by their `profile:` field (P9). Threaded
-// from the Gradle project property `-Pconcord.profiles=core,dist,dur` into the
-// test JVM as a system property. All four W2 pilots are `core`, so the default
-// leaves behaviour unchanged; `-Pconcord.profiles=dist` runs zero pilots.
+// Default profile: `core,dist,dur` — the full corpus, including the 6 `dist` + 2
+// `dur` scenarios that used to be silently skipped by `./gradlew test`. Local fast
+// loops opt *out* with `-Pconcord.profiles=core`.
 tasks.withType<Test>().configureEach {
-    systemProperty("concord.profiles", (project.findProperty("concord.profiles") as String?) ?: "core")
+    systemProperty("concord.profiles", (project.findProperty("concord.profiles") as String?) ?: "core,dist,dur")
     // W4-C: the generative sweep (24-GEN-01) defaults to its `generator: instances:`
     // count; `-Pconcord.gen.instances=N` overrides it for a deeper local sweep.
     (project.findProperty("concord.gen.instances") as String?)?.let { systemProperty("concord.gen.instances", it) }
