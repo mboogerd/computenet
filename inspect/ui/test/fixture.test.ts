@@ -4,18 +4,43 @@ import { createLayeredLayout } from '../src/layout/layered';
 import { TopologyStore } from '../src/sync/store';
 import fixture from '../fixtures/topology.json';
 
-/** The checked-in skillmatch-shaped fixture (M0-FE ticket Implement §2:
- *  "unit-tested against fixtures/topology.json ... 13 cells, 3 hosts") —
- *  exercised end to end through the same store and layout code the app
- *  uses, so a future edit to the fixture that drifts from the api/types
- *  shape or breaks layering fails here rather than only visually. */
+/** The checked-in skillmatch fixture — exercised end to end through the same
+ *  store and layout code the app uses, so a future edit that drifts from the
+ *  api/types shape or breaks layering fails here rather than only visually.
+ *
+ *  M0-EVAL reconciled this file to reality: it is now a verbatim capture of
+ *  `GET /api/inspect/topology` from the real skillmatch pilot (`:demo:skillmatch`
+ *  with `--inspect-port`), sorted for a stable diff. It was authored from the
+ *  contract's illustrative "13 cells, 3 hosts" before the server existed; the
+ *  live graph is 16 cells (10 named pipeline cells + 6 ObserveCell sinks) on
+ *  the single `skillmatch` process host, all edges CONSUME, `fused` null. */
 const snapshot = fixture as TopologySnapshot;
 
 describe('fixtures/topology.json', () => {
-  it('matches the contract-mandated shape: 13 cells across 3 hosts', () => {
-    expect(snapshot.nodes.length).toBe(13);
-    expect(new Set(snapshot.nodes.map((n) => n.host))).toEqual(new Set(['sm-host-1', 'sm-host-2', 'sm-host-3']));
-    expect(snapshot.edges.length).toBeGreaterThan(0);
+  it('is the real skillmatch graph: 16 cells on the one process host', () => {
+    expect(snapshot.nodes.length).toBe(16);
+    expect(new Set(snapshot.nodes.map((n) => n.host))).toEqual(new Set(['skillmatch']));
+    expect(snapshot.edges.length).toBe(18);
+    // M0 serves no fusion detection and indexes only consume-role links
+    expect(new Set(snapshot.edges.map((e) => e.role))).toEqual(new Set(['CONSUME']));
+    expect(snapshot.edges.every((e) => e.fused === null)).toBe(true);
+    // placeholders the contract fixes until later milestones
+    expect(snapshot.nodes.every((n) => n.net === 'local')).toBe(true);
+    expect(snapshot.nodes.every((n) => n.graph === null)).toBe(true);
+    expect(snapshot.nodes.every((n) => n.lifecycle === 'HOT')).toBe(true);
+  });
+
+  it('carries the descriptor metadata the canvas renders from', () => {
+    // colors and manifests come from the generated CellDescriptor, so an empty
+    // fixture here would silently hide the badge/chip rendering paths
+    expect(new Set(snapshot.nodes.map((n) => n.color))).toEqual(new Set(['PURE']));
+    expect(snapshot.nodes.every((n) => n.manifests.includes('DURABLE'))).toBe(true);
+    const sets = snapshot.nodes.filter((n) => n.typeFqn === 'civictech.cell.data.SetCell');
+    expect(sets.length).toBe(2);
+    expect(sets.every((n) => n.manifests.includes('REPLICATED'))).toBe(true);
+    // the app-supplied handle names, and the unnamed observation sinks
+    expect(snapshot.nodes.filter((n) => n.name !== null).length).toBe(10);
+    expect(snapshot.nodes.filter((n) => n.name === null).length).toBe(6);
   });
 
   it('loads into TopologyStore as one structural snapshot with every ref/id unique', () => {

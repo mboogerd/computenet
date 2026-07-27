@@ -62,12 +62,11 @@ internal class InspectorModel(
      * Every live topology edge — the link half of the initial sync.
      *
      * Single point of contact with the registry's topology projection, on
-     * purpose: this branch is cut from a base where `LocationRegistry.topology`
-     * is public (as M0-BE's ticket specifies). `main` has since made that field
-     * private and exposes read-only projections instead, so on merge this body
-     * becomes `registry.all()` — one line, one place.
+     * purpose: `LocationRegistry.topology` is private and exposed through
+     * read-only projections (T03), of which [LocationRegistry.all] is the one
+     * the inspector needs.
      */
-    private fun topologyLinks(): Set<TopologyLink> = registry.topology.all()
+    private fun topologyLinks(): Set<TopologyLink> = registry.all()
 
     fun snapshot(): TopologySnapshot = synchronized(lock) {
         TopologySnapshot(seq, nodes.values.toList(), edges.values.toList())

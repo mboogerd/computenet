@@ -3,7 +3,12 @@ import type { Ref } from '../api/types';
 /** Fixed node dimensions — analytic anchors, never live DOM geometry (agora
  *  precedent, demo/agora/ui/src/layout/map.ts). */
 export const NODE_W = 208;
-export const NODE_H = 72;
+/** Tall enough for the card's three rows at their natural line boxes — name
+ *  row (20.4) + type (16.8) + badges (18), two 4px gaps and 12.8px of vertical
+ *  padding = 76. At the previous 72 the type row (the only child with
+ *  `overflow: hidden`, hence the only one flex could shrink below its content)
+ *  absorbed the whole 4px deficit and clipped its glyphs mid-height. */
+export const NODE_H = 80;
 const COL_GAP = 96;
 const ROW_GAP = 28;
 const MARGIN = 32;

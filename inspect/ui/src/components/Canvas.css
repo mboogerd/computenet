@@ -111,6 +111,11 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* `overflow: hidden` opts this row out of flex's automatic minimum size, so
+     without this it is the one child flex will shrink below its line box —
+     clipping the type name horizontally (intended, via the ellipsis) AND
+     vertically (a bug). Ellipsis horizontally, never a half-height glyph. */
+  flex: 0 0 auto;
 }
 
 .node-card__badges {

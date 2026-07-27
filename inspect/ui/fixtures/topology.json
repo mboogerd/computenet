@@ -1,198 +1,419 @@
 {
-  "seq": 42,
+  "seq": 0,
   "nodes": [
     {
-      "ref": "aaaaaaaa-0000-0000-0000-000000000001:0",
+      "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
       "name": "candSkills",
       "typeFqn": "civictech.cell.data.SetCell",
       "color": "PURE",
-      "manifests": [],
-      "ports": [{ "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.SetApi" }],
-      "host": "sm-host-1",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "bbbbbbbb-0000-0000-0000-000000000002:0",
-      "name": "jobSkills",
-      "typeFqn": "civictech.cell.data.SetCell",
-      "color": "PURE",
-      "manifests": [],
-      "ports": [{ "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.SetApi" }],
-      "host": "sm-host-1",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "cccccccc-0000-0000-0000-000000000003:0",
-      "name": "matches",
-      "typeFqn": "civictech.cell.data.op.JoinSetCell",
-      "color": "PURE",
-      "manifests": [],
-      "ports": [
-        { "name": "left", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
-        { "name": "right", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.JoinSetApi" }
+      "manifests": [
+        "DURABLE",
+        "REPLICATED"
       ],
-      "host": "sm-host-1",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "dddddddd-0000-0000-0000-000000000004:0",
-      "name": "matchCounts",
-      "typeFqn": "civictech.cell.data.op.GroupByCell",
-      "color": "PURE",
-      "manifests": [],
       "ports": [
-        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.JoinSetApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
+        {
+          "name": "deltaInlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.data.SetOps"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
       ],
-      "host": "sm-host-1",
+      "host": "skillmatch",
       "net": "local",
       "lifecycle": "HOT",
       "generation": 0,
       "graph": null
     },
     {
-      "ref": "eeeeeeee-0000-0000-0000-000000000005:0",
-      "name": "required",
-      "typeFqn": "civictech.cell.data.op.GroupByCell",
-      "color": "PURE",
-      "manifests": [],
-      "ports": [
-        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
-      ],
-      "host": "sm-host-2",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "ffffffff-0000-0000-0000-000000000006:0",
-      "name": "qualification",
-      "typeFqn": "civictech.cell.data.op.LookupJoinCell",
-      "color": "PURE",
-      "manifests": [],
-      "ports": [
-        { "name": "fact", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
-        { "name": "dimension", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.LookupJoinApi" }
-      ],
-      "host": "sm-host-2",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "11223344-0000-0000-0000-000000000007:0",
-      "name": "gap",
-      "typeFqn": "civictech.cell.data.op.SemiJoinCell",
-      "color": "PURE",
-      "manifests": [],
-      "ports": [
-        { "name": "left", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
-        { "name": "right", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.SemiJoinApi" }
-      ],
-      "host": "sm-host-2",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "55667788-0000-0000-0000-000000000011:0",
-      "name": null,
-      "typeFqn": "civictech.cell.observe.ObserveCell",
-      "color": "PURE",
-      "manifests": [],
-      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.LookupJoinApi" }],
-      "host": "sm-host-2",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "22334455-0000-0000-0000-000000000008:0",
-      "name": "supply",
-      "typeFqn": "civictech.cell.data.op.GroupByCell",
-      "color": "PURE",
-      "manifests": [],
-      "ports": [
-        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
-      ],
-      "host": "sm-host-3",
-      "net": "local",
-      "lifecycle": "HOT",
-      "generation": 0,
-      "graph": null
-    },
-    {
-      "ref": "33445566-0000-0000-0000-000000000009:0",
+      "ref": "6b04c703-78a8-4c58-9136-a646dc4e64d6:0",
       "name": "demand",
       "typeFqn": "civictech.cell.data.op.GroupByCell",
       "color": "PURE",
-      "manifests": [],
-      "ports": [
-        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
+      "manifests": [
+        "DURABLE"
       ],
-      "host": "sm-host-3",
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
       "net": "local",
       "lifecycle": "HOT",
       "generation": 0,
       "graph": null
     },
     {
-      "ref": "44556677-0000-0000-0000-000000000010:0",
+      "ref": "497567e0-5dcf-4a09-b54c-6ae21a903378:0",
+      "name": "gap",
+      "typeFqn": "civictech.cell.data.op.SemiJoinCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "left",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "right",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "8d2b9ed1-bcb6-4c82-aab4-e0fcffc929c9:0",
+      "name": "jobSkills",
+      "typeFqn": "civictech.cell.data.SetCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE",
+        "REPLICATED"
+      ],
+      "ports": [
+        {
+          "name": "deltaInlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.data.SetOps"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "e2391304-717d-45ad-b260-9a22d9734ba5:0",
       "name": "market",
       "typeFqn": "civictech.cell.data.op.CombineLatestCell",
       "color": "PURE",
-      "manifests": [],
-      "ports": [
-        { "name": "left", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
-        { "name": "right", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
-        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.CombineLatestApi" }
+      "manifests": [
+        "DURABLE"
       ],
-      "host": "sm-host-3",
+      "ports": [
+        {
+          "name": "left",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "right",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
       "net": "local",
       "lifecycle": "HOT",
       "generation": 0,
       "graph": null
     },
     {
-      "ref": "66778899-0000-0000-0000-000000000012:0",
-      "name": null,
-      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "ref": "53340c2c-48cf-4f9b-b949-ace044fbf311:0",
+      "name": "matchCounts",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
       "color": "PURE",
-      "manifests": [],
-      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.SemiJoinApi" }],
-      "host": "sm-host-3",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
       "net": "local",
       "lifecycle": "HOT",
       "generation": 0,
       "graph": null
     },
     {
-      "ref": "778899aa-0000-0000-0000-000000000013:0",
+      "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+      "name": "matches",
+      "typeFqn": "civictech.cell.data.op.JoinSetCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "left",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "right",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "560edf02-f361-4b4f-b188-7bcba136fe8c:0",
+      "name": "qualification",
+      "typeFqn": "civictech.cell.data.op.LookupJoinCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "dimension",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "fact",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "7947c132-6d54-4c73-a02e-3861f391fe24:0",
+      "name": "required",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "f686e892-c8e1-43bf-898e-56e2c78b929c:0",
+      "name": "supply",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        },
+        {
+          "name": "outlet",
+          "dir": "OUT",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "1875486c-b83b-4fea-a9b1-f6339794cfd5:0",
       "name": null,
       "typeFqn": "civictech.cell.observe.ObserveCell",
       "color": "PURE",
-      "manifests": [],
-      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.CombineLatestApi" }],
-      "host": "sm-host-3",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "5c06ca66-916b-4377-ae71-43d30ca854be:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "75526c68-13a8-4c6b-b126-00bacfa97330:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "8fa58422-3e34-4192-9812-45daecb8f555:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "acdc60db-d111-42da-b117-d1e14cae31a1:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "f6f0d53f-5cce-484d-9ccc-6bc2910930ef:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [
+        "DURABLE"
+      ],
+      "ports": [
+        {
+          "name": "inlet",
+          "dir": "IN",
+          "contractFqn": "civictech.cell.Propagate"
+        }
+      ],
+      "host": "skillmatch",
       "net": "local",
       "lifecycle": "HOT",
       "generation": 0,
@@ -201,108 +422,237 @@
   ],
   "edges": [
     {
-      "id": "e1111111-0000-0000-0000-000000000001",
-      "from": { "ref": "aaaaaaaa-0000-0000-0000-000000000001:0", "port": "outlet" },
-      "to": { "ref": "cccccccc-0000-0000-0000-000000000003:0", "port": "left" },
+      "id": "1319b821-5b62-445a-bc9e-9f373c70ac2b",
+      "from": {
+        "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "53340c2c-48cf-4f9b-b949-ace044fbf311:0",
+        "port": "inlet"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000002",
-      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
-      "to": { "ref": "cccccccc-0000-0000-0000-000000000003:0", "port": "right" },
+      "id": "327ab252-b906-4236-9194-9b7e2f7b7b60",
+      "from": {
+        "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+        "port": "left"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000003",
-      "from": { "ref": "cccccccc-0000-0000-0000-000000000003:0", "port": "outlet" },
-      "to": { "ref": "dddddddd-0000-0000-0000-000000000004:0", "port": "inlet" },
+      "id": "3c1e56b2-8d06-4307-a31f-1bef6ad566f5",
+      "from": {
+        "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "8fa58422-3e34-4192-9812-45daecb8f555:0",
+        "port": "inlet"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000004",
-      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
-      "to": { "ref": "eeeeeeee-0000-0000-0000-000000000005:0", "port": "inlet" },
+      "id": "54030ec2-3c2d-4508-9ae7-15d0df11b44a",
+      "from": {
+        "ref": "8d2b9ed1-bcb6-4c82-aab4-e0fcffc929c9:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "497567e0-5dcf-4a09-b54c-6ae21a903378:0",
+        "port": "left"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000005",
-      "from": { "ref": "dddddddd-0000-0000-0000-000000000004:0", "port": "outlet" },
-      "to": { "ref": "ffffffff-0000-0000-0000-000000000006:0", "port": "fact" },
+      "id": "68bc3870-61a4-4c9c-90b2-eb6eafdf73ef",
+      "from": {
+        "ref": "53340c2c-48cf-4f9b-b949-ace044fbf311:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "560edf02-f361-4b4f-b188-7bcba136fe8c:0",
+        "port": "fact"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000006",
-      "from": { "ref": "eeeeeeee-0000-0000-0000-000000000005:0", "port": "outlet" },
-      "to": { "ref": "ffffffff-0000-0000-0000-000000000006:0", "port": "dimension" },
+      "id": "75e80aa6-1d09-4999-a198-f780410ef3f2",
+      "from": {
+        "ref": "7947c132-6d54-4c73-a02e-3861f391fe24:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "560edf02-f361-4b4f-b188-7bcba136fe8c:0",
+        "port": "dimension"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000007",
-      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
-      "to": { "ref": "11223344-0000-0000-0000-000000000007:0", "port": "left" },
+      "id": "7ef9f588-3ce1-4060-b588-06a483674f21",
+      "from": {
+        "ref": "8d2b9ed1-bcb6-4c82-aab4-e0fcffc929c9:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+        "port": "right"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000008",
-      "from": { "ref": "aaaaaaaa-0000-0000-0000-000000000001:0", "port": "outlet" },
-      "to": { "ref": "11223344-0000-0000-0000-000000000007:0", "port": "right" },
+      "id": "8c45fed6-e337-4b7d-b4c7-332d10c54da3",
+      "from": {
+        "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "75526c68-13a8-4c6b-b126-00bacfa97330:0",
+        "port": "inlet"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000009",
-      "from": { "ref": "aaaaaaaa-0000-0000-0000-000000000001:0", "port": "outlet" },
-      "to": { "ref": "22334455-0000-0000-0000-000000000008:0", "port": "inlet" },
+      "id": "9e8b2e99-2aac-43a3-9c19-fd20a44687f9",
+      "from": {
+        "ref": "6b04c703-78a8-4c58-9136-a646dc4e64d6:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "e2391304-717d-45ad-b260-9a22d9734ba5:0",
+        "port": "right"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000010",
-      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
-      "to": { "ref": "33445566-0000-0000-0000-000000000009:0", "port": "inlet" },
+      "id": "ac485aa7-27bc-41f8-8c8e-b4f9e68613f1",
+      "from": {
+        "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "497567e0-5dcf-4a09-b54c-6ae21a903378:0",
+        "port": "right"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000011",
-      "from": { "ref": "22334455-0000-0000-0000-000000000008:0", "port": "outlet" },
-      "to": { "ref": "44556677-0000-0000-0000-000000000010:0", "port": "left" },
+      "id": "aef4b8c8-dd4d-41ab-b019-811cc10bdc86",
+      "from": {
+        "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "f686e892-c8e1-43bf-898e-56e2c78b929c:0",
+        "port": "inlet"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000012",
-      "from": { "ref": "33445566-0000-0000-0000-000000000009:0", "port": "outlet" },
-      "to": { "ref": "44556677-0000-0000-0000-000000000010:0", "port": "right" },
+      "id": "b6812577-1b71-4db2-bda1-3153c6bd6c0f",
+      "from": {
+        "ref": "f686e892-c8e1-43bf-898e-56e2c78b929c:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "e2391304-717d-45ad-b260-9a22d9734ba5:0",
+        "port": "left"
+      },
       "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000013",
-      "from": { "ref": "ffffffff-0000-0000-0000-000000000006:0", "port": "outlet" },
-      "to": { "ref": "55667788-0000-0000-0000-000000000011:0", "port": "inlet" },
-      "role": "OBSERVE",
+      "id": "b9a2a469-ba9c-435c-bf9f-9c2d73ddfd22",
+      "from": {
+        "ref": "8d2b9ed1-bcb6-4c82-aab4-e0fcffc929c9:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "7947c132-6d54-4c73-a02e-3861f391fe24:0",
+        "port": "inlet"
+      },
+      "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000014",
-      "from": { "ref": "11223344-0000-0000-0000-000000000007:0", "port": "outlet" },
-      "to": { "ref": "66778899-0000-0000-0000-000000000012:0", "port": "inlet" },
-      "role": "OBSERVE",
+      "id": "c8141f2d-8ab0-4c5d-85d8-841af468a1c2",
+      "from": {
+        "ref": "560edf02-f361-4b4f-b188-7bcba136fe8c:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "acdc60db-d111-42da-b117-d1e14cae31a1:0",
+        "port": "inlet"
+      },
+      "role": "CONSUME",
       "fused": null
     },
     {
-      "id": "e1111111-0000-0000-0000-000000000015",
-      "from": { "ref": "44556677-0000-0000-0000-000000000010:0", "port": "outlet" },
-      "to": { "ref": "778899aa-0000-0000-0000-000000000013:0", "port": "inlet" },
-      "role": "OBSERVE",
+      "id": "c9e167d1-f547-4c84-be87-ef91cf161ee7",
+      "from": {
+        "ref": "e2391304-717d-45ad-b260-9a22d9734ba5:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "5c06ca66-916b-4377-ae71-43d30ca854be:0",
+        "port": "inlet"
+      },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "efcdf68b-21f8-4168-90e3-881d516aff53",
+      "from": {
+        "ref": "8d2b9ed1-bcb6-4c82-aab4-e0fcffc929c9:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "1875486c-b83b-4fea-a9b1-f6339794cfd5:0",
+        "port": "inlet"
+      },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "f04026c2-4165-444c-813c-d1c5ddd04f90",
+      "from": {
+        "ref": "8d2b9ed1-bcb6-4c82-aab4-e0fcffc929c9:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "6b04c703-78a8-4c58-9136-a646dc4e64d6:0",
+        "port": "inlet"
+      },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "f407f36d-f8a1-479d-b8f4-300c82505221",
+      "from": {
+        "ref": "497567e0-5dcf-4a09-b54c-6ae21a903378:0",
+        "port": "outlet"
+      },
+      "to": {
+        "ref": "f6f0d53f-5cce-484d-9ccc-6bc2910930ef:0",
+        "port": "inlet"
+      },
+      "role": "CONSUME",
       "fused": null
     }
   ]

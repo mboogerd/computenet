@@ -126,6 +126,35 @@ describe('TopologyClient', () => {
     expect(onEvent).toHaveBeenCalledTimes(2); // seq 11, then seq 51
   });
 
+  it('treats a heartbeat ahead of lastSeq as a lost delta, never as the next one', async () => {
+    // The server's heartbeat RE-STATES its current seq without consuming one
+    // (M0-BE), so a heartbeat we have not already seen proves a delta went
+    // missing — including the exactly-one-dropped case, where a naive
+    // seq == lastSeq+1 check would swallow the loss forever.
+    mockFetchOnce(10);
+    await client.start();
+    const es = MockEventSource.last!;
+    es.open();
+
+    mockFetchOnce(11);
+    es.message({ seq: 11, kind: 'heartbeat', payload: {} }); // the delta at 11 was dropped
+    expect(onEvent).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(2));
+    expect(onSnapshot).toHaveBeenLastCalledWith(snapshot(11));
+  });
+
+  it('ignores a heartbeat that merely re-states the seq we already hold', async () => {
+    mockFetchOnce(10);
+    await client.start();
+    const es = MockEventSource.last!;
+    es.open();
+
+    es.message({ seq: 10, kind: 'heartbeat', payload: {} }); // idle graph, we are current
+    es.message(evt(11)); // the next real delta still applies normally
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onSnapshot).toHaveBeenCalledTimes(1); // no spurious resync
+  });
+
   it('advances lastSeq for an unrecognized (future-milestone) event kind without erroring', async () => {
     mockFetchOnce(10);
     await client.start();

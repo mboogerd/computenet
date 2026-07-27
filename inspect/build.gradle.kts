@@ -15,9 +15,6 @@ dependencies {
     implementation(project(":demo:shell"))
     implementation(libs.kotlinx.serialization)
 
-    testImplementation(libs.kotest.assertions.core)
-    testImplementation(libs.junit)
-    testRuntimeOnly(libs.junit.platform)
-    testImplementation(kotlin("test"))
+    // the shared JUnit5/kotest/kotlin-test stack comes from the kotlin-jvm convention
     testImplementation(project(":testkit"))
 }

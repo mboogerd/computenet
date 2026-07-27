@@ -101,6 +101,18 @@ export class TopologyClient {
       return;
     }
     if (event.seq <= this.lastSeq) return; // stale/duplicate
+
+    // A heartbeat is a liveness probe, not a delta: it RE-STATES the server's
+    // current seq without consuming one. So it must never advance lastSeq —
+    // doing so would let a client that lost exactly one delta swallow the loss
+    // (heartbeat.seq == lastSeq+1 would read as "the next delta, understood"),
+    // leaving its topology permanently wrong with no gap ever detected. Any
+    // heartbeat ahead of us is itself the proof that a delta went missing.
+    if (event.kind === 'heartbeat') {
+      void this.refetch();
+      return;
+    }
+
     if (event.seq > this.lastSeq + 1) {
       void this.refetch(); // gap — the fresh snapshot supersedes this event
       return;
