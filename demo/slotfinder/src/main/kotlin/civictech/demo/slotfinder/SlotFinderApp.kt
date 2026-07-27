@@ -5,8 +5,8 @@ import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.graph.TypedRef
-import civictech.cell.graph.graph
-import civictech.cell.graph.lookup
+import civictech.cell.graph.graphOf
+import civictech.cell.graph.lookupOrThrow
 import civictech.cell.graph.refAs
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -65,12 +65,13 @@ object SlotPipeline {
     )
 
     fun build(host: ManagedHost): Refs {
-        lateinit var refs: Refs
         // Factories stay pure (replay-safe: each takes the resolved ref, captures
         // no instance), while wiring stays compile-checked via the handles'
         // link(a.cell.outlet, b.cell.inlet): a payload-type or direction
-        // mismatch is a Kotlin compile error, not a runtime surprise.
-        graph(host.managementInlet) {
+        // mismatch is a Kotlin compile error, not a runtime surprise. graphOf
+        // returns the block's result directly (T08 finding 3) — no
+        // lateinit/!! round trip to get the refs back out.
+        val (refs, _) = graphOf(host.managementInlet) {
             val sources = PARTICIPANTS.associateWith { name ->
                 spawn(name) { ref -> SetCell<Slot>(ref = ref) }
             }
@@ -91,7 +92,7 @@ object SlotPipeline {
             link(common.cell.outlet, filtered.cell.inlet)
             link(filtered.cell.outlet, byDay.cell.inlet)
 
-            refs = Refs(
+            Refs(
                 participants = sources.mapValues { it.value.refAs<SetApi<Slot>>() },
                 common = common.refAs(),
                 nearMiss = nearMiss.refAs(),
@@ -108,18 +109,20 @@ class SlotFinderApp(port: Int = 8080) {
     private val host = ManagedHost(registry = registry)
     private val refs = SlotPipeline.build(host)
     private val writers: Map<String, SetOps<Slot>> = refs.participants.mapValues { (_, tref) ->
-        host.lookup(tref)!!.inlet.call
+        host.lookupOrThrow(tref).inlet.call
     }
 
     // The observation edge: one composite sink folds every observed outlet into a
     // materialized, thread-safe snapshot with built-in late-join catch-up — no hand-rolled
-    // hub cells, no synchronized mutable snapshot.
+    // hub cells, no synchronized mutable snapshot. Typed overloads (T08 finding 2): the
+    // element/key type flows from each TypedRef's API shape, so a wrong-shaped source
+    // here is a compile error, not an Any?-erased fold read back with an unchecked cast.
     private val view = host.observeAll {
-        PARTICIPANTS.forEach { set(it, refs.participants.getValue(it).ref) }
-        set("nearMiss", refs.nearMiss.ref)
-        set("common", refs.common.ref)
-        set("filtered", refs.filtered.ref)
-        count("byDay", refs.byDay.ref)
+        PARTICIPANTS.forEach { set(it, refs.participants.getValue(it)) }
+        set("nearMiss", refs.nearMiss)
+        set("common", refs.common)
+        set("filtered", refs.filtered)
+        count("byDay", refs.byDay)
     }
 
     private val shell = DemoShell(port)
@@ -164,13 +167,12 @@ class SlotFinderApp(port: Int = 8080) {
     private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
-        val snapshot = view.current()
+        // T08 finding 2: checked accessors — a wrong-shaped registration now
+        // throws naming what was registered vs requested, instead of degrading
+        // to a silently-empty panel (the prior `as? ... ?: emptySet()` unwrap).
+        fun slotsOf(name: String) = view.get<Set<Slot>>(name)
 
-        @Suppress("UNCHECKED_CAST")
-        fun slotsOf(name: String) = snapshot[name] as? Set<Slot> ?: emptySet()
-
-        @Suppress("UNCHECKED_CAST")
-        val byDay = snapshot["byDay"] as? Map<String, Long> ?: emptyMap()
+        val byDay = view.get<Map<String, Long>>("byDay")
 
         fun arr(values: Set<Slot>) =
             values.sortedWith(compareBy({ Slot.DAYS.indexOf(it.day) }, { it.hour }))
@@ -185,7 +187,14 @@ class SlotFinderApp(port: Int = 8080) {
 
     fun start(): SlotFinderApp = apply { shell.start() }
 
-    fun stop() = shell.stop()
+    fun stop() {
+        shell.stop()
+        // T08 finding 4: stop this composite's listener-dispatch thread — the
+        // per-outlet ObserveCells close themselves via onDeactivate on despawn,
+        // but nothing despawns them for a demo that runs for the process
+        // lifetime, so stop() is this app's shutdown hook instead.
+        view.close()
+    }
 }
 
 fun main(args: Array<String>) {

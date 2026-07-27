@@ -2,6 +2,8 @@ package civictech.cell.link
 
 import civictech.cell.protocol.EdgeClose
 import civictech.cell.protocol.EdgeOpen
+import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkTo
 import civictech.cell.nature.NatureNegotiation
 import civictech.cell.port.Port
@@ -36,6 +38,53 @@ private fun reconcileNatures(offered: NatureVector, required: NatureVector): Lin
     }
 
 /**
+ * T08 finding 1: the payload class each side declares, when the port is a
+ * [FanOutlet]/[FanInlet] — the only two [Linked] port kinds that carry it
+ * ([FanOutlet.clazz] / [FanInlet.clazz], both constructor fields already).
+ * `null` for any other port kind (e.g. [civictech.cell.port.FeedbackInlet]),
+ * which simply opts the check out rather than risking a false refusal.
+ */
+private fun payloadClassOf(port: Any?): Class<*>? = when (port) {
+    is FanOutlet<*> -> port.clazz
+    is FanInlet<*> -> port.clazz
+    else -> null
+}
+
+/**
+ * T08 finding 1: `ManagedHost.connect`'s runtime path forces both endpoints to
+ * `LinkTo<Any>`/`LinkFrom<Any>` (string-keyed `connect`, and every
+ * [civictech.cell.graph.GraphSpec] replay) — nothing before this compared the
+ * declared payload class on either side, so a miswired link reported
+ * `Connected` and only failed as a `ClassCastException` on the dispatch
+ * thread at first delivery, sanitized into a dead letter arbitrarily far from
+ * the `connect` that caused it.
+ *
+ * Erasure caveat, sharper than it first looks: `.clazz` is `Api::class.java`
+ * (a [FanOutlet]/[FanInlet] constructor field), and `Api::class` never
+ * carries nested generic arguments. Every delta-streaming outlet/inlet in
+ * this codebase declares its `Api` as `Propagate<D>`
+ * (`FanOutlet.create<Propagate<D>>()`), and `Propagate<D>::class.java` is
+ * `Propagate::class.java` regardless of `D` — so this check does NOT
+ * distinguish `SetDelta` from `MapDelta` when both sides are
+ * `Propagate`-wrapped (two data-cell delta ports of different shapes, the
+ * common case). It DOES catch a wrong-shaped connect: a delta outlet
+ * (`Propagate<...>`) wired into a write inlet (`SetOps<E>`/`MapOps<K, V>`/…),
+ * or any other pair of genuinely different top-level port interfaces —
+ * exactly the class of error the erased `connect` path cannot see coming
+ * from its own signature.
+ */
+private fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, targetRef: PortRef): LinkResult.Rejected? {
+    val outClazz = payloadClassOf(portOut) ?: return null
+    val inClazz = payloadClassOf(target) ?: return null
+    if (outClazz != inClazz) {
+        return LinkResult.Rejected(
+            "payload mismatch: ${outClazz.name} -> ${inClazz.name} at $portOutRef -> $targetRef",
+        )
+    }
+    return null
+}
+
+/**
  * Runs the target-side handshake shared by the inlet implementations:
  * policies → cardinality (checked by the caller) → onLink → install.
  */
@@ -50,6 +99,10 @@ internal fun <Api> handshake(
     val support = target.linking
     // identity rides the delivery (M8.2): bridged requests carry their peer
     support.reject(LinkRequest(portOut.ref, targetRef, CurrentPeer.get(), role))?.let { return it }
+
+    // T08 finding 1: the payload-type witness — before natures/install, so a
+    // structurally wrong-shaped connect never reaches onLink/install at all.
+    checkPayload(portOut, target, portOut.ref, targetRef)?.let { return it }
 
     // CP-F3: reconcile the two port nature-vectors after policies, before
     // install. Direct (the same-nature/default fast path) costs nothing; a

@@ -477,3 +477,23 @@ class GraphBuilder internal constructor(private val host: Use<HostManagementApi>
 /** Builds a graph on [host] and returns its replayable [GraphSpec]. */
 fun graph(host: Use<HostManagementApi>, block: GraphBuilder.() -> Unit): GraphSpec =
     GraphBuilder(host).apply(block).spec()
+
+/**
+ * [graph] variant that also returns the block's result (T08 finding 3): the
+ * documented happy path was `lateinit var refs` mutated from inside the block,
+ * then read back after — `lookup` returning `A?` for a ref the DSL just minted
+ * carried no actionable information. `val (refs, spec) = graphOf(host) { ...;
+ * Refs(...) }` returns the block's last expression directly, no `lateinit`/`!!`.
+ *
+ * Ships under a distinct name rather than as a same-named generic overload of
+ * [graph]: verified (a standalone Kotlin/JVM overload-resolution probe) that a
+ * bare-lambda call to `graph(host) { … }` always resolves to the existing
+ * `Unit` overload regardless of the block's actual last-expression type — an
+ * `R`-generic overload of the same name is therefore never reachable, a
+ * silently dead entry point, not merely an "ambiguous" one.
+ */
+fun <R> graphOf(host: Use<HostManagementApi>, block: GraphBuilder.() -> R): Pair<R, GraphSpec> {
+    val builder = GraphBuilder(host)
+    val result = builder.block()
+    return result to builder.spec()
+}

@@ -87,36 +87,39 @@ The same flags work on `:demo:exchange`.
 ## Building a data flow
 
 A graph is built with the `graph { }` DSL against a host, then driven through
-typed refs. Minimal complete example (adapted from a kernel test):
+typed refs. `graphOf` is the result-carrying form — it returns the block's
+last expression alongside the replayable `GraphSpec`, so wiring up refs never
+needs `lateinit`/`!!`. Minimal complete example (adapted from a kernel test):
 
 ```kotlin
 val controller = SimulationController(seed = 12)     // deterministic; use the default VirtualThreadScheduler in real apps
 val host = ManagedHost(scheduler = controller.scheduler())
 
-lateinit var items: TypedRef<SetApi<String>>
-lateinit var count: TypedRef<CountSetApi<String>>
-graph(host.managementInlet) {
+val (refs, _) = graphOf(host.managementInlet) {
     val a = spawn("items") { ref -> SetCell<String>(ref = ref) }
-    val c = spawn("count") { ref -> CountCell<String>(ref = ref) }
-    link(a.cell.outlet, c.cell.inlet)                // typed: mismatch = compile error
-    items = a.refAs()
-    count = c.refAs()
+    val g = spawn("byLength") { ref ->
+        GroupByCell(ref = ref, keyFn = { s: String -> s.length }, aggregator = Aggregators.count<String>())
+    }
+    link(a.cell.outlet, g.cell.inlet)   // compile-checked at DSL build; runtime-rejected on replay/string paths
+    a.refAs<SetApi<String>>() to g.refAs<GroupByApi<String, Int, Long>>()
 }
+val (items, byLength) = refs
 
-host.lookup(items)!!.inlet.call.add("x")
-host.lookup(items)!!.inlet.call.add("y")
+host.lookupOrThrow(items).inlet.call.add("x")
+host.lookupOrThrow(items).inlet.call.add("yy")
 controller.runToIdle()
 ```
 
 Observe outputs through the observation API — `current()` gives a consistent
-snapshot from any thread, `onChange` includes late-join catch-up:
+snapshot from any thread, `onChange` includes late-join catch-up (both off the
+host scheduler thread — a slow listener never stalls the host's dispatch):
 
 ```kotlin
 val view = host.observeAll {
-    set("items", items.ref)
-    count("count", count.ref)
+    set("items", items)         // typed: element type flows from items' TypedRef<SetApi<String>>
+    count("byLength", byLength) // typed: key type flows from byLength's TypedRef<GroupByApi<String, Int, Long>>
 }
-view.onChange { broadcast(view.current()) }
+view.onChange { broadcast(view.get<Set<String>>("items")) }
 ```
 
 Combinator sugar keeps pipelines short: `items.filter("inStock") { ... }`,
