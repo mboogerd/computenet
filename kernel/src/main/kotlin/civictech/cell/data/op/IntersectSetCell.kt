@@ -7,6 +7,7 @@ import civictech.cell.Timestamp
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
+import civictech.cell.control.absorbAck
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -66,10 +67,16 @@ class IntersectSetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) : Intersect
             }
         }
 
-        if (adds.isNotEmpty() || dels.isNotEmpty()) {
-            outlet.call.propagate(SetDelta(adds, dels))
-        }
-        // TODO(restructure): ack divergence, owner decision pending
+        // T05 finding 2 (was a TODO(restructure) "ack divergence, owner
+        // decision pending"): a membership-neutral fold (tag churn with no
+        // net add/del) now absorb-acks instead of silently swallowing the
+        // wave — a GlitchFreeCell downstream would otherwise stall forever
+        // on such a wave. Behavior change: this operator now acks.
+        emitOrAbsorb(
+            adds.isEmpty() && dels.isEmpty(),
+            emit = { outlet.call.propagate(SetDelta(adds, dels)) },
+            absorbAck = { outlet.absorbAck() },
+        )
     }
 
     override fun snapshot(): Serializable =

@@ -254,7 +254,11 @@ class LocationRegistry {
     /**
      * Make [host] the location of [ref]. Parked invocations replay — in park
      * order — before the fast path sees the new location, preserving the
-     * accepted-then-parked-then-new total order per link (spec 33).
+     * accepted-then-parked-then-new total order per link (spec 33). T05
+     * finding 1: a refused head (e.g. the freshly published host is itself
+     * already saturated) now stays parked, in order, rather than being
+     * destroyed — the ordinary [onIntakeAvailable]-driven [replay] finishes
+     * the batch once intake reopens.
      */
     fun publish(ref: CellRef, host: ManagedHost) {
         install(ref, Local(host))
@@ -282,10 +286,39 @@ class LocationRegistry {
         }
     }
 
+    /**
+     * T05 finding 1 (critical): `queue.drain()` used to snapshot-and-clear
+     * the whole park batch before anything was sent; the first refusal
+     * (SATURATED/CLOSED intake) then tripped `check(...)`, throwing — and
+     * the already-cleared batch (the refused head, every ordered successor,
+     * `Owned`/`Leased` included) was simply gone: not re-parked, not
+     * dead-lettered, not counted, and [locations] never got updated so the
+     * ref stayed unpublished with its history destroyed.
+     * [ParkQueue.drainWhile] exists precisely for this: it stops at the
+     * first refusal and RETAINS the remainder, in order, in the same queue.
+     *
+     * [locations] is still assigned only AFTER the drain attempt, same as
+     * before this fix — publishing it first was considered (and matches the
+     * ticket's literal text) but measurably breaks per-ref FIFO: a
+     * concurrent `deliver()` for this ref would see the new location on its
+     * lock-free fast path and could race ahead of a not-yet-drained parked
+     * remainder still sitting behind this method's lock
+     * (`RelocationTest`'s `concurrent relocation is exactly-once under real
+     * threads` catches exactly this — it started failing under the
+     * publish-first ordering). Draining first keeps every concurrent
+     * `deliver()` funneled through the SAME `synchronized(queue)` this
+     * method holds (its fast path fails — [locations] isn't updated yet —
+     * so it falls through and blocks on the lock), preserving order. A
+     * refused head that stops `drainWhile` early still parks correctly:
+     * [send]'s SATURATED branch registers an `onIntakeAvailable` hook
+     * bound to `location` (not read back from [locations]), and by the time
+     * that hook fires later, [locations] has long since been assigned here
+     * — so [replay]'s `locations[ref] == expected` check still passes.
+     */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         synchronized(queue) {
-            queue.drain().forEach { check(send(location, it)) { "replay into fresh location failed for $ref" } }
+            queue.drainWhile { send(location, it) }
             locations[ref] = location
             indexAdd(ref)
         }

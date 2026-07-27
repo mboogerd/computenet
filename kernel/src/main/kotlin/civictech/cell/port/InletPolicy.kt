@@ -6,6 +6,7 @@ import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.protocol.StateRequest
 import civictech.cell.proxy.Invocation
+import civictech.cell.proxy.Proxy
 import civictech.nature.PullService
 
 /**
@@ -76,6 +77,19 @@ class Admit(
     private var inlet: FanInlet<*>? = null
     private lateinit var release: (Invocation) -> Unit
 
+    /**
+     * T05 finding 3: mirrors [civictech.cell.consistency.WaveFrontier.unmatchedDrops] —
+     * a counted tripwire for [mintAck]'s silent `?: return` exits (no context,
+     * no attached inlet, or — the one that matters in practice — no open link
+     * matching [civictech.cell.MessageContext.sourcePort], e.g. a
+     * wire-reconstructed edge, a `Use.fixed` producer, or a replayed journal
+     * frame). Each such exit means the ack was never minted and a downstream
+     * `WaveFrontier` stalls forever on that edge; this at least makes the gap
+     * observable instead of silent.
+     */
+    var unackedDrops: Long = 0
+        private set
+
     override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
         this.inlet = inlet
         this.release = release
@@ -86,6 +100,14 @@ class Admit(
             release(invocation)
             return
         }
+        // T05 finding 3: the ADMIT tier is the licensed drop point, but a
+        // dropped invocation's args were never inspected — an Owned was
+        // never taken/frozen, a Leased never released (pool slot leak). The
+        // SPSC rule (FanOutlet, spec 23) means an exclusive-carrying outlet
+        // has exactly one consumer, so an admit-drop was unrecoverable loss.
+        // Consistent with the other two sanitizers (DeadLetters, Evolution's
+        // discharging proxy).
+        invocation.args.forEach(Proxy::discharge)
         onDrop(invocation)
         if (mintsProgressAck) mintAck(invocation)
     }
@@ -96,12 +118,12 @@ class Admit(
      * arrived on (matched by [civictech.cell.MessageContext.sourcePort]). Reuses
      * the ordinary absorb-ack path — the frontier's own [Progress] handler — so a
      * dropped edge contribution is indistinguishable from one silently absorbed
-     * upstream.
+     * upstream. Each early exit counts against [unackedDrops] (T05 finding 3).
      */
     private fun mintAck(invocation: Invocation) {
-        val ctx = invocation.context ?: return
-        val inlet = inlet ?: return
-        val link = inlet.linking.links.firstOrNull { it.from == ctx.sourcePort } ?: return
+        val ctx = invocation.context ?: run { unackedDrops++; return }
+        val inlet = inlet ?: run { unackedDrops++; return }
+        val link = inlet.linking.links.firstOrNull { it.from == ctx.sourcePort } ?: run { unackedDrops++; return }
         ProtocolSupport.of(inlet).deliver(
             Protocols.Progress, link, Progress(ctx.timestamp.sourceId, ctx.timestamp.counter)
         )

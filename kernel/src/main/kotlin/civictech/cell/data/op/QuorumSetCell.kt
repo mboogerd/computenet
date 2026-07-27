@@ -11,6 +11,7 @@ import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.control.absorbAck
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -100,7 +101,19 @@ class QuorumSetCell<E>(
                 dels[element] = advertised.remove(element)!!
             }
         }
-        if (adds.isNotEmpty() || dels.isNotEmpty()) outlet.call.propagate(SetDelta(adds, dels))
+        // T05 finding 2: a re-evaluation that changes no membership (tag
+        // churn, or a link open/close that doesn't tip any element's count
+        // across the threshold) now absorb-acks the reactive wave instead of
+        // silently dropping it — a GlitchFreeCell downstream would otherwise
+        // stall forever on such a wave. Behavior change: this operator now
+        // acks. (No-op via absorbAck's own CurrentContext guard when
+        // `evaluate` runs from the EdgeOpen/EdgeClose protocol path, which
+        // carries no reactive wave context.)
+        emitOrAbsorb(
+            adds.isEmpty() && dels.isEmpty(),
+            emit = { outlet.call.propagate(SetDelta(adds, dels)) },
+            absorbAck = { outlet.absorbAck() },
+        )
     }
 
     override fun snapshot(): Serializable = arrayListOf(lanes.snapshot(), HashMap(advertised))

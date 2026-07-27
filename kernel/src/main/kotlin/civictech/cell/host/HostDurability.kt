@@ -21,6 +21,16 @@ private const val RECORD_CHECKPOINT: Byte = 2
 private const val RECORD_FRONTIER: Byte = 3
 
 /**
+ * T05 finding 4: [HostDurability.recoverFrom] failed on [recordIndex] of
+ * [total] journal records (0-based) and stopped there — every record before
+ * it applied, every record from [recordIndex] onward did not. Thrown after
+ * the bad record is dead-lettered; callers must not treat a caught partial
+ * replay as a complete recovery.
+ */
+class RecoveryIncomplete(val recordIndex: Int, val total: Int, cause: Throwable) :
+    Exception("journal replay aborted at record $recordIndex of $total: ${cause.message}", cause)
+
+/**
  * Durable record of an [civictech.cell.evolve.Effectful] inlet's processed-frontier advance
  * (G-59, fixes C-9; spec 20/24, 30/31, 50/52 "Effectful recovery"): the last applied
  * `(sourceId, counter)` for one `(cellRef, portName)`.
@@ -117,17 +127,31 @@ internal class HostDurability(
         val scope: TagFrontier? = if (replayAsBaseline) TagFrontier(emptyMap()) else null
         try {
             ReplayScope.with(scope) {
-                journal.replay().forEach { record ->
-                    when (record[0]) {
-                        RECORD_FRAME -> submit(
-                            WireCodec.decode(record.copyOfRange(1, record.size)).let { frame ->
-                                if (scope == null) frame else frame.baselined(scope)
-                            }
-                        )
+                val records = journal.replay()
+                records.forEachIndexed { index, record ->
+                    // T05 finding 4: a bare forEach with no per-record handling
+                    // meant any decode/readObject throw (or the else -> error
+                    // below) silently abandoned every remaining record —
+                    // recovering still reset in the finally, and the host
+                    // resumed live traffic on truncated state with nothing
+                    // to say so. Dead-letter the bad record, then rethrow so
+                    // the caller cannot mistake a partial replay for a
+                    // complete one.
+                    try {
+                        when (record[0]) {
+                            RECORD_FRAME -> submit(
+                                WireCodec.decode(record.copyOfRange(1, record.size)).let { frame ->
+                                    if (scope == null) frame else frame.baselined(scope)
+                                }
+                            )
 
-                        RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
-                        RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
-                        else -> error("unknown journal record type ${record[0]}")
+                            RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
+                            RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
+                            else -> error("unknown journal record type ${record[0]}")
+                        }
+                    } catch (e: Exception) {
+                        deadLetter("journal replay: record $index of ${records.size} failed: $e")
+                        throw RecoveryIncomplete(index, records.size, e)
                     }
                 }
             }

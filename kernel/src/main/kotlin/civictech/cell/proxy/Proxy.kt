@@ -113,7 +113,14 @@ object Proxy {
         }
     }
 
-    private fun discharge(value: Any?) {
+    /**
+     * T05 finding 3: promoted from `private` to `internal` so [civictech.cell.port.Admit]
+     * can discharge a *dropped* invocation's exclusive args directly
+     * (consume `Owned`, release `Leased`) without needing a whole
+     * [discharging] proxy — the ADMIT tier drops one already-decoded
+     * `Invocation`, not a method call it forwards to a sink.
+     */
+    internal fun discharge(value: Any?) {
         when (value) {
             is Owned<*> -> value.take()
             is Leased<*> -> value.release()

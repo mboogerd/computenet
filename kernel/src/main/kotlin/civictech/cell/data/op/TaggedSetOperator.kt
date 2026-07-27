@@ -31,9 +31,9 @@ class TaggedSetOperator<E> {
      * The copy-pasted apply/effective/ack shape (CP-A3), byte-identical across
      * [FilterCell], [UnionSetCell], and [FlatMapSetCell]: [propagate] a
      * non-empty [out], else [absorbAck] the swallowed wave. Preserves the
-     * exact current condition — nothing added, nothing removed.
+     * exact current condition — nothing added, nothing removed. T05 finding
+     * 2: delegates to the shared [emitOrAbsorb] free function.
      */
-    fun <X> emitOrAbsorb(out: SetDelta<X>, propagate: (SetDelta<X>) -> Unit, absorbAck: () -> Unit) {
-        if (out.adds.isNotEmpty() || out.dels.isNotEmpty()) propagate(out) else absorbAck()
-    }
+    fun <X> emitOrAbsorb(out: SetDelta<X>, propagate: (SetDelta<X>) -> Unit, absorbAck: () -> Unit) =
+        emitOrAbsorb(out.adds.isEmpty() && out.dels.isEmpty(), { propagate(out) }, absorbAck)
 }

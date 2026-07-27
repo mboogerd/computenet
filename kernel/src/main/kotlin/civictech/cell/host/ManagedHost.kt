@@ -301,7 +301,7 @@ open class ManagedHost(
     )
 
     /** Supervision state is per-host: on despawn/migrate it clears, and parked traffic dead-letters rather than vanishing. */
-    private fun clearSupervision(cellRef: CellRef) {
+    private fun clearSupervision(cellRef: CellRef, cell: Cell) {
         policies.remove(cellRef)
         checkpoints.remove(cellRef)
         generations.remove(cellRef)
@@ -312,6 +312,21 @@ open class ManagedHost(
         synchronized(dataLock) { attentionScheduler.attentionParked.remove(cellRef) }?.forEach {
             parkedDrainedOnTeardownCount.incrementAndGet()
             deadLetter(null, "cell $cellRef left the host while attention-parked", it)
+        }
+        // T05 finding 5: a FanInlet's ACTIVATE-tier cold tail (invocations
+        // that arrived before a handler was installed, spec 10/15 §Admission
+        // vs activation) used to vanish with the cell object on despawn — no
+        // dead letter, no counter, no exclusive discharge. Same accounting
+        // path as the two park queues above.
+        PortRegistry.of(cell).names().forEach { name ->
+            (PortRegistry.of(cell)[name] as? FanInlet<*>)?.drainParked()?.forEach { invocation ->
+                parkedDrainedOnTeardownCount.incrementAndGet()
+                deadLetter(
+                    null,
+                    "cell $cellRef left the host with a parked cold-inlet invocation on port '$name'",
+                    HostedPortInvocation(cellRef, name, HostedPortInvocation.Type.PORT_API, invocation),
+                )
+            }
         }
     }
 
@@ -418,7 +433,13 @@ open class ManagedHost(
             }
         }
         if (!isManagement && intakeControl.intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
-        if (!isManagement) {
+        // T05 finding 4: a replayed frame is already-accepted work re-entering
+        // through the ordinary intake (a journal is a bridge to disk, per
+        // HostDurability's KDoc) — the SATURATED gate must not re-reject it.
+        // Pre-fix, a durable host with an intakeBound deterministically
+        // aborted recovery once the journal exceeded high-water (nothing
+        // drains during the synchronous replay under the sim controller).
+        if (!isManagement && !hostDurability.recovering) {
             synchronized(dataLock) {
                 if (intakeControl.intakeState == IntakeState.SATURATED) {
                     if (intakeBound?.policy == SaturationPolicy.Coalesce && intakeControl.coalesce(hostedInvocation)) {
@@ -771,7 +792,7 @@ open class ManagedHost(
             override fun despawn(ref: CellRef) {
                 val cell = cells.remove(ref) ?: throw IllegalArgumentException("Cell not found: $ref")
                 registry?.unpublish(ref)
-                clearSupervision(ref)
+                clearSupervision(ref, cell)
                 cell.onDeactivate(ctx)
                 // PN-9 (leak bound), widened by T04 finding 3: release the cell's
                 // ProtocolSupport + PortRegistry entries so a despawned cell's ports
@@ -826,7 +847,7 @@ open class ManagedHost(
                 moving.forEach { (cellRef, cell) ->
                     registry?.unpublish(cellRef)
                     // supervision is per-host and does not migrate (31)
-                    clearSupervision(cellRef)
+                    clearSupervision(cellRef, cell)
                     // the serialization seam is exercised even in-process (G-25):
                     // restore from a round-tripped snapshot, not the live object
                     snapshots[cellRef]?.let { (cell as Stateful).restore(roundTrip(it)) }

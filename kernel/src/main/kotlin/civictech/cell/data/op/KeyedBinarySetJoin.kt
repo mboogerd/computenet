@@ -49,14 +49,13 @@ class KeyedBinarySetJoin<A, B, K> {
      * The copy-pasted apply/effective/ack shape (CP-A3), byte-identical across
      * [JoinSetCell] and [SemiJoinCell]: [propagate] a non-empty delta built
      * from [adds]/[dels], else [absorbAck] the swallowed wave. Preserves the
-     * exact current condition.
+     * exact current condition. T05 finding 2: delegates to the shared
+     * [emitOrAbsorb] free function.
      */
     fun <Out> emitOrAbsorb(
         adds: Map<Out, Set<Timestamp>>,
         dels: Map<Out, Set<Timestamp>>,
         propagate: (SetDelta<Out>) -> Unit,
         absorbAck: () -> Unit,
-    ) {
-        if (adds.isNotEmpty() || dels.isNotEmpty()) propagate(SetDelta(adds, dels)) else absorbAck()
-    }
+    ) = emitOrAbsorb(adds.isEmpty() && dels.isEmpty(), { propagate(SetDelta(adds, dels)) }, absorbAck)
 }

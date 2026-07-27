@@ -168,6 +168,18 @@ class FanInlet<Api : Any>(
     fun resetPolicies() = stages.forEach { it.policy.reset() }
 
     /**
+     * Drains the ACTIVATE-tier cold tail — invocations that arrived before a
+     * handler was installed (10/15, 10/13 §Admission vs activation) — for a
+     * caller tearing this inlet down without ever activating it (T05 finding
+     * 5: `despawn` used to leave this tail to vanish with the cell object —
+     * no dead letter, no counter, no exclusive discharge). Draining is once,
+     * in arrival order, exactly like [replayParked]'s own drain; a caller
+     * that has already activated (served a handler) finds nothing here,
+     * since [replayParked] already ran it out at that point.
+     */
+    fun drainParked(): List<Invocation> = parked.drain()
+
+    /**
      * Deprecated ALIGN sugar (PN-9): assigning a frontier is now shorthand for
      * [install]. Kept for the many call sites that set a [WaveFrontier] directly;
      * new code should [install] policies (which composes across tiers).
