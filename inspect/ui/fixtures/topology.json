@@ -1,0 +1,309 @@
+{
+  "seq": 42,
+  "nodes": [
+    {
+      "ref": "aaaaaaaa-0000-0000-0000-000000000001:0",
+      "name": "candSkills",
+      "typeFqn": "civictech.cell.data.SetCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [{ "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.SetApi" }],
+      "host": "sm-host-1",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "bbbbbbbb-0000-0000-0000-000000000002:0",
+      "name": "jobSkills",
+      "typeFqn": "civictech.cell.data.SetCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [{ "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.SetApi" }],
+      "host": "sm-host-1",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "cccccccc-0000-0000-0000-000000000003:0",
+      "name": "matches",
+      "typeFqn": "civictech.cell.data.op.JoinSetCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "left", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
+        { "name": "right", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.JoinSetApi" }
+      ],
+      "host": "sm-host-1",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "dddddddd-0000-0000-0000-000000000004:0",
+      "name": "matchCounts",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.JoinSetApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
+      ],
+      "host": "sm-host-1",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "eeeeeeee-0000-0000-0000-000000000005:0",
+      "name": "required",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
+      ],
+      "host": "sm-host-2",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "ffffffff-0000-0000-0000-000000000006:0",
+      "name": "qualification",
+      "typeFqn": "civictech.cell.data.op.LookupJoinCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "fact", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
+        { "name": "dimension", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.LookupJoinApi" }
+      ],
+      "host": "sm-host-2",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "11223344-0000-0000-0000-000000000007:0",
+      "name": "gap",
+      "typeFqn": "civictech.cell.data.op.SemiJoinCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "left", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
+        { "name": "right", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.SemiJoinApi" }
+      ],
+      "host": "sm-host-2",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "55667788-0000-0000-0000-000000000011:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.LookupJoinApi" }],
+      "host": "sm-host-2",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "22334455-0000-0000-0000-000000000008:0",
+      "name": "supply",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
+      ],
+      "host": "sm-host-3",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "33445566-0000-0000-0000-000000000009:0",
+      "name": "demand",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.SetApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.GroupByApi" }
+      ],
+      "host": "sm-host-3",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "44556677-0000-0000-0000-000000000010:0",
+      "name": "market",
+      "typeFqn": "civictech.cell.data.op.CombineLatestCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "left", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
+        { "name": "right", "dir": "IN", "contractFqn": "civictech.cell.data.op.GroupByApi" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.data.op.CombineLatestApi" }
+      ],
+      "host": "sm-host-3",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "66778899-0000-0000-0000-000000000012:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.SemiJoinApi" }],
+      "host": "sm-host-3",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "778899aa-0000-0000-0000-000000000013:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.op.CombineLatestApi" }],
+      "host": "sm-host-3",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1111111-0000-0000-0000-000000000001",
+      "from": { "ref": "aaaaaaaa-0000-0000-0000-000000000001:0", "port": "outlet" },
+      "to": { "ref": "cccccccc-0000-0000-0000-000000000003:0", "port": "left" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000002",
+      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
+      "to": { "ref": "cccccccc-0000-0000-0000-000000000003:0", "port": "right" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000003",
+      "from": { "ref": "cccccccc-0000-0000-0000-000000000003:0", "port": "outlet" },
+      "to": { "ref": "dddddddd-0000-0000-0000-000000000004:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000004",
+      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
+      "to": { "ref": "eeeeeeee-0000-0000-0000-000000000005:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000005",
+      "from": { "ref": "dddddddd-0000-0000-0000-000000000004:0", "port": "outlet" },
+      "to": { "ref": "ffffffff-0000-0000-0000-000000000006:0", "port": "fact" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000006",
+      "from": { "ref": "eeeeeeee-0000-0000-0000-000000000005:0", "port": "outlet" },
+      "to": { "ref": "ffffffff-0000-0000-0000-000000000006:0", "port": "dimension" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000007",
+      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
+      "to": { "ref": "11223344-0000-0000-0000-000000000007:0", "port": "left" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000008",
+      "from": { "ref": "aaaaaaaa-0000-0000-0000-000000000001:0", "port": "outlet" },
+      "to": { "ref": "11223344-0000-0000-0000-000000000007:0", "port": "right" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000009",
+      "from": { "ref": "aaaaaaaa-0000-0000-0000-000000000001:0", "port": "outlet" },
+      "to": { "ref": "22334455-0000-0000-0000-000000000008:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000010",
+      "from": { "ref": "bbbbbbbb-0000-0000-0000-000000000002:0", "port": "outlet" },
+      "to": { "ref": "33445566-0000-0000-0000-000000000009:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000011",
+      "from": { "ref": "22334455-0000-0000-0000-000000000008:0", "port": "outlet" },
+      "to": { "ref": "44556677-0000-0000-0000-000000000010:0", "port": "left" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000012",
+      "from": { "ref": "33445566-0000-0000-0000-000000000009:0", "port": "outlet" },
+      "to": { "ref": "44556677-0000-0000-0000-000000000010:0", "port": "right" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000013",
+      "from": { "ref": "ffffffff-0000-0000-0000-000000000006:0", "port": "outlet" },
+      "to": { "ref": "55667788-0000-0000-0000-000000000011:0", "port": "inlet" },
+      "role": "OBSERVE",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000014",
+      "from": { "ref": "11223344-0000-0000-0000-000000000007:0", "port": "outlet" },
+      "to": { "ref": "66778899-0000-0000-0000-000000000012:0", "port": "inlet" },
+      "role": "OBSERVE",
+      "fused": null
+    },
+    {
+      "id": "e1111111-0000-0000-0000-000000000015",
+      "from": { "ref": "44556677-0000-0000-0000-000000000010:0", "port": "outlet" },
+      "to": { "ref": "778899aa-0000-0000-0000-000000000013:0", "port": "inlet" },
+      "role": "OBSERVE",
+      "fused": null
+    }
+  ]
+}

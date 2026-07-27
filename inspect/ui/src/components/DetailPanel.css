@@ -1,0 +1,20 @@
+.detail-panel {
+  width: 280px;
+  flex: 0 0 280px;
+  border-left: 1px solid var(--hairline);
+  background: var(--surface);
+  padding: 1rem;
+  overflow-y: auto;
+}
+
+.detail-panel__empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.detail-panel__name {
+  font-size: 1rem;
+  font-family: var(--font-mono);
+  margin: 0;
+  word-break: break-all;
+}
