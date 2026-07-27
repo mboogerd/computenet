@@ -11,6 +11,7 @@ import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
+import civictech.cell.link.catchUpOnLinked
 import civictech.cell.control.absorbAck
 import civictech.gen.wire.CellBase
 import java.io.Serializable
@@ -39,7 +40,8 @@ interface QuorumSetApi<E> {
  * | k-of-n quorum        | `{ k }`       |
  * | near-miss (all-but-one) | `{ n -> n - 1 }` |
  *
- * Output tag discipline is [IntersectSetCell]'s: on entry an element is
+ * Output tag discipline is [IntersectSetCell]'s — and, since T07 finding 3,
+ * literally shared with it via [AdvertisedLedger]: on entry an element is
  * advertised downstream with its live input tags; on exit *exactly those*
  * advertised tags are deleted, so a downstream `SetView`/[UnionSetCell] tracks
  * membership precisely and tag churn while membership holds is absorbed
@@ -53,8 +55,8 @@ class QuorumSetCell<E>(
 ) : QuorumSetCellBase<E>(ref), Stateful {
     private val lanes = PresenceLanes<E>()
 
-    /** Elements currently advertised downstream, each with the exact tags advertised on entry. */
-    private val advertised = mutableMapOf<E, Set<Timestamp>>()
+    /** Elements currently advertised downstream, each with the exact tags advertised on entry (RS-5.3, T07 finding 3: shared with [IntersectSetCell]). */
+    private val ledger: JoinLedger<E> = AdvertisedLedger()
 
     init {
         ProtocolSupport.of(inlet).handle(Protocols.TopologyOrder) { link, event ->
@@ -63,19 +65,17 @@ class QuorumSetCell<E>(
                 // working set, not just an incoming delta's elements.
                 EdgeOpen -> {
                     lanes.open(link)
-                    evaluate(lanes.elements() + advertised.keys)
+                    evaluate(lanes.elements() + ledger.entries.keys)
                 }
                 EdgeClose -> {
                     val orphaned = lanes.close(link)
-                    evaluate(lanes.elements() + advertised.keys + orphaned)
+                    evaluate(lanes.elements() + ledger.entries.keys + orphaned)
                 }
                 else -> {}
             }
         }
         // late-join catch-up (G-22): the advertised quorum as a delta-from-empty
-        outlet.linking.onLinked = { link ->
-            if (advertised.isNotEmpty()) outlet.at(link.to).propagate(SetDelta(adds = advertised.toMap()))
-        }
+        outlet.catchUpOnLinked { if (ledger.isEmpty) null else ledger.asDelta() }
     }
 
     override fun onInlet(value: SetDelta<E>) {
@@ -92,13 +92,10 @@ class QuorumSetCell<E>(
             // an absent element (count 0) is never in the quorum, even if the
             // threshold is non-positive (near-miss with a single source).
             val meets = count >= 1 && count >= target
-            val was = element in advertised
-            if (meets && !was) {
-                val tags = lanes.tags(element)
-                advertised[element] = tags
-                adds[element] = tags
-            } else if (!meets && was) {
-                dels[element] = advertised.remove(element)!!
+            if (meets) {
+                ledger.enter(element) { lanes.tags(element) }?.let { adds[element] = it }
+            } else {
+                ledger.exit(element)?.let { dels[element] = it }
             }
         }
         // T05 finding 2: a re-evaluation that changes no membership (tag
@@ -116,14 +113,13 @@ class QuorumSetCell<E>(
         )
     }
 
-    override fun snapshot(): Serializable = arrayListOf(lanes.snapshot(), HashMap(advertised))
+    override fun snapshot(): Serializable = arrayListOf(lanes.snapshot(), ledger.snapshot())
 
     @Suppress("UNCHECKED_CAST")
     override fun restore(state: Serializable) {
-        val (laneState, adv) = state as ArrayList<Serializable>
+        val (laneState, ledgerState) = state as ArrayList<Serializable>
         lanes.restore(laneState)
-        advertised.clear()
-        advertised.putAll(adv as Map<E, Set<Timestamp>>)
+        ledger.restore(ledgerState)
     }
 
     companion object {

@@ -140,24 +140,18 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             // symmetric view chaining: my unions stream into the peer's counterparts.
             // Tag dedup + effective-only emission make the two-way chain cycle-safe;
             // sends park in the registry until the peer announces, so a late-starting
-            // peer replays the full history in order and converges.
+            // peer replays the full history in order and converges. Anti-entropy on
+            // (re)announce (M10.4, T07 finding 2): a returning peer may have missed
+            // deltas its dying socket swallowed — Peering.chainOnReannounce re-fires
+            // the full on-link catch-up so the full state-as-delta flows again; tag
+            // idempotence makes the repeat free.
             val chained = mapOf(
                 unionRef("items", peerRole) to
-                        (itemsUnion to itemsUnion.outlet.streamTo(routedDelta(unionRef("items", peerRole)))),
+                        (itemsUnion.outlet to itemsUnion.outlet.streamTo(routedDelta(unionRef("items", peerRole)))),
                 unionRef("votes", peerRole) to
-                        (votesUnion to votesUnion.outlet.streamTo(routedDelta(unionRef("votes", peerRole)))),
+                        (votesUnion.outlet to votesUnion.outlet.streamTo(routedDelta(unionRef("votes", peerRole)))),
             )
-            // Anti-entropy on (re)announce (M10.4): a returning peer may have
-            // missed deltas its dying socket swallowed — re-fire the catch-up
-            // hook so the full state-as-delta flows again; tag idempotence
-            // makes the repeat free. Same pattern as Replication.maybeLink.
-            registry.onPublish { ref ->
-                // PN-9: fire the full on-link multicast (catch-up moved to
-                // onLinkedListeners), not just the single onLinked slot, so a
-                // returning peer's re-announce still re-pushes catch-up. Same
-                // fix as exchange/Main.kt and Replication.maybeLink.
-                chained[ref]?.let { (cell, link) -> cell.outlet.linking.fireLinked(link) }
-            }
+            Peering.chainOnReannounce(registry, chained)
         }
 
         // recover() pre-spawns every known writer (the factory rewires streamTo)

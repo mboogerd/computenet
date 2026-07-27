@@ -6,6 +6,8 @@ import civictech.cell.Propagate
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
+import civictech.cell.link.Link
+import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
@@ -144,5 +146,30 @@ object Peering {
         side.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
         side.registry.localLinks().forEach(announce::linked)
         return AutoCloseable { registration.close(); unpublishRegistration.close(); topologyRegistration.close() }
+    }
+
+    /**
+     * Kernel-level re-announce chaining rule (T07 finding 2, DRY audit):
+     * promotes the application-side idiom every symmetric-view-chaining demo
+     * had hand-rolled —
+     * `registry.onPublish { ref -> chained[ref]?.let { (cell, link) -> cell.outlet.linking.fireLinked(link) } }`
+     * — into the kernel, so the ONE fix this pattern has already needed three
+     * times (the PN-9 full-multicast fix: re-fire [Link.unlink]-adjacent
+     * [civictech.cell.link.LinkSupport.fireLinked], not just the single
+     * `onLinked` slot) lives where the semantics live, not re-expressed at
+     * every call site.
+     *
+     * [chained] maps a peer's announced ref to the local `(outlet, link)`
+     * pair that ref feeds into — e.g. `myUnion.outlet to myUnion.outlet
+     * .streamTo(routedDelta(peerUnionRef))`. Every announcement (initial join
+     * OR a returning/reconnecting peer, M10.1 anti-entropy) that matches a
+     * chained ref re-fires that link's FULL on-link catch-up — the same
+     * "state-as-delta unicast is idempotent, so a redundant re-fire costs one
+     * wasted delta at worst" reasoning [Replication.maybeLink] and
+     * [SingleWriterReplication.shipTo] apply to the kernel's own gossip/
+     * shipping meshes.
+     */
+    fun chainOnReannounce(registry: LocationRegistry, chained: Map<CellRef, Pair<Linked, Link>>) {
+        registry.onPublish { ref -> chained[ref]?.let { (linked, link) -> linked.linking.fireLinked(link) } }
     }
 }

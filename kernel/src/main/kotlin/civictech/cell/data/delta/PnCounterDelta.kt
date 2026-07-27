@@ -19,12 +19,11 @@ data class PnCounterDelta(
     val incs: Map<@kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID, Long> = emptyMap(),
     val decs: Map<@kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID, Long> = emptyMap(),
 ) : Serializable, MergeablePayload {
+    // T07 finding 4: routed through the shared [mergeMax] fold — identity `0L`
+    // because an un-incremented source has contributed nothing (vs
+    // [WatermarkDelta]'s `Long.MIN_VALUE` bottom; see [Lattices.kt] for why the
+    // two lattices need different identities).
     fun merge(other: PnCounterDelta): PnCounterDelta =
-        PnCounterDelta(mergeMax(incs, other.incs), mergeMax(decs, other.decs))
+        PnCounterDelta(mergeMax(incs, other.incs, identity = 0L), mergeMax(decs, other.decs, identity = 0L))
     override fun mergeWith(other: MergeablePayload): MergeablePayload = merge(other as PnCounterDelta)
-
-    companion object {
-        private fun mergeMax(a: Map<UUID, Long>, b: Map<UUID, Long>): Map<UUID, Long> =
-            (a.keys + b.keys).associateWith { maxOf(a[it] ?: 0L, b[it] ?: 0L) }
-    }
 }
