@@ -17,8 +17,8 @@ runtime lifecycle, concord, demos): `doc/ARCHITECTURE.md`.
    E-items), `doc/spec/90-roadmap/95-research-plan.md` (research-gated scope),
    `doc/PERNODE-FOLLOWUP-TICKETS.md` (open FU items), `backlog/` (idea inbox),
    `doc/demo-findings.md`, and the `gap` rows of `doc/spec/CONCORDANCE.md`.
-   `94-implementation-plan.md` is a historical wave decomposition — all its
-   waves merged long ago; despite its header it is not the work list.
+   `94-implementation-plan.md` is a historical wave decomposition, not the
+   work list (its own header says so).
 2. Read every cited spec section in full. Use
    `doc/spec/00-foundations/03-glossary.md` when terminology is unclear and
    `doc/spec/90-roadmap/93-feature-interactions.md` for cross-feature decisions.
@@ -44,8 +44,7 @@ for documentation maintenance.
   Package-by-package inventory in `doc/ARCHITECTURE.md` §2. Notable packages
   beyond the obvious: `.durability` (journals), `.evolve` (shadow/promotion),
   `.verify` (invariant cells), `.membrane` (composition), `.observe`
-  (app-facing reads). `AttentionPolicy` lives in `.host`; the attention
-  scheduler in `.control`.
+  (app-facing reads).
 - `nature/`: descriptor/nature vocabulary shared by `:gen` (processor-time)
   and `:kernel` (runtime); `api` on `:kernel`, so descriptor types are
   intentionally transitive.
@@ -84,9 +83,8 @@ for documentation maintenance.
 - `doc/spec/`: the normative design — foundations (`00`), programming model
   (`10`), dataflow semantics (`20`), execution (`30`), distribution (`40`),
   development/evolution (`50`), roadmap (`90`). Entry: `doc/spec/README.md`.
-- `doc/` (rest): see the documentation map in `doc/ARCHITECTURE.md` §7. The
-  `COMPOSITION-*`/`PERNODE-*`/`RESTRUCTURE-*`/`ORCHESTRATION` files are
-  completed-run records, not guidance — they cite pre-restructure paths.
+- `doc/` (rest): see the documentation map in `doc/ARCHITECTURE.md` §7.
+  `doc/archive/{runs,frontend,adr}/` holds historical material, not guidance.
 - `backlog/`: idea inbox, one file per prospective feature (some marked
   IMPLEMENTED/absorbed). `bugs/`: fixed-defect reports, inert.
 - `legacy/` and `runtime/`: untracked directories containing only stale build
@@ -176,5 +174,5 @@ concurrently. Avoid unrelated formatting and broad file churn so independently
 completed tickets remain straightforward to integrate. Later-wave dependencies
 must be consumed from the code actually merged into `main`, never recreated
 locally. (The Docker/Codex harness under `scripts/plan-orchestrator/` and
-`doc/ORCHESTRATION.md` is retired; recent runs used git worktrees with the
-orchestrator merging — the discipline above applies either way.)
+`doc/archive/runs/ORCHESTRATION.md` is retired; recent runs used git worktrees
+with the orchestrator merging — the discipline above applies either way.)

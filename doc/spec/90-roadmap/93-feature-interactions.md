@@ -1,8 +1,16 @@
 # 93 — Feature-Interaction Analysis
 
-> **Status**: Exploratory — systematic analysis; challenge resolutions are design proposals, not normative text
+> **Status**: Living — the 28 numbered challenges (I-1..I-28) below are
+> resolved here as design proposals, but every one of them is cited from a
+> normative chapter (00–53) as "decided in 93"; a citing chapter's decision
+> stands as decided design regardless of implementation state (see the
+> per-chapter "(...unimplemented)" qualifiers). Exploratory status applies
+> only to the surrounding pair-classification method and matrix (§1–§3) —
+> the un-consumed C(27,2)=351-pair scan this document derives the challenges
+> from, not to the challenges' resolutions themselves. See the index below.
 > **Sources**: the entire spec (00–53); [91-gap-analysis.md](91-gap-analysis.md)
-> **Implementation**: none — analysis document
+> **Implementation**: none — analysis document; consuming normative chapters
+> carry their own implementation state
 
 This document systematically examines how **every pair** of dataflow-relevant
 features in this spec composes. It answers one question per pair: *is the
@@ -10,6 +18,50 @@ composed behavior specified, or does it hide a design decision nobody has made
 yet?* Unresolved pairs are consolidated into numbered challenges (I-1 … I-28),
 each resolved here as a design proposal checked against the design principles
 (P1–P10) and the recorded decisions in [91-gap-analysis.md](91-gap-analysis.md).
+
+## Index — I-1..I-28 status
+
+`decided` = at least one normative chapter under `doc/spec/{00,10,20,30,40,50}-*`
+cites this challenge's resolution as "decided in 93" (enumerated by grepping
+`decided in 93` across `doc/spec/`); `proposed` would mark a challenge no
+chapter yet relies on. All 28 are currently decided — a citing chapter treats
+the resolution as settled design even where the code has not caught up (its
+own "(...unimplemented)" qualifier tracks that gap, not this one).
+
+| I-n | Title | Status | Line |
+|---|---|---|---|
+| I-1 | Multiplex sub-port model: unit of contract, cardinality, ordering, policy, and addressing (G-13) | decided | 573 |
+| I-2 | Identity model: what a logicalId-bound ref, link, or guard denotes under multiple live instances (G-8) | decided | 720 |
+| I-3 | Replication skeleton: membership, location-set resolution, gossip topology, eviction (G-7) | decided | 1095 |
+| I-4 | Attention protocol algebra: aggregation over fan-out, retraction, context classification (G-6) | decided | 1540 |
+| I-5 | Wave semantics in cycles: same-wave re-entry detection and per-iteration topology version | decided | 1722 |
+| I-6 | Cycle divergence guard: Magnitude declaration, quiescence thresholds, throttling granularity (G-19) | decided | 2071 |
+| I-7 | Invocation journal: what is journaled, what replay means downstream, and where the journal lives (G-25) | decided | 2568 |
+| I-8 | PartitionedCell composite design: routing, merging, lifecycle, identity, and wave semantics (G-24) | decided | 2967 |
+| I-9 | Attention as the resource lever: suspension triggers, priority mapping, fairness, and edge cases (G-6) | decided | 3546 |
+| I-10 | Membrane and organelle realization: exposure API, authority at fused crossings, hierarchy cascade (G-9/G-10/G-28) | decided | 4032 |
+| I-11 | Atomic multi-link swap: the promotion/rollback primitive and its failure semantics | decided | 4221 |
+| I-12 | Backpressure: what a bounded intake's refusal means, and who owns refused or parked traffic | decided | 4750 |
+| I-13 | Stamping topology events into the wave domain: null-context management ops vs edge-set completeness | decided | 4899 |
+| I-14 | Wave-source and tag identity: do (sourceId, counter) streams follow the logical cell or the instance, and do counters survive? | decided | 5050 |
+| I-15 | Execution colors as data: where color lives and what validates it across fan-out, wire, replicas, and construction | decided | 5452 |
+| I-16 | State-request protocol: on-demand pull triggers, answering instance, and snapshot/live interleaving (G-18 residual) | decided | 5844 |
+| I-17 | Faithful non-perturbing observation: effect classification, suppression scope, and trustworthy judgment (G-32) | decided | 6249 |
+| I-18 | Wave completeness when an edge will not deliver: absorbed, suspended, restarted, or dead-lettered inputs | decided | 6461 |
+| I-19 | Partition placement as ordinary placement: a live composite spanning hosts without a second distribution mechanism (G-24) | decided | 7002 |
+| I-20 | Observing, shadowing, and replicating exclusive flows: fan-out refusal vs every multi-consumer feature | decided | 7494 |
+| I-21 | GraphSpec expressiveness: identity-preserving spawn, hierarchy, evolution steps, and remote application | decided | 7630 |
+| I-22 | Producer rollback contract: RESTART and dead-letter versus state downstream already derived | decided | 8073 |
+| I-23 | Upstream frontier traversal: visibility through delegation and membranes, termination in cycles | decided | 8531 |
+| I-24 | Wave alignment of catch-up snapshots: a multi-source snapshot has no single representable wave id | decided | 8968 |
+| I-25 | Leader+follower mode: enforcing one writer across a replica set and surviving leader restart | decided | 9381 |
+| I-26 | When is link time? Cold-phase structure, eager cells (C-7), and what exists on an unactivated port | decided | 9876 |
+| I-27 | State migration across instances: exportState/importState choreography in the swap drain window (G-33) | decided | 10287 |
+| I-28 | Boundary security: what a membrane enforces at a crossing — identity, disclosure, and protocol authority (G-29) | decided | 10793 |
+
+Line numbers are as of this edit; re-derive with
+`grep -n '^### I-' doc/spec/90-roadmap/93-feature-interactions.md` if the file
+has since grown above/between challenges.
 
 ## 1. Method
 
