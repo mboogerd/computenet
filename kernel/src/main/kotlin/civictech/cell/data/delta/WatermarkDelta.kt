@@ -66,11 +66,15 @@ data class WatermarkDelta(
     val members: Set<@kotlinx.serialization.Serializable(with = UuidSerializer::class) UUID> = emptySet(),
 ) : Serializable, MergeablePayload {
 
+    // T07 finding 4: both folds route through the shared [mergeMax] — identity
+    // `Long.MIN_VALUE` (bottom), unlike [PnCounterDelta]'s `0L`, because an
+    // absent row/epoch here must never look "caught up"/"never suspended" by
+    // coincidence with a real zero value (see [Lattices.kt]).
     fun merge(other: WatermarkDelta): WatermarkDelta =
         WatermarkDelta(
             mergeRows(rows, other.rows),
             closed + other.closed,
-            mergeSuspend(suspended, other.suspended),
+            mergeMax(suspended, other.suspended, identity = Long.MIN_VALUE),
             members + other.members,
         )
 
@@ -94,19 +98,12 @@ data class WatermarkDelta(
     }
 
     companion object {
-        private fun mergeSuspend(a: Map<UUID, Long>, b: Map<UUID, Long>): Map<UUID, Long> =
-            (a.keys + b.keys).associateWith { maxOf(a[it] ?: Long.MIN_VALUE, b[it] ?: Long.MIN_VALUE) }
-
         private fun mergeRows(
             a: Map<UUID, Map<UUID, Long>>,
             b: Map<UUID, Map<UUID, Long>>,
         ): Map<UUID, Map<UUID, Long>> =
             (a.keys + b.keys).associateWith { replica ->
-                val ca = a[replica] ?: emptyMap()
-                val cb = b[replica] ?: emptyMap()
-                (ca.keys + cb.keys).associateWith { source ->
-                    maxOf(ca[source] ?: Long.MIN_VALUE, cb[source] ?: Long.MIN_VALUE)
-                }
+                mergeMax(a[replica] ?: emptyMap(), b[replica] ?: emptyMap(), identity = Long.MIN_VALUE)
             }
     }
 }

@@ -36,6 +36,30 @@ internal class TagState<E> {
     /** Current state as a delta-from-empty — the catch-up emission (G-22). */
     fun asDelta(): SetDelta<E> = SetDelta(adds = live.mapValues { it.value.toSet() })
 
+    /**
+     * The del-fold shared by [apply] and (b)'s del pass in [applyReBaseline]
+     * (T07 finding 4): identical tombstone logic — which tags counted as
+     * "killed", whether an element's live-tag entry empties out — the ONE
+     * declared difference being whether a killed tag REPLACES or ACCUMULATES
+     * onto [into] ([accumulateKilled]). `applyReBaseline` needs accumulation
+     * because its (a) pass may already have recorded a drop for the same
+     * element before this (b) pass runs; `apply` never has a prior entry, so
+     * replace and accumulate are byte-identical there. The documented
+     * add-path divergence between the two callers is untouched — only the
+     * del-fold is shared.
+     */
+    private fun foldDels(delta: SetDelta<E>, into: MutableMap<E, Set<Timestamp>>, accumulateKilled: Boolean) {
+        delta.dels.forEach { (element, tags) ->
+            val had = live[element] ?: return@forEach
+            val killed = tags intersect had
+            if (killed.isNotEmpty()) {
+                had -= killed
+                if (had.isEmpty()) live.remove(element)
+                into[element] = if (accumulateKilled) (into[element] ?: emptySet()) + killed else killed
+            }
+        }
+    }
+
     fun apply(delta: SetDelta<E>): SetDelta<E> {
         val newAdds = mutableMapOf<E, Set<Timestamp>>()
         val newDels = mutableMapOf<E, Set<Timestamp>>()
@@ -49,15 +73,7 @@ internal class TagState<E> {
                 newAdds[element] = fresh
             }
         }
-        delta.dels.forEach { (element, tags) ->
-            val had = live[element] ?: return@forEach
-            val killed = tags intersect had
-            if (killed.isNotEmpty()) {
-                had -= killed
-                if (had.isEmpty()) live.remove(element)
-                newDels[element] = killed
-            }
-        }
+        foldDels(delta, newDels, accumulateKilled = false)
         return SetDelta(newAdds, newDels)
     }
 
@@ -96,15 +112,7 @@ internal class TagState<E> {
                 newAdds[element] = fresh
             }
         }
-        delta.dels.forEach { (element, tags) ->
-            val had = live[element] ?: return@forEach
-            val killed = tags intersect had
-            if (killed.isNotEmpty()) {
-                had -= killed
-                if (had.isEmpty()) live.remove(element)
-                newDels[element] = (newDels[element] ?: emptySet()) + killed
-            }
-        }
+        foldDels(delta, newDels, accumulateKilled = true)
 
         // (c) fence the superseded sources — future ordinary deltas from them are rejected
         deadSources += notice.supersedes
