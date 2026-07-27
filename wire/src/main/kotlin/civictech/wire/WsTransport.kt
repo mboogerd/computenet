@@ -20,6 +20,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The WebSocket transport driver (spec 41 point 4, M5.5): frames from a
@@ -69,6 +70,16 @@ object WsTransport {
         @Volatile
         private var ingress: Propagate<ByteArray>? = null
 
+        /**
+         * T05 finding 7: binary frames arriving before an admitted hello are
+         * correctly refused (nowhere to route them yet), but were previously
+         * unaccounted. Counted here so a peer sending data ahead of its hello
+         * — a protocol violation or a race on reconnect — is observable
+         * without changing the drop itself.
+         */
+        private val preHelloDropCount = AtomicLong()
+        val preHelloDrops: Long get() = preHelloDropCount.get()
+
         /** The current announcement hook — replaced on every (re)hello so reconnects don't leak stale announcers (M10.3). */
         @Volatile
         private var announcement: AutoCloseable? = null
@@ -108,8 +119,10 @@ object WsTransport {
         fun onFrame(buffer: ByteBuffer) {
             val bytes = ByteArray(buffer.remaining()).also(buffer::get)
             // enqueue only — decoding happens on the bridge host; frames
-            // before an admitted hello have nowhere to go and drop
-            ingress?.propagate(bytes)
+            // before an admitted hello have nowhere to go and drop (T05
+            // finding 7: now counted via preHelloDropCount)
+            val current = ingress
+            if (current != null) current.propagate(bytes) else preHelloDropCount.incrementAndGet()
         }
 
         fun onClose() {

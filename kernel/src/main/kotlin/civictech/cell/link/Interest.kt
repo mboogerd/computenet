@@ -206,6 +206,17 @@ interface Scoped<D> {
 }
 
 /**
+ * T05 finding 6: a running count of [sliceTo] refusals — an emission whose
+ * delta is not [Scoped] offered to a non-[Interest.Total] interest. Each
+ * refusal also logs once via `System.err` (matching the current registry
+ * style, e.g. [civictech.cell.host.LocationRegistry]'s hook-failure logging).
+ * The residual per-link-ack gap for a *legitimate* `Scoped`-slices-to-nothing
+ * result is separate and tracked in `concord/corpus/DISPUTES.md` (finding 8)
+ * — this counter is specifically the "shipped whole" bug, now refused.
+ */
+val refusedSliceCount = java.util.concurrent.atomic.AtomicLong()
+
+/**
  * The **one** slice-and-route primitive (PN-6, plan §3 "keep exactly one
  * link/slice mechanism"): restrict [delta] to the sub-delta [interest] admits
  * over [keyOf]. Both the gossip linker ([civictech.cell.replication.Replication],
@@ -215,13 +226,28 @@ interface Scoped<D> {
  * two settings of one knob, not two mechanisms.
  *
  * [Interest.Total] short-circuits to the whole delta (the replication default,
- * byte-identical to no filter); a non-[Scoped] delta also rides whole (only
- * interest-scoped substrates need slicing); `null` means nothing is admitted and
- * the emission is dropped.
+ * byte-identical to no filter); `null` means nothing is admitted and the
+ * emission is dropped. T05 finding 6: a non-[Scoped] delta offered to a
+ * **non-Total** interest used to ride the link whole (`else -> delta`) —
+ * silently breaking "a delta a peer has no interest in never crosses" (spec
+ * 40/42 §Interest-scoped instance sets) for `Replicable`s whose delta doesn't
+ * implement `Scoped` (`PnCounterDelta`, `WatermarkDelta`, `CounterDelta`,
+ * `ListDelta`) yet can join a partial-interest mesh (`PnCounterCell`,
+ * `WatermarkCell`). Now refused — dropped, counted, logged — like a
+ * legitimate `Scoped`-slices-to-nothing result, per
+ * [civictech.cell.data.Replicable]'s KDoc rule.
  */
 @Suppress("UNCHECKED_CAST")
 fun <D> sliceTo(delta: D, interest: Interest, keyOf: (Any?) -> Any?): D? = when {
     interest is Interest.Total -> delta
     delta is Scoped<*> -> (delta as Scoped<D>).within(interest, keyOf)
-    else -> delta
+    else -> {
+        refusedSliceCount.incrementAndGet()
+        System.err.println(
+            "[sliceTo] refused: ${delta?.let { it::class.simpleName }} is not Scoped and interest is not " +
+                "Total (spec 40/42 §Interest-scoped instance sets) — a non-Total mesh requires a Scoped " +
+                "delta; dropping rather than shipping it whole across a partial-interest link"
+        )
+        null
+    }
 }

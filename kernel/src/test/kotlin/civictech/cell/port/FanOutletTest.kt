@@ -21,6 +21,25 @@ class FanOutletTest {
     }
 
     @Test
+    fun `T05 finding 7 - a target-miss on at() is counted, not silently answered into the void`() {
+        val fanOutlet = FanOutlet.create<Consumer<String>>()
+        assertEquals(0L, fanOutlet.targetMisses)
+
+        val missingRef = PortRef.generate()
+        fanOutlet.at(missingRef).provide("test") // no consumer/tap for missingRef
+        assertEquals(1L, fanOutlet.targetMisses)
+
+        fanOutlet.at(missingRef).provide("again") // same ref, second miss — still counted
+        assertEquals(2L, fanOutlet.targetMisses)
+
+        // a resolvable target is not a miss
+        val (portRef, buffer) = fanOutlet.attachBufferingPort()
+        fanOutlet.at(portRef).provide("resolved")
+        assertEquals(listOf("resolved"), buffer)
+        assertEquals(2L, fanOutlet.targetMisses)
+    }
+
+    @Test
     fun `retrieving an existing downstream api returns that entry`() {
         val fanOutlet = FanOutlet.create<Consumer<String>>()
         val (portRef1, buffer1) = fanOutlet.attachBufferingPort()

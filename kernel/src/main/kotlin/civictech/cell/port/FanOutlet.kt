@@ -222,13 +222,35 @@ class FanOutlet<Api : Any>(
         // (spec 40/43 seam 3, 20/21 §Pull) — targeted delivery still bypasses
         // taps/consumers fan-out, unchanged.
         return Proxy.fromClass(clazz) { _, method, args ->
-            val target = consumers[keyOf(portRef)]?.call ?: taps[keyOf(portRef)]?.call ?: Proxy.noop(clazz)
+            val key = keyOf(portRef)
+            val target = consumers[key]?.call ?: taps[key]?.call ?: run {
+                // T05 finding 7: an unresolvable target used to answer into
+                // the void with no signal at all — the delivery path for
+                // baselineTo and every targeted catch-up/StateRequest reply.
+                // A requester that unlinked between request and reply gets
+                // nothing back; a consumer depending on the pull for its
+                // baseline starves silently. Counted, and logged once per
+                // ref so a genuinely leaking miss is observable without
+                // spamming on a routine unlink race.
+                targetMissCount.incrementAndGet()
+                if (loggedTargetMisses.add(portRef)) {
+                    System.err.println("[FanOutlet] at($portRef): no consumer/tap for this target — answered into the void")
+                }
+                Proxy.noop(clazz)
+            }
             val filtered = disclosureFilter(args ?: emptyArray()) ?: return@fromClass null
             Proxy.unwrapInvocationTarget {
                 method.invoke(target, *filtered)
             }
         }
     }
+
+    /** T05 finding 7: count of [at] calls that found no consumer/tap for their target ref. */
+    val targetMisses: Long get() = targetMissCount.get()
+    private val targetMissCount = AtomicLong()
+
+    /** Refs already logged by [at]'s target-miss path — log once per ref, not once per delivery. */
+    private val loggedTargetMisses = ConcurrentHashMap.newKeySet<PortRef>()
 
     override fun subscribe(port: Use<Api>) {
         // every attach path funnels here: handshake installs, Use.fixed links,

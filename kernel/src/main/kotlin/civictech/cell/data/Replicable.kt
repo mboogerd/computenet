@@ -13,6 +13,17 @@ import civictech.cell.port.Use
  * terminate and catch-up replays stay harmless. The mergeable class today:
  * the tagged set family ([SetCell]) and [PnCounterCell]; plain [CounterCell]
  * does not qualify (addition is not idempotent).
+ *
+ * T05 finding 6 — joining a **non-[civictech.cell.link.Interest.Total]** mesh
+ * additionally requires [D] to implement [civictech.cell.link.Scoped]: the
+ * gossip linker's [civictech.cell.link.sliceTo] refuses (drops, counted) a
+ * non-`Scoped` delta rather than shipping it whole across a partial-interest
+ * link — silently shipping it whole would break "a delta a peer has no
+ * interest in never crosses" (spec 40/42 §Interest-scoped instance sets), the
+ * guarantee partitioning/disclosure reasoning rests on. Only
+ * `SetDelta`/`MapDelta` implement `Scoped` today; a `Replicable` whose delta
+ * doesn't (`PnCounterDelta`, `WatermarkDelta`, `CounterDelta`, `ListDelta`)
+ * is safe only on a `Total`-interest (pure replication) mesh.
  */
 interface Replicable<D> : Cell {
     val outlet: Subscribe<Propagate<D>>
