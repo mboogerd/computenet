@@ -287,6 +287,26 @@ Schema contracts live in `concord/schema/*.md` (single-writer,
 schema-change-gated). Cross-process driver (W5) is deferred until a second
 implementation exists.
 
+**Architecture ratchets (T10).** Three of this document's boundary claims are
+executable, not just prose, each wired into the normal test task so it gates
+`./gradlew test`/`check` the same way `concordanceGate` and `docLints` do:
+`NeutralityGateTest` (`concord/src/test/kotlin/civictech/concord/provenance/`)
+fails the build if any `:concord` file outside `civictech.concord.driver.kernel`
+imports `civictech.cell.*`, enforcing the L3 rule above; `DemoSurfaceAllowlistTest`
+(`kernel/src/test/kotlin/civictech/cell/architecture/`) fails if a demo's
+`src/main` reaches past the allowed `civictech.cell` surface (root vocabulary,
+`.host`/`.port`/`.graph`/`.data*`/`.observe`/`.link`/`.wire`/`.consistency`/
+`.control`/`.durability`, plus `civictech.testkit`); `ArchitectureRatchetTest`
+(same directory) pins the current `civictech.cell` package→package import edge
+set against a checked-in baseline
+(`kernel/src/test/resources/architecture/package-edges.txt`) — see
+`90/91` gap `G-63` (all 20 non-leaf `civictech.cell.*` packages form one SCC;
+this is a ratchet, not a claim of acyclicity) — and fails on any *new* edge, while a baseline
+edge no longer present in code is warn-only (delete the stale line by hand;
+the ratchet only ever tightens). To widen any of the three deliberately,
+change the allowlist/baseline in the same PR that adds the edge/import,
+citing why.
+
 ## 6. Demos
 
 All runnable demos serve HTTP + SSE via `DemoShell`; port = first non-flag arg,
