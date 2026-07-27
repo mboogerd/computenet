@@ -197,19 +197,14 @@ class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: 
             // the peer's counterpart. Tag dedup + effective-only emission make the
             // two-way chain cycle-safe; sends park until the peer announces, so a
             // late/returning peer replays full history in order and converges.
+            // Anti-entropy on (re)announce (T07 finding 2): a returning peer's
+            // re-announce re-fires the full on-link catch-up via
+            // Peering.chainOnReannounce; tag idempotence makes the repeat free.
             val chained = mapOf(
                 unionRef("orders", peerRole) to
-                        (orderUnion to orderUnion.outlet.streamTo(routedDelta(unionRef("orders", peerRole)))),
+                        (orderUnion.outlet to orderUnion.outlet.streamTo(routedDelta(unionRef("orders", peerRole)))),
             )
-            // Anti-entropy on (re)announce: a returning peer re-fires the catch-up
-            // hook so the full state-as-delta flows again; tag idempotence makes
-            // the repeat free.
-            registry.onPublish { ref ->
-                // PN-9: catch-up moved to the onLinkedListeners multicast, so a manual
-                // re-announce must fire the full on-link fan-out, not just the single
-                // onLinked slot (the same reconciliation the kernel re-announce sites use).
-                chained[ref]?.let { (cell, linkHandle) -> cell.outlet.linking.fireLinked(linkHandle) }
-            }
+            Peering.chainOnReannounce(registry, chained)
         }
 
         // recover() pre-spawns every known writer (registering its ref + streamTo)
