@@ -1,0 +1,115 @@
+# T10-C architecture ratchet baseline: pinned civictech.cell package->package
+# import edges (kernel/src/main). Generated from the tree at commit c59cd65
+# (post-T03 dead-import sweep). One 'from -> to' per line, sorted.
+#
+# A new edge here means a new cross-package dependency was introduced --
+# either revert it, or add the line here in the same PR, citing why.
+# A baseline edge no longer present in code is a warn-only stale line;
+# delete it by hand once ArchitectureRatchetTest reports it (the ratchet
+# only ever tightens).
+#
+# See kernel/src/test/kotlin/civictech/cell/architecture/ArchitectureRatchetTest.kt
+# and doc/spec/90-roadmap/91-gap-analysis.md G-63 for context.
+cell -> port
+consistency -> cell
+consistency -> control
+consistency -> host
+consistency -> link
+consistency -> port
+consistency -> protocol
+consistency -> proxy
+control -> cell
+control -> host
+control -> link
+control -> port
+control -> protocol
+control -> proxy
+data -> cell
+data -> control
+data -> link
+data -> port
+data -> protocol
+evolve -> cell
+evolve -> host
+evolve -> membrane
+evolve -> port
+evolve -> proxy
+evolve -> verify
+graph -> cell
+graph -> data
+graph -> host
+graph -> link
+graph -> nature
+graph -> port
+host -> cell
+host -> control
+host -> durability
+host -> evolve
+host -> graph
+host -> link
+host -> port
+host -> protocol
+host -> proxy
+host -> wire
+link -> cell
+link -> nature
+link -> port
+link -> protocol
+membrane -> cell
+membrane -> control
+membrane -> link
+membrane -> port
+membrane -> protocol
+membrane -> proxy
+nature -> cell
+nature -> consistency
+nature -> data
+nature -> partition
+observe -> cell
+observe -> data
+observe -> host
+observe -> link
+observe -> port
+partition -> cell
+partition -> control
+partition -> data
+partition -> host
+partition -> link
+partition -> membrane
+partition -> port
+partition -> protocol
+partition -> proxy
+partition -> replication
+partition -> wire
+port -> cell
+port -> control
+port -> link
+port -> protocol
+port -> proxy
+protocol -> cell
+protocol -> link
+protocol -> port
+proxy -> cell
+proxy -> link
+proxy -> protocol
+replication -> cell
+replication -> consistency
+replication -> data
+replication -> host
+replication -> link
+replication -> nature
+replication -> port
+replication -> proxy
+verify -> cell
+verify -> data
+verify -> host
+verify -> port
+wire -> cell
+wire -> control
+wire -> data
+wire -> host
+wire -> link
+wire -> port
+wire -> protocol
+wire -> proxy
+wire -> replication
