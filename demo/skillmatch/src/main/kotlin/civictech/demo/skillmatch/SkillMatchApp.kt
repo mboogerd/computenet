@@ -15,6 +15,7 @@ import civictech.cell.observe.observe
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
+import civictech.inspect.InspectorServer
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
 import java.net.URLDecoder
@@ -216,8 +217,38 @@ class SkillMatchApp(port: Int = 8080) {
         host.observe(refs.market.ref, View.map<String, MarketEntry>())
 
     private val shell = DemoShell(port)
+    private var inspector: InspectorServer? = null
 
     val boundPort: Int get() = shell.boundPort
+
+    /**
+     * Opt-in inspector (`--inspect-port <p>` / `INSPECT_PORT`): serves this
+     * app's live dataflow graph on its own port (97-inspector-plan M0). Off
+     * unless asked for — nothing about the demo changes when it is not.
+     *
+     * The kernel has no cell-name registry (graph-builder handle names live in
+     * the `GraphSpec`, not at runtime), so the app hands the inspector the
+     * names it knows; the observation-sink cells `host.observe` spawns are
+     * unnamed and report `null`, per the contract.
+     */
+    fun startInspector(port: Int = InspectorServer.DEFAULT_PORT): InspectorServer =
+        InspectorServer(
+            registry = registry,
+            hosts = mapOf("skillmatch" to host),
+            port = port,
+            cellNames = mapOf(
+                refs.candSkills.ref to "candSkills",
+                refs.jobSkills.ref to "jobSkills",
+                refs.matches.ref to "matches",
+                refs.matchCounts.ref to "matchCounts",
+                refs.required.ref to "required",
+                refs.qualification.ref to "qualification",
+                refs.gap.ref to "gap",
+                refs.supply.ref to "supply",
+                refs.demand.ref to "demand",
+                refs.market.ref to "market",
+            ),
+        ).start().also { inspector = it }
 
     init {
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
@@ -305,12 +336,44 @@ class SkillMatchApp(port: Int = 8080) {
 
     fun start(): SkillMatchApp = apply { shell.start() }
 
-    fun stop() = shell.stop()
+    fun stop() {
+        inspector?.stop()
+        shell.stop()
+    }
 }
 
 fun main(args: Array<String>) {
-    val app = SkillMatchApp(demoPort(args)).start()
+    val (inspectPort, demoArgs) = splitInspectorPort(args)
+    val app = SkillMatchApp(demoPort(demoArgs)).start()
     println("computenet skillmatch: http://localhost:${app.boundPort}")
+    inspectPort?.let { port ->
+        val inspector = app.startInspector(port)
+        println("computenet inspector: http://localhost:${inspector.boundPort}${InspectorServer.TOPOLOGY_PATH}")
+    }
+}
+
+private const val INSPECT_FLAG = "--inspect-port"
+
+/**
+ * The inspector port — `--inspect-port <p>`, `--inspect-port=<p>`, or the
+ * `INSPECT_PORT` environment variable — and the remaining args. The flag is
+ * stripped because [demoPort] reads the first non-`--` argument as the demo's
+ * own port and would otherwise take the inspector's.
+ */
+private fun splitInspectorPort(args: Array<String>): Pair<Int?, Array<String>> {
+    val rest = mutableListOf<String>()
+    var value: String? = null
+    var i = 0
+    while (i < args.size) {
+        val arg = args[i]
+        when {
+            arg == INSPECT_FLAG -> { value = args.getOrNull(i + 1); i++ }
+            arg.startsWith("$INSPECT_FLAG=") -> value = arg.substringAfter('=')
+            else -> rest += arg
+        }
+        i++
+    }
+    return (value ?: System.getenv("INSPECT_PORT"))?.trim()?.toIntOrNull() to rest.toTypedArray()
 }
 
 private val PAGE = """
