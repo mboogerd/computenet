@@ -388,20 +388,38 @@ class CompositeSink internal constructor(
     private var snapshot: Map<String, Any?> = emptyMap()
 
     init {
-        sinks.forEach { (name, sink) ->
-            values[name] = null
-            // each sink's onChange fires immediately (catch-up) then on every
-            // settled change; both funnel through here under the composite lock
-            // — state assembly stays synchronous, only listener dispatch defers.
-            sink.onChange { v ->
-                synchronized(lock) {
-                    values[name] = v
-                    snapshot = LinkedHashMap(values)
-                    val fired = listeners.toList()
-                    val s = snapshot
-                    dispatchIfOpen { fired.forEach { it(s) } }
+        synchronized(lock) {
+            sinks.forEach { (name, sink) ->
+                // Seed each slot SYNCHRONOUSLY from the sink's materialized
+                // state. Before T08 finding 4 this seeding was implicit: the
+                // `onChange` registration below fired its catch-up inline, so
+                // the composite was fully populated by the time the
+                // constructor returned. Finding 4 made that catch-up an
+                // asynchronous submission on the per-sink dispatcher, which
+                // left `current()` an EMPTY map for a window after
+                // construction — `get(name)` threw "no observe named '<name>'
+                // (available: [])" and the README's "current() gives a
+                // consistent snapshot from any thread" was false at startup
+                // (e.g. slotfinder's `/state` before its first fold landed).
+                // The asynchronous catch-up still arrives and re-writes the
+                // same slot; being the FIRST submission on that sink's
+                // dispatcher it can never land after a newer change, so the
+                // no-stale-after-fresh ordering guarantee is unaffected.
+                values[name] = sink.current()
+                // each sink's onChange fires immediately (catch-up) then on every
+                // settled change; both funnel through here under the composite lock
+                // — state assembly stays serialized, only listener dispatch defers.
+                sink.onChange { v ->
+                    synchronized(lock) {
+                        values[name] = v
+                        snapshot = LinkedHashMap(values)
+                        val fired = listeners.toList()
+                        val s = snapshot
+                        dispatchIfOpen { fired.forEach { it(s) } }
+                    }
                 }
             }
+            snapshot = LinkedHashMap(values)
         }
     }
 
