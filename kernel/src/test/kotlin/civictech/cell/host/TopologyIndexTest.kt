@@ -35,7 +35,7 @@ class TopologyIndexTest {
             repeat(250) {
                 if (live.isNotEmpty() && random.nextBoolean()) {
                     live.values.random(random).unlink()
-                    live.entries.removeIf { (_, link) -> registry.topology.all().none { it.id == link.id } }
+                    live.entries.removeIf { (_, link) -> registry.all().none { it.id == link.id } }
                 } else {
                     val from = nodes.random(random)
                     val to = nodes.random(random)
@@ -47,7 +47,7 @@ class TopologyIndexTest {
                     val actual = live.values.filterTo(mutableSetOf()) {
                         it.from.cell == node.ref || it.to.cell == node.ref
                     }.mapTo(mutableSetOf()) { it.id }
-                    registry.topology.swapSet(node.ref).mapTo(mutableSetOf()) { it.id } shouldBe actual
+                    registry.swapSet(node.ref).mapTo(mutableSetOf()) { it.id } shouldBe actual
                 }
             }
         }
@@ -71,12 +71,12 @@ class TopologyIndexTest {
         val link = (hostA.managementInlet.call.connect(from.ref, "output", to.ref, "input") as LinkResult.Connected).link
         controller.runToIdle()
 
-        registryB.topology.swapSet(from.ref).map { it.id }.toSet() shouldBe setOf(link.id)
-        registryB.topology.swapSet(to.ref).map { it.id }.toSet() shouldBe setOf(link.id)
+        registryB.swapSet(from.ref).map { it.id }.toSet() shouldBe setOf(link.id)
+        registryB.swapSet(to.ref).map { it.id }.toSet() shouldBe setOf(link.id)
 
         link.unlink()
         controller.runToIdle()
-        registryB.topology.swapSet(from.ref) shouldBe emptySet()
-        registryB.topology.swapSet(to.ref) shouldBe emptySet()
+        registryB.swapSet(from.ref) shouldBe emptySet()
+        registryB.swapSet(to.ref) shouldBe emptySet()
     }
 }

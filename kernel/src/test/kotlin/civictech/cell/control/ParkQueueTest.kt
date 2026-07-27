@@ -30,7 +30,7 @@ class ParkQueueTest {
         q.park(2)
 
         // held: nothing has been released; the items are still parked, in order.
-        q.toList() shouldBe listOf(1, 2)
+        q.snapshot() shouldBe listOf(1, 2)
         q.size shouldBe 2
 
         q.drain() shouldBe listOf(1, 2)
@@ -48,7 +48,7 @@ class ParkQueueTest {
 
         sent shouldBe listOf(1, 2)
         // the rejected head and its successors stay parked, in order, for next time
-        q.toList() shouldBe listOf(3, 4)
+        q.snapshot() shouldBe listOf(3, 4)
         // a later attempt resumes from where it stopped, then drains clean
         q.drainWhile { head -> true.also { sent += head } }
         sent shouldBe listOf(1, 2, 3, 4)

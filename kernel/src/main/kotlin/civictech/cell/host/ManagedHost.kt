@@ -789,8 +789,8 @@ open class ManagedHost(
                 // inlet is a declared CycleHead (a FeedbackInlet). Cross-host
                 // cycles are not locally visible here; they fall to the runtime
                 // hop guard (20/22) instead.
-                registry?.topology?.let { topology ->
-                    if (topology.wouldCloseCycle(from, to)) {
+                registry?.let { reg ->
+                    if (reg.wouldCloseCycle(from, to)) {
                         // Headedness (spec 10/13): the closing edge MUST land on a
                         // declared CycleHead.
                         if (inlet !is FeedbackInlet<*>) {
@@ -904,7 +904,9 @@ open class ManagedHost(
 
     // wouldCloseCycle: moved onto TopologyIndex itself (RS-8.4) — it only
     // ever read its `topology` parameter, so it fits as a member; call site
-    // above is now `topology.wouldCloseCycle(from, to)`.
+    // above is now `reg.wouldCloseCycle(from, to)`, routed through
+    // LocationRegistry's read-only projection (T03) rather than the raw
+    // TopologyIndex (which `LocationRegistry.topology` no longer exposes).
 
     /**
      * FU-8 — is there a *damping witness* for a cycle closing on [head], fed by

@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class LocationRegistry {
 
-    val topology = TopologyIndex()
+    private val topology = TopologyIndex()
 
     sealed interface Location
     data class Local(val host: ManagedHost) : Location
@@ -114,6 +114,15 @@ class LocationRegistry {
 
     fun localLinks(): Set<TopologyLink> = topology.all().filterTo(mutableSetOf()) { it.id in localLinkIds }
 
+    /** Every inbound or outbound link incident on the full [ref] (read-only [TopologyIndex] projection, T03). */
+    fun swapSet(ref: CellRef): Set<TopologyLink> = topology.swapSet(ref)
+
+    /** Would a `from -> to` edge close a cycle already visible in this index? (read-only [TopologyIndex] projection, T03). */
+    fun wouldCloseCycle(from: CellRef, to: CellRef): Boolean = topology.wouldCloseCycle(from, to)
+
+    /** Every live topology edge, local and mirrored (read-only [TopologyIndex] projection, T03). */
+    fun all(): Set<TopologyLink> = topology.all()
+
     internal fun link(link: TopologyLink) {
         localLinkIds += link.id
         topology.linked(link)
@@ -127,8 +136,8 @@ class LocationRegistry {
     }
 
     /** Announcement-fed remote edge; deliberately does not re-announce. */
-    fun mirrorLink(link: TopologyLink) = topology.linked(link)
-    fun mirrorUnlink(id: java.util.UUID) = topology.unlinked(id)
+    internal fun mirrorLink(link: TopologyLink) = topology.linked(link)
+    internal fun mirrorUnlink(id: java.util.UUID) = topology.unlinked(id)
 
     private fun notifyLink(listener: (TopologyLink) -> Unit, link: TopologyLink) {
         try { listener(link) } catch (e: Exception) {
@@ -158,7 +167,7 @@ class LocationRegistry {
 
     /** Parked invocations awaiting a [publish] for [ref] (test/introspection surface). */
     fun parkedFor(ref: CellRef): List<HostedPortInvocation> =
-        parked[ref]?.let { synchronized(it) { it.toList() } } ?: emptyList()
+        parked[ref]?.let { synchronized(it) { it.snapshot() } } ?: emptyList()
 
     /**
      * Optimistic send with lazy re-resolution: enqueue on the located host or
