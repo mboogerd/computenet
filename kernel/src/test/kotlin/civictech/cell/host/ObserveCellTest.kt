@@ -352,6 +352,39 @@ class ObserveCellTest {
         sink.close()
     }
 
+    /**
+     * `Cell.onDeactivate` is not only a despawn hook: `ManagedHost` calls it on
+     * the `SupervisionPolicy.RESTART` path (immediately followed by
+     * `onActivate`) and on host drain before a migration re-activates the cell
+     * elsewhere. T08 finding 4 wired `ObserveCell.close()` — which shuts the
+     * listener-dispatch executor down for good — straight into it, so ONE
+     * restart or migration left the sink permanently deaf: the fold kept
+     * working and `current()` stayed correct, but every registered listener
+     * silently stopped firing forever. Exactly the silent-degrade shape T08
+     * set out to remove. `onActivate` now reopens the dispatcher.
+     */
+    @Test
+    fun `a sink still notifies after the deactivate-reactivate cycle a restart or migration performs`() {
+        val host = ManagedHost()
+        val sink = ObserveCell(View.set<Int>())
+        host.managementInlet.call.spawn(sink)
+
+        val fires = java.util.Collections.synchronizedList(mutableListOf<Set<Int>>())
+        sink.onChange { fires += it }
+        awaitUntil("registration catch-up") { fires.isNotEmpty() }
+
+        val ctx = object : civictech.cell.CellContext {}
+        sink.onDeactivate(ctx)
+        sink.onActivate(ctx)
+
+        sink.inlet.call.propagate(SetDelta(adds = mapOf(1 to setOf(freshTag()))))
+        awaitUntil("post-reactivation change still reaches the listener") { fires.size >= 2 }
+        fires.last() shouldBe setOf(1)
+        sink.current() shouldBe setOf(1)
+
+        sink.close()
+    }
+
     @Test
     fun `a blocking listener delays only its own sink, never the host's dispatch of other cells`() {
         val host = ManagedHost()
