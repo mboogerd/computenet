@@ -139,6 +139,11 @@ not replayed). Server sends `heartbeat` every 15 s.
 ## Fixture
 
 `inspect/ui/fixtures/topology.json` — a `TopologySnapshot` of the skillmatch
-demo graph (13 cells, 3 hosts), checked in by M0-FE and used by unit tests and
-for offline development. Keep it conformant to this contract; the M0 evaluator
-diffs it against a real server response.
+demo graph (16 cells: 10 named pipeline cells + 6 `ObserveCell` sinks, all on
+a single `skillmatch` host — the M0-FE draft guessed 13 cells across 3
+synthetic hosts before a real server existed; M0-EVAL reconciled it against
+the real `GET /api/inspect/topology` response), checked in by M0-FE and used
+by unit tests and for offline development. Keep it conformant to this
+contract. M1-FE needing multi-host coverage (e.g. for the process-host hull
+toggle) should add a second, clearly-labelled synthetic multi-host fixture
+alongside this golden one rather than re-inventing it.
