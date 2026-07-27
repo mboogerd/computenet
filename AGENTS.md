@@ -50,10 +50,9 @@ for documentation maintenance.
   intentionally transitive.
 - `gen/`: KSP processors (`@Contract`, `@CellBase`, `@Key`, `@Protocol`) and
   descriptor/proxy generation. Generator behavior is part of the runtime
-  contract; test diagnostics as well as generated output.
-- `gen-test/`: codegen fixture module (currently no sources — its build script
-  runs KSP). `:kernel:compileKotlin` depends on this module's tests, so
-  generator failures surface as kernel compile failures.
+  contract; test diagnostics as well as generated output. `:kernel:compileKotlin`
+  depends on `:gen:test`, so generator regressions surface as kernel compile
+  failures.
 - `testkit/`: shared test scaffolding (`SimWorld`, `awaitUntil`, `HttpProbe`,
   `JvmPeer`) consumed as `testImplementation` by `:kernel` and every demo.
 - `wire/`: the concrete WebSocket transport. Keep transport dependencies out of
