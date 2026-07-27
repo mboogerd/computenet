@@ -1,6 +1,6 @@
 # 53 — Deployment as Evolution
 
-> **Status**: Core implemented (M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`. The full swap transaction, contract-granular effect suppression, state-transform tiers, and `PromotionPolicy` are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-11/I-17/I-21/I-27), unimplemented.
+> **Status**: Implemented (core, M9): shadow → judge → buffered swap → rollback-by-symmetry; `cell.evolve.{Shadow,Promotion,StateMigrating,Effectful}`. The full swap transaction, contract-granular effect suppression, state-transform tiers, and `PromotionPolicy` are decided design ([93](../90-roadmap/93-feature-interactions.md) I-2/I-9/I-11/I-17/I-21/I-27), unimplemented.
 > **Sources**: ADR — Cellular Software Development Process (deployment model, versioning), ADR 0 (§7)
 > **Implementation**: `civictech.cell.evolve` (`Shadow`, `Promotion`, `StateMigrating`, `Effectful`); `ShadowPromotionTest`
 

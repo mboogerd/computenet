@@ -1,6 +1,6 @@
 # 96 — Incremental-Engines Plan (E-milestones)
 
-**Status**: Proposed — no E-item is committed work until scheduled.
+**Status**: Living — proposed forward queue; no E-item is committed work until scheduled.
 **Sources**: `doc/research/incremental-engines/` (deep research 2026-07-23: DBSP/Feldera,
 Timely/Differential/Materialize, LASP/CRDT-lattice; per-fact provenance in docs 01-05);
 backlog `06-or-map-tagged-map-delta.md` and `consistent-multiview-snapshot.md` (absorbed
