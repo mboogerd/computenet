@@ -314,6 +314,21 @@ class LocationRegistry {
      * bound to `location` (not read back from [locations]), and by the time
      * that hook fires later, [locations] has long since been assigned here
      * — so [replay]'s `locations[ref] == expected` check still passes.
+     *
+     * That last sentence holds for the *queued* hook, but not for [send]'s
+     * `runNow` path (review addendum): [ManagedHost.onIntakeAvailable] fires
+     * the listener **synchronously on this thread** when the host is no
+     * longer SATURATED by the time the hook goes in — i.e. exactly when the
+     * host crossed low-water in the window between throwing
+     * `IntakeSaturatedException` and the registration. That immediate
+     * [replay] re-enters this monitor reentrantly and bails on
+     * `locations[ref] != expected`, since [locations] is not assigned yet —
+     * so nothing re-drives the retained remainder and it strands until the
+     * next [deliver]/[publish] for this ref. [deliver] already covers the
+     * same window by re-registering the hook *after* it parks (see its own
+     * comment); this is the missing analogue: re-register once [locations]
+     * is assigned, so the immediate and the deferred wake-up alike find
+     * [replay]'s `locations[ref] == expected` guard satisfied.
      */
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
@@ -321,6 +336,7 @@ class LocationRegistry {
             queue.drainWhile { send(location, it) }
             locations[ref] = location
             indexAdd(ref)
+            if (!queue.isEmpty()) (location as? Local)?.host?.onIntakeAvailable { replay(ref, location) }
         }
     }
 

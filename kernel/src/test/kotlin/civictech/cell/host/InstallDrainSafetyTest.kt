@@ -99,4 +99,63 @@ class InstallDrainSafetyTest {
         target.received shouldBe listOf("first", "second", "third")
         registry.parkedFor(target.ref).shouldBeEmpty()
     }
+
+    /**
+     * Review addendum to T05 finding 1. `install()` keeps the pre-fix
+     * drain-before-publish ordering (correctly — publishing first breaks
+     * per-ref FIFO, `RelocationTest`'s concurrent-relocation stress test
+     * catches that directly). But that ordering leaves a lost wake-up
+     * `drainWhile` alone does not close:
+     *
+     * `send`'s SATURATED branch registers `host.onIntakeAvailable { replay }`,
+     * and `onIntakeAvailable` runs the listener **synchronously** when the
+     * host is no longer SATURATED by the time the hook is registered — the
+     * host crossed low-water in the window between the throw and the
+     * registration. That immediate `replay` re-enters `install`'s monitor and
+     * bails on its `locations[ref] == expected` guard, because `locations`
+     * has not been assigned yet. Result: the retained remainder strands with
+     * no hook at all, until some later `deliver`/`publish` happens to
+     * re-drive it. `deliver` already guards the identical window by
+     * re-registering after it parks; `install` did not.
+     *
+     * This host models exactly that window: it refuses the first offer with
+     * `IntakeSaturatedException`, then accepts — while its real intake state
+     * stays OPEN, so `onIntakeAvailable` always takes the synchronous
+     * `runNow` path. Pre-fix nothing is ever delivered; post-fix the whole
+     * batch drains, in order, before `publish` returns.
+     */
+    @Test
+    fun `install() re-registers the intake hook after publishing, so a runNow wake-up during the drain is not lost`() {
+        class RefuseOnceHost(scheduler: HostScheduler) : ManagedHost(scheduler = scheduler) {
+            private val refusalsLeft = java.util.concurrent.atomic.AtomicInteger(1)
+            val recorded = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+            override fun enqueueHostedInvocation(hostedInvocation: HostedPortInvocation) {
+                // one refusal, then open — the low-water crossing that lands
+                // in `send`'s throw -> onIntakeAvailable registration window.
+                if (refusalsLeft.getAndDecrement() > 0) throw IntakeSaturatedException(ref)
+                @Suppress("UNCHECKED_CAST")
+                recorded += (hostedInvocation.invocation.args[0] as Owned<String>).take()
+            }
+        }
+
+        val controller = SimulationController()
+        val registry = LocationRegistry()
+        val host = RefuseOnceHost(controller.scheduler())
+
+        val targetRef = CellRef(UUID.randomUUID())
+        val api = registryApi(registry, targetRef)
+        api.accept(Owned("first"))
+        api.accept(Owned("second"))
+        api.accept(Owned("third"))
+        registry.parkedFor(targetRef).size shouldBe 3
+
+        registry.publish(targetRef, host)
+
+        // pre-fix: the first send is refused, the synchronous replay bails on
+        // the not-yet-assigned location, and all three strand unparked-but-
+        // undelivered with no hook left to wake them.
+        host.recorded shouldBe listOf("first", "second", "third")
+        registry.parkedFor(targetRef).shouldBeEmpty()
+    }
 }
