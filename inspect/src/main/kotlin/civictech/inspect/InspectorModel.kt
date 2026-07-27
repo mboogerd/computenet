@@ -55,8 +55,19 @@ internal class InspectorModel(
      */
     fun sync() = synchronized(lock) {
         registry.localRefs().forEach { ref -> nodes.getOrPut(ref) { nodeOf(ref) } }
-        registry.topology.all().forEach { link -> edges.getOrPut(link.id) { edgeOf(link) } }
+        topologyLinks().forEach { link -> edges.getOrPut(link.id) { edgeOf(link) } }
     }
+
+    /**
+     * Every live topology edge — the link half of the initial sync.
+     *
+     * Single point of contact with the registry's topology projection, on
+     * purpose: this branch is cut from a base where `LocationRegistry.topology`
+     * is public (as M0-BE's ticket specifies). `main` has since made that field
+     * private and exposes read-only projections instead, so on merge this body
+     * becomes `registry.all()` — one line, one place.
+     */
+    private fun topologyLinks(): Set<TopologyLink> = registry.topology.all()
 
     fun snapshot(): TopologySnapshot = synchronized(lock) {
         TopologySnapshot(seq, nodes.values.toList(), edges.values.toList())
