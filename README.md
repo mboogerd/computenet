@@ -182,7 +182,7 @@ specification), [AGENTS.md](AGENTS.md) (contributor/agent conventions).
 ## Troubleshooting
 
 - `:kernel` fails to compile after touching `gen/`: `:kernel:compileKotlin`
-  depends on `:gen-test:test`, so a generator regression surfaces there first.
+  depends on `:gen:test`, so a generator regression surfaces there first.
 - `./gradlew check` fails in `:concord` with a concordance lint: a scenario's
   `covers:` id and the spec drifted; regenerate the matrix with
   `./gradlew :concord:concordance` and fix the dangling id — never hand-edit

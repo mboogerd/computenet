@@ -25,7 +25,7 @@ checks the implementation against requirement ids embedded in the spec.
                           │  │
                   :wire ──┘  └── :concord
                     ▲
-                    │        :demo:shell ──► :kernel
+                    │        :demo:shell (no :kernel dep — pure HTTP/SSE plumbing)
       :demo:shopping┤            ▲
       :demo:exchange┘            │  (every runnable demo depends on :demo:shell)
       :demo:{agora,slotfinder,skillmatch,tiering,backlog-triage}
@@ -34,19 +34,22 @@ checks the implementation against requirement ids embedded in the spec.
 | Module | Purpose | Depends on (main scope) |
 |---|---|---|
 | `:nature` | Descriptor/nature vocabulary shared by `:gen` (processor-time) and `:kernel` (runtime): `ContractDescriptor`, `CellDescriptor`, `NatureVector`/`NatureAxis`, `Manifest`, `ContractRegistry`, `StableHash`. | — |
-| `:gen` | KSP processor: `@Contract`/`@CellBase`/`@Key`/`@Protocol` → generated descriptor tables, AOT proxies, port-id constants, `<Name>CellBase` classes. | `:nature`, kotlinpoet, ksp-api |
-| `:gen-test` | Codegen fixture module — currently **zero sources**; its build script runs KSP to prove generation compiles. `:kernel:compileKotlin` depends on `:gen-test:test`, so generator regressions fail before kernel compiles. | `:gen` (test) |
+| `:gen` | KSP processor: `@Contract`/`@CellBase`/`@Key`/`@Protocol` → generated descriptor tables, AOT proxies, port-id constants, `<Name>CellBase` classes. `:gen`'s own test suite (`ContractProcessorTest`, `NatureDescriptorSweepTest`) is the real generator-regression gate; `:kernel:compileKotlin` depends on `:gen:test`, so generator regressions fail before kernel compiles. | `:nature`, kotlinpoet, ksp-api |
 | `:kernel` | The entire cell model and runtime (see §2). Transport-dependency-free by policy. | `api(:nature)`, `:gen` (+ksp), coroutines, kotlinx-serialization |
 | `:testkit` | Shared test scaffolding: `SimWorld`, `awaitUntil`, `HttpProbe`, `JvmPeer`. Lives in `src/main` so a plain project dep reaches it from consumers' test source sets. | `api(:kernel)`, `api(junit)` |
 | `:wire` | The one concrete transport: `WsTransport` over Java-WebSocket. Another transport = another small module behind the same kernel bridge cells. | `:kernel`, Java-WebSocket |
 | `:concord` | Executable specification / conformance suite (see §5). | `:kernel`, kotlinx-serialization; kaml (test) |
-| `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo. Not an application itself. | `:kernel` |
+| `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo. Not an application itself. `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
 | `:demo:*` (7 apps) | Demo applications (see §6). Only `:demo:shopping` and `:demo:exchange` use `:wire`; only `:demo:agora` and `:demo:backlog-triage` define their own KSP cells; only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
 
-Non-module directories: `buildSrc/` (one convention plugin,
-`buildsrc.convention.kotlin-jvm`: JDK 21 toolchain, JUnit platform, test heap
-1g / forkEvery 80 — bounded because `ProtocolSupport` keys ports in a
-JVM-global map), `scripts/` (`stage-preview.sh`, `plan-orchestrator/`),
+Non-module directories: `buildSrc/` (two convention plugins —
+`buildsrc.convention.kotlin-jvm`: JDK 21 toolchain, JUnit platform, shared test
+stack (kotest-assertions, JUnit, kotlin-test), test heap 2g / forkEvery 80
+(bounded because `ProtocolSupport` keys ports in a JVM-global map), and a
+5-minute-per-test-method timeout backstop; `buildsrc.convention.ksp-cell`:
+the KSP plugin + `implementation`/`ksp(project(":gen"))` + the generated-source
+dir, for cell-authoring modules (`:kernel`, `:demo:agora`,
+`:demo:backlog-triage`)), `scripts/` (`stage-preview.sh`, `plan-orchestrator/`),
 `backlog/` (idea inbox, one file per prospective feature), `bugs/` (fixed-defect
 reports), `doc/` (see §7), `legacy/` and `runtime/` (**untracked, sources
 deleted — only stale build output; ignore them**).
@@ -276,8 +279,9 @@ reference), `generator`) → L4 concordance + lints.
 `concord/corpus/DISPUTES.md` is the honesty ledger: requirements that cannot be
 checked honestly are filed there, never weakened into a passing scenario.
 `./gradlew :concord:check` runs `concordanceGate`, which fails the build on a
-dangling `covers:` id or orphan scenario. Profiles:
-`-Pconcord.profiles=core,dist,dur`; generative depth `-Pconcord.gen.instances=N`.
+dangling `covers:` id or orphan scenario. Profiles default to
+`core,dist,dur` (the full corpus); local fast loops opt *out* with
+`-Pconcord.profiles=core`. Generative depth: `-Pconcord.gen.instances=N`.
 Schema contracts live in `concord/schema/*.md` (single-writer,
 schema-change-gated). Cross-process driver (W5) is deferred until a second
 implementation exists.

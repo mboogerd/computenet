@@ -141,10 +141,10 @@ Typical commands:
 
 ```bash
 ./gradlew :kernel:test --tests 'fully.qualified.TestName'
-./gradlew :gen:test :gen-test:test
+./gradlew :gen:test
 ./gradlew :wire:test
-./gradlew :concord:test                          # acceptance corpus (core profile)
-./gradlew :concord:test -Pconcord.profiles=core,dist,dur
+./gradlew :concord:test                          # acceptance corpus (core, dist, dur — the default)
+./gradlew :concord:test -Pconcord.profiles=core   # fast local loop, core only
 ./gradlew :demo:shopping:test
 ./gradlew :demo:exchange:test                    # composition exit gate
 ./gradlew :demo:agora:test
