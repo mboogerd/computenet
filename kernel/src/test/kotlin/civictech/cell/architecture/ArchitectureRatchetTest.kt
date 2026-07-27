@@ -99,6 +99,15 @@ class ArchitectureRatchetTest {
         val actual = scanKernelPackageEdges(kernelMainRoot)
         val baseline = parseBaseline(baselineFile)
 
+        // Non-vacuity: a ratchet that silently scans nothing (moved sources, a
+        // changed test working directory) would pass forever while enforcing
+        // nothing. The real tree has ~100 edges; any collapse toward zero means
+        // the scan broke, not that the kernel was untangled.
+        assertTrue(actual.size > baseline.size / 2) {
+            "scanned only ${actual.size} package edges under ${kernelMainRoot.path} against a " +
+                "${baseline.size}-edge baseline — the scan is broken (wrong root?), not the ratchet"
+        }
+
         val newEdges = (actual - baseline).sortedBy { it.toString() }
         val staleEdges = (baseline - actual).sortedBy { it.toString() }
 

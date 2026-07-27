@@ -81,7 +81,16 @@ class DemoSurfaceAllowlistTest {
         val root = repoRoot()
         val violations = mutableListOf<String>()
 
-        demoMainKotlinFiles(root).forEach { file ->
+        val scanned = demoMainKotlinFiles(root)
+        // Non-vacuity: `demoMainKotlinFiles` degrades to an empty list when the
+        // demo tree cannot be located, which would make this gate pass forever
+        // while checking nothing.
+        assertTrue(scanned.size >= 10) {
+            "scanned only ${scanned.size} demo main sources under ${root.path}/demo — the walk is " +
+                "broken (wrong repo root?), not the demo tree"
+        }
+
+        scanned.forEach { file ->
             file.readLines().forEachIndexed { index, line ->
                 val match = cellImport.find(line) ?: return@forEachIndexed
                 val importPath = match.groupValues[1]
