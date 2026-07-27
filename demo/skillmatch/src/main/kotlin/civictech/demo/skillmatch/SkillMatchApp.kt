@@ -14,6 +14,7 @@ import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
+import civictech.demo.shell.esc
 import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
@@ -266,7 +267,6 @@ class SkillMatchApp(port: Int = 8080) {
     private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
-        fun esc(s: String) = "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
         fun grouped(pairs: List<Pair<String, String>>): String =
             pairs.groupBy({ it.first }, { it.second }).toSortedMap()
                 .entries.joinToString(",", "{", "}") { (owner, skills) ->

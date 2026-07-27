@@ -15,6 +15,7 @@ import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
+import civictech.demo.shell.esc
 import civictech.demo.shell.respond
 import com.sun.net.httpserver.HttpExchange
 import java.io.Serializable
@@ -223,7 +224,6 @@ class TieringApp(port: Int = 8080) {
     private fun broadcast() = shell.broadcast { stateJson() }
 
     private fun stateJson(): String {
-        fun esc(s: String) = "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
         fun num(d: Double) = "%.4f".format(Locale.ROOT, d)
 
         val items = itemsView.current()

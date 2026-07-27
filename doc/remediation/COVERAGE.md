@@ -51,7 +51,7 @@ Status legend: ✅ ticketed · ⏸ deferred (tracked) · ✖ excluded (reasoned)
 | — full `MeshLinker` extraction (M/L) | ⏸ | Chosen against for now: medium-risk typing across `Stamped`-vs-plain outlets; the T07 pairing tests make future drift loud, which was the actual harm. |
 | emit-or-absorb rule ×5, 3 without ack | ✅ | T05-B |
 | shopping/exchange peer-bootstrap semantic copy (re-announce rule) | ✅ | T07-B (`Peering.chainOnReannounce`) |
-| — cosmetic scaffold (Wire ADT, arg parsing) | ✅/✖ | arg-parse helper: T12-E; the tiny `Wire` ADT stays per-demo (2 files, 4 lines, no drift risk). |
+| — cosmetic scaffold (Wire ADT, arg parsing) | ✅/✖ | arg-parse helper: T12-E, migrated in `agora`/`backlog-triage`; `shopping`/`exchange` left on their local `value(flag)` copies per T12's own contingency — both files are T07's peering-scaffold `Main.kt`s, mid-flight in the same phase when T12 ran, so migrating them belongs to a fast follow-up once T07 lands. The tiny `Wire` ADT stays per-demo (2 files, 4 lines, no drift risk). |
 | `QuorumSetCell` reimplements `AdvertisedLedger` | ✅ | T07-C |
 | Pointwise-max ×3 with two identities; `TagState` del-fold copy | ✅ | T07-D |
 | — full `Lattice<T>` interface (L) | ✖ | Auditor's own judgment: over-scoped for a research runtime; touches wire-serialized types. |
@@ -70,6 +70,7 @@ Status legend: ✅ ticketed · ⏸ deferred (tracked) · ✖ excluded (reasoned)
 | No CI + concord profile default skips dist/dur | ✅ | T01-B/C |
 | Wire smoke: port re-bind race + wall-clock backoff | ✅ | T12-D |
 | — grow wire suite toward semantic invariants (L) | ⏸ | T06-E adds the wire-thread conformance test; a full wire semantic suite is future work once a second transport exists. |
+| — reconnect bounded attempt ceiling / surfaced give-up state | ✖ | T12-D's own scope line: `WsConnection`'s reconnect loop retries forever by design (ponytail-flagged in `WsTransport.kt`); a ceiling or an observable "gave up" signal is unrequested product behavior, not a test-infra fix — out of scope for T12. |
 | Soft-timeout awaits | ✅ | T12-B |
 | `@Covers` requirement-id traceability in JVM tests (LOW) | ⏸ | Real but interacts with concord scanner design; revisit after the T02 density lint changes the coverage picture. |
 
