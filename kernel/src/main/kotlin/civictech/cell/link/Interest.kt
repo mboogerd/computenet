@@ -1,8 +1,6 @@
 package civictech.cell.link
 
 import java.io.Serializable
-import civictech.cell.partition.PartitionedCell
-import civictech.cell.partition.PartitionedShardSet
 
 /**
  * A per-instance demand predicate over the delta/key space (spec 40/42

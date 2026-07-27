@@ -40,10 +40,9 @@ class ProxyGenerationTest {
     }
 
     @Test
-    fun `standard proxy behaviors (noop, buffering, throwing, callback) resolve through the registry`() {
+    fun `standard proxy behaviors (noop, buffering, callback) resolve through the registry`() {
         java.lang.reflect.Proxy.isProxyClass(noop<Consumer<Int>>().javaClass) shouldBe false
         java.lang.reflect.Proxy.isProxyClass(buffering<Consumer<Int>>(mutableListOf()).javaClass) shouldBe false
-        java.lang.reflect.Proxy.isProxyClass(throwing<Consumer<Int>>().javaClass) shouldBe false
         java.lang.reflect.Proxy.isProxyClass(callback<Consumer<Int>> { }.javaClass) shouldBe false
     }
 }

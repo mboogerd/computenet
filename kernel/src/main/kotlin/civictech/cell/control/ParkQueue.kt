@@ -1,7 +1,5 @@
 package civictech.cell.control
 
-import civictech.cell.partition.PartitionedShardSet
-
 /**
  * ParkQueue — the append-in-order / hold / drain-once primitive (PN-11).
  *
@@ -19,19 +17,23 @@ import civictech.cell.partition.PartitionedShardSet
  * the ordered hold and the drain, so the drain-once discipline lives in one place
  * (the control: a drain-twice or hold-leak here diverges the migration/flip pins).
  *
- * It implements [MutableList] by delegation so the existing [Buffering]
- * `InvocationHandler` appends to it unchanged and the location-park's
- * `synchronized(queue)` inspection still works; [park] is the intent-named alias
- * for [MutableList.add]. Prefer [park]/[drain]/[drainWhile] over hand-rolled
- * iterate-and-clear — that hand-rolling is exactly what this unifies.
+ * Exposes only the intent-named surface below (T03 — no longer `MutableList`
+ * by delegation): a bare `by items` let any caller `clear()`/`remove()`/
+ * `removeAt()` a park queue directly — precisely the "silently drop parked
+ * exclusives" operation the project bans (`Owned`/`Leased` payloads may sit
+ * in a `parked` `Invocation`). [Buffering] takes a `(T) -> Unit` recorder now,
+ * so its callers pass `queue::park` instead of the queue itself; every other
+ * call site already used [park]/[drain]/[drainWhile]. [snapshot] is the
+ * read-only replacement for what used to be free `Iterable`/`List` access
+ * (`toList()`, iteration, `size`, `isEmpty()`).
  */
 class ParkQueue<T> private constructor(
     private val items: MutableList<T>,
-) : MutableList<T> by items {
+) {
 
     constructor() : this(mutableListOf())
 
-    /** Append in arrival order (the hold). Intent-named alias for [add]. */
+    /** Append in arrival order (the hold). Intent-named alias for `MutableList.add`. */
     fun park(item: T) {
         items.add(item)
     }
@@ -61,4 +63,13 @@ class ParkQueue<T> private constructor(
             items.removeAt(0)
         }
     }
+
+    /** Current park count, without draining. */
+    val size: Int get() = items.size
+
+    /** True iff nothing is currently parked. */
+    fun isEmpty(): Boolean = items.isEmpty()
+
+    /** A read-only copy of what's currently parked, in park order — inspection only, never a mutation handle. */
+    fun snapshot(): List<T> = items.toList()
 }

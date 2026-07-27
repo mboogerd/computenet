@@ -5,7 +5,6 @@ import civictech.cell.UuidSerializer
 import kotlinx.serialization.SerialName
 import java.io.Serializable
 import java.util.*
-import civictech.cell.data.delta.MintedTags
 
 /**
  * Immutable identifier of a [Port]. [cell] is the owning cell where known;

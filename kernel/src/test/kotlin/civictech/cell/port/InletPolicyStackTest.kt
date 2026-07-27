@@ -8,13 +8,14 @@ import civictech.cell.MessageContext
 import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.consistency.WaveFrontier
+import civictech.cell.proxy.Invocation
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.*
 
 /**
- * PN-9: the inlet policy chain. Fixed tiers ADMIT → GATE → ALIGN → ACTIVATE run
+ * PN-9: the inlet policy chain. Fixed tiers ADMIT → ALIGN → ACTIVATE run
  * in tier order regardless of install order; at most one ALIGN; a dropping ADMIT
  * that does not mint a Progress absorb-ack (the CP-A3 law) stalls a downstream
  * ALIGN frontier.
@@ -23,8 +24,46 @@ import java.util.*
  * source (srcId, n) fans through relay A and relay B, each re-stamping its own
  * outlet as `sourcePort` while keeping the wave timestamp — so the frontier sees
  * two edges of the same wave, exactly as a real fan-in join does.
+ *
+ * [HoldingProbe] is a local, test-only ADMIT-tier double (the production
+ * GATE tier of `PolicyTier` this stress-test originally exercised via `Gate`
+ * had zero production installs and was deleted, T03) that holds invocations
+ * FIFO and releases them on demand — kept here only to exercise
+ * multi-ADMIT-tier chain composition (two ADMIT-tier stages plus one ALIGN)
+ * and to confirm install-order independence still holds with more than one
+ * ADMIT policy.
  */
 class InletPolicyStackTest {
+
+    /** ADMIT-tier test double: holds invocations FIFO after [close], draining them in arrival order on [open]. */
+    private class HoldingProbe : InletPolicy {
+        override val tier get() = PolicyTier.ADMIT
+
+        private lateinit var release: (Invocation) -> Unit
+        private val held = ArrayDeque<Invocation>()
+        private var isOpen = true
+
+        override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
+            this.release = release
+        }
+
+        override fun offer(invocation: Invocation) {
+            if (isOpen) release(invocation) else held.addLast(invocation)
+        }
+
+        fun close() {
+            isOpen = false
+        }
+
+        fun open() {
+            isOpen = true
+            while (held.isNotEmpty()) release(held.removeFirst())
+        }
+
+        override fun reset() {
+            held.clear()
+        }
+    }
 
     private val consumerInt = @Suppress("UNCHECKED_CAST") (Consumer::class.java as Class<Consumer<Int>>)
     private val consumerPair = @Suppress("UNCHECKED_CAST") (Consumer::class.java as Class<Consumer<Pair<String, Int>>>)
@@ -56,7 +95,7 @@ class InletPolicyStackTest {
 
     /**
      * Runs [waves] through the diamond into one inlet carrying the policies named
-     * in [order] (installed in that order). Arm delivery order per wave and gate
+     * in [order] (installed in that order). Arm delivery order per wave and hold
      * cycling are driven by [seed]. Returns the served observations.
      */
     private fun run(
@@ -77,10 +116,10 @@ class InletPolicyStackTest {
             }
         })
 
-        val gate = Gate()
+        val hold = HoldingProbe()
         val policies: Map<String, InletPolicy> = mapOf(
             "admit" to admit(mintsProgressAck, dropB),
-            "gate" to gate,
+            "hold" to hold,
             "align" to WaveFrontier(GlitchFreeCell.WaveMode.WAIT),
         )
         order.forEach { inlet.install(policies.getValue(it)) }
@@ -93,13 +132,13 @@ class InletPolicyStackTest {
         val srcId = UUID.randomUUID()
         val dummy = PortRef.generate()
         for (n in 1..waves) {
-            // GATE exercise: occasionally hold, then drain in FIFO before the next wave
-            val cycleGate = "gate" in order && rnd.nextInt(3) == 0
-            if (cycleGate) gate.close()
+            // HoldingProbe exercise: occasionally hold, then drain in FIFO before the next wave
+            val cycleHold = "hold" in order && rnd.nextInt(3) == 0
+            if (cycleHold) hold.close()
             val arms = if (rnd.nextBoolean()) listOf(relayA, relayB) else listOf(relayB, relayA)
             val ctx = MessageContext(Timestamp(srcId, n.toLong()), dummy)
             arms.forEach { relay -> CurrentContext.with(ctx) { relay.inlet.call.provide(n) } }
-            if (cycleGate) gate.open()
+            if (cycleHold) hold.open()
         }
         return out
     }
@@ -114,11 +153,11 @@ class InletPolicyStackTest {
         obs.groupBy { it.counter }.mapValues { (_, v) -> v.map { it.label }.toSet() }
 
     @Test
-    fun `ADMIT + GATE + ALIGN stack equals the three tiers applied in series`() {
+    fun `ADMIT (plus a holding ADMIT double) + ALIGN stack equals the tiers applied in series`() {
         val waves = 40
         val dropB = { n: Int -> n % 5 == 0 }
         for (seed in 0L until 100L) {
-            val obs = run(seed, waves, listOf("admit", "gate", "align"), dropB = dropB)
+            val obs = run(seed, waves, listOf("admit", "hold", "align"), dropB = dropB)
             byWave(obs) shouldBe reference(waves, dropB)
             // glitch-free ordering: waves surface in non-decreasing counter order
             val counters = obs.map { it.counter }
@@ -131,12 +170,12 @@ class InletPolicyStackTest {
         val waves = 40
         val dropB = { n: Int -> n % 7 == 0 }
         val perms = listOf(
-            listOf("admit", "gate", "align"),
-            listOf("align", "gate", "admit"),
-            listOf("gate", "admit", "align"),
-            listOf("align", "admit", "gate"),
-            listOf("admit", "align", "gate"),
-            listOf("gate", "align", "admit"),
+            listOf("admit", "hold", "align"),
+            listOf("align", "hold", "admit"),
+            listOf("hold", "admit", "align"),
+            listOf("align", "admit", "hold"),
+            listOf("admit", "align", "hold"),
+            listOf("hold", "align", "admit"),
         )
         for (seed in 0L until 100L) {
             val outputs = perms.map { byWave(run(seed, waves, it, dropB = dropB)) }

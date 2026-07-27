@@ -60,11 +60,11 @@ class TrafficLightCell<T : Any>(
 
             override fun setRed() {
                 if (isStopped) return
-                dataInlet.serve(Proxy.fromClass(clazz, Buffering(buffer)))
+                dataInlet.serve(Proxy.fromClass(clazz, Buffering(buffer::park)))
                 isStopped = true
             }
         })
-        dataInlet.serve(Proxy.fromClass(clazz, Buffering(buffer)))
+        dataInlet.serve(Proxy.fromClass(clazz, Buffering(buffer::park)))
     }
 
     companion object {

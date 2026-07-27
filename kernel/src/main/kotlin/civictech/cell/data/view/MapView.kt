@@ -2,12 +2,11 @@ package civictech.cell.data.view
 
 import java.io.Serializable
 import civictech.cell.data.delta.MapDelta
-import civictech.cell.data.op.GroupByCell
 
 /**
  * Consumer-side materialized read model over a [MapDelta] stream: folds
  * last-writer-per-key puts and removals into a queryable map — the canonical
- * fold for anything holding a [MapCell] / [GroupByCell] outlet (an app
+ * fold for anything holding a [MapCell] / `GroupByCell` outlet (an app
  * subscriber, a test, the observation sink). No ports, no host, no wave logic.
  *
  * Convergence caveat is inherited from [MapDelta] (G-23): map deltas carry no

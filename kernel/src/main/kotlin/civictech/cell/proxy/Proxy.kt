@@ -25,8 +25,8 @@ object Proxy {
 
     /**
      * Constructs an instance of [clazz] dispatching every method through
-     * [invocationHandler] — the shape `Buffering`, `Broadcast`, `NoOp`,
-     * `Throwing`, `Callback`, `HostProxy`, `MediateProxy`, and every port
+     * [invocationHandler] — the shape `Buffering`, `NoOp`,
+     * `Callback`, `HostProxy`, `MediateProxy`, and every port
      * (`Outlet`, `Inlet`, `FanOutlet`, `FanInlet`, ...) already build on.
      *
      * C-5 completion (W4.6, spec 10/14 §Reflection budget): every `@Contract`
@@ -55,8 +55,8 @@ object Proxy {
     /**
      * Unwraps a reflective [java.lang.reflect.InvocationTargetException],
      * rethrowing the invocation's real cause — the shape every `Method.invoke`
-     * dispatch site in this package repeats (delegating/broadcasting here,
-     * [Invocation], [Broadcast], and the port outlets).
+     * dispatch site in this package repeats (delegating here,
+     * [Invocation], and the port outlets).
      */
     internal inline fun <T> unwrapInvocationTarget(block: () -> T): T =
         try {

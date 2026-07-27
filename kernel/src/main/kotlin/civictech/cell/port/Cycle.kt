@@ -6,7 +6,6 @@ import civictech.cell.Leased
 import civictech.cell.MessageContext
 import civictech.cell.Timestamp
 import civictech.cell.control.Magnitude
-import civictech.cell.link.Link
 import civictech.cell.link.Linked
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkSupport

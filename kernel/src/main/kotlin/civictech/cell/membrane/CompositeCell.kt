@@ -25,17 +25,6 @@ import java.util.UUID
 enum class SurfaceMode { FLATTEN, MEDIATE }
 
 /**
- * A wave scope of one [Exposure] (spec 10/11 "Decided model"): **PRESERVE**
- * (waves flow through per 20/22, transparent) or **REMINT** (Mediate only —
- * the proxy mints fresh waves from its own counter). Only PRESERVE is
- * realized today; REMINT's wave re-mint interplay with attention
- * propagation and late-join catch-up is explicitly open (G-52 residual,
- * 50/51) and is recorded here for correctness-by-construction but not yet
- * implemented by [CompositeCell.mediate].
- */
-enum class WaveScope { PRESERVE, REMINT }
-
-/**
  * One named seam of a composite cell's membrane (spec 10/11 "Decided
  * model"): [externalName] is the ONLY name external resolvers may use;
  * [organellePortName] documents which internal port it re-presents, for
@@ -49,7 +38,6 @@ data class Exposure(
     val externalName: String,
     val organellePortName: String,
     val mode: SurfaceMode,
-    val waveScope: WaveScope = WaveScope.PRESERVE,
     /**
      * Identity-keyed predicates evaluated at the three seams this boundary
      * already owns (spec 40/43 "BoundaryPolicy", decided 93 I-28, W4.1/G-54).
@@ -137,7 +125,6 @@ abstract class CompositeCell(
         externalName: String,
         organellePortName: String,
         organelleInlet: FanInlet<Api>,
-        waveScope: WaveScope = WaveScope.PRESERVE,
         policy: BoundaryPolicy = BoundaryPolicy(),
     ): FanInlet<Api> {
         require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
@@ -149,7 +136,7 @@ abstract class CompositeCell(
             ),
         )
         installLinkAuthority(exposed, policy)
-        exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, waveScope, policy)
+        exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, exposed)
     }
 
@@ -186,7 +173,6 @@ abstract class CompositeCell(
         externalName: String,
         organellePortName: String,
         organelleOutlet: FanOutlet<Api>,
-        waveScope: WaveScope = WaveScope.PRESERVE,
         policy: BoundaryPolicy,
     ): FanOutlet<Api> {
         require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
@@ -199,7 +185,7 @@ abstract class CompositeCell(
             ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter()
         }
         exposureMapMutable[externalName] =
-            Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, waveScope, policy)
+            Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, organelleOutlet)
     }
 

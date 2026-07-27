@@ -1,13 +1,12 @@
 package civictech.cell.data
 
 import java.io.Serializable
-import civictech.cell.data.op.FlatMapSetCell
 
 /**
  * Window assignment as key derivation (M11.6): there is no wall clock (P1) —
  * event time is an explicit attribute of the element, and the window is just
  * part of the group key. Tumbling = composite key via [tumbling]; sliding =
- * per-element expansion ([FlatMapSetCell]) into [sliding]'s windows, then
+ * per-element expansion (`FlatMapSetCell`) into [sliding]'s windows, then
  * group. Windows never close: late elements are ordinary adds and
  * retractions flow (view semantics). Watermark-driven eviction is deferred
  * with trigger (24). Assigners are named serializable classes so they

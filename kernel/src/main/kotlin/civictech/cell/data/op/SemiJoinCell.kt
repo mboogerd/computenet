@@ -12,7 +12,6 @@ import java.io.Serializable
 import java.util.*
 import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.delta.MintedTags
 
 @CellBase
 interface SemiJoinApi<A, B> {
@@ -29,7 +28,7 @@ interface SemiJoinApi<A, B> {
  * set difference).
  *
  * Non-monotone: a row can (re-)enter when the *right* side removes, with no
- * fresh left tag to ride — so output tags are minted per entry ([MintedTags],
+ * fresh left tag to ride — so output tags are minted per entry (`MintedTags`,
  * tag hygiene, 21), never borrowed from the inputs. Output membership at idle
  * is a deterministic function of the converged input memberships (add-wins on
  * both sides); duplicates converge on membership, not on tags. Not

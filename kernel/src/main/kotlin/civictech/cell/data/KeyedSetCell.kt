@@ -11,10 +11,6 @@ import civictech.gen.wire.Contract
 import java.io.Serializable
 import java.util.*
 import civictech.cell.data.delta.SetDelta
-import civictech.cell.data.op.FilterCell
-import civictech.cell.data.op.UnionSetCell
-import civictech.cell.data.op.FlatMapSetCell
-import civictech.cell.data.op.GroupByCell
 
 /**
  * Keyed upsert input (F-3): the latest element under a [key] replaces the
@@ -40,7 +36,7 @@ interface KeyedSetApi<K, E> {
  * [SetCell]'s tagged set algebra (F-3). It owns the "what element was under this
  * key" memory that demos otherwise keep by hand (a shadow index, plus the
  * remove-old-then-add dance), and emits set deltas so it plugs straight into
- * [GroupByCell], [FlatMapSetCell], [FilterCell], [UnionSetCell], etc.
+ * `GroupByCell`, `FlatMapSetCell`, `FilterCell`, `UnionSetCell`, etc.
  *
  * Re-put atomicity: a [put] over an existing key ships the previous element's
  * retraction and the new element's add in ONE [SetDelta], so a downstream
@@ -51,7 +47,7 @@ interface KeyedSetApi<K, E> {
  *
  * Tags are keyed *per key*, not per element: if two keys hold the same element,
  * the element carries both keys' add-tags and stays live until both keys drop
- * it (distinct-projection / OR-set union — the [FlatMapSetCell] many-to-one
+ * it (distinct-projection / OR-set union — the `FlatMapSetCell` many-to-one
  * case). A re-put retracts only the element's tag under *this* key.
  */
 class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :

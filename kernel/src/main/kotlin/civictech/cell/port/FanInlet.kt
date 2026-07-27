@@ -85,14 +85,14 @@ class FanInlet<Api : Any>(
     private val parked = ParkQueue<Invocation>()
 
     /** Cold-state sink: every method call parks instead of dispatching or throwing. */
-    private val parkingImplementation: Api = Proxy.fromClass(clazz, Buffering(parked))
+    private val parkingImplementation: Api = Proxy.fromClass(clazz, Buffering(parked::park))
 
     /** Current usable API implementation; null while cold (handler not yet installed). */
     private var activeImplementation: Use<Api>? = default?.let { Use.fixed(it, ref) }
 
     /**
      * The inbound policy chain (PN-9, spec 12 §Policies): an ordered set of
-     * [InletPolicy] stages run in fixed [PolicyTier] order (ADMIT → GATE →
+     * [InletPolicy] stages run in fixed [PolicyTier] order (ADMIT →
      * ALIGN → ACTIVATE), install order irrelevant. Each stage is [attach]ed once
      * with a stable release that indirects through [Stage.downstream]; [rewire]
      * only re-links the downstream slots when a stage is added, so no policy is

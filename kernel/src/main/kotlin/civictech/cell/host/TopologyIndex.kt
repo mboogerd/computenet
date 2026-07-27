@@ -17,12 +17,19 @@ data class TopologyLink(
     val to: PortRef,
 ) : java.io.Serializable
 
-/** Reverse-topology index used by rare-path orchestration such as promotion. */
+/**
+ * Reverse-topology index used by rare-path orchestration such as promotion.
+ * [linked]/[unlinked] are `internal` (T03): the mutation discipline lives at
+ * [LocationRegistry]'s `link`/`unlink`/`mirrorLink`/`mirrorUnlink` — an
+ * outside module only ever sees this index through
+ * [LocationRegistry]'s read-only projections ([LocationRegistry.swapSet],
+ * [LocationRegistry.wouldCloseCycle], [LocationRegistry.all]).
+ */
 class TopologyIndex {
     private val links = ConcurrentHashMap<UUID, TopologyLink>()
     private val byCell = ConcurrentHashMap<CellRef, MutableSet<UUID>>()
 
-    fun linked(link: TopologyLink) {
+    internal fun linked(link: TopologyLink) {
         val previous = links.put(link.id, link)
         if (previous != null) removeFromCells(previous)
         cellsOf(link).forEach { ref ->
@@ -30,7 +37,7 @@ class TopologyIndex {
         }
     }
 
-    fun unlinked(id: UUID) {
+    internal fun unlinked(id: UUID) {
         links.remove(id)?.let(::removeFromCells)
     }
 

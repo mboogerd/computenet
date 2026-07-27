@@ -3,7 +3,6 @@ package civictech.cell.data.delta
 import civictech.cell.MergeablePayload
 import civictech.cell.Timestamp
 import java.io.Serializable
-import civictech.cell.partition.PartitionedCell
 
 /**
  * Observed-remove set delta (G-23): every add carries a unique tag; a remove

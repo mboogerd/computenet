@@ -3,15 +3,12 @@ package civictech.cell.data.view
 import java.io.Serializable
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
-import civictech.cell.data.op.UnionSetCell
-import civictech.cell.data.op.CountCell
-import civictech.cell.data.op.IntersectSetCell
 
 /**
  * Consumer-side materialized read model over a [SetDelta] stream: folds the
  * kernel's OR-set tag algebra into live membership an app subscriber, a test,
  * or the observation sink can query. This is the *same* fold that
- * [UnionSetCell] / [IntersectSetCell] / [CountCell] run internally — it wraps
+ * `UnionSetCell` / `IntersectSetCell` / `CountCell` run internally — it wraps
  * the internal [TagState], so a consumer that materializes a cell's outlet
  * agrees with the cell on what "current membership" means (important once tags
  * carry convergence identity across `wire`). No ports, no host, no wave logic —
