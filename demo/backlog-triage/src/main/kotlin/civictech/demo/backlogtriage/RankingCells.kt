@@ -7,14 +7,31 @@ import civictech.cell.Propagate
 import civictech.cell.onEach
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.Serve
+import civictech.cell.port.Subscribe
 import civictech.cell.link.catchUpOnLinked
 import civictech.cell.port.registerPort
+import civictech.gen.wire.CellBase
 import java.util.*
 import kotlin.math.abs
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.op.CombineLatestCell
 import civictech.cell.data.view.MapDiffPublisher
+
+/**
+ * `@CellBase` Api for [RatingCell] (T09 §C: the first `@CellBase` consumer
+ * outside `:kernel`'s own cell library — see [RatingCell] for why it, and not
+ * [MetaRankCell], is the honest candidate). KSP generates `RatingCellBase`:
+ * `inlet` registered and statically bound to `onInlet`, `outlet` registered
+ * (emission stays [RatingCell]'s own logic, as `@CellBase`'s authoring
+ * contract documents).
+ */
+@CellBase
+interface RatingApi {
+    val inlet: Serve<Propagate<SetDelta<Pref>>>
+    val outlet: Subscribe<Propagate<MapDelta<String, Double>>>
+}
 
 /**
  * RatingCell — hosts one incremental [RatingEngine] as a dataflow cell.
@@ -49,36 +66,33 @@ import civictech.cell.data.view.MapDiffPublisher
 class RatingCell(
     private val engine: RatingEngine,
     private val epsilon: Double = 1e-9,
-    override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
-    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<Pref>>>())
-
-    val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<String, Double>>>())
-
+    ref: CellRef = CellRef(UUID.randomUUID()),
+) : RatingCellBase(ref) {
     private val live = mutableMapOf<Pref, MutableSet<Timestamp>>()
     private val ratings = MapDiffPublisher<String, Double>(changed = { a, b -> abs(a - b) > epsilon })
 
     init {
-        inlet.onEach { value ->
-            value.adds.forEach { (p, tags) ->
-                val t = live.getOrPut(p) { mutableSetOf() }
-                val wasLive = t.isNotEmpty()
-                t += tags
-                if (!wasLive && t.isNotEmpty()) engine.add(p.winner, p.loser)
-            }
-            value.dels.forEach { (p, tags) ->
-                val t = live[p] ?: return@forEach
-                val wasLive = t.isNotEmpty()
-                t -= tags
-                if (wasLive && t.isEmpty()) {
-                    live.remove(p)
-                    engine.retract(p.winner, p.loser)
-                }
-            }
-            publishDiff()
-        }
         // late-join catch-up (G-22): current ratings as a delta-from-empty
         outlet.catchUpOnLinked { ratings.catchUpDelta() }
+    }
+
+    override fun onInlet(value: SetDelta<Pref>) {
+        value.adds.forEach { (p, tags) ->
+            val t = live.getOrPut(p) { mutableSetOf() }
+            val wasLive = t.isNotEmpty()
+            t += tags
+            if (!wasLive && t.isNotEmpty()) engine.add(p.winner, p.loser)
+        }
+        value.dels.forEach { (p, tags) ->
+            val t = live[p] ?: return@forEach
+            val wasLive = t.isNotEmpty()
+            t -= tags
+            if (wasLive && t.isEmpty()) {
+                live.remove(p)
+                engine.retract(p.winner, p.loser)
+            }
+        }
+        publishDiff()
     }
 
     private fun publishDiff() {
@@ -98,6 +112,14 @@ class RatingCell(
  * see meta computed from a partially-updated source set before it settles —
  * the same observation-edge glitch recorded as finding F-5 (and targeted by
  * the SnapshotView/observe() backlog items this demo ranks).
+ *
+ * Deliberately NOT `@CellBase` (T09 §C): its `inlets` are a runtime-sized map
+ * keyed by the `sources` constructor argument — one `FanInlet` per algorithm
+ * name, decided at construction, not at authoring time. `@CellBase`'s Api
+ * interface declares a fixed, statically-named port per property; it has no
+ * way to express "N ports, names known only at runtime". [RatingCell] above
+ * is the honest `@CellBase` candidate in this file — every one of its ports
+ * is fixed at authoring time.
  */
 class MetaRankCell(
     sources: List<String> = listOf("mean", "elo", "bt", "trueskill", "glicko", "wenglin", "wilson"),
