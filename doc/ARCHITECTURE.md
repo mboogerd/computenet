@@ -69,7 +69,7 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   `Manifest` tags from marker interfaces; `NatureNegotiation`/`Reconciliation`.
 - `.port` — port ADT and mechanism: `Port`, `PortRef`, `PortRegistry`,
   `Use`/`Serve`/`Subscribe`/`StreamTo`, `FanInlet`/`FanOutlet`, `InletPolicy`
-  with tier ADT `PolicyTier { ADMIT, GATE, ALIGN, ACTIVATE }`, cycles
+  with tier ADT `PolicyTier { ADMIT, ALIGN, ACTIVATE }`, cycles
   (`FeedbackInlet`, `CycleHead`).
 - `.link` — edge semantics: `Link` ADT with `LinkRole { Consume, Observe }`,
   handshake + nature reconciliation (`LinkResult.Rejected` is returned, never
@@ -78,7 +78,7 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
 - `.protocol` — generic protocol bus: `Protocols`, `EdgeOpen`/`EdgeClose`,
   `TopologyOrderProtocol`, `StateRequestProtocol`, `RetainedFrontiers`.
 - `.proxy` — JDK dynamic-proxy toolkit + `Invocation` types +
-  handler behaviors (`Buffering`, `Broadcast`, `Callback`, `NoOp`, `Throwing`).
+  handler behaviors (`Buffering`, `Callback`, `NoOp`).
 
 **Data plane**
 
@@ -214,9 +214,11 @@ network or wall clock.
 stamping point: reactive calls keep the incoming context; spontaneous calls
 mint a fresh wave. `FanInlet` runs the tier chain ADMIT (may drop, but must
 mint an absorb-ack for any dropped waved invocation or downstream frontiers
-stall) → GATE (backpressure) → ALIGN (`WaveFrontier` folds `EdgeOpen`/
-`EdgeClose` into a completeness frontier, releases waves in per-source order)
-→ ACTIVATE (cold-park buffering).
+stall) → ALIGN (`WaveFrontier` folds `EdgeOpen`/`EdgeClose` into a completeness
+frontier, releases waves in per-source order) → ACTIVATE (cold-park buffering).
+Backpressure is *not* a tier of this chain — it lives in
+`IntakeControl`/`ParkQueue`; spec 10/12 §Policies still specifies a GATE tier,
+which has no code and can return with its first real user.
 
 **Failure.** Every failure path accounts: `SupervisionPolicy` (PROPAGATE
 default; SUSPEND parks traffic for `resume(ref)`), sanitized `DeadLetters`,
