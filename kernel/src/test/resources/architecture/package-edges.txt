@@ -67,6 +67,7 @@ nature -> data
 nature -> partition
 observe -> cell
 observe -> data
+observe -> graph
 observe -> host
 observe -> link
 observe -> port
