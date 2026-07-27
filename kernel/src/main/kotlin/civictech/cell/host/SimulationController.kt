@@ -31,6 +31,25 @@ class SimulationController(seed: Long? = null) {
     private val rng = seed?.let { Random(it) }
     private val schedulers = mutableListOf<SimulatedScheduler>()
 
+    companion object {
+        /**
+         * T12 finding 1: `runToIdle()` was a bare `while (step()) {}` — 440+
+         * call sites with no signal beyond T01's 5-minute JUnit backstop when
+         * a livelock hangs the simulation. Empirically calibrated: a full,
+         * instrumented `./gradlew :kernel:test` run (2026-07-27, this
+         * ticket) recorded the step count of every `runToIdle()` call across
+         * the whole suite (32,965 calls); the observed maximum was 5,667
+         * steps. This sets the default budget at ~10x that measured max,
+         * rounded up — generous headroom for legitimate long drains (deep
+         * seed sweeps, multi-host meshes) while still turning a genuine
+         * livelock into a diagnosable failure instead of riding T01's
+         * 5-minute backstop to a bare timeout. Callers with a legitimately
+         * larger drain pass an explicit [runToIdle] budget; never raise this
+         * default to accommodate one call site.
+         */
+        const val DEFAULT_BUDGET: Int = 60_000
+    }
+
     /** Create and register a scheduler; pass one to each simulated host. */
     fun scheduler(color: HostColor = HostColor.BLOCKING): HostScheduler =
         SimulatedScheduler(color).also { schedulers += it }
@@ -44,10 +63,20 @@ class SimulationController(seed: Long? = null) {
         return true
     }
 
-    fun runToIdle() {
+    /**
+     * Drain to idle under a hard step [budget] (default [DEFAULT_BUDGET]):
+     * quiescence is asserted, not hoped for. Throws when the budget is
+     * exhausted rather than looping forever — a stalled simulation fails
+     * loudly, with the step count in the message, instead of riding T01's
+     * outer JUnit timeout to an undiagnosable hang. Returns the number of
+     * steps taken.
+     */
+    fun runToIdle(budget: Int = DEFAULT_BUDGET): Int {
+        var steps = 0
         while (step()) {
-            // drain
+            check(++steps <= budget) { "simulation did not quiesce within $budget steps — likely livelock" }
         }
+        return steps
     }
 
     private inner class SimulatedScheduler(override val color: HostColor) : HostScheduler {
