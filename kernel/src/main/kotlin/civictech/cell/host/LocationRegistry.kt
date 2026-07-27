@@ -1,9 +1,11 @@
 package civictech.cell.host
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.control.ParkQueue
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -156,6 +158,28 @@ class LocationRegistry {
     /** Every published ref sharing [logicalId] — replicas, local and remote (spec 42). */
     fun replicasOf(logicalId: java.util.UUID): Set<CellRef> = instancesOf(logicalId)
 
+    /**
+     * What a locally published ref *is*: the concrete [Cell] class captured at
+     * [publish] time (M0 inspector seam). Held [WeakReference]ly so the table
+     * pins nothing — the entry is dropped on [unpublish] anyway, this only
+     * makes the retention explicit.
+     */
+    private val descriptions = ConcurrentHashMap<CellRef, WeakReference<Class<out Cell>>>()
+
+    /**
+     * The concrete cell class published under [ref], or null when this registry
+     * never saw that publish. Registry-less hosts (`ManagedHost(registry = null)`)
+     * publish nowhere and are therefore invisible here — as they are to
+     * [localRefs] and [locate].
+     *
+     * The one metadata accessor the topology inspector needs: descriptors
+     * (color, ports, manifests) are then read with
+     * `ContractRegistry.cellDescriptor(cls)`, the sanctioned lookup — the class
+     * is captured on the rare publish path rather than recovered reflectively
+     * at read time.
+     */
+    fun describe(ref: CellRef): Class<out Cell>? = descriptions[ref]?.get()
+
     /** The host currently serving [ref] on this registry, if local. */
     fun locate(ref: CellRef): ManagedHost? = (locations[ref] as? Local)?.host
 
@@ -259,8 +283,14 @@ class LocationRegistry {
      * already saturated) now stays parked, in order, rather than being
      * destroyed — the ordinary [onIntakeAvailable]-driven [replay] finishes
      * the batch once intake reopens.
+     *
+     * [cell] is the instance being published, when the caller has it (the spawn
+     * path does): its class is recorded for [describe]. Omitting it leaves any
+     * previously captured class in place, so a re-publish that only moves a ref
+     * (`resumeHost`) never blinds [describe].
      */
-    fun publish(ref: CellRef, host: ManagedHost) {
+    fun publish(ref: CellRef, host: ManagedHost, cell: Cell? = null) {
+        if (cell != null) descriptions[ref] = WeakReference(cell.javaClass)
         install(ref, Local(host))
         onLocalPublish.forEach { notify(it, ref) }
         onPublish.forEach { notify(it, ref) }
@@ -352,6 +382,7 @@ class LocationRegistry {
         val wasLocal = locations[ref] is Local
         locations.remove(ref)
         indexRemove(ref)
+        descriptions.remove(ref)
         if (wasLocal) onLocalUnpublish.forEach { notify(it, ref) }
         onUnpublish.forEach { notify(it, ref) }
     }
@@ -360,6 +391,7 @@ class LocationRegistry {
     fun mirrorUnpublish(ref: CellRef) {
         locations.remove(ref)
         indexRemove(ref)
+        descriptions.remove(ref)
         onUnpublish.forEach { notify(it, ref) }
     }
 

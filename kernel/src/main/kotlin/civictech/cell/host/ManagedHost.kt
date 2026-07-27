@@ -772,8 +772,10 @@ open class ManagedHost(
                     AttentionSupport.of(cell).ticks = { attentionScheduler.dispatchStep }
                 }
                 // location becomes visible only after activation, so replayed
-                // parked invocations find served ports (spec 33 step 7)
-                registry?.publish(cell.ref, this@ManagedHost)
+                // parked invocations find served ports (spec 33 step 7). The
+                // instance rides along so the registry can answer
+                // `describe(ref)` without reflecting at read time.
+                registry?.publish(cell.ref, this@ManagedHost, cell)
                 return cell.ref
             }
 
