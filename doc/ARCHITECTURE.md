@@ -132,8 +132,7 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   `RegistryMirrorCell`. `Leased` payloads are refused at egress.
 - `.replication` — `Replication` (symmetric gossip mesh from ordinary
   announcements; `keyOf` generalizes to partitioning), `SingleWriterReplication`
-  (`LeaderMark`, `WritePosture { AVAILABLE_FENCED, SAFETY_PARK }`),
-  `InstanceSet`.
+  (`LeaderMark`), `InstanceSet`.
 - `.partition` — `PartitionedCell`, `PartitionedShardSet` (interest-based
   router, versioned `routingEpoch`; `repartition` = interest reassignment +
   state-as-delta replay), `ShardCell`.
@@ -147,7 +146,7 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   (`leftJoin`/`rightJoin`/`fullJoin`). `link(...)` is typed — payload/direction
   mismatch is a compile error.
 - `.membrane` — composition: `CompositeCell`, `Exposure`, `SurfaceMode
-  { FLATTEN, MEDIATE }`, `WaveScope` (REMINT specified, not implemented),
+  { FLATTEN, MEDIATE }` (REMINT: spec-only, no code — see 93),
   `BoundaryPolicy` (disclosure/integrity, projections, signed deltas).
 - `.evolve` — live evolution: `Shadow` (candidate with `Effectful` inlets
   NoOp-served), `Promotion` (buffered-window swap + `StateMigrating`),
