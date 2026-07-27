@@ -1,9 +1,11 @@
 package civictech.cell.observe
 
 import civictech.cell.Cell
+import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Stateful
 import civictech.cell.Propagate
+import civictech.cell.graph.TypedRef
 import civictech.cell.host.HostManagementApi
 import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
@@ -12,8 +14,15 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import java.io.Serializable
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import civictech.cell.data.MapApi
+import civictech.cell.data.SetApi
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.MapDelta
+import civictech.cell.data.op.FilterSetApi
+import civictech.cell.data.op.GroupByApi
+import civictech.cell.data.op.QuorumSetApi
 import civictech.cell.data.view.MapView
 import civictech.cell.data.view.SetView
 import civictech.cell.data.view.CountView
@@ -43,7 +52,10 @@ interface ObservationSink<out S> {
      * immediately with [current] (the materialized state, NOT a replay of
      * historical deltas), so a fresh subscriber — a new SSE client, a reloaded
      * tab — is caught up in one call. Listener invocations are serialized and
-     * ordered with change delivery.
+     * ordered with change delivery (T08 finding 4: off the host scheduler
+     * thread — see [ObserveCell]'s class doc for the dispatch mechanism), so a
+     * blocking listener delays only its own sink's catch-up/notifications,
+     * never the host's dispatch of other cells.
      */
     fun onChange(listener: (S) -> Unit)
 }
@@ -107,8 +119,24 @@ interface View<in D, out S> {
  * Threading: the fold runs on the host scheduler thread (per-cell FIFO); a
  * [lock] serializes the fold against [onChange] registration, and the published
  * snapshot is a `@Volatile` immutable value so [current] is torn-read-free from
- * any thread. Listeners fire under the lock so change delivery and a fresh
- * subscriber's catch-up are totally ordered (no stale-after-fresh).
+ * any thread.
+ *
+ * **Listener dispatch (T08 finding 4)**: a blocking app listener (an SSE
+ * write, e.g.) used to run *inside* [lock] on the host scheduler thread —
+ * pinning the whole host's dispatch on one slow app I/O call. Each sink now
+ * owns a dedicated single-thread daemon executor ([dispatcher]); the fold and
+ * the snapshot swap still run under [lock] on the host thread (unchanged —
+ * that is what makes [current] and the catch-up value consistent), but
+ * *invoking* a listener is submitted to [dispatcher] instead of run inline.
+ * The total-ordering guarantee this class has always documented (change
+ * delivery and a fresh subscriber's catch-up never interleave out of order)
+ * is preserved by construction: every submission to [dispatcher] — a change
+ * fire from [propagate], or a catch-up fire from [onChange] — happens while
+ * holding [lock], so submission order is a strict total order, and a
+ * single-consumer executor executes in submission order. What changes is
+ * *where* the listener runs: never the host thread, so a listener that
+ * blocks stalls only its own sink's later notifications, never other cells'
+ * dispatch.
  */
 class ObserveCell<D : Any, S>(
     private val view: View<D, S>,
@@ -120,6 +148,14 @@ class ObserveCell<D : Any, S>(
     private val lock = Any()
     private val listeners = mutableListOf<(S) -> Unit>()
 
+    /** T08 finding 4: single-consumer ⇒ FIFO submission order is delivery order. */
+    private val dispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "observe-cell-${ref.id}").apply { isDaemon = true }
+    }
+
+    @Volatile
+    private var closed = false
+
     @Volatile
     private var latest: S = view.current()
 
@@ -129,7 +165,9 @@ class ObserveCell<D : Any, S>(
                 synchronized(lock) {
                     if (view.apply(value)) {
                         latest = view.current()
-                        listeners.forEach { it(latest) }
+                        val snapshot = latest
+                        val fired = listeners.toList()
+                        dispatchIfOpen { fired.forEach { it(snapshot) } }
                     }
                 }
             }
@@ -141,9 +179,22 @@ class ObserveCell<D : Any, S>(
     override fun onChange(listener: (S) -> Unit) {
         synchronized(lock) {
             listeners += listener
-            // late-join catch-up: one call with the materialized snapshot,
-            // under the lock so no interleaving change fires it out of order.
-            listener(latest)
+            // late-join catch-up: one submission with the materialized
+            // snapshot, made under the lock so no interleaving change's
+            // submission can land out of order around it (no
+            // stale-after-fresh, no gap, no duplicate — see class doc).
+            val snapshot = latest
+            dispatchIfOpen { listener(snapshot) }
+        }
+    }
+
+    /** Submits [block] to [dispatcher] unless [close]d; silently drops on a close race (no live listener to reach). */
+    private fun dispatchIfOpen(block: () -> Unit) {
+        if (closed) return
+        try {
+            dispatcher.execute(block)
+        } catch (_: RejectedExecutionException) {
+            // raced a concurrent close(); nothing left to notify.
         }
     }
 
@@ -154,6 +205,26 @@ class ObserveCell<D : Any, S>(
             view.restore(state)
             latest = view.current()
         }
+    }
+
+    /**
+     * T08 finding 4 lifecycle: stops [dispatcher]. Idempotent. Wired into
+     * [onDeactivate] — the host already calls this on despawn (`Cell`'s own
+     * disposal hook) — so a despawned sink's dispatch thread does not
+     * outlive it; a caller that never despawns the sink (the common demo
+     * shape: the sink lives for the process) may call this directly at
+     * shutdown instead.
+     */
+    fun close() {
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+        }
+        dispatcher.shutdown()
+    }
+
+    override fun onDeactivate(ctx: CellContext) {
+        close()
     }
 }
 
@@ -195,25 +266,75 @@ fun <D : Any, S> ManagedHost.observe(
 
 /**
  * Declarative builder for [observeAll]: names one fold per outlet.
+ *
+ * T08 finding 2: the `CellRef` overloads below are the original, untyped
+ * form — kept byte-for-byte, `View.set<Any?>()`'s erased fold and all — so
+ * every existing caller keeps compiling. Alongside them, additive typed
+ * overloads accept a [TypedRef] minted by [civictech.cell.graph.refAs] at
+ * graph-build time: the element/key type flows from the ref's declared API
+ * shape, so wiring the wrong-shaped source (a `TypedRef<MapApi<K, V>>` where
+ * a `set` was meant) is a compile error instead of an `Any?` fold that a call
+ * site has to re-assert with an unchecked cast. One overload per *shape* this
+ * codebase's `civictech.cell.data`/`.data.op` package actually declares
+ * (`SetApi`, `QuorumSetApi`, `FilterSetApi`, `MapApi`, `GroupByApi`'s count
+ * form) — a JVM signature clash forces distinct `@JvmName`s per overload
+ * (`TypedRef<...>`'s generic argument erases the same way regardless of the
+ * bound), so each carries one below.
  */
 class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagementApi>) {
     internal val sinks = LinkedHashMap<String, ObservationSink<*>>()
 
-    private fun add(name: String, sink: ObservationSink<*>) {
+    /** What each [sinks] entry was registered as — [CompositeSink.get]'s checked-cast diagnostic. */
+    internal val kinds = LinkedHashMap<String, String>()
+
+    private fun add(name: String, sink: ObservationSink<*>, kind: String) {
         require(sinks.put(name, sink) == null) { "duplicate observe name '$name'" }
+        kinds[name] = kind
     }
 
     /** Fold a [SetDelta] outlet into a `Set` under [name]. */
     fun set(name: String, source: CellRef, outletName: String = "outlet") =
-        add(name, mgmt.observe(source, View.set<Any?>(), outletName))
+        add(name, mgmt.observe(source, View.set<Any?>(), outletName), "set")
 
     /** Fold a [MapDelta] outlet into a `Map` under [name]. */
     fun map(name: String, source: CellRef, outletName: String = "outlet") =
-        add(name, mgmt.observe(source, View.map<Any?, Any?>(), outletName))
+        add(name, mgmt.observe(source, View.map<Any?, Any?>(), outletName), "map")
 
     /** Fold a per-key count [MapDelta] outlet into counts under [name]. */
     fun count(name: String, source: CellRef, outletName: String = "outlet") =
-        add(name, mgmt.observe(source, View.count<Any?>(), outletName))
+        add(name, mgmt.observe(source, View.count<Any?>(), outletName), "count")
+
+    // ---- T08 finding 2: typed overloads — the element type is compile-checked ----
+
+    /** Typed [set]: [source]'s element type flows from a `TypedRef<SetApi<E>>`. */
+    @JvmName("setFromSetApi")
+    fun <E> set(name: String, source: TypedRef<out SetApi<E>>, outletName: String = "outlet") =
+        add(name, mgmt.observe(source.ref, View.set<E>(), outletName), "set")
+
+    /** Typed [set]: [source]'s element type flows from a `TypedRef<QuorumSetApi<E>>`. */
+    @JvmName("setFromQuorumSetApi")
+    fun <E> set(name: String, source: TypedRef<out QuorumSetApi<E>>, outletName: String = "outlet") =
+        add(name, mgmt.observe(source.ref, View.set<E>(), outletName), "set")
+
+    /** Typed [set]: [source]'s element type flows from a `TypedRef<FilterSetApi<E>>`. */
+    @JvmName("setFromFilterSetApi")
+    fun <E> set(name: String, source: TypedRef<out FilterSetApi<E>>, outletName: String = "outlet") =
+        add(name, mgmt.observe(source.ref, View.set<E>(), outletName), "set")
+
+    /** Typed [map]: [source]'s key/value types flow from a `TypedRef<MapApi<K, V>>`. */
+    @JvmName("mapFromMapApi")
+    fun <K, V> map(name: String, source: TypedRef<out MapApi<K, V>>, outletName: String = "outlet") =
+        add(name, mgmt.observe(source.ref, View.map<K, V>(), outletName), "map")
+
+    /**
+     * Typed [count]: [source]'s key type flows from a `TypedRef<GroupByApi<E, K, Long>>`
+     * (`Aggregators.count`'s accumulator, the shipped per-key-count shape —
+     * `slotfinder`'s `byDay`). A `GroupByApi` folded with a non-`Long`
+     * aggregator is a `map`, not a `count`; use the [map] overload instead.
+     */
+    @JvmName("countFromGroupByApi")
+    fun <E, K> count(name: String, source: TypedRef<out GroupByApi<E, K, Long>>, outletName: String = "outlet") =
+        add(name, mgmt.observe(source.ref, View.count<K>(), outletName), "count")
 }
 
 /**
@@ -228,14 +349,40 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
  * flash is possible here). The wave-aligned glitch-free composite behind
  * [civictech.cell.consistency.GlitchFreeCell] is deferred — see [observeAll].
  * Each *individual* per-outlet value is always internally consistent.
+ *
+ * T08 finding 4: routes its own listener dispatch through the same
+ * dedicated-executor mechanism as [ObserveCell] (its own `dispatcher`, not a
+ * shared one) — a blocking composite listener no longer runs inline on
+ * whichever upstream [ObserveCell]'s dispatcher thread happened to fire, so
+ * it can no longer delay that per-outlet sink's *own* later notifications
+ * either; the nested-lock shape (`sinkLock` → this composite's `lock`) this
+ * class's KDoc used to flag as a hazard dissolves the same way finding 4's
+ * fix dissolves it in [ObserveCell]: nothing blocking runs under either lock
+ * anymore.
  */
 class CompositeSink internal constructor(
     sinks: Map<String, ObservationSink<*>>,
+    /**
+     * What each named sink was registered as (T08 finding 2) — [get]'s
+     * checked-cast diagnostic. `@PublishedApi internal`, not `private`: [get]
+     * is a public inline function (it needs `reified T`) and Kotlin forbids a
+     * public inline function from reaching a `private` member of its own
+     * class, since inlining would copy that access out to external call sites.
+     */
+    @PublishedApi internal val registeredAs: Map<String, String> = emptyMap(),
 ) : ObservationSink<Map<String, Any?>> {
 
     private val lock = Any()
     private val values = LinkedHashMap<String, Any?>()
     private val listeners = mutableListOf<(Map<String, Any?>) -> Unit>()
+
+    /** T08 finding 4: this composite's own single-consumer dispatch executor. */
+    private val dispatcher = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "observe-composite-${System.identityHashCode(this)}").apply { isDaemon = true }
+    }
+
+    @Volatile
+    private var closed = false
 
     @Volatile
     private var snapshot: Map<String, Any?> = emptyMap()
@@ -244,12 +391,15 @@ class CompositeSink internal constructor(
         sinks.forEach { (name, sink) ->
             values[name] = null
             // each sink's onChange fires immediately (catch-up) then on every
-            // settled change; both funnel through here under the composite lock.
+            // settled change; both funnel through here under the composite lock
+            // — state assembly stays synchronous, only listener dispatch defers.
             sink.onChange { v ->
                 synchronized(lock) {
                     values[name] = v
                     snapshot = LinkedHashMap(values)
-                    listeners.forEach { it(snapshot) }
+                    val fired = listeners.toList()
+                    val s = snapshot
+                    dispatchIfOpen { fired.forEach { it(s) } }
                 }
             }
         }
@@ -260,8 +410,53 @@ class CompositeSink internal constructor(
     override fun onChange(listener: (Map<String, Any?>) -> Unit) {
         synchronized(lock) {
             listeners += listener
-            listener(snapshot)
+            val s = snapshot
+            dispatchIfOpen { listener(s) }
         }
+    }
+
+    private fun dispatchIfOpen(block: () -> Unit) {
+        if (closed) return
+        try {
+            dispatcher.execute(block)
+        } catch (_: RejectedExecutionException) {
+            // raced a concurrent close(); nothing left to notify.
+        }
+    }
+
+    /**
+     * T08 finding 2: checked accessor — casts the named entry's current value
+     * to [T], throwing a message naming both what [name] was registered as
+     * and what was requested, instead of the silent `as? … ?: emptySet()`
+     * degrade a raw `current()[name]` invites. Still erasure-level (same
+     * caveat as every generic runtime check in this codebase): it confirms
+     * the *shape* (a `Set` requested where a `Map` was registered fails
+     * loudly), not the element/key/value type argument.
+     */
+    inline fun <reified T> get(name: String): T {
+        val snap = current()
+        require(name in snap) { "no observe named '$name' (available: ${snap.keys})" }
+        val value = snap.getValue(name)
+        return value as? T ?: throw IllegalStateException(
+            "'$name' was registered as ${registeredAs[name] ?: "unknown"} " +
+                "(actual snapshot type ${value?.let { it::class.simpleName } ?: "null"}), " +
+                "requested ${T::class.simpleName ?: T::class}",
+        )
+    }
+
+    /**
+     * T08 finding 4 lifecycle: stops this composite's own dispatch executor.
+     * Idempotent. Does **not** close the underlying per-outlet [ObserveCell]s
+     * — [observeAll] does not own their lifecycle (each is despawned, and so
+     * closed, independently — see [ObserveCell.close]); this only stops the
+     * composite's own listener-dispatch thread.
+     */
+    fun close() {
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+        }
+        dispatcher.shutdown()
     }
 }
 
@@ -300,5 +495,5 @@ class CompositeSink internal constructor(
  */
 fun ManagedHost.observeAll(block: ObserveAllBuilder.() -> Unit): CompositeSink {
     val builder = ObserveAllBuilder(managementInlet).apply(block)
-    return CompositeSink(builder.sinks)
+    return CompositeSink(builder.sinks, builder.kinds)
 }
