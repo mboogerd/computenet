@@ -1,7 +1,6 @@
 package civictech.cell.port
 
 import civictech.cell.control.Progress
-import civictech.cell.protocol.EdgeEvent
 import civictech.cell.protocol.EdgeOpen
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
@@ -12,7 +11,7 @@ import civictech.nature.PullService
 /**
  * Fixed processing tiers of a [FanInlet] policy chain (PN-9, spec 12 §Policies).
  * Install order is irrelevant; **tier order is authoritative** — a chain always
- * runs ADMIT → GATE → ALIGN → ACTIVATE regardless of the order policies were
+ * runs ADMIT → ALIGN → ACTIVATE regardless of the order policies were
  * installed in.
  *
  *  - **ADMIT** — may drop an invocation, never holds one. A dropping ADMIT that
@@ -20,16 +19,18 @@ import civictech.nature.PullService
  *    every waved invocation it drops ([InletPolicy.mintsProgressAck], the CP-A3
  *    law), or the downstream frontier stalls forever waiting for the dropped
  *    edge's contribution.
- *  - **GATE** — holds invocations FIFO (backpressure / suspension), draining in
- *    arrival order when released.
  *  - **ALIGN** — reorders/buffers for wave completeness
  *    ([civictech.cell.consistency.WaveFrontier]); **at most one per inlet**
  *    (install-time `require`).
  *  - **ACTIVATE** — cold-park until a handler is installed. This tier is
  *    intrinsic to [FanInlet] (its [civictech.cell.proxy.Buffering] parked tail);
  *    it is the terminal of every chain, not an installable policy.
+ *
+ * Backpressure lives in [civictech.cell.host.IntakeControl]/
+ * [civictech.cell.control.ParkQueue], not in this chain — a GATE-shaped hold
+ * tier can be reintroduced here with its first real (non-test) user.
  */
-enum class PolicyTier { ADMIT, GATE, ALIGN, ACTIVATE }
+enum class PolicyTier { ADMIT, ALIGN, ACTIVATE }
 
 /**
  * A composable stage on a [FanInlet]'s inbound path (PN-9). Stages are installed
@@ -104,40 +105,6 @@ class Admit(
         ProtocolSupport.of(inlet).deliver(
             Protocols.Progress, link, Progress(ctx.timestamp.sourceId, ctx.timestamp.counter)
         )
-    }
-}
-
-/**
- * GATE tier (spec 12 §Policies): holds invocations FIFO while [closed], draining
- * them in arrival order on [open]. Backpressure / suspension hold — never drops,
- * never reorders.
- */
-class Gate : InletPolicy {
-    override val tier get() = PolicyTier.GATE
-
-    private lateinit var release: (Invocation) -> Unit
-    private val held = ArrayDeque<Invocation>()
-    private var open = true
-
-    override fun attach(inlet: FanInlet<*>, release: (Invocation) -> Unit) {
-        this.release = release
-    }
-
-    override fun offer(invocation: Invocation) {
-        if (open) release(invocation) else held.addLast(invocation)
-    }
-
-    fun close() {
-        open = false
-    }
-
-    fun open() {
-        open = true
-        while (held.isNotEmpty()) release(held.removeFirst())
-    }
-
-    override fun reset() {
-        held.clear()
     }
 }
 
