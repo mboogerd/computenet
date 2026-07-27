@@ -16,9 +16,9 @@ import java.io.File
  * and `.durability` (`FileJournal`, used by `:demo:agora`) — plus
  * `civictech.testkit`.
  *
- * The allowlist below is seeded from the actual current state of every
- * every `.kt` file under each demo module's `src/main` (verified by running this test); it is not a
- * design aspiration independent of the code. A new demo reaching into an
+ * The allowlist below is seeded from the actual current state of every `.kt`
+ * file under each demo module's `src/main` (verified by running this test);
+ * it is not a design aspiration independent of the code. A new demo reaching into an
  * unlisted package (e.g. `.protocol`, `.proxy`) fails here, naming the file,
  * the import, and this allowlist so the fix is either to route through an
  * already-allowed package or to extend [allowedCellPrefixes] in the same PR.
