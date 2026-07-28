@@ -82,10 +82,26 @@ class LocationRegistry {
     /** Fire after a *local* unpublish — the eviction-announcement seam (spec 42, G-45). */
     private val onLocalUnpublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
 
-    /** Fire after *any* unpublish (local or mirrored) — lets a linker (`Replication`) drop stale gossip links. */
+    /**
+     * Fire after *any* unpublish — local, mirrored ([mirrorUnpublish]) or a whole
+     * peer's worth at once ([unpublishRemotes], T21). Lets a linker
+     * (`Replication`) drop stale gossip links, and lets an out-of-kernel observer
+     * learn that a peer's cells are gone from an event rather than from a poll.
+     */
     private val onUnpublish = java.util.concurrent.CopyOnWriteArrayList<(CellRef) -> Unit>()
     private val onLocalLink = java.util.concurrent.CopyOnWriteArrayList<(TopologyLink) -> Unit>()
     private val onLocalUnlink = java.util.concurrent.CopyOnWriteArrayList<(java.util.UUID) -> Unit>()
+
+    /**
+     * Fire after *any* topology mutation — a local [link]/[unlink] or an
+     * announcement-fed [mirrorLink]/[mirrorUnlink] (T21). The topology
+     * counterpart of the [onPublish]/[onUnpublish] any-scope pair: a peer's
+     * edges are registry state that subscribers care about, and the no-loop
+     * guarantee mirroring rests on is that [mirrorLink] never re-announces
+     * *onward* — not that nothing in this process may observe it.
+     */
+    private val onLink = java.util.concurrent.CopyOnWriteArrayList<(TopologyLink) -> Unit>()
+    private val onUnlink = java.util.concurrent.CopyOnWriteArrayList<(java.util.UUID) -> Unit>()
     private val localLinkIds = ConcurrentHashMap.newKeySet<java.util.UUID>()
 
     /** Returns a deregistration handle — reconnecting transports replace their announcement hook (M10.3). */
@@ -94,8 +110,15 @@ class LocationRegistry {
         return AutoCloseable { onLocalPublish -= listener }
     }
 
-    fun onPublish(listener: (CellRef) -> Unit) {
+    /**
+     * Returns a deregistration handle, exactly like the three `onLocal…` hooks
+     * (T21). Before that symmetry existed an any-scope subscriber could never
+     * detach and had to disarm itself with a flag instead; every caller that
+     * ignores the handle keeps behaving as it did.
+     */
+    fun onPublish(listener: (CellRef) -> Unit): AutoCloseable {
         onPublish += listener
+        return AutoCloseable { onPublish -= listener }
     }
 
     /** Returns a deregistration handle — mirrors [onLocalPublish]'s reconnect contract. */
@@ -104,8 +127,10 @@ class LocationRegistry {
         return AutoCloseable { onLocalUnpublish -= listener }
     }
 
-    fun onUnpublish(listener: (CellRef) -> Unit) {
+    /** Returns a deregistration handle — mirrors [onPublish]'s detachment contract (T21). */
+    fun onUnpublish(listener: (CellRef) -> Unit): AutoCloseable {
         onUnpublish += listener
+        return AutoCloseable { onUnpublish -= listener }
     }
 
     fun onLocalTopology(linked: (TopologyLink) -> Unit, unlinked: (java.util.UUID) -> Unit): AutoCloseable {
@@ -114,7 +139,27 @@ class LocationRegistry {
         return AutoCloseable { onLocalLink -= linked; onLocalUnlink -= unlinked }
     }
 
+    /**
+     * Subscribe to *every* topology mutation this registry records — local and
+     * mirrored alike (T21). [onLocalTopology] is the announce-outward seam (a
+     * peer must only ever hear about local edges, or mirroring would loop);
+     * this is the observe-in-process seam.
+     */
+    fun onTopology(linked: (TopologyLink) -> Unit, unlinked: (java.util.UUID) -> Unit): AutoCloseable {
+        onLink += linked
+        onUnlink += unlinked
+        return AutoCloseable { onLink -= linked; onUnlink -= unlinked }
+    }
+
     fun localLinks(): Set<TopologyLink> = topology.all().filterTo(mutableSetOf()) { it.id in localLinkIds }
+
+    /**
+     * Was [id] admitted by this registry's own [link] (as opposed to mirrored in
+     * from a peer)? The O(1) companion to [localLinks], for a consumer that
+     * holds one edge id and needs its scope — scanning [localLinks] to answer
+     * that is O(E) per question.
+     */
+    fun isLocalLink(id: java.util.UUID): Boolean = id in localLinkIds
 
     /** Every inbound or outbound link incident on the full [ref] (read-only [TopologyIndex] projection, T03). */
     fun swapSet(ref: CellRef): Set<TopologyLink> = topology.swapSet(ref)
@@ -129,17 +174,32 @@ class LocationRegistry {
         localLinkIds += link.id
         topology.linked(link)
         onLocalLink.forEach { notifyLink(it, link) }
+        onLink.forEach { notifyLink(it, link) }
     }
 
     internal fun unlink(id: java.util.UUID) {
         localLinkIds -= id
         topology.unlinked(id)
         onLocalUnlink.forEach { listener -> runCatching { listener(id) } }
+        onUnlink.forEach { listener -> runCatching { listener(id) } }
     }
 
-    /** Announcement-fed remote edge; deliberately does not re-announce. */
-    internal fun mirrorLink(link: TopologyLink) = topology.linked(link)
-    internal fun mirrorUnlink(id: java.util.UUID) = topology.unlinked(id)
+    /**
+     * Announcement-fed remote edge; deliberately does not re-announce *onward*
+     * — that is what keeps mirrored registries from looping — but it does
+     * notify this process's any-scope [onTopology] subscribers (T21), so an
+     * observer of a peer's edges no longer has to poll [all] for them.
+     */
+    internal fun mirrorLink(link: TopologyLink) {
+        topology.linked(link)
+        onLink.forEach { notifyLink(it, link) }
+    }
+
+    /** Announcement-fed remote unlink; notifies [onTopology] only (mirrors [mirrorLink]). */
+    internal fun mirrorUnlink(id: java.util.UUID) {
+        topology.unlinked(id)
+        onUnlink.forEach { listener -> runCatching { listener(id) } }
+    }
 
     private fun notifyLink(listener: (TopologyLink) -> Unit, link: TopologyLink) {
         try { listener(link) } catch (e: Exception) {
@@ -188,6 +248,17 @@ class LocationRegistry {
     /** Refs currently published as [Local] — the initial-sync set for a new peer. */
     fun localRefs(): Set<CellRef> =
         locations.entries.filter { it.value is Local }.mapTo(mutableSetOf()) { it.key }
+
+    /**
+     * Refs currently published as [Remote] — every peer-announced location this
+     * registry holds (T21). The catch-up counterpart of [localRefs] for an
+     * observer constructed *after* the announcements it needs: the [onPublish]
+     * hook names a remote ref exactly once, when it arrives, so anything built
+     * later could previously only rediscover one that happens to be a link
+     * endpoint or a replica named by [instancesOf].
+     */
+    fun remoteRefs(): Set<CellRef> =
+        locations.entries.filter { it.value is Remote }.mapTo(mutableSetOf()) { it.key }
 
     /** Parked invocations awaiting a [publish] for [ref] (test/introspection surface). */
     fun parkedFor(ref: CellRef): List<HostedPortInvocation> =
@@ -398,10 +469,30 @@ class LocationRegistry {
     /**
      * Drop every [Remote] location routed through [via] — the transport's
      * disconnect hook (M5.5): senders park until the peer re-announces.
+     *
+     * T21: this is an unpublish like any other, so it notifies [onUnpublish] —
+     * the same hook [unpublish] and [mirrorUnpublish] fire.
+     *
+     * Notification happens after the whole batch has left [locations], never per
+     * removal inside the scan, and that ordering is load-bearing: this method is
+     * the transport's *send-failure* path as much as its close path (`WsTransport`
+     * calls it from inside an outlet propagate), and a listener is free to send
+     * on the wire itself — a send that can fail and re-enter here. Draining the
+     * scan first means the re-entrant call finds nothing of [via] left and
+     * terminates, instead of recursing through a half-emptied map. The batch is
+     * also what makes a listener's own re-read of this registry answer about a
+     * fully disconnected peer rather than an arbitrary prefix of one.
      */
     fun unpublishRemotes(via: InvocationSink) {
+        val dropped = mutableListOf<CellRef>()
         locations.entries.removeIf { entry ->
-            ((entry.value as? Remote)?.sink === via).also { if (it) indexRemove(entry.key) }
+            ((entry.value as? Remote)?.sink === via).also {
+                if (it) {
+                    indexRemove(entry.key)
+                    dropped += entry.key
+                }
+            }
         }
+        dropped.forEach { ref -> onUnpublish.forEach { notify(it, ref) } }
     }
 }

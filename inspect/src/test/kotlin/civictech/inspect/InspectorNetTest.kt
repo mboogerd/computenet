@@ -25,16 +25,18 @@ import org.junit.jupiter.api.Test
  * - A's own cells report the launcher's network host; B's announced cells
  *   report the peer connection's derived label and no process host;
  * - B's own links arrive as edges, and leave when the peering is severed;
- * - a disconnect retracts B's cells (`unpublishRemotes` fires no hook — the
- *   reconcile sweep is what notices), and healing brings them back;
+ * - a disconnect retracts B's cells (`unpublishRemotes` notifies `onUnpublish`
+ *   since T21, so the retraction rides the removal event), and healing brings
+ *   them back;
  * - a declared cross-boundary stream joins the two sides into one component;
  * - a remote cell is topology + placement only: no state, no observation.
  *
- * Every case starts the inspector *before* the peering, which is both the
- * pilot's real ordering (a socket peer says hello long after startup) and the
- * one that avoids `InspectorModel.discoverRemotes`' documented catch-up hole:
- * an announcement that landed before the publish hook existed is only
- * recoverable for a ref some mirrored link or replica index still names.
+ * Every case starts the inspector *before* the peering, which is the pilot's
+ * real ordering (a socket peer says hello long after startup). T21 also made
+ * the opposite order sound — `LocationRegistry.remoteRefs()` is the catch-up
+ * projection `InspectorModel.sync` now reads, so an inspector built after the
+ * announcements no longer depends on a mirrored link or the replica index
+ * naming the ref.
  */
 class InspectorNetTest {
 
@@ -67,12 +69,15 @@ class InspectorNetTest {
             netName = "jvm-a",
         ).start().also { server = it }
 
-    private fun InspectorServer.snapshot(): TopologySnapshot {
-        reconcilePeersNow()
-        return json.decodeFromString(
+    /**
+     * T21: no forced sweep any more. Peer arrivals, departures and mirrored
+     * edges reach the view as registry events, so the served snapshot is
+     * already current — reading it is the whole helper.
+     */
+    private fun InspectorServer.snapshot(): TopologySnapshot =
+        json.decodeFromString(
             HttpProbe("http://localhost:$boundPort").state(InspectorServer.TOPOLOGY_PATH),
         )
-    }
 
     private fun encode(ref: CellRef) = "${ref.id}:${ref.instanceId}"
 
@@ -86,8 +91,18 @@ class InspectorNetTest {
     private fun InspectorServer.awaitNode(ref: CellRef) =
         awaitUntil("the inspector adopted $ref") { knowsNow(ref) }
 
-    private fun awaitMirroredLink(id: java.util.UUID) =
-        awaitUntil("registry A mirrors link $id") { registryA.all().any { it.id == id } }
+    /**
+     * Strengthened for T21: the barrier is the *inspector's* served edge set,
+     * not `registryA.all()`. `mirrorLink` writes the topology index and then
+     * notifies, so the registry can already name a mirrored edge one hook-call
+     * before the view holds it — the same reason [awaitNode] never waits on the
+     * registry either.
+     */
+    private fun InspectorServer.awaitEdges(count: Int) =
+        awaitUntil("the inspector serves $count edge(s)") { snapshot().edges.size == count }
+
+    private fun InspectorServer.awaitEdge(id: java.util.UUID) =
+        awaitUntil("the inspector serves edge $id") { snapshot().edges.any { it.id == id.toString() } }
 
     @Test
     fun `a peer's cells appear with its network host, and no process host`() {
@@ -134,7 +149,7 @@ class InspectorNetTest {
         peer()
         val linkId = (link as LinkResult.Connected).link.id
         inspector.awaitNode(to.ref)
-        awaitMirroredLink(linkId)
+        inspector.awaitEdge(linkId)
 
         val edge = inspector.snapshot().edges.single { it.id == linkId.toString() }
         edge.from.ref shouldBe encode(from.ref)
@@ -161,22 +176,28 @@ class InspectorNetTest {
         val loopback = peer()
         inspector.awaitNode(theirs.ref)
         inspector.awaitNode(alsoTheirs.ref)
-        awaitUntil("registry A mirrors the peer's link") { registryA.all().isNotEmpty() }
+        inspector.awaitEdges(1)
         inspector.snapshot().nodes.map { it.ref } shouldContain encode(theirs.ref)
 
-        // the transport's close path: it clears locations and notifies nobody,
-        // so only the reconcile sweep can notice
+        // the transport's close path, called synchronously from this thread:
+        // since T21 it clears the locations and notifies `onUnpublish` for each
+        // one, so the view is current the moment `partition()` returns — no
+        // sweep, and no wait
         loopback.partition()
         val severed = inspector.snapshot()
         severed.nodes.map { it.ref } shouldNotContain encode(theirs.ref)
         severed.nodes.map { it.ref } shouldNotContain encode(alsoTheirs.ref)
         // the peer's edge went with its endpoints — `unpublishRemotes` leaves
-        // the mirrored links behind in the topology index
+        // the mirrored links behind in the topology index, so the retraction is
+        // the removal event's own work (InspectorModel.retractDangling)
         severed.edges shouldBe emptyList()
+        // and the registry still holds that stale mirrored edge: the view
+        // dropped it because both endpoints left, not because anything unlinked
+        registryA.all().isNotEmpty() shouldBe true
 
         loopback.heal()
         inspector.awaitNode(theirs.ref)
-        awaitUntil("registry A re-mirrors the peer's link") { registryA.all().isNotEmpty() }
+        inspector.awaitEdges(1)
         val healed = inspector.snapshot()
         healed.nodes.map { it.ref } shouldContain encode(theirs.ref)
         healed.edges.size shouldBe 1

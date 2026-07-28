@@ -53,7 +53,27 @@ fun <Api : Any> FanOutlet<Api>.streamTo(
         }
     }
     subscribe(Use.fixed(target, at))
-    val link = PortLink(ref, at) { unsubscribe(at) }
+    // T21: the teardown drops the source-side bookkeeping as well as the
+    // attachment — exactly what the negotiated `handshake` path above does
+    // (`sourceLinking?.remove(link)`), which this bypass had never mirrored.
+    // Without it an `unlink()`ed streamTo link stays in `linking.links`
+    // forever: `SingleWriterReplication` unlinks a departed follower's
+    // shipping link on every `onUnpublish` and rebuilds it on re-announce, so
+    // each peer disconnect/reconnect left one dead link behind for
+    // `Protocols.sendDownstream`/`AbsorbAck`/`Attention`/topology walks to
+    // keep walking.
+    val link = PortLink(ref, at) { superseded -> unsubscribe(at); linking.remove(superseded) }
+    // T21: streaming again to the same [at] REPLACES the attachment — that is
+    // already what `subscribe` does (`consumers[at] = port`), so the superseded
+    // link must leave [LinkSupport] with it. `active` is keyed by a fresh random
+    // `Link.id`, so without this the bookkeeping accumulates one orphan per
+    // re-stream even though the outlet holds a single consumer, and everything
+    // that walks `linking.links` (protocol relay, `AbsorbAck` progress,
+    // attention, topology walks) counts the corpses. Not `unlink()`: that would
+    // run the superseded link's teardown, `unsubscribe(at)`, and tear down the
+    // attachment just installed. A caller that keeps the default generated [at]
+    // never collides, so this is inert for every pre-T21 call site.
+    linking.links.filter { it.to == at }.forEach(linking::remove)
     linking.register(link)
     // PN-9: fire the full on-link multicast (catch-up moved to onLinkedListeners),
     // not just the single onLinked slot, so a streamTo'd link still catches up.

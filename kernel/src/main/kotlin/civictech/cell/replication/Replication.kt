@@ -141,10 +141,19 @@ class Replication(
 
     init {
         registry.onPublish { ref -> linkOut(ref) }
-        // reconcile (spec 42, G-45): a peer's despawn/eviction removes it from
+        // reconcile (spec 42, G-45): a peer's despawn/eviction — or, since T21,
+        // a whole peer dropped by `unpublishRemotes` — removes it from
         // replicasOf; drop the now-stale outbound gossip link rather than
         // leaving it targeting a gone ref (no ack protocol — this is purely
-        // local bookkeeping, the routed proxy would otherwise just dead-letter)
+        // local bookkeeping, the routed proxy would otherwise just dead-letter).
+        //
+        // Bookkeeping only, deliberately: the outlet attachment itself is left
+        // in place and simply *replaced* if the peer comes back, because the
+        // gossip subscription is keyed by a ref derived from the pair
+        // ([gossipRef]). Unlinking here instead would be the other half of the
+        // same guarantee — but it would have to be repeated in [evict] and
+        // [rebind], and it is the derived key, not this call site, that makes
+        // re-linking idempotent no matter which path dropped the entry.
         registry.onUnpublish { ref -> linked.keys.filter { it.second == ref }.toList().forEach { linked.remove(it) } }
     }
 
@@ -430,7 +439,40 @@ class Replication(
         val sink: Propagate<Any?> = if (targetInterest is Interest.Total) routed
         else Propagate { delta -> sliceTo(delta, targetInterest, keyOf)?.let { routed.propagate(it) } }
         @Suppress("UNCHECKED_CAST")
-        linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(sink)
+        linked[key] = local to (local.outlet as FanOutlet<Propagate<Any?>>).streamTo(sink, at = gossipRef(local.ref, other))
     }
+
+    /**
+     * The stable identity of the gossip subscription `local → other` carries on
+     * `local`'s delta outlet (T21).
+     *
+     * Derived rather than [PortRef.generate]d because *re-linking is a normal
+     * event*: a peer disconnect drops the pair from [linked] (the [onUnpublish]
+     * reconciliation above) without unsubscribing the outlet, and the peer's
+     * next announcement re-runs [maybeLink]. With a fresh ref per `streamTo`
+     * that re-link installs a *second* consumer beside the orphaned first —
+     * which nothing names any more, so no [evict]/[rebind]/reconcile can ever
+     * reach it — and every disconnect/reconnect cycle adds one more, unbounded.
+     * The mergeable merge is idempotent, so duplicated delivery still converges
+     * and no convergence assertion can see the leak (see
+     * `GossipLinkIdempotenceTest`).
+     *
+     * Keyed on the ordered pair, so [FanOutlet.subscribe]'s
+     * `consumers[ref] = port` *replaces* the stale attachment rather than
+     * joining it. That makes re-linking idempotent at the outlet itself,
+     * independent of which reconciliation hook fired or in what order — the
+     * self-healing property, rather than plugging one call site.
+     *
+     * No owning `cell`: this endpoint is a free-standing [Use.fixed] stand-in
+     * for the *remote* inlet, not a port of [local] (PortRef's own rule —
+     * "free-standing endpoints have none"), so only the id becomes derived
+     * where it was random. The derivation mirrors [watermarkRef] /
+     * [PortRef.of]: a name-spaced UUID over the identities involved.
+     */
+    private fun gossipRef(local: CellRef, other: CellRef): PortRef = PortRef(
+        UUID.nameUUIDFromBytes(
+            "gossip:${local.id}:${local.instanceId}:${other.id}:${other.instanceId}".toByteArray(),
+        ),
+    )
 
 }
