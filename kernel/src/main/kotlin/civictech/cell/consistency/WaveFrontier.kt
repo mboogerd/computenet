@@ -194,10 +194,42 @@ class WaveFrontier(
         }
     }
 
+    /**
+     * T11-F self-documentation (SRP audit): the three arms below are not one
+     * "is it waved" test with an edge case — they are two DIFFERENT catch-up
+     * mechanisms plus the ordinary waved path, and nothing before this KDoc
+     * said so:
+     *
+     *  - **`ctx == null`** serves **push catch-up**: the original late-join
+     *    unicast (spec 20/21 §Pull; the `onLinked` post-install hook,
+     *    G-18/G-22) sends its state-as-delta-from-empty with NO
+     *    [civictech.cell.MessageContext] at all — "catch-up emission is
+     *    currently unwaved" is the residual noted throughout
+     *    `93-feature-interactions.md` (N4×N9, N4×N15, N8×N9, N9×N13,
+     *    N9×N26). It shares this arm with genuinely context-free traffic
+     *    (management/generic-protocol sends), which is also, correctly,
+     *    passed straight through.
+     *  - **`ctx.baseline != null`** serves **pull catch-up**: the LATER,
+     *    decided mechanism (G-38, 93 I-24) — a topology-versioned
+     *    state-as-delta stamped with a non-null [civictech.cell.MessageContext.baseline],
+     *    "never a wave position", released immediately and excluded from
+     *    every wave set exactly like the push arm above, but distinguishably
+     *    marked instead of merely absent.
+     *  - The remaining (fall-through) arm is the ordinary **waved** data
+     *    path below, buffered until its edge frontier completes.
+     *
+     * T02's divergence marker: G-18 designed on-demand pull as a *distinct*,
+     * later mechanism from the original push-based late-join catch-up
+     * (G-22) without retrofitting the older push path onto the newer
+     * baseline stamp — so this inlet permanently carries two catch-up
+     * dialects, not a transitional one. Treat the null arm as a second,
+     * load-bearing catch-up path, not an incidental default.
+     */
     override fun offer(invocation: Invocation) {
         val ctx = invocation.context
         if (ctx == null) {
-            // unwaved traffic: pass straight through
+            // unwaved traffic (push catch-up OR context-free management/
+            // protocol sends): pass straight through — see the KDoc above.
             release(invocation)
             return
         }
@@ -205,6 +237,8 @@ class WaveFrontier(
             // Catch-up baseline (spec 20/21 §Pull, 20/22 §Interaction, decided in 93
             // I-24): a topology-versioned state-as-delta, never a wave position —
             // released immediately, never buffered, excluded from every wave set.
+            // Pull catch-up's arm — see the KDoc above for how it differs from
+            // the null (push catch-up) arm above it.
             release(invocation)
             return
         }
