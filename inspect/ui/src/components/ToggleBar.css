@@ -1,0 +1,31 @@
+.toggle-bar {
+  display: flex;
+  gap: 0.9rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  flex-wrap: wrap;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  cursor: not-allowed;
+  user-select: none;
+}
+
+.toggle input {
+  cursor: not-allowed;
+}
+
+.toggle--active {
+  color: var(--text);
+  cursor: pointer;
+}
+
+.toggle--active input {
+  cursor: pointer;
+}
