@@ -161,10 +161,23 @@ describe('TopologyClient', () => {
     const es = MockEventSource.last!;
     es.open();
 
-    es.message(evt(11, 'state.summary')); // M1 kind — additive evolution, not yet understood
+    es.message(evt(11, 'error.deadLetter')); // M2 kind — additive evolution, not yet understood
     expect(onEvent).not.toHaveBeenCalled();
 
     es.message(evt(12, 'lifecycle')); // must be accepted, not treated as a gap
     expect(onEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('recognizes state.summary (M1) as a known kind and forwards it', async () => {
+    mockFetchOnce(10);
+    await client.start();
+    const es = MockEventSource.last!;
+    es.open();
+
+    es.message({ seq: 11, kind: 'state.summary', payload: { ref: 'a', cardinality: '4 rows', frontier: null, staleMs: 0 } });
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'state.summary', payload: expect.objectContaining({ ref: 'a' }) }),
+    );
   });
 });

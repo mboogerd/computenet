@@ -1,8 +1,11 @@
 import { For, Show, createMemo } from 'solid-js';
 import type { EdgeRole, Ref } from '../api/types';
+import { computeHostHulls, hostFingerprint, type HostHull } from '../layout/hulls';
 import { portAnchors } from '../layout/ports';
 import { layoutEngine } from '../solid/layout';
+import { stateSummaries } from '../solid/detail';
 import { edges, nodes, selection, setSelection, store, structuralVersion } from '../solid/state';
+import { showHosts, showState } from '../solid/toggles';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
 import './Canvas.css';
 
@@ -22,6 +25,17 @@ export default function Canvas() {
 
   const nodeRefs = createMemo(() => [...layout().nodes.keys()]);
   const edgeIds = createMemo(() => Object.keys(edges));
+
+  // M1-FE ticket Implement §3: "recomputed only on structuralVersion change
+  // or host change." A host reassignment alone is a pure value change (does
+  // not bump structuralVersion — see sync/diff.ts), so this memo adds its
+  // own fingerprint dependency rather than piggy-backing on `layout()`'s.
+  const hostFp = createMemo(() => hostFingerprint([...store.nodes.keys()], (ref) => nodes[ref]?.host ?? null));
+  const hulls = createMemo<HostHull[]>(() => {
+    if (!showHosts()) return [];
+    hostFp(); // dep: recompute on host reassignment even without a structural change
+    return computeHostHulls([...store.nodes.keys()], layout(), (ref) => nodes[ref]?.host ?? null);
+  });
 
   function anchorOf(ref: Ref, port: string) {
     const ln = layout().nodes.get(ref);
@@ -52,6 +66,20 @@ export default function Canvas() {
           onClick={onSceneClick}
         >
           <svg class="canvas__svg" width={layout().width} height={layout().height}>
+            {/* Hulls first: SVG paints in document order, so "rendered beneath
+                edges" (10-target-v3.md toggle table) means listing them
+                before the edges/ports below. */}
+            <For each={hulls()}>
+              {(h) => (
+                <g class="host-hull">
+                  <rect class="host-hull__rect" x={h.x} y={h.y} width={h.w} height={h.h} rx={12} ry={12} />
+                  <text class="host-hull__label" x={h.x + 10} y={h.y + 16}>
+                    {h.host}
+                  </text>
+                </g>
+              )}
+            </For>
+
             <For each={edgeIds()}>
               {(id) => {
                 const e = () => edges[id];
@@ -148,6 +176,32 @@ export default function Canvas() {
                         </For>
                       </div>
                     </Show>
+                  </div>
+                </Show>
+              );
+            }}
+          </For>
+
+          {/* State toggle chips — a separate absolutely-positioned layer
+              (not nested inside `.node-card`, which clips overflow for its
+              own text-ellipsis rows) anchored just below each card. M1-FE
+              ticket "Correction for clarity": driven purely by received
+              `state.summary` events; only the observed (== selected) cell
+              ever has one, so an unselected cell simply shows no chip. */}
+          <For each={nodeRefs()}>
+            {(ref) => {
+              const ln = () => layout().nodes.get(ref);
+              const summary = () => stateSummaries[ref];
+              return (
+                <Show when={showState() && ln() && summary()}>
+                  <div
+                    class="node-state-chip"
+                    style={{ left: `${ln()!.x}px`, top: `${ln()!.y + ln()!.h + 4}px`, width: `${ln()!.w}px` }}
+                    title="cardinality · frontier · staleness"
+                  >
+                    {summary()!.cardinality ?? '—'} ·{' '}
+                    {summary()!.frontier ? `${summary()!.frontier!.source.slice(0, 6)}·${summary()!.frontier!.counter}` : '—'} ·{' '}
+                    {summary()!.staleMs}ms
                   </div>
                 </Show>
               );

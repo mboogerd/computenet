@@ -1,0 +1,7 @@
+{
+  "ref": "e2391304-717d-45ad-b260-9a22d9734ba5:0",
+  "frontier": null,
+  "kind": "snapshot",
+  "value": { "opaque": "AdvertisedLedger@3f2c1a{entries=12, tombstones=2}" },
+  "staleMs": 0
+}

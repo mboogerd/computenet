@@ -64,23 +64,61 @@ verbatim per the ticket.
   intentionally re-lays-out the whole graph from a focal claim on any
   structural change (see `test/layout.test.ts` for the property this buys).
 
-## Deferred (M1+, per the ticket's Exclusions)
+## M1: detail panel, state, process-host hulls
 
-Detail-panel content beyond a selected node's name, hulls (process/network
-host grouping), errors, flow, state chips, the multi-graph navigator. No
-optimistic writes — this is a read-only instrument. No CSS framework,
-router, or state library (agora precedent).
+Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M1-FE.md`:
+
+- **Detail panel** (`src/components/DetailPanel.tsx`) always stacks all four
+  subsections on selection — Descriptor & placement (`GET /cell/{ref}`),
+  State, and Flow/Errors placeholders ("arrives with the ... milestone").
+  No perspective switching (that was v2 — see `10-target-v3.md`).
+- **State subscription lifecycle** (`src/sync/detailClient.ts`,
+  `src/solid/detail.ts`): selection drives exactly one `POST .../observe` /
+  `DELETE .../observe` pair (P6 — browsing never subscribes); `state.summary`
+  SSE events for the selected ref trigger a `GET .../state` refetch.
+  `DetailController` is framework-free and directly unit-tested
+  (`test/detailClient.test.ts`) the same way `sync/client.ts` is.
+- **Value rendering** (`src/components/ValueView.tsx`): `$table` as a data
+  table (tombstoned rows struck through), objects/lists as an indented tree,
+  `$truncated` as a "showing N of M" note, `opaque` as a code block. The
+  dispatch logic is pure guard functions in `src/api/types.ts`
+  (`tableOf`/`truncatedOf`/`opaqueOf`/...), tested per-shape in
+  `test/value.test.ts` against one `fixtures/cell-state-*.json` per shape.
+- **Process-host hulls** (`src/layout/hulls.ts`): padded-bbox hulls grouping
+  nodes by `Node.host`, rendered beneath edges, recomputed on
+  `structuralVersion` change *or* a host reassignment (a pure value change
+  that does not itself bump `structuralVersion` — see `Canvas.tsx`'s
+  `hostFp` memo). "Network hosts" stays disabled (M5).
+- **State toggle chips** on the canvas: driven purely by received
+  `state.summary` events; since only the selected cell is ever observed in
+  M1, at most one node ever shows a chip at a time.
 
 ## Notes
 
-- `fixtures/topology.json` is the skillmatch pipeline's topology, laid out
-  across 3 hosts (13 cells total: 10 pipeline cells + the 3 `ObserveCell`
-  sinks the pilot's `stateJson()` reads from) — see the M0-FE report for how
-  the exact host split was chosen (M0-BE didn't exist yet to consult) and
-  why `manifests` is left `[]` everywhere (we cannot honestly claim
-  DURABLE/GLITCH_FREE/etc. without running `ContractRegistry.cellDescriptor`,
-  which is M0-BE's job — the M0 evaluator reconciles this fixture to the real
-  server response).
-- `mock/serve.mjs` is a dependency-free static server for that fixture, not a
-  stand-in for `:inspect` — it serves the topology once and heartbeats the
-  SSE stream, nothing else.
+- `fixtures/topology.json` is a verbatim capture of the real skillmatch
+  pilot's `GET /api/inspect/topology` (reconciled to reality by M0-EVAL): 16
+  cells (10 named pipeline cells + 6 `ObserveCell` sinks) on the single
+  `skillmatch` process host, 18 `CONSUME` edges. `fixtures/topology-multihost.json`
+  is a **synthetic** M1-FE addition (not a server capture) — 3 hosts, 2 cells
+  each — added because the single-host golden fixture cannot exercise the
+  process-host hull toggle's grouping; see `test/hulls.test.ts`.
+- `fixtures/cell-detail.json` and `fixtures/cell-state-*.json` are M1-FE
+  additions, hand-authored against `20-api-contract.md`'s `CellDetail`/
+  `CellState`/`Value` shapes ahead of a real `:inspect` M1 server response.
+  Two are FE-side assumptions flagged for M1-EVAL's "reconcile fixtures to
+  the server, not vice versa": the tombstoned-row wire shape (contract
+  doesn't specify one) and sending the ref unencoded in the URL path.
+- `mock/serve.mjs` is a dependency-free static server for the fixtures, not a
+  stand-in for `:inspect`. M1-FE extended it with `/cell/{ref}`,
+  `/cell/{ref}/state`, and `POST`/`DELETE /cell/{ref}/observe`: observing a
+  cell starts a 2s timer that grows a fake table and broadcasts
+  `state.summary`, so the live-update and observe-lifecycle behavior can be
+  checked by hand without a real backend (`npm run mock` + `npm run dev`,
+  then select a node). Still not a semantics stand-in — single global
+  observation slot, one fake dataset.
+
+## Deferred (M2+, per the ticket's Exclusions)
+
+Real errors/flow rendering, the multi-graph navigator. No optimistic writes
+— this is a read-only instrument. No CSS framework, router, or state
+library (agora precedent).

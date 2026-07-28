@@ -3,12 +3,14 @@ import Canvas from './components/Canvas';
 import DetailPanel from './components/DetailPanel';
 import Header from './components/Header';
 import ToggleBar from './components/ToggleBar';
+import { initDetail } from './solid/detail';
 import { connect } from './solid/state';
 import { initTheme } from './solid/theme';
 import './app.css';
 
 export default function App() {
   initTheme();
+  initDetail();
   onMount(() => connect());
 
   return (

@@ -37,6 +37,37 @@
   stroke-width: 1;
 }
 
+.host-hull__rect {
+  fill: var(--surface-raised);
+  stroke: var(--hairline-strong);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.6;
+}
+
+.host-hull__label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  fill: var(--text-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+.node-state-chip {
+  position: absolute;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  padding: 0.1rem 0.35rem;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 .node-card {
   position: absolute;
   background: var(--surface);

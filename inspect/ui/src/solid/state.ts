@@ -1,6 +1,8 @@
 import { batch, createSignal } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Edge, EdgeRemoval, InspectEvent, Ref } from '../api/types';
+import { onStateSummary } from './detail';
+import { selection, setSelection } from './selection';
 import { TopologyClient, type ConnState } from '../sync/client';
 import type { EdgeRec, NodeRec } from '../sync/records';
 import { TopologyStore } from '../sync/store';
@@ -25,8 +27,10 @@ const [edges, setEdges] = createStore<Record<string, EdgeRec>>({});
 const [structuralVersion, setStructuralVersion] = createSignal(0);
 const [conn, setConn] = createSignal<ConnState>('connecting');
 const [ready, setReady] = createSignal(false);
-const [selection, setSelection] = createSignal<Ref | null>(null);
 
+// Re-exported from ./selection so existing consumers (Canvas, DetailPanel)
+// keep importing selection/setSelection from here; detail.ts imports the
+// signal from ./selection directly to avoid a state.ts <-> detail.ts cycle.
 export { conn, edges, nodes, ready, selection, setSelection, structuralVersion };
 
 let prevNodes: ReadonlyMap<Ref, NodeRec> = new Map();
@@ -69,6 +73,13 @@ function applyEvent(event: InspectEvent): void {
       break;
     case 'lifecycle':
       store.applyLifecycle(event.payload.ref, event.payload.lifecycle, event.payload.generation);
+      break;
+    case 'state.summary':
+      // Never touches the topology store — a summary is a value fact about
+      // the currently-observed cell, routed to the M1 detail/state module
+      // (which ignores it if it does not name the currently-selected ref;
+      // P6: only the selected cell is ever observed in M1).
+      onStateSummary(event.payload);
       break;
     default:
       break; // heartbeat, and any later-milestone kind: no local state to update yet
