@@ -33,6 +33,16 @@ import civictech.cell.host.ManagedHost
  *
  * ### What is *not* in the predicate, and why
  *
+ * **`LocationRegistry.parkedFor`** is a *consequence* of coldness, not a
+ * definition of it: it holds invocations that could not be delivered — because
+ * the target has no location yet, or its host's intake is closed — and it fills
+ * up for reasons that have nothing to do with a parked cell (a cell that has
+ * not been published yet, a saturated host). A component with an empty park
+ * queue can be thoroughly cold (nobody is sending to it), and a component with
+ * a full one can be perfectly hot (it is merely being spawned). M2 already
+ * surfaces those queues as the error lane's `parked` rows, which is the honest
+ * place for them.
+ *
  * **Attention-parked cones** (spec 34): `AttentionScheduler.attentionParked` is
  * internal to the kernel and keyed inside a host's private scheduler, and the
  * band itself lives on the cell object behind `ManagedHost`'s private `cells`
