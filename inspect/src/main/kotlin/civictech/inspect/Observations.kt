@@ -127,6 +127,17 @@ internal class Observations(
     val openRefs: Set<CellRef> get() = synchronized(lock) { open.keys.toSet() }
 
     /**
+     * The `ObserveCell` sinks this inspector has spawned into the graph — its
+     * own instruments. They are published cells like any other, so anything
+     * enumerating the graph will find them; [DataSearch] excludes them, because
+     * an instrument reporting its own readings as results is the observer
+     * effect wearing a search box (selecting a cell would make it start
+     * appearing in content-search hits, holding a copy of the very state its
+     * producer already answered for).
+     */
+    val sinkRefs: Set<CellRef> get() = synchronized(lock) { open.values.mapTo(HashSet()) { it.sinkRef } }
+
+    /**
      * Start observing [ref], or renew the idle deadline if it is already
      * observed. False when the cell cannot be observed at all — it is not
      * locally hosted, has no generated descriptor, exposes no outlet, or emits

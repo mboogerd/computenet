@@ -140,6 +140,7 @@ class InspectorServer(
         registry = registry,
         components = model::components,
         observed = observations::reading,
+        instruments = { observations.sinkRefs },
     )
 
     /** M2 — the error lane (see [Errors]'s doc for the three sources it feeds). */

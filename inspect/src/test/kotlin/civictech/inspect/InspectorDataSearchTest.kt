@@ -265,6 +265,30 @@ class InspectorDataSearchTest {
         registry.all().size shouldBe linksBefore
     }
 
+    /**
+     * The inspector's own `ObserveCell` sink is a published cell holding a copy
+     * of what it observes — so a search that did not exclude it would start
+     * reporting the inspector's own instrument the moment a user selected a
+     * cell. An instrument is not a subject.
+     */
+    @Test
+    fun `the inspector's own observation sink is never a hit`() {
+        spawn(refA)
+        seed(refA, "alice")
+        val serving = started(names = mapOf(refA to "people"))
+        probe.postForm("", "${InspectorServer.CELL_PATH}/${InspectorServer.encodeRef(refA)}/observe")
+            .statusCode() shouldBe 204
+        awaitUntil("the sink is published") { registry.localRefs().size == 2 }
+        serving.observedRefs shouldContainExactly setOf(refA)
+
+        val result = search("alice")
+
+        // exactly one hit: the cell itself, not the sink mirroring it
+        result.hits.single().ref shouldBe InspectorServer.encodeRef(refA)
+        // and the sink costs nothing either — it is not a candidate at all
+        result.cost shouldBe SearchCost(cellsQueried = 1, coldSkipped = 0)
+    }
+
     /** A held ref (mid-migration) is parking its traffic by design — do not add to it. */
     @Test
     fun `a held cell is skipped and counted cold`() {

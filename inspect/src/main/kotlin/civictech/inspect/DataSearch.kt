@@ -80,6 +80,13 @@ internal class DataSearch(
     private val components: () -> List<Component>,
     /** A free read for a cell a client already observes — no host round-trip, no new attachment. */
     private val observed: (CellRef) -> StateReading?,
+    /**
+     * The inspector's own `ObserveCell` sinks ([Observations.sinkRefs]).
+     * Skipped outright — not counted as candidates, not counted as cost: an
+     * instrument is not a subject, and a sink only ever mirrors state its
+     * producer already answered for.
+     */
+    private val instruments: () -> Set<CellRef> = ::emptySet,
     private val clock: () -> Long = System::currentTimeMillis,
     private val maxCells: Int = MAX_CELLS,
     private val budgetMs: Long = BUDGET_MS,
@@ -104,9 +111,11 @@ internal class DataSearch(
         var capReached = false
         var budgetSpent = false
 
+        val ours = instruments()
         components@ for (component in components()) {
             for (node in component.nodes) {
                 val ref = InspectorServer.decodeRef(node.ref) ?: continue
+                if (ref in ours) continue
                 when (candidacy(ref)) {
                     Candidacy.COLD -> {
                         coldSkipped += 1
