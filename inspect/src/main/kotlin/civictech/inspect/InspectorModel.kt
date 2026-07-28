@@ -49,12 +49,31 @@ internal class InspectorModel(
      * exactly as M0 did.
      */
     private val flow: () -> FlowBinding = { FlowBinding.None },
+    /** M5 — the network-host resolver; defaults to a purely local process. */
+    private val peers: Peers = Peers(registry, Node.LOCAL_NET),
 ) {
     private val lock = Any()
     private val hostNames: Map<ManagedHost, String> = hosts.entries.associate { (name, host) -> host to name }
 
     private val nodes = LinkedHashMap<CellRef, Node>()
     private val edges = LinkedHashMap<UUID, Edge>()
+
+    /**
+     * M5 — the refs in [nodes] this view learned from a peer announcement
+     * rather than from a local publish. Tracked explicitly because the one
+     * removal path the kernel offers no hook for —
+     * `LocationRegistry.unpublishRemotes`, the transport's disconnect — has to
+     * be found by comparing this set against the registry (see
+     * [reconcilePeers]).
+     */
+    private val mirrored = LinkedHashSet<CellRef>()
+
+    /**
+     * M5 — edge ids [declareLink] created. Held apart from the registry-fed
+     * ids so [reconcilePeers]' "in my view but no longer in the registry"
+     * sweep never retracts an edge the registry was never asked about.
+     */
+    private val declared = LinkedHashSet<UUID>()
 
     /** Derived `PortRef.id -> declared port name` per cell (PN-1 derivation, inverted). */
     private val portNames = HashMap<CellRef, Map<UUID, String>>()
@@ -100,6 +119,14 @@ internal class InspectorModel(
             nodes.getOrPut(ref) { nodeOf(ref) }
             componentIndex.addCell(ref)
             announcedLifecycle[ref] = lifecycleOf(ref)
+        }
+        // M5: an inspector started *after* peering already announced picks up
+        // no publish hook for the refs already mirrored, so the catch-up half
+        // has to find them the same way [reconcilePeers] does
+        discoverRemotes().forEach { ref ->
+            nodes.getOrPut(ref) { nodeOf(ref) }
+            mirrored += ref
+            componentIndex.addCell(ref)
         }
         topologyLinks().forEach { link ->
             edges.getOrPut(link.id) { edgeOf(link) }
@@ -392,6 +419,7 @@ internal class InspectorModel(
         componentIndex.removeCell(ref)
         announcedLifecycle.remove(ref)
         portNames.remove(ref)
+        mirrored -= ref
         // a despawn unpublishes but does not unlink (only an explicit
         // `Link.unlink` retracts an edge), so the flow feed's taps on this
         // cell's outlets are released from here, not from [unlinked]
@@ -427,6 +455,152 @@ internal class InspectorModel(
     }
 
     /**
+     * M5 — a ref a peer announced (`Peering.announceTo` → `RegistryMirrorCell`
+     * → [LocationRegistry.publish]`(ref, sink)`). Fed from the registry's
+     * any-publish hook, filtered to [LocationRegistry.Remote] locations by the
+     * caller, so a local publish never arrives here twice.
+     *
+     * Upsert rather than add-once: a reconnecting peer re-announces every ref
+     * it holds, and the second announcement may carry a *different* network
+     * host (a new bridge egress — see [Peers]). Re-emitting `topology.node
+     * added` for a node whose content changed is exactly the upsert the client
+     * applies; an announcement that changes nothing emits nothing.
+     */
+    fun mirroredPublish(ref: CellRef) = synchronized(lock) { adopt(ref, announced = true) }
+
+    /**
+     * Re-derive [ref]'s node from the registry and emit it if anything about it
+     * changed. [announced] records whether this view is holding it because a
+     * peer announced it — the bit [reconcilePeers] sweeps against.
+     */
+    private fun adopt(ref: CellRef, announced: Boolean) {
+        val node = nodeOf(ref)
+        if (announced) mirrored += ref else mirrored -= ref
+        if (nodes.put(ref, node) == node) return
+        componentIndex.addCell(ref)
+        emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
+            put("op", Event.ADDED)
+            put("node", inspectorJson.encodeToJsonElement(withGraph(ref, node)))
+        })
+    }
+
+    /**
+     * M5 — reconcile this view against the registry for the three changes the
+     * kernel fires no hook for. Driven by the inspector's scheduler, on the
+     * same tick as [publishGraphChanges] so a peer arriving or leaving lands in
+     * the component partition before the `graphs.changed` that announces it.
+     *
+     * 1. **A peer disconnected.** `LocationRegistry.unpublishRemotes(via)` —
+     *    the transport's close path — drops every location routed through a
+     *    dead socket *silently*: it notifies neither `onUnpublish` nor
+     *    `onLocalUnpublish` (unlike `mirrorUnpublish`, which does). So a
+     *    mirrored ref that has lost its location is how a disconnect becomes
+     *    visible, and it retracts as an ordinary `topology.node removed`.
+     * 2. **Mirrored links.** `mirrorLink`/`mirrorUnlink` deliberately do not
+     *    re-announce, and `onLocalTopology` fires only for *local* links — so
+     *    the peer's own edges appear and disappear in
+     *    [LocationRegistry.all] with no delta anywhere. A set difference
+     *    against this view supplies them. A mirrored link also has to be
+     *    dropped when the peer goes: `unpublishRemotes` clears *locations*, not
+     *    the topology index, so a partition leaves the peer's edges behind with
+     *    both endpoints gone — a mirrored link is therefore retained only while
+     *    at least one of its endpoints is still a cell this view knows.
+     * 3. **Late-discovered remote refs.** Ordinarily the publish hook is first,
+     *    but an announcement whose ref reaches us only as a link endpoint (or a
+     *    replica instance discovered through [LocationRegistry.instancesOf])
+     *    is adopted here rather than left as a dangling edge.
+     *
+     * Idempotent and O(V+E) on the inspector's own thread: nothing here runs on
+     * a graph thread, and it touches no cell (P6 — this is registry metadata).
+     */
+    fun reconcilePeers() = synchronized(lock) {
+        mirrored.toList().forEach { ref ->
+            if (peers.isRemote(ref)) return@forEach
+            // No location at all: the peer is gone, retract the cell. A
+            // location that turned *Local* instead means the ref migrated onto
+            // this JVM — re-derive it (it has a process host now) and stop
+            // treating it as announced, rather than deleting a live cell.
+            if (registry.location(ref) == null) unpublished(ref) else adopt(ref, announced = false)
+        }
+        discoverRemotes().forEach(::mirroredPublish)
+
+        // a local link is authoritative on its own (its hooks are exact); a
+        // mirrored one is only as live as the cells it names
+        val localIds = registry.localLinks().mapTo(HashSet()) { it.id }
+        val live = topologyLinks().filter { it.id in localIds || anchored(it) }.associateBy { it.id }
+        live.forEach { (id, link) -> if (id !in edges) linked(link) }
+        edges.keys.filter { it !in live && it !in declared }.toList().forEach(::unlinked)
+    }
+
+    /** Does [link] still name a cell this view holds? (See [reconcilePeers] point 2.) */
+    private fun anchored(link: TopologyLink): Boolean =
+        link.from.cell?.let { it in nodes } == true || link.to.cell?.let { it in nodes } == true
+
+    /**
+     * Every peer-announced ref the registry currently holds that this view has
+     * not adopted. There is no `remoteRefs()` on [LocationRegistry] — the
+     * announcement seam is a hook, not an index — so this reads the two
+     * registry projections that *do* name remote refs: the topology index
+     * (every mirrored link's endpoints) and the instances-by-logical-id index
+     * (a remote replica of a cell published here, spec 42).
+     *
+     * Residual, honestly stated: a remote cell that is neither linked to
+     * anything nor a replica of a locally published cell is invisible to a
+     * *catch-up* read. It is still picked up by the publish hook, so the only
+     * case that loses it is an inspector constructed after such a cell was
+     * announced — and even then only until the peer re-announces (a reconnect
+     * replays `localRefs()`) or the cell acquires a link. Closing the hole
+     * outright wants a remote-refs projection on `LocationRegistry`, next to
+     * `localRefs()`; that is a kernel change M5-NET does not own.
+     */
+    private fun discoverRemotes(): List<CellRef> {
+        val found = LinkedHashSet<CellRef>()
+        fun consider(ref: CellRef?) {
+            if (ref != null && ref !in nodes && peers.isRemote(ref)) found += ref
+        }
+        topologyLinks().forEach { link -> consider(link.from.cell); consider(link.to.cell) }
+        nodes.keys.toList().forEach { ref -> registry.instancesOf(ref.id).forEach(::consider) }
+        return found.toList()
+    }
+
+    /**
+     * M5 — an application-declared edge, for a cross-boundary stream the kernel
+     * records nowhere.
+     *
+     * `ManagedHost.connect` — the one path that writes the topology index — is
+     * `LinkAdmission.connect`, which resolves *both* endpoints in the host's
+     * own `cells` map: a cross-JVM link is therefore not expressible as a
+     * `TopologyLink` at all. What actually crosses the wire in every peered
+     * demo is `outlet.streamTo(RoutedPropagate(peerRef, port, registry::deliver))`
+     * — a real consume-role subscription on a real local outlet, but one no
+     * index in the kernel knows about, on either side.
+     *
+     * So the application declares it, exactly as it annotates a graph's name
+     * ([nameGraph]): the inspector never invents an edge, and never guesses one
+     * from a heuristic — it reports the wiring the process says it performed.
+     * The id is derived from the two endpoints, so re-declaring the same stream
+     * is idempotent and survives a restart with the same edge id.
+     *
+     * The producing endpoint is locally hosted by construction, so the edge
+     * takes M3's ordinary tap and carries a real per-message rate — declare it
+     * *after* the producing cell is published, or the flow feed will answer the
+     * contract's `fused: null` for it forever.
+     */
+    fun declareLink(from: PortRef, to: PortRef): UUID = synchronized(lock) {
+        val id = declaredLinkId(from, to)
+        declared += id
+        if (id in edges) return@synchronized id
+        val link = TopologyLink(id, from, to)
+        edges[id] = edgeOf(link)
+        componentIndex.addLink(id, from.cell, to.cell)
+        emitEvent(Event.TOPOLOGY_LINK, buildJsonObject {
+            put("op", Event.ADDED)
+            put("edge", inspectorJson.encodeToJsonElement(edges.getValue(id)))
+        })
+        id
+    }
+
+    /**
      * Liveness frame. It re-states the *current* seq without consuming one, so
      * it is inert for an up-to-date client and a gap signal for one that lost a
      * delta while the graph was quiet.
@@ -443,6 +617,19 @@ internal class InspectorModel(
     private fun frame(seq: Long, kind: String, payload: JsonObject): String =
         inspectorJson.encodeToString(Event(seq, kind, payload))
 
+    /**
+     * One node's contract shape.
+     *
+     * A **peer-announced** ref answers the same fields honestly rather than
+     * differently: `RegistryAnnounce.published` carries a [CellRef] and nothing
+     * else, so the registry captured no class for it
+     * ([LocationRegistry.describe] is written on the local publish path only)
+     * and there is no descriptor to read — type `<unknown>`, no color, no
+     * manifests, no ports. Its process host is likewise unknowable from here
+     * (`locate` answers only for [LocationRegistry.Local]), which the contract
+     * covers with `host: null`; its *network* host is the one placement fact a
+     * mirrored location does carry, and that is what M5 adds.
+     */
     private fun nodeOf(ref: CellRef): Node {
         // the class is what the registry captured at publish time; everything
         // structural comes from its generated descriptor, the authoritative
@@ -458,8 +645,9 @@ internal class InspectorModel(
             manifests = descriptor?.manifest?.map { it.name }?.sorted() ?: emptyList(),
             ports = descriptor?.ports?.map { NodePort(it.name, it.direction.name, it.contractFqn) } ?: emptyList(),
             host = host?.let { hostNames[it] ?: defaultHostName(it) },
-            // M0 is single-process; peer introspection is M5
-            net = Node.LOCAL_NET,
+            // M5: the JVM this ref lives on — [Peers.localNet] for a local
+            // publish, the announcing peer's derived label for a mirrored one
+            net = peers.netOf(ref) ?: peers.localNet,
             // stamped on the way out by [stamped], like `graph`: whether a cell
             // is running is a property of its host *now*, not of the publish
             // that recorded it (M5-COLD — see [Heat])
@@ -517,6 +705,15 @@ internal class InspectorModel(
 
         /** The contract's ref encoding — shared with the route parser's inverse. */
         fun encode(ref: CellRef): String = InspectorServer.encodeRef(ref)
+
+        /**
+         * A declared edge's id: derived from its two endpoints, in the same
+         * name-based shape `PortRef.of` uses, so declaring the same stream
+         * twice — or after a restart — yields the same `Edge.id` rather than a
+         * second edge for one link.
+         */
+        fun declaredLinkId(from: PortRef, to: PortRef): UUID =
+            UUID.nameUUIDFromBytes("inspect-declared:${from.id}->${to.id}".toByteArray())
 
         fun defaultHostName(host: ManagedHost): String = "host-" + host.ref.id.toString().substringBefore('-')
     }

@@ -183,6 +183,51 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M4-FE.md`:
   `fixtures/topology.json`/`fixtures/errors.json` (see
   `test/graphs-fixture.test.ts`).
 
+## M5-NET: network-host hulls, remote-cell placement
+
+Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M5-NET.md`:
+
+- **Network-host hulls** (`src/layout/hulls.ts`'s `computeNetHulls`/
+  `netFingerprint`): dashed padded-bbox hulls grouping nodes by `Node.net`,
+  painted *before* the process hulls and padded twice as wide, so "net
+  outside, proc inside" holds both geometrically and in paint order. A hull
+  is tagged `peer` when no member of it reports a process host. The process
+  hull became solid at the same time, which is what 10-target-v3.md's toggle
+  table always said — the distinction only starts carrying information once
+  a net hull sits around it. `test/net.test.ts` pins the nesting property.
+- **The Network hosts toggle is functional**, the last of the five; nothing
+  in `ToggleBar` is disabled any more.
+- **Remote cells** (`src/util/placement.ts`): `host === null` is the
+  discriminator — it is the server's own statement, since a peer-announced
+  ref has a mirrored location (a bridge, not a `ManagedHost`) and the
+  contract's `host` is null for exactly those. Deliberately *not*
+  `net !== 'local'`: the local JVM's network host is whatever `--net-name`
+  says. The detail panel's placement rows name both levels (with a `peer`
+  tag), and State/Flow/Errors each render one verbatim sentence —
+  `REMOTE_NOTICE`.
+- **Card anchors** (`src/layout/ports.ts`'s `cardAnchor`): an edge endpoint
+  whose port the node never declared now attaches to the middle of the card's
+  in/out side instead of the whole edge being dropped. This is M3-EVAL's open
+  question 1, which M5 makes real: a peer-announced cell arrives as a bare
+  `CellRef`, so it has no descriptor, no ports, and its mirrored edges carry
+  raw port ids.
+- `fixtures/topology-nets.json` is a **synthetic** two-network snapshot
+  (local `jvm-a` over two process hosts + one announced peer with no process
+  host), added for the same reason M1-FE added the multi-host one.
+
+### Two-JVM run recipe (what the network hulls were verified against)
+
+```
+./gradlew :demo:shopping:installDist
+./demo/shopping/build/install/shopping/bin/shopping 18081 --listen 19101 --inspect-port 17071 --net-name jvm-a
+./demo/shopping/build/install/shopping/bin/shopping 18082 --peer ws://localhost:19101 --inspect-port 17072 --net-name jvm-b
+INSPECT_BACKEND=http://localhost:17071 npm run dev   # in inspect/ui
+```
+
+Open the UI, enter the `shopping` graph (16 cells · 2 nets), and turn on
+Process hosts + Network hosts. Add an item at <http://localhost:18081> to
+give the Flow toggle something to show on the cross-boundary edge.
+
 ## Notes
 
 - M4-EVAL re-stamped `Node.graph` on both topology fixtures: after M4 the
@@ -215,10 +260,10 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M4-FE.md`:
   then select a node). Still not a semantics stand-in — single global
   observation slot, one fake dataset.
 
-## Deferred (M5+, per the tickets' Exclusions)
+## Deferred (per the tickets' Exclusions)
 
-Network-host hulls, cold-graph UX, data search, per-message flow animation
-(M3-FE's own Exclusions: "not in v3 v1 scope"; M4-FE's own Exclusions:
-"Cold-graph UX, data search, network hulls (M5)"). No optimistic writes —
-this is a read-only instrument. No CSS framework, router, or state library
-(agora precedent).
+Cold-graph UX (M5-COLD), data search (M5-SEARCH), per-message flow animation
+(M3-FE's own Exclusions: "not in v3 v1 scope"), and remote *state/flow/error*
+feeds (M5-NET's own Exclusions — a remote cell is topology + placement only).
+No optimistic writes — this is a read-only instrument. No CSS framework,
+router, or state library (agora precedent).

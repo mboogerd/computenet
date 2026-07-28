@@ -39,9 +39,16 @@ data class Node(
     val color: String? = null,
     val manifests: List<String> = emptyList(),
     val ports: List<NodePort> = emptyList(),
-    /** Process host (`ManagedHost`) name. */
+    /**
+     * Process host (`ManagedHost`) name. Null for a peer-announced cell: a
+     * mirrored location names a bridge, not a host (M5-NET).
+     */
     val host: String? = null,
-    /** Network host / peer id — `"local"` until M5. */
+    /**
+     * Network host / peer id. [LOCAL_NET] unless the launcher named this JVM
+     * (`--net-name`); a peer-announced cell reports that connection's derived
+     * label instead (M5-NET, see [Peers]).
+     */
     val net: String = LOCAL_NET,
     val lifecycle: String = HOT,
     val generation: Long = 0,
@@ -302,7 +309,10 @@ data class GraphSummary(
     val cells: Int,
     /** Distinct process-host (`ManagedHost`) names among the members. */
     val hosts: Int,
-    /** Distinct network hosts among the members — 1 (`"local"`) until M5. */
+    /**
+     * Distinct network hosts among the members — 1 for a single-JVM component,
+     * more once a peer's cells join it (M5-NET).
+     */
     val nets: Int,
     val health: GraphHealth,
     /**

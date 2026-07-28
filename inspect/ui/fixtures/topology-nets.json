@@ -1,0 +1,99 @@
+{
+  "seq": 0,
+  "nodes": [
+    {
+      "ref": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:0",
+      "name": "items",
+      "typeFqn": "civictech.cell.data.op.UnionSetCell",
+      "color": "PURE",
+      "manifests": ["DURABLE"],
+      "ports": [
+        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }
+      ],
+      "host": "shopping",
+      "net": "jvm-a",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": "g-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    },
+    {
+      "ref": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:0",
+      "name": "produce",
+      "typeFqn": "civictech.cell.data.op.FilterCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [
+        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }
+      ],
+      "host": "shopping",
+      "net": "jvm-a",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": "g-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    },
+    {
+      "ref": "cccccccc-cccc-cccc-cccc-cccccccccccc:0",
+      "name": "bridge",
+      "typeFqn": "civictech.cell.wire.BridgeEgressCell",
+      "color": "PURE",
+      "manifests": [],
+      "ports": [{ "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }],
+      "host": "shopping-bridge",
+      "net": "jvm-a",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": "g-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    },
+    {
+      "ref": "dddddddd-dddd-dddd-dddd-dddddddddddd:0",
+      "name": null,
+      "typeFqn": "<unknown>",
+      "color": null,
+      "manifests": [],
+      "ports": [],
+      "host": null,
+      "net": "peer-7c19f3ab",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": "g-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    },
+    {
+      "ref": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee:0",
+      "name": null,
+      "typeFqn": "<unknown>",
+      "color": null,
+      "manifests": [],
+      "ports": [],
+      "host": null,
+      "net": "peer-7c19f3ab",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": "g-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    }
+  ],
+  "edges": [
+    {
+      "id": "10000000-0000-0000-0000-000000000001",
+      "from": { "ref": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:0", "port": "outlet" },
+      "to": { "ref": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": false
+    },
+    {
+      "id": "10000000-0000-0000-0000-000000000002",
+      "from": { "ref": "dddddddd-dddd-dddd-dddd-dddddddddddd:0", "port": "6f0d0f6c-6a5b-5b0e-9a44-1f6b0b1c2d3e" },
+      "to": { "ref": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee:0", "port": "1c2d3e4f-5a6b-5c7d-8e9f-0a1b2c3d4e5f" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "10000000-0000-0000-0000-000000000003",
+      "from": { "ref": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:0", "port": "outlet" },
+      "to": { "ref": "dddddddd-dddd-dddd-dddd-dddddddddddd:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": false
+    }
+  ]
+}

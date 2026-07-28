@@ -53,10 +53,17 @@ import java.util.concurrent.TimeUnit
  *
  * M5 adds content search (see [DataSearch]): `?mode=data` reads hot,
  * locally-hosted cells' state under an explicit cap and deadline and reports
- * the cost it paid; and cold graphs (see [Heat] and [Waker]): a component whose
+ * the cost it paid; cold graphs (see [Heat] and [Waker]): a component whose
  * cells are all parked lists as `lifecycle: "cold"` from registry metadata
  * alone, and `POST /api/inspect/graph/{id}/wake` is the one explicit,
- * user-initiated act that ends that.
+ * user-initiated act that ends that; and network hosts (see [Peers]):
+ * peer-announced cells appear in topology with their `Node.net` set to the
+ * connection they arrived through (and `host: null` — a mirrored location
+ * carries no process host), a peer disconnect retracts them, and [declareLink]
+ * reports a cross-boundary stream the kernel indexes nowhere. Remote cells are
+ * topology and placement only: they are not locally hosted, so state, flow and
+ * error feeds have nothing to read for them and say so (`GET state` →
+ * `unavailable`, `POST observe` → 409).
  *
  * ### What it can and cannot see
  *
@@ -96,6 +103,15 @@ class InspectorServer(
      * knows. Unnamed cells report `null`, per the contract.
      */
     cellNames: Map<CellRef, String> = emptyMap(),
+    /**
+     * This JVM's network-host label — the launcher's `--net-name` (M5-NET).
+     * Every locally published cell reports it as `Node.net`; peer-announced
+     * cells report a label derived from the connection they arrived through
+     * (see [Peers]). Defaults to the contract's `"local"`, so an inspector
+     * that is not told about a wider network keeps emitting exactly what M0–M4
+     * emitted.
+     */
+    netName: String = Node.LOCAL_NET,
 ) : AutoCloseable {
 
     /** Name the hosts by ref — the convenience form when the app has no names of its own. */
@@ -108,12 +124,15 @@ class InspectorServer(
     private val shell = DemoShell(port)
     private val broadcaster = SseBroadcaster()
 
+    /** M5 — the network-host resolver (see [Peers]). */
+    private val peers = Peers(registry, netName)
+
     // `flow` is declared below and read through the supplier, so the two can
     // reference each other without a construction cycle: the model asks the
     // collector for an edge's `fused`, the collector hands its windows back to
     // the model's `flowRates`. The supplier only runs after construction.
     private val model: InspectorModel =
-        InspectorModel(registry, hosts, cellNames, broadcaster::publish, flow = { flow })
+        InspectorModel(registry, hosts, cellNames, broadcaster::publish, flow = { flow }, peers = peers)
 
     /** M3 — the flow feed (see [FlowCollector]); attaches taps as edges appear. */
     private val flow: FlowCollector = FlowCollector(registry, onBatch = model::flowRates)
@@ -172,12 +191,34 @@ class InspectorServer(
         registry.onLocalTopology(model::linked, model::unlinked),
     )
 
+    /**
+     * False from [close] on, disarming the two any-publish hooks below.
+     *
+     * `LocationRegistry.onPublish`/`onUnpublish` — unlike their `onLocal…`
+     * counterparts — return no deregistration handle, so a closed inspector
+     * cannot detach from them. It disarms them instead: the listeners stay
+     * registered on the registry and do nothing. Noted rather than fixed
+     * because widening those two hooks is a kernel change, and M5-NET owns the
+     * inspector module (and the pilot's wiring) only.
+     */
+    @Volatile
+    private var attached = true
+
     val boundPort: Int get() = shell.boundPort
 
     /** Live SSE subscribers — diagnostics, and the tests' connect barrier. */
     internal val attachedClients: Int get() = broadcaster.clientCount
 
     init {
+        // M5 — peer-announced refs arrive on the *any*-publish hooks: a
+        // mirrored location is published by `RegistryMirrorCell`, which
+        // deliberately never fires the local ones. Filtered to Remote
+        // locations, so a local publish is not seen twice; the unpublish side
+        // needs no filter, since a local ref has already left the view by the
+        // time this fires and the model's removal is idempotent.
+        registry.onPublish { ref -> if (attached && peers.isRemote(ref)) model.mirroredPublish(ref) }
+        registry.onUnpublish { ref -> if (attached) model.unpublished(ref) }
+
         // hooks first, then the catch-up read: a publish racing construction is
         // seen by the hook and merely re-confirmed by the sync, never lost
         model.sync()
@@ -380,6 +421,41 @@ class InspectorServer(
      */
     fun nameGraph(anchorRef: CellRef, name: String): InspectorServer = apply { model.nameGraph(anchorRef, name) }
 
+    /**
+     * Declare a cross-boundary stream as an edge (M5-NET).
+     *
+     * The kernel records an edge only where `ManagedHost.connect` admitted one,
+     * and that path resolves *both* endpoints in one host's own cell map — so a
+     * link from a local outlet to a ref on another JVM is not expressible as a
+     * `TopologyLink` and appears in no index, on either side of the wire. What
+     * peered applications actually build is
+     * `outlet.streamTo(RoutedPropagate(peerRef, port, registry::deliver))`: a
+     * genuine consume-role subscription that the registry routes across the
+     * bridge, and that nothing introspects.
+     *
+     * This is the same shape of opt-in annotation as [nameGraph]: the process
+     * tells the inspector about wiring it performed, and the inspector reports
+     * it rather than inferring or inventing it. Declare after both the
+     * producing cell is published and (ideally) the peer has announced [toRef],
+     * so the edge is tapped for flow and lands in the right component;
+     * declaring the same stream twice is idempotent.
+     *
+     * Nothing about the graph changes — no link is created here, only reported.
+     * A declared edge therefore also *survives* the peer going away, unlike a
+     * mirrored one: the subscription is still there and still emitting (into
+     * the registry's park queue), so retracting the edge would misreport the
+     * process. The target cell leaves the topology, and a client draws what it
+     * can anchor.
+     */
+    fun declareLink(
+        fromRef: CellRef,
+        fromPort: String,
+        toRef: CellRef,
+        toPort: String,
+    ): InspectorServer = apply {
+        model.declareLink(PortRef.of(fromRef, fromPort), PortRef.of(toRef, toPort))
+    }
+
     fun start(): InspectorServer = apply {
         shell.start()
         heartbeats.scheduleAtFixedRate(
@@ -403,9 +479,12 @@ class InspectorServer(
         )
         // M4: `graphs.changed` is published from here rather than from the
         // registry hooks, which coalesces a whole graph build into one hint and
-        // keeps the component sweep off the thread that is linking cells
+        // keeps the component sweep off the thread that is linking cells.
+        // M5 reconciles peers on the same tick, deliberately *before* the
+        // announcement: a peer that just arrived or vanished is in the
+        // partition by the time the `graphs.changed` describing it goes out.
         heartbeats.scheduleAtFixedRate(
-            { runCatching { model.publishGraphChanges() } },
+            { runCatching { model.reconcilePeers() }; runCatching { model.publishGraphChanges() } },
             GRAPHS_POLL_MS, GRAPHS_POLL_MS, TimeUnit.MILLISECONDS,
         )
         // M5-COLD: suspend/resume and drain/resumeHost are plain management
@@ -422,6 +501,7 @@ class InspectorServer(
     fun stop() = close()
 
     override fun close() {
+        attached = false
         heartbeats.shutdownNow()
         hooks.forEach { runCatching { it.close() } }
         // before the broadcaster: releasing a sink emits topology deltas, and a
@@ -457,6 +537,12 @@ class InspectorServer(
 
     /** Publish any pending `lifecycle` changes now instead of waiting for the 1 s schedule — tests. */
     internal fun publishLifecycleChangesNow() = model.publishLifecycleChanges()
+
+    /** Reconcile peer refs/links now instead of waiting for the 1 s schedule — tests. */
+    internal fun reconcilePeersNow() = model.reconcilePeers()
+
+    /** Has this view adopted [ref] yet? The barrier a peer-announcement test waits on. */
+    internal fun knowsNow(ref: CellRef): Boolean = model.knows(ref)
 
     /** The live components, as `GET /graphs` and `GET /search` see them — tests. */
     internal fun componentsNow(): List<Component> = model.components()

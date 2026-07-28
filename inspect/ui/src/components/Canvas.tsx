@@ -1,14 +1,21 @@
 import { For, Show, createMemo } from 'solid-js';
-import type { EdgeRole, Ref } from '../api/types';
-import { computeHostHulls, hostFingerprint, type HostHull } from '../layout/hulls';
-import { portAnchors } from '../layout/ports';
+import type { Dir, EdgeRole, Ref } from '../api/types';
+import {
+  computeHostHulls,
+  computeNetHulls,
+  hostFingerprint,
+  netFingerprint,
+  type HostHull,
+  type NetHull,
+} from '../layout/hulls';
+import { cardAnchor, portAnchors } from '../layout/ports';
 import { layoutEngine } from '../solid/layout';
 import { stateSummaries } from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
 import { prefersReducedMotion } from '../solid/motion';
 import { edges, nodes, selection, setSelection, store, structuralVersion } from '../solid/state';
-import { showErrors, showFlow, showHosts, showState } from '../solid/toggles';
+import { showErrors, showFlow, showHosts, showNet, showState } from '../solid/toggles';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { cellErrorBadges, deriveEdgeParkedCounts } from '../util/errors';
 import {
@@ -50,6 +57,23 @@ export default function Canvas() {
     return computeHostHulls([...store.nodes.keys()], layout(), (ref) => nodes[ref]?.host ?? null);
   });
 
+  // M5-NET ticket Implement §2: the Network hosts toggle. Same shape as the
+  // process-host memo above — its own fingerprint dependency, because a net
+  // reassignment (a peer reconnecting under a new label) is a pure value
+  // change and does not bump structuralVersion.
+  const netFp = createMemo(() => netFingerprint([...store.nodes.keys()], (ref) => nodes[ref]?.net ?? null));
+  const netHulls = createMemo<NetHull[]>(() => {
+    if (!showNet()) return [];
+    netFp();
+    hostFp();
+    return computeNetHulls(
+      [...store.nodes.keys()],
+      layout(),
+      (ref) => nodes[ref]?.net ?? null,
+      (ref) => nodes[ref]?.host ?? null,
+    );
+  });
+
   // M2-FE ticket Implement §2: Errors toggle canvas overlay. Both derivations
   // are pure functions of (current refs/edges, the error store, the toggle) —
   // "badges are value-changes (restyle), never structural" holds automatically
@@ -87,11 +111,16 @@ export default function Canvas() {
     return nodes[ref]?.name ?? null;
   }
 
-  function anchorOf(ref: Ref, port: string) {
+  /** Where an edge endpoint attaches. `dir` is the endpoint's side of the
+   *  edge — 'OUT' for its producer, 'IN' for its consumer — and is only used
+   *  when the node declares no port by that name, which is the normal case
+   *  for a peer-announced cell (no descriptor reached this JVM, so no port
+   *  list): the edge anchors on the card instead of being dropped. */
+  function anchorOf(ref: Ref, port: string, dir: Dir) {
     const ln = layout().nodes.get(ref);
     const rec = nodes[ref];
     if (!ln || !rec) return undefined;
-    return portAnchors(ln, rec.ports).get(port);
+    return portAnchors(ln, rec.ports).get(port) ?? cardAnchor(ln, dir);
   }
 
   function onCardKeyDown(e: KeyboardEvent, ref: Ref) {
@@ -118,7 +147,24 @@ export default function Canvas() {
           <svg class="canvas__svg" width={layout().width} height={layout().height}>
             {/* Hulls first: SVG paints in document order, so "rendered beneath
                 edges" (10-target-v3.md toggle table) means listing them
-                before the edges/ports below. */}
+                before the edges/ports below. Network hulls come before
+                process hulls for the same reason — "net outside, proc inside"
+                (M5-NET ticket Implement §2) is both a geometric nesting
+                (`computeNetHulls`' wider padding) and a paint order. */}
+            <For each={netHulls()}>
+              {(h) => (
+                <g class="net-hull" classList={{ 'net-hull--peer': h.peer }}>
+                  <rect class="net-hull__rect" x={h.x} y={h.y} width={h.w} height={h.h} rx={16} ry={16} />
+                  <text class="net-hull__label" x={h.x + 12} y={h.y + 18}>
+                    {h.net}
+                    <Show when={h.peer}>
+                      <tspan class="net-hull__tag"> peer</tspan>
+                    </Show>
+                  </text>
+                </g>
+              )}
+            </For>
+
             <For each={hulls()}>
               {(h) => (
                 <g class="host-hull">
@@ -133,8 +179,8 @@ export default function Canvas() {
             <For each={edgeIds()}>
               {(id) => {
                 const e = () => edges[id];
-                const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port) : undefined);
-                const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port) : undefined);
+                const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
+                const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
                 const overlay = () => flowOverlays().get(id);
                 const tooltip = () =>
                   showFlow() && e() ? flowTooltip(formatRoute(e()!.from, e()!.to, nameOf), overlay()) : undefined;
@@ -296,8 +342,8 @@ export default function Canvas() {
           <For each={edgeIds()}>
             {(id) => {
               const e = () => edges[id];
-              const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port) : undefined);
-              const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port) : undefined);
+              const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
+              const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
               const count = () => edgeParked().get(id);
               return (
                 <Show when={e() && from() && to() && count()}>
@@ -325,8 +371,8 @@ export default function Canvas() {
           <For each={edgeIds()}>
             {(id) => {
               const e = () => edges[id];
-              const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port) : undefined);
-              const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port) : undefined);
+              const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
+              const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
               const overlay = () => flowOverlays().get(id);
               return (
                 <Show when={e() && from() && to() && overlay()}>

@@ -92,6 +92,20 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
 
     private val shell = DemoShell(port)
 
+    /**
+     * The peering bridge's own host, hoisted out of [init] so [startInspector]
+     * can name it: its cells (the bridge egress/ingress and the registry
+     * mirror) are published on this registry like any other, and an
+     * unrecognised host would otherwise show up under a generated name.
+     */
+    private val bridgeHost: ManagedHost? = wire?.let { ManagedHost(registry = registry) }
+
+    /** The DSL-spawned derived views, kept for the inspector's cell names. */
+    private var produceRef: CellRef? = null
+    private var wantedRef: CellRef? = null
+
+    private var inspector: civictech.inspect.InspectorServer? = null
+
     val boundPort: Int get() = shell.boundPort
 
     init {
@@ -111,6 +125,8 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         }
         val produceCell = produceHandle!!
         val wantedCell = wantedHandle!!
+        produceRef = produceCell.ref
+        wantedRef = wantedCell.ref
         manage.link(itemsUnion.outlet, produceCell.cell.inlet)
 
         host.observe(itemsUnion.ref, View.set<String>()) { synchronized(state) { items = it }; broadcast() }
@@ -132,8 +148,7 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         }
 
         if (wire != null) {
-            val bridgeHost = ManagedHost(registry = registry)
-            val side = Peering.Side(registry, bridgeHost)
+            val side = Peering.Side(registry, bridgeHost!!)
             when (wire) {
                 is Wire.Listen -> WsTransport.listen(wire.wsPort, side)
                 is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
@@ -225,13 +240,82 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount}"""
     }
 
+    /**
+     * Opt-in inspector (`--inspect-port <p>`): serves this JVM's live dataflow
+     * graph on its own port. This demo is the M5-NET pilot — the one that runs
+     * two symmetric JVMs over the real `:wire` transport — so what it shows
+     * beyond the single-process case is:
+     *
+     * - **both sides.** The peer's announced cells appear with its network
+     *   host and no process host; this JVM's cells report [netName]
+     *   (`--net-name`, e.g. `jvm-a`), so the canvas nests one dashed net hull
+     *   per JVM around the solid process hulls inside them.
+     * - **the cross-boundary stream, as an edge.** The symmetric view chain
+     *   (`itemsUnion.outlet.streamTo(routedDelta(peerItemsRef))`) is a real
+     *   subscription that no kernel index records — `ManagedHost.connect`,
+     *   the only path that writes the topology index, resolves both endpoints
+     *   in one host's cell map, so a cross-JVM link is not expressible as a
+     *   `TopologyLink` at all. The app therefore declares it
+     *   (`InspectorServer.declareLink`), the same way it annotates the graph's
+     *   name: reported, never inferred.
+     *
+     * The peer's union refs are deterministic (`unionRef(name, peerRole)` —
+     * that is exactly how each side addresses its counterpart without a
+     * discovery protocol), so they can be both named and declared here before
+     * the peer has ever connected.
+     */
+    fun startInspector(
+        inspectPort: Int = civictech.inspect.InspectorServer.DEFAULT_PORT,
+        netName: String = "local",
+    ): civictech.inspect.InspectorServer {
+        val peerItems = unionRef("items", peerRole)
+        val peerVotes = unionRef("votes", peerRole)
+        val names = buildMap {
+            put(itemsUnion.ref, "items")
+            put(votesUnion.ref, "votes")
+            produceRef?.let { put(it, "produce") }
+            wantedRef?.let { put(it, "wanted") }
+            if (wire != null) {
+                put(peerItems, "items@$peerRole")
+                put(peerVotes, "votes@$peerRole")
+            }
+        }
+        val hosts = buildMap {
+            put("shopping", host)
+            bridgeHost?.let { put("shopping-bridge", it) }
+        }
+        val started = civictech.inspect.InspectorServer(
+            registry = registry,
+            hosts = hosts,
+            port = inspectPort,
+            cellNames = names,
+            netName = netName,
+        ).nameGraph(itemsUnion.ref, "shopping").start()
+        if (wire != null) {
+            started.declareLink(itemsUnion.ref, "outlet", peerItems, "inlet")
+            started.declareLink(votesUnion.ref, "outlet", peerVotes, "inlet")
+        }
+        return started.also { inspector = it }
+    }
+
     fun start(): DemoApp = apply { shell.start() }
 
-    fun stop() = shell.stop()
+    fun stop() {
+        inspector?.stop()
+        shell.stop()
+    }
 }
 
 fun main(args: Array<String>) {
-    val port = demoPort(args)
+    val inspectPort = args.value("--inspect-port")?.trim()?.toIntOrNull()
+        ?: System.getenv("INSPECT_PORT")?.trim()?.toIntOrNull()
+    val netName = args.value("--net-name")?.trim()?.takeUnless { it.isEmpty() }
+    // strip the inspector's own `--flag value` pairs before [demoPort], which
+    // reads the first non-`--` argument as this demo's port and would
+    // otherwise take one of their values (the skillmatch pilot's precedent)
+    val demoArgs = stripPairs(args, "--inspect-port", "--net-name")
+
+    val port = demoPort(demoArgs)
     val wire = args.value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
         ?: args.value("--peer")?.let { DemoApp.Wire.Dial(it) }
     val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
@@ -243,6 +327,21 @@ fun main(args: Array<String>) {
         is DemoApp.Wire.Dial -> println("  peered with ${wire.uri}")
         null -> println("  single-process mode; add --listen <wsPort> or --peer <ws-uri> to span two JVMs")
     }
+    inspectPort?.let { p ->
+        val inspector = app.startInspector(p, netName ?: "local")
+        println("computenet inspector: http://localhost:${inspector.boundPort}/api/inspect/topology")
+        println("  this JVM's network host: ${netName ?: "local"}")
+    }
+}
+
+/** Drop each `--flag value` pair from [args] — see [main]'s use. */
+private fun stripPairs(args: Array<String>, vararg flags: String): Array<String> {
+    val rest = mutableListOf<String>()
+    var i = 0
+    while (i < args.size) {
+        if (args[i] in flags) i += 2 else rest += args[i++]
+    }
+    return rest.toTypedArray()
 }
 
 private val PAGE = """
