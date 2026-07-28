@@ -267,9 +267,25 @@ class SkillMatchApp(port: Int = 8080) {
      * [withSideGraph] spawns [SideGraph] first, so the M4 navigator has a
      * second, deliberately unnamed component to render (see its doc). The
      * pilot `main` asks for it; the demo itself never does.
+     *
+     * [coldSideGraph] then suspends every cell of that side component
+     * (`HostManagementApi.suspend`, spec 34/G-26), so the M5 navigator has a
+     * genuinely cold graph to list, ghost and offer to wake — the pilot half of
+     * the M5-COLD ticket. It applies only to the side graph: the pipeline stays
+     * hot, because a process with nothing running is not a demonstration of the
+     * difference. Suspension is a management call, so this waits for it to take
+     * effect rather than racing the inspector's first read.
      */
-    fun startInspector(port: Int = InspectorServer.DEFAULT_PORT, withSideGraph: Boolean = false): InspectorServer {
+    fun startInspector(
+        port: Int = InspectorServer.DEFAULT_PORT,
+        withSideGraph: Boolean = false,
+        coldSideGraph: Boolean = false,
+    ): InspectorServer {
         val side = if (withSideGraph) SideGraph.build(host) else null
+        if (coldSideGraph) side?.let { refs ->
+            listOf(refs.saved, refs.mirror).forEach { host.managementInlet.call.suspend(it) }
+            awaitSuspended(listOf(refs.saved, refs.mirror))
+        }
         return InspectorServer(
             registry = registry,
             hosts = mapOf("skillmatch" to host),
@@ -377,6 +393,19 @@ class SkillMatchApp(port: Int = 8080) {
                 """"matches":$matchList,"progress":$progress,"gap":$gaps,"market":$marketJson}"""
     }
 
+    /**
+     * Block until every [refs] cell reports suspended, or give up after a
+     * second. Suspension rides the host's management queue, and a launcher that
+     * printed "cold" before the queue ran would be describing a state that had
+     * not happened yet. Giving up rather than throwing keeps a demo flag from
+     * being able to fail a demo: the inspector's own 1 Hz lifecycle poll
+     * reports the transition whenever it lands.
+     */
+    private fun awaitSuspended(refs: List<CellRef>) {
+        val deadline = System.currentTimeMillis() + 1_000
+        while (System.currentTimeMillis() < deadline && refs.any { !host.isSuspended(it) }) Thread.sleep(5)
+    }
+
     fun start(): SkillMatchApp = apply { shell.start() }
 
     fun stop() {
@@ -387,17 +416,27 @@ class SkillMatchApp(port: Int = 8080) {
 
 fun main(args: Array<String>) {
     val (inspectPort, demoArgs) = splitInspectorPort(args)
-    val app = SkillMatchApp(demoPort(demoArgs)).start()
+    val cold = COLD_FLAG in args
+    val app = SkillMatchApp(demoPort(demoArgs.filterNot { it == COLD_FLAG }.toTypedArray())).start()
     println("computenet skillmatch: http://localhost:${app.boundPort}")
     inspectPort?.let { port ->
         // the pilot runs two graphs (see [SideGraph]) so the M4 navigator has
         // something to navigate: the named pipeline and one unnamed component
-        val inspector = app.startInspector(port, withSideGraph = true)
+        val inspector = app.startInspector(port, withSideGraph = true, coldSideGraph = cold)
         println("computenet inspector: http://localhost:${inspector.boundPort}${InspectorServer.TOPOLOGY_PATH}")
+        if (cold) println("  side graph started cold ($COLD_FLAG) — wake it from the navigator")
     }
 }
 
 private const val INSPECT_FLAG = "--inspect-port"
+
+/**
+ * M5-COLD pilot flag: start the side graph suspended, so the navigator has a
+ * cold card, a ghosted cold screen and a wake to demonstrate. Only meaningful
+ * together with `--inspect-port`; ignored otherwise (there is nothing to look
+ * at without an inspector).
+ */
+private const val COLD_FLAG = "--cold-graph"
 
 /**
  * The inspector port — `--inspect-port <p>`, `--inspect-port=<p>`, or the

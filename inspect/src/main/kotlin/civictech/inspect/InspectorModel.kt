@@ -79,6 +79,15 @@ internal class InspectorModel(
     /** The membership last announced through `graphs.changed`; drives [publishGraphChanges]. */
     private var announced: Map<String, Set<CellRef>> = emptyMap()
 
+    /**
+     * The per-cell lifecycle last announced (M5-COLD); drives
+     * [publishLifecycleChanges]. Kept beside [announced] rather than inside the
+     * node records because lifecycle is *read* from the host on every stamp
+     * ([stamped]) — this map is only the memory of what a client was last told,
+     * so a change can be detected without polling turning into a change.
+     */
+    private val announcedLifecycle = HashMap<CellRef, String>()
+
     private var seq = 0L
 
     /**
@@ -90,6 +99,7 @@ internal class InspectorModel(
         registry.localRefs().forEach { ref ->
             nodes.getOrPut(ref) { nodeOf(ref) }
             componentIndex.addCell(ref)
+            announcedLifecycle[ref] = lifecycleOf(ref)
         }
         topologyLinks().forEach { link ->
             edges.getOrPut(link.id) { edgeOf(link) }
@@ -125,7 +135,7 @@ internal class InspectorModel(
      * `graphs.changed` it will also have received, not an error.
      */
     fun snapshot(graph: String? = null): TopologySnapshot = synchronized(lock) {
-        val stamped = nodes.entries.map { (ref, node) -> withGraph(ref, node) }
+        val stamped = nodes.entries.map { (ref, node) -> stamped(ref, node) }
         if (graph == null) return@synchronized TopologySnapshot(seq, stamped, edges.values.toList())
         val members = stamped.filter { it.graph == graph }
         val refs = members.mapTo(HashSet()) { it.ref }
@@ -148,7 +158,7 @@ internal class InspectorModel(
             Component(
                 id = id,
                 name = nameOf(refs),
-                nodes = refs.mapNotNull { ref -> nodes[ref]?.let { withGraph(ref, it) } },
+                nodes = refs.mapNotNull { ref -> nodes[ref]?.let { stamped(ref, it) } },
             )
         }
     }
@@ -189,14 +199,66 @@ internal class InspectorModel(
         emitEvent(Event.GRAPHS_CHANGED, JsonObject(emptyMap()))
     }
 
+    /**
+     * `lifecycle` (contract §SSE, M5-COLD): one `topology.node`-shaped
+     * lifecycle event per cell whose observed lifecycle changed since the last
+     * announcement, plus a single `graphs.changed` when any did — a suspend or
+     * a wake changes a navigator card's cold pill, and nothing else would tell
+     * the client to refetch it.
+     *
+     * Polled from the inspector's scheduler for the same reason
+     * [publishGraphChanges] is: `HostManagementApi.suspend`/`resume` and
+     * `drainHost`/`resumeHost` are ordinary management calls with no
+     * notification hook, so there is nothing to subscribe to. The poll reads
+     * host metadata only ([Heat]) — no cell is touched and no attention raised.
+     *
+     * A resume that republishes (`resumeHost`) is already reported by
+     * [published]; that path updates [announcedLifecycle] too, so this poll
+     * does not double-announce it.
+     */
+    fun publishLifecycleChanges() = synchronized(lock) {
+        var changed = false
+        nodes.keys.toList().forEach { ref ->
+            val now = lifecycleOf(ref)
+            if (announcedLifecycle.put(ref, now) == now) return@forEach
+            changed = true
+            emitEvent(Event.LIFECYCLE, buildJsonObject {
+                put("ref", encode(ref))
+                put("lifecycle", now)
+                put("generation", nodes[ref]?.generation ?: 0L)
+            })
+        }
+        if (changed) emitEvent(Event.GRAPHS_CHANGED, JsonObject(emptyMap()))
+    }
+
     /** The name of whichever anchor in [refs] sorts first by uuid, or null when none is anchored. */
     private fun nameOf(refs: Set<CellRef>): String? = refs
         .filter { it in graphAnchors }
         .minByOrNull { it.id.toString() }
         ?.let(graphAnchors::get)
 
-    /** [node] with the contract's `graph` field resolved from the current partition. */
-    private fun withGraph(ref: CellRef, node: Node): Node = node.copy(graph = componentIndex.componentOf(ref))
+    /**
+     * [node] with the two fields that belong to the *world* rather than to the
+     * stored record resolved at read time: `graph` (a property of the current
+     * partition, which changes without the cell changing) and `lifecycle` (a
+     * property of the cell's host right now — see [Heat]).
+     *
+     * Both are stamped in one place so every reader — the snapshot, the
+     * component list behind `GET /graphs`, the detail body — sees one
+     * consistent answer for one cell.
+     */
+    private fun stamped(ref: CellRef, node: Node): Node =
+        node.copy(graph = componentIndex.componentOf(ref), lifecycle = lifecycleOf(ref))
+
+    /**
+     * The contract's `"HOT" | "SUSPENDED"` for one cell, from registry and host
+     * metadata only. [Heat] carries the finer distinctions (individually
+     * suspended vs. on a drained host vs. held for a migration flip); the
+     * contract offers two words, and a cell the kernel is not running is
+     * `SUSPENDED` in both of the senses that qualify.
+     */
+    private fun lifecycleOf(ref: CellRef): String =
+        if (Heat.of(registry, ref).isCold) Node.SUSPENDED else Node.HOT
 
     /** Has this view ever been told [ref] is published here? (404 vs 200 at the routes.) */
     fun knows(ref: CellRef): Boolean = synchronized(lock) { ref in nodes }
@@ -210,7 +272,7 @@ internal class InspectorModel(
      * Null when the view has never seen [ref] published (a 404 at the route).
      */
     fun detailJson(ref: CellRef): String? = synchronized(lock) {
-        val node = nodes[ref]?.let { withGraph(ref, it) } ?: return@synchronized null
+        val node = nodes[ref]?.let { stamped(ref, it) } ?: return@synchronized null
         val links = linkCounts(node.ref)
         buildJsonObject {
             inspectorJson.encodeToJsonElement(node).jsonObject.forEach { (key, value) -> put(key, value) }
@@ -302,16 +364,21 @@ internal class InspectorModel(
         val node = nodeOf(ref)
         nodes[ref] = node
         componentIndex.addCell(ref)
+        // a re-publish is how `resumeHost` reports a wake, so the announced
+        // lifecycle moves here too — otherwise [publishLifecycleChanges] would
+        // announce the same transition a second time on its next tick
+        val lifecycle = lifecycleOf(ref)
+        announcedLifecycle[ref] = lifecycle
         if (known) {
             emitEvent(Event.LIFECYCLE, buildJsonObject {
                 put("ref", node.ref)
-                put("lifecycle", node.lifecycle)
+                put("lifecycle", lifecycle)
                 put("generation", node.generation)
             })
         } else {
             emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
                 put("op", Event.ADDED)
-                put("node", inspectorJson.encodeToJsonElement(withGraph(ref, node)))
+                put("node", inspectorJson.encodeToJsonElement(stamped(ref, node)))
             })
         }
     }
@@ -319,10 +386,11 @@ internal class InspectorModel(
     fun unpublished(ref: CellRef) = synchronized(lock) {
         // the hook fires after the location is gone, so the removal payload is
         // served from the view — the last node the client was told about
-        val node = nodes.remove(ref)?.let { withGraph(ref, it) } ?: return@synchronized
+        val node = nodes.remove(ref)?.let { stamped(ref, it) } ?: return@synchronized
         // read the component id above, before the vertex leaves the index: a
         // removal reports the graph the cell was in, not the one it is not in
         componentIndex.removeCell(ref)
+        announcedLifecycle.remove(ref)
         portNames.remove(ref)
         // a despawn unpublishes but does not unlink (only an explicit
         // `Link.unlink` retracts an edge), so the flow feed's taps on this
@@ -392,8 +460,9 @@ internal class InspectorModel(
             host = host?.let { hostNames[it] ?: defaultHostName(it) },
             // M0 is single-process; peer introspection is M5
             net = Node.LOCAL_NET,
-            // the registry knows published-or-not, not suspended-or-not; a
-            // published ref is HOT until a kernel seam can say otherwise
+            // stamped on the way out by [stamped], like `graph`: whether a cell
+            // is running is a property of its host *now*, not of the publish
+            // that recorded it (M5-COLD — see [Heat])
             lifecycle = Node.HOT,
             generation = host?.generationOf(ref) ?: 0L,
             // stamped on the way out by [withGraph] — the component id belongs

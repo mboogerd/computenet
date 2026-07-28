@@ -1,11 +1,12 @@
 import { createMemo, For, Show } from 'solid-js';
-import type { GraphSummary, SearchMode } from '../api/types';
+import type { GraphSummary, SearchHit, SearchMode } from '../api/types';
 import { buildConstellations } from '../layout/constellation';
+import { COLD_TAG, formatColdSkipHint } from '../nav/cold';
 import { deriveHealthPills } from '../nav/health';
-import { isSearchModeEnabled, SEARCH_MODES } from '../nav/search';
+import { formatSearchCost, isNoticeHit, isSearchModeEnabled, isSubmitMode, SEARCH_MODES } from '../nav/search';
 import { graphs, graphsLoading } from '../solid/graphs';
 import { enterGraph } from '../solid/route';
-import { runSearch, searchError, searchHits, searchLoading, searchMode, searchQuery, setSearchMode, setSearchQuery } from '../solid/search';
+import { clearSearch, runSearch, searchCost, searchError, searchHits, searchLoading, searchMode, searchQuery, setSearchMode, setSearchQuery } from '../solid/search';
 import { edges, nodes, structuralVersion } from '../solid/state';
 import './Navigator.css';
 
@@ -42,19 +43,29 @@ function GraphCards() {
  *  as 'unnamed', dashed border per the v2 mockup)". */
 function GraphCard(props: { graph: GraphSummary }) {
   const pills = createMemo(() => deriveHealthPills(props.graph.health, props.graph.lifecycle));
+  const cold = () => props.graph.lifecycle === 'cold';
   return (
     <button
       class="graph-card"
-      classList={{ 'graph-card--unnamed': !props.graph.name }}
+      classList={{ 'graph-card--unnamed': !props.graph.name, 'graph-card--cold': cold() }}
       // The tooltip is also this button's accessible name, so it has to lead
       // with which graph it opens — restarts alone made every card announce
-      // itself as "0 restarts" (M4-EVAL).
+      // itself as "0 restarts" (M4-EVAL). M5-COLD appends the state rather
+      // than replacing anything: the ❄ glyph beside the name is decorative
+      // and carries no accessible text of its own.
       title={`${props.graph.name ?? props.graph.id} — ${props.graph.cells} cells, ${props.graph.health.restarts} restart${
         props.graph.health.restarts === 1 ? '' : 's'
-      }`}
+      }${cold() ? ', cold' : ''}`}
       onClick={() => enterGraph(props.graph.id)}
     >
-      <div class="graph-card__name">{props.graph.name ?? props.graph.id}</div>
+      <div class="graph-card__name">
+        <Show when={cold()}>
+          <span class="cold-tag" aria-hidden="true">
+            {COLD_TAG}{' '}
+          </span>
+        </Show>
+        {props.graph.name ?? props.graph.id}
+      </div>
       <div class="graph-card__counts">
         {props.graph.cells} cells · {props.graph.hosts} hosts · {props.graph.nets} nets
       </div>
@@ -66,18 +77,39 @@ function GraphCard(props: { graph: GraphSummary }) {
 }
 
 /** 10-target-v3.md Navigator: "Search with modes: name (live filter),
- *  problems (...), data (M5)"; M4-FE ticket Implement §4. */
+ *  problems (...), data (M5 — find the cell holding a record)"; M4-FE ticket
+ *  Implement §4, M5-SEARCH ticket Implement §2.
+ *
+ *  `name` queries as-you-type: it is answered from metadata the server already
+ *  holds, and its blank query is defined to match nothing. `data` does not:
+ *  every data query reads real cell state on the cells' own host threads, so
+ *  it runs on submit (Enter) and reports its cost. */
 function SearchPanel() {
+  const placeholder = () => (searchMode() === 'data' ? 'Find a record… (Enter)' : 'Search graphs…');
+  const costLine = () => (searchMode() === 'data' ? formatSearchCost(searchCost()) : null);
+  // M5-COLD ticket Implement §3: the one skip a user can act on, so it names
+  // the remedy. Derived from the same cost object the line above renders.
+  const coldHint = () => (searchMode() === 'data' ? formatColdSkipHint(searchCost()) : null);
+
   function selectMode(mode: SearchMode): void {
     if (!isSearchModeEnabled(mode)) return;
     setSearchMode(mode);
+    clearSearch();
     if (mode === 'problems') runSearch('problems', '');
-    else setSearchQuery(''); // 'name': as-you-type — nothing to show until the user types
+    // 'name' is as-you-type and 'data' is on-submit: both start empty
+    else setSearchQuery('');
   }
 
   function onInput(v: string): void {
     setSearchQuery(v);
-    if (searchMode() === 'name') runSearch('name', v);
+    if (isSubmitMode(searchMode())) clearSearch(); // stale results must not outlive the query that produced them
+    else if (searchMode() === 'name') runSearch('name', v);
+  }
+
+  function onKeyDown(e: KeyboardEvent): void {
+    if (e.key !== 'Enter' || !isSubmitMode(searchMode())) return;
+    e.preventDefault();
+    runSearch(searchMode(), searchQuery());
   }
 
   return (
@@ -85,10 +117,11 @@ function SearchPanel() {
       <input
         class="search-panel__input"
         type="search"
-        placeholder="Search graphs…"
+        placeholder={placeholder()}
         value={searchQuery()}
-        disabled={searchMode() !== 'name'}
+        disabled={searchMode() === 'problems'}
         onInput={(e) => onInput(e.currentTarget.value)}
+        onKeyDown={onKeyDown}
       />
       <div class="search-panel__modes" role="group" aria-label="Search mode">
         <For each={SEARCH_MODES}>
@@ -105,31 +138,55 @@ function SearchPanel() {
           )}
         </For>
       </div>
-      <Show when={searchMode() !== 'data'}>
-        <Show
-          when={!searchLoading()}
-          fallback={<p class="navigator__status">Searching…</p>}
-        >
-          <Show when={!searchError()} fallback={<p class="navigator__status">Search failed.</p>}>
-            <ul class="search-hits">
-              <For each={searchHits()}>
-                {(hit) => (
-                  <li>
-                    <button
-                      class="search-hit"
-                      onClick={() => enterGraph(hit.graph, { ref: hit.ref, forceErrors: searchMode() === 'problems' })}
-                    >
-                      <span class="search-hit__label">{hit.label}</span>
-                      <span class="search-hit__detail">{hit.detail}</span>
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
+      <Show when={!searchLoading()} fallback={<p class="navigator__status">Searching…</p>}>
+        <Show when={!searchError()} fallback={<p class="navigator__status">Search failed.</p>}>
+          <ul class="search-hits">
+            <For each={searchHits()}>{(hit) => <SearchHitRow hit={hit} />}</For>
+          </ul>
+          {/* The cost of a data search is part of its answer, including when
+              it found nothing — 10-target-v3.md §Known kernel gaps
+              ("surfaces the cost in the UI"), M5-SEARCH Implement §2. */}
+          <Show when={costLine()}>{(line) => <p class="search-cost">{line()}</p>}</Show>
+          <Show when={coldHint()}>
+            {(hint) => (
+              <p class="search-cold-hint">
+                <span aria-hidden="true">{COLD_TAG} </span>
+                {hint()}
+              </p>
+            )}
           </Show>
         </Show>
       </Show>
     </div>
+  );
+}
+
+/** One result row. A notice row (`nav/search.ts`'s {@link isNoticeHit}) names
+ *  what the search did *not* cover and opens nothing — rendering it as a
+ *  button would offer navigation to a graph that does not exist. */
+function SearchHitRow(props: { hit: SearchHit }) {
+  return (
+    <li>
+      <Show
+        when={!isNoticeHit(props.hit)}
+        fallback={
+          <div class="search-hit search-hit--notice">
+            <span class="search-hit__label">{props.hit.label}</span>
+            <span class="search-hit__detail">{props.hit.detail}</span>
+          </div>
+        }
+      >
+        <button
+          class="search-hit"
+          onClick={() =>
+            enterGraph(props.hit.graph, { ref: props.hit.ref, forceErrors: searchMode() === 'problems' })
+          }
+        >
+          <span class="search-hit__label">{props.hit.label}</span>
+          <span class="search-hit__detail">{props.hit.detail}</span>
+        </button>
+      </Show>
+    </li>
   );
 }
 
@@ -166,10 +223,17 @@ function ConstellationGrid() {
                 }}
                 // Without this the button's only content is a decorative SVG,
                 // so it exposes no accessible name at all (M4-EVAL).
-                aria-label={`Open ${summary()?.name ?? c.graphId}`}
+                aria-label={`Open ${summary()?.name ?? c.graphId}${summary()?.lifecycle === 'cold' ? ' (cold)' : ''}`}
                 onClick={() => enterGraph(c.graphId)}
               >
-                <div class="constellation-card__header">{summary()?.name ?? c.graphId}</div>
+                <div class="constellation-card__header">
+                  <Show when={summary()?.lifecycle === 'cold'}>
+                    <span class="cold-tag" aria-hidden="true">
+                      {COLD_TAG}{' '}
+                    </span>
+                  </Show>
+                  {summary()?.name ?? c.graphId}
+                </div>
                 <svg class="constellation-card__svg" viewBox={c.viewBox} aria-hidden="true">
                   <For each={c.edges}>
                     {(e) => <line class="constellation-edge" x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} />}

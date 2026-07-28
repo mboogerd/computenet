@@ -55,6 +55,15 @@ data class Node(
     companion object {
         const val LOCAL_NET = "local"
         const val HOT = "HOT"
+
+        /**
+         * The contract's other `lifecycle` value. Reported for a cell the
+         * kernel is not running: individually suspended, or on a drained host
+         * — see [Heat] for the whole vocabulary and why those two collapse into
+         * this one word (the contract offers `"HOT" | "SUSPENDED"` and no
+         * third).
+         */
+        const val SUSPENDED = "SUSPENDED"
     }
 }
 
@@ -298,12 +307,16 @@ data class GraphSummary(
     val health: GraphHealth,
     /**
      * The contract's `"hot" | "cold"`, lowercase (unlike [Node.lifecycle]).
-     * Always [HOT] in M4: cold-graph listing is M5-COLD.
+     * [COLD] once every member cell is parked — see [Component.lifecycle] for
+     * the predicate and [Heat] for what each parked state means.
      */
     val lifecycle: String = HOT,
 ) {
     companion object {
         const val HOT = "hot"
+
+        /** M5-COLD: every member cell is suspended, or on a drained host. */
+        const val COLD = "cold"
     }
 }
 
@@ -322,8 +335,10 @@ data class SearchResult(
     val mode: String,
     val hits: List<SearchHit>,
     /**
-     * Data-mode only, and therefore always null in M4 — `mode=data` answers
-     * 501 until M5-SEARCH builds the fan-out this would account for.
+     * Data-mode only, and non-null on every data response — including one that
+     * matched nothing, since "this query cost four cell reads and found
+     * nothing" is exactly the answer a user needs. Null for [NAME]/[PROBLEMS],
+     * which read only metadata the inspector already holds. See [DataSearch].
      */
     val cost: SearchCost? = null,
 ) {
@@ -344,9 +359,16 @@ data class SearchHit(
     val detail: String,
 )
 
-/** `SearchResult.cost` — what a data-mode fan-out touched. Filled by M5-SEARCH. */
+/**
+ * `SearchResult.cost` — what a data-mode fan-out touched (M5-SEARCH). Surfacing
+ * this is a product requirement, not diagnostics: content search is the one
+ * inspector read that costs the graph something, so the price is part of the
+ * answer. See [DataSearch] for what each number counts.
+ */
 @Serializable
 data class SearchCost(
+    /** Cells whose state this search actually read. */
     val cellsQueried: Int,
+    /** Candidate cells skipped as not hot — suspended, or held mid-migration. */
     val coldSkipped: Int,
 )

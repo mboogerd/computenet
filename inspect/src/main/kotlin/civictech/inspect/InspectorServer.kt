@@ -51,6 +51,13 @@ import java.util.concurrent.TimeUnit
  * - `graphs.changed` SSE events, plus `Node.graph` on every node;
  * - [nameGraph], the opt-in host-side annotation that labels a component.
  *
+ * M5 adds content search (see [DataSearch]): `?mode=data` reads hot,
+ * locally-hosted cells' state under an explicit cap and deadline and reports
+ * the cost it paid; and cold graphs (see [Heat] and [Waker]): a component whose
+ * cells are all parked lists as `lifecycle: "cold"` from registry metadata
+ * alone, and `POST /api/inspect/graph/{id}/wake` is the one explicit,
+ * user-initiated act that ends that.
+ *
  * ### What it can and cannot see
  *
  * The inspector reads one [LocationRegistry]. **Cells on registry-less hosts
@@ -127,6 +134,21 @@ class InspectorServer(
         snapshots = SnapshotSource { ref -> snapshots.snapshotOf(ref) },
     )
 
+    /**
+     * M5 — content search (see [DataSearch]). Reads through [observations] so a
+     * cell a client already observes costs nothing extra, and through the
+     * registry for everything else.
+     */
+    private val dataSearch = DataSearch(
+        registry = registry,
+        components = model::components,
+        observed = observations::reading,
+        instruments = { observations.sinkRefs },
+    )
+
+    /** M5-COLD — the one causal act in the whole inspector (see [Waker]). */
+    private val waker = Waker(registry)
+
     /** M2 — the error lane (see [Errors]'s doc for the three sources it feeds). */
     private val errors = Errors(
         registry = registry,
@@ -176,6 +198,15 @@ class InspectorServer(
             val body = Graphs.list(model.components(), errors.snapshot())
             exchange.respond(200, inspectorJson.encodeToString(GraphList.serializer(), body), JSON)
         }
+        // M5-COLD. Registered *after* GRAPHS_PATH and deliberately one
+        // character shorter than it: the JDK http server matches contexts by
+        // longest path prefix, so `/graphs` still reaches its own handler while
+        // `/graph/{id}/wake` reaches this one.
+        shell.route(GRAPH_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            runCatching { serveGraph(exchange) }
+                .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
+        }
         shell.route(SEARCH_PATH) { exchange ->
             exchange.allowCrossOrigin()
             runCatching { serveSearch(exchange) }
@@ -207,9 +238,11 @@ class InspectorServer(
      * `name` and `problems` are answered from metadata the inspector already
      * holds — component membership, cell names and types, and M2's error rows
      * — so searching subscribes to nothing and raises no attention (P6).
-     * `data` is the one mode that would have to *ask cells*, which is exactly
-     * why it is M5-SEARCH's problem and answers 501 here rather than a
-     * plausible-looking empty result.
+     * `data` (M5) is the one mode that has to *ask cells*: it reads hot,
+     * locally-hosted candidates through the host-routed snapshot seam, under a
+     * cap and a deadline, and reports what that cost in [SearchResult.cost] —
+     * see [DataSearch] for the whole cost model and why it does not fan
+     * `StateRequest` out.
      */
     private fun serveSearch(exchange: HttpExchange) {
         val params = exchange.query()
@@ -217,13 +250,49 @@ class InspectorServer(
         when (val mode = params[MODE_PARAM]?.takeIf { it.isNotBlank() } ?: SearchResult.NAME) {
             SearchResult.NAME -> exchange.respondSearch(Graphs.byName(model.components(), query))
             SearchResult.PROBLEMS -> exchange.respondSearch(Graphs.problems(model.components(), errors.snapshot()))
-            SearchResult.DATA -> exchange.respond(501, DATA_SEARCH_DEFERRED, JSON)
+            SearchResult.DATA -> exchange.respondSearch(dataSearch.search(query))
             else -> exchange.respond(400, problem("unknown search mode: $mode"), JSON)
         }
     }
 
     private fun HttpExchange.respondSearch(result: SearchResult) =
         respond(200, inspectorJson.encodeToString(SearchResult.serializer(), result), JSON)
+
+    /**
+     * The `/graph/{id}/…` subtree — one action today: `POST .../wake`
+     * (M5-COLD ticket Implement §1).
+     *
+     * **202, not 200**: waking is a management call enqueued on each host's own
+     * queue (`resumeHost` / `resume`), so the only honest thing this response
+     * can claim is that the request was accepted. The client learns the actual
+     * outcome the same way it learns everything else — from the `lifecycle` and
+     * `graphs.changed` events that follow, which is also what makes the wake
+     * *logged* rather than silent.
+     *
+     * An id no component carries is a 404 here, unlike `GET /topology?graph=`'s
+     * empty 200: a stale id on a read is an ordinary race the client resolves
+     * by resyncing, but "wake this graph" naming nothing did not happen, and
+     * answering 202 would claim it did.
+     */
+    private fun serveGraph(exchange: HttpExchange) {
+        val segments = exchange.requestURI.path.removePrefix(GRAPH_PATH).split('/').filter { it.isNotEmpty() }
+        val id = segments.firstOrNull()
+        if (id == null || segments.drop(1) != listOf(WAKE) || exchange.requestMethod != "POST") {
+            return exchange.respond(404, problem("expected POST /graph/{id}/wake"), JSON)
+        }
+        val component = model.components().firstOrNull { it.id == id }
+            ?: return exchange.respond(404, problem("unknown graph: $id"), JSON)
+        val report = waker.wake(component)
+        exchange.respond(
+            202,
+            buildJsonObject {
+                put("graph", component.id)
+                put("hosts", report.hosts)
+                put("cells", report.cells)
+            }.toString(),
+            JSON,
+        )
+    }
 
     private fun serveCell(exchange: HttpExchange) {
         val segments = exchange.requestURI.path.removePrefix(CELL_PATH)
@@ -339,6 +408,15 @@ class InspectorServer(
             { runCatching { model.publishGraphChanges() } },
             GRAPHS_POLL_MS, GRAPHS_POLL_MS, TimeUnit.MILLISECONDS,
         )
+        // M5-COLD: suspend/resume and drain/resumeHost are plain management
+        // calls with no notification hook, so a cell going cold (or coming
+        // back) is only observable by asking. Same cadence and same rationale
+        // as the component poll above — metadata reads only, off every host's
+        // thread.
+        heartbeats.scheduleAtFixedRate(
+            { runCatching { model.publishLifecycleChanges() } },
+            GRAPHS_POLL_MS, GRAPHS_POLL_MS, TimeUnit.MILLISECONDS,
+        )
     }
 
     fun stop() = close()
@@ -377,6 +455,9 @@ class InspectorServer(
     /** Publish any pending `graphs.changed` now instead of waiting for its 1 s schedule — tests. */
     internal fun publishGraphChangesNow() = model.publishGraphChanges()
 
+    /** Publish any pending `lifecycle` changes now instead of waiting for the 1 s schedule — tests. */
+    internal fun publishLifecycleChangesNow() = model.publishLifecycleChanges()
+
     /** The live components, as `GET /graphs` and `GET /search` see them — tests. */
     internal fun componentsNow(): List<Component> = model.components()
 
@@ -388,6 +469,9 @@ class InspectorServer(
         const val CELL_PATH = "$BASE_PATH/cell"
         const val ERRORS_PATH = "$BASE_PATH/errors"
         const val GRAPHS_PATH = "$BASE_PATH/graphs"
+
+        /** M5-COLD — the per-graph action subtree: `POST $GRAPH_PATH/{id}/wake`. */
+        const val GRAPH_PATH = "$BASE_PATH/graph"
         const val SEARCH_PATH = "$BASE_PATH/search"
 
         /** Contract §SSE: "Server sends `heartbeat` every 15 s". */
@@ -405,14 +489,12 @@ class InspectorServer(
         private const val JSON = "application/json"
         private const val STATE = "state"
         private const val OBSERVE = "observe"
+        private const val WAKE = "wake"
 
         /** `GET /topology`'s M4 scoping parameter. */
         private const val GRAPH_PARAM = "graph"
         private const val MODE_PARAM = "mode"
         private const val QUERY_PARAM = "q"
-
-        /** M4-BE §4, verbatim: `mode=data` returns 501 with this body. */
-        private const val DATA_SEARCH_DEFERRED = """{"error": "data search arrives in M5"}"""
 
         /** `"<uuid>:<instanceId>"` — the contract's ref encoding. */
         internal fun encodeRef(ref: CellRef): String = "${ref.id}:${ref.instanceId}"

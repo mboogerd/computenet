@@ -1,9 +1,11 @@
 import { onMount, Show } from 'solid-js';
 import Canvas from './components/Canvas';
+import ColdScreen from './components/ColdScreen';
 import DetailPanel from './components/DetailPanel';
 import Header from './components/Header';
 import Navigator from './components/Navigator';
 import ToggleBar from './components/ToggleBar';
+import { currentGraphCold } from './solid/cold';
 import { initDetail } from './solid/detail';
 import { fetchGraphs } from './solid/graphs';
 import { currentGraphGone, goHome, initRoute, screen } from './solid/route';
@@ -35,7 +37,14 @@ export default function App() {
         <ToggleBar />
         <div class="app-body">
           <Show when={!currentGraphGone()} fallback={<GraphGone />}>
-            <Canvas />
+            {/* M5-COLD: a parked component renders as the cold screen — the
+                same structure, ghosted, with the notice and the explicit wake
+                — instead of the live canvas. The transition back is driven by
+                the server's `lifecycle`/`graphs.changed` events landing in the
+                `GraphList` this reads, so nothing here has to poll. */}
+            <Show when={!currentGraphCold()} fallback={<ColdScreen />}>
+              <Canvas />
+            </Show>
           </Show>
           <DetailPanel />
         </div>

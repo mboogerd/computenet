@@ -1,0 +1,27 @@
+{
+  "mode": "data",
+  "hits": [
+    {
+      "graph": "g-016eda8f-96de-40e1-a04c-f997395ade62",
+      "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+      "label": "alice",
+      "detail": "skillmatch / candSkills · SetCell — 2 records"
+    },
+    {
+      "graph": "g-016eda8f-96de-40e1-a04c-f997395ade62",
+      "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+      "label": "alice",
+      "detail": "skillmatch / matches · JoinSetCell — 2 records"
+    },
+    {
+      "graph": "",
+      "ref": null,
+      "label": "Partial results",
+      "detail": "7 cells read only to the first 200 rows"
+    }
+  ],
+  "cost": {
+    "cellsQueried": 18,
+    "coldSkipped": 0
+  }
+}

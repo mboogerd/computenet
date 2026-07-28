@@ -62,9 +62,15 @@ internal data class StateReading(
  * reading a live cell from the HTTP thread — the one thing the ticket
  * explicitly warns against.
  *
- * When the accessor lands (a `ManagedHost.snapshotOf(ref): Serializable?`
- * running `enqueueAwaiting(0) { (cells[ref] as? Stateful)?.snapshot() }` is the
- * whole of it), wiring it is one line at [InspectorServer]'s construction.
+ * **M5 update — the accessor now exists.** `ManagedHost.snapshotOf(ref)` landed
+ * with M5-SEARCH, which needed a host-routed read for content search; it
+ * returns a `CompletableFuture` rather than the `Serializable?` predicted here,
+ * so the caller owns the deadline instead of inheriting the scheduler's. Wiring
+ * it into this seam is still one line at [InspectorServer]'s construction and
+ * would finally make `kind: "snapshot"` reachable — but that changes what
+ * `GET /cell/{ref}/state` answers for an *unobserved* cell, which belongs to
+ * whoever owns M1's remaining residual, not to M5-SEARCH. Left deliberately
+ * unwired; [DataSearch] calls the accessor directly.
  */
 fun interface SnapshotSource {
     /** [ref]'s snapshot, captured on its host's execution context, or null. */
@@ -119,6 +125,17 @@ internal class Observations(
 
     /** Refs with a live observation — diagnostics and tests. */
     val openRefs: Set<CellRef> get() = synchronized(lock) { open.keys.toSet() }
+
+    /**
+     * The `ObserveCell` sinks this inspector has spawned into the graph — its
+     * own instruments. They are published cells like any other, so anything
+     * enumerating the graph will find them; [DataSearch] excludes them, because
+     * an instrument reporting its own readings as results is the observer
+     * effect wearing a search box (selecting a cell would make it start
+     * appearing in content-search hits, holding a copy of the very state its
+     * producer already answered for).
+     */
+    val sinkRefs: Set<CellRef> get() = synchronized(lock) { open.values.mapTo(HashSet()) { it.sinkRef } }
 
     /**
      * Start observing [ref], or renew the idle deadline if it is already
