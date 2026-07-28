@@ -23,14 +23,57 @@ class DocLintsTest {
     private fun writeSpec(dir: File, name: String, content: String) =
         File(dir, name).apply { parentFile.mkdirs() }.writeText(content)
 
+    private fun writeKt(dir: File, name: String, content: String) =
+        File(dir, name).apply { parentFile.mkdirs() }.writeText(content)
+
     // --- 1. Package-pointer resolution --------------------------------------------------
 
     @Test
     fun `a package pointer to an existing directory is not flagged`() {
         val spec = specDir()
         val cellRoot = kernelCellDir()
-        File(cellRoot, "control").mkdirs()
+        val controlDir = File(cellRoot, "control").apply { mkdirs() }
+        writeKt(controlDir, "AttentionSupport.kt", "package civictech.cell.control\n\nclass AttentionSupport\n")
         writeSpec(spec, "34-fake.md", "Implementation: `cell.control.AttentionSupport` over sub-channels.")
+
+        DocLints.checkPackagePointers(spec, cellRoot) shouldHaveSize 0
+    }
+
+    @Test
+    fun `a package pointer whose type is genuinely declared in the resolved directory is not flagged`() {
+        val spec = specDir()
+        val cellRoot = kernelCellDir()
+        val evolveDir = File(cellRoot, "evolve").apply { mkdirs() }
+        writeKt(evolveDir, "PromotionPolicy.kt", "package civictech.cell.evolve\n\ninterface PromotionPolicy\n")
+        writeSpec(spec, "53-fake.md", "`cell.evolve.PromotionPolicy` governs shadow promotion.")
+
+        DocLints.checkPackagePointers(spec, cellRoot) shouldHaveSize 0
+    }
+
+    @Test
+    fun `a package pointer whose directory exists but whose type moved elsewhere is a fatal finding`() {
+        val spec = specDir()
+        val cellRoot = kernelCellDir()
+        val hostDir = File(cellRoot, "host").apply { mkdirs() }
+        // AttentionPolicy actually lives in cell.control; cell.host has no declaration of it
+        // (modeled on the real host -> control move DocLints previously missed).
+        writeKt(hostDir, "ManagedHost.kt", "package civictech.cell.host\n\nclass ManagedHost\n")
+        writeSpec(spec, "34-scheduling.md", "The scheduler consults `cell.host.AttentionPolicy` before dispatch.")
+
+        val findings = DocLints.checkPackagePointers(spec, cellRoot)
+
+        findings shouldHaveSize 1
+        findings.single().severity shouldBe Severity.FATAL
+        findings.single().message shouldContain "cell.host.AttentionPolicy"
+        findings.single().message shouldContain "34-scheduling.md"
+        findings.single().message shouldContain "civictech/cell/host/"
+    }
+
+    @Test
+    fun `a package-only pointer with no type segment continues to pass unaffected by type resolution`() {
+        val spec = specDir()
+        val cellRoot = kernelCellDir()
+        writeSpec(spec, "11-fake.md", "`cell.Owned` is referenced without a package structure.")
 
         DocLints.checkPackagePointers(spec, cellRoot) shouldHaveSize 0
     }
@@ -67,7 +110,8 @@ class DocLintsTest {
     fun `a multi-segment package pointer resolves against the nested directory`() {
         val spec = specDir()
         val cellRoot = kernelCellDir()
-        File(cellRoot, "data/op").mkdirs()
+        val opDir = File(cellRoot, "data/op").apply { mkdirs() }
+        writeKt(opDir, "UnionSetCell.kt", "package civictech.cell.data.op\n\nclass UnionSetCell\n")
         writeSpec(spec, "24-fake.md", "`cell.data.op.UnionSetCell` tracks the union.")
 
         DocLints.checkPackagePointers(spec, cellRoot) shouldHaveSize 0
@@ -86,7 +130,8 @@ class DocLintsTest {
     fun `a method-access suffix after a resolvable type is ignored`() {
         val spec = specDir()
         val cellRoot = kernelCellDir()
-        File(cellRoot, "evolve").mkdirs()
+        val evolveDir = File(cellRoot, "evolve").apply { mkdirs() }
+        writeKt(evolveDir, "Shadow.kt", "package civictech.cell.evolve\n\nclass Shadow\n")
         writeSpec(spec, "53-fake.md", "`cell.evolve.Shadow.spawn` suppresses effects.")
 
         DocLints.checkPackagePointers(spec, cellRoot) shouldHaveSize 0
