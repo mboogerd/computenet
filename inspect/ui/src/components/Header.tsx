@@ -1,5 +1,6 @@
-import { createMemo } from 'solid-js';
+import { createMemo, Show } from 'solid-js';
 import { errorStore, errorVersion } from '../solid/errors';
+import { goHome, screen } from '../solid/route';
 import { conn, nodes } from '../solid/state';
 import { theme, toggleTheme } from '../solid/theme';
 import { showErrors, setShowErrors } from '../solid/toggles';
@@ -30,6 +31,13 @@ export default function Header() {
   return (
     <header class="app-header">
       <h1>Inspector</h1>
+      {/* M4-FE ticket Implement §1: "Back returns to Home" — only shown on
+          the Graph screen; Home has nothing to go "back" from. */}
+      <Show when={screen() === 'graph'}>
+        <button class="icon-btn" title="Back to graphs" onClick={goHome}>
+          ‹ Graphs
+        </button>
+      </Show>
       <span class="app-header__host">{host()}</span>
       <span class="conn-pip" classList={{ 'is-live': conn() === 'live' }} data-state={conn()}>
         <span class="conn-pip__dot" /> {CONN_LABEL[conn()] ?? conn()}

@@ -1,0 +1,269 @@
+.navigator {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.navigator__rail {
+  width: 300px;
+  flex: 0 0 300px;
+  border-right: 1px solid var(--hairline);
+  background: var(--surface);
+  padding: 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.navigator__main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.navigator__status {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+/* --- search panel --- */
+
+.search-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.search-panel__input {
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+}
+
+.search-panel__input:disabled {
+  opacity: 0.5;
+}
+
+.search-panel__modes {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.search-chip {
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.search-chip:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+}
+
+.search-chip.is-active {
+  border-color: var(--focus-ring);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.search-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.search-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.search-hit {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.search-hit:hover {
+  border-color: var(--hairline-strong);
+}
+
+.search-hit__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.search-hit__detail {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* --- graph cards --- */
+
+.graph-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.graph-card {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.7rem;
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.graph-card:hover {
+  border-color: var(--hairline-strong);
+}
+
+/* M4-FE ticket Implement §2: "the g-… id styled as 'unnamed', dashed
+   border per the v2 mockup". */
+.graph-card--unnamed {
+  border-style: dashed;
+}
+
+.graph-card__name {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-card--unnamed .graph-card__name {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-style: italic;
+}
+
+.graph-card__counts {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.graph-card__pills {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.health-pill {
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  color: var(--text-secondary);
+}
+
+.health-pill[data-kind='dead'] {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.health-pill[data-kind='parked'] {
+  color: var(--parked);
+  border-color: var(--parked);
+}
+
+.health-pill[data-kind='lifecycle'] {
+  color: var(--status-live);
+  text-transform: uppercase;
+}
+
+/* --- constellation --- */
+
+.constellation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+  align-content: start;
+}
+
+.constellation-card {
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.5rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-align: left;
+  font: inherit;
+}
+
+.constellation-card:hover {
+  border-color: var(--hairline-strong);
+}
+
+/* 10-target-v3.md Navigator: "cold ones dimmed". */
+.constellation-card--cold {
+  opacity: 0.55;
+}
+
+.constellation-card--erring {
+  border-color: var(--error);
+}
+
+.constellation-card__header {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.constellation-card__svg {
+  width: 100%;
+  height: 100px;
+  display: block;
+}
+
+.constellation-dot {
+  fill: var(--cell-pure);
+}
+
+.constellation-edge {
+  stroke: var(--edge-consume);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.constellation-card--erring .constellation-dot {
+  fill: var(--error);
+}

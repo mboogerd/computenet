@@ -1,0 +1,12 @@
+{
+  "mode": "name",
+  "hits": [
+    {
+      "graph": "g-016eda8f-96de-40e1-a04c-f997395ade62",
+      "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+      "label": "candSkills",
+      "detail": "civictech.cell.data.SetCell"
+    }
+  ],
+  "cost": null
+}
