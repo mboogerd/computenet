@@ -74,8 +74,14 @@ class FanOutlet<Api : Any>(
      * the SPSC funnel, always admitted regardless of the exclusive bit. Fire
      * before consumers on emit ("taps-fire-first"). T04 finding 6: same
      * `ConcurrentHashMap` + [keyOf] + order-tracking rationale as [consumers].
+     *
+     * Holds both Observe-role shapes — the contract-typed [tap] and the
+     * payload-agnostic [observe] — in the *same* pair of structures (see
+     * [TapTarget]): one order list is what "taps-fire-first, in emission
+     * order" means, and a second parallel pair would need T04 finding 6's
+     * whole concurrency argument re-made for it.
      */
-    private val taps: MutableMap<PortRef, Use<Api>> = ConcurrentHashMap()
+    private val taps: MutableMap<PortRef, TapTarget> = ConcurrentHashMap()
     private val tapOrder = CopyOnWriteArrayList<PortRef>()
 
     private fun putConsumer(key: PortRef, port: Use<Api>) {
@@ -86,8 +92,8 @@ class FanOutlet<Api : Any>(
         if (consumers.remove(key) != null) consumerOrder.remove(key)
     }
 
-    private fun putTap(key: PortRef, port: Use<Api>) {
-        if (taps.put(key, port) == null) tapOrder += key
+    private fun putTap(key: PortRef, target: TapTarget) {
+        if (taps.put(key, target) == null) tapOrder += key
     }
 
     private fun removeTap(key: PortRef) {
@@ -143,17 +149,59 @@ class FanOutlet<Api : Any>(
             // mutates or moves it. Order comes from consumerOrder/tapOrder
             // (T04 finding 6): ConcurrentHashMap's own iteration order is not
             // insertion order.
-            tapOrder.toList().forEach { key -> taps[key]?.let { target -> invoke(target, method, args) } }
-            consumerOrder.toList().forEach { key -> consumers[key]?.let { target -> invoke(target, method, args) } }
+            //
+            // Both lists are iterated directly, with no intervening copy
+            // (audit finding B11). A CopyOnWriteArrayList's iterator IS the
+            // stable array snapshot taken at iterator creation — that is
+            // precisely the guarantee T04 finding 6 introduced these lists for
+            // — so copying one into a second list allocated a throwaway List
+            // per tap/consumer set per message, on the hottest path in the
+            // runtime, and bought nothing.
+            for (key in tapOrder) {
+                when (val target = taps[key]) {
+                    is TapTarget.Typed -> invoke(target.port, method, args)
+                    is TapTarget.Observer -> notifyObserver(target, args, ctx)
+                    // untapped between the order snapshot and this step
+                    null -> Unit
+                }
+            }
+            for (key in consumerOrder) consumers[key]?.let { target -> invoke(target, method, args) }
         }
         null
     }
 
-    private fun invoke(target: Use<Api>, method: java.lang.reflect.Method, args: Array<out Any?>?) {
+    // `Use<*>`, not `Use<Api>`: the consumer path passes a `Use<Api>` and the
+    // typed-tap path a [TapTarget.Typed]'s star-projected port, and both end at
+    // the same reflective `Method.invoke`, which is untyped anyway.
+    private fun invoke(target: Use<*>, method: java.lang.reflect.Method, args: Array<out Any?>?) {
         val filtered = disclosureFilter(args ?: emptyArray()) ?: return
         Proxy.unwrapInvocationTarget {
             method.invoke(target.call, *filtered)
         }
+    }
+
+    /**
+     * Delivers one emission to a payload-agnostic Observe-role attachment
+     * ([observe]) — the [invoke] of the observer shape, on the same dispatch
+     * step, inside the same [CurrentContext.with] frame, so the wave-stamping
+     * setup is written once in [call] and never duplicated.
+     *
+     * Disclosure (spec 40/43 seam 3, decided 93 I-28): the observer is handed
+     * no arguments, so there is nothing here to redact — but a delivery
+     * [disclosureFilter] *suppresses* did not happen at all, and an observer
+     * that counted it would report traffic no subscriber ever received. So the
+     * filter still gates the notification exactly as it gates [invoke]; only
+     * its rewritten arguments are discarded, unread. Not an exemption: an
+     * Observe-role attachment is subject to disclosure like any other, it
+     * simply has nothing disclosed to it.
+     */
+    private fun notifyObserver(
+        target: TapTarget.Observer,
+        args: Array<out Any?>?,
+        ctx: MessageContext,
+    ) {
+        disclosureFilter(args ?: emptyArray()) ?: return
+        target.onEmit(ctx)
     }
 
     /**
@@ -223,7 +271,11 @@ class FanOutlet<Api : Any>(
         // taps/consumers fan-out, unchanged.
         return Proxy.fromClass(clazz) { _, method, args ->
             val key = keyOf(portRef)
-            val target = consumers[key]?.call ?: taps[key]?.call ?: run {
+            // Only a contract-typed attachment can take a targeted delivery: a
+            // payload-agnostic [observe] attachment has no `Api` to invoke, so
+            // `at(observerRef)` is a genuine target miss (counted below), not a
+            // silent no-op.
+            val target = consumers[key]?.call ?: (taps[key] as? TapTarget.Typed)?.port?.call ?: run {
                 // T05 finding 7: an unresolvable target used to answer into
                 // the void with no signal at all — the delivery path for
                 // baselineTo and every targeted catch-up/StateRequest reply.
@@ -289,17 +341,71 @@ class FanOutlet<Api : Any>(
                 target = target,
                 targetRef = port.ref,
                 role = LinkRole.Observe,
-                install = { putTap(keyOf(port.ref), port) },
+                install = { putTap(keyOf(port.ref), TapTarget.Typed(port)) },
                 uninstall = { removeTap(keyOf(port.ref)) },
             )
         }
-        putTap(keyOf(port.ref), port)
+        putTap(keyOf(port.ref), TapTarget.Typed(port))
         return LinkResult.Connected(
             PortLink(ref, port.ref, this, port as? Port, LinkRole.Observe) { removeTap(keyOf(port.ref)) },
         )
     }
 
-    /** Detaches a tap previously installed with [tap]. Idempotent. */
+    /**
+     * Payload-agnostic Observe-role attachment (spec 20/23 §Taps, G-47; audit
+     * finding B2) — the second shape of [tap], installed through the very same
+     * [putTap] path into the same [taps]/[tapOrder] pair. It is therefore
+     * uncounted by the SPSC funnel, always admitted regardless of the
+     * exclusive bit, fires before every consumer in tap-insertion order
+     * interleaved with contract-typed taps, is never an expected sibling of a
+     * wave-completeness set, and so never gates a wave — identical to [tap] in
+     * every respect a downstream observer can see.
+     *
+     * What differs is the shape: [onEmit] is told *that* an emission happened
+     * and which [MessageContext] it carries, and is never handed the payload.
+     * That is the point. A message counter, a rate sampler or a last-wave
+     * recorder has no business decoding `Api`, yet before this the only way to
+     * attach one was to synthesize a dynamic proxy of the outlet's contract
+     * and hand-screen `Object`'s own methods off the counting path — answering
+     * `null` to a primitive-returning `hashCode()` throws on unboxing, on the
+     * *emitting cell's* thread. Nothing reachable from here can decode, borrow
+     * or retain the payload, so that hazard cannot be re-derived by the next
+     * out-of-graph observer.
+     *
+     * [onEmit] runs on the emitting thread, inside the emission, exactly where
+     * a [tap] handler runs: it must not block, and an exception it throws
+     * propagates to the emitter just as a tap's does.
+     * [CurrentContext.get] inside it answers the same [MessageContext] handed
+     * to it, so an observer needs no thread-local read of its own.
+     *
+     * No handshake: a lambda is not a [Linked] port, so there is no target side
+     * to negotiate policies, natures or an `EdgeOpen` with — this takes the
+     * same unnegotiated path [tap] takes for a `Use.fixed` endpoint, and so
+     * always answers [LinkResult.Connected].
+     *
+     * [observerRef] is the attachment's identity; detach with [untap] or with
+     * [civictech.cell.link.Link.unlink] on the returned link, both idempotent.
+     * Deliberately not defaulted: port identity stays explicit, and a caller
+     * that cannot name its attachment cannot detach it.
+     *
+     * NB the parameter is NOT named `ref` — that would shadow this outlet's own
+     * [ref] property inside the body (the same footgun the constructor
+     * parameter is named around), and the [PortLink] below would then record
+     * the observer's ref as *both* endpoints of the link.
+     */
+    fun observe(observerRef: PortRef, onEmit: (MessageContext) -> Unit): LinkResult {
+        val key = keyOf(observerRef)
+        putTap(key, TapTarget.Observer(onEmit))
+        return LinkResult.Connected(
+            PortLink(ref, observerRef, this, null, LinkRole.Observe) { removeTap(key) },
+        )
+    }
+
+    /**
+     * Detaches an Observe-role attachment previously installed with [tap] or
+     * [observe] — both live in the same [taps] map, so one detach covers both.
+     * Idempotent.
+     */
     fun untap(portRef: PortRef) {
         removeTap(keyOf(portRef))
     }
@@ -356,4 +462,39 @@ class FanOutlet<Api : Any>(
      */
     @Suppress("SENSELESS_COMPARISON", "USELESS_ELVIS")
     private fun keyOf(candidate: PortRef): PortRef = candidate ?: NULL_PORT_REF
+}
+
+/**
+ * One Observe-role attachment on a [FanOutlet] (spec 20/23 §Taps, G-47) — the
+ * value side of the outlet's `taps` map.
+ *
+ * The two shapes deliberately share one map + one order list rather than
+ * getting a structure each: the `ConcurrentHashMap` + `CopyOnWriteArrayList`
+ * pair is what T04 finding 6 (commit `fae2ffa`) put in place so that a
+ * `tap`/`untap`/`observe`/`unsubscribe` racing the per-emission iteration can
+ * neither corrupt it nor lose a delivery, and a second parallel pair would
+ * need that whole argument re-made for it *and* would fracture the single
+ * documented emission order taps have ("taps-fire-first", in tap-insertion
+ * order).
+ *
+ * File-private: the distinction is an implementation detail of the fan-out
+ * loop. Callers see two attachment methods and one detach.
+ */
+private sealed interface TapTarget {
+
+    /**
+     * A contract-typed tap ([FanOutlet.tap]): receives the declared payload
+     * form and is expected to read it read-only
+     * ([civictech.cell.Owned.borrow] / [civictech.cell.Leased.borrow], never
+     * `take`/`release`). Star-projected — the outlet's own `Api` bound already
+     * gates what [FanOutlet.tap] admits here, and the emission path hands the
+     * port straight to a reflective `Method.invoke`.
+     */
+    class Typed(val port: Use<*>) : TapTarget
+
+    /**
+     * A payload-agnostic observer ([FanOutlet.observe]): told that an emission
+     * happened and which [MessageContext] it carried, never handed the payload.
+     */
+    class Observer(val onEmit: (MessageContext) -> Unit) : TapTarget
 }

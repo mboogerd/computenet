@@ -1,14 +1,11 @@
 package civictech.inspect
 
 import civictech.cell.CellRef
-import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.TopologyLink
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
-import civictech.cell.port.Use
-import civictech.cell.proxy.Proxy
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -48,22 +45,25 @@ internal interface FlowBinding {
 /**
  * M3 — the flow feed (`doc/spec/90-roadmap/97-inspector-plan/tickets/M3-BE.md`):
  * per-edge message rates, sampled at the one seam built for exactly this,
- * [FanOutlet.tap] (spec 20/23 §Taps, G-47).
+ * [FanOutlet.observe] (spec 20/23 §Taps, G-47).
  *
  * ### Why a tap, and why at the outlet
  *
- * A tap is the Observe-role attachment: uncounted by the SPSC funnel, never an
- * expected sibling of a wave-completeness set
- * ([civictech.cell.consistency.WaveFrontier] filters
+ * [FanOutlet.observe] is the Observe-role attachment in its payload-agnostic
+ * shape: uncounted by the SPSC funnel, never an expected sibling of a
+ * wave-completeness set ([civictech.cell.consistency.WaveFrontier] filters
  * [civictech.cell.link.LinkRole.Consume]), always admitted, and fired *before*
- * the outlet's consumers. Attaching a `Propagate` **consumer** instead — the
- * only other way to see traffic from outside the graph — would be a semantic
- * intrusion on three counts at once: it would be refused outright on an
- * `Owned`/`Leased` contract (SPSC), it would enter every downstream join's
+ * the outlet's consumers — the same storage and the same firing position as a
+ * contract-typed [FanOutlet.tap]. Attaching a `Propagate` **consumer** instead
+ * — the only other way to see traffic from outside the graph — would be a
+ * semantic intrusion on three counts at once: it would be refused outright on
+ * an `Owned`/`Leased` contract (SPSC), it would enter every downstream join's
  * completeness condition, and it would take delivery of payloads the inspector
- * has no business touching. The tap does none of that: the handler below never
- * looks at its arguments, so payloads stay `Borrowed` in the strictest sense —
- * unread, uncopied, unretained (10-target-v3 §Constraints 3).
+ * has no business touching. The observe attachment does none of that, and it
+ * is not merely disciplined about the payload but structurally incapable of
+ * reaching it: the handler below is handed a [MessageContext] and nothing
+ * else, so payloads stay `Borrowed` in the strictest sense — unread, uncopied,
+ * unretained (10-target-v3 §Constraints 3).
  *
  * The outlet is also the only point that sees *all* of an edge's traffic. Spec
  * 20/21 §Fusion: co-hosted chains run as nested direct calls, so a same-host
@@ -77,24 +77,27 @@ internal interface FlowBinding {
  *
  * ### Attribution
  *
- * A tap fires once per *emission*, not once per consumer, and a [FanOutlet]
- * broadcasts: every one of an outlet's consume links carries every emission.
- * So an outlet's emission count is each of its outgoing edges' message count —
- * duplicated across them, never divided. Rates are therefore exact per edge for
- * the broadcast fan-out the kernel implements, and the only traffic they omit
- * is what genuinely never reaches a link's consumer: [FanOutlet.at] deliveries
- * (the `onLinked` catch-up baseline and pull replies, which bypass taps by
- * construction) and emissions a `disclosureFilter` suppresses.
+ * An Observe-role attachment fires once per *emission*, not once per consumer,
+ * and a [FanOutlet] broadcasts: every one of an outlet's consume links carries
+ * every emission. So an outlet's emission count is each of its outgoing edges'
+ * message count — duplicated across them, never divided. Rates are therefore
+ * exact per edge for the broadcast fan-out the kernel implements, and the only
+ * traffic they omit is what genuinely never reaches a link's consumer:
+ * [FanOutlet.at] deliveries (the `onLinked` catch-up baseline and pull replies,
+ * which bypass taps by construction) and emissions a `disclosureFilter`
+ * suppresses — the kernel gates a payload-agnostic observer on exactly the same
+ * filter verdict it gates a delivery on, so that omission is unchanged.
  *
  * ### Cost on the graph thread
  *
- * Per message per tapped outlet, the handler does one reference comparison
- * (screening `Object`'s own methods), one `AtomicLong.incrementAndGet`, one
- * thread-local read ([CurrentContext.get]) and one volatile reference store.
- * No allocation, no map lookup, no lock, and nothing touching the payload. The
- * recorded [MessageContext] is the wave-plane object the outlet had already
- * built — carrying only a timestamp, a port ref and a hop count — so keeping
- * the last one retains nothing of the message.
+ * Per message per tapped outlet, the handler does one
+ * `AtomicLong.incrementAndGet` and one volatile reference store. No
+ * allocation, no map lookup, no lock, no reflective dispatch, not even a
+ * thread-local read — the outlet hands the [MessageContext] straight to the
+ * handler — and nothing touching the payload. The recorded [MessageContext] is
+ * the wave-plane object the outlet had already built — carrying only a
+ * timestamp, a port ref and a hop count — so keeping the last one retains
+ * nothing of the message.
  *
  * The aggregation half never runs on a graph thread: [sample] is driven by the
  * inspector's own single scheduler thread, and the batch it produces is handed
@@ -238,55 +241,40 @@ internal class FlowCollector(
         private val tapRef = PortRef.generate()
 
         /**
-         * The tapped outlet, erased so [FanOutlet.tap]/[FanOutlet.untap] can be
-         * called on it. The handler is a proxy of the outlet's *own* contract,
-         * so every method of it lands on [observe] — an outlet is not
-         * necessarily a `Propagate`.
+         * The observed outlet, kept so [detach] can undo the attachment.
          *
-         * `Use.fixed` is not [civictech.cell.link.Linked], so [FanOutlet.tap]
-         * takes its unnegotiated path and always answers
+         * [FanOutlet.observe] is the kernel's payload-agnostic Observe-role
+         * attachment: same `taps` storage, same always-admitted SPSC
+         * exemption, same taps-fire-first position as a contract-typed
+         * [FanOutlet.tap] — but the handler is told only *that* an emission
+         * happened and which [MessageContext] it carried. No proxy of the
+         * outlet's contract is synthesized here (the outlet's `Api` is never
+         * named, hence no cast and no erasure), so there is no payload to
+         * decode and no `Object`-method dispatch to screen off the counting
+         * path. The whole class of "answering `null` to `hashCode()` throws on
+         * unboxing, on a graph thread" hazard is gone with it.
+         *
+         * A lambda is not [civictech.cell.link.Linked], so `observe` takes the
+         * unnegotiated path and always answers
          * [civictech.cell.link.LinkResult.Connected] — the same shape
          * [Errors]'s dead-letter tap relies on. It also means installing this
-         * tap fires no `onLinked` hook, so it triggers no catch-up push and
-         * records nothing in the topology index: the inspector's own
+         * attachment fires no `onLinked` hook, so it triggers no catch-up push
+         * and records nothing in the topology index: the inspector's own
          * attachments never appear as edges it then reports.
          */
-        @Suppress("UNCHECKED_CAST")
-        private val tapped: FanOutlet<Any> = (source as FanOutlet<Any>).also { outlet ->
-            val handler = Proxy.fromClass<Any>(outlet.clazz) { proxy, method, args ->
-                if (method.declaringClass === OBJECT) objectMethod(proxy, method, args) else observe()
+        private val observed: FanOutlet<*> = source.also { outlet ->
+            outlet.observe(tapRef) { context ->
+                // The whole per-message cost: one atomic add, one volatile
+                // store. The context is the wave-plane object the outlet had
+                // already built, handed straight over.
+                count.incrementAndGet()
+                lastContext = context
             }
-            outlet.tap(Use.fixed(handler, tapRef))
-        }
-
-        /** The whole per-message cost: one atomic add, one thread-local read, one volatile store. */
-        private fun observe(): Any? {
-            count.incrementAndGet()
-            lastContext = CurrentContext.get()
-            return null
         }
 
         fun drain(): Long = count.getAndSet(0)
 
-        fun detach() = tapped.untap(tapRef)
-
-        private companion object {
-            val OBJECT: Class<*> = Any::class.java
-
-            /**
-             * `equals`/`hashCode`/`toString` are not messages. A dynamic proxy
-             * forwards them here too, and answering `null` to `hashCode` would
-             * throw on unboxing — so they are screened off the counting path
-             * rather than counted or crashed on.
-             */
-            fun objectMethod(proxy: Any, method: java.lang.reflect.Method, args: Array<out Any?>?): Any? =
-                when (method.name) {
-                    "hashCode" -> System.identityHashCode(proxy)
-                    "equals" -> proxy === args?.firstOrNull()
-                    "toString" -> "inspector-flow-tap"
-                    else -> null
-                }
-        }
+        fun detach() = observed.untap(tapRef)
     }
 
     internal companion object {
