@@ -13,7 +13,9 @@ import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.handshake.ServerHandshake
 import org.java_websocket.server.WebSocketServer
+import java.io.IOException
 import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URI
 import java.nio.ByteBuffer
 import java.util.UUID
@@ -58,11 +60,32 @@ object WsTransport {
      * proceeds asynchronously). [backoff] governs the delay before each reconnect
      * attempt after an unplanned close (default: [DEFAULT_RECONNECT_BACKOFF]) — tests
      * drive it down to make reconnect timing testable without wall-clock deadlines.
+     *
+     * The listener side of a fresh two-process pairing may simply not have bound
+     * its port yet — an ordinary startup race, not a fatal one (found via CI's
+     * demo:exchange peer log: a startup-race ECONNREFUSED killed `main()`). A bare
+     * TCP probe retried on [backoff] absorbs that wait; java-websocket's own
+     * `WebSocketClient` can't be retried before its first successful open (a
+     * `connectReadThread`/`reset()` interaction it doesn't support), so the real
+     * handshake below still runs exactly once, only after the port is reachable.
      */
     fun connect(uri: URI, side: Peering.Side, backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF): WsConnection {
+        awaitReachable(uri, backoff)
         val connection = WsConnection(uri, side, backoff)
         check(connection.connectBlocking(10, TimeUnit.SECONDS)) { "could not connect to $uri" }
         return connection
+    }
+
+    private fun awaitReachable(uri: URI, backoff: (attempt: Int) -> Long) {
+        var attempt = 0
+        while (true) {
+            try {
+                Socket(uri.host, uri.port).close()
+                return
+            } catch (_: IOException) {
+                Thread.sleep(backoff(attempt++))
+            }
+        }
     }
 
     private const val HELLO = "HELLO "
