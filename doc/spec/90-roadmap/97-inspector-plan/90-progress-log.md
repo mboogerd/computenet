@@ -899,3 +899,281 @@ scoping, and `Node.graph` on every node. No console errors throughout.
    worth clearing first.
 5. **`state.summary` coalescing** (carried from M1/M2/M3-EVAL): still no
    equivalent of `flow.rates`' 1 Hz publish-even-when-quiet window.
+
+---
+
+## M5 + whole-product acceptance (M5-EVAL, evaluated 2026-07-28)
+
+Merged: `worktree-wf_468f847c-cfa-3` (M5-SEARCH + M5-COLD, 9 commits) +
+`worktree-wf_468f847c-cfa-1` (M5-NET, 5 commits) into evaluator branch
+`worktree-wf_468f847c-cfa-4`, plus four evaluator commits (merge-conflict
+resolution, one cross-branch compile fix, the instrument-exclusion fix, one
+a11y fix). Verdict: **accepted — the inspector v3 is delivered**; every
+binding constraint holds on the merged system.
+
+### Merge notes
+
+Three textual conflicts (`InspectorModel.nodeOf` — NET's `net` resolution vs
+COLD's lifecycle stamping; `InspectorServer` KDoc + test accessors — union;
+`DetailPanel` StateSection — the cold gate now nests outside the remote gate)
+plus one semantic conflict git could not see: COLD renamed `withGraph` →
+`stamped` while NET's new `adopt()` still called `withGraph` (fixed in
+`476d047`) — a peer-adopted node is now stamped with both `graph` and
+`lifecycle` like every other emission path. The two branches otherwise
+composed remarkably well: COLD's `Heat.UNHOSTED` (not cold, not readable)
+already gave NET's mirrored refs the right answers everywhere — a pure-peer
+component is never "cold", and a remote cell is search-skipped as `remote`,
+never counted into `coldSkipped`.
+
+### Tests run (final tree)
+
+| Suite | Result |
+|---|---|
+| `./gradlew test --rerun-tasks` | BUILD SUCCESSFUL — **1125 tests, 0 failures, 0 errors**, all 66 tasks re-executed (kernel 702, concord 168, inspect 147, backlog-triage 34, gen 19, agora 19, exchange 14, skillmatch 5, shopping 4, shell 4, wire 4, slotfinder 3, tiering 2) |
+| `./gradlew :concord:check` | green, `concord/` untouched (the 23 doc-lint findings were cleared on main by `c7d0cac` before this milestone) |
+| `npm test` (`inspect/ui`) | 259 passed / 25 files; `npm run typecheck` and `npm run build` clean; `dist/` removed, not committed |
+
+### Layer 1 — M5 vertical verification (all replayed live, not from reports)
+
+**SEARCH** (skillmatch pilot, real dist): `mode=data&q=alice` → 9 real hits
+with correct graph/ref/label/detail + cost `{cellsQueried: 16, coldSkipped:
+2}` while the side graph was cold; blank `q` → `{0, 0}` and no reads;
+zero-hit query still reports its full cost; `name`/`problems` unchanged with
+`cost: null`; unknown mode → 400. In the browser: typing in Data mode issued
+zero search requests, Enter issued exactly one; the cost line and the dashed
+inert notice row render; hit click-through opens the graph, selects the cell,
+and the State subsection shows the matching row. P6: verified live that an
+open observation leaves the search's candidate count unchanged (the sink is
+excluded), and the M1-EVAL leak-check battery is inherited in
+`InspectorDataSearchTest`.
+
+**COLD** (`--cold-graph` pilot): `GET /graphs` lists the side component
+`"cold"`; its scoped topology serves 2 `SUSPENDED` nodes + 1 edge without
+touching a cell; wake → 202 `{graph, hosts: 0, cells: 2}`, and an SSE capture
+attached *before* the wake recorded exactly two `lifecycle: HOT` frames
+followed by one `graphs.changed`, contiguous seq — the wake is logged.
+Unknown id → 404; GET on the wake path → 404. In the browser: cold card
+dimmed with ❄ + COLD pill; the cold screen shows the ghosted structure, the
+ticket's verbatim notice, and "Wake to inspect"; **selecting a cell inside
+the cold graph issued exactly one request (`GET /cell/{ref}`) — no observe
+POST, no state GET** (network log); the State subsection explains rather than
+erroring; the confirmation dialog carries the ticket's verbatim consequence
+line plus the drained-host blast-radius line; confirming transitions to the
+live canvas.
+
+**NET** (two real JVMs over `:wire`, the checked-in shopping recipe, fresh
+ports): jvm-a's inspector showed 20 nodes across nets `{jvm-a: 10,
+peer-0ae324f9: 10}`; peer cells report `host: null`, `typeFqn: <unknown>`,
+no color/ports; both directions symmetric (jvm-b saw `{jvm-b, peer-…}` and
+named its own cells). `GET /graphs` listed the named `shopping` component as
+`16 cells · 1 hosts · 2 nets` — the declared cross-boundary edges join the
+two sides into one component. Remote-cell honesty: `GET /cell/{ref}` 200,
+`GET state` → `unavailable`, `POST observe` → 409; the UI renders the exact
+sentence "remote — state/flow/errors not available in this milestone" in
+State/Flow/Errors and "not reported (remote)" + a `peer` tag in placement.
+A declared cross-boundary edge carried a real rate (50 messages observed in
+`flow.rates` while driving 50 adds); demo convergence verified in both
+directions. Killing the peer JVM retracted its 12 cells and their mirrored
+edges within a reconcile tick; the two declared edges survive by design (see
+Arbitration); restarting the peer brought its cells back under a new
+`peer-…` label, the documented reconnect-relabel. Nested hulls verified in
+the browser: dashed `peer-… PEER` net hull, solid `shopping` process hull
+inside `jvm-a`'s net hull; all five toggles on simultaneously with a remote
+cell selected produced zero console errors.
+
+One live-verification false alarm worth recording: an early SSE capture
+(`curl -N -o file`) suggested `flow.rates` had gone silent on the pilots —
+it was curl's stdio buffering delaying file writes past the traffic window.
+A synchronous reader showed correct per-edge rates on both pilots. Flow is
+healthy; nothing regressed.
+
+### Defects found and fixed by the evaluator
+
+1. **Cross-branch compile break** (`476d047`): NET's `adopt()` called the
+   `withGraph` COLD had renamed to `stamped`. Caught by the first compile;
+   fixed to stamp both world-derived fields.
+2. **The selection flip-flop — fixed as recommended** (`87e15ba`; M5-COLD's
+   open question 1, a pre-existing M1×M4 interaction handed to this ticket).
+   The inspector's own `ObserveCell` sink joined the observed cell's
+   component; a sink uuid sorting below the current minimum *renamed* the
+   component (`g-<min uuid>`), kicking the client out of the graph it had
+   just selected a cell in — release, revert, repeat. Fix: an instrument is
+   not a subject. `Observations` registers the sink ref *before* spawn (the
+   publish hook fires during spawn) and unregisters on release;
+   `InspectorModel` filters instrument refs out of nodes, edges, and the
+   component partition at every entry point (hooks, `sync`,
+   `reconcilePeers`). DataSearch already excluded them; topology, `/graphs`,
+   and the constellation now agree with it. Verified live: during an open
+   observation the snapshot stayed 18 nodes / 19 edges, component ids and
+   cell counts unchanged, the observation itself still working. One M1 test
+   rewritten (not weakened — the sink is no longer a topology delta, so a
+   real topology change supplies its mixed-kind seq-continuity case); one
+   new `InspectorGraphsTest` case pins the exclusion with ff…-prefixed
+   uuids a random sink uuid would displace.
+3. **Search-hit rows had no accessible name** (`2dfc143`; flagged by
+   M5-SEARCH, same class as M4-EVAL's card fix, confirmed live via the
+   accessibility tree). `aria-label` = label + detail.
+
+### Arbitration rulings (each flagged by a worker rather than taken silently)
+
+1. **`InspectorServer.declareLink` — accepted.** Investigated the seams NET
+   cited: `LinkAdmission.connect` resolves both endpoints in one host's
+   `cells` map, so a cross-JVM stream is genuinely inexpressible as a
+   `TopologyLink`, and `Peering.announceTo` mirrors only a peer's own local
+   links. Without the annotation the pilot cannot form one component and
+   §3's "replication edge visible" is unreachable. Same opt-in shape as
+   M4's `nameGraph`; no contract change (an ordinary `Edge`).
+2. **`Node.net` carries the configured local label — accepted.** The
+   contract's own comment scopes `"local"` as "until M5"; a separate label
+   field would have been a real contract addition for no gain. The default
+   keeps M0–M4 output byte-identical (verified: skillmatch still emits
+   `"local"`).
+3. **Three kernel accessors (`snapshotOf`, `isSuspended`, `isDrained`) —
+   approved** under `10-target-v3.md` §Constraints 5; see the kernel-diff
+   table below. `snapshotOf` is the accessor M1-EVAL's orchestrator
+   addendum already approved in principle, future-shaped so the caller owns
+   the deadline.
+4. **A declared edge survives its peer's disappearance — accepted.** The
+   subscription genuinely still exists and still emits into the registry's
+   park queue; retracting it would misreport the process. The client
+   anchors what it can, and the edge reconnects on peer return.
+5. **`coldSkipped` non-zero before M5-COLD merged (SEARCH deviation 3) —
+   moot and correct**: COLD merged in the same milestone and widened the
+   same predicate.
+6. **Process hulls dashed → solid (NET deviation 3) — accepted**: that is
+   what `10-target-v3.md`'s toggle table always specified; M1 shipped them
+   dashed, which only mattered once a dashed net hull nested outside.
+7. **FE remote gating is server-refusal, not client-suppression**: selecting
+   a remote cell still issues `POST observe` (→ 409) and `GET state`
+   (→ `unavailable`). Contract-sanctioned ("a client that ignores the 409
+   still behaves correctly") and P6-safe (no observation is created), so
+   accepted as-is; noted for symmetry with COLD's stricter client-side
+   gate.
+
+### Layer 2 — whole-product acceptance vs `10-target-v3.md`
+
+| Clause | Verdict | Evidence |
+|---|---|---|
+| One canvas, no view tabs | **met** | one `Canvas.tsx`; everything else is an overlay |
+| Five toggles, independent, any combination | **met** | all five enabled and exercised together live (two-JVM graph, remote cell selected, zero console errors); each gates only its overlay |
+| Process hosts — solid hulls | **met** | solid since this milestone, per the target's own table |
+| Network hosts — dashed hulls, nested | **met** | live two-JVM run; nesting invariant unit-tested (`net.test.ts`); cosmetic caveat: layout does not cluster by placement, so net hulls can overlap on screen while nesting stays correct — roadmap note |
+| Flow — pulses/rates, fused never animated | **met** | M3 evidence carried; re-verified live this milestone (synchronous capture, declared edge at 50 msg/s) |
+| Errors — badges, park pills | **met** | M2 evidence carried; header counters live in every session |
+| State — per-cell chip | **met** | M1 evidence carried; chip only for observed cells |
+| All-properties detail panel, stacked subsections | **met** | verified on local, remote, and cold cells — each subsection states what it honestly can |
+| Lazy state subscription on selection, released on deselect | **met** | network-log verified again this milestone; the new instrument exclusion means observing no longer perturbs the topology being observed |
+| Navigator: cards, constellation, cold dimmed | **met** | live: HOT/COLD pills, ❄, dimming, thumbnails |
+| Search: name / problems / data | **met** | all three live; data is submit-only with visible cost |
+| Selection/viewport/toggles persist while navigating | **met** | M4 evidence; hash round-trip re-verified |
+| §Constraints 1 — P2 fast path | **met** | tap handler audited line-by-line (M3-EVAL) and unchanged; M5 added no per-message hook; `reconcilePeers`/lifecycle poll are 1 Hz metadata sweeps on the inspector's scheduler |
+| §Constraints 2 — P6 observation causal | **met** | browsing/listing/search/coldness subscribe to nothing (leak-checks in `InspectorDataSearchTest` + `InspectorColdTest`); the one causal act is the confirmed wake button; data search reads via `snapshotOf`, which links/emits/subscribes nothing and moves no wave counter |
+| §Constraints 3 — ownership, taps Borrowed-only | **met** | two tap sites total (dead letters, flow), both `Use.fixed`/Observe-role; the flow handler never reads args; no `Owned`/`Leased` consumed, copied, delayed, or dropped anywhere in `inspect/` |
+| §Constraints 4 — per-cell consistency, F-5 accepted | **met** | every state view carries its own frontier; the footnote renders in the State and Flow subsections |
+| §Constraints 5 — kernel transport-neutral, listed accessors only | **met** | the cumulative kernel diff is five read-only accessors, listed below; zero HTTP/JSON/transport types in `kernel/` |
+| §Constraints 6 — viz never blocks | **met** | bounded drop-oldest SSE queues (M0), measured non-blocking under a stalled client (M3), search deadline abandons slow reads, wake calls are enqueued not awaited |
+
+### The cumulative kernel diff (all of it, justified)
+
+| File | Change | Milestone | Justification |
+|---|---|---|---|
+| `LocationRegistry.kt` | `describe(ref): Class<out Cell>?` + weakly-referenced `descriptions` map + defaulted `publish` param + removal on `unpublish`/`mirrorUnpublish` | M0 | descriptor lookup for topology; audited M0-EVAL |
+| `ManagedHost.kt` | `outletAt(PortRef): FanOutlet<*>?` (~6 lines) | M3 | tap-seam resolution; approved + kernel-tested by M3-EVAL (`OutletAtTest`) |
+| `ManagedHost.kt` | `snapshotOf(ref): CompletableFuture<Serializable?>` | M5-SEARCH | host-routed `Stateful.snapshot()` — the accessor M1's orchestrator addendum pre-approved; caller-owned deadline; completes null, never throws; P2/P6-clean |
+| `ManagedHost.kt` | `isSuspended(ref)` + `suspendedCells` → `ConcurrentHashMap` | M5-SEARCH | tell a cone is parked *without touching it*; writers unchanged (scheduler thread), reader is the observer's thread |
+| `ManagedHost.kt` | `isDrained` + `state` → `@Volatile` | M5-COLD | distinguish DRAINED from DRAINING so a wake never fires `resumeHost` at a still-draining host (whose own `require` would dead-letter it) |
+
+Nothing else in `kernel/`, `gen/`, `nature/`, `wire/`, `testkit/`, or
+`concord/` is touched by the entire inspector delivery. No gap or
+consistency markers were removed at any point.
+
+### Contract additions for the orchestrator to fold into `20-api-contract.md`
+
+1. `POST /api/inspect/graph/{id}/wake` → 202 `{graph, hosts, cells}`; 404
+   for an unknown id, other methods, or other sub-paths (M5-COLD).
+2. `Node.net`: from M5, the configured local label (launcher `--net-name`,
+   default `"local"`) for local cells; a stable per-connection `peer-…`
+   label for peer-announced cells. `Node.host == null` ⟺ the cell is
+   remote — the FE relies on this as the remote discriminator; worth one
+   explicit sentence.
+3. `Node.lifecycle` is genuinely two-valued from M5 (`SUSPENDED` covers
+   both a suspended cell and a cell on a drained host);
+   `GraphSummary.lifecycle` `"cold"` is live.
+4. `SearchResult`: in data mode, `cost` is non-null on every response
+   (including zero-hit); a hit with an empty `graph` is a closing notice,
+   not navigable; `SearchHit.ref` is null on notices.
+5. A cell with an open inspector observation no longer appears in topology:
+   the inspector's own sinks are not subjects (this evaluation).
+   App-created `ObserveCell`s are unaffected (the golden fixture's 16
+   cells still include skillmatch's six).
+6. Carried from M4-EVAL's list, still unfolded: `graphs.changed` fires on
+   any membership change and on rename; unknown `?graph=` → empty 200;
+   blank `q` → no hits; `mode` defaults to `name`; unknown `mode` → 400;
+   the lowercase-vs-uppercase lifecycle note.
+
+### Open items fed back to the roadmap
+
+- **Graph identity (MRB-156)**: the min-uuid heuristic held through M5, and
+  the instrument fix removed its worst artifact (self-inflicted renames).
+  Still emergent and still unnamed for peers: a component spanning JVMs has
+  one id per JVM-side view, and genuine same-logical-id replicas across a
+  peer boundary remain undriven end to end (`ComponentIndex` now admits
+  mirrored refs as vertices — M4-EVAL's line was revisited as predicted —
+  but no replicated pilot exercises it). Membranes as naming boundary
+  remain the real answer.
+- **Inspect-without-attention + search cost model (MRB-157)**, what this
+  build learned: (a) `StateRequest` is unusable for read-only instruments
+  as long as `pullServe` replies mint waves from the producing outlet's
+  counter (it perturbs replication watermarks; `CatchUp.kt` documents it) —
+  any future cold-read or search protocol needs a wave-neutral reply path.
+  (b) A cold graph's *structure* is genuinely free today; its *state* needs
+  the checkpoint reader — the cold screen's "unavailable" is the honest
+  boundary. (c) `snapshot()` is a whole-state copy; a bounded state read
+  (cursor/limit) is the missing kernel primitive behind both search cost
+  and big-cell state views.
+- **E2 observation-edge alignment**: unchanged; every state view is
+  per-cell stamped and the UI promises nothing cross-panel. The F-5
+  footnote renders in the State and Flow subsections.
+- **Peer identity across reconnects**: `PeerId` reaches only the transport
+  ingress; a reconnect relabels the peer's hull (observed live:
+  `peer-0ae324f9` → `peer-804f5917`). Stable cross-reconnect identity needs
+  `PeerId` threaded to the registry — a peering-protocol change, now with a
+  concrete consumer.
+- **Kernel hook gaps the inspector papers over with 1 Hz polls** (three,
+  all documented in code): `LocationRegistry.onPublish`/`onUnpublish`
+  return no deregistration handle (disarmed-listener workaround);
+  `unpublishRemotes`/`mirrorLink`/`mirrorUnlink` notify nobody
+  (`reconcilePeers`); suspend/resume/drain have no lifecycle listener
+  (`publishLifecycleChanges`). A `remoteRefs()` projection beside
+  `localRefs()` would additionally close the catch-up discovery hole for
+  isolated, never-linked remote cells.
+- **`state.summary` coalescing** (carried since M1): still uncoalesced;
+  `flow.rates`' publish-even-when-quiet window remains the pattern to copy.
+- **Should `POST /cell/{ref}/observe` refuse a cold cell server-side?**
+  (M5-COLD's question 3.) Today the gate is client-side only, verified
+  live; a defence-in-depth 409 changes an M1 endpoint's contract. Left to
+  the orchestrator with the other contract edits.
+- **Cosmetics**: layout does not cluster by placement (net hulls can
+  overlap while nesting correctly); remote endpoints show raw port uuids
+  (descriptor metadata does not cross the wire — a peering-protocol
+  change).
+
+### Recommended next increments
+
+1. **Per-message ticker / wave tracer** on the existing tap seam: the
+   collector already holds the last `MessageContext` per outlet; a bounded
+   ring of (wave, hop, port) tuples per tapped outlet would give a
+   follow-one-wave debugging view with no new kernel surface.
+2. **Remote state via the bridge once FU-1 lands**: `GET state` for a
+   `host: null` cell currently answers `unavailable`; a scoped,
+   wave-neutral pull across the bridge is the natural next NET increment.
+3. **Journal time-travel**: `.durability`'s journals + the cold screen are
+   the two halves of "inspect a graph that is not running"; MRB-157's
+   checkpoint reader would light up the cold screen's missing preview.
+4. **Bounded state reads** (cursor/limit on `Stateful`): removes the
+   whole-copy caveat on both data search and large state views.
+5. **Housekeeping for the orchestrator**: fold the contract list above
+   into `20-api-contract.md`; strike the progress-log items now resolved
+   (M3-EVAL question 1 / M4-EVAL question 2 — dropped edges, fixed by
+   `cardAnchor`; M4-EVAL question 3 — partially, mirrored refs are now
+   vertices).
