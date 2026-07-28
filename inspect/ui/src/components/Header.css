@@ -1,0 +1,62 @@
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.app-header h1 {
+  font-size: 1rem;
+  margin: 0;
+  font-weight: 600;
+}
+
+.app-header__host {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+}
+
+.app-header__spacer {
+  flex: 1;
+}
+
+.conn-pip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--status-pending);
+}
+
+.conn-pip.is-live {
+  color: var(--status-live);
+}
+
+.conn-pip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.icon-btn {
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.6rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  border-color: var(--hairline-strong);
+}
+
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
