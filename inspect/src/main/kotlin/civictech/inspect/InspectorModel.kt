@@ -59,6 +59,26 @@ internal class InspectorModel(
     /** Derived `PortRef.id -> declared port name` per cell (PN-1 derivation, inverted). */
     private val portNames = HashMap<CellRef, Map<UUID, String>>()
 
+    /**
+     * M4 — the connected components over [edges], kept under this same monitor
+     * so a snapshot's `Node.graph` and its `GET /graphs` card can never
+     * disagree. [Node]s are stored with `graph = null` and stamped on the way
+     * out ([withGraph]): the component id is a property of the *partition*, not
+     * of the cell, and re-stamping on read is what keeps a merge or split from
+     * having to rewrite every node it touched.
+     */
+    private val components = ComponentIndex()
+
+    /**
+     * Graph names, anchored to a cell rather than to a component id — ids
+     * change on merge and split by design, so an id-keyed name would evaporate
+     * exactly when the graph got more interesting. See [nameGraph].
+     */
+    private val graphAnchors = LinkedHashMap<CellRef, String>()
+
+    /** The membership last announced through `graphs.changed`; drives [publishGraphChanges]. */
+    private var announced: Map<String, Set<CellRef>> = emptyMap()
+
     private var seq = 0L
 
     /**
@@ -67,8 +87,18 @@ internal class InspectorModel(
      * ref or link a hook already added is simply already present.
      */
     fun sync() = synchronized(lock) {
-        registry.localRefs().forEach { ref -> nodes.getOrPut(ref) { nodeOf(ref) } }
-        topologyLinks().forEach { link -> edges.getOrPut(link.id) { edgeOf(link) } }
+        registry.localRefs().forEach { ref ->
+            nodes.getOrPut(ref) { nodeOf(ref) }
+            components.addCell(ref)
+        }
+        topologyLinks().forEach { link ->
+            edges.getOrPut(link.id) { edgeOf(link) }
+            components.addLink(link.id, link.from.cell, link.to.cell)
+        }
+        // the components a client's first `GET /graphs` will see: announcing
+        // them again on the first tick would be a gap signal for a change that
+        // never happened
+        announced = components.components()
     }
 
     /**
@@ -81,11 +111,92 @@ internal class InspectorModel(
      */
     private fun topologyLinks(): Set<TopologyLink> = registry.all()
 
-    fun snapshot(): TopologySnapshot = synchronized(lock) {
-        TopologySnapshot(seq, nodes.values.toList(), edges.values.toList())
+    /**
+     * `GET /api/inspect/topology`, optionally scoped to one component
+     * (M4's `?graph=g-…`; unfiltered stays valid and is the default).
+     *
+     * [seq] is the *global* sequence either way — the SSE stream stays global
+     * and the client filters it (M4-BE §5), so a filtered snapshot must resume
+     * from the same position an unfiltered one would.
+     *
+     * An id no component currently carries answers an empty snapshot rather
+     * than a 404: ids change on merge and split by design, so "that graph is
+     * gone" is an ordinary race the client resolves by following the
+     * `graphs.changed` it will also have received, not an error.
+     */
+    fun snapshot(graph: String? = null): TopologySnapshot = synchronized(lock) {
+        val stamped = nodes.entries.map { (ref, node) -> withGraph(ref, node) }
+        if (graph == null) return@synchronized TopologySnapshot(seq, stamped, edges.values.toList())
+        val members = stamped.filter { it.graph == graph }
+        val refs = members.mapTo(HashSet()) { it.ref }
+        TopologySnapshot(
+            seq = seq,
+            nodes = members,
+            edges = edges.values.filter { it.from.ref in refs || it.to.ref in refs },
+        )
     }
 
-    fun snapshotJson(): String = inspectorJson.encodeToString(snapshot())
+    fun snapshotJson(graph: String? = null): String = inspectorJson.encodeToString(snapshot(graph))
+
+    /**
+     * Every connected component, with its members' nodes already stamped —
+     * the input `GET /graphs` and `GET /search` are built from. Ordered by id
+     * so both endpoints list graphs the same way between refreshes.
+     */
+    fun components(): List<Component> = synchronized(lock) {
+        components.components().entries.sortedBy { it.key }.map { (id, refs) ->
+            Component(
+                id = id,
+                name = nameOf(refs),
+                nodes = refs.mapNotNull { ref -> nodes[ref]?.let { withGraph(ref, it) } },
+            )
+        }
+    }
+
+    /**
+     * The opt-in naming hook (M4-BE §2): label the component that currently
+     * contains [anchor]. The name follows the *cell*, so it survives the
+     * component growing, and it moves with the anchor when a merge or split
+     * renames the component around it.
+     *
+     * A merge that brings two differently-named anchors into one component
+     * resolves to the anchor with the lexicographically-min cell uuid — the
+     * same tie-break [ComponentIndex] uses for the id, so the answer is
+     * deterministic rather than dependent on which host annotated first.
+     * Nothing is invented: a component holding no anchor stays `null`.
+     */
+    fun nameGraph(anchor: CellRef, name: String) = synchronized(lock) {
+        if (graphAnchors.put(anchor, name) == name) return@synchronized
+        // the partition did not move, but every card of it just changed
+        emitEvent(Event.GRAPHS_CHANGED, JsonObject(emptyMap()))
+    }
+
+    /**
+     * `graphs.changed` (contract §SSE): `{}`, a hint to refetch the
+     * [GraphList]. Driven by the inspector's scheduler rather than from the
+     * registry hooks, which coalesces a whole graph build — N publishes and M
+     * links — into a single hint instead of N+M of them, and keeps the O(V+E)
+     * component sweep off the thread that is linking cells.
+     *
+     * Compares full membership, not just the id set: growing a component
+     * without displacing its minimum member leaves the id alone but still
+     * changes the card the client is showing.
+     */
+    fun publishGraphChanges() = synchronized(lock) {
+        val current = components.components()
+        if (current == announced) return@synchronized
+        announced = current
+        emitEvent(Event.GRAPHS_CHANGED, JsonObject(emptyMap()))
+    }
+
+    /** The name of whichever anchor in [refs] sorts first by uuid, or null when none is anchored. */
+    private fun nameOf(refs: Set<CellRef>): String? = refs
+        .filter { it in graphAnchors }
+        .minByOrNull { it.id.toString() }
+        ?.let(graphAnchors::get)
+
+    /** [node] with the contract's `graph` field resolved from the current partition. */
+    private fun withGraph(ref: CellRef, node: Node): Node = node.copy(graph = components.componentOf(ref))
 
     /** Has this view ever been told [ref] is published here? (404 vs 200 at the routes.) */
     fun knows(ref: CellRef): Boolean = synchronized(lock) { ref in nodes }
@@ -99,7 +210,7 @@ internal class InspectorModel(
      * Null when the view has never seen [ref] published (a 404 at the route).
      */
     fun detailJson(ref: CellRef): String? = synchronized(lock) {
-        val node = nodes[ref] ?: return@synchronized null
+        val node = nodes[ref]?.let { withGraph(ref, it) } ?: return@synchronized null
         val links = linkCounts(node.ref)
         buildJsonObject {
             inspectorJson.encodeToJsonElement(node).jsonObject.forEach { (key, value) -> put(key, value) }
@@ -190,6 +301,7 @@ internal class InspectorModel(
         val known = ref in nodes
         val node = nodeOf(ref)
         nodes[ref] = node
+        components.addCell(ref)
         if (known) {
             emitEvent(Event.LIFECYCLE, buildJsonObject {
                 put("ref", node.ref)
@@ -199,7 +311,7 @@ internal class InspectorModel(
         } else {
             emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
                 put("op", Event.ADDED)
-                put("node", inspectorJson.encodeToJsonElement(node))
+                put("node", inspectorJson.encodeToJsonElement(withGraph(ref, node)))
             })
         }
     }
@@ -207,7 +319,10 @@ internal class InspectorModel(
     fun unpublished(ref: CellRef) = synchronized(lock) {
         // the hook fires after the location is gone, so the removal payload is
         // served from the view — the last node the client was told about
-        val node = nodes.remove(ref) ?: return@synchronized
+        val node = nodes.remove(ref)?.let { withGraph(ref, it) } ?: return@synchronized
+        // read the component id above, before the vertex leaves the index: a
+        // removal reports the graph the cell was in, not the one it is not in
+        components.removeCell(ref)
         portNames.remove(ref)
         // a despawn unpublishes but does not unlink (only an explicit
         // `Link.unlink` retracts an edge), so the flow feed's taps on this
@@ -222,6 +337,9 @@ internal class InspectorModel(
     fun linked(link: TopologyLink) = synchronized(lock) {
         val edge = edgeOf(link)
         edges[link.id] = edge
+        // undirected for component purposes: an edge means "same graph",
+        // whichever way the messages run
+        components.addLink(link.id, link.from.cell, link.to.cell)
         emitEvent(Event.TOPOLOGY_LINK, buildJsonObject {
             put("op", Event.ADDED)
             put("edge", inspectorJson.encodeToJsonElement(edge))
@@ -230,6 +348,8 @@ internal class InspectorModel(
 
     fun unlinked(id: UUID) = synchronized(lock) {
         if (edges.remove(id) == null) return@synchronized
+        // may split the component in two — the next read sweeps and finds out
+        components.removeLink(id)
         flow().unbind(id)
         // contract: a removal carries only the id
         emitEvent(Event.TOPOLOGY_LINK, buildJsonObject {
@@ -276,7 +396,8 @@ internal class InspectorModel(
             // published ref is HOT until a kernel seam can say otherwise
             lifecycle = Node.HOT,
             generation = host?.generationOf(ref) ?: 0L,
-            // components are M4
+            // stamped on the way out by [withGraph] — the component id belongs
+            // to the partition, not to the cell, and changes without the cell
             graph = null,
         )
     }

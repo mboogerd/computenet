@@ -11,6 +11,8 @@ import civictech.demo.shell.sseFrame
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -38,6 +40,16 @@ import java.util.concurrent.TimeUnit
  *
  * - `GET /api/inspect/errors` — an [ErrorSnapshot];
  * - `error.deadLetter` / `error.parked` / `error.restart` SSE events.
+ *
+ * M3 adds the flow feed (see [FlowCollector]): the 1 Hz `flow.rates` events.
+ *
+ * M4 adds the multi-graph navigator (see [ComponentIndex] and [Graphs]):
+ *
+ * - `GET /api/inspect/graphs` — a [GraphList] of the connected components;
+ * - `GET /api/inspect/search?mode=&q=` — a [SearchResult];
+ * - `?graph=g-…` scoping on `GET /api/inspect/topology`;
+ * - `graphs.changed` SSE events, plus `Node.graph` on every node;
+ * - [nameGraph], the opt-in host-side annotation that labels a component.
  *
  * ### What it can and cannot see
  *
@@ -150,11 +162,24 @@ class InspectorServer(
 
         shell.route(TOPOLOGY_PATH) { exchange ->
             exchange.allowCrossOrigin()
-            exchange.respond(200, model.snapshotJson(), "application/json")
+            // M4: `?graph=g-…` scopes the snapshot to one component; absent, the
+            // whole process, exactly as M0 through M3 served it
+            val graph = exchange.query()[GRAPH_PARAM]?.takeIf { it.isNotBlank() }
+            exchange.respond(200, model.snapshotJson(graph), JSON)
         }
         shell.route(ERRORS_PATH) { exchange ->
             exchange.allowCrossOrigin()
             exchange.respond(200, inspectorJson.encodeToString(ErrorSnapshot.serializer(), errors.snapshot()), JSON)
+        }
+        shell.route(GRAPHS_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            val body = Graphs.list(model.components(), errors.snapshot())
+            exchange.respond(200, inspectorJson.encodeToString(GraphList.serializer(), body), JSON)
+        }
+        shell.route(SEARCH_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            runCatching { serveSearch(exchange) }
+                .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
         }
         shell.route(EVENTS_PATH) { exchange ->
             exchange.allowCrossOrigin()
@@ -175,6 +200,30 @@ class InspectorServer(
                 .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
         }
     }
+
+    /**
+     * `GET /api/inspect/search?mode={name|problems|data}&q=`.
+     *
+     * `name` and `problems` are answered from metadata the inspector already
+     * holds — component membership, cell names and types, and M2's error rows
+     * — so searching subscribes to nothing and raises no attention (P6).
+     * `data` is the one mode that would have to *ask cells*, which is exactly
+     * why it is M5-SEARCH's problem and answers 501 here rather than a
+     * plausible-looking empty result.
+     */
+    private fun serveSearch(exchange: HttpExchange) {
+        val params = exchange.query()
+        val query = params[QUERY_PARAM].orEmpty()
+        when (val mode = params[MODE_PARAM]?.takeIf { it.isNotBlank() } ?: SearchResult.NAME) {
+            SearchResult.NAME -> exchange.respondSearch(Graphs.byName(model.components(), query))
+            SearchResult.PROBLEMS -> exchange.respondSearch(Graphs.problems(model.components(), errors.snapshot()))
+            SearchResult.DATA -> exchange.respond(501, DATA_SEARCH_DEFERRED, JSON)
+            else -> exchange.respond(400, problem("unknown search mode: $mode"), JSON)
+        }
+    }
+
+    private fun HttpExchange.respondSearch(result: SearchResult) =
+        respond(200, inspectorJson.encodeToString(SearchResult.serializer(), result), JSON)
 
     private fun serveCell(exchange: HttpExchange) {
         val segments = exchange.requestURI.path.removePrefix(CELL_PATH)
@@ -243,6 +292,25 @@ class InspectorServer(
         else exchange.respond(409, problem("no observable outlet on this cell"), JSON)
     }
 
+    /**
+     * Label the graph that contains [anchorRef] (M4). The kernel has no `Graph`
+     * entity and no naming mechanism — a graph is an emergent connected
+     * component (`10-target-v3.md` §Known kernel gaps; membranes as the real
+     * nameable boundary are tracked in Linear MRB-156) — so this is an
+     * inspector-level annotation an application opts into for the components it
+     * knows the meaning of. Everything else stays `name: null`, which the
+     * navigator renders as its generated id; no name is ever invented.
+     *
+     * Anchored to a cell rather than to a component id on purpose: ids change
+     * whenever components merge or split, and a name that evaporated on the
+     * first merge would be worse than none. Nothing is persisted — a restarted
+     * process re-annotates from its own code, as this one does.
+     *
+     * Safe to call before the cell is published; it simply names nothing until
+     * the ref shows up.
+     */
+    fun nameGraph(anchorRef: CellRef, name: String): InspectorServer = apply { model.nameGraph(anchorRef, name) }
+
     fun start(): InspectorServer = apply {
         shell.start()
         heartbeats.scheduleAtFixedRate(
@@ -263,6 +331,13 @@ class InspectorServer(
         heartbeats.scheduleAtFixedRate(
             { runCatching { flow.sample() } },
             FlowCollector.WINDOW_MS, FlowCollector.WINDOW_MS, TimeUnit.MILLISECONDS,
+        )
+        // M4: `graphs.changed` is published from here rather than from the
+        // registry hooks, which coalesces a whole graph build into one hint and
+        // keeps the component sweep off the thread that is linking cells
+        heartbeats.scheduleAtFixedRate(
+            { runCatching { model.publishGraphChanges() } },
+            GRAPHS_POLL_MS, GRAPHS_POLL_MS, TimeUnit.MILLISECONDS,
         )
     }
 
@@ -299,6 +374,12 @@ class InspectorServer(
     /** `GET /api/inspect/errors`'s body, decoded — tests. */
     internal fun errorSnapshot(): ErrorSnapshot = errors.snapshot()
 
+    /** Publish any pending `graphs.changed` now instead of waiting for its 1 s schedule — tests. */
+    internal fun publishGraphChangesNow() = model.publishGraphChanges()
+
+    /** The live components, as `GET /graphs` and `GET /search` see them — tests. */
+    internal fun componentsNow(): List<Component> = model.components()
+
     companion object {
         const val DEFAULT_PORT = 7071
         const val BASE_PATH = "/api/inspect"
@@ -306,6 +387,8 @@ class InspectorServer(
         const val EVENTS_PATH = "$BASE_PATH/events"
         const val CELL_PATH = "$BASE_PATH/cell"
         const val ERRORS_PATH = "$BASE_PATH/errors"
+        const val GRAPHS_PATH = "$BASE_PATH/graphs"
+        const val SEARCH_PATH = "$BASE_PATH/search"
 
         /** Contract §SSE: "Server sends `heartbeat` every 15 s". */
         const val HEARTBEAT_SECONDS = 15L
@@ -316,9 +399,20 @@ class InspectorServer(
         /** M2-BE ticket: "poll parked counts on a 2 s timer" — the same cadence covers restarts. */
         const val ERROR_POLL_SECONDS = 2L
 
+        /** How often pending component changes are announced as `graphs.changed`. */
+        const val GRAPHS_POLL_MS = 1_000L
+
         private const val JSON = "application/json"
         private const val STATE = "state"
         private const val OBSERVE = "observe"
+
+        /** `GET /topology`'s M4 scoping parameter. */
+        private const val GRAPH_PARAM = "graph"
+        private const val MODE_PARAM = "mode"
+        private const val QUERY_PARAM = "q"
+
+        /** M4-BE §4, verbatim: `mode=data` returns 501 with this body. */
+        private const val DATA_SEARCH_DEFERRED = """{"error": "data search arrives in M5"}"""
 
         /** `"<uuid>:<instanceId>"` — the contract's ref encoding. */
         internal fun encodeRef(ref: CellRef): String = "${ref.id}:${ref.instanceId}"
@@ -334,6 +428,23 @@ class InspectorServer(
             buildJsonObject { put("reason", reason) }.toString()
     }
 }
+
+/**
+ * The request's decoded query parameters. The JDK http server hands over a raw
+ * query string and nothing else, and the inspector's two parameterized
+ * endpoints (`?graph=`, `?mode=&q=`) need no more than this: last value wins,
+ * a valueless key reads as empty, and percent/`+` escapes are decoded so a
+ * search for `civictech.cell.data` survives the wire.
+ */
+private fun HttpExchange.query(): Map<String, String> =
+    requestURI.rawQuery
+        ?.split('&')
+        ?.filter { it.isNotEmpty() }
+        ?.associate { pair ->
+            val name = URLDecoder.decode(pair.substringBefore('='), StandardCharsets.UTF_8)
+            name to URLDecoder.decode(pair.substringAfter('=', ""), StandardCharsets.UTF_8)
+        }
+        ?: emptyMap()
 
 /** 204 has no body; the JDK server needs `-1`, not `0` (which means "chunked"). */
 private fun HttpExchange.noContent() {

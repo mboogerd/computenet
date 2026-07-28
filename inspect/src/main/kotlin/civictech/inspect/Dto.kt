@@ -10,8 +10,8 @@ import kotlinx.serialization.json.JsonObject
  * The wire shapes of `doc/spec/90-roadmap/97-inspector-plan/20-api-contract.md`.
  * The contract is binding: field names and value vocabularies here are copied
  * from it, not invented. Fields the milestone cannot answer yet carry their
- * contract-declared null/placeholder (`fused`, `graph`, `net`) rather than a
- * guess.
+ * contract-declared null/placeholder (`net`, `SearchResult.cost`) rather than
+ * a guess.
  */
 internal val inspectorJson = Json {
     // The contract's examples spell out every field, and the client applies
@@ -45,7 +45,11 @@ data class Node(
     val net: String = LOCAL_NET,
     val lifecycle: String = HOT,
     val generation: Long = 0,
-    /** Component id — null until M4. */
+    /**
+     * The id of the connected component this cell belongs to (M4, see
+     * [ComponentIndex]). Non-null for every published cell — an unlinked cell
+     * is a component of one.
+     */
     val graph: String? = null,
 ) {
     companion object {
@@ -207,6 +211,7 @@ data class Event(
         const val ERROR_PARKED = "error.parked"
         const val ERROR_RESTART = "error.restart"
         const val FLOW_RATES = "flow.rates"
+        const val GRAPHS_CHANGED = "graphs.changed"
         const val HEARTBEAT = "heartbeat"
 
         const val ADDED = "added"
@@ -272,4 +277,76 @@ data class RestartRow(
     val ref: String,
     val generation: Long,
     val atMs: Long,
+)
+
+/** `GET /api/inspect/graphs` — every connected component this inspector can see. */
+@Serializable
+data class GraphList(val graphs: List<GraphSummary>)
+
+/** One component's navigator card. */
+@Serializable
+data class GraphSummary(
+    /** `g-<lexicographically-min member uuid>` — see [ComponentIndex]. */
+    val id: String,
+    /** A host-supplied annotation ([InspectorServer.nameGraph]); null = unnamed, and the UI renders [id]. */
+    val name: String? = null,
+    val cells: Int,
+    /** Distinct process-host (`ManagedHost`) names among the members. */
+    val hosts: Int,
+    /** Distinct network hosts among the members — 1 (`"local"`) until M5. */
+    val nets: Int,
+    val health: GraphHealth,
+    /**
+     * The contract's `"hot" | "cold"`, lowercase (unlike [Node.lifecycle]).
+     * Always [HOT] in M4: cold-graph listing is M5-COLD.
+     */
+    val lifecycle: String = HOT,
+) {
+    companion object {
+        const val HOT = "hot"
+    }
+}
+
+/** `GraphSummary.health` — error counters scoped to one component's refs. */
+@Serializable
+data class GraphHealth(
+    val deadLetters: Int,
+    val parked: Int,
+    val restarts: Int,
+)
+
+/** `GET /api/inspect/search`. */
+@Serializable
+data class SearchResult(
+    /** [NAME], [PROBLEMS] or [DATA]. */
+    val mode: String,
+    val hits: List<SearchHit>,
+    /**
+     * Data-mode only, and therefore always null in M4 — `mode=data` answers
+     * 501 until M5-SEARCH builds the fan-out this would account for.
+     */
+    val cost: SearchCost? = null,
+) {
+    companion object {
+        const val NAME = "name"
+        const val PROBLEMS = "problems"
+        const val DATA = "data"
+    }
+}
+
+/** One search hit: a graph, optionally a cell inside it. */
+@Serializable
+data class SearchHit(
+    val graph: String,
+    /** The cell this hit points at, or null for a whole-graph hit. */
+    val ref: String? = null,
+    val label: String,
+    val detail: String,
+)
+
+/** `SearchResult.cost` — what a data-mode fan-out touched. Filled by M5-SEARCH. */
+@Serializable
+data class SearchCost(
+    val cellsQueried: Int,
+    val coldSkipped: Int,
 )

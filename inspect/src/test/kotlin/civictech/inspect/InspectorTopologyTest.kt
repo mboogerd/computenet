@@ -63,8 +63,12 @@ class InspectorTopologyTest {
         node.net shouldBe "local"
         node.lifecycle shouldBe "HOT"
         node.generation shouldBe 0L
-        // M0 does not answer these; the contract says null, not a guess
-        node.graph shouldBe null
+        // M4: every published cell belongs to a component, and these two are
+        // unlinked, so each is a component of one named by its own uuid
+        node.graph shouldBe "g-${source.ref.id}"
+        snapshot.nodes.map { it.graph }.toSet() shouldBe
+            setOf("g-${source.ref.id}", "g-${replica.ref.id}")
+        // M0 does not answer this; the contract says null, not a guess
         node.name shouldBe null
     }
 
