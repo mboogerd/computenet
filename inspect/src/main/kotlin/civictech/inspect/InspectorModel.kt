@@ -398,10 +398,17 @@ internal class InspectorModel(
      * added` for a node whose content changed is exactly the upsert the client
      * applies; an announcement that changes nothing emits nothing.
      */
-    fun mirroredPublish(ref: CellRef) = synchronized(lock) {
+    fun mirroredPublish(ref: CellRef) = synchronized(lock) { adopt(ref, announced = true) }
+
+    /**
+     * Re-derive [ref]'s node from the registry and emit it if anything about it
+     * changed. [announced] records whether this view is holding it because a
+     * peer announced it — the bit [reconcilePeers] sweeps against.
+     */
+    private fun adopt(ref: CellRef, announced: Boolean) {
         val node = nodeOf(ref)
-        mirrored += ref
-        if (nodes.put(ref, node) == node) return@synchronized
+        if (announced) mirrored += ref else mirrored -= ref
+        if (nodes.put(ref, node) == node) return
         componentIndex.addCell(ref)
         emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
             put("op", Event.ADDED)
@@ -419,9 +426,8 @@ internal class InspectorModel(
      *    the transport's close path — drops every location routed through a
      *    dead socket *silently*: it notifies neither `onUnpublish` nor
      *    `onLocalUnpublish` (unlike `mirrorUnpublish`, which does). So a
-     *    mirrored ref whose location is no longer [LocationRegistry.Remote] is
-     *    how a disconnect becomes visible, and it retracts as an ordinary
-     *    `topology.node removed`.
+     *    mirrored ref that has lost its location is how a disconnect becomes
+     *    visible, and it retracts as an ordinary `topology.node removed`.
      * 2. **Mirrored links.** `mirrorLink`/`mirrorUnlink` deliberately do not
      *    re-announce, and `onLocalTopology` fires only for *local* links — so
      *    the peer's own edges appear and disappear in
@@ -440,7 +446,14 @@ internal class InspectorModel(
      * a graph thread, and it touches no cell (P6 — this is registry metadata).
      */
     fun reconcilePeers() = synchronized(lock) {
-        mirrored.filterNot(peers::isRemote).toList().forEach(::unpublished)
+        mirrored.toList().forEach { ref ->
+            if (peers.isRemote(ref)) return@forEach
+            // No location at all: the peer is gone, retract the cell. A
+            // location that turned *Local* instead means the ref migrated onto
+            // this JVM — re-derive it (it has a process host now) and stop
+            // treating it as announced, rather than deleting a live cell.
+            if (registry.location(ref) == null) unpublished(ref) else adopt(ref, announced = false)
+        }
         discoverRemotes().forEach(::mirroredPublish)
 
         // a local link is authoritative on its own (its hooks are exact); a
