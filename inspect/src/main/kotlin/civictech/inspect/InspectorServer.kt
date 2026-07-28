@@ -33,6 +33,11 @@ import java.util.concurrent.TimeUnit
  * - `GET /api/inspect/cell/{ref}/state` — a [CellState], plus the
  *   `state.summary` SSE events an open subscription streams.
  *
+ * M2 adds the error lane (see [Errors]):
+ *
+ * - `GET /api/inspect/errors` — an [ErrorSnapshot];
+ * - `error.deadLetter` / `error.parked` / `error.restart` SSE events.
+ *
  * ### What it can and cannot see
  *
  * The inspector reads one [LocationRegistry]. **Cells on registry-less hosts
@@ -100,6 +105,15 @@ class InspectorServer(
         snapshots = SnapshotSource { ref -> snapshots.snapshotOf(ref) },
     )
 
+    /** M2 — the error lane (see [Errors]'s doc for the three sources it feeds). */
+    private val errors = Errors(
+        registry = registry,
+        hosts = hosts,
+        onDeadLetter = model::deadLetterEvent,
+        onParked = model::parkedEvent,
+        onRestart = model::restartEvent,
+    )
+
     private val heartbeats = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "inspector-heartbeat").apply { isDaemon = true }
     }
@@ -127,6 +141,10 @@ class InspectorServer(
         shell.route(TOPOLOGY_PATH) { exchange ->
             exchange.allowCrossOrigin()
             exchange.respond(200, model.snapshotJson(), "application/json")
+        }
+        shell.route(ERRORS_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            exchange.respond(200, inspectorJson.encodeToString(ErrorSnapshot.serializer(), errors.snapshot()), JSON)
         }
         shell.route(EVENTS_PATH) { exchange ->
             exchange.allowCrossOrigin()
@@ -225,6 +243,10 @@ class InspectorServer(
             { runCatching { observations.sweep() } },
             SWEEP_SECONDS, SWEEP_SECONDS, TimeUnit.SECONDS,
         )
+        heartbeats.scheduleAtFixedRate(
+            { runCatching { errors.poll() } },
+            ERROR_POLL_SECONDS, ERROR_POLL_SECONDS, TimeUnit.SECONDS,
+        )
     }
 
     fun stop() = close()
@@ -235,6 +257,7 @@ class InspectorServer(
         // before the broadcaster: releasing a sink emits topology deltas, and a
         // still-attached client should see its own subscriptions retract
         observations.close()
+        errors.close()
         broadcaster.close()
         shell.stop()
     }
@@ -245,18 +268,28 @@ class InspectorServer(
     /** Run the idle sweep now instead of waiting for its schedule — tests. */
     internal fun sweepIdleObservations() = observations.sweep()
 
+    /** Run the error-lane poll now instead of waiting for its 2 s schedule — tests. */
+    internal fun pollErrorsNow() = errors.poll()
+
+    /** `GET /api/inspect/errors`'s body, decoded — tests. */
+    internal fun errorSnapshot(): ErrorSnapshot = errors.snapshot()
+
     companion object {
         const val DEFAULT_PORT = 7071
         const val BASE_PATH = "/api/inspect"
         const val TOPOLOGY_PATH = "$BASE_PATH/topology"
         const val EVENTS_PATH = "$BASE_PATH/events"
         const val CELL_PATH = "$BASE_PATH/cell"
+        const val ERRORS_PATH = "$BASE_PATH/errors"
 
         /** Contract §SSE: "Server sends `heartbeat` every 15 s". */
         const val HEARTBEAT_SECONDS = 15L
 
         /** How often idle observations are swept; the deadline itself is [Observations.IDLE_RELEASE_MS]. */
         const val SWEEP_SECONDS = 30L
+
+        /** M2-BE ticket: "poll parked counts on a 2 s timer" — the same cadence covers restarts. */
+        const val ERROR_POLL_SECONDS = 2L
 
         private const val JSON = "application/json"
         private const val STATE = "state"
