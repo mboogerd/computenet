@@ -1,5 +1,7 @@
 # ComputeNet
 
+[![CI](https://github.com/mboogerd/computenet/actions/workflows/ci.yml/badge.svg)](https://github.com/mboogerd/computenet/actions/workflows/ci.yml)
+
 An experimental Kotlin/JVM dataflow runtime. You build programs as graphs of
 **cells** — small stateful components with typed **ports** — connected by
 explicit **links**. Data flows as incremental deltas: sets, maps, and counters
@@ -83,6 +85,22 @@ converge on both sides. Start a listener and a dialer:
 Open a tab on each HTTP port and edit — both sides converge. A late-starting
 or reconnecting peer replays history in order and catches up automatically.
 The same flags work on `:demo:exchange`.
+
+## Inspect a running graph
+
+`:inspect` is a read-only HTTP/SSE view of a host process's live dataflow
+graph. It's opt-in on `demo/skillmatch` and `demo/shopping` via
+`--inspect-port`:
+
+```bash
+./gradlew :demo:skillmatch:run --args="8080 --inspect-port 7071"
+cd inspect/ui && npm install && npm run dev   # UI on :5173, proxies to :7071
+```
+
+See [`inspect/build.gradle.kts`](inspect/build.gradle.kts)'s header comment
+and [`inspect/ui/README.md`](inspect/ui/README.md) for the full recipe
+(including the checked-in fixture mode that needs no backend, and the
+two-JVM network-host walkthrough).
 
 ## Building a data flow
 

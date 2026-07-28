@@ -30,9 +30,7 @@ class ModuleInventoryTest {
          * change. Seeded 2026-07-28; the `:inspect` row is the audit's own
          * finding and its removal is part of the audit's implementation plan.
          */
-        val documentedExceptions = setOf(
-            ":inspect",
-        )
+        val documentedExceptions = setOf<String>()
     }
 
     private fun repoRoot(): File {
