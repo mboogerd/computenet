@@ -106,7 +106,9 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
   `MapDiffPublisher`, hub cells. Views are not thread-safe; single-threaded
   apply.
 - `.consistency` — glitch freedom: `WaveFrontier` (ALIGN-tier wave-completeness
-  fold), `GlitchFreeCell`, `ReplicaFrontier`.
+  fold), `GlitchFreeCell`, `ReplicaFrontier`, `ReplicaQuorum` (the R13/PN-19/
+  FU-2 cross-replica settlement predicate; `Replication.replicaFrontier` is a
+  one-line factory over it).
 
 **Execution and operations**
 

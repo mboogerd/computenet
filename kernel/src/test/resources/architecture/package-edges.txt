@@ -24,9 +24,18 @@
 # doc/ARCHITECTURE.md:107/116 flagged as anomalous). No other file under
 # civictech.cell.control imports civictech.cell.host.* (verified by grep),
 # so the edge is genuinely gone, not just relocated.
+#
+# T11-D: consistency -> data ADDED — Replication.replicaFrontier moved into
+# consistency/ReplicaQuorum.kt (the settlement predicate belongs with
+# ReplicaFrontier/WaveFrontier, its interface and consumer, both already in
+# .consistency); the predicate reads WatermarkCell.rows/closed/suspended/
+# members/slotId, so the file needs civictech.cell.data.WatermarkCell. No
+# file under civictech.cell.data imports civictech.cell.consistency.* (also
+# verified by grep), so this is a new one-way edge, not a new cycle.
 cell -> port
 consistency -> cell
 consistency -> control
+consistency -> data
 consistency -> host
 consistency -> link
 consistency -> port
