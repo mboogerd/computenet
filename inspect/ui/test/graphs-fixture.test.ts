@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ErrorSnapshot, GraphList, SearchResult, TopologySnapshot } from '../src/api/types';
+import { coldGraphCount, formatColdSkipHint, isGraphCold } from '../src/nav/cold';
 import { deriveHealthPills } from '../src/nav/health';
 import { formatSearchCost, isNoticeHit } from '../src/nav/search';
 import errorsFixture from '../fixtures/errors.json';
 import graphsFixture from '../fixtures/graphs.json';
+import graphsColdFixture from '../fixtures/graphs-cold.json';
+import searchDataColdFixture from '../fixtures/search-data-cold.json';
 import searchDataFixture from '../fixtures/search-data.json';
 import searchNameFixture from '../fixtures/search-name.json';
 import searchProblemsFixture from '../fixtures/search-problems.json';
@@ -16,6 +19,8 @@ const topologySnapshot = topology as TopologySnapshot;
 const searchName = searchNameFixture as SearchResult;
 const searchProblems = searchProblemsFixture as SearchResult;
 const searchData = searchDataFixture as SearchResult;
+const graphsCold = graphsColdFixture as GraphList;
+const searchDataCold = searchDataColdFixture as SearchResult;
 const multihost = topologyMultihost as TopologySnapshot;
 
 /** M4-FE ticket Implement §5: "Fixtures: fixtures/graphs.json,
@@ -130,6 +135,51 @@ describe('fixtures/search-data.json', () => {
     expect(notices).toHaveLength(1);
     expect(searchData.hits[searchData.hits.length - 1]).toBe(notices[0]);
     expect(notices[0].ref).toBeNull();
+  });
+});
+
+/** M5-COLD. Captured from a live `--cold-graph` run of the skillmatch pilot
+ *  (its unnamed side component started suspended) and re-keyed onto this
+ *  fixture set's own ids, the same way `search-data.json` was. Kept as a
+ *  *second* graph list rather than by editing `graphs.json`: the golden one is
+ *  the all-hot pilot every other fixture cross-references, and both states
+ *  need to exist offline. */
+describe('fixtures/graphs-cold.json', () => {
+  it('is the same two components as graphs.json, with the unnamed one parked', () => {
+    expect(graphsCold.graphs.map((g) => g.id)).toEqual(graphs.graphs.map((g) => g.id));
+    expect(graphsCold.graphs.filter((g) => g.lifecycle === 'cold').map((g) => g.name)).toEqual([null]);
+  });
+
+  it('drives the cold predicates the screen and the card dimming read', () => {
+    const cold = graphsCold.graphs.find((g) => g.lifecycle === 'cold')!;
+    expect(coldGraphCount(graphsCold.graphs)).toBe(1);
+    expect(isGraphCold(cold.id, graphsCold.graphs)).toBe(true);
+    expect(isGraphCold(cold.id, graphs.graphs)).toBe(false); // same id, hot list
+  });
+
+  it('reports "cold" as its lifecycle health pill', () => {
+    const cold = graphsCold.graphs.find((g) => g.lifecycle === 'cold')!;
+    expect(deriveHealthPills(cold.health, cold.lifecycle)).toContainEqual({ kind: 'lifecycle', label: 'cold' });
+  });
+});
+
+/** The data search from that same cold run: the cold component's cells are
+ *  counted, not read, and the closing notice names the remedy. */
+describe('fixtures/search-data-cold.json', () => {
+  it('reports a nonzero coldSkipped and the hint that offers to include it', () => {
+    expect(searchDataCold.cost!.coldSkipped).toBe(2);
+    expect(formatColdSkipHint(searchDataCold.cost)).toBe('2 cold cells skipped — wake their graph to include');
+  });
+
+  it('queried fewer cells than the all-hot capture, by exactly the skipped ones', () => {
+    expect(searchDataCold.cost!.cellsQueried + searchDataCold.cost!.coldSkipped).toBe(searchData.cost!.cellsQueried);
+  });
+
+  it('closes with a scope notice naming the cold graph, not a failure', () => {
+    const notice = searchDataCold.hits.filter(isNoticeHit);
+    expect(notice).toHaveLength(1);
+    expect(notice[0].label).toBe('Search scope');
+    expect(notice[0].detail).toContain('cold graph skipped — wake to include');
   });
 });
 

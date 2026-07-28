@@ -1,0 +1,22 @@
+{
+  "graphs": [
+    {
+      "id": "g-016eda8f-96de-40e1-a04c-f997395ade62",
+      "name": "skillmatch",
+      "cells": 16,
+      "hosts": 1,
+      "nets": 1,
+      "health": { "deadLetters": 1, "parked": 11, "restarts": 1 },
+      "lifecycle": "hot"
+    },
+    {
+      "id": "g-77777777-7777-7777-7777-777777777777",
+      "name": null,
+      "cells": 4,
+      "hosts": 1,
+      "nets": 1,
+      "health": { "deadLetters": 0, "parked": 0, "restarts": 0 },
+      "lifecycle": "cold"
+    }
+  ]
+}
