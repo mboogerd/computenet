@@ -61,6 +61,13 @@
   color: var(--cell-blocking);
 }
 
+/* M5-COLD: not an error — a deliberate non-read. Styled as information
+   rather than a failure, since nothing failed. */
+.detail-section__status--cold {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 .detail-section__footnote {
   margin: 0.6rem 0 0;
   font-size: 0.68rem;

@@ -1,0 +1,159 @@
+/* M5-COLD — the cold screen (see ColdScreen.tsx). Occupies the same slot the
+   live Canvas does, so the detail panel beside it is unaffected. */
+
+.cold-screen {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.cold-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px dashed var(--hairline-strong);
+  background: var(--surface);
+}
+
+.cold-banner__tag {
+  font-size: 1.1rem;
+  line-height: 1.2;
+  color: var(--cell-pure);
+}
+
+.cold-banner__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cold-banner__notice {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cold-banner__sub {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.cold-banner__error {
+  margin: 0.15rem 0 0;
+  font-size: 0.72rem;
+  color: var(--error);
+}
+
+.cold-banner__wake {
+  flex: 0 0 auto;
+  border: 1px solid var(--focus-ring);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cold-banner__wake:hover:not(:disabled) {
+  background: var(--focus-ring);
+  color: var(--surface);
+}
+
+.cold-banner__wake:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+/* Ghosting: the real canvas, dimmed and desaturated. Still interactive —
+   selection inside a cold graph is allowed, it just does not subscribe
+   (`solid/detail.ts`). */
+.cold-screen__ghost {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  opacity: var(--ghost-opacity);
+  filter: grayscale(0.7);
+}
+
+/* --- confirmation dialog --- */
+
+.cold-dialog__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.cold-dialog {
+  max-width: 26rem;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+.cold-dialog__title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.cold-dialog__body {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.cold-dialog__note {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.cold-dialog__actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.35rem;
+}
+
+.cold-dialog__cancel,
+.cold-dialog__confirm {
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-raised);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.85rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.cold-dialog__confirm {
+  border-color: var(--focus-ring);
+  font-weight: 600;
+}
+
+.cold-dialog__confirm:hover {
+  background: var(--focus-ring);
+  color: var(--surface);
+}

@@ -139,6 +139,81 @@ describe('DetailController', () => {
 
     expect(onDetail).toHaveBeenCalledWith('a', undefined, err);
   });
+
+  /** M5-COLD ticket Implement §2: "NO state/flow/error subscriptions while
+   *  cold — selection shows descriptor only", asserted against the mock
+   *  transport (ticket Tests: "FE: cold gating (no observe calls while cold —
+   *  mock-transport assertion)"). Subscribing raises attention and can un-park
+   *  a cone, so a graph the UI has just called parked must not be woken by
+   *  looking at it. */
+  describe('descriptor-only selection (cold graph)', () => {
+    it('fetches the descriptor and issues no observe POST and no state fetch', async () => {
+      controller.select('a', 'descriptor');
+      await flush();
+
+      expect(transport.fetchDetail).toHaveBeenCalledWith('a');
+      expect(transport.observeStart).not.toHaveBeenCalled();
+      expect(transport.fetchState).not.toHaveBeenCalled();
+      expect(onState).not.toHaveBeenCalled();
+    });
+
+    it('moving between cells inside a cold graph never subscribes to any of them', async () => {
+      controller.select('a', 'descriptor');
+      await flush();
+      controller.select('b', 'descriptor');
+      await flush();
+
+      expect(transport.observeStart).not.toHaveBeenCalled();
+      // nothing was acquired, so nothing is released either
+      expect(transport.observeStop).not.toHaveBeenCalled();
+      expect(transport.fetchDetail).toHaveBeenNthCalledWith(2, 'b');
+    });
+
+    it('a state.summary for the selected ref does not pull its state in through the back door', async () => {
+      controller.select('a', 'descriptor');
+      await flush();
+
+      controller.onSummary('a');
+      await flush();
+
+      expect(transport.fetchState).not.toHaveBeenCalled();
+    });
+
+    it('deselecting a descriptor-only selection issues no observe DELETE', async () => {
+      controller.select('a', 'descriptor');
+      await flush();
+      controller.deselect();
+      await flush();
+
+      expect(transport.observeStop).not.toHaveBeenCalled();
+    });
+
+    /** The wake path: the same ref, now hot, must actually start observing —
+     *  and the going-cold direction must release what it had. */
+    it('re-selecting the same ref as live after a wake opens exactly one observation', async () => {
+      controller.select('a', 'descriptor');
+      await flush();
+
+      controller.select('a', 'live');
+      await flush();
+
+      expect(transport.observeStart).toHaveBeenCalledTimes(1);
+      expect(transport.observeStart).toHaveBeenCalledWith('a');
+      expect(transport.fetchState).toHaveBeenCalledWith('a');
+    });
+
+    it('a live selection that goes cold releases its observation', async () => {
+      controller.select('a', 'live');
+      await flush();
+
+      controller.select('a', 'descriptor');
+      await flush();
+
+      expect(transport.observeStop).toHaveBeenCalledTimes(1);
+      expect(transport.observeStop).toHaveBeenCalledWith('a');
+      expect(transport.observeStart).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 /** Flush the microtask queue so chained `.then()`s in DetailController settle. */

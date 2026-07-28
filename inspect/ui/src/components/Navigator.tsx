@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from 'solid-js';
 import type { GraphSummary, SearchHit, SearchMode } from '../api/types';
 import { buildConstellations } from '../layout/constellation';
+import { COLD_TAG, formatColdSkipHint } from '../nav/cold';
 import { deriveHealthPills } from '../nav/health';
 import { formatSearchCost, isNoticeHit, isSearchModeEnabled, isSubmitMode, SEARCH_MODES } from '../nav/search';
 import { graphs, graphsLoading } from '../solid/graphs';
@@ -42,19 +43,29 @@ function GraphCards() {
  *  as 'unnamed', dashed border per the v2 mockup)". */
 function GraphCard(props: { graph: GraphSummary }) {
   const pills = createMemo(() => deriveHealthPills(props.graph.health, props.graph.lifecycle));
+  const cold = () => props.graph.lifecycle === 'cold';
   return (
     <button
       class="graph-card"
-      classList={{ 'graph-card--unnamed': !props.graph.name }}
+      classList={{ 'graph-card--unnamed': !props.graph.name, 'graph-card--cold': cold() }}
       // The tooltip is also this button's accessible name, so it has to lead
       // with which graph it opens — restarts alone made every card announce
-      // itself as "0 restarts" (M4-EVAL).
+      // itself as "0 restarts" (M4-EVAL). M5-COLD appends the state rather
+      // than replacing anything: the ❄ glyph beside the name is decorative
+      // and carries no accessible text of its own.
       title={`${props.graph.name ?? props.graph.id} — ${props.graph.cells} cells, ${props.graph.health.restarts} restart${
         props.graph.health.restarts === 1 ? '' : 's'
-      }`}
+      }${cold() ? ', cold' : ''}`}
       onClick={() => enterGraph(props.graph.id)}
     >
-      <div class="graph-card__name">{props.graph.name ?? props.graph.id}</div>
+      <div class="graph-card__name">
+        <Show when={cold()}>
+          <span class="cold-tag" aria-hidden="true">
+            {COLD_TAG}{' '}
+          </span>
+        </Show>
+        {props.graph.name ?? props.graph.id}
+      </div>
       <div class="graph-card__counts">
         {props.graph.cells} cells · {props.graph.hosts} hosts · {props.graph.nets} nets
       </div>
@@ -76,6 +87,9 @@ function GraphCard(props: { graph: GraphSummary }) {
 function SearchPanel() {
   const placeholder = () => (searchMode() === 'data' ? 'Find a record… (Enter)' : 'Search graphs…');
   const costLine = () => (searchMode() === 'data' ? formatSearchCost(searchCost()) : null);
+  // M5-COLD ticket Implement §3: the one skip a user can act on, so it names
+  // the remedy. Derived from the same cost object the line above renders.
+  const coldHint = () => (searchMode() === 'data' ? formatColdSkipHint(searchCost()) : null);
 
   function selectMode(mode: SearchMode): void {
     if (!isSearchModeEnabled(mode)) return;
@@ -133,6 +147,14 @@ function SearchPanel() {
               it found nothing — 10-target-v3.md §Known kernel gaps
               ("surfaces the cost in the UI"), M5-SEARCH Implement §2. */}
           <Show when={costLine()}>{(line) => <p class="search-cost">{line()}</p>}</Show>
+          <Show when={coldHint()}>
+            {(hint) => (
+              <p class="search-cold-hint">
+                <span aria-hidden="true">{COLD_TAG} </span>
+                {hint()}
+              </p>
+            )}
+          </Show>
         </Show>
       </Show>
     </div>
@@ -201,10 +223,17 @@ function ConstellationGrid() {
                 }}
                 // Without this the button's only content is a decorative SVG,
                 // so it exposes no accessible name at all (M4-EVAL).
-                aria-label={`Open ${summary()?.name ?? c.graphId}`}
+                aria-label={`Open ${summary()?.name ?? c.graphId}${summary()?.lifecycle === 'cold' ? ' (cold)' : ''}`}
                 onClick={() => enterGraph(c.graphId)}
               >
-                <div class="constellation-card__header">{summary()?.name ?? c.graphId}</div>
+                <div class="constellation-card__header">
+                  <Show when={summary()?.lifecycle === 'cold'}>
+                    <span class="cold-tag" aria-hidden="true">
+                      {COLD_TAG}{' '}
+                    </span>
+                  </Show>
+                  {summary()?.name ?? c.graphId}
+                </div>
                 <svg class="constellation-card__svg" viewBox={c.viewBox} aria-hidden="true">
                   <For each={c.edges}>
                     {(e) => <line class="constellation-edge" x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} />}

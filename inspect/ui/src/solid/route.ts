@@ -1,5 +1,6 @@
 import { createEffect } from 'solid-js';
 import { formatHash, graphIsGone, TOGGLE_KEYS, type Route, type ToggleKey } from '../nav/route';
+import { clearWake } from './cold';
 import { graphs, graphsLoaded } from './graphs';
 import { selection, setSelection } from './selection';
 import { currentGraphId, initialRoute, screen, setCurrentGraphId, setScreen } from './routeState';
@@ -88,6 +89,9 @@ export function initRoute(): void {
  *  click-through preserves toggles" (ticket Tests) holds for free, since
  *  they are module-level state that navigation never resets. */
 export function enterGraph(graphId: string, opts: { ref?: string | null; forceErrors?: boolean } = {}): void {
+  // M5-COLD: wake state (a pending confirmation, a failed attempt) belongs to
+  // the graph it was raised for and must not follow the user to the next one.
+  clearWake();
   setCurrentGraphId(graphId);
   setSelection(opts.ref ?? null);
   if (opts.forceErrors) setShowErrors(true);
@@ -100,6 +104,7 @@ export function enterGraph(graphId: string, opts: { ref?: string | null; forceEr
  *  `currentGraphId` switches the shared topology fetch back to unfiltered,
  *  refreshing the data Home's constellation reads from. */
 export function goHome(): void {
+  clearWake();
   setSelection(null);
   setCurrentGraphId(null);
   setScreen('home');

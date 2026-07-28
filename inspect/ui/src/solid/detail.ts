@@ -2,6 +2,7 @@ import { createEffect, createSignal } from 'solid-js';
 import { createStore, unwrap } from 'solid-js/store';
 import type { CellDetail, CellState, Ref, StateSummaryPayload } from '../api/types';
 import { DetailController, defaultDetailTransport } from '../sync/detailClient';
+import { currentGraphCold } from './cold';
 import { selection } from './selection';
 
 const [cellDetail, setCellDetail] = createSignal<CellDetail | null>(null);
@@ -43,12 +44,18 @@ function clearSummary(ref: Ref | null): void {
 }
 
 /** Wire the M1 subscription lifecycle to `selection()`. Call once, on app
- *  mount (mirrors `sync/state.ts`'s `connect()`). */
+ *  mount (mirrors `sync/state.ts`'s `connect()`).
+ *
+ *  M5-COLD: the effect also depends on `currentGraphCold()`, so a graph that
+ *  goes cold (or wakes) under a standing selection re-runs it — releasing the
+ *  observation on the way into cold, and opening one on the way back out. */
 export function initDetail(): void {
   let prev: Ref | null = null;
+  let prevCold = false;
   createEffect(() => {
     const ref = selection();
-    if (ref === prev) return;
+    const cold = currentGraphCold();
+    if (ref === prev && cold === prevCold) return;
 
     clearSummary(prev);
     setCellDetail(null);
@@ -58,12 +65,15 @@ export function initDetail(): void {
 
     if (ref) {
       setDetailLoading(true);
-      setStateLoading(true);
-      controller.select(ref);
+      // a cold graph's state is not fetched at all — the panel says
+      // "unavailable without waking" rather than spinning forever
+      setStateLoading(!cold);
+      controller.select(ref, cold ? 'descriptor' : 'live');
     } else {
       controller.deselect();
     }
     prev = ref;
+    prevCold = cold;
   });
 }
 

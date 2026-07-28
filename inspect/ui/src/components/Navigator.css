@@ -142,6 +142,15 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* M5-COLD ticket Implement §3: the inline "N cold cells skipped — wake their
+   graph to include" hint. Sits under the cost line and only appears when the
+   number is nonzero. */
+.search-cold-hint {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
 /* --- graph cards --- */
 
 .graph-cards {
@@ -173,6 +182,21 @@
    border per the v2 mockup". */
 .graph-card--unnamed {
   border-style: dashed;
+}
+
+/* M5-COLD ticket Implement §2: "cold cards/thumbnails dimmed with a ❄ tag"
+   (v2 mockup). Dimmed, not disabled — a cold card is still the way into its
+   graph, which is exactly where the wake lives. */
+.graph-card--cold {
+  opacity: 0.62;
+}
+
+.graph-card--cold:hover {
+  opacity: 1;
+}
+
+.cold-tag {
+  color: var(--cell-pure);
 }
 
 .graph-card__name {

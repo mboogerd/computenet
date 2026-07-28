@@ -218,9 +218,10 @@ export interface GraphHealth {
   restarts: number;
 }
 
-/** "cold" arrives with M5 — M4-BE always reports "hot" (contract: "lifecycle
- *  is always 'hot' (cold is M5)"). Kept as a two-value type (not a boolean)
- *  so the M5 addition is additive, not a breaking rename. */
+/** "cold" is live as of M5-COLD: a component every one of whose cells is
+ *  parked — individually suspended, or on a drained host (server `Heat`).
+ *  Lowercase here, unlike {@link Lifecycle}'s uppercase `"HOT" | "SUSPENDED"`
+ *  on a Node; both are as the contract specifies. */
 export type GraphLifecycle = 'hot' | 'cold';
 
 export interface GraphSummary {

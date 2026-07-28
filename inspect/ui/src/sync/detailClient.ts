@@ -63,6 +63,10 @@ export interface DetailHandlers {
 export class DetailController {
   private current: Ref | null = null;
   private epoch = 0;
+  /** True while the current selection is descriptor-only (a cold graph, see
+   *  {@link select}) — so a `state.summary` for some other, still-observed cell
+   *  cannot pull this one's state in through the back door. */
+  private descriptorOnly = false;
 
   constructor(
     private readonly transport: DetailTransport,
@@ -74,15 +78,32 @@ export class DetailController {
     return this.current;
   }
 
-  select(ref: Ref): void {
-    if (this.current === ref) return;
+  /**
+   * Select `ref`.
+   *
+   * `mode: 'descriptor'` is M5-COLD's gate: inside a cold graph, selecting a
+   * node fetches its descriptor and **nothing else** — no `POST observe`, no
+   * `GET state`. That is not an optimization, it is the whole point of the cold
+   * screen: subscribing raises attention and can un-park a cone
+   * (10-target-v3.md §Constraints 2), so a graph the UI has just told the user
+   * is parked must not be woken by the act of looking at it. Waking is the
+   * explicit button, never a side effect of selection.
+   */
+  select(ref: Ref, mode: 'live' | 'descriptor' = 'live'): void {
+    if (this.current === ref && this.descriptorOnly === (mode === 'descriptor')) return;
     const prev = this.current;
+    const wasObserved = prev !== null && !this.descriptorOnly;
     this.current = ref;
+    this.descriptorOnly = mode === 'descriptor';
     const epoch = ++this.epoch;
 
-    if (prev) void this.transport.observeStop(prev);
+    // only release what was actually acquired — a descriptor-only selection
+    // never opened an observation to release
+    if (prev && wasObserved) void this.transport.observeStop(prev);
 
     void this.loadDetail(ref, epoch);
+    if (this.descriptorOnly) return;
+
     void this.transport
       .observeStart(ref)
       .then(() => this.loadState(ref, epoch))
@@ -94,15 +115,18 @@ export class DetailController {
   deselect(): void {
     if (!this.current) return;
     const prev = this.current;
+    const wasObserved = !this.descriptorOnly;
     this.current = null;
+    this.descriptorOnly = false;
     this.epoch++;
-    void this.transport.observeStop(prev);
+    if (wasObserved) void this.transport.observeStop(prev);
   }
 
   /** Called for every `state.summary` SSE event, regardless of ref — a no-op
-   *  unless it names the currently-observed cell. */
+   *  unless it names the currently-observed cell. Descriptor-only selections
+   *  are not observed, so they never re-read state from one either. */
   onSummary(ref: Ref): void {
-    if (ref !== this.current) return;
+    if (ref !== this.current || this.descriptorOnly) return;
     void this.loadState(ref, this.epoch);
   }
 

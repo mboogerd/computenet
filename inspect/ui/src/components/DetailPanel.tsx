@@ -2,6 +2,8 @@ import { For, Show, createMemo, type JSX } from 'solid-js';
 import type { DeadLetterEntry, ParkedEntry, RestartEntry } from '../api/types';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { portFlowRows, type PortFlowRow } from '../util/flow';
+import { COLD_NOTICE } from '../nav/cold';
+import { currentGraphCold } from '../solid/cold';
 import { cellDetail, cellState, detailError, detailLoading, stateError, stateLoading } from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
@@ -140,6 +142,14 @@ function StateSection() {
 
   return (
     <Section title="State">
+      {/* M5-COLD: inside a cold graph nothing was fetched — no observe, no
+          `GET state` — so this says why, rather than rendering a failure for
+          a request that was deliberately never made (ticket Implement §2:
+          "selection shows descriptor only"). */}
+      <Show
+        when={!currentGraphCold()}
+        fallback={<p class="detail-section__status detail-section__status--cold">{COLD_NOTICE}</p>}
+      >
       <Show when={!stateLoading()} fallback={<p class="detail-section__status">Loading…</p>}>
         <Show
           when={cellState()}
@@ -163,6 +173,7 @@ function StateSection() {
             </>
           )}
         </Show>
+      </Show>
       </Show>
       <p class="detail-section__footnote">per-cell consistent — cross-panel alignment not guaranteed</p>
     </Section>
