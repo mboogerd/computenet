@@ -34,6 +34,14 @@ import java.io.File
  *   (`Flow.kt`), and `LocationRegistry.Remote.sink` is declared as
  *   `civictech.cell.proxy.InvocationSink` (`Peers.kt`). Shrinking this to a
  *   kernel-owned observe seam is the tracked end state (audit finding B2).
+ * - `partition`: forced by the absence of an Api marker — `ShardCell` is a
+ *   plain `Cell` with no generated `@CellBase` `ShardApi` to key on, so the
+ *   inspector's fold table can only name the concrete class
+ *   (`Observations.kt`, `SET_OUTLETS`). The reference is a bare `Class`
+ *   literal compared with `isAssignableFrom`; no `civictech.cell.partition`
+ *   behavior is called. Deliberate widening for T20 / guardrail G3 — see
+ *   `doc/architecture-decisions.md` "Guardrails › Amended". Shrinks the day
+ *   `ShardCell` gains an Api marker interface.
  */
 class DemoSurfaceAllowlistTest {
 
@@ -67,6 +75,7 @@ class DemoSurfaceAllowlistTest {
             "link",
             "wire",
             "proxy", // see class KDoc — forced by FanOutlet.tap / Remote.sink shapes
+            "partition", // see class KDoc — ShardCell has no Api marker; Class literal only (T20)
         )
     }
 
@@ -151,8 +160,10 @@ class DemoSurfaceAllowlistTest {
         assertTrue(!disallowedImport("civictech.cell.consistency.GlitchFreeCell", demoCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.protocol.Protocols", demoCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.proxy.Invocation", demoCellPrefixes))
-        // inspect may reach .proxy (documented above) but not .protocol or .evolve
+        // inspect may reach .proxy and .partition (documented above) but not .protocol or .evolve
         assertTrue(!disallowedImport("civictech.cell.proxy.Proxy", inspectCellPrefixes))
+        assertTrue(!disallowedImport("civictech.cell.partition.ShardCell", inspectCellPrefixes))
+        assertTrue(disallowedImport("civictech.cell.partition.ShardCell", demoCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.protocol.Protocols", inspectCellPrefixes))
         assertTrue(disallowedImport("civictech.cell.evolve.Shadow", inspectCellPrefixes))
     }

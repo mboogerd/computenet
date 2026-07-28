@@ -103,3 +103,27 @@ say which part changed.
   per-module table (G1). Approved as part of accepting this audit; the demo
   set is unchanged, `:inspect`'s set is seeded from its actual current
   surface.
+- **G1 widened: `partition` added to `inspectCellPrefixes`** (2026-07-28,
+  escalation decision during the remediation run, standing in for human
+  approval per the orchestration plan's escalation clause). T20 closed the
+  last of finding B3's three blind folds by adding `ShardCell::class.java` to
+  `Observations.SET_OUTLETS`, which requires
+  `import civictech.cell.partition.ShardCell` in
+  `inspect/src/main/kotlin/civictech/inspect/Observations.kt`. The widening is
+  accepted because the coupling is nominal, not behavioral: `ShardCell` is a
+  plain `Cell` (`Cell, Stateful, Replicable<SetDelta<E>>, Partitioned`) with
+  no generated `@CellBase` `ShardApi` marker to key on — unlike every other
+  `SET_OUTLETS`/`MAP_OUTLETS` entry — so the fold table has no Api type
+  available and must name the concrete class. The reference is a bare `Class`
+  literal consumed by `isAssignableFrom` in `viewFor`; no
+  `civictech.cell.partition` member is called, constructed, or subtyped.
+  (T20's sibling entry `MergeableGroupByCell` needed no widening — it lives
+  under the already-allowed `data` prefix.) Rejected alternatives:
+  `Class.forName("civictech.cell.partition.ShardCell")` would satisfy the
+  regex-based gate while leaving the coupling exactly as strong, and would
+  additionally turn a class rename from a compile error into a silent refold
+  regression — a loophole, not a fix; reverting the `ShardCell` entry would
+  reopen the B3 blind spot that guardrail G3 exists to close. **Shrink
+  trigger:** the day `ShardCell` gains a `@CellBase` Api marker interface (or
+  B2's kernel-owned observe seam subsumes the fold table), drop `partition`
+  from the set. Recorded in the test's class KDoc.
