@@ -118,6 +118,24 @@ class InspectorDataSearchTest {
         hit.detail shouldBe "g-$A / candSkills · SetCell — 1 record"
     }
 
+    /**
+     * The encoder's last resort for a value it cannot decompose is
+     * `{"$opaque": {"type": "…", "text": "…"}}`. The `text` is the value; the
+     * `type` is a class name, and matching it would make "civictech" hit every
+     * undecomposable value in the process.
+     */
+    @Test
+    fun `an opaque value matches on its text but never on its type`() {
+        spawn(refA)
+        seedRecords(refA, Undecomposable("carol"))
+        started(names = mapOf(refA to "opaques"))
+
+        search("carol").hits.single().detail shouldBe "g-$A / opaques · SetCell — 1 record"
+        // the encoded type is `civictech.inspect.InspectorDataSearchTest.Undecomposable`
+        search("Undecomposable").hits.shouldBeEmpty()
+        search("civictech").hits.shouldBeEmpty()
+    }
+
     @Test
     fun `a query that matches nothing still reports what it cost to find out`() {
         spawn(refA)
@@ -348,6 +366,16 @@ class InspectorDataSearchTest {
 
     /** A record shape the encoder renders as a `$table` — one row per element, columns per property. */
     data class Skill(val candidate: String, val skill: String) : Serializable
+
+    /**
+     * Neither a Java record nor a Kotlin data class, so the encoder falls back
+     * to its `$opaque` `{type, text}` form.
+     */
+    class Undecomposable(private val who: String) : Serializable {
+        override fun toString(): String = "who=$who"
+        override fun equals(other: Any?): Boolean = other is Undecomposable && other.who == who
+        override fun hashCode(): Int = who.hashCode()
+    }
 
     /**
      * A [Stateful] cell whose snapshot takes far longer than the search budget

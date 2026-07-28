@@ -241,15 +241,28 @@ internal class DataSearch(
         return rows.toList()
     }
 
-    /** Every scalar leaf under [element], rendered as the string a query is matched against. */
+    /**
+     * Every scalar leaf under [element], rendered as the string a query is
+     * matched against. Two of the encoder's reserved shapes are structure
+     * rather than content and are treated as such:
+     *
+     * - `$truncated` is a marker about the read, not a record in it;
+     * - `$opaque` contributes only its `text` (the value's own `toString`),
+     *   never its `type` — a user searching for a record must not match every
+     *   undecomposable value in the process just because they typed part of a
+     *   package name.
+     */
     private fun scalars(element: JsonElement): Sequence<String> = when (element) {
-        is JsonPrimitive -> if (element.content == "null" && !element.isString) emptySequence()
-        else sequenceOf(element.content)
+        is JsonPrimitive ->
+            if (element.content == JSON_NULL && !element.isString) emptySequence() else sequenceOf(element.content)
 
         is JsonArray -> element.asSequence().flatMap { scalars(it) }
-        is JsonObject ->
-            if (element.isTruncationMarker()) emptySequence()
-            else element.values.asSequence().flatMap { scalars(it) }
+        is JsonObject -> when {
+            element.isTruncationMarker() -> emptySequence()
+            else -> (element[ValueEncoder.OPAQUE] as? JsonObject)
+                ?.let { opaque -> opaque["text"]?.let { scalars(it) } ?: emptySequence() }
+                ?: element.values.asSequence().flatMap { scalars(it) }
+        }
     }
 
     private fun JsonElement.isTruncationMarker(): Boolean =
@@ -319,5 +332,8 @@ internal class DataSearch(
          * a hit without a contract field for it.
          */
         const val NOTICE_GRAPH = ""
+
+        /** A JSON null renders as this; it is absence, not a value anyone searches for. */
+        private const val JSON_NULL = "null"
     }
 }
