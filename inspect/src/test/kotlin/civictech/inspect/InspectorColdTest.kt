@@ -7,6 +7,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.link.LinkResult
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -219,12 +220,12 @@ class InspectorColdTest {
         val (a, b) = pair(host, A, B)
         val serving = started()
         suspendCells(host, a, b)
-        serving.publishLifecycleChangesNow()
+        serving.tickAll()
         val events = listen()
 
         wake("g-$A").statusCode() shouldBe 202
         awaitUntil("both cells resumed") { !host.isSuspended(a) && !host.isSuspended(b) }
-        serving.publishLifecycleChangesNow()
+        serving.tickAll()
 
         events.awaitKind(Event.LIFECYCLE, 2)
         events.lifecyclesOf(encoded(a)) shouldContainExactly listOf("HOT")
@@ -240,7 +241,7 @@ class InspectorColdTest {
         val events = listen()
 
         suspendCells(host, a, b)
-        serving.publishLifecycleChangesNow()
+        serving.tickAll()
 
         events.awaitKind(Event.LIFECYCLE, 2)
         events.lifecyclesOf(encoded(a)) shouldContainExactly listOf("SUSPENDED")
@@ -280,6 +281,28 @@ class InspectorColdTest {
         probe.postForm("", "${InspectorServer.GRAPH_PATH}/g-$A").statusCode() shouldBe 404
         // the shorter context must not have swallowed the graph list
         probe.get(InspectorServer.GRAPHS_PATH).statusCode() shouldBe 200
+    }
+
+    /**
+     * T24 — the routing-distinctness regression the prefix-length trap
+     * protects: `GRAPHS_PATH` ("…/graphs") and `GRAPH_PATH` ("…/graph", one
+     * character shorter, registered after) must each reach their *own*
+     * handler in the same running server, not just fail closed individually.
+     * `GET /api/inspect/graphs` answers the live graph list, and
+     * `POST /api/inspect/graph/{id}/wake` is independently accepted and
+     * resolves the same graph — neither route silently served by the other's
+     * handler.
+     */
+    @Test
+    fun `GET graphs and POST graph wake reach distinct handlers`() {
+        pair(host, A, B)
+        started()
+
+        graphs().graphs.map { it.id } shouldContain "g-$A"
+
+        val woken = wake("g-$A")
+        woken.statusCode() shouldBe 202
+        json.parseToJsonElement(woken.body()).jsonObject["graph"]!!.jsonPrimitive.content shouldBe "g-$A"
     }
 
     /**

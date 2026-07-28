@@ -117,7 +117,7 @@ class InspectorServer(
 
     /** Name the hosts by ref — the convenience form when the app has no names of its own. */
     constructor(registry: LocationRegistry, hosts: Set<ManagedHost>, port: Int = DEFAULT_PORT) :
-        this(registry, hosts.associateBy { "host-" + it.ref.id.toString().substringBefore('-') }, port)
+        this(registry, hosts.associateBy { labelFor("host-", it.ref.id) }, port)
 
     constructor(registry: LocationRegistry, host: ManagedHost, port: Int = DEFAULT_PORT) :
         this(registry, setOf(host), port)
@@ -252,10 +252,9 @@ class InspectorServer(
             val body = Graphs.list(model.components(), errors.snapshot())
             exchange.respond(200, inspectorJson.encodeToString(GraphList.serializer(), body), JSON)
         }
-        // M5-COLD. Registered *after* GRAPHS_PATH and deliberately one
-        // character shorter than it: the JDK http server matches contexts by
-        // longest path prefix, so `/graphs` still reaches its own handler while
-        // `/graph/{id}/wake` reaches this one.
+        // M5-COLD. Registered here, after GRAPHS_PATH's route above — see
+        // [GRAPH_PATH]'s own doc for why that order (and its length relative
+        // to GRAPHS_PATH) matters.
         shell.route(GRAPH_PATH) { exchange ->
             exchange.allowCrossOrigin()
             runCatching { serveGraph(exchange) }
@@ -341,7 +340,7 @@ class InspectorServer(
      * 4xx before [Waker.wake] is ever reached.
      */
     private fun serveGraph(exchange: HttpExchange) {
-        val segments = exchange.requestURI.path.removePrefix(GRAPH_PATH).split('/').filter { it.isNotEmpty() }
+        val segments = exchange.tailSegments(GRAPH_PATH)
         val id = segments.firstOrNull()
         if (id == null || segments.drop(1) != listOf(WAKE) || exchange.requestMethod != "POST") {
             return exchange.respond(404, problem("expected POST /graph/{id}/wake"), JSON)
@@ -364,8 +363,7 @@ class InspectorServer(
     }
 
     private fun serveCell(exchange: HttpExchange) {
-        val segments = exchange.requestURI.path.removePrefix(CELL_PATH)
-            .split('/').filter { it.isNotEmpty() }
+        val segments = exchange.tailSegments(CELL_PATH)
         val ref = segments.firstOrNull()?.let(::decodeRef)
             ?: return exchange.respond(404, problem("expected /cell/{ref}"), JSON)
         val tail = segments.drop(1)
@@ -484,48 +482,59 @@ class InspectorServer(
         model.declareLink(PortRef.of(fromRef, fromPort), PortRef.of(toRef, toPort))
     }
 
-    fun start(): InspectorServer = apply {
-        shell.start()
-        heartbeats.scheduleAtFixedRate(
-            { runCatching { model.heartbeat() } },
-            HEARTBEAT_SECONDS, HEARTBEAT_SECONDS, TimeUnit.SECONDS,
-        )
-        heartbeats.scheduleAtFixedRate(
-            { runCatching { observations.sweep() } },
-            SWEEP_SECONDS, SWEEP_SECONDS, TimeUnit.SECONDS,
-        )
-        heartbeats.scheduleAtFixedRate(
-            { runCatching { errors.poll() } },
-            ERROR_POLL_SECONDS, ERROR_POLL_SECONDS, TimeUnit.SECONDS,
-        )
-        // M3: the flow feed's single aggregation thread is this same scheduler
-        // — snapshot-and-reset is a handful of atomic reads, and sharing the
-        // one daemon thread keeps the inspector at exactly the threads it had
-        heartbeats.scheduleAtFixedRate(
-            { runCatching { flow.sample() } },
-            FlowCollector.WINDOW_MS, FlowCollector.WINDOW_MS, TimeUnit.MILLISECONDS,
-        )
+    /**
+     * One polled collaborator action (T24): a name for diagnostics, the
+     * period [start] schedules it at, and the action itself. Driving every
+     * schedule off one list of these — rather than six inline
+     * `scheduleAtFixedRate` calls, each welded to its own bespoke test
+     * accessor — is what lets [tickAll] exist as a single seam instead of
+     * six.
+     *
+     * Order matters for exactly one pair: `"graphsChanged"` before
+     * `"lifecycleChanged"`, both at [GRAPHS_POLL_MS]. Neither reads the
+     * other's output, so nothing breaks if that order is not preserved, but
+     * [tickAll] running them in list order is what keeps a single synchronous
+     * test tick behaviorally identical to the two independent scheduled tasks
+     * this replaces (same single scheduler thread, same submission order).
+     */
+    private class Tick(val name: String, val periodMs: Long, val action: () -> Unit)
+
+    private val ticks: List<Tick> = listOf(
+        // contract §SSE: "Server sends `heartbeat` every 15 s".
+        Tick("heartbeat", HEARTBEAT_SECONDS * 1_000) { model.heartbeat() },
+        Tick("sweep", SWEEP_SECONDS * 1_000) { observations.sweep() },
+        Tick("errorPoll", ERROR_POLL_SECONDS * 1_000) { errors.poll() },
+        // M3: the flow feed's single aggregation thread is this same
+        // scheduler — snapshot-and-reset is a handful of atomic reads, and
+        // sharing the one daemon thread keeps the inspector at exactly the
+        // threads it had.
+        Tick("flowSample", FlowCollector.WINDOW_MS) { flow.sample() },
         // M4: `graphs.changed` is published from here rather than from the
-        // registry hooks, which coalesces a whole graph build — N publishes and
-        // M links — into one hint and keeps the O(V+E) component sweep off the
-        // thread that is linking cells. That coalescing is its own reason to
-        // stay scheduled; T21 removed only the `model.reconcilePeers()` call
-        // that used to share this tick, because peer arrivals and departures
-        // now reach the model as registry events (see [hooks]) and are
-        // therefore already in the partition when this tick describes it.
-        heartbeats.scheduleAtFixedRate(
-            { runCatching { model.publishGraphChanges() } },
-            GRAPHS_POLL_MS, GRAPHS_POLL_MS, TimeUnit.MILLISECONDS,
-        )
+        // registry hooks, which coalesces a whole graph build — N publishes
+        // and M links — into one hint and keeps the O(V+E) component sweep
+        // off the thread that is linking cells. That coalescing is its own
+        // reason to stay scheduled; T21 removed only the
+        // `model.reconcilePeers()` call that used to share this tick, because
+        // peer arrivals and departures now reach the model as registry events
+        // (see [hooks]) and are therefore already in the partition when this
+        // tick describes it.
+        Tick("graphsChanged", GRAPHS_POLL_MS) { model.publishGraphChanges() },
         // M5-COLD: suspend/resume and drain/resumeHost are plain management
         // calls with no notification hook, so a cell going cold (or coming
-        // back) is only observable by asking. Same cadence and same rationale
-        // as the component poll above — metadata reads only, off every host's
-        // thread.
-        heartbeats.scheduleAtFixedRate(
-            { runCatching { model.publishLifecycleChanges() } },
-            GRAPHS_POLL_MS, GRAPHS_POLL_MS, TimeUnit.MILLISECONDS,
-        )
+        // back) is only observable by asking. Same cadence and same
+        // rationale as the component poll above — metadata reads only, off
+        // every host's thread.
+        Tick("lifecycleChanged", GRAPHS_POLL_MS) { model.publishLifecycleChanges() },
+    )
+
+    fun start(): InspectorServer = apply {
+        shell.start()
+        ticks.forEach { tick ->
+            heartbeats.scheduleAtFixedRate(
+                { runCatching(tick.action) },
+                tick.periodMs, tick.periodMs, TimeUnit.MILLISECONDS,
+            )
+        }
     }
 
     fun stop() = close()
@@ -548,26 +557,24 @@ class InspectorServer(
     /** Refs with a live observation — diagnostics and tests. */
     internal val observedRefs: Set<CellRef> get() = observations.openRefs
 
-    /** Run the idle sweep now instead of waiting for its schedule — tests. */
-    internal fun sweepIdleObservations() = observations.sweep()
-
-    /** Run the error-lane poll now instead of waiting for its 2 s schedule — tests. */
-    internal fun pollErrorsNow() = errors.poll()
-
-    /** Close the flow window now instead of waiting for its 1 s schedule — tests. */
-    internal fun sampleFlowNow() = flow.sample()
+    /**
+     * Run every scheduled [Tick]'s action once, synchronously, on the calling
+     * thread — the single test seam that replaces the six `…Now()` accessors
+     * this ticket (T24) collapsed (`sweepIdleObservations`, `pollErrorsNow`,
+     * `sampleFlowNow`, `publishGraphChangesNow`, `publishLifecycleChangesNow`,
+     * plus the heartbeat tick no accessor ever exposed). Every action here is
+     * a read-then-maybe-emit pass over its own collaborator's independent
+     * state, so running them together introduces no test-visible interference
+     * beyond an extra `heartbeat` frame on the wire, which every test that
+     * cares filters its SSE stream by event kind anyway.
+     */
+    internal fun tickAll() = ticks.forEach { it.action() }
 
     /** Outlets the flow feed currently taps — tests. */
     internal val tappedOutlets: Set<PortRef> get() = flow.tappedOutlets
 
     /** `GET /api/inspect/errors`'s body, decoded — tests. */
     internal fun errorSnapshot(): ErrorSnapshot = errors.snapshot()
-
-    /** Publish any pending `graphs.changed` now instead of waiting for its 1 s schedule — tests. */
-    internal fun publishGraphChangesNow() = model.publishGraphChanges()
-
-    /** Publish any pending `lifecycle` changes now instead of waiting for the 1 s schedule — tests. */
-    internal fun publishLifecycleChangesNow() = model.publishLifecycleChanges()
 
     /** Has this view adopted [ref] yet? The barrier a peer-announcement test waits on. */
     internal fun knowsNow(ref: CellRef): Boolean = model.knows(ref)
@@ -584,7 +591,20 @@ class InspectorServer(
         const val ERRORS_PATH = "$BASE_PATH/errors"
         const val GRAPHS_PATH = "$BASE_PATH/graphs"
 
-        /** M5-COLD — the per-graph action subtree: `POST $GRAPH_PATH/{id}/wake`. */
+        /**
+         * M5-COLD — the per-graph action subtree: `POST $GRAPH_PATH/{id}/wake`.
+         *
+         * **Registration-order/prefix-length constraint, stated once, here,
+         * beside the two constants it depends on**: [GRAPH_PATH] is
+         * deliberately one character shorter than [GRAPHS_PATH], and its route
+         * (in `init`) is registered *after* [GRAPHS_PATH]'s. The JDK http
+         * server matches contexts by longest path prefix, so `/graphs` still
+         * reaches its own handler while `/graph/{id}/wake` reaches this one —
+         * get either the length or the order wrong and one swallows the
+         * other. A future route under [BASE_PATH] whose path prefixes an
+         * existing one must repeat this discipline (longer/more-specific
+         * prefix registered first) or choose a path that does not collide.
+         */
         const val GRAPH_PATH = "$BASE_PATH/graph"
         const val SEARCH_PATH = "$BASE_PATH/search"
 
@@ -632,6 +652,17 @@ class InspectorServer(
             buildJsonObject { put("reason", reason) }.toString()
     }
 }
+
+/**
+ * The non-empty `/`-separated segments of this request's path after
+ * stripping [prefix] — "strip the route prefix, split on `/`, drop empty
+ * segments", shared by [InspectorServer.serveGraph] and
+ * [InspectorServer.serveCell] so a third sub-path handler under
+ * [InspectorServer.BASE_PATH] has one helper to reach for instead of writing
+ * a third slightly-different inline parse (T24).
+ */
+private fun HttpExchange.tailSegments(prefix: String): List<String> =
+    requestURI.path.removePrefix(prefix).split('/').filter { it.isNotEmpty() }
 
 /**
  * The request's decoded query parameters. The JDK http server hands over a raw

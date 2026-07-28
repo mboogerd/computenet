@@ -159,11 +159,11 @@ class InspectorErrorsTest {
 
         // seed the poller's baseline at generation 0 before the restart happens,
         // so the later poll sees a genuine increase rather than a false first-sight
-        server.pollErrorsNow()
+        server.tickAll()
 
         api.provide(-1) // poisons -> RESTART bumps the generation
         awaitUntil("generation bumped by RESTART") { host.generationOf(cell.ref) == 1L }
-        server.pollErrorsNow()
+        server.tickAll()
 
         val frame = events.awaitKind(Event.ERROR_RESTART, 1).single()
         frame["ref"]!!.jsonPrimitive.content shouldBe InspectorServer.encodeRef(cell.ref)
@@ -210,7 +210,7 @@ class InspectorErrorsTest {
         api.inlet.call.add("b")
         awaitUntil("two invocations parked") { registry.parkedFor(cell.ref).size == 2 }
 
-        server.pollErrorsNow()
+        server.tickAll()
         val parkedFrame = events.awaitKind(Event.ERROR_PARKED, 1).single()
         parkedFrame["ref"]!!.jsonPrimitive.content shouldBe InspectorServer.encodeRef(cell.ref)
         parkedFrame["port"]!!.jsonPrimitive.content shouldBe "inlet"
@@ -223,7 +223,7 @@ class InspectorErrorsTest {
 
         registry.release(cell.ref)
         awaitUntil("the parked traffic drained") { registry.parkedFor(cell.ref).isEmpty() }
-        server.pollErrorsNow()
+        server.tickAll()
 
         val cleared = events.awaitKind(Event.ERROR_PARKED, 2).last()
         cleared["count"]!!.jsonPrimitive.content shouldBe "0"
@@ -244,12 +244,12 @@ class InspectorErrorsTest {
         api.inlet.call.add("a")
         awaitUntil("one invocation parked") { registry.parkedFor(cell.ref).size == 1 }
 
-        server.pollErrorsNow()
+        server.tickAll()
         events.awaitKind(Event.ERROR_PARKED, 1)
 
         // a second poll with nothing changed must not emit a second frame
-        server.pollErrorsNow()
-        server.pollErrorsNow()
+        server.tickAll()
+        server.tickAll()
         events.countOfKind(Event.ERROR_PARKED) shouldBe 1
 
         registry.release(cell.ref)
