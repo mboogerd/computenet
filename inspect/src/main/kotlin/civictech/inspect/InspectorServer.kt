@@ -11,6 +11,7 @@ import civictech.demo.shell.sseFrame
 import com.sun.net.httpserver.HttpExchange
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.net.InetAddress
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.UUID
@@ -121,7 +122,15 @@ class InspectorServer(
     constructor(registry: LocationRegistry, host: ManagedHost, port: Int = DEFAULT_PORT) :
         this(registry, setOf(host), port)
 
-    private val shell = DemoShell(port)
+    /**
+     * T19: loopback only, not every interface. The inspector serves live
+     * topology, cell state and content search — a `?mode=data` hit can read
+     * hot cells' values — so it must not be network-reachable by default the
+     * way `DemoShell`'s wildcard bind would leave it (see
+     * `doc/remediation/AUDIT-2026-07-28.md` §W6 item 1, `doc/architecture-
+     * decisions.md` finding B8).
+     */
+    private val shell = DemoShell(port, InetAddress.getLoopbackAddress())
     private val broadcaster = SseBroadcaster()
 
     /** M5 — the network-host resolver (see [Peers]). */
@@ -322,12 +331,27 @@ class InspectorServer(
      * empty 200: a stale id on a read is an ordinary race the client resolves
      * by resyncing, but "wake this graph" naming nothing did not happen, and
      * answering 202 would claim it did.
+     *
+     * **T19 — [WAKE_HEADER] is required.** Unlike every `GET` route, this one
+     * is a real management mutation, so it cannot lean on [allowCrossOrigin]'s
+     * wildcard the way reads do. Requiring a custom header turns a cross-
+     * origin `POST` from a CORS *simple request* (no preflight, sent and
+     * answered before anything can stop it) into one the browser must
+     * preflight with `OPTIONS` first — and since this server registers no
+     * `OPTIONS` handler anywhere, that preflight fails closed and the browser
+     * never sends the real request cross-origin. The check below is the
+     * belt-and-suspenders half: a non-browser caller (or a caller that adds
+     * the header itself) still needs it, and its absence is answered with a
+     * 4xx before [Waker.wake] is ever reached.
      */
     private fun serveGraph(exchange: HttpExchange) {
         val segments = exchange.requestURI.path.removePrefix(GRAPH_PATH).split('/').filter { it.isNotEmpty() }
         val id = segments.firstOrNull()
         if (id == null || segments.drop(1) != listOf(WAKE) || exchange.requestMethod != "POST") {
             return exchange.respond(404, problem("expected POST /graph/{id}/wake"), JSON)
+        }
+        if (exchange.requestHeaders.getFirst(WAKE_HEADER) != WAKE_HEADER_VALUE) {
+            return exchange.respond(400, problem("missing required header: $WAKE_HEADER"), JSON)
         }
         val component = model.components().firstOrNull { it.id == id }
             ?: return exchange.respond(404, problem("unknown graph: $id"), JSON)
@@ -585,6 +609,14 @@ class InspectorServer(
         private const val OBSERVE = "observe"
         private const val WAKE = "wake"
 
+        /**
+         * T19 — required on every `POST .../wake`; see that route's KDoc and
+         * [allowCrossOrigin]'s for why a header, not a stronger auth scheme,
+         * is the right size for a developer instrument's one mutating route.
+         */
+        internal const val WAKE_HEADER = "X-Inspector"
+        internal const val WAKE_HEADER_VALUE = "1"
+
         /** `GET /topology`'s M4 scoping parameter. */
         private const val GRAPH_PARAM = "graph"
         private const val MODE_PARAM = "mode"
@@ -632,7 +664,33 @@ private fun HttpExchange.noContent() {
  * The inspector runs on its own port, so a dev UI (Vite, another port) is
  * cross-origin unless it proxies. `demo/agora/ui` proxies and the inspector UI
  * is expected to as well; this header only removes the failure mode where it
- * does not. Read-only endpoints, no credentials, developer instrument.
+ * does not.
+ *
+ * **T19 — the real per-route posture, not one blanket claim.** The *reads*
+ * that call this — `TOPOLOGY_PATH`, `ERRORS_PATH`, `GRAPHS_PATH`,
+ * `SEARCH_PATH`, `EVENTS_PATH`, and `CELL_PATH`'s `GET {ref}` / `GET
+ * {ref}/state` — carry no credentials and are safe to leave wildcard because a
+ * developer instrument has no cross-origin caller to distrust *and* — since
+ * [InspectorServer]'s own `shell` binds `InetAddress.getLoopbackAddress()` —
+ * is not reachable from anywhere but this machine to begin with.
+ *
+ * Two things served through this helper are *not* reads, and saying so is the
+ * whole point of this rewrite:
+ *
+ * - `POST GRAPH_PATH/{id}/wake` is a management mutation ([Waker.wake] resumes
+ *   hosts and cells). It does not rely on this wildcard to stay safe — see
+ *   that route's KDoc for [WAKE_HEADER], the mechanism that actually gates it.
+ * - `CELL_PATH`'s `POST`/`DELETE {ref}/observe` start and stop an observation
+ *   ([Observations]) — server-side state, not a read. They are deliberately
+ *   left ungated: T19 scoped its gate to the wake route only, so what stands
+ *   between `observe` and anything off this machine is the loopback bind.
+ *   Recorded here rather than quietly widened, so the next reader is not told
+ *   again that everything behind this helper is read-only.
+ *
+ * This stays one helper for all of them because the wildcard origin header
+ * alone was never the problem on the wake route; the problem was treating "no
+ * CORS error" as "safe to mutate", which the header requirement now makes
+ * false for any caller that has not opted in.
  */
 private fun HttpExchange.allowCrossOrigin() {
     responseHeaders.add("Access-Control-Allow-Origin", "*")

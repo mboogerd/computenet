@@ -21,9 +21,22 @@ export interface WakeTransport {
   wake(graphId: string): Promise<WakeAck>;
 }
 
+/** T19 — required by the server on every wake POST (see
+ *  `InspectorServer.WAKE_HEADER` / its KDoc on `serveGraph`): forces a
+ *  cross-origin caller's request to be preflighted, which this server
+ *  answers with no `OPTIONS` handler, so it fails closed. Same-origin here
+ *  (the dev UI's own traffic, proxied by `vite.config.ts`) triggers no CORS
+ *  machinery at all — the header is just a plain header on a same-origin
+ *  request. */
+const WAKE_HEADER = 'X-Inspector';
+const WAKE_HEADER_VALUE = '1';
+
 export const defaultWakeTransport: WakeTransport = {
   wake: async (graphId) => {
-    const res = await fetch(`/api/inspect/graph/${graphId}/wake`, { method: 'POST' });
+    const res = await fetch(`/api/inspect/graph/${graphId}/wake`, {
+      method: 'POST',
+      headers: { [WAKE_HEADER]: WAKE_HEADER_VALUE },
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status} for ${res.url}`);
     return (await res.json()) as WakeAck;
   },
