@@ -13,6 +13,11 @@ dependencies {
     implementation(project(":inspect"))
 
     testImplementation(project(":testkit"))
+    // T22: decode :inspect's TopologySnapshot/Node DTOs directly in
+    // TwoJvmInspectorTest. :inspect declares this as `implementation`
+    // (not `api`), so it reaches this module's runtime classpath
+    // transitively but not its (test) compile classpath — needs stating here.
+    testImplementation(libs.kotlinx.serialization)
 }
 
 application {
