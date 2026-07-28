@@ -19,6 +19,17 @@ import kotlinx.serialization.json.putJsonObject
 import java.util.UUID
 
 /**
+ * A network-identity label: `prefix + the first uuid segment` — short enough
+ * for a hull/label chip, and stable for whatever [id] names for the life of
+ * the resource behind it (a [civictech.cell.host.ManagedHost] or a peer's
+ * bridge egress). [InspectorModel]'s own [InspectorModel.defaultHostName] uses
+ * it with `"host-"`; [Peers.labelOf] uses it with `"peer-"` — same shape, same
+ * code, one definition, so the two families cannot silently drift apart (the
+ * problem three independent copies of this expression used to risk: T24).
+ */
+internal fun labelFor(prefix: String, id: UUID): String = prefix + id.toString().substringBefore('-')
+
+/**
  * The inspector's materialized view of one [LocationRegistry]'s topology, and
  * the single source of both `GET /api/inspect/topology` and the delta stream —
  * the initial-sync-then-delta shape `cell.wire.Peering.announceTo` uses for
@@ -706,6 +717,6 @@ internal class InspectorModel(
         fun declaredLinkId(from: PortRef, to: PortRef): UUID =
             UUID.nameUUIDFromBytes("inspect-declared:${from.id}->${to.id}".toByteArray())
 
-        fun defaultHostName(host: ManagedHost): String = "host-" + host.ref.id.toString().substringBefore('-')
+        fun defaultHostName(host: ManagedHost): String = labelFor("host-", host.ref.id)
     }
 }

@@ -83,11 +83,11 @@ class InspectorGraphsTest {
         graphs().graphs.size shouldBe 2
         // the build itself moved the partition; take that hint out of the way
         // so the assertion below is about the merge and nothing else
-        server.publishGraphChangesNow()
+        server.tickAll()
         val before = events.countOfKind(Event.GRAPHS_CHANGED)
 
         connect(a, c)
-        server.publishGraphChangesNow()
+        server.tickAll()
 
         events.awaitKind(Event.GRAPHS_CHANGED, before + 1)
         val merged = graphs().graphs.single()
@@ -128,12 +128,12 @@ class InspectorGraphsTest {
     fun `an idle partition announces nothing`() {
         val events = listen()
         pair(A, B)
-        server.publishGraphChangesNow()
+        server.tickAll()
         val announced = events.countOfKind(Event.GRAPHS_CHANGED)
 
         // nothing moved between these two ticks
-        server.publishGraphChangesNow()
-        server.publishGraphChangesNow()
+        server.tickAll()
+        server.tickAll()
 
         events.countOfKind(Event.GRAPHS_CHANGED) shouldBe announced
     }
@@ -182,7 +182,7 @@ class InspectorGraphsTest {
     fun `naming announces graphs_changed even though the partition did not move`() {
         val events = listen()
         val (a, _) = pair(A, B)
-        server.publishGraphChangesNow()
+        server.tickAll()
         val before = events.countOfKind(Event.GRAPHS_CHANGED)
 
         server.nameGraph(a, "skillmatch")
@@ -239,7 +239,7 @@ class InspectorGraphsTest {
         val api = HostedCellProxy.create(a, registry, SetApi::class.java) as SetApi<String>
         api.inlet.call.add("x")
         awaitUntil("one invocation parked") { registry.parkedFor(a).size == 1 }
-        server.pollErrorsNow()
+        server.tickAll()
 
         val cards = graphs().graphs.associateBy { it.id }
         cards.getValue("g-$A").health.parked shouldBe 1
@@ -326,7 +326,7 @@ class InspectorGraphsTest {
         ).kind shouldBe CellState.VIEW
 
         // nothing was announced either: no node/link deltas, no graphs.changed
-        server.publishGraphChangesNow()
+        server.tickAll()
         events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
         events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
         events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0

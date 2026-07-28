@@ -73,11 +73,13 @@ internal class Peers(
          * anything else (a hand-built sink in a test) falls back to identity,
          * which is stable within a JVM run and still distinct per peer.
          *
-         * Formatted like [InspectorModel]'s own default host name: the prefix
-         * plus the first uuid segment, short enough to fit a hull label.
+         * Built with the same [labelFor] [InspectorModel]'s own default host
+         * name uses (T24): the prefix plus the first uuid segment, short
+         * enough to fit a hull label — one shared expression, not two copies
+         * that happen to match today.
          */
         fun labelOf(sink: InvocationSink): String = when (sink) {
-            is BridgeEgressCell -> PREFIX + sink.ref.id.toString().substringBefore('-')
+            is BridgeEgressCell -> labelFor(PREFIX, sink.ref.id)
             else -> PREFIX + Integer.toHexString(System.identityHashCode(sink))
         }
     }

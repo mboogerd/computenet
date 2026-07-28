@@ -129,7 +129,7 @@ class InspectorSearchTest {
         park(refC)
         repeat(2) { deadLetter(refA) }
         awaitUntil("dead letters captured") { serving.errorSnapshot().deadLetters.size == 2 }
-        serving.pollErrorsNow()
+        serving.tickAll()
 
         val hits = search("problems", "").hits
 

@@ -66,7 +66,7 @@ class InspectorFlowStreamTest {
         repeat(3) { ops.add("e$it") }
         awaitUntil("the deltas were emitted") { source.outlet.waveState().highWater >= 3 }
 
-        server.sampleFlowNow()
+        server.tickAll()
 
         val frame = stream.awaitKind(Event.FLOW_RATES)
         (frame.seq > snapshot.seq) shouldBe true
@@ -87,12 +87,12 @@ class InspectorFlowStreamTest {
         // nobody is watching: the window is still built and simply goes nowhere
         repeat(3) { ops.add("pre$it") }
         awaitUntil("pre-load flowed") { source.outlet.waveState().highWater >= 3 }
-        server.sampleFlowNow()
+        server.tickAll()
 
         val stream = listen()
         repeat(2) { ops.add("mid$it") }
         awaitUntil("mid-load flowed") { source.outlet.waveState().highWater >= 5 }
-        server.sampleFlowNow()
+        server.tickAll()
         stream.awaitKind(Event.FLOW_RATES).kind shouldBe Event.FLOW_RATES
 
         // the client goes away mid-load — the graph must not notice
@@ -100,7 +100,7 @@ class InspectorFlowStreamTest {
         awaitUntil("the client detached") { server.attachedClients == 0 }
         repeat(4) { ops.add("post$it") }
         awaitUntil("post-load flowed") { source.outlet.waveState().highWater >= 9 }
-        server.sampleFlowNow()
+        server.tickAll()
 
         awaitUntil("every delta reached the sink") { sink.membership().size == 9 }
     }
