@@ -1,6 +1,6 @@
 # ComputeNet architecture
 
-> Snapshot as of commit `742f7ca` (2026-07-27). If the module list in
+> Snapshot as of commit `b1efd10` (2026-07-28). If the module list in
 > `settings.gradle.kts` or the kernel package tree has drifted from this
 > document, trust the code and update this file.
 
@@ -21,14 +21,16 @@ checks the implementation against requirement ids embedded in the spec.
         implementation api
          │              │
        :gen ───ksp────► :kernel ◄── api ── :testkit
-      (KSP)              ▲  ▲            (test helpers)
-                          │  │
-                  :wire ──┘  └── :concord
-                    ▲
-                    │        :demo:shell (no :kernel dep — pure HTTP/SSE plumbing)
-      :demo:shopping┤            ▲
-      :demo:exchange┘            │  (every runnable demo depends on :demo:shell)
-      :demo:{agora,slotfinder,skillmatch,tiering,backlog-triage}
+      (KSP)              ▲  ▲  ▲         (test helpers)
+                          │  │  └─────────────────┐
+                  :wire ──┘  └── :concord          │
+                    ▲                              │
+                    │        :demo:shell ──────► :inspect  (Inspector backend;
+                    │      (no :kernel dep —          opt-in consumer:
+      :demo:shopping┤       pure HTTP/SSE plumbing)   :demo:shopping,
+      :demo:exchange┘            ▲                    :demo:skillmatch —
+      :demo:{agora,slotfinder,skillmatch,tiering,backlog-triage}    --inspect-port)
+                                  (every runnable demo depends on :demo:shell)
 ```
 
 `:gen` is a `ksp(...)`-only (processor-time) dependency of `:kernel` and every
@@ -44,8 +46,9 @@ runtime classpath, so KotlinPoet/`symbol-processing-api`/`kotlin-reflect`
 | `:testkit` | Shared test scaffolding: `SimWorld`, `awaitUntil`, `HttpProbe`, `JvmPeer`. Lives in `src/main` so a plain project dep reaches it from consumers' test source sets. | `api(:kernel)`, `api(junit)` |
 | `:wire` | The one concrete transport: `WsTransport` over Java-WebSocket. Another transport = another small module behind the same kernel bridge cells. | `:kernel`, Java-WebSocket |
 | `:concord` | Executable specification / conformance suite (see §5). | `:kernel`, kotlinx-serialization; kaml (test) |
-| `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo. Not an application itself. `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
-| `:demo:*` (7 apps) | Demo applications (see §6). Only `:demo:shopping` and `:demo:exchange` use `:wire`; only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
+| `:demo:shell` | Shared JDK `httpserver` + SSE shell (`DemoShell`, `demoPort`) used by every runnable demo, and also consumed by `:inspect` (not itself a demo). `DemoShell`'s API takes no cell-model type today, so it has no `:kernel` dependency. | — |
+| `:demo:*` (7 apps) | Demo applications (see §6). Only `:demo:shopping` and `:demo:exchange` use `:wire`; `:demo:shopping` and `:demo:skillmatch` additionally depend on `:inspect` (opt-in, `--inspect-port`); only `:demo:backlog-triage` defines its own KSP cell (`RatingCell`, `@CellBase` — T09 §C; `agora` annotates nothing and dropped the `ksp-cell` convention plugin accordingly); only `:demo:exchange` needs `:nature` (it asserts composed manifests). | `:kernel`, `:demo:shell`, + per-demo extras |
+| `:inspect` | The Inspector backend — a read-only HTTP/SSE view of a host process's live dataflow graph (`doc/spec/90-roadmap/97-inspector-plan/`, all six milestones M0–M5 merged). Reuses `:demo:shell`'s JDK-`httpserver`/SSE framing rather than duplicating it; adds no third-party dependency beyond kotlinx.serialization. Its frontend `inspect/ui/` (SolidJS + Vite + TypeScript) is npm-only and deliberately not wired into Gradle — same decision as `demo/agora/ui`. Required five kernel accessors added specifically for it: `ManagedHost.outletAt`, `ManagedHost.snapshotOf`, `ManagedHost.isDrained`, `ManagedHost.isSuspended`, `LocationRegistry.describe` — rationale in `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md`'s orchestrator closing note. | `:kernel`, `:demo:shell`, kotlinx.serialization |
 
 Non-module directories: `buildSrc/` (two convention plugins —
 `buildsrc.convention.kotlin-jvm`: JDK 21 toolchain, JUnit platform, shared test
