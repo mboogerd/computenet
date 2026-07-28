@@ -480,7 +480,7 @@ internal class InspectorModel(
         componentIndex.addCell(ref)
         emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
             put("op", Event.ADDED)
-            put("node", inspectorJson.encodeToJsonElement(withGraph(ref, node)))
+            put("node", inspectorJson.encodeToJsonElement(stamped(ref, node)))
         })
     }
 
