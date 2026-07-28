@@ -1,5 +1,6 @@
 package civictech.demo.skillmatch
 
+import civictech.cell.CellRef
 import civictech.cell.data.Aggregators
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -191,6 +192,37 @@ object SkillPipeline {
     }
 }
 
+/**
+ * A second, disjoint graph on the same host — two saved-search sets, one
+ * mirroring the other, sharing no link with [SkillPipeline].
+ *
+ * It exists for the inspector's M4 navigator, which is about a *process*
+ * running many unrelated graphs: with only the pipeline there is one component
+ * and nothing to navigate between. Deliberately left unnamed, so the navigator
+ * also has the unnamed case — a card showing its generated `g-…` id — to
+ * render beside the named one. Its cells are named, so name search has a hit
+ * outside the pipeline.
+ *
+ * Off by default and wired only from `main`: the demo's own views never read
+ * it, and nothing about skillmatch changes when it is absent.
+ */
+object SideGraph {
+    data class Refs(val saved: CellRef, val mirror: CellRef) {
+        val names: Map<CellRef, String> get() = mapOf(saved to "savedSearches", mirror to "savedSearchesLog")
+    }
+
+    fun build(host: ManagedHost): Refs {
+        lateinit var built: Refs
+        graph(host.managementInlet) {
+            val saved = spawn("savedSearches") { ref -> SetCell<String>(ref = ref) }
+            val mirror = spawn("savedSearchesLog") { ref -> SetCell<String>(ref = ref) }
+            link(saved.cell.outlet, mirror.cell.deltaInlet)
+            built = Refs(saved.ref, mirror.ref)
+        }
+        return built
+    }
+}
+
 class SkillMatchApp(port: Int = 8080) {
     private val registry = LocationRegistry()
     private val host = ManagedHost(registry = registry)
@@ -231,9 +263,14 @@ class SkillMatchApp(port: Int = 8080) {
      * the `GraphSpec`, not at runtime), so the app hands the inspector the
      * names it knows; the observation-sink cells `host.observe` spawns are
      * unnamed and report `null`, per the contract.
+     *
+     * [withSideGraph] spawns [SideGraph] first, so the M4 navigator has a
+     * second, deliberately unnamed component to render (see its doc). The
+     * pilot `main` asks for it; the demo itself never does.
      */
-    fun startInspector(port: Int = InspectorServer.DEFAULT_PORT): InspectorServer =
-        InspectorServer(
+    fun startInspector(port: Int = InspectorServer.DEFAULT_PORT, withSideGraph: Boolean = false): InspectorServer {
+        val side = if (withSideGraph) SideGraph.build(host) else null
+        return InspectorServer(
             registry = registry,
             hosts = mapOf("skillmatch" to host),
             port = port,
@@ -248,8 +285,14 @@ class SkillMatchApp(port: Int = 8080) {
                 refs.supply.ref to "supply",
                 refs.demand.ref to "demand",
                 refs.market.ref to "market",
-            ),
-        ).start().also { inspector = it }
+            ) + side?.names.orEmpty(),
+        )
+            // M4: the pipeline's component is the one this process can name.
+            // The anchor is a cell, not the component id, because ids change
+            // whenever components merge or split (97-inspector-plan M4-BE §2).
+            .nameGraph(refs.candSkills.ref, "skillmatch")
+            .start().also { inspector = it }
+    }
 
     init {
         shell.route("/") { it.respond(200, PAGE, "text/html; charset=utf-8") }
@@ -347,7 +390,9 @@ fun main(args: Array<String>) {
     val app = SkillMatchApp(demoPort(demoArgs)).start()
     println("computenet skillmatch: http://localhost:${app.boundPort}")
     inspectPort?.let { port ->
-        val inspector = app.startInspector(port)
+        // the pilot runs two graphs (see [SideGraph]) so the M4 navigator has
+        // something to navigate: the named pipeline and one unnamed component
+        val inspector = app.startInspector(port, withSideGraph = true)
         println("computenet inspector: http://localhost:${inspector.boundPort}${InspectorServer.TOPOLOGY_PATH}")
     }
 }
