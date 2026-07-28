@@ -1,0 +1,5 @@
+{
+  "seq": 503,
+  "kind": "error.restart",
+  "payload": { "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0", "generation": 2, "atMs": 1753600700000 }
+}

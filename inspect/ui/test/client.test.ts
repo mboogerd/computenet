@@ -161,7 +161,7 @@ describe('TopologyClient', () => {
     const es = MockEventSource.last!;
     es.open();
 
-    es.message(evt(11, 'error.deadLetter')); // M2 kind — additive evolution, not yet understood
+    es.message(evt(11, 'flow.rates')); // M3 kind — additive evolution, not yet understood
     expect(onEvent).not.toHaveBeenCalled();
 
     es.message(evt(12, 'lifecycle')); // must be accepted, not treated as a gap
@@ -179,5 +179,19 @@ describe('TopologyClient', () => {
     expect(onEvent).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'state.summary', payload: expect.objectContaining({ ref: 'a' }) }),
     );
+  });
+
+  it('recognizes every error.* kind (M2) and forwards each', async () => {
+    mockFetchOnce(10);
+    await client.start();
+    const es = MockEventSource.last!;
+    es.open();
+
+    es.message({ seq: 11, kind: 'error.deadLetter', payload: { ref: 'a', cause: 'X', description: 'd', wave: null, atMs: 1 } });
+    es.message({ seq: 12, kind: 'error.parked', payload: { ref: 'a', port: 'left', count: 1, oldestMs: 1 } });
+    es.message({ seq: 13, kind: 'error.restart', payload: { ref: 'a', generation: 1, atMs: 1 } });
+
+    expect(onEvent).toHaveBeenCalledTimes(3);
+    expect(onEvent.mock.calls.map((c) => c[0].kind)).toEqual(['error.deadLetter', 'error.parked', 'error.restart']);
   });
 });

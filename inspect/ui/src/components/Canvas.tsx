@@ -4,9 +4,11 @@ import { computeHostHulls, hostFingerprint, type HostHull } from '../layout/hull
 import { portAnchors } from '../layout/ports';
 import { layoutEngine } from '../solid/layout';
 import { stateSummaries } from '../solid/detail';
+import { errorStore, errorVersion } from '../solid/errors';
 import { edges, nodes, selection, setSelection, store, structuralVersion } from '../solid/state';
-import { showHosts, showState } from '../solid/toggles';
+import { showErrors, showHosts, showState } from '../solid/toggles';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
+import { cellErrorBadges, deriveEdgeParkedCounts } from '../util/errors';
 import './Canvas.css';
 
 const FUSED_OFFSET = 2.5;
@@ -35,6 +37,29 @@ export default function Canvas() {
     if (!showHosts()) return [];
     hostFp(); // dep: recompute on host reassignment even without a structural change
     return computeHostHulls([...store.nodes.keys()], layout(), (ref) => nodes[ref]?.host ?? null);
+  });
+
+  // M2-FE ticket Implement §2: Errors toggle canvas overlay. Both derivations
+  // are pure functions of (current refs/edges, the error store, the toggle) —
+  // "badges are value-changes (restyle), never structural" holds automatically
+  // here since neither memo depends on structuralVersion/layout(), only on
+  // nodeRefs()/edgeIds() (already structural-version-gated) plus errorVersion()
+  // and showErrors() (both pure value signals).
+  const cellBadges = createMemo(() => {
+    errorVersion();
+    return cellErrorBadges(
+      nodeRefs(),
+      (ref) => errorStore.deadLettersFor(ref).length + errorStore.restartsFor(ref).length,
+      showErrors(),
+    );
+  });
+
+  const edgeParked = createMemo(() => {
+    errorVersion();
+    const targets = edgeIds()
+      .map((id) => edges[id])
+      .filter((e): e is NonNullable<typeof e> => e !== undefined);
+    return deriveEdgeParkedCounts(errorStore.allParked(), targets, showErrors());
   });
 
   function anchorOf(ref: Ref, port: string) {
@@ -136,6 +161,7 @@ export default function Canvas() {
                     classList={{
                       'is-selected': selection() === ref,
                       'is-suspended': rec()!.lifecycle === 'SUSPENDED',
+                      'is-erring': !!cellBadges().get(ref),
                     }}
                     style={{
                       left: `${ln()!.x}px`,
@@ -202,6 +228,57 @@ export default function Canvas() {
                     {summary()!.cardinality ?? '—'} ·{' '}
                     {summary()!.frontier ? `${summary()!.frontier!.source.slice(0, 6)}·${summary()!.frontier!.counter}` : '—'} ·{' '}
                     {summary()!.staleMs}ms
+                  </div>
+                </Show>
+              );
+            }}
+          </For>
+
+          {/* Errors toggle: red badge with count, one per erring cell
+              (10-target-v3.md Errors toggle: "Red badges on erring cells";
+              M2-FE ticket Implement §2). A separate layer for the same
+              reason the state chip above is: `.node-card` clips via
+              `overflow: hidden`, and this badge deliberately pokes past the
+              card's top-right corner. */}
+          <For each={nodeRefs()}>
+            {(ref) => {
+              const ln = () => layout().nodes.get(ref);
+              const count = () => cellBadges().get(ref);
+              return (
+                <Show when={ln() && count()}>
+                  <div
+                    class="node-error-badge"
+                    style={{ left: `${ln()!.x + ln()!.w}px`, top: `${ln()!.y}px` }}
+                    title={`${count()} error${count() === 1 ? '' : 's'} (dead letters + restarts)`}
+                  >
+                    {count()}
+                  </div>
+                </Show>
+              );
+            }}
+          </For>
+
+          {/* Errors toggle: amber "n parked" pill at the midpoint of every
+              edge whose target (ref, port) has parked traffic
+              (10-target-v3.md Errors toggle: "amber 'n parked' pills on
+              edges"; M2-FE ticket Implement §2). */}
+          <For each={edgeIds()}>
+            {(id) => {
+              const e = () => edges[id];
+              const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port) : undefined);
+              const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port) : undefined);
+              const count = () => edgeParked().get(id);
+              return (
+                <Show when={e() && from() && to() && count()}>
+                  <div
+                    class="edge-parked-pill"
+                    style={{
+                      left: `${(from()!.x + to()!.x) / 2}px`,
+                      top: `${(from()!.y + to()!.y) / 2}px`,
+                    }}
+                    title={`${count()} parked`}
+                  >
+                    ▮ {count()} parked
                   </div>
                 </Show>
               );

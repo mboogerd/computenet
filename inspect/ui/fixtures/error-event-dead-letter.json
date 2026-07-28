@@ -1,0 +1,11 @@
+{
+  "seq": 501,
+  "kind": "error.deadLetter",
+  "payload": {
+    "ref": "8fa58422-3e34-4192-9812-45daecb8f555:0",
+    "cause": "SerializationFailure",
+    "description": "Payload could not be encoded for the dead-letter journal",
+    "wave": { "source": "a13f9c02", "counter": 44 },
+    "atMs": 1753600600000
+  }
+}

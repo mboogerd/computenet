@@ -2,21 +2,26 @@
 // §1: "add a tiny `npm run mock` static server for the fixture"; extended by
 // M1-FE for the cell-detail/state/observe endpoints so the detail panel,
 // state live-update, and observe-lifecycle can be checked manually against
-// `npm run dev` without a real `:inspect` server).
+// `npm run dev` without a real `:inspect` server; extended again by M2-FE
+// for /errors + error.* events, needed here specifically because M2-BE runs
+// in parallel and may not be merged yet — this mock is the only way to
+// screenshot the Errors toggle/subsection without it).
 //
 // No deps — Node's built-in http module only. NOT a stand-in for the real
 // server's semantics (single global observation slot, one fake "live"
-// dataset) — just enough for a human to see the M0+M1 UI work end to end.
+// dataset) — just enough for a human to see the M0+M1+M2 UI work end to end.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const fixturePath = fileURLToPath(new URL('../fixtures/topology.json', import.meta.url));
 const detailFixturePath = fileURLToPath(new URL('../fixtures/cell-detail.json', import.meta.url));
+const errorsFixturePath = fileURLToPath(new URL('../fixtures/errors.json', import.meta.url));
 const port = Number(process.env.PORT ?? 7071);
 
 const snapshot = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const detailFixture = JSON.parse(readFileSync(detailFixturePath, 'utf8'));
+const errorsSnapshot = JSON.parse(readFileSync(errorsFixturePath, 'utf8'));
 
 /** Shared across every connected /events client — the contract's `seq` is a
  *  single monotonic counter, not per-connection. */
@@ -84,6 +89,61 @@ function stopObserving(ref) {
   stopTimer();
 }
 
+// --- errors state ----------------------------------------------------------
+// Simulates a live error feed so the Errors toggle + subsection (M2-FE
+// ticket) can be checked manually against `npm run dev` — M2-BE runs in
+// parallel and may not be merged into this worktree yet. A mutable working
+// copy of fixtures/errors.json, evolved in place so GET /errors always
+// reflects exactly what the SSE stream has already announced (never further
+// ahead — the same "the snapshot and the deltas agree" property the real
+// server must hold).
+const errorsState = JSON.parse(JSON.stringify(errorsSnapshot));
+
+function bumpParked() {
+  const row = errorsState.parked[0];
+  if (!row) return;
+  row.count += 1;
+  row.oldestMs += 4000;
+  errorsState.counters.parked = errorsState.parked.reduce((sum, p) => sum + p.count, 0);
+  broadcast('error.parked', row);
+}
+
+const DEAD_LETTER_CAUSES = ['OwnershipViolation', 'SerializationFailure', 'PortTypeMismatch'];
+let deadLetterTick = 0;
+
+function emitDeadLetter() {
+  const parkedRef = errorsState.parked[0]?.ref;
+  const ref = snapshot.nodes.find((n) => n.ref !== parkedRef)?.ref;
+  if (!ref) return;
+  deadLetterTick += 1;
+  const cause = DEAD_LETTER_CAUSES[deadLetterTick % DEAD_LETTER_CAUSES.length];
+  const entry = {
+    ref,
+    cause,
+    description: `mock ${cause} at tick ${deadLetterTick}`,
+    wave: { source: 'mock0000ab', counter: deadLetterTick },
+    atMs: Date.now(),
+  };
+  errorsState.deadLetters.push(entry);
+  errorsState.counters.deadLetters += 1;
+  broadcast('error.deadLetter', entry);
+}
+
+function bumpRestart() {
+  const row = errorsState.restarts[0];
+  if (!row) return;
+  row.generation += 1;
+  row.atMs = Date.now();
+  errorsState.counters.restarts += 1;
+  broadcast('error.restart', row);
+}
+
+// Staggered so a short manual-verification session (well under a minute)
+// still sees all three kinds fire at least once.
+setInterval(bumpParked, 5000);
+setInterval(emitDeadLetter, 12000);
+setInterval(bumpRestart, 20000);
+
 function findNode(ref) {
   return snapshot.nodes.find((n) => n.ref === ref);
 }
@@ -108,6 +168,11 @@ const server = createServer((req, res) => {
 
   if (path === '/api/inspect/topology') {
     sendJson(res, 200, { ...snapshot, seq });
+    return;
+  }
+
+  if (path === '/api/inspect/errors') {
+    sendJson(res, 200, errorsState);
     return;
   }
 
@@ -162,7 +227,7 @@ const server = createServer((req, res) => {
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('not found — this is the M0/M1-FE fixture mock, not the real :inspect server');
+  res.end('not found — this is the M0/M1/M2-FE fixture mock, not the real :inspect server');
 });
 
 server.listen(port, () => {

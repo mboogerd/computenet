@@ -1,0 +1,18 @@
+{
+  "counters": { "deadLetters": 1, "parked": 11, "restarts": 1, "drainedOnTeardown": 0 },
+  "deadLetters": [
+    {
+      "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+      "cause": "OwnershipViolation",
+      "description": "Owned payload dropped without discharge on despawn",
+      "wave": { "source": "9c41a2f0", "counter": 288 },
+      "atMs": 1753600000000
+    }
+  ],
+  "parked": [
+    { "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0", "port": "left", "count": 11, "oldestMs": 41000 }
+  ],
+  "restarts": [
+    { "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0", "generation": 1, "atMs": 1753600500000 }
+  ]
+}

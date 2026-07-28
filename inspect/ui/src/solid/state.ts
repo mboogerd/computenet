@@ -2,6 +2,7 @@ import { batch, createSignal } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Edge, EdgeRemoval, InspectEvent, Ref } from '../api/types';
 import { onStateSummary } from './detail';
+import { fetchErrorSnapshot, onErrorDeadLetter, onErrorParked, onErrorRestart } from './errors';
 import { selection, setSelection } from './selection';
 import { TopologyClient, type ConnState } from '../sync/client';
 import type { EdgeRec, NodeRec } from '../sync/records';
@@ -81,6 +82,18 @@ function applyEvent(event: InspectEvent): void {
       // P6: only the selected cell is ever observed in M1).
       onStateSummary(event.payload);
       break;
+    case 'error.deadLetter':
+      // Never touches the topology store either — routed to the M2 error
+      // store (solid/errors.ts), which is independent of selection (unlike
+      // state.summary, error data is not gated by an observe subscription).
+      onErrorDeadLetter(event.payload);
+      break;
+    case 'error.parked':
+      onErrorParked(event.payload);
+      break;
+    case 'error.restart':
+      onErrorRestart(event.payload);
+      break;
     default:
       break; // heartbeat, and any later-milestone kind: no local state to update yet
   }
@@ -91,6 +104,11 @@ const client = new TopologyClient({
     store.applySnapshot(snapshot);
     mirror();
     if (!ready()) setReady(true);
+    // M2-FE ticket Implement §1: "fetch ErrorSnapshot on connect" — this
+    // handler fires once at startup and again on any post-gap/-reconnect
+    // topology resync, so errors get refreshed alongside topology rather
+    // than only once ever. See solid/errors.ts's fetchErrorSnapshot doc.
+    fetchErrorSnapshot();
   },
   onEvent: (event) => {
     applyEvent(event);
