@@ -108,13 +108,28 @@ Selection, viewport, and toggle set persist while navigating within a graph.
 
 ## Known kernel gaps this plan works around (do not silently solve)
 
+Status as delivered (M5-EVAL whole-product acceptance, see `90-progress-log.md`):
+
 - **Graph identity**: no `Graph` entity exists; components are emergent and
-  unnamed. M4 uses a pragmatic heuristic (stable min-cell-id + optional name
-  annotation); the real answer (membranes as naming boundary) is tracked in
-  Linear MRB-156 and out of scope here.
+  unnamed. M4's heuristic (stable min-cell-id + optional name annotation)
+  held through M5 — mirrored refs from a peer are now vertices too, so a
+  component can span JVMs — but a genuinely replicated cell (the same
+  logical id hosted on two peers) is still undriven through the inspector.
+  The real answer (membranes as naming boundary) is tracked in Linear
+  MRB-156 and remains out of scope here.
 - **Inspect-without-attention**: cold reads from checkpoint/journal without
-  waking a cone. M5-COLD delivers a minimal explicit-wake UX; the full
-  capability is tracked in MRB-157.
-- **Content-search cost model**: M5-SEARCH fans out `StateRequest` to
-  pull-serving cells only, hot cones only, and surfaces the cost in the UI.
-  Anything broader is out of scope (MRB-157).
+  waking a cone. M5-COLD delivered the minimal explicit-wake UX (a
+  subscription-free coldness predicate over `isSuspended`/`isDrained`, an
+  explicit confirmed `POST .../wake`); the full capability (reading state
+  from a checkpoint/journal without resuming the cell at all) is still
+  tracked in MRB-157.
+- **Content-search cost model**: M5-SEARCH deliberately did NOT fan out
+  `StateRequest` — investigation found a pull-serve reply is an emission via
+  `FanOutlet.baselineTo` that inflates the wave-plane high-water mark
+  replication reads, so a read-only search instrument must not use it.
+  Instead it matches against cells the inspector can already read cheaply
+  (an open observation, or a host-routed `Stateful.snapshot()`), bounded
+  (50 cells / 2s deadline), hot cones only, cost surfaced in the UI. This
+  means any future cold-read or search protocol needs a genuinely
+  wave-neutral state read — a bounded, non-emitting state read is the
+  missing kernel primitive MRB-157 should track, not `StateRequest`.

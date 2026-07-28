@@ -27,7 +27,8 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 | `GET /api/inspect/errors` | M2 | `ErrorSnapshot` |
 | `GET /api/inspect/graphs` | M4 | `GraphList` |
 | `GET /api/inspect/topology?graph={id}` | M4 | `TopologySnapshot` scoped to one component, sharing `seq` with the unfiltered snapshot. An unrecognized/evaporated id (components merge/split, ids are not stable) returns 200 with an empty snapshot, not 404 — treat it as a race, not an error |
-| `GET /api/inspect/search?mode={name\|problems\|data}&q=` | M4 (name, problems), M5 (data) | `SearchResult`. `mode` defaults to `name` if omitted; an unrecognized `mode` is 400. A blank/whitespace `q` in `name` mode returns no hits (not everything) — safe to call on every keystroke. `data` mode returns 501 `{"error": "data search arrives in M5"}` until M5 |
+| `GET /api/inspect/search?mode={name\|problems\|data}&q=` | M4 (name, problems), M5 (data) | `SearchResult`. `mode` defaults to `name` if omitted; an unrecognized `mode` is 400. A blank/whitespace `q` in `name` mode returns no hits (not everything) — safe to call on every keystroke. `data` mode is submit-triggered (not per-keystroke), bounded (50 cells / 2s deadline / cold components skipped), and always returns a non-null `cost` — including a zero-hit or blank-query result, since "this query cost N cell reads" is itself the answer |
+| `POST /api/inspect/graph/{id}/wake` | M5 | 202 `{ "graph": "g-…", "hosts": 2, "cells": 5 }` — resumes every suspended/drained cell and host in the component (a drained host's wake resumes *every* cell it holds, not only this component's — `hosts`/`cells` report the true blast radius). 404 for an unknown/evaporated id (unlike the read-only `?graph=`, naming nothing to wake is treated as an error, not a race) |
 
 ## DTOs
 
@@ -47,9 +48,16 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
   "color": "PURE" | "BLOCKING" | "SUSPENDING" | null,
   "manifests": ["DURABLE", "GLITCH_FREE", ...],
   "ports": [ { "name": "out", "dir": "OUT", "contractFqn": "..." } ],
-  "host": "sm-host",              // process host (ManagedHost) name — M0
-  "net": "local",                 // network host / peer id — "local" until M5
-  "lifecycle": "HOT" | "SUSPENDED",
+  "host": "sm-host" | null,       // process host (ManagedHost) name — M0. null means remote: this is
+                                   // the client's discriminator for a peer-announced cell, which has
+                                   // no local descriptor (color/manifests/ports all absent, typeFqn
+                                   // "<unknown>") and answers CellState "unavailable" / observe 409 (M5)
+  "net": "local",                 // network host / peer id. Local cells: the launcher's --net-name
+                                   // (default "local", so M0-M4 output is unchanged). Remote cells:
+                                   // a "peer-<id>" label, NOT stable across a peer reconnect (M5)
+  "lifecycle": "HOT" | "SUSPENDED", // SUSPENDED covers both a suspended cell and any cell on a drained
+                                   // host (M5) — the vocabulary does not distinguish them; a component's
+                                   // GraphList.lifecycle "cold" requires every member cell SUSPENDED
   "generation": 0,
   "graph": "g-<id>"               // component id; never null from M4 on (an unlinked cell is
                                    // its own singleton component). M0-M3 servers may still emit null.
@@ -116,7 +124,8 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
     "name": "skillmatch" | null,   // from an optional host-side annotation; null = unnamed
     "cells": 13, "hosts": 3, "nets": 1,
     "health": { "deadLetters": 2, "parked": 14, "restarts": 1 },
-    "lifecycle": "hot" | "cold"    // cold: M5; until then always "hot" — LOWERCASE, unlike Node.lifecycle's "HOT"
+    "lifecycle": "hot" | "cold"    // cold iff every member cell reports Node.lifecycle SUSPENDED (M5)
+                                   // — LOWERCASE, unlike Node.lifecycle's "HOT"/"SUSPENDED"
   } ]
 }
 // health is scoped to the component's own cells, rolled up from ErrorSnapshot's
@@ -130,8 +139,17 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 {
   "mode": "name" | "problems" | "data",
   "hits": [ { "graph": "g-…", "ref": "uuid:0" | null, "label": "...", "detail": "..." } ],
-  "cost": { "cellsQueried": 4, "coldSkipped": 2 } | null   // data mode only (M5)
+  "cost": { "cellsQueried": 4, "coldSkipped": 2 } | null   // non-null on every "data" mode response
+                                                            // (including zero hits or a blank query),
+                                                            // null for "name"/"problems". coldSkipped
+                                                            // counts skipped CELLS, not graphs (M5)
 }
+// A "data" mode hit whose "graph" is "" (empty, not null) is a closing NOTICE, not a navigable
+// result — it names what the search did not fully cover (the 50-cell cap, the 2s deadline, a
+// cell read only to its first 200 rows, cold components skipped). Render it inert. (M5)
+// The inspector's own observation-sink cells (ObserveCell instruments it spawns on selection)
+// never appear anywhere in this API — not as a Node, an Edge, a component member, or a search
+// hit. An instrument is not a subject. (M5)
 ```
 
 ## SSE events
