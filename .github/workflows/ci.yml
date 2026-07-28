@@ -85,3 +85,51 @@ jobs:
       # drifted from the corpus and was hand-edited or left stale.
       - name: Confirm concordance regeneration is a no-op
         run: git diff --exit-code doc/spec/CONCORDANCE.md
+
+  ui-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: inspect/ui/.nvmrc
+          cache: npm
+          cache-dependency-path: inspect/ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: inspect/ui
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: inspect/ui
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: inspect/ui
+        run: npm test
+
+  agora-ui-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: demo/agora/ui/.nvmrc
+          cache: npm
+          cache-dependency-path: demo/agora/ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: demo/agora/ui
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: demo/agora/ui
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: demo/agora/ui
+        run: npm test
