@@ -432,7 +432,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "327ab252-b906-4236-9194-9b7e2f7b7b60",
@@ -445,7 +445,7 @@
         "port": "left"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "3c1e56b2-8d06-4307-a31f-1bef6ad566f5",
@@ -458,7 +458,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "54030ec2-3c2d-4508-9ae7-15d0df11b44a",
@@ -471,7 +471,7 @@
         "port": "left"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "68bc3870-61a4-4c9c-90b2-eb6eafdf73ef",
@@ -484,7 +484,7 @@
         "port": "fact"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "75e80aa6-1d09-4999-a198-f780410ef3f2",
@@ -497,7 +497,7 @@
         "port": "dimension"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "7ef9f588-3ce1-4060-b588-06a483674f21",
@@ -510,7 +510,7 @@
         "port": "right"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "8c45fed6-e337-4b7d-b4c7-332d10c54da3",
@@ -523,7 +523,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "9e8b2e99-2aac-43a3-9c19-fd20a44687f9",
@@ -536,7 +536,7 @@
         "port": "right"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "ac485aa7-27bc-41f8-8c8e-b4f9e68613f1",
@@ -549,7 +549,7 @@
         "port": "right"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "aef4b8c8-dd4d-41ab-b019-811cc10bdc86",
@@ -562,7 +562,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "b6812577-1b71-4db2-bda1-3153c6bd6c0f",
@@ -575,7 +575,7 @@
         "port": "left"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "b9a2a469-ba9c-435c-bf9f-9c2d73ddfd22",
@@ -588,7 +588,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "c8141f2d-8ab0-4c5d-85d8-841af468a1c2",
@@ -601,7 +601,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "c9e167d1-f547-4c84-be87-ef91cf161ee7",
@@ -614,7 +614,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "efcdf68b-21f8-4168-90e3-881d516aff53",
@@ -627,7 +627,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "f04026c2-4165-444c-813c-d1c5ddd04f90",
@@ -640,7 +640,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     },
     {
       "id": "f407f36d-f8a1-479d-b8f4-300c82505221",
@@ -653,7 +653,7 @@
         "port": "inlet"
       },
       "role": "CONSUME",
-      "fused": null
+      "fused": false
     }
   ]
 }

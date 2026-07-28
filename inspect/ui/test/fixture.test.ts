@@ -13,7 +13,10 @@ import fixture from '../fixtures/topology.json';
  *  with `--inspect-port`), sorted for a stable diff. It was authored from the
  *  contract's illustrative "13 cells, 3 hosts" before the server existed; the
  *  live graph is 16 cells (10 named pipeline cells + 6 ObserveCell sinks) on
- *  the single `skillmatch` process host, all edges CONSUME, `fused` null. */
+ *  the single `skillmatch` process host, all edges CONSUME. M3-EVAL re-trued
+ *  `fused` from null to false against the real server, which now taps every
+ *  one of these 18 edges (M3-BE's flow feed) and so answers `false`, not
+ *  "unknown", for all of them. */
 const snapshot = fixture as TopologySnapshot;
 
 describe('fixtures/topology.json', () => {
@@ -21,9 +24,10 @@ describe('fixtures/topology.json', () => {
     expect(snapshot.nodes.length).toBe(16);
     expect(new Set(snapshot.nodes.map((n) => n.host))).toEqual(new Set(['skillmatch']));
     expect(snapshot.edges.length).toBe(18);
-    // M0 serves no fusion detection and indexes only consume-role links
+    // the server indexes only consume-role links; since M3 every edge in this
+    // graph has a tappable producing outlet, so none of them is fused
     expect(new Set(snapshot.edges.map((e) => e.role))).toEqual(new Set(['CONSUME']));
-    expect(snapshot.edges.every((e) => e.fused === null)).toBe(true);
+    expect(snapshot.edges.every((e) => e.fused === false)).toBe(true);
     // placeholders the contract fixes until later milestones
     expect(snapshot.nodes.every((n) => n.net === 'local')).toBe(true);
     expect(snapshot.nodes.every((n) => n.graph === null)).toBe(true);
