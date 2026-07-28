@@ -124,5 +124,31 @@ class ObservationsIdleTest {
         Observations.viewFor(civictech.cell.data.CounterCell::class.java) shouldBe null
         Observations.viewFor(civictech.cell.data.ListCell::class.java) shouldBe null
         Observations.viewFor(civictech.cell.observe.ObserveCell::class.java) shouldBe null
+        // T20 (audit 2026-07-28, finding B3): the three cells ObservationsCompletenessTest's
+        // knownBlind seeded — now folded
+        (Observations.viewFor(civictech.cell.data.op.PresenceCountCell::class.java) != null) shouldBe true
+        (Observations.viewFor(civictech.cell.data.op.MergeableGroupByCell::class.java) != null) shouldBe true
+        (Observations.viewFor(civictech.cell.partition.ShardCell::class.java) != null) shouldBe true
+    }
+
+    @Test
+    fun `POST observe succeeds on a PresenceCountCell-backed graph and its state reflects the folded MapDelta`() {
+        // T20: PresenceCountCell was a knownBlind entry — MapDelta<E, Int> with
+        // no fold table coverage, so `observe` refused it with false/409 and
+        // `state` reported CellState.UNAVAILABLE. Now folded via PresenceCountApi
+        // in MAP_OUTLETS; this drives the full start/reading path directly
+        // through Observations, exactly as this file's other tests do.
+        val presence = civictech.cell.data.op.PresenceCountCell<String>()
+            .also { host.managementInlet.call.spawn(it) }
+        val source = set()
+        host.managementInlet.call.connect(source.ref, "outlet", presence.ref, "inlet")
+
+        observations.start(presence.ref) shouldBe true
+
+        source.inlet.call.add("alice")
+        awaitUntil("presence count reflects the added element") {
+            val reading = observations.reading(presence.ref)
+            reading != null && reading.value == mapOf("alice" to 1)
+        }
     }
 }
