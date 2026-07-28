@@ -130,12 +130,26 @@ export function flowTooltip(route: string, overlay: EdgeFlowOverlay | undefined)
 export interface PortFlowRow {
   port: string;
   dir: Dir;
-  /** Sum of the rates of every non-fused edge touching this port; 0 when
-   *  `fused` is true or nothing is currently observed on this port. */
+  /** This port's own message rate; 0 when `fused` is true or nothing is
+   *  currently observed on it.
+   *
+   *  How the port's edges combine depends on the direction, because the
+   *  server's per-edge attribution is directional (M3-BE `FlowCollector`
+   *  KDoc, "Attribution"): a tap fires once per *emission*, and a
+   *  `FanOutlet` broadcasts, so **every edge leaving one OUT port reports
+   *  that same outlet's emission count** — duplicated across the edges,
+   *  never divided. Summing an OUT port's edges would therefore multiply
+   *  the port's true rate by its fan-out (measured live at M3-EVAL:
+   *  `jobSkills.outlet` emitting 6/s across 5 edges summed to 30/s), so an
+   *  OUT port reports the emission rate itself — the max over its edges,
+   *  which are all readings of the one counter.
+   *
+   *  An IN port is the opposite: its edges come from *distinct* producing
+   *  outlets, so they are independent streams and genuinely add. */
   rate: number;
   /** True only when every edge touching this port is fused — a port with a
-   *  mix of fused and active edges still reports the active ones' summed
-   *  rate (there is real, if partial, observable traffic on it). */
+   *  mix of fused and active edges still reports the active ones' rate
+   *  (there is real, if partial, observable traffic on it). */
   fused: boolean;
   /** The most-advanced (highest counter) wave among this port's edges, or
    *  null when none of them currently report one. */
@@ -150,9 +164,11 @@ export interface PortFlowEdge {
   fused: boolean | null;
 }
 
-/** Per-port table for the selected cell: direction, summed rate, last wave;
- *  fused ports labeled (10-target-v3.md detail subsection 3: "per-port
- *  rates, last wave ... 'fused — no observable messages' where applicable").
+/** Per-port table for the selected cell: direction, rate, last wave; fused
+ *  ports labeled (10-target-v3.md detail subsection 3: "per-port rates, last
+ *  wave ... 'fused — no observable messages' where applicable"). See
+ *  {@link PortFlowRow.rate} for why OUT and IN combine their edges
+ *  differently.
  *  `edges` is the *whole* topology edge set — this filters to the ones
  *  touching `ref` itself, so callers (DetailPanel) do not have to
  *  pre-filter. */
@@ -176,7 +192,9 @@ export function portFlowRows(
       if (e.fused === true) continue;
       const f = flowOf(e.id);
       if (!f) continue;
-      rate += f.rate;
+      // OUT: one outlet, one counter, reported on each of its edges — take it
+      // once. IN: distinct upstream outlets — independent streams, so add.
+      rate = p.dir === 'OUT' ? Math.max(rate, f.rate) : rate + f.rate;
       if (f.lastWave && (!lastWave || f.lastWave.counter > lastWave.counter)) lastWave = f.lastWave;
     }
     return { port: p.name, dir: p.dir, rate, fused: false, lastWave };

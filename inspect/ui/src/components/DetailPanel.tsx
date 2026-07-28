@@ -171,7 +171,10 @@ function StateSection() {
 
 /** M3-FE ticket Implement §4: "Flow subsection (detail panel, replaces
  *  placeholder): per-port table for the selected cell — direction, rate
- *  (sum of that port's edges), last wave; fused ports labeled." Reads
+ *  (sum of that port's edges), last wave; fused ports labeled." The ticket's
+ *  parenthetical holds for IN ports; an OUT port's edges are all readings of
+ *  one outlet's counter, so summing them would multiply by the fan-out — see
+ *  `util/flow.ts`'s `PortFlowRow.rate` (M3-EVAL defect fix). Reads
  *  `flowStore` directly (imperatively), gated on `flowVersion()` +
  *  `selection()`, same pattern as `ErrorsSection` below — not gated on the
  *  canvas Flow *toggle* (10-target-v3.md: "the detail panel is not

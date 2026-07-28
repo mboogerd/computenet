@@ -163,16 +163,46 @@ describe('portFlowRows', () => {
     ...over,
   });
 
-  it('sums the rates of every edge touching an OUT port (fan-out)', () => {
+  // An OUT port is one FanOutlet, and the server reports that one outlet's
+  // emission count on *each* of its edges (M3-BE attribution: broadcast, so
+  // duplicated across edges, never divided). Summing them would multiply the
+  // port's true rate by its fan-out — measured live at M3-EVAL as
+  // `jobSkills.outlet` emitting 6/s across 5 edges and reporting 30/s.
+  it('reports an OUT port\'s emission rate once, not multiplied by its fan-out', () => {
+    const rows = portFlowRows(
+      ports,
+      'a:0',
+      [edge({ id: 'e1', to: { ref: 'b:0', port: 'inlet' } }), edge({ id: 'e2', to: { ref: 'c:0', port: 'inlet' } })],
+      (id) => (id === 'e1' ? flowState({ id: 'e1', rate: 6 }) : flowState({ id: 'e2', rate: 6 })),
+    );
+    const outRow = rows.find((r) => r.port === 'outlet')!;
+    expect(outRow.rate).toBe(6);
+    expect(outRow.fused).toBe(false);
+  });
+
+  it('takes the highest reading when an OUT port\'s edges disagree (one bound mid-window)', () => {
     const rows = portFlowRows(
       ports,
       'a:0',
       [edge({ id: 'e1', to: { ref: 'b:0', port: 'inlet' } }), edge({ id: 'e2', to: { ref: 'c:0', port: 'inlet' } })],
       (id) => (id === 'e1' ? flowState({ id: 'e1', rate: 5 }) : flowState({ id: 'e2', rate: 7 })),
     );
-    const outRow = rows.find((r) => r.port === 'outlet')!;
-    expect(outRow.rate).toBe(12);
-    expect(outRow.fused).toBe(false);
+    expect(rows.find((r) => r.port === 'outlet')!.rate).toBe(7);
+  });
+
+  // The IN direction is the opposite case: distinct upstream outlets, so the
+  // readings are independent streams and genuinely add.
+  it('sums an IN port\'s edges, which come from distinct producing outlets', () => {
+    const rows = portFlowRows(
+      ports,
+      'b:0',
+      [
+        edge({ id: 'e1', from: { ref: 'a:0', port: 'outlet' }, to: { ref: 'b:0', port: 'inlet' } }),
+        edge({ id: 'e2', from: { ref: 'c:0', port: 'outlet' }, to: { ref: 'b:0', port: 'inlet' } }),
+      ],
+      (id) => (id === 'e1' ? flowState({ id: 'e1', rate: 5 }) : flowState({ id: 'e2', rate: 7 })),
+    );
+    expect(rows.find((r) => r.port === 'inlet')!.rate).toBe(12);
   });
 
   it('reads the IN port for the edge terminating there, keyed on ref+port not just port name', () => {
