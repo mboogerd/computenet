@@ -188,7 +188,26 @@ open class ManagedHost(
     /** Supervision (G-26): per-cell failure policies, spawn-time checkpoints, and suspended-cell parking. */
     private val policies = mutableMapOf<CellRef, SupervisionPolicy>()
     private val checkpoints = mutableMapOf<CellRef, Serializable>()
-    private val suspendedCells = mutableMapOf<CellRef, ParkQueue<HostedPortInvocation>>()
+
+    // T04 finding 4's rationale, applied to the one supervision map an outside
+    // reader now consults: every writer is the scheduler thread (supervise /
+    // suspend / resume / clearSupervision / deliver), but [isSuspended] is
+    // called from an observer's own thread, and a plain HashMap's concurrent
+    // resize can false-negative a containsKey or spin.
+    private val suspendedCells = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
+
+    /**
+     * Is [ref] currently suspended here — parked by `SupervisionPolicy.SUSPEND`
+     * or by an explicit [HostManagementApi.suspend] (spec 34, G-26)? A suspended
+     * cell's data and ordinary-management traffic parks until [HostManagementApi.resume];
+     * only the always-open metadata plane still reaches it.
+     *
+     * Read-only introspection, safe from any thread: an outside observer (the
+     * inspector's content search, spec 90/97 M5) must be able to *tell* that a
+     * cone is parked without touching it, since the whole point is to leave it
+     * alone. False for a ref this host does not hold at all.
+     */
+    fun isSuspended(ref: CellRef): Boolean = suspendedCells.containsKey(ref)
 
     /**
      * Host-held per-instance recovery generation (spec 00/03 glossary
@@ -829,7 +848,7 @@ open class ManagedHost(
 
             override fun suspend(ref: CellRef) {
                 require(cells.containsKey(ref)) { "Cell not found: $ref" }
-                if (ref !in suspendedCells) {
+                if (!suspendedCells.containsKey(ref)) {
                     suspendedCells[ref] = ParkQueue()
                     cells[ref]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
                 }
@@ -986,6 +1005,41 @@ open class ManagedHost(
         val ports = PortRegistry.of(cell)
         return ports.names().firstNotNullOfOrNull { name ->
             (ports[name] as? FanOutlet<*>)?.takeIf { it.ref.id == port.id }
+        }
+    }
+
+    /**
+     * Host-routed state read (the [Stateful] half of the observation seam,
+     * spec 33 §Snapshot / G-25): [ref]'s own `snapshot()`, captured **on this
+     * host's execution context** rather than on the caller's thread — off-thread
+     * it would race the cell's fold, which is exactly why no such accessor
+     * existed and why an outside reader could not have one.
+     *
+     * A future rather than a value, deliberately: the caller owns the bound.
+     * An observer that must not stall (the inspector's content search, spec
+     * 90/97 M5 — "viz never blocks the graph") applies its own deadline and
+     * abandons the read, where a blocking `enqueueAwaiting` would hand it the
+     * scheduler's 5 s default instead. Completed with null — never
+     * exceptionally — when [ref] is not hosted here, is not [Stateful], the
+     * scheduler is gone, or `snapshot()` itself throws; a diagnostic read must
+     * not turn a broken cell into a broken caller.
+     *
+     * Cost, stated plainly because it is real: `snapshot()` copies the cell's
+     * whole state, on the cell's own thread. It is off the per-message data
+     * path (P2) and raises no attention or subscription (P6) — nothing is
+     * linked, nothing is emitted, no wave counter moves — but it is not free,
+     * and a caller that fans it out must bound the fan-out.
+     */
+    fun snapshotOf(ref: CellRef): CompletableFuture<Serializable?> {
+        val future = CompletableFuture<Serializable?>()
+        val cell = cells[ref]
+        if (cell !is Stateful) return future.also { it.complete(null) }
+        return try {
+            scheduler.submit(0) { future.complete(runCatching { cell.snapshot() }.getOrNull()) }
+            future
+        } catch (_: IllegalStateException) {
+            // terminated scheduler (T04 finding 5): a dead host has no state to read
+            future.also { it.complete(null) }
         }
     }
 

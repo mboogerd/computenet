@@ -51,6 +51,10 @@ import java.util.concurrent.TimeUnit
  * - `graphs.changed` SSE events, plus `Node.graph` on every node;
  * - [nameGraph], the opt-in host-side annotation that labels a component.
  *
+ * M5 adds content search (see [DataSearch]): `?mode=data` reads hot,
+ * locally-hosted cells' state under an explicit cap and deadline and reports
+ * the cost it paid.
+ *
  * ### What it can and cannot see
  *
  * The inspector reads one [LocationRegistry]. **Cells on registry-less hosts
@@ -125,6 +129,17 @@ class InspectorServer(
         onChange = model::stateSummary,
         // read through, so a source installed after construction takes effect
         snapshots = SnapshotSource { ref -> snapshots.snapshotOf(ref) },
+    )
+
+    /**
+     * M5 — content search (see [DataSearch]). Reads through [observations] so a
+     * cell a client already observes costs nothing extra, and through the
+     * registry for everything else.
+     */
+    private val dataSearch = DataSearch(
+        registry = registry,
+        components = model::components,
+        observed = observations::reading,
     )
 
     /** M2 — the error lane (see [Errors]'s doc for the three sources it feeds). */
@@ -207,9 +222,11 @@ class InspectorServer(
      * `name` and `problems` are answered from metadata the inspector already
      * holds — component membership, cell names and types, and M2's error rows
      * — so searching subscribes to nothing and raises no attention (P6).
-     * `data` is the one mode that would have to *ask cells*, which is exactly
-     * why it is M5-SEARCH's problem and answers 501 here rather than a
-     * plausible-looking empty result.
+     * `data` (M5) is the one mode that has to *ask cells*: it reads hot,
+     * locally-hosted candidates through the host-routed snapshot seam, under a
+     * cap and a deadline, and reports what that cost in [SearchResult.cost] —
+     * see [DataSearch] for the whole cost model and why it does not fan
+     * `StateRequest` out.
      */
     private fun serveSearch(exchange: HttpExchange) {
         val params = exchange.query()
@@ -217,7 +234,7 @@ class InspectorServer(
         when (val mode = params[MODE_PARAM]?.takeIf { it.isNotBlank() } ?: SearchResult.NAME) {
             SearchResult.NAME -> exchange.respondSearch(Graphs.byName(model.components(), query))
             SearchResult.PROBLEMS -> exchange.respondSearch(Graphs.problems(model.components(), errors.snapshot()))
-            SearchResult.DATA -> exchange.respond(501, DATA_SEARCH_DEFERRED, JSON)
+            SearchResult.DATA -> exchange.respondSearch(dataSearch.search(query))
             else -> exchange.respond(400, problem("unknown search mode: $mode"), JSON)
         }
     }
@@ -410,9 +427,6 @@ class InspectorServer(
         private const val GRAPH_PARAM = "graph"
         private const val MODE_PARAM = "mode"
         private const val QUERY_PARAM = "q"
-
-        /** M4-BE §4, verbatim: `mode=data` returns 501 with this body. */
-        private const val DATA_SEARCH_DEFERRED = """{"error": "data search arrives in M5"}"""
 
         /** `"<uuid>:<instanceId>"` — the contract's ref encoding. */
         internal fun encodeRef(ref: CellRef): String = "${ref.id}:${ref.instanceId}"

@@ -166,16 +166,24 @@ class InspectorSearchTest {
 
     // ------------------------------------------------------------ mode=data
 
+    /**
+     * M5-SEARCH replaced M4's 501 with a real, bounded content search — the
+     * behaviour of which lives in `InspectorDataSearchTest`. What this test
+     * still owns is the *routing*: `mode=data` is now a 200 carrying the
+     * data-mode cost object, next to its two metadata-only siblings.
+     */
     @Test
-    fun `data search is deferred to M5 with a 501 and a JSON explanation`() {
+    fun `data search answers 200 with a cost object`() {
         twoGraphs()
         started()
 
         val response = probe.get("${InspectorServer.SEARCH_PATH}?mode=data&q=anything")
 
-        response.statusCode() shouldBe 501
-        json.parseToJsonElement(response.body()).jsonObject["error"]!!.jsonPrimitive.content shouldBe
-            "data search arrives in M5"
+        response.statusCode() shouldBe 200
+        val body = json.decodeFromString<SearchResult>(response.body())
+        body.mode shouldBe "data"
+        // four empty SetCells: read, matched nothing, and the price is reported
+        body.cost shouldBe SearchCost(cellsQueried = 4, coldSkipped = 0)
     }
 
     @Test
