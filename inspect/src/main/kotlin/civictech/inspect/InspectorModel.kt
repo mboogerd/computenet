@@ -1,15 +1,19 @@
 package civictech.inspect
 
 import civictech.cell.CellRef
+import civictech.cell.Timestamp
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.TopologyLink
 import civictech.cell.port.PortRef
 import civictech.nature.ContractRegistry
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import java.util.UUID
@@ -73,6 +77,69 @@ internal class InspectorModel(
     }
 
     fun snapshotJson(): String = inspectorJson.encodeToString(snapshot())
+
+    /** Has this view ever been told [ref] is published here? (404 vs 200 at the routes.) */
+    fun knows(ref: CellRef): Boolean = synchronized(lock) { ref in nodes }
+
+    /**
+     * `GET /api/inspect/cell/{ref}` — the contract's "[Node] plus" body, built
+     * by *merging* the encoded node with M1's two extra fields rather than by
+     * restating the node's own. One source for the shared half means a detail
+     * response and the same cell in the snapshot can never disagree.
+     *
+     * Null when the view has never seen [ref] published (a 404 at the route).
+     */
+    fun detailJson(ref: CellRef): String? = synchronized(lock) {
+        val node = nodes[ref] ?: return@synchronized null
+        val links = linkCounts(node.ref)
+        buildJsonObject {
+            inspectorJson.encodeToJsonElement(node).jsonObject.forEach { (key, value) -> put(key, value) }
+            // the band lives on the cell object, out of reach without new
+            // kernel surface the ticket forbids — the contract's null
+            put("attention", JsonNull)
+            put("links", inspectorJson.encodeToJsonElement(links))
+        }.toString()
+    }
+
+    /**
+     * The per-cell link census, counted off this view's own edges — which are
+     * the registry `TopologyIndex` projection ([topologyLinks]) materialized
+     * under [lock]. Counting here rather than re-reading the index keeps the
+     * detail panel consistent with the canvas the client has already drawn.
+     */
+    private fun linkCounts(encodedRef: String): LinkCounts {
+        var inbound = 0
+        var outbound = 0
+        var taps = 0
+        edges.values.forEach { edge ->
+            if (edge.role == Edge.OBSERVE) {
+                if (edge.from.ref == encodedRef || edge.to.ref == encodedRef) taps += 1
+                return@forEach
+            }
+            if (edge.to.ref == encodedRef) inbound += 1
+            if (edge.from.ref == encodedRef) outbound += 1
+        }
+        return LinkCounts(inbound = inbound, outbound = outbound, taps = taps)
+    }
+
+    /**
+     * `state.summary` (contract §SSE): emitted only for a cell with an active
+     * observe subscription, once per settled effective change plus the
+     * subscription's own immediate catch-up. Rides the same monotonic [seq] as
+     * the topology deltas — one stream, one gap detector.
+     */
+    fun stateSummary(ref: CellRef, reading: StateReading) = synchronized(lock) {
+        emitEvent(Event.STATE_SUMMARY, buildJsonObject {
+            put("ref", encode(ref))
+            put("cardinality", ValueEncoder.cardinality(reading.value))
+            put("frontier", stampJson(reading.frontier))
+            put("staleMs", reading.staleMs)
+        })
+    }
+
+    /** `{"source": …, "counter": …}` or JSON null — the contract's `frontier`. */
+    private fun stampJson(stamp: Timestamp?): JsonElement =
+        stamp?.let { inspectorJson.encodeToJsonElement(WaveStamp(it.sourceId.toString(), it.counter)) } ?: JsonNull
 
     /**
      * A local publish. A ref the view has not seen is a new node; a ref it has
@@ -208,7 +275,8 @@ internal class InspectorModel(
         /** A free-standing endpoint (`Use.fixed`) owns no cell. */
         const val UNKNOWN_REF = ""
 
-        fun encode(ref: CellRef): String = "${ref.id}:${ref.instanceId}"
+        /** The contract's ref encoding — shared with the route parser's inverse. */
+        fun encode(ref: CellRef): String = InspectorServer.encodeRef(ref)
 
         fun defaultHostName(host: ManagedHost): String = "host-" + host.ref.id.toString().substringBefore('-')
     }
