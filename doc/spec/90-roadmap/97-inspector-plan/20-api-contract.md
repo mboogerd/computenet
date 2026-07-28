@@ -24,7 +24,8 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 | `DELETE /api/inspect/cell/{ref}/observe` | M1 | 204; stops them |
 | `GET /api/inspect/errors` | M2 | `ErrorSnapshot` |
 | `GET /api/inspect/graphs` | M4 | `GraphList` |
-| `GET /api/inspect/search?mode={name\|problems\|data}&q=` | M4 (name, problems), M5 (data) | `SearchResult` |
+| `GET /api/inspect/topology?graph={id}` | M4 | `TopologySnapshot` scoped to one component, sharing `seq` with the unfiltered snapshot. An unrecognized/evaporated id (components merge/split, ids are not stable) returns 200 with an empty snapshot, not 404 — treat it as a race, not an error |
+| `GET /api/inspect/search?mode={name\|problems\|data}&q=` | M4 (name, problems), M5 (data) | `SearchResult`. `mode` defaults to `name` if omitted; an unrecognized `mode` is 400. A blank/whitespace `q` in `name` mode returns no hits (not everything) — safe to call on every keystroke. `data` mode returns 501 `{"error": "data search arrives in M5"}` until M5 |
 
 ## DTOs
 
@@ -48,7 +49,8 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
   "net": "local",                 // network host / peer id — "local" until M5
   "lifecycle": "HOT" | "SUSPENDED",
   "generation": 0,
-  "graph": "g-<id>"               // component id — null until M4
+  "graph": "g-<id>"               // component id; never null from M4 on (an unlinked cell is
+                                   // its own singleton component). M0-M3 servers may still emit null.
 }
 
 // Edge
@@ -112,9 +114,15 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
     "name": "skillmatch" | null,   // from an optional host-side annotation; null = unnamed
     "cells": 13, "hosts": 3, "nets": 1,
     "health": { "deadLetters": 2, "parked": 14, "restarts": 1 },
-    "lifecycle": "hot" | "cold"    // cold: M5; until then always "hot"
+    "lifecycle": "hot" | "cold"    // cold: M5; until then always "hot" — LOWERCASE, unlike Node.lifecycle's "HOT"
   } ]
 }
+// health is scoped to the component's own cells, rolled up from ErrorSnapshot's
+// per-cell rows (deadLetters[]/parked[]/restarts[]) rather than its host-wide
+// counters, which carry no cell attribution and cannot be split between two
+// components sharing a host. Consequence: health is bounded by however much
+// row history the error feed's ring buffers (cap 200 each) still retain — GET
+// /api/inspect/errors' counters remain the true, unbounded per-host totals.
 
 // SearchResult (M4/M5)
 {
@@ -146,7 +154,7 @@ not replayed). Server sends `heartbeat` every 15 s.
 | `error.parked` | M2 | one `parked[]` element (send on change; `count: 0` clears) |
 | `error.restart` | M2 | one `restarts[]` element |
 | `flow.rates` | M3 | `{ "window": 1000, "edges": [ { "id", "rate", "lastWave": {...}\|null, "hop": 2\|null } ] }` — 1 Hz batch; `rate` is messages/second (a Double; with `window: 1000` numerically equal to the raw count); edges with no traffic that window are omitted (not sent as `rate: 0`). Publishes every second while anything is tapped, even an all-empty window (so a client's decay logic can key off "window received" rather than off silence), then one trailing empty window after the last tap detaches, then nothing. Unlike every other feed in this table, `flow.rates` has no paired snapshot/`GET` endpoint — a client's only source of truth for flow is this stream |
-| `graphs.changed` | M4 | `{}` — hint to refetch `GraphList` (components merged/split) |
+| `graphs.changed` | M4 | `{}` — refetch both `GraphList` **and** any held `TopologySnapshot` (filtered or not). Fires on any component membership change or a `nameGraph` rename, not only merge/split. Required, not optional: a cell is published (stamped with its own singleton `Node.graph`) *before* the link that merges it into an existing component, so a client applying deltas alone holds a stale `Node.graph` until it resyncs |
 | `heartbeat` | M0 | `{}` |
 
 ## Fixture
