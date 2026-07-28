@@ -142,6 +142,27 @@ internal class InspectorModel(
         stamp?.let { inspectorJson.encodeToJsonElement(WaveStamp(it.sourceId.toString(), it.counter)) } ?: JsonNull
 
     /**
+     * `error.deadLetter` (contract §SSE): one retained [DeadLetterRow], rides
+     * the same monotonic [seq] as every other event — [Errors] is the
+     * collaborator that captures and bounds these ([Errors.deadLetterRing]),
+     * this is only the emission point, kept here so the one gap detector
+     * covers topology, state and error events alike (mirrors [stateSummary]).
+     */
+    fun deadLetterEvent(row: DeadLetterRow) = synchronized(lock) {
+        emitEvent(Event.ERROR_DEAD_LETTER, inspectorJson.encodeToJsonElement(row).jsonObject)
+    }
+
+    /** `error.parked` (contract §SSE): sent on change; a `count: 0` row clears. */
+    fun parkedEvent(row: ParkedRow) = synchronized(lock) {
+        emitEvent(Event.ERROR_PARKED, inspectorJson.encodeToJsonElement(row).jsonObject)
+    }
+
+    /** `error.restart` (contract §SSE): one observed generation increase. */
+    fun restartEvent(row: RestartRow) = synchronized(lock) {
+        emitEvent(Event.ERROR_RESTART, inspectorJson.encodeToJsonElement(row).jsonObject)
+    }
+
+    /**
      * A local publish. A ref the view has not seen is a new node; a ref it has
      * is a re-publish (`resumeHost`, a returning migration) — the node is
      * refreshed and reported as a [Event.LIFECYCLE] change rather than a

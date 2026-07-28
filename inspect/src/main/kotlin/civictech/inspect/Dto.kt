@@ -171,9 +171,72 @@ data class Event(
         const val TOPOLOGY_LINK = "topology.link"
         const val LIFECYCLE = "lifecycle"
         const val STATE_SUMMARY = "state.summary"
+        const val ERROR_DEAD_LETTER = "error.deadLetter"
+        const val ERROR_PARKED = "error.parked"
+        const val ERROR_RESTART = "error.restart"
         const val HEARTBEAT = "heartbeat"
 
         const val ADDED = "added"
         const val REMOVED = "removed"
     }
 }
+
+/** `GET /api/inspect/errors`. */
+@Serializable
+data class ErrorSnapshot(
+    val counters: ErrorCounters,
+    val deadLetters: List<DeadLetterRow>,
+    val parked: List<ParkedRow>,
+    val restarts: List<RestartRow>,
+)
+
+/**
+ * `ErrorSnapshot.counters` — running totals across every inspected host, read
+ * straight off [civictech.cell.host.ManagedHost.supervisionAccounting] (deadLetters,
+ * restarts, drainedOnTeardown) except [parked], which has no accounting
+ * counterpart in the kernel and is instead the live sum of every currently
+ * parked row (a gauge, not a monotonic count — it falls as parked traffic
+ * drains).
+ */
+@Serializable
+data class ErrorCounters(
+    val deadLetters: Long,
+    val parked: Long,
+    val restarts: Long,
+    val drainedOnTeardown: Long,
+)
+
+/**
+ * One retained dead letter — the ring buffer's element. Built once, at
+ * capture time, from extracted primitives only: the [civictech.cell.host.DeadLetter]
+ * and its [civictech.cell.proxy.HostedPortInvocation] are never held past that
+ * conversion (ownership invariant — a dead letter can carry a sanitized but
+ * still potentially large payload, and the inspector must not become a second
+ * retention path for it).
+ */
+@Serializable
+data class DeadLetterRow(
+    val ref: String,
+    /** The thrown exception's simple class name, or null for a drop (unknown target, no exception). */
+    val cause: String? = null,
+    val description: String,
+    val wave: WaveStamp? = null,
+    val atMs: Long,
+)
+
+/** One `(ref, port)` group of currently parked traffic — a live gauge, never retained history. */
+@Serializable
+data class ParkedRow(
+    val ref: String,
+    val port: String,
+    val count: Int,
+    val oldestMs: Long,
+)
+
+/** One observed generation increase — [civictech.cell.host.ManagedHost.generationOf] going up. */
+@Serializable
+data class RestartRow(
+    val ref: String,
+    val generation: Long,
+    val atMs: Long,
+)
