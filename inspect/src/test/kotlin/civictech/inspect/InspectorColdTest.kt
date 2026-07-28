@@ -282,6 +282,39 @@ class InspectorColdTest {
         probe.get(InspectorServer.GRAPHS_PATH).statusCode() shouldBe 200
     }
 
+    /**
+     * T19 — the CORS-simple-request gate. A plain cross-origin `POST` with no
+     * custom header (the shape a browser sends with no preflight, and the
+     * shape `allowCrossOrigin()`'s old KDoc wrongly treated as harmless for
+     * this route) is rejected before {@link Waker.wake} ever runs: neither
+     * cell resumes, and the caller gets a 4xx, not a 202.
+     */
+    @Test
+    fun `a wake POST without the required header is rejected, and nothing wakes`() {
+        val (a, b) = pair(host, A, B)
+        started()
+        suspendCells(host, a, b)
+
+        val response = wakeWithoutHeader("g-$A")
+
+        response.statusCode() shouldBe 400
+        host.isSuspended(a) shouldBe true
+        host.isSuspended(b) shouldBe true
+    }
+
+    /** The header alone does not conjure a graph that was never suspended — it
+     *  only clears the gate; the rest of the route's behavior is unchanged. */
+    @Test
+    fun `a wake POST with the required header still succeeds`() {
+        val (a, b) = pair(host, A, B)
+        started()
+        suspendCells(host, a, b)
+
+        wake("g-$A").statusCode() shouldBe 202
+
+        awaitUntil("both cells resumed") { !host.isSuspended(a) && !host.isSuspended(b) }
+    }
+
     // ----------------------------------------------------- search integration
 
     /** Ticket Implement §3: a cold component is skipped whole, and counted. */
@@ -356,8 +389,22 @@ class InspectorColdTest {
     private fun search(query: String): SearchResult =
         json.decodeFromString(probe.state("${InspectorServer.SEARCH_PATH}?mode=data&q=$query"))
 
-    private fun wake(graph: String): HttpResponse<String> =
-        probe.postForm("", "${InspectorServer.GRAPH_PATH}/$graph/wake")
+    /**
+     * `HttpProbe` has no header-carrying POST, and the T19 gate lives on a
+     * header — so wake requests go straight through a plain [HttpClient]
+     * here, with [withHeader] choosing whether [InspectorServer.WAKE_HEADER]
+     * is attached.
+     */
+    private fun wake(graph: String): HttpResponse<String> = sendWake(graph, withHeader = true)
+
+    private fun wakeWithoutHeader(graph: String): HttpResponse<String> = sendWake(graph, withHeader = false)
+
+    private fun sendWake(graph: String, withHeader: Boolean): HttpResponse<String> {
+        val builder = HttpRequest.newBuilder(URI("http://localhost:${server!!.boundPort}${InspectorServer.GRAPH_PATH}/$graph/wake"))
+            .POST(HttpRequest.BodyPublishers.ofString(""))
+        if (withHeader) builder.header(InspectorServer.WAKE_HEADER, InspectorServer.WAKE_HEADER_VALUE)
+        return HttpClient.newHttpClient().send(builder.build(), HttpResponse.BodyHandlers.ofString())
+    }
 
     private fun encoded(ref: CellRef): String = InspectorServer.encodeRef(ref)
 

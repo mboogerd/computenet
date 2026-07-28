@@ -3,6 +3,7 @@ package civictech.demo.shell
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.json.JsonPrimitive
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -19,9 +20,20 @@ import java.util.concurrent.CopyOnWriteArrayList
  * redesigning it — this shell only extracts what's actually duplicated.
  * Likewise [sse] covers every demo's single `/events` endpoint; none
  * register more than one SSE stream.
+ *
+ * [bindAddress] is `null` by default, which reproduces the shell's original
+ * behavior byte-for-byte: `HttpServer.create(InetSocketAddress(port), 0)`
+ * binds the wildcard address (every interface). T19 adds the parameter so a
+ * caller with a reason not to accept connections from the whole network —
+ * `InspectorServer`, which serves live topology and cell state — can pass
+ * `InetAddress.getLoopbackAddress()` without every other demo's `Main.kt`
+ * needing to change.
  */
-class DemoShell(port: Int) {
-    private val server: HttpServer = HttpServer.create(InetSocketAddress(port), 0)
+class DemoShell(port: Int, bindAddress: InetAddress? = null) {
+    private val server: HttpServer = HttpServer.create(
+        if (bindAddress == null) InetSocketAddress(port) else InetSocketAddress(bindAddress, port),
+        0,
+    )
     private val clients = CopyOnWriteArrayList<HttpExchange>()
 
     // Set by sse() for its one registration (no demo registers more than one
