@@ -245,13 +245,18 @@ class InspectorObserveTest {
         val events = listen()
         probe.postForm("", observePath(cell.ref)).statusCode() shouldBe 204
 
-        // spawning + linking the sink are topology deltas; the catch-up summary
-        // follows them, and every frame's seq is strictly increasing so the
-        // client's one gap detector covers both kinds
-        val frames = events.awaitAtLeast(3)
+        // the sink itself is an instrument, not a topology delta (M5-EVAL), so
+        // a real topology change supplies the second event kind; every frame's
+        // seq is strictly increasing so the client's one gap detector covers
+        // both kinds
+        events.awaitKind(Event.STATE_SUMMARY, 1)
+        set()
+        events.awaitKind(Event.TOPOLOGY_NODE, 1)
+        val frames = events.awaitAtLeast(2)
         val first = frames.first().seq
         frames.map { it.seq } shouldBe frames.indices.map { first + it }
         frames.map { it.kind }.contains(Event.STATE_SUMMARY) shouldBe true
+        frames.map { it.kind }.contains(Event.TOPOLOGY_NODE) shouldBe true
     }
 
     // ------------------------------------------------- the snapshot fallback

@@ -51,6 +51,17 @@ internal class InspectorModel(
     private val flow: () -> FlowBinding = { FlowBinding.None },
     /** M5 — the network-host resolver; defaults to a purely local process. */
     private val peers: Peers = Peers(registry, Node.LOCAL_NET),
+    /**
+     * M5-EVAL — is this ref one of the inspector's own `ObserveCell` sinks
+     * ([Observations.sinkRefs])? An instrument is not a subject: it never
+     * becomes a node, an edge endpoint, or a component member. Without this, a
+     * sink spawned on selection joins the observed cell's component and — when
+     * its uuid sorts below the current minimum — *renames* it, kicking the
+     * client out of the very graph it selected a cell in (the flip-flop
+     * M5-COLD's report reproduced at the API level). Read through a supplier
+     * for the same construction-order reason as [flow].
+     */
+    private val instruments: (CellRef) -> Boolean = { false },
 ) {
     private val lock = Any()
     private val hostNames: Map<ManagedHost, String> = hosts.entries.associate { (name, host) -> host to name }
@@ -116,6 +127,7 @@ internal class InspectorModel(
      */
     fun sync() = synchronized(lock) {
         registry.localRefs().forEach { ref ->
+            if (instruments(ref)) return@forEach
             nodes.getOrPut(ref) { nodeOf(ref) }
             componentIndex.addCell(ref)
             announcedLifecycle[ref] = lifecycleOf(ref)
@@ -129,6 +141,7 @@ internal class InspectorModel(
             componentIndex.addCell(ref)
         }
         topologyLinks().forEach { link ->
+            if (touchesInstrument(link)) return@forEach
             edges.getOrPut(link.id) { edgeOf(link) }
             componentIndex.addLink(link.id, link.from.cell, link.to.cell)
         }
@@ -387,6 +400,9 @@ internal class InspectorModel(
      * duplicate add.
      */
     fun published(ref: CellRef) = synchronized(lock) {
+        // the inspector's own observation sink: real in the registry, but not
+        // a subject of the view it serves (see the [instruments] doc)
+        if (instruments(ref)) return@synchronized
         val known = ref in nodes
         val node = nodeOf(ref)
         nodes[ref] = node
@@ -431,6 +447,9 @@ internal class InspectorModel(
     }
 
     fun linked(link: TopologyLink) = synchronized(lock) {
+        // the producer→sink link of an observation is instrument wiring, not
+        // topology — reporting it would draw the observer effect on the canvas
+        if (touchesInstrument(link)) return@synchronized
         val edge = edgeOf(link)
         edges[link.id] = edge
         // undirected for component purposes: an edge means "same graph",
@@ -527,7 +546,9 @@ internal class InspectorModel(
         // a local link is authoritative on its own (its hooks are exact); a
         // mirrored one is only as live as the cells it names
         val localIds = registry.localLinks().mapTo(HashSet()) { it.id }
-        val live = topologyLinks().filter { it.id in localIds || anchored(it) }.associateBy { it.id }
+        val live = topologyLinks()
+            .filter { (it.id in localIds || anchored(it)) && !touchesInstrument(it) }
+            .associateBy { it.id }
         live.forEach { (id, link) -> if (id !in edges) linked(link) }
         edges.keys.filter { it !in live && it !in declared }.toList().forEach(::unlinked)
     }
@@ -535,6 +556,10 @@ internal class InspectorModel(
     /** Does [link] still name a cell this view holds? (See [reconcilePeers] point 2.) */
     private fun anchored(link: TopologyLink): Boolean =
         link.from.cell?.let { it in nodes } == true || link.to.cell?.let { it in nodes } == true
+
+    /** Does [link] touch one of the inspector's own observation sinks? (See [instruments].) */
+    private fun touchesInstrument(link: TopologyLink): Boolean =
+        link.from.cell?.let(instruments) == true || link.to.cell?.let(instruments) == true
 
     /**
      * Every peer-announced ref the registry currently holds that this view has

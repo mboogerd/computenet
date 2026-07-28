@@ -129,13 +129,21 @@ internal class Observations(
     /**
      * The `ObserveCell` sinks this inspector has spawned into the graph — its
      * own instruments. They are published cells like any other, so anything
-     * enumerating the graph will find them; [DataSearch] excludes them, because
-     * an instrument reporting its own readings as results is the observer
-     * effect wearing a search box (selecting a cell would make it start
-     * appearing in content-search hits, holding a copy of the very state its
-     * producer already answered for).
+     * enumerating the graph will find them; [DataSearch] excludes them (an
+     * instrument reporting its own readings as results is the observer effect
+     * wearing a search box), and [InspectorModel] excludes them from the
+     * topology view and its component partition (M5-EVAL — a sink joining the
+     * observed cell's component could displace its min-uuid id, kicking the
+     * client out of the very graph it selected a cell in; an instrument is not
+     * a subject).
+     *
+     * Registered **before** the sink is spawned: the registry's publish hook
+     * fires during `spawn`, so a set derived from [open] — which is written
+     * after — would race the model's exclusion check. A failed or released
+     * observation removes its entry again.
      */
-    val sinkRefs: Set<CellRef> get() = synchronized(lock) { open.values.mapTo(HashSet()) { it.sinkRef } }
+    val sinkRefs: Set<CellRef> get() = instruments
+    private val instruments = java.util.concurrent.ConcurrentHashMap.newKeySet<CellRef>()
 
     /**
      * Start observing [ref], or renew the idle deadline if it is already
@@ -162,10 +170,14 @@ internal class Observations(
         // `observe`'s body, with the link retained — see this class's doc.
         val sink = ObserveCell(view)
         val mgmt = host.managementInlet.call
+        // before spawn: the publish hook must already see this ref as an
+        // instrument, or the model would adopt it as a node (see [sinkRefs])
+        instruments += sink.ref
         mgmt.spawn(sink)
         val result = mgmt.connect(ref, outlet, sink.ref, "inlet")
         if (result !is LinkResult.Connected) {
             mgmt.despawn(sink.ref)
+            instruments -= sink.ref
             return false
         }
 
@@ -242,6 +254,10 @@ internal class Observations(
     private fun release(observation: Observation) {
         runCatching { observation.link.unlink() }
         runCatching { observation.host.managementInlet.call.despawn(observation.sinkRef) }
+        // after despawn: a despawned ref never returns (each ObserveCell has a
+        // fresh uuid), so removal cannot re-admit it, and the model's
+        // unpublished() is a no-op for a node it never adopted
+        instruments -= observation.sinkRef
     }
 
     private class Observation(

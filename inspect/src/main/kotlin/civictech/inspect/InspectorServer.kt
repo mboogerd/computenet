@@ -132,7 +132,15 @@ class InspectorServer(
     // collector for an edge's `fused`, the collector hands its windows back to
     // the model's `flowRates`. The supplier only runs after construction.
     private val model: InspectorModel =
-        InspectorModel(registry, hosts, cellNames, broadcaster::publish, flow = { flow }, peers = peers)
+        InspectorModel(
+            registry, hosts, cellNames, broadcaster::publish,
+            flow = { flow },
+            peers = peers,
+            // `observations` is declared below; safe for the same reason as
+            // `flow` — the supplier only runs once hooks fire or sync() runs,
+            // both after construction completes
+            instruments = { ref -> ref in observations.sinkRefs },
+        )
 
     /** M3 — the flow feed (see [FlowCollector]); attaches taps as edges appear. */
     private val flow: FlowCollector = FlowCollector(registry, onBatch = model::flowRates)

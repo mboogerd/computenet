@@ -292,6 +292,52 @@ class InspectorGraphsTest {
         detail.graph shouldBe snapshot(null).nodes.first { it.ref == encoded(a) }.graph
     }
 
+    // ------------------------------------------------- instruments (M5-EVAL)
+
+    @Test
+    fun `the inspector's own observation sink never joins the component it observes`() {
+        // Both uuids start with ff…, so a random sink uuid would displace the
+        // lexicographic minimum with near-certainty if it were admitted — the
+        // component would be *renamed* by the act of selecting a cell in it,
+        // and the client (filtered on the old id) kicked out of the graph it
+        // is looking at: the flip-flop M5-COLD's report reproduced. An
+        // instrument is not a subject.
+        val (x, y) = pair(X_HIGH, Y_HIGH)
+        val events = listen()
+        val before = snapshot(null)
+        before.nodes.map { it.ref }.toSet() shouldBe setOf(encoded(x), encoded(y))
+
+        probe.postForm("", "${InspectorServer.CELL_PATH}/${encoded(x)}/observe").statusCode() shouldBe 204
+        awaitUntil("observation sink linked to $x") { registry.swapSet(x).size == 2 }
+
+        // the sink is real in the registry…
+        registry.localRefs().size shouldBe 3
+        // …and absent from the view: same nodes, same edges, same id, same size
+        val during = snapshot(null)
+        during.nodes.map { it.ref }.toSet() shouldBe before.nodes.map { it.ref }.toSet()
+        during.edges.map { it.id }.toSet() shouldBe before.edges.map { it.id }.toSet()
+        val card = graphs().graphs.single()
+        card.id shouldBe "g-$X_HIGH"
+        card.cells shouldBe 2
+
+        // the observation itself still works — exclusion broke no reading
+        json.decodeFromString<CellState>(
+            probe.state("${InspectorServer.CELL_PATH}/${encoded(x)}/state"),
+        ).kind shouldBe CellState.VIEW
+
+        // nothing was announced either: no node/link deltas, no graphs.changed
+        server.publishGraphChangesNow()
+        events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
+        events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
+        events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0
+
+        probe.delete("${InspectorServer.CELL_PATH}/${encoded(x)}/observe").statusCode() shouldBe 204
+        awaitUntil("observation sink despawned") { registry.localRefs().size == 2 }
+        snapshot(null).nodes.map { it.ref }.toSet() shouldBe before.nodes.map { it.ref }.toSet()
+        events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
+        events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
+    }
+
     // -------------------------------------------------------------- fixtures
 
     private fun spawn(uuid: String): CellRef =
@@ -359,5 +405,9 @@ class InspectorGraphsTest {
         const val B = "0b000000-0000-4000-8000-000000000000"
         const val C = "0c000000-0000-4000-8000-000000000000"
         const val D = "0d000000-0000-4000-8000-000000000000"
+
+        // deliberately at the top of the uuid ordering — see the instrument test
+        const val X_HIGH = "ff000000-0000-4000-8000-000000000000"
+        const val Y_HIGH = "ff000000-0000-4000-8000-000000000001"
     }
 }
