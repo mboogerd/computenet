@@ -2,6 +2,7 @@ package civictech.demo
 
 import civictech.testkit.JvmPeer
 import civictech.testkit.awaitUntil
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.net.HttpURLConnection
@@ -58,6 +59,7 @@ class CrashRestartConvergenceTest {
 
     private fun down(httpPort: Int): Boolean = !up(httpPort)
 
+    @Tag("multi-jvm")
     @Test
     fun `a kill -9'd peer recovers from its journal, re-peers, and both sides converge`() {
         val httpA = JvmPeer.freePort()
