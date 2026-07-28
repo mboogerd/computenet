@@ -10,9 +10,12 @@ import kotlin.system.exitProcess
  * compile classpath, textual scanning over every markdown file under `doc/spec`.
  *
  * 1. **Package-pointer resolution** (fatal): every backticked `cell.<pkg>.<Type>`
- *    reference must resolve, at the directory level, to a real
- *    `kernel/src/main/kotlin/civictech/cell/<pkg>/` package. Catches drift
- *    like a header citing `cell.attention.*`, a package that was never real.
+ *    reference must resolve to a real `kernel/src/main/kotlin/civictech/cell/<pkg>/`
+ *    package directory, AND `<Type>` must be declared (`class`, `interface`,
+ *    `object`, `enum class`, `typealias`, `fun`, or `val`) in one of that
+ *    directory's `.kt` files. Catches drift like a header citing
+ *    `cell.attention.*` (a package that was never real) as well as a type
+ *    that moved to a different package or file after the pointer was written.
  * 2. **Requirement-id density** (report-only): ids-per-chapter under the
  *    normative chapter directories `doc/spec/{10,20,30,40,50}-*`; a zero-id
  *    chapter is a NOTE, not a failure — visibility, not a forcing function.
@@ -46,9 +49,20 @@ object DocLints {
      * the package path) and `civictech.cell.evolve.PromotionPolicy` matches
      * from the embedded `cell.` onward. Two-segment forms with no package
      * component (`cell.Handle`) intentionally do not match — nothing to
-     * resolve at the directory level.
+     * resolve at the directory level. Group 1 is the dotted package path,
+     * group 2 is the PascalCase type segment (resolved separately below).
      */
-    private val packagePointer = Regex("""cell\.((?:[a-z][a-zA-Z0-9_]*\.)+)[A-Z][A-Za-z0-9_]*""")
+    private val packagePointer = Regex("""cell\.((?:[a-z][a-zA-Z0-9_]*\.)+)([A-Z][A-Za-z0-9_]*)""")
+
+    /**
+     * A top-level Kotlin declaration header: `class|interface|object|
+     * enum class|typealias|fun|val` followed by the exact (word-bounded)
+     * type/member name. Used to confirm a package-pointer's type segment is
+     * actually declared somewhere in the resolved package directory, not
+     * just that the directory happens to exist.
+     */
+    private fun declarationPattern(typeName: String) =
+        Regex("""\b(class|interface|object|enum\s+class|typealias|fun|val)\s+${Regex.escape(typeName)}\b""")
 
     private val chapterHeading = Regex("""^##\s""")
     private val statusLine = Regex("""^\s*>?\s*\*\*Status\*\*:\s*(.*)$""")
@@ -75,19 +89,47 @@ object DocLints {
             backtickSpan.findAll(file.readText()).forEach { span ->
                 packagePointer.findAll(span.groupValues[1]).forEach { m ->
                     val pkgDotted = m.groupValues[1].removeSuffix(".")
+                    val typeName = m.groupValues[2]
                     val pkgPath = pkgDotted.replace('.', '/')
                     val dir = File(kernelCellRoot, pkgPath)
-                    if (!dir.isDirectory && reportedPerFile.add(pkgDotted)) {
-                        findings += Finding(
-                            Severity.FATAL,
-                            "Unresolved package pointer: `${m.value}` in $relative — no directory " +
-                                "kernel/src/main/kotlin/civictech/cell/$pkgPath/",
-                        )
+                    when {
+                        !dir.isDirectory -> {
+                            if (reportedPerFile.add(pkgDotted)) {
+                                findings += Finding(
+                                    Severity.FATAL,
+                                    "Unresolved package pointer: `${m.value}` in $relative — no directory " +
+                                        "kernel/src/main/kotlin/civictech/cell/$pkgPath/",
+                                )
+                            }
+                        }
+                        !declaresType(dir, typeName) -> {
+                            val reportKey = "$pkgDotted.$typeName"
+                            if (reportedPerFile.add(reportKey)) {
+                                findings += Finding(
+                                    Severity.FATAL,
+                                    "Unresolved type pointer: `${m.value}` in $relative — no declaration of " +
+                                        "$typeName in kernel/src/main/kotlin/civictech/cell/$pkgPath/",
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
         return findings
+    }
+
+    /**
+     * True iff one of [dir]'s direct `.kt` files declares [typeName] via
+     * `class|interface|object|enum class|typealias|fun|val <typeName>`.
+     * Textual, not a full Kotlin parser — sufficient for the small corpus of
+     * spec-cited types; annotation classes and backtick-quoted names are not
+     * specially handled (none encountered in the current spec tree).
+     */
+    private fun declaresType(dir: File, typeName: String): Boolean {
+        val pattern = declarationPattern(typeName)
+        val ktFiles = dir.listFiles { f -> f.isFile && f.extension == "kt" } ?: return false
+        return ktFiles.any { pattern.containsMatchIn(it.readText()) }
     }
 
     // --- 2. Requirement-id density ---------------------------------------------------------
