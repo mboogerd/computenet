@@ -330,12 +330,16 @@ replicated spawn). The decided rules:
   restore is the solo fallback when no follower is reachable. Writes served
   but not yet shipped to any follower at failure are lost — the stated async
   primary-backup window; shrinking it (ack-from-k) is explicitly not adopted.
-- **`WritePosture` split, declared per cell.** `AVAILABLE_FENCED` (default):
-  each partition's leader keeps serving; on heal the higher epoch wins, the
-  loser steps down and re-catches-up, and its divergent post-partition writes
-  are surfaced on the error/dead-letter path, never silently dropped.
-  `SAFETY_PARK` (opt-in): a leader that cannot confirm it is un-superseded
-  parks writes — no split-brain, no loss, unavailable for writes by design.
+- **Always-fenced writes — no per-cell posture.** Each partition's leader
+  keeps serving; on heal the higher epoch wins, the loser steps down and
+  re-catches-up, and its divergent post-partition writes are surfaced on the
+  error/dead-letter path, never silently dropped. An opt-in `SAFETY_PARK`
+  posture — a leader that cannot confirm it is un-superseded parks writes
+  instead of serving divergent ones, trading availability for no split-brain
+  and no loss — **was specified, never implemented**: the `WritePosture` enum
+  and both its values (`AVAILABLE_FENCED`/`SAFETY_PARK`) had zero production
+  installs and were deleted (remediation T03). It can be reintroduced with
+  its first real user — see `91-gap-analysis.md` G-67.
 - **Failover is explicit by default.** Leader death (ref unpublishes) parks
   writes until a successor is designated by promotion (53); an opt-in posture
   lets a follower claim leadership by minting a higher epoch and
@@ -356,16 +360,25 @@ peers, resolving the RESTART-within-replication question carried by four
 earlier challenges (93 I-22/I-2/I-7/I-18/I-19/I-25).
 
 ⚠ GAP (G-44): single-writer replication (leader→follower log-shipping) defers
-its liveness half — no automatic leader election, no failure detector, no
-follower-unpark rule under SAFETY_PARK, and split-brain reconciliation beyond
-last-epoch-wins is undesigned. Proposal: opt-in epoch-claim election folded
-from the eventually-consistent membership index with a stated
-convergence/liveness bound and a generative leader-churn harness; a
-failure-detection window that does not become a second heartbeat protocol; a
-witness-set-superset unpark rule for SAFETY_PARK; an application-level
-reconciliation hook for fenced divergent writes; an optional ack-from-k
-durability tier; and per-shard leader routing when partitions replicate
-(93 I-25/I-2/I-3/I-8).
+its liveness half — no automatic leader election, no failure detector, and
+split-brain reconciliation beyond last-epoch-wins is undesigned. Proposal:
+opt-in epoch-claim election folded from the eventually-consistent membership
+index with a stated convergence/liveness bound and a generative leader-churn
+harness; a failure-detection window that does not become a second heartbeat
+protocol; an application-level reconciliation hook for fenced divergent
+writes; an optional ack-from-k durability tier; and per-shard leader routing
+when partitions replicate (93 I-25/I-2/I-3/I-8).
+
+⚠ GAP (G-67): the leader/follower split specified an opt-in
+`WritePosture.SAFETY_PARK` (a leader that cannot confirm it is un-superseded
+parks writes instead of serving divergent ones); `WritePosture` and both its
+values (`AVAILABLE_FENCED`/`SAFETY_PARK`) had zero production installs and
+were deleted (remediation T03) — every leader today runs the always-fenced
+behavior unconditionally, with no per-cell posture switch. Proposal: not a
+redesign — the always-fenced default stays exactly as landed; an opt-in
+`SAFETY_PARK` posture (and the follower-unpark rule it would need) can be
+reintroduced with its first real user once a concrete case needs
+park-on-uncertainty over the fenced-and-reconcile default.
 
 ## Constraint on everything else
 

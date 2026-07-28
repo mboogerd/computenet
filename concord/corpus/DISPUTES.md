@@ -535,3 +535,46 @@ exclusion (per `provenance.md` §4) for statements that genuinely resist a
 driver-SPI check (internals, scheduling order, protocol frames). Until that
 pass lands, `CONCORDANCE.md`'s coverage percentage must always be read against
 the denominator preamble, never against the row count alone.
+
+## Structural gap: inspector subsystem semantics carry no requirement ids and no scenario coverage
+
+**Category: `spec-gap` (subsystem-level exclusion, not a per-scenario
+dispute).** Per this file's opening rule, filed rather than checked
+dishonestly: the inspector (`:inspect`, delivered via the
+`doc/spec/90-roadmap/97-inspector-plan/` run) ships five semantics that user
+code relies on, specified only as prose in `97-inspector-plan/20-api-contract.md`,
+none with an EARS `[NN-SLUG-nn]` id and none with a `concord/corpus/` scenario:
+
+- topology snapshot/delta `seq` monotonicity (`20-api-contract.md:38`:
+  `"seq": 412, // monotonic; SSE events carry seq > this`)
+- `Edge.fused` meaning (`20-api-contract.md:72`: `"fused": false // true: the
+  producing endpoint has no emission point at all` — a delegating pass-through
+  with genuinely no message to observe)
+- `flow.rates` cadence and the rate-0-omitted rule (`20-api-contract.md:176`:
+  1 Hz batch; edges with no traffic that window are omitted, never sent as
+  `rate: 0`)
+- the cold predicate (`20-api-contract.md:127`: `"lifecycle": "hot" | "cold"
+  // cold iff every member cell reports Node.lifecycle SUSPENDED`)
+- `data`-mode search bounds (`20-api-contract.md:30`: bounded — 50 cells / 2s
+  deadline / cold components skipped — and always returns a non-null `cost`,
+  including on a zero-hit or blank-query result)
+
+**Why this can't be checked honestly**: `civictech.concord.driver.kernel` is
+the only package permitted to import `civictech.cell.*` (AGENTS.md's concord
+boundary rule), and the twelve-verb driver SPI has no observation verbs over
+the inspector's HTTP/SSE surface (topology snapshots, SSE event feeds, search).
+There is only one binding of the inspector API contract today (`:inspect`
+itself), so nothing could author an honest scenario against these semantics
+without either inventing a second, parallel implementation to bind against or
+reaching into `civictech.cell.*` from outside the kernel driver — both out of
+scope for a corpus scenario. Per `CONCORDANCE.md`'s denominator-honesty
+doctrine (see the preceding "Structural gap" entry and `CONCORDANCE.md`'s own
+generated preamble), leaving these semantics unlisted would read as silently
+clean coverage rather than as a known, deliberate exclusion — this entry is
+the fix, not a weakened scenario with an omitted assertion.
+
+**Revisit trigger**: a second binding of the inspector API contract appears
+(e.g. an alternate implementation or a driver-level harness that exercises the
+HTTP/SSE surface independent of `:inspect`), or the inspector subsystem
+becomes product surface rather than an internal debugging tool — either would
+make an honest scenario authorable against these five semantics.
