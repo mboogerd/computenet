@@ -1,0 +1,5 @@
+{
+  "seq": 502,
+  "kind": "error.parked",
+  "payload": { "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0", "port": "left", "count": 13, "oldestMs": 48000 }
+}

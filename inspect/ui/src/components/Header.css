@@ -60,3 +60,35 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.error-counters {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.55rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.error-counters:hover {
+  border-color: var(--hairline-strong);
+}
+
+.error-counters.is-active {
+  border-color: var(--error);
+}
+
+.error-counters__item--dead {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.error-counters__item--parked {
+  color: var(--parked);
+  font-weight: 600;
+}

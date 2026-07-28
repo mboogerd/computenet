@@ -1,6 +1,8 @@
 import { For, Show, createMemo, type JSX } from 'solid-js';
+import type { DeadLetterEntry, ParkedEntry, RestartEntry } from '../api/types';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { cellDetail, cellState, detailError, detailLoading, stateError, stateLoading } from '../solid/detail';
+import { errorStore, errorVersion } from '../solid/errors';
 import { selection, setSelection } from '../solid/state';
 import ValueView from './ValueView';
 import './DetailPanel.css';
@@ -173,12 +175,95 @@ function FlowSection() {
   );
 }
 
+/** M2-FE ticket Implement §3: replaces the M1 placeholder. Reads
+ *  `errorStore` directly (imperatively, like `Canvas.tsx`'s badge/pill
+ *  memos), gated on `errorVersion()` + `selection()` so it re-renders
+ *  exactly when either changes — no subscription lifecycle to manage here
+ *  (unlike the State subsection): the error feed is not per-cell observed,
+ *  it is a standing SSE stream the whole app already receives (M2-BE ticket
+ *  Exclusions: "No per-cell subscriptions for error data"). */
 function ErrorsSection() {
+  const ref = () => selection();
+
+  const deadLetters = createMemo<readonly DeadLetterEntry[]>(() => {
+    errorVersion();
+    const r = ref();
+    return r ? errorStore.deadLettersFor(r) : [];
+  });
+  const parked = createMemo<readonly ParkedEntry[]>(() => {
+    errorVersion();
+    const r = ref();
+    return r ? errorStore.parkedFor(r) : [];
+  });
+  const restarts = createMemo<readonly RestartEntry[]>(() => {
+    errorVersion();
+    const r = ref();
+    return r ? errorStore.restartsFor(r) : [];
+  });
+  const hasAny = createMemo(() => deadLetters().length > 0 || parked().length > 0 || restarts().length > 0);
+
   return (
     <Section title="Errors">
-      <p class="detail-section__status">arrives with the Errors milestone</p>
+      <Show when={hasAny()} fallback={<p class="detail-section__status">No local errors</p>}>
+        <Show when={deadLetters().length}>
+          <div class="error-group">
+            <h4 class="error-group__title">Dead letters</h4>
+            <For each={deadLetters()}>
+              {(dl) => (
+                <div class="dead-letter-card">
+                  <div class="dead-letter-card__cause">{dl.cause}</div>
+                  <div class="dead-letter-card__desc">{dl.description}</div>
+                  <div class="dead-letter-card__meta">
+                    <span class="mono" title="wave stamp (source · counter)">
+                      {dl.wave ? `${dl.wave.source.slice(0, 8)} · ${dl.wave.counter}` : '—'}
+                    </span>
+                    <span>{formatTime(dl.atMs)}</span>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+
+        <Show when={parked().length}>
+          <div class="error-group">
+            <h4 class="error-group__title">Parked</h4>
+            <ul class="parked-rows">
+              <For each={parked()}>
+                {(p) => (
+                  <li>
+                    <span class="mono">{p.port}</span>
+                    <span class="parked-rows__count">{p.count} parked</span>
+                    <span class="detail-muted">oldest {p.oldestMs}ms ago</span>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        </Show>
+
+        <Show when={restarts().length}>
+          <div class="error-group">
+            <h4 class="error-group__title">Restart history</h4>
+            <ul class="restart-rows">
+              <For each={restarts()}>
+                {(r) => (
+                  <li>
+                    <span>generation {r.generation}</span>
+                    <span>{formatTime(r.atMs)}</span>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        </Show>
+      </Show>
     </Section>
   );
+}
+
+function formatTime(atMs: number): string {
+  return new Date(atMs).toLocaleTimeString();
 }
 
 function describeError(err: unknown): string {

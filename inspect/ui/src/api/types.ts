@@ -218,13 +218,75 @@ export interface HeartbeatEvent {
   payload: Record<string, never>;
 }
 
+// --- M2: errors (20-api-contract.md "ErrorSnapshot (M2)", "error.* events") ----
+
+export interface DeadLetterEntry {
+  ref: Ref;
+  cause: string;
+  description: string;
+  wave: Frontier | null;
+  atMs: number;
+}
+
+/** `error.parked` — "send on change; `count: 0` clears" (contract): a
+ *  `count: 0` row is a clear signal for the (ref, port) pair, not a
+ *  zero-count row to keep around. */
+export interface ParkedEntry {
+  ref: Ref;
+  port: string;
+  count: number;
+  oldestMs: number;
+}
+
+export interface RestartEntry {
+  ref: Ref;
+  generation: number;
+  atMs: number;
+}
+
+export interface ErrorCounters {
+  deadLetters: number;
+  parked: number;
+  restarts: number;
+  drainedOnTeardown: number;
+}
+
+/** `GET /api/inspect/errors`. */
+export interface ErrorSnapshot {
+  counters: ErrorCounters;
+  deadLetters: readonly DeadLetterEntry[];
+  parked: readonly ParkedEntry[];
+  restarts: readonly RestartEntry[];
+}
+
+export interface ErrorDeadLetterEvent {
+  seq: number;
+  kind: 'error.deadLetter';
+  payload: DeadLetterEntry;
+}
+
+export interface ErrorParkedEvent {
+  seq: number;
+  kind: 'error.parked';
+  payload: ParkedEntry;
+}
+
+export interface ErrorRestartEvent {
+  seq: number;
+  kind: 'error.restart';
+  payload: RestartEntry;
+}
+
 /** The kinds this client understands — a clean discriminated union on `kind`. */
 export type InspectEvent =
   | TopologyNodeEvent
   | TopologyLinkEvent
   | LifecycleEvent
   | StateSummaryEvent
-  | HeartbeatEvent;
+  | HeartbeatEvent
+  | ErrorDeadLetterEvent
+  | ErrorParkedEvent
+  | ErrorRestartEvent;
 
 /** The wire-level shape before we know whether `kind` is one M0 understands.
  *  Deliberately NOT a member of the `InspectEvent` union: adding a
@@ -248,4 +310,7 @@ export const KNOWN_EVENT_KINDS = new Set<string>([
   'lifecycle',
   'state.summary',
   'heartbeat',
+  'error.deadLetter',
+  'error.parked',
+  'error.restart',
 ]);

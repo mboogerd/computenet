@@ -96,6 +96,14 @@
   border-style: dashed;
 }
 
+/* Errors toggle: red-tinted border on an erring cell (10-target-v3.md
+   Errors toggle: "red-tinted node border"). Placed after .is-selected so an
+   erring+selected node's border reads as red — the selection ring
+   (box-shadow, untouched here) still shows alongside it. */
+.node-card.is-erring {
+  border-color: var(--error);
+}
+
 .node-card__top {
   display: flex;
   align-items: center;
@@ -163,4 +171,41 @@
   background: var(--surface-raised);
   border: 1px solid var(--hairline);
   color: var(--text-secondary);
+}
+
+/* Errors toggle: the red error-count badge, poking past the node card's
+   top-right corner — a separate absolutely-positioned layer, same reasoning
+   as .node-state-chip (the card clips via overflow: hidden). */
+.node-error-badge {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--error);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* Errors toggle: the amber "n parked" pill, centered on an edge's midpoint. */
+.edge-parked-pill {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--parked);
+  color: #1a1300;
+  white-space: nowrap;
+  pointer-events: none;
 }
