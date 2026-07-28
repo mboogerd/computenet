@@ -111,18 +111,19 @@ All under `kernel/src/main/kotlin/civictech/cell/`.
 **Execution and operations**
 
 - `.control` — operations plane: attention (`Attention`, `AttentionScheduler`,
-  bands, aggregation), `Magnitude`, `AbsorbAck`, `ParkQueue`, progress
-  (`Progress`, `VersionMinter`), suspension (`StallNotice`,
-  `SuspensionProtocol`). Note: `AttentionPolicy` lives in `.host`, not here.
+  `AttentionPolicy`, bands, aggregation), `Magnitude`, `AbsorbAck`,
+  `ParkQueue`, progress (`Progress`, `VersionMinter`), suspension
+  (`StallNotice`, `SuspensionProtocol`).
 - `.host` — hosted execution: `ManagedHost` (the largest file; a host is itself
-  a `Cell` with `managementInlet`/`routerInlet`), schedulers
-  (`VirtualThreadScheduler` 🔵, `CoroutineScheduler` 🟣, `SimulationController`
-  deterministic), `LocationRegistry` (`Local`/`Remote`, park-and-replay),
+  a `Cell` with `managementInlet`/`routerInlet`), `LinkAdmission` (cycle/
+  headedness/damping-witness admission + topology recording behind
+  `ManagedHost.connect`), schedulers (`VirtualThreadScheduler` 🔵,
+  `CoroutineScheduler` 🟣, `SimulationController` deterministic),
+  `LocationRegistry` (`Local`/`Remote`, park-and-replay),
   `TopologyIndex`/`TopologyWalks`, `IntakeControl`/`IntakeSaturation`,
   `HostDurability`, `KeyedCells` (durable per-key families), supervision, dead
   letters (sanitized — no live `Owned`/`Leased` escapes), `CellError`,
-  remoting proxies (`HostProxy`, `HostedCellProxy`, `RoutedInlet`), `TypedLink`,
-  `AttentionPolicy`.
+  remoting proxies (`HostProxy`, `HostedCellProxy`, `RoutedInlet`), `TypedLink`.
 - `.observe` — app-facing reads: `ObservationSink` (`current()`, `onChange`
   with late-join catch-up), `View.set()/map()/count()`, `host.observe` /
   `host.observeAll`. Caveat: `observeAll` is point-consistent per outlet, not

@@ -16,7 +16,7 @@ class Harness(
     private val world = SimWorld(
         seed = seed,
         attention = if (magnitude) {
-            civictech.cell.host.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS)
+            civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS)
         } else null,
     )
     val controller = world.controller

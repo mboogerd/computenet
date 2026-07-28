@@ -60,7 +60,7 @@ class DurabilityTest {
             val host = ManagedHost(
                 scheduler = controller.scheduler(),
                 registry = registry,
-                attention = civictech.cell.host.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
+                attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
                 journal = FileJournal(journalFile),
             )
             val service = AgoraService(host, registry, quiescence = q, structureLog = structure)
@@ -119,7 +119,7 @@ class DurabilityTest {
             val registry = LocationRegistry()
             val host = ManagedHost(
                 registry = registry,
-                attention = civictech.cell.host.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
+                attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
                 journal = FileJournal(journalFile),
             )
             return host to AgoraService(host, registry, quiescence = q, structureLog = structure)

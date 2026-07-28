@@ -3,7 +3,7 @@ package civictech.cell.consistency
 import civictech.cell.*
 import civictech.cell.control.AttentionSupport
 import civictech.cell.control.NonSuspendable
-import civictech.cell.host.AttentionPolicy
+import civictech.cell.control.AttentionPolicy
 import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.testkit.SimWorld

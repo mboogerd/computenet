@@ -1,7 +1,6 @@
 package civictech.cell.control
 
 import civictech.cell.CellRef
-import civictech.cell.host.AttentionPolicy
 import civictech.cell.proxy.HostedPortInvocation
 import java.util.LinkedHashMap
 

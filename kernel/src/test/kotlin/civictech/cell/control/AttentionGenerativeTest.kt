@@ -2,7 +2,6 @@ package civictech.cell.control
 
 import civictech.cell.*
 import civictech.cell.Propagate
-import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

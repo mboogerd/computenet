@@ -4,7 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.control.AttentionSupport
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.host.AttentionPolicy
+import civictech.cell.control.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController

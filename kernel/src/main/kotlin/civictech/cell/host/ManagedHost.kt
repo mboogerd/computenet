@@ -18,6 +18,7 @@ import java.io.ObjectInputStream
 import java.io.ObjectOutputStream
 import java.io.Serializable
 import civictech.cell.control.AttentionBand
+import civictech.cell.control.AttentionPolicy
 import civictech.cell.control.AttentionScheduler
 import civictech.cell.control.AttentionSupport
 import civictech.cell.control.StallNotice

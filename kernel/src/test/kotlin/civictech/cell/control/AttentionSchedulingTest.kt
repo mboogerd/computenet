@@ -4,7 +4,6 @@ import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
-import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.DeadLetter
 import civictech.cell.port.Use
 import civictech.cell.port.input
