@@ -199,27 +199,31 @@ class InspectorServer(
     }
 
     /**
-     * Registry hook registrations. Held so [close] can drop them: a stopped
-     * inspector must not keep a dead broadcaster attached to a live registry.
+     * Registry hook registrations — *all* of them, since T21 gave the two
+     * any-scope hooks the same `AutoCloseable` contract their `onLocal…`
+     * siblings always had. Held so [close] can drop every one: a stopped
+     * inspector leaves no listener on a live registry.
+     *
+     * Four feeds, in the order they are registered:
+     *
+     * - [LocationRegistry.onLocalPublish] — a cell published on this JVM;
+     * - [LocationRegistry.onTopology] — *any* edge, local or mirrored in from a
+     *   peer (`mirrorLink`/`mirrorUnlink`), which is what retired M5's 1 Hz set
+     *   difference against `LocationRegistry.all()`;
+     * - [LocationRegistry.onPublish] — filtered to
+     *   [LocationRegistry.Remote] locations, so a local publish is not seen
+     *   twice by the two publish feeds;
+     * - [LocationRegistry.onUnpublish] — every removal path: a local despawn, a
+     *   peer's announced eviction, and (T21) a whole peer dropped by
+     *   `unpublishRemotes`. It strictly supersets `onLocalUnpublish`, so the
+     *   view subscribes to it alone rather than being told twice.
      */
     private val hooks: List<AutoCloseable> = listOf(
         registry.onLocalPublish(model::published),
-        registry.onLocalUnpublish(model::unpublished),
-        registry.onLocalTopology(model::linked, model::unlinked),
+        registry.onTopology(model::linked, model::unlinked),
+        registry.onPublish { ref -> if (peers.isRemote(ref)) model.mirroredPublish(ref) },
+        registry.onUnpublish(model::unpublished),
     )
-
-    /**
-     * False from [close] on, disarming the two any-publish hooks below.
-     *
-     * `LocationRegistry.onPublish`/`onUnpublish` — unlike their `onLocal…`
-     * counterparts — return no deregistration handle, so a closed inspector
-     * cannot detach from them. It disarms them instead: the listeners stay
-     * registered on the registry and do nothing. Noted rather than fixed
-     * because widening those two hooks is a kernel change, and M5-NET owns the
-     * inspector module (and the pilot's wiring) only.
-     */
-    @Volatile
-    private var attached = true
 
     val boundPort: Int get() = shell.boundPort
 
@@ -227,17 +231,9 @@ class InspectorServer(
     internal val attachedClients: Int get() = broadcaster.clientCount
 
     init {
-        // M5 — peer-announced refs arrive on the *any*-publish hooks: a
-        // mirrored location is published by `RegistryMirrorCell`, which
-        // deliberately never fires the local ones. Filtered to Remote
-        // locations, so a local publish is not seen twice; the unpublish side
-        // needs no filter, since a local ref has already left the view by the
-        // time this fires and the model's removal is idempotent.
-        registry.onPublish { ref -> if (attached && peers.isRemote(ref)) model.mirroredPublish(ref) }
-        registry.onUnpublish { ref -> if (attached) model.unpublished(ref) }
-
-        // hooks first, then the catch-up read: a publish racing construction is
-        // seen by the hook and merely re-confirmed by the sync, never lost
+        // hooks first (see [hooks]), then the catch-up read: a publish racing
+        // construction is seen by the hook and merely re-confirmed by the sync,
+        // never lost
         model.sync()
 
         shell.route(TOPOLOGY_PATH) { exchange ->
@@ -510,13 +506,15 @@ class InspectorServer(
             FlowCollector.WINDOW_MS, FlowCollector.WINDOW_MS, TimeUnit.MILLISECONDS,
         )
         // M4: `graphs.changed` is published from here rather than from the
-        // registry hooks, which coalesces a whole graph build into one hint and
-        // keeps the component sweep off the thread that is linking cells.
-        // M5 reconciles peers on the same tick, deliberately *before* the
-        // announcement: a peer that just arrived or vanished is in the
-        // partition by the time the `graphs.changed` describing it goes out.
+        // registry hooks, which coalesces a whole graph build — N publishes and
+        // M links — into one hint and keeps the O(V+E) component sweep off the
+        // thread that is linking cells. That coalescing is its own reason to
+        // stay scheduled; T21 removed only the `model.reconcilePeers()` call
+        // that used to share this tick, because peer arrivals and departures
+        // now reach the model as registry events (see [hooks]) and are
+        // therefore already in the partition when this tick describes it.
         heartbeats.scheduleAtFixedRate(
-            { runCatching { model.reconcilePeers() }; runCatching { model.publishGraphChanges() } },
+            { runCatching { model.publishGraphChanges() } },
             GRAPHS_POLL_MS, GRAPHS_POLL_MS, TimeUnit.MILLISECONDS,
         )
         // M5-COLD: suspend/resume and drain/resumeHost are plain management
@@ -533,8 +531,9 @@ class InspectorServer(
     fun stop() = close()
 
     override fun close() {
-        attached = false
         heartbeats.shutdownNow()
+        // every registry feed detaches, including the two any-scope ones (T21):
+        // a closed inspector is not merely disarmed, it is off the registry
         hooks.forEach { runCatching { it.close() } }
         // before the broadcaster: releasing a sink emits topology deltas, and a
         // still-attached client should see its own subscriptions retract
@@ -569,9 +568,6 @@ class InspectorServer(
 
     /** Publish any pending `lifecycle` changes now instead of waiting for the 1 s schedule — tests. */
     internal fun publishLifecycleChangesNow() = model.publishLifecycleChanges()
-
-    /** Reconcile peer refs/links now instead of waiting for the 1 s schedule — tests. */
-    internal fun reconcilePeersNow() = model.reconcilePeers()
 
     /** Has this view adopted [ref] yet? The barrier a peer-announcement test waits on. */
     internal fun knowsNow(ref: CellRef): Boolean = model.knows(ref)

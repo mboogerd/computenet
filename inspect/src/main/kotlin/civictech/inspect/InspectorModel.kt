@@ -70,19 +70,11 @@ internal class InspectorModel(
     private val edges = LinkedHashMap<UUID, Edge>()
 
     /**
-     * M5 — the refs in [nodes] this view learned from a peer announcement
-     * rather than from a local publish. Tracked explicitly because the one
-     * removal path the kernel offers no hook for —
-     * `LocationRegistry.unpublishRemotes`, the transport's disconnect — has to
-     * be found by comparing this set against the registry (see
-     * [reconcilePeers]).
-     */
-    private val mirrored = LinkedHashSet<CellRef>()
-
-    /**
      * M5 — edge ids [declareLink] created. Held apart from the registry-fed
-     * ids so [reconcilePeers]' "in my view but no longer in the registry"
-     * sweep never retracts an edge the registry was never asked about.
+     * ids so [retractDangling] never retracts an edge the registry was never
+     * asked about: a declared cross-boundary stream is a real local
+     * subscription that outlives the peer it points at (see
+     * [InspectorServer.declareLink]).
      */
     private val declared = LinkedHashSet<UUID>()
 
@@ -133,15 +125,22 @@ internal class InspectorModel(
             announcedLifecycle[ref] = lifecycleOf(ref)
         }
         // M5: an inspector started *after* peering already announced picks up
-        // no publish hook for the refs already mirrored, so the catch-up half
-        // has to find them the same way [reconcilePeers] does
-        discoverRemotes().forEach { ref ->
+        // no publish hook for the refs already mirrored. T21 closed that hole
+        // outright — [LocationRegistry.remoteRefs] names every peer-announced
+        // location directly, instead of the old inference from link endpoints
+        // plus the replica index (which missed an unlinked, unreplicated one).
+        registry.remoteRefs().forEach { ref ->
+            if (instruments(ref)) return@forEach
             nodes.getOrPut(ref) { nodeOf(ref) }
-            mirrored += ref
             componentIndex.addCell(ref)
         }
         topologyLinks().forEach { link ->
             if (touchesInstrument(link)) return@forEach
+            // a mirrored edge is only as live as the cells it names, and
+            // `unpublishRemotes` clears locations without touching the topology
+            // index — so a peer that left before this inspector existed leaves
+            // its edges behind, with no event that could ever retract them
+            if (!registry.isLocalLink(link.id) && !anchored(link)) return@forEach
             edges.getOrPut(link.id) { edgeOf(link) }
             componentIndex.addLink(link.id, link.from.cell, link.to.cell)
         }
@@ -152,12 +151,14 @@ internal class InspectorModel(
     }
 
     /**
-     * Every live topology edge — the link half of the initial sync.
+     * Every live topology edge — the link half of the initial sync, and after
+     * T21 the *only* place this view reads the whole edge set (the 1 Hz
+     * difference against it is gone; edges arrive as
+     * [LocationRegistry.onTopology] events).
      *
-     * Single point of contact with the registry's topology projection, on
-     * purpose: `LocationRegistry.topology` is private and exposed through
-     * read-only projections (T03), of which [LocationRegistry.all] is the one
-     * the inspector needs.
+     * `LocationRegistry.topology` is private and exposed through read-only
+     * projections (T03); [LocationRegistry.all] is the one a catch-up read
+     * needs, and [LocationRegistry.swapSet] the one [retractDangling] does.
      */
     private fun topologyLinks(): Set<TopologyLink> = registry.all()
 
@@ -426,6 +427,14 @@ internal class InspectorModel(
         }
     }
 
+    /**
+     * Any unpublish — a local despawn/migrate, a peer's announced eviction
+     * (`mirrorUnpublish`), or one ref of a whole peer dropped by a disconnect
+     * (`LocationRegistry.unpublishRemotes`, which T21 made notify
+     * `onUnpublish` like every other removal path). Idempotent: a ref this view
+     * does not hold is silently ignored, which is what lets the local
+     * unpublish's two hooks and a re-announced eviction all land here.
+     */
     fun unpublished(ref: CellRef) = synchronized(lock) {
         // the hook fires after the location is gone, so the removal payload is
         // served from the view — the last node the client was told about
@@ -435,7 +444,6 @@ internal class InspectorModel(
         componentIndex.removeCell(ref)
         announcedLifecycle.remove(ref)
         portNames.remove(ref)
-        mirrored -= ref
         // a despawn unpublishes but does not unlink (only an explicit
         // `Link.unlink` retracts an edge), so the flow feed's taps on this
         // cell's outlets are released from here, not from [unlinked]
@@ -444,8 +452,48 @@ internal class InspectorModel(
             put("op", Event.REMOVED)
             put("node", inspectorJson.encodeToJsonElement(node))
         })
+        retractDangling(ref)
     }
 
+    /**
+     * T21 — retract every *mirrored* edge that [ref]'s departure just left with
+     * no endpoint in this view, in the same event that removed [ref].
+     *
+     * This is what the retired 1 Hz `reconcilePeers` sweep did with its
+     * `anchored()` check over the whole edge set: `unpublishRemotes` clears
+     * *locations* and leaves the topology index alone, so a partition would
+     * otherwise leave the peer's edges drawn between two cells that are gone.
+     * Driven from the removal event instead of from a poll, it is also
+     * O(degree-of-[ref]) rather than O(V+E) per tick — [LocationRegistry.swapSet]
+     * is the incidence projection, and the edges are still in the index at hook
+     * time precisely because `unpublishRemotes` does not touch it.
+     *
+     * Two exclusions, both carried over verbatim from the sweep's rules:
+     *
+     * - a **local** edge is authoritative on its own — "a despawn unpublishes
+     *   but does not unlink", so only [unlinked] retracts one, however many of
+     *   its endpoints have left ([LocationRegistry.isLocalLink] is the scope
+     *   question, asked once per incident edge);
+     * - a **declared** edge ([declareLink]) is a real local subscription the
+     *   registry indexes nowhere, so it survives the peer going away — and
+     *   [LocationRegistry.swapSet] never names one anyway.
+     */
+    private fun retractDangling(ref: CellRef) {
+        registry.swapSet(ref)
+            .filter { it.id in edges && it.id !in declared && !registry.isLocalLink(it.id) && !anchored(it) }
+            .map { it.id }
+            .forEach(::unlinked)
+    }
+
+    /**
+     * Any topology edge this registry recorded — a local `connect` or a peer's
+     * mirrored one, both arriving on [LocationRegistry.onTopology] since T21.
+     * One handler for both: a mirrored edge is drawn exactly like a local one
+     * (its producer simply is not hosted here, so [edgeOf] reports the
+     * contract's `fused: null` for it). Upsert on the same id is idempotent
+     * apart from re-emitting the edge, which is what a re-announcing peer
+     * should produce.
+     */
     fun linked(link: TopologyLink) = synchronized(lock) {
         // the producer→sink link of an observation is instrument wiring, not
         // topology — reporting it would draw the observer effect on the canvas
@@ -485,108 +533,26 @@ internal class InspectorModel(
      * added` for a node whose content changed is exactly the upsert the client
      * applies; an announcement that changes nothing emits nothing.
      */
-    fun mirroredPublish(ref: CellRef) = synchronized(lock) { adopt(ref, announced = true) }
-
-    /**
-     * Re-derive [ref]'s node from the registry and emit it if anything about it
-     * changed. [announced] records whether this view is holding it because a
-     * peer announced it — the bit [reconcilePeers] sweeps against.
-     */
-    private fun adopt(ref: CellRef, announced: Boolean) {
+    fun mirroredPublish(ref: CellRef) = synchronized(lock) {
         val node = nodeOf(ref)
-        if (announced) mirrored += ref else mirrored -= ref
-        if (nodes.put(ref, node) == node) return
+        if (nodes.put(ref, node) == node) return@synchronized
         componentIndex.addCell(ref)
         emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
             put("op", Event.ADDED)
+            // stamped, exactly like every other node emission: `graph` and
+            // `lifecycle` belong to the world, not to the stored record (the
+            // cross-branch desync `476d047` fixed was this call losing its stamp)
             put("node", inspectorJson.encodeToJsonElement(stamped(ref, node)))
         })
     }
 
-    /**
-     * M5 — reconcile this view against the registry for the three changes the
-     * kernel fires no hook for. Driven by the inspector's scheduler, on the
-     * same tick as [publishGraphChanges] so a peer arriving or leaving lands in
-     * the component partition before the `graphs.changed` that announces it.
-     *
-     * 1. **A peer disconnected.** `LocationRegistry.unpublishRemotes(via)` —
-     *    the transport's close path — drops every location routed through a
-     *    dead socket *silently*: it notifies neither `onUnpublish` nor
-     *    `onLocalUnpublish` (unlike `mirrorUnpublish`, which does). So a
-     *    mirrored ref that has lost its location is how a disconnect becomes
-     *    visible, and it retracts as an ordinary `topology.node removed`.
-     * 2. **Mirrored links.** `mirrorLink`/`mirrorUnlink` deliberately do not
-     *    re-announce, and `onLocalTopology` fires only for *local* links — so
-     *    the peer's own edges appear and disappear in
-     *    [LocationRegistry.all] with no delta anywhere. A set difference
-     *    against this view supplies them. A mirrored link also has to be
-     *    dropped when the peer goes: `unpublishRemotes` clears *locations*, not
-     *    the topology index, so a partition leaves the peer's edges behind with
-     *    both endpoints gone — a mirrored link is therefore retained only while
-     *    at least one of its endpoints is still a cell this view knows.
-     * 3. **Late-discovered remote refs.** Ordinarily the publish hook is first,
-     *    but an announcement whose ref reaches us only as a link endpoint (or a
-     *    replica instance discovered through [LocationRegistry.instancesOf])
-     *    is adopted here rather than left as a dangling edge.
-     *
-     * Idempotent and O(V+E) on the inspector's own thread: nothing here runs on
-     * a graph thread, and it touches no cell (P6 — this is registry metadata).
-     */
-    fun reconcilePeers() = synchronized(lock) {
-        mirrored.toList().forEach { ref ->
-            if (peers.isRemote(ref)) return@forEach
-            // No location at all: the peer is gone, retract the cell. A
-            // location that turned *Local* instead means the ref migrated onto
-            // this JVM — re-derive it (it has a process host now) and stop
-            // treating it as announced, rather than deleting a live cell.
-            if (registry.location(ref) == null) unpublished(ref) else adopt(ref, announced = false)
-        }
-        discoverRemotes().forEach(::mirroredPublish)
-
-        // a local link is authoritative on its own (its hooks are exact); a
-        // mirrored one is only as live as the cells it names
-        val localIds = registry.localLinks().mapTo(HashSet()) { it.id }
-        val live = topologyLinks()
-            .filter { (it.id in localIds || anchored(it)) && !touchesInstrument(it) }
-            .associateBy { it.id }
-        live.forEach { (id, link) -> if (id !in edges) linked(link) }
-        edges.keys.filter { it !in live && it !in declared }.toList().forEach(::unlinked)
-    }
-
-    /** Does [link] still name a cell this view holds? (See [reconcilePeers] point 2.) */
+    /** Does [link] still name a cell this view holds? (See [retractDangling].) */
     private fun anchored(link: TopologyLink): Boolean =
         link.from.cell?.let { it in nodes } == true || link.to.cell?.let { it in nodes } == true
 
     /** Does [link] touch one of the inspector's own observation sinks? (See [instruments].) */
     private fun touchesInstrument(link: TopologyLink): Boolean =
         link.from.cell?.let(instruments) == true || link.to.cell?.let(instruments) == true
-
-    /**
-     * Every peer-announced ref the registry currently holds that this view has
-     * not adopted. There is no `remoteRefs()` on [LocationRegistry] — the
-     * announcement seam is a hook, not an index — so this reads the two
-     * registry projections that *do* name remote refs: the topology index
-     * (every mirrored link's endpoints) and the instances-by-logical-id index
-     * (a remote replica of a cell published here, spec 42).
-     *
-     * Residual, honestly stated: a remote cell that is neither linked to
-     * anything nor a replica of a locally published cell is invisible to a
-     * *catch-up* read. It is still picked up by the publish hook, so the only
-     * case that loses it is an inspector constructed after such a cell was
-     * announced — and even then only until the peer re-announces (a reconnect
-     * replays `localRefs()`) or the cell acquires a link. Closing the hole
-     * outright wants a remote-refs projection on `LocationRegistry`, next to
-     * `localRefs()`; that is a kernel change M5-NET does not own.
-     */
-    private fun discoverRemotes(): List<CellRef> {
-        val found = LinkedHashSet<CellRef>()
-        fun consider(ref: CellRef?) {
-            if (ref != null && ref !in nodes && peers.isRemote(ref)) found += ref
-        }
-        topologyLinks().forEach { link -> consider(link.from.cell); consider(link.to.cell) }
-        nodes.keys.toList().forEach { ref -> registry.instancesOf(ref.id).forEach(::consider) }
-        return found.toList()
-    }
 
     /**
      * M5 — an application-declared edge, for a cross-boundary stream the kernel
