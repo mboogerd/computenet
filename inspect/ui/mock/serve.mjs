@@ -5,7 +5,9 @@
 // `npm run dev` without a real `:inspect` server; extended again by M2-FE
 // for /errors + error.* events, needed here specifically because M2-BE runs
 // in parallel and may not be merged yet — this mock is the only way to
-// screenshot the Errors toggle/subsection without it).
+// screenshot the Errors toggle/subsection without it; extended again by
+// M3-FE for flow.rates, same reasoning — M3-BE (the real tap-based flow
+// feed) runs in parallel and does not exist in this worktree either).
 //
 // No deps — Node's built-in http module only. NOT a stand-in for the real
 // server's semantics (single global observation slot, one fake "live"
@@ -144,6 +146,49 @@ setInterval(bumpParked, 5000);
 setInterval(emitDeadLetter, 12000);
 setInterval(bumpRestart, 20000);
 
+// --- flow state --------------------------------------------------------
+// Simulates the M3 tap-based flow feed (M3-FE ticket) so the Flow toggle,
+// pulses, rate labels, fused rendering, and the per-port Flow subsection can
+// be checked manually against `npm run dev` — M3-BE (the real feed) runs in
+// parallel and does not exist in this worktree yet. One edge is marked
+// `fused: true` purely for this mock's own demo purposes: only the
+// in-memory served copy of the snapshot gains the flag, never the checked-in
+// `fixtures/topology.json` (still `fused: null` throughout, per its own
+// "verbatim capture" contract — see test/fixture.test.ts).
+const FUSED_EDGE_ID = snapshot.edges[0]?.id;
+if (snapshot.edges[0]) snapshot.edges[0].fused = true;
+
+// Three edges cycle through bands 1/2/3 over time; a fourth goes silent
+// every few windows so the store's grace-then-decay behavior
+// (sync/flowStore.ts: "absent from a batch decays to zero after 2 missed
+// windows") is visible in the UI, not just in the unit tests.
+const flowEdges = snapshot.edges.filter((e) => e.id !== FUSED_EDGE_ID).slice(0, 4);
+const BAND_RATES = [2, 12, 40];
+let flowTick = 0;
+
+function emitFlowRates() {
+  flowTick += 1;
+  const edges = [];
+  flowEdges.forEach((e, i) => {
+    // The 4th edge goes silent for two *consecutive* windows every 6-tick
+    // cycle — long enough to actually cross DECAY_AFTER_MISSED_WINDOWS (2)
+    // and disappear from the canvas/Flow subsection, not just the 1-window
+    // grace period (a single miss deliberately stays visible — see
+    // sync/flowStore.ts).
+    if (i === 3 && flowTick % 6 >= 4) return;
+    const rate = BAND_RATES[(flowTick + i) % BAND_RATES.length] + Math.random();
+    edges.push({
+      id: e.id,
+      rate: Math.round(rate * 10) / 10,
+      lastWave: { source: 'mock0000ab', counter: flowTick },
+      hop: (i % 3) + 1,
+    });
+  });
+  broadcast('flow.rates', { window: 1000, edges });
+}
+
+setInterval(emitFlowRates, 1000);
+
 function findNode(ref) {
   return snapshot.nodes.find((n) => n.ref === ref);
 }
@@ -227,7 +272,7 @@ const server = createServer((req, res) => {
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('not found — this is the M0/M1/M2-FE fixture mock, not the real :inspect server');
+  res.end('not found — this is the M0/M1/M2/M3-FE fixture mock, not the real :inspect server');
 });
 
 server.listen(port, () => {

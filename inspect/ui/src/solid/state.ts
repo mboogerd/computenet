@@ -3,6 +3,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Edge, EdgeRemoval, InspectEvent, Ref } from '../api/types';
 import { onStateSummary } from './detail';
 import { fetchErrorSnapshot, onErrorDeadLetter, onErrorParked, onErrorRestart } from './errors';
+import { onFlowRates } from './flow';
 import { selection, setSelection } from './selection';
 import { TopologyClient, type ConnState } from '../sync/client';
 import type { EdgeRec, NodeRec } from '../sync/records';
@@ -93,6 +94,13 @@ function applyEvent(event: InspectEvent): void {
       break;
     case 'error.restart':
       onErrorRestart(event.payload);
+      break;
+    case 'flow.rates':
+      // Never touches the topology store — routed to the M3 flow store
+      // (solid/flow.ts), which like errors is independent of selection (a
+      // batch covers every currently-active edge in the whole graph, not
+      // just the selected cell's).
+      onFlowRates(event.payload);
       break;
     default:
       break; // heartbeat, and any later-milestone kind: no local state to update yet

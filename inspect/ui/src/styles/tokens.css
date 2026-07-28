@@ -38,6 +38,11 @@
   --error: #dc2626;
   --parked: #d97706;
 
+  /* flow (M3: pulses/rate labels — v2 mockup's "amber pulses", a distinct
+     warm hue from --parked's amber so the Flow and Errors overlays stay
+     tellable apart when both toggles are on at once) */
+  --flow-pulse: #eab308;
+
   --radius: 8px;
   --radius-sm: 5px;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -67,6 +72,7 @@
   --status-pending: #d99646;
   --error: #f87171;
   --parked: #fbbf24;
+  --flow-pulse: #facc15;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -91,6 +97,7 @@
     --status-pending: #d99646;
     --error: #f87171;
     --parked: #fbbf24;
+    --flow-pulse: #facc15;
   }
 }
 

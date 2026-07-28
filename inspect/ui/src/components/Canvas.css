@@ -209,3 +209,78 @@
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* Flow toggle (M3-FE): an active (non-fused) edge tints its line amber; the
+   moving pulses (below) carry the rate under normal motion, so the line
+   itself stays a light touch. Under `prefers-reduced-motion: reduce` no
+   pulses render at all (gated in JS — `util/flow.ts`'s `pulsesToRender`),
+   so `[data-band]` steps the stroke width/opacity instead — "static
+   intensity styling instead of pulses" (ticket Implement §2). */
+.edge.flow-active {
+  stroke: var(--flow-pulse);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edge.flow-active[data-band='1'] {
+    stroke-width: 2;
+    opacity: 0.6;
+  }
+  .edge.flow-active[data-band='2'] {
+    stroke-width: 3;
+    opacity: 0.8;
+  }
+  .edge.flow-active[data-band='3'] {
+    stroke-width: 4.5;
+    opacity: 1;
+  }
+}
+
+/* Flow toggle: fused state made visibly explicit — thick stroke, inherited
+   by the two child lines the base `.is-fused` (M0) double-offset rendering
+   already draws (`stroke-width` is an inherited SVG presentation
+   property). */
+.is-fused.flow-fused {
+  stroke-width: 3;
+}
+
+/* Flow toggle: the wide invisible hit-line carrying the hover tooltip
+   (M3-FE ticket Implement §3). `pointer-events: stroke` needs an actual
+   (even fully transparent) stroke to hit-test against; `.canvas__svg`'s
+   blanket `pointer-events: none` is inherited by every other edge/port
+   element, but this one explicitly opts back in. */
+.edge-hit {
+  stroke: transparent;
+  stroke-width: 12;
+  fill: none;
+  pointer-events: stroke;
+}
+
+/* Flow toggle: rate ("N.n/s") or "fused" label at an edge's midpoint. */
+.edge-flow-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--flow-pulse);
+  color: #1a1300;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.edge-flow-label--fused {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Flow toggle: pulses travelling along an edge (SMIL `animateMotion` on
+   each, set in Canvas.tsx). `r` on the circle is the only geometry needed —
+   `animateMotion` positions it directly in the SVG's own coordinate space. */
+.flow-pulse {
+  fill: var(--flow-pulse);
+  pointer-events: none;
+}

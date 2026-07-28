@@ -177,6 +177,38 @@ export function rowCells(row: TableRow): readonly Value[] {
   return isTombstoneRow(row) ? row.cells : row;
 }
 
+// --- M3: flow (20-api-contract.md "flow.rates" SSE event) --------------
+//
+// Unlike the other M-tickets there is no `GET` snapshot endpoint for flow —
+// the contract defines only the 1 Hz SSE batch. The client therefore has no
+// "resync" for flow the way topology/errors do; a batch is self-contained
+// (every currently-active edge, "edges with rate 0 omitted") so a client
+// that missed a batch or two just sees fewer/staler edges until the next one
+// arrives — see `sync/flowStore.ts`'s decay-on-silence logic.
+
+/** One edge's reading inside a `flow.rates` batch. `rate`'s unit is not
+ *  specified by the contract beyond "per-edge rates over the window"; M3-BE
+ *  aggregates over a 1000 ms window (`window` below), so this client treats
+ *  `rate` as already normalized to messages/second — see `util/flow.ts`. */
+export interface FlowRateEdge {
+  id: string;
+  rate: number;
+  lastWave: Frontier | null;
+  hop: number | null;
+}
+
+/** `flow.rates` payload — "1 Hz batch; edges with rate 0 omitted" (contract). */
+export interface FlowRatesPayload {
+  window: number;
+  edges: readonly FlowRateEdge[];
+}
+
+export interface FlowRatesEvent {
+  seq: number;
+  kind: 'flow.rates';
+  payload: FlowRatesPayload;
+}
+
 // --- SSE events -------------------------------------------------------
 
 export interface TopologyNodeEvent {
@@ -288,7 +320,8 @@ export type InspectEvent =
   | HeartbeatEvent
   | ErrorDeadLetterEvent
   | ErrorParkedEvent
-  | ErrorRestartEvent;
+  | ErrorRestartEvent
+  | FlowRatesEvent;
 
 /** The wire-level shape before we know whether `kind` is one M0 understands.
  *  Deliberately NOT a member of the `InspectEvent` union: adding a
@@ -315,4 +348,5 @@ export const KNOWN_EVENT_KINDS = new Set<string>([
   'error.deadLetter',
   'error.parked',
   'error.restart',
+  'flow.rates',
 ]);
