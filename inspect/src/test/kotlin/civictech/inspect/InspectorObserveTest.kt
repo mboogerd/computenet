@@ -94,23 +94,35 @@ class InspectorObserveTest {
     }
 
     @Test
-    fun `a released observation stops folding — the producer no longer reaches it`() {
+    fun `a released observation fires no further onChange`() {
         val cell = set()
+        val events = listen()
         probe.postForm("", observePath(cell.ref)).statusCode() shouldBe 204
         val sinkRef = awaitSink(cell.ref)
         add(cell, "ada")
-        awaitUntil("first element observed") { state(cell.ref).value.toString() == """["ada"]""" }
+        // catch-up summary plus the one for this add
+        events.awaitKind(Event.STATE_SUMMARY, 2)
 
         probe.delete(observePath(cell.ref)).statusCode() shouldBe 204
         awaitUntil("observe sink despawned") { sinkRef !in registry.localRefs() }
+        val summariesAtRelease = events.countOfKind(Event.STATE_SUMMARY)
 
-        // the cell keeps working; nothing is delivered to the released sink, so
-        // no dead letters are raised for a despawned target either
-        val before = host.supervisionAccounting().deadLetters
+        // the cell keeps working, and its outlet no longer reaches the sink:
+        // the fold is not merely ignored, it is never invoked again
+        val deadLettersBefore = host.supervisionAccounting().deadLetters
         add(cell, "grace")
-        awaitUntil("second add applied") { host.lookup<SetApi<String>>(cell.ref) != null }
-        Thread.sleep(100)
-        host.supervisionAccounting().deadLetters shouldBe before
+        // the add is observable through a *fresh* subscription, so waiting on
+        // it is a real barrier rather than a sleep-and-hope
+        probe.postForm("", observePath(cell.ref)).statusCode() shouldBe 204
+        awaitUntil("the post-release add landed in the cell") {
+            state(cell.ref).value.toString() == """["ada","grace"]"""
+        }
+
+        // the released sink contributed nothing to that: every summary since
+        // the release belongs to the new subscription, and no delivery to the
+        // despawned sink dead-lettered
+        events.countOfKind(Event.STATE_SUMMARY) shouldBe summariesAtRelease + 1
+        host.supervisionAccounting().deadLetters shouldBe deadLettersBefore
     }
 
     @Test
@@ -310,6 +322,8 @@ class InspectorObserveTest {
             awaitUntil("$count sse frames (saw ${frames.size})", timeoutMs = 10_000) { frames.size >= count }
             return frames.toList()
         }
+
+        fun countOfKind(kind: String): Int = frames.count { it.kind == kind }
 
         fun awaitKind(kind: String, count: Int): List<JsonObject> {
             awaitUntil("$count '$kind' frames", timeoutMs = 10_000) {
