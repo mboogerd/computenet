@@ -2,6 +2,7 @@ package civictech.demo.exchange
 
 import civictech.testkit.JvmPeer
 import civictech.testkit.awaitUntil
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.net.HttpURLConnection
@@ -70,6 +71,7 @@ class ExchangeScaffoldTest {
 
     private fun down(httpPort: Int): Boolean = !up(httpPort)
 
+    @Tag("multi-jvm")
     @Test
     fun `edits on either JVM converge to the same region-sum board`() {
         val httpA = JvmPeer.freePort()
@@ -104,6 +106,7 @@ class ExchangeScaffoldTest {
         }
     }
 
+    @Tag("multi-jvm")
     @Test
     fun `a kill -9'd peer recovers its journaled writer state and both sides re-converge`() {
         val httpA = JvmPeer.freePort()

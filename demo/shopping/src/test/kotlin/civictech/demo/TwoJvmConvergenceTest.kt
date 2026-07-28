@@ -2,6 +2,7 @@ package civictech.demo
 
 import civictech.testkit.JvmPeer
 import civictech.testkit.awaitUntil
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.net.HttpURLConnection
 import java.net.URI
@@ -39,6 +40,7 @@ class TwoJvmConvergenceTest {
             .responseCode == 200
     }.getOrDefault(false)
 
+    @Tag("multi-jvm")
     @Test
     fun `edits on either JVM converge on the other`() {
         val httpA = JvmPeer.freePort()

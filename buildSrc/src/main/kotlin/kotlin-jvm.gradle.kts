@@ -26,7 +26,18 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        // Two-JVM/`ProcessBuilder` tests (`@Tag("multi-jvm")`) fork external `java`
+        // processes and wait on fixed wall-clock awaits for OS-level process
+        // startup + socket bind — starved hard by scheduler contention on a
+        // constrained-core CI runner (T13 / doc/remediation/AUDIT-2026-07-28.md
+        // §W1). Gated by project property so a plain `./gradlew test` is
+        // unchanged (runs everything); CI passes one of these two, one per lane.
+        when {
+            project.hasProperty("multiJvmOnly") -> includeTags("multi-jvm")
+            project.hasProperty("excludeMultiJvm") -> excludeTags("multi-jvm")
+        }
+    }
     // The whole kernel suite runs in one JVM fork; ProtocolSupport keys ports in a
     // JVM-global map whose handler-closure values reference their keys, so ports
     // created across the suite accumulate (a pre-existing structural retention the
