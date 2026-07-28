@@ -117,7 +117,7 @@ internal class FlowCollector(
     /** One tap per producing outlet, shared by every edge that outlet feeds. */
     private val sites = LinkedHashMap<PortRef, TapSite>()
 
-    /** Did the previous window carry traffic? Drives the trailing all-quiet batch. */
+    /** Did the last published window have anything tapped? Drives the trailing all-quiet batch. */
     private var everSampled = false
 
     override fun bind(link: TopologyLink): Boolean? {
@@ -167,9 +167,11 @@ internal class FlowCollector(
      * [FlowBatch] of the edges that carried traffic (the contract omits rate-0
      * edges). Runs on the inspector's scheduler thread.
      *
-     * A window with no traffic at all still publishes an empty batch as long as
-     * anything is tapped — the client's decay rule keys on *received* windows,
-     * so silence must not be ambiguous between "quiet" and "feed stopped".
+     * Cadence: a window publishes whenever anything is tapped, even when
+     * nothing moved — the client's decay rule keys on *received* windows, so a
+     * quiet second must read as "quiet", not as "the feed stopped". Once the
+     * last tap is gone one trailing empty window says so, and the feed then
+     * falls silent rather than emitting an empty batch every second forever.
      */
     fun sample() {
         val batch = synchronized(lock) {
@@ -202,6 +204,8 @@ internal class FlowCollector(
             val snapshot = sites.values.toList()
             sites.clear()
             edges.clear()
+            // a closed collector is silent, not one trailing batch short of it
+            everSampled = false
             snapshot
         }
         all.forEach { it.detach() }

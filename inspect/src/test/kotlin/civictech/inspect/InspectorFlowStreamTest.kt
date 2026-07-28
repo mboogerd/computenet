@@ -78,6 +78,34 @@ class InspectorFlowStreamTest {
     }
 
     @Test
+    fun `the feed samples with no client attached, and a client leaving mid-load takes nothing with it`() {
+        val source = spawnSet()
+        val sink = spawnSet()
+        host.managementInlet.call.connect(source.ref, "outlet", sink.ref, "deltaInlet")
+        val ops = host.lookup<SetApi<String>>(source.ref)!!.inlet.call
+
+        // nobody is watching: the window is still built and simply goes nowhere
+        repeat(3) { ops.add("pre$it") }
+        awaitUntil("pre-load flowed") { source.outlet.waveState().highWater >= 3 }
+        server.sampleFlowNow()
+
+        val stream = listen()
+        repeat(2) { ops.add("mid$it") }
+        awaitUntil("mid-load flowed") { source.outlet.waveState().highWater >= 5 }
+        server.sampleFlowNow()
+        stream.awaitKind(Event.FLOW_RATES).kind shouldBe Event.FLOW_RATES
+
+        // the client goes away mid-load — the graph must not notice
+        stream.close()
+        awaitUntil("the client detached") { server.attachedClients == 0 }
+        repeat(4) { ops.add("post$it") }
+        awaitUntil("post-load flowed") { source.outlet.waveState().highWater >= 9 }
+        server.sampleFlowNow()
+
+        awaitUntil("every delta reached the sink") { sink.membership().size == 9 }
+    }
+
+    @Test
     fun `an unlinked edge releases its tap through the topology hook`() {
         val source = spawnSet()
         val sink = spawnSet()
@@ -102,6 +130,28 @@ class InspectorFlowStreamTest {
         host.managementInlet.call.despawn(source.ref)
 
         awaitUntil("the despawn reached the collector") { server.tappedOutlets.isEmpty() }
+    }
+
+    @Test
+    fun `an inspector started against a running graph taps what is already linked`() {
+        val source = spawnSet()
+        val sink = spawnSet()
+        val link = (host.managementInlet.call.connect(source.ref, "outlet", sink.ref, "deltaInlet")
+            as LinkResult.Connected).link
+
+        // a second inspector, constructed after the graph was already wired:
+        // the startup sync must bind the edges it adopts, not only the ones it
+        // later sees appear
+        InspectorServer(registry, host, port = 0).use { late ->
+            late.tappedOutlets shouldBe setOf(source.outlet.ref)
+            json.decodeFromString<TopologySnapshot>(
+                HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI("http://localhost:${late.start().boundPort}${InspectorServer.TOPOLOGY_PATH}"))
+                        .build(),
+                    HttpResponse.BodyHandlers.ofString(),
+                ).body()
+            ).edges.single { it.id == link.id.toString() }.fused shouldBe false
+        }
     }
 
     @Test
