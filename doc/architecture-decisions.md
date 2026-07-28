@@ -1,0 +1,105 @@
+# Architecture decisions
+
+Durable record of architecture audits. Read before starting a new audit: the
+marker sets the incremental baseline, and the declined list prevents
+re-litigating settled questions.
+
+This ledger is maintained by whatever process acts on it: resolving a finding
+updates its Status; completing a body of work verifies the ledger's claims
+against the result and appends a fresh audit marker.
+
+The 2026-07-27 full audit predates this file; its record lives in
+`doc/remediation/COVERAGE.md` (findings → tickets T01–T12) and remains
+authoritative for its own deferred (⏸) and excluded (✖) rows.
+
+---
+
+## Audit 2026-07-28
+
+**Marker:** `dcfbb33` · **Mode:** incremental from `742f7ca` (the 2026-07-27
+full audit; delta = 168 commits, dominated by the new `:inspect` subsystem +
+`inspect/ui`)
+**Principles evaluated:** inspector boundary containment · kernel observation
+purity · spec-led integrity · no parallel models · cohesion of delta hotspots ·
+verification architecture
+**Method:** 6 parallel principle auditors → dedupe/normalize → independent
+adversarial refutation of every Critical/High. Full report and implementation
+plan: `doc/remediation/AUDIT-2026-07-28.md`.
+
+### Accepted
+
+| # | Finding | Severity | Location | Solution | Status |
+|---|---|---|---|---|---|
+| A1 | CI has never gated: exactly one run in repo history, red (2 two-JVM exchange tests on the 2-core runner); the untracked-files guard step has never executed; three docs claim gates that never gated | Critical | `.github/workflows/ci.yml`, `ExchangeScaffoldTest` | W1: tag multi-JVM tests, split fast/serial CI lanes, badge | planned |
+| A2 | `WritePosture`/`SAFETY_PARK` deleted from code (T03) but still specified normatively; G-44 defers work on the deleted enum | High | `doc/spec/40-distribution/42-replication.md:333`, `91-gap-analysis.md:95` | W3: rewrite §, mint G-marker, reword G-44 (mirror the G-65 treatment its sibling deletions got) | planned |
+| A3 | `:inspect` (largest delta module) absent from `doc/ARCHITECTURE.md`, `AGENTS.md`, `README.md` — defeats the mandated orientation path; enabled the ratchet gap | High | `doc/ARCHITECTURE.md`, `AGENTS.md` | W3 docs pass; recurrence blocked by guardrail G2 | planned |
+| B1 | `:inspect` outside all three T10 ratchets; imports `.proxy` unscanned | Medium | `DemoSurfaceAllowlistTest` | **done** — G1 widened the gate per-module | done |
+| B2 | Kernel API forces `.proxy` coupling on out-of-kernel observers (`FanOutlet.tap` needs a dynamic proxy; `Remote.sink` type leak); untracked | Medium | `FanOutlet.kt:275`, `LocationRegistry.kt:30` | W5: payload-agnostic observe attachment; sink projection batched with deferred LocationRegistry extraction | planned |
+| B3 | `Observations.viewFor` closed world: 3 foldable cells blind today (`PresenceCountCell`, `MergeableGroupByCell`, `ShardCell`), package actively growing, 3 more cells scheduled in plan 96 | Medium | `Observations.kt:306-344` | **guardrail done** (G3, empirically found 2 of the 3); W4 folds the three and shrinks `knownBlind` to empty | partial |
+| B4 | Inspector semantics carry 0 requirement ids / 0 concord scenarios; subsystem invisible to the CONCORDANCE gap worklist (denominator honesty) | Medium | `97-inspector-plan/` | W3: DISPUTES.md entry recording the exclusion + revisit trigger | planned |
+| B5 | `inspect/ui`: 259 tests/typecheck run by no gate (EVAL control retired with the plan); 5 recorded fixture drifts in 6 milestones | Medium | `ci.yml`, `inspect/ui/fixtures/` | W4: standalone npm CI job (+ agora/ui) + strict-decode fixture test in `:inspect` | planned |
+| B6 | `InspectorModel` accretion: 205→745 lines, edited by every milestone, one shipped semantic merge bug (`476d047`); all named next increments land in it | Medium | `InspectorModel.kt` | W6: `PeerReconciler` extraction (partly falls out of W5 `remoteRefs`); route future tickets to avoid pairwise editing | planned |
+| B7 | `InspectorServer` fuses DI root, hand-rolled routing (order/length-dependent prefix trap), 6 schedules, 11 test accessors | Medium | `InspectorServer.kt` | W6: routing split + single tick list | planned |
+| B8 | `Access-Control-Allow-Origin: *` + wildcard bind + `POST …/wake` is a no-preflight simple request — any web page can resume suspended cells; the justifying KDoc ("read-only endpoints") was falsified by M5 | Medium | `InspectorServer.kt:637`, `DemoShell.kt:24` | W6: loopback bind, GET-only wildcard or preflight-forcing header on wake, correct KDoc | planned |
+| B9 | `LocationRegistry` notification seam: `onPublish`/`onUnpublish` return no handle (listener leak, `attached`-flag workaround); 3 mutation paths notify nobody, forcing the 1 Hz O(V+E) shadow sweep | Medium | `LocationRegistry.kt:97-108` | W5: symmetrize hooks (AutoCloseable), `remoteRefs()` + fire hooks from `unpublishRemotes`/`mirrorLink` → retire `reconcilePeers` | planned |
+| B10 | `snapshotOf` routes through `HostScheduler.submit`; `SimulationController`'s queue is documented not-thread-safe — first deterministic inspector test corrupts it silently | Medium | `ManagedHost.kt:1054`, `SimulationController.kt:82-94` | W5: fail fast on single-threaded schedulers (or synchronized submit with determinism argument); honor cancellation | planned |
+| B11 | `FanOutlet` per-message: redundant `.toList()` copy of an already-COW list + per-subscriber map lookup (T04 residual on the hottest path) | Medium | `FanOutlet.kt:146-147` | W5: iterate COW lists directly | planned |
+| B12 | `DocLints` package pointers resolve at directory granularity — type-level moves pass green; 2 stale citations live now (`34-scheduling.md:8` AttentionPolicy, G-63 stale proposal) | Medium | `concord/.../DocLints.kt:70-91` | W3: resolve final PascalCase segment to a declared type; fix the 2 instances | planned |
+| B13 | M5-NET socket path verified only by a hand-run two-JVM recipe; automated test covers loopback shape only | Medium | `InspectorNetTest.kt` | W4 (sequenced after W1): one shopping two-JVM `--inspect-port` assertion | planned |
+| B14 | `Canvas.tsx` FE accretion twin (203→509, every FE milestone; caused ticket serialization) | Medium | `inspect/ui/src/components/Canvas.tsx` | W6 optional: per-overlay components; gate on FE work actually being scheduled | planned |
+
+### Declined
+
+| Finding | Severity claimed | Reason declined |
+|---|---|---|
+| `snapshotOf` at band 0 preempts management; 50-wide fan-out starves data dispatch | High | Refuted: `DataSearch.read` blocks per read — at most one in-flight snapshot per search; snapshots are shallow copies; the cited `34-scheduling.md` §5 text constrains *attention banding*, is marked unimplemented, and band 0 already carries non-management work; sanctioned twice in the plan (`90-progress-log.md:359,1031`). Low residual (orphaned task after abandoned search on a pathological cell) folded into B10's cancellation check. |
+| Search/state reads bypass `disclosureFilter` — second disclosure enforcement point | Medium | Refuted: `43-security.md:78` `LocalTrusted` sanctions in-host/same-registry crossings; `DataSearch` reads hot, locally-hosted cells only — no membrane is crossed; G-54 core is landed and its residual list does not include local observers. |
+| `ValueEncoder.normalize` decodes only 3 of ~25 snapshot shapes | Medium | Refuted: `?: raw` fallback renders unknown shapes as their raw map — cosmetic fidelity on a mostly-unwired path, not unobservability. |
+| `types.ts` `net: string\|null` diverges from `Dto.kt` non-null | High (as cited) | Refuted: wider type, every consumer coalesces defensively; the real defect is a stale comment. Free-ride fix in W4. |
+| `ManagedHost` regrew / accessors made supervision extraction harder | — | Checked clean: growth is remediation KDoc minus T11 extractions; the four accessors are KDoc-heavy readers of genuinely host-private state. |
+| `SingleWriterReplication` +95 added responsibility | — | Checked clean: T07-A brought shipping-link formation into agreement with `Replication`; T03 removed a concern. |
+| UI god store | — | Checked clean: 74-line event router, per-milestone modules; `Canvas.tsx` is the only FE accretion site (B14). |
+| Concord `Driver` SPI observation verbs (`topologySnapshot`, `flowRates`, …) | — | Declined for now: real SPI cost, only pays off with a second inspector binding. Revisit trigger: a second binding, or the inspector becoming product surface. |
+| Normative spec chapter for inspector semantics now | — | Declined in favor of the cheaper honest form (B4's DISPUTES entry + W4 executable contract tests). Same revisit trigger as above. |
+
+Do not re-report these without new evidence. If the reason no longer holds,
+say which part changed.
+
+### Guardrails
+
+**Added** (each file carries its own amendment header):
+
+- **G1** — per-module `civictech.cell` surface allowlist (demo leaves + `:inspect`;
+  `.proxy` allowed for `:inspect` only, documented as forced and shrinking) —
+  `kernel/src/test/kotlin/civictech/cell/architecture/DemoSurfaceAllowlistTest.kt`,
+  from findings B1/B2. Green.
+- **G2** — every `settings.gradle.kts` module appears in `doc/ARCHITECTURE.md`
+  (shrinking exception seed: `:inspect`) —
+  `kernel/src/test/kotlin/civictech/cell/architecture/ModuleInventoryTest.kt`,
+  from finding A3. Green; the exception is deleted by W3.
+- **G3** — every `SetDelta`/`MapDelta`-emitting cell resolves an
+  `Observations.viewFor` fold (reflective over generic signatures, no
+  hand-list to rot; shrinking `knownBlind` seed of 3, each entry
+  asserted-stale-on-fix) —
+  `inspect/src/test/kotlin/civictech/inspect/ObservationsCompletenessTest.kt`,
+  from finding B3. Green. Empirically found 2 blind cells beyond the audit's 1.
+
+**Considered, not encoded:**
+
+- Fixture ↔ `Dto.kt` strict-decode test — it is W4 implementation (a contract
+  test, not a structure rule); encode when W4 lands.
+- File-size / responsibility-count ratchets for `InspectorModel`/`Canvas` —
+  judgment-based, generate exceptions faster than value.
+- Lock-residency assertion ("no O(V+E) work under the model monitor") —
+  heuristic, not mechanically checkable.
+- Concord scenarios for inspector semantics — blocked on the declined Driver
+  SPI extension; see Declined.
+- `DocLints` type-level pointer resolution — a lint-code change (W3), not a
+  new rule; once landed it *is* the guardrail for the B12/A2 class.
+
+**Amended:**
+
+- `DemoSurfaceAllowlistTest` (T10-B) generalized from a demo-only walk to the
+  per-module table (G1). Approved as part of accepting this audit; the demo
+  set is unchanged, `:inspect`'s set is seeded from its actual current
+  surface.

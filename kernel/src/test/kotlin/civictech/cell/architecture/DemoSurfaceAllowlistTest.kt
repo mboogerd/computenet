@@ -5,34 +5,48 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * T10-B: with `:kernel` at 323 public / 20 internal declarations
- * (`doc/remediation/tickets/T10-architecture-ratchets.md` problem statement),
- * nothing physically stops a demo from reaching past the intended
- * application surface into scheduling/protocol/proxy internals. Demos are
- * meant to sit on the outward-facing vocabulary — `civictech.cell` root
- * types, `.host`, `.port`, `.graph`, `.data*`, `.observe`, `.link`, `.wire`
- * (the bridge cells `Peering` et al.), plus `.consistency` (`GlitchFreeCell`,
- * used by `:demo:exchange`), `.control` (`Magnitude`, used by `:demo:agora`),
- * and `.durability` (`FileJournal`, used by `:demo:agora`) — plus
- * `civictech.testkit`.
+ * Architecture guardrail (T10-B, widened by the 2026-07-28 audit).
  *
- * The allowlist below is seeded from the actual current state of every `.kt`
- * file under each demo module's `src/main` (verified by running this test);
- * it is not a design aspiration independent of the code. A new demo reaching into an
- * unlisted package (e.g. `.protocol`, `.proxy`) fails here, naming the file,
- * the import, and this allowlist so the fix is either to route through an
- * already-allowed package or to extend [allowedCellPrefixes] in the same PR.
+ * Enforces: every application-surface module (each demo leaf, `inspect`)
+ * imports only its allowed slice of `civictech.cell`.
+ *
+ * Amendment policy: adding a module row or tightening a set is always
+ * allowed. Widening a set, relaxing, or deleting a rule requires human
+ * approval and a note in `doc/architecture-decisions.md`. A failing guardrail
+ * is evidence the change is wrong until a human says otherwise — do not edit
+ * this file to make a build pass.
+ *
+ * T10-B's original problem statement: with `:kernel` at 323 public / 20
+ * internal declarations, nothing physically stops an out-of-kernel consumer
+ * from reaching past the intended application surface into
+ * scheduling/protocol/proxy internals. The original gate walked the demo
+ * tree only; `:inspect` was created 53 minutes after the gate landed and sat
+ * outside it (audit 2026-07-28, finding B1). The walk is now driven by a
+ * per-module table so the next consumer module must claim a surface here on
+ * the day it is created.
+ *
+ * Each allowlist is seeded from the actual current state of the module's
+ * `src/main` sources (verified by running this test), not a design
+ * aspiration. Notes on `inspect`'s two extra prefixes:
+ *
+ * - `proxy`: forced by kernel API shape — `FanOutlet.tap` takes a `Use<Api>`,
+ *   so a payload-agnostic observer must synthesize a dynamic proxy
+ *   (`Flow.kt`), and `LocationRegistry.Remote.sink` is declared as
+ *   `civictech.cell.proxy.InvocationSink` (`Peers.kt`). Shrinking this to a
+ *   kernel-owned observe seam is the tracked end state (audit finding B2).
  */
 class DemoSurfaceAllowlistTest {
 
     companion object {
         /**
-         * First segment after `civictech.cell.` that a demo main source may import.
-         * Anything imported directly from the bare `civictech.cell` root package
-         * (no further segment, e.g. `civictech.cell.CellRef`) is always allowed —
-         * that is the root vocabulary the whole model is built on.
+         * First segment after `civictech.cell.` that each module's main
+         * sources may import, keyed by the source root that the segment
+         * applies to. Anything imported directly from the bare
+         * `civictech.cell` root package (no further segment, e.g.
+         * `civictech.cell.CellRef`) is always allowed — that is the root
+         * vocabulary the whole model is built on.
          */
-        val allowedCellPrefixes = setOf(
+        val demoCellPrefixes = setOf(
             "host",
             "port",
             "graph",
@@ -43,6 +57,16 @@ class DemoSurfaceAllowlistTest {
             "consistency",
             "control",
             "durability",
+        )
+
+        val inspectCellPrefixes = setOf(
+            "host",
+            "port",
+            "data",
+            "observe",
+            "link",
+            "wire",
+            "proxy", // see class KDoc — forced by FanOutlet.tap / Remote.sink shapes
         )
     }
 
@@ -57,18 +81,19 @@ class DemoSurfaceAllowlistTest {
         return dir
     }
 
+    private fun mainKotlinFiles(sourceRoot: File): List<File> =
+        if (!sourceRoot.isDirectory) emptyList()
+        else sourceRoot.walkTopDown().filter { it.isFile && it.extension == "kt" }.sortedBy { it.path }.toList()
+
     private fun demoMainKotlinFiles(root: File): List<File> {
         val demoDir = File(root, "demo")
         if (!demoDir.isDirectory) return emptyList()
         return demoDir.listFiles { f -> f.isDirectory }.orEmpty()
-            .map { File(it, "src/main/kotlin") }
-            .filter { it.isDirectory }
-            .flatMap { it.walkTopDown().filter { f -> f.isFile && f.extension == "kt" } }
-            .sortedBy { it.path }
+            .flatMap { mainKotlinFiles(File(it, "src/main/kotlin")) }
     }
 
-    /** Returns null (in scope, allowed) or the disallowed import path. */
-    private fun disallowedImport(importPath: String): Boolean {
+    /** True when the import path falls outside the module's allowed surface. */
+    private fun disallowedImport(importPath: String, allowedCellPrefixes: Set<String>): Boolean {
         val rest = importPath.removePrefix("civictech.cell.")
         if (rest == importPath) return false // not a civictech.cell import at all — out of scope
         if (!rest.contains('.')) return false // direct root member (e.g. CellRef, onEach, *) — always allowed
@@ -76,45 +101,59 @@ class DemoSurfaceAllowlistTest {
         return firstSegment !in allowedCellPrefixes
     }
 
-    @Test
-    fun `demo main sources only import the allowed civictech-cell surface`() {
-        val root = repoRoot()
-        val violations = mutableListOf<String>()
-
-        val scanned = demoMainKotlinFiles(root)
-        // Non-vacuity: `demoMainKotlinFiles` degrades to an empty list when the
-        // demo tree cannot be located, which would make this gate pass forever
-        // while checking nothing.
-        assertTrue(scanned.size >= 10) {
-            "scanned only ${scanned.size} demo main sources under ${root.path}/demo — the walk is " +
-                "broken (wrong repo root?), not the demo tree"
-        }
-
-        scanned.forEach { file ->
+    private fun scan(files: List<File>, allowed: Set<String>, root: File, violations: MutableList<String>) {
+        files.forEach { file ->
             file.readLines().forEachIndexed { index, line ->
                 val match = cellImport.find(line) ?: return@forEachIndexed
                 val importPath = match.groupValues[1]
-                if (disallowedImport(importPath)) {
+                if (disallowedImport(importPath, allowed)) {
                     violations += "${file.relativeTo(root).path}:${index + 1}: import $importPath"
                 }
             }
         }
+    }
+
+    @Test
+    fun `application-surface main sources only import their allowed civictech-cell slice`() {
+        val root = repoRoot()
+        val violations = mutableListOf<String>()
+
+        val demoFiles = demoMainKotlinFiles(root)
+        val inspectFiles = mainKotlinFiles(File(root, "inspect/src/main/kotlin"))
+        // Non-vacuity: both walks degrade to an empty list when the tree
+        // cannot be located, which would make this gate pass forever while
+        // checking nothing.
+        assertTrue(demoFiles.size >= 10) {
+            "scanned only ${demoFiles.size} demo main sources under ${root.path}/demo — the walk is " +
+                "broken (wrong repo root?), not the demo tree"
+        }
+        assertTrue(inspectFiles.size >= 5) {
+            "scanned only ${inspectFiles.size} inspect main sources under ${root.path}/inspect — the walk " +
+                "is broken (wrong repo root?), not the inspect tree"
+        }
+
+        scan(demoFiles, demoCellPrefixes, root, violations)
+        scan(inspectFiles, inspectCellPrefixes, root, violations)
 
         assertTrue(violations.isEmpty()) {
-            "demo main source imports fall outside the allowed civictech.cell surface " +
-                "(allowedCellPrefixes in " +
+            "application-surface imports fall outside the allowed civictech.cell slice " +
+                "(per-module sets in " +
                 "kernel/src/test/kotlin/civictech/cell/architecture/DemoSurfaceAllowlistTest.kt):\n" +
                 violations.joinToString("\n")
         }
     }
 
-    // Sanity check on the matcher itself, independent of the real demo tree.
+    // Sanity check on the matcher itself, independent of the real trees.
     @Test
     fun `allowlist matcher accepts root members and listed prefixes, rejects others`() {
-        assertTrue(!disallowedImport("civictech.cell.CellRef"))
-        assertTrue(!disallowedImport("civictech.cell.data.op.UnionSetCell"))
-        assertTrue(!disallowedImport("civictech.cell.consistency.GlitchFreeCell"))
-        assertTrue(disallowedImport("civictech.cell.protocol.Protocols"))
-        assertTrue(disallowedImport("civictech.cell.proxy.Invocation"))
+        assertTrue(!disallowedImport("civictech.cell.CellRef", demoCellPrefixes))
+        assertTrue(!disallowedImport("civictech.cell.data.op.UnionSetCell", demoCellPrefixes))
+        assertTrue(!disallowedImport("civictech.cell.consistency.GlitchFreeCell", demoCellPrefixes))
+        assertTrue(disallowedImport("civictech.cell.protocol.Protocols", demoCellPrefixes))
+        assertTrue(disallowedImport("civictech.cell.proxy.Invocation", demoCellPrefixes))
+        // inspect may reach .proxy (documented above) but not .protocol or .evolve
+        assertTrue(!disallowedImport("civictech.cell.proxy.Proxy", inspectCellPrefixes))
+        assertTrue(disallowedImport("civictech.cell.protocol.Protocols", inspectCellPrefixes))
+        assertTrue(disallowedImport("civictech.cell.evolve.Shadow", inspectCellPrefixes))
     }
 }
