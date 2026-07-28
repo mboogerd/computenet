@@ -756,3 +756,144 @@ cited in new KDoc, not closed).
    window that publishes even when quiet (so the client's decay rule can key on
    *received* windows). `state.summary` still has no equivalent; the flow window
    is the pattern to copy if it is ever revisited.
+
+---
+
+## M4 — Navigator (evaluated 2026-07-28)
+
+Merged: `worktree-wf_85284fdb-eee-1` (M4-BE) + `worktree-wf_85284fdb-eee-2`
+(M4-FE) + one evaluator commit, as `inspector(M4): …`. Verdict: **accepted**;
+six defects fixed in the eval session, no bounce needed. Both worker diffs were
+genuinely file-disjoint (`inspect/src/**` + `demo/skillmatch/**` vs
+`inspect/ui/**`), so both merges were conflict-free.
+
+### Tests run
+
+| Suite | Result |
+|---|---|
+| `./gradlew :inspect:test` | 109 passed (108 from the workers + 1 evaluator test); `InspectorGraphsTest` 16, `InspectorSearchTest` 12 |
+| `./gradlew :demo:skillmatch:test` | 5 passed, incl. the new two-graph pilot listing test |
+| `npm test` (`inspect/ui/`) | 202 passed / 21 files (188 from M4-FE + 14 evaluator tests); `npm run typecheck` and `npm run build` clean |
+| `./gradlew test --rerun-tasks` | 1087 tests, 0 failures, 0 errors — forced re-execution of every module, nothing from cache |
+
+Live verification ran against a real two-graph pilot (skillmatch pipeline +
+`SideGraph`, inspector on 7097) with the built UI served beside it, driven in a
+browser. A throwaway JUnit harness in `demo/skillmatch/src/test` drove
+merge/split/dead-letter on command; it was deleted before committing and is not
+in the diff.
+
+### Acceptance items verified live
+
+1. **Component semantics.** Two disjoint pilot graphs listed as two cards
+   (`g-098568c3…` "skillmatch" / 16 cells, `g-905f49b1…` unnamed / 2 cells).
+   Linking `savedSearches.outlet → candSkills.deltaInlet` at runtime collapsed
+   them to one card of 18 cells, keeping the min-uuid id, **without a reload** —
+   `graphs.changed` → `GraphList` refetch → topology resync works end to end.
+   Unlinking split them back to 16 + 2 with the original two ids. Id stability
+   within a component's lifetime is pinned by `InspectorGraphsTest`.
+2. **Naming honesty.** Only the explicitly anchored component shows
+   "skillmatch"; the side graph renders its `g-…` id in italics behind a dashed
+   border. No name is invented anywhere — `nameOf` returns null for a component
+   holding no anchor.
+3. **Scoping.** A dead letter injected into the *side* graph's `savedSearches`
+   showed as `deadLetters: 1` on that card only; the skillmatch card stayed
+   all-zero, while `GET /errors`' host-wide counter read 1. `?graph=` returned
+   exactly the 2 nodes / 1 edge of the side component, sharing the unfiltered
+   snapshot's `seq`.
+4. **Navigation state.** The hash round-trips graph + ref + toggles
+   (`#/g/<id>/<ref>/flow,state`); a forced reload restored the filtered graph,
+   the selected cell's detail panel and exactly those toggles, with the first
+   topology fetch already carrying `?graph=`. Thumbnail click-through preserved
+   Flow/State. A `problems` hit opened the erring graph with **Errors forced
+   on** and the offending cell badged.
+
+Contract conformance was diffed endpoint by endpoint against
+`20-api-contract.md`: `GraphList`, `SearchResult` (`name`, `problems`,
+`data` → 501 with the verbatim body), `cost: null` on every 200, `?graph=`
+scoping, and `Node.graph` on every node. No console errors throughout.
+
+### Defects found and fixed (all by the evaluator)
+
+1. **A vanished graph rendered as a blank canvas.** Merging the component the
+   user was inside left "No cells reported yet." and a "—" title with no
+   explanation — indistinguishable from a bug, and the one thing M4-EVAL asks
+   the UI to be honest about. Now an explicit state naming what happened, with
+   a way back (`nav/route.ts`'s pure `graphIsGone` + `app.tsx`'s `GraphGone`).
+2. **Constellation thumbnails had no shared scale.** Each component's layout
+   was stretched to fill its card, so the two-cell side graph's dots rendered
+   roughly six times the diameter of the sixteen-cell pipeline's. Fixed with a
+   viewBox floor (`viewBoxOf`).
+3. **Both topology fixtures were stale at `"graph": null`** — a shape the M4
+   server can no longer emit, since `Node.graph` is non-null for every
+   published cell. Re-stamped with the id the heuristic yields for each
+   (`topology.json`'s is exactly the id `graphs.json` already calls
+   "skillmatch"), same treatment M3-EVAL gave `fused`.
+4. **An M0-era assertion pinned `graph === null`** in `test/fixture.test.ts`,
+   and would have kept the stale fixture honest-looking. Updated to the M4
+   shape rather than deleted.
+5. **Card accessible names were wrong.** A graph card's tooltip is also its
+   accessible name, so every card announced itself as "0 restarts";
+   constellation cards had no accessible name at all. Both now lead with the
+   graph they open.
+6. **`Graphs.describe` rendered one restart as "1 restarts"**, and
+   `fixtures/search-problems.json` invented a `detail` format the server never
+   produces. Both corrected, the former pinned by a direct unit test.
+
+### Deviations from ticket or contract
+
+- **`Node.graph` is now non-null for every published cell**, where the contract
+  still reads "component id — null until M4". Accepted: an unlinked cell is a
+  component of one, so there is no honest null left. Needs folding into the
+  contract (below).
+- **`graphs.changed` fires on more than merge/split** — on any membership
+  change and on `nameGraph`. Strictly more informative for a client that
+  refetches; accepted.
+- **M4-FE's `TopologyClient` also force-refetches the topology snapshot** on
+  `graphs.changed`, beyond the contract's "hint to refetch `GraphList`".
+  Confirmed **necessary**, not redundant: verified live that a cell is
+  published (stamped with its own singleton id) *before* the link that merges
+  it, so a client applying deltas alone holds a stale `Node.graph` until it
+  resyncs. Both workers independently reached this; it is the correct reading.
+- **Behaviours the contract does not specify**, decided by M4-BE and accepted
+  here: unknown `?graph=` → 200 with an empty snapshot (ids evaporate by
+  design, so it is a race, not an error); blank `q` → no hits; absent `mode`
+  → `name`; unknown `mode` → 400; `SearchHit.detail` content.
+- **Per-graph health is bounded by M2's ring buffers** (cap 200 each), because
+  `supervisionAccounting()` counters carry no cell attribution and cannot be
+  split between components sharing a host. `GET /errors` remains the true
+  total. Accepted and documented in `Graphs.health`.
+- **No kernel change was needed or made.** The diff touches only
+  `inspect/**` and `demo/skillmatch/**`; `kernel/`, `gen/`, `nature/`,
+  `wire/`, `testkit/` and `concord/` are untouched, and no gap or consistency
+  marker was removed. The component sweep is O(V+E), lazy, and runs only on
+  HTTP/scheduler threads — never the per-message data path (P2) — and the M4
+  endpoints subscribe to nothing and raise no attention (P6).
+
+### Open questions for M5
+
+1. **Contract additions to fold in** (carrying M3-EVAL's item 2 forward, still
+   unfolded): `Edge.fused`'s M3 meaning is now in the contract, but M4 adds —
+   `Node.graph` is never null after M4; `graphs.changed` invalidates the held
+   `TopologySnapshot` as well as the `GraphList`; unknown `?graph=` → empty
+   200; blank `q` → no hits; `mode` defaults to `name`; unknown `mode` → 400;
+   and the easy client trap that `GraphSummary.lifecycle` is lowercase while
+   `Node.lifecycle` is uppercase (both as specified — worth a note, not a
+   change).
+2. **The canvas still drops an edge whose endpoint port is not in the node's
+   `ports` list** (M3-EVAL's open question 1). M3-EVAL predicted M4's navigator
+   would expose it; it did not bite, because every cell in the pilot has a KSP
+   descriptor. M5-COLD and M5-NET bring in refs this inspector did not spawn,
+   which is the likelier trigger. Still an FE fix, still unscoped.
+3. **Component identity vs replicas.** The id uses the logical `CellRef.id`, so
+   two instances of one logical cell cannot flip it, but no genuinely
+   replicated graph has been driven through the inspector. `ComponentIndex.sweep`
+   requires *both* endpoints to be locally published for a link to connect them
+   — that is the line M5-NET will need to revisit for mirrored/announced refs.
+4. **`docLints` header gap is still red on `main`** (carried from M1/M2/M3):
+   `./gradlew :concord:check` reports 23 fatal "Missing Status header"
+   findings, all on `97-inspector-plan/**` docs. Untouched and unaffected —
+   `./gradlew test` is green — but it bites the moment a gate is wired to
+   `:concord:check`. This is the last milestone before M5's final acceptance;
+   worth clearing first.
+5. **`state.summary` coalescing** (carried from M1/M2/M3-EVAL): still no
+   equivalent of `flow.rates`' 1 Hz publish-even-when-quiet window.
