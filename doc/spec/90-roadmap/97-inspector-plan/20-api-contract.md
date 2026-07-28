@@ -92,7 +92,7 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // ErrorSnapshot (M2)
 {
   "counters": { "deadLetters": 3, "parked": 14, "restarts": 1, "drainedOnTeardown": 0 },
-  "deadLetters": [ { "ref": "uuid:0", "cause": "OwnershipViolation",
+  "deadLetters": [ { "ref": "uuid:0", "cause": "OwnershipViolation" | null,  // null for a plain drop (e.g. unknown target), no thrown exception
                      "description": "...", "wave": {"source":"9c41","counter":288} | null,
                      "atMs": 1753600000000 } ],
   "parked": [ { "ref": "uuid:0", "port": "left", "count": 11, "oldestMs": 41000 } ],
