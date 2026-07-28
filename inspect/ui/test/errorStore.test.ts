@@ -62,6 +62,12 @@ describe('ErrorStore.applySnapshot', () => {
     store.applySnapshot(snapshot());
     expect(store.deadLettersFor('a:0')).toEqual([]);
   });
+
+  it('accepts a null cause (server: a drop, unknown target — no thrown exception to name)', () => {
+    const store = new ErrorStore();
+    store.applySnapshot(snapshot({ deadLetters: [deadLetter({ ref: 'a:0', cause: null })] }));
+    expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null })]);
+  });
 });
 
 describe('ErrorStore.applyDeadLetter', () => {

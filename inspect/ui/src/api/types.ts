@@ -222,7 +222,9 @@ export interface HeartbeatEvent {
 
 export interface DeadLetterEntry {
   ref: Ref;
-  cause: string;
+  /** null for a drop (unknown target) — no thrown exception to name (server
+   *  `Errors.kt`: `cause?.javaClass?.simpleName`). */
+  cause: string | null;
   description: string;
   wave: Frontier | null;
   atMs: number;

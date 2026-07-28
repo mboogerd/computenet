@@ -211,7 +211,7 @@ function ErrorsSection() {
             <For each={deadLetters()}>
               {(dl) => (
                 <div class="dead-letter-card">
-                  <div class="dead-letter-card__cause">{dl.cause}</div>
+                  <div class="dead-letter-card__cause">{dl.cause ?? 'dropped (unknown target)'}</div>
                   <div class="dead-letter-card__desc">{dl.description}</div>
                   <div class="dead-letter-card__meta">
                     <span class="mono" title="wave stamp (source · counter)">
