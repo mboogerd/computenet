@@ -185,6 +185,14 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M4-FE.md`:
 
 ## Notes
 
+- M4-EVAL re-stamped `Node.graph` on both topology fixtures: after M4 the
+  server emits a non-null component id for *every* published cell (an
+  unlinked cell is a component of one), so the checked-in `"graph": null`
+  was a shape the backend can no longer produce. Each fixture is one
+  connected component, so each got the single id the heuristic yields —
+  `g-<lexicographically-min member uuid>` — which is also the id
+  `fixtures/graphs.json` already calls "skillmatch"
+  (`test/graphs-fixture.test.ts` pins both facts).
 - `fixtures/topology.json` is a verbatim capture of the real skillmatch
   pilot's `GET /api/inspect/topology` (reconciled to reality by M0-EVAL): 16
   cells (10 named pipeline cells + 6 `ObserveCell` sinks) on the single

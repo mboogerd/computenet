@@ -35,7 +35,20 @@ export interface Constellation {
   readonly edges: readonly ConstellationEdge[];
   readonly width: number;
   readonly height: number;
+  /** The SVG `viewBox` to render this thumbnail with — the laid-out extent
+   *  padded out to at least {@link MIN_VIEW_W}×{@link MIN_VIEW_H} and centred
+   *  in it. Without the floor, an SVG scales its own content to fill the
+   *  card, so a two-cell component's dots render several times larger than a
+   *  sixteen-cell one's and the grid stops reading as one picture at one
+   *  scale (M4-EVAL). With it, every thumbnail up to the floor shares a
+   *  scale, and only genuinely larger components scale down. */
+  readonly viewBox: string;
 }
+
+/** The thumbnail viewBox floor — sized so the pilot's two-cell side graph and
+ *  its sixteen-cell pipeline render at a comparable dot size. */
+export const MIN_VIEW_W = 110;
+export const MIN_VIEW_H = 80;
 
 /** Group nodes/edges by `Node.graph` (the M4-BE-stamped component id) and
  *  lay out each group independently at thumbnail scale. Nodes with
@@ -96,7 +109,22 @@ export function buildConstellations(nodes: Iterable<NodeRec>, edges: Iterable<Ed
       if (from && to) cEdges.push({ id: e.id, x1: from.x, y1: from.y, x2: to.x, y2: to.y });
     }
 
-    out.push({ graphId, dots, edges: cEdges, width: layout.width, height: layout.height });
+    out.push({
+      graphId,
+      dots,
+      edges: cEdges,
+      width: layout.width,
+      height: layout.height,
+      viewBox: viewBoxOf(layout.width, layout.height),
+    });
   }
   return out.sort((a, b) => a.graphId.localeCompare(b.graphId));
+}
+
+/** The laid-out extent grown to the {@link MIN_VIEW_W}×{@link MIN_VIEW_H}
+ *  floor, with the content centred in whatever slack that adds. */
+export function viewBoxOf(width: number, height: number): string {
+  const w = Math.max(width, MIN_VIEW_W);
+  const h = Math.max(height, MIN_VIEW_H);
+  return `${(width - w) / 2} ${(height - h) / 2} ${w} ${h}`;
 }

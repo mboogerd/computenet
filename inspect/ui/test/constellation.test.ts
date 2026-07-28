@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildConstellations } from '../src/layout/constellation';
+import { buildConstellations, MIN_VIEW_H, MIN_VIEW_W, viewBoxOf } from '../src/layout/constellation';
 import type { EdgeRec, NodeRec } from '../src/sync/records';
 
 function node(ref: string, graph: string | null, extra: Partial<NodeRec> = {}): NodeRec {
@@ -83,5 +83,33 @@ describe('buildConstellations', () => {
     expect(out[0].dots).toHaveLength(1);
     expect(out[0].width).toBeGreaterThan(0);
     expect(out[0].height).toBeGreaterThan(0);
+  });
+});
+
+// M4-EVAL fix: without a viewBox floor an SVG scales its content to fill the
+// card, so a two-cell thumbnail's dots render several times larger than a
+// sixteen-cell one's and the grid stops reading as one picture at one scale.
+describe('thumbnail viewBox floor', () => {
+  it('pads a small component out to the floor and centres it', () => {
+    expect(viewBoxOf(30, 14)).toBe(`${(30 - MIN_VIEW_W) / 2} ${(14 - MIN_VIEW_H) / 2} ${MIN_VIEW_W} ${MIN_VIEW_H}`);
+  });
+
+  it('leaves a component larger than the floor at its own extent', () => {
+    const w = MIN_VIEW_W + 40;
+    const h = MIN_VIEW_H + 40;
+    expect(viewBoxOf(w, h)).toBe(`0 0 ${w} ${h}`);
+  });
+
+  it('floors each axis independently', () => {
+    expect(viewBoxOf(MIN_VIEW_W + 20, 10)).toBe(`0 ${(10 - MIN_VIEW_H) / 2} ${MIN_VIEW_W + 20} ${MIN_VIEW_H}`);
+  });
+
+  it('two components of very different size share a dot scale up to the floor', () => {
+    const small = buildConstellations([node('a', 'g-1'), node('b', 'g-1')], [edge('e1', 'a', 'b')])[0];
+    const lone = buildConstellations([node('z', 'g-9')], [])[0];
+    // both lay out well under the floor, so both render in an identically
+    // sized box — same scale, therefore same apparent dot size
+    expect(small.viewBox.split(' ').slice(2)).toEqual([`${MIN_VIEW_W}`, `${MIN_VIEW_H}`]);
+    expect(lone.viewBox.split(' ').slice(2)).toEqual([`${MIN_VIEW_W}`, `${MIN_VIEW_H}`]);
   });
 });

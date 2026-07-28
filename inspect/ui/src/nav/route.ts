@@ -66,6 +66,20 @@ export function parseHash(hash: string): Route {
   return { screen: 'graph', graphId, ref, toggles };
 }
 
+/** Is `graphId` a component the loaded `GraphList` no longer contains?
+ *
+ *  Component ids are `g-<lexicographically-min member uuid>`, so they change
+ *  on every merge and split by design (20-api-contract.md §GraphList). A
+ *  client sitting inside a graph that merges is therefore looking at an id
+ *  that no longer resolves — a normal event, not a bad URL. `loaded` is
+ *  false until a `GET /graphs` has actually answered, so a boot frame (empty
+ *  list, nothing fetched yet) never reads as "gone". Pure, so the decision
+ *  is unit-testable away from the Solid wiring (`solid/route.ts`). */
+export function graphIsGone(graphId: string | null, known: readonly { id: string }[], loaded: boolean): boolean {
+  if (graphId === null || !loaded) return false;
+  return !known.some((g) => g.id === graphId);
+}
+
 /** Inverse of {@link parseHash}: always produces a `#/...` string that
  *  `parseHash` reads back as an equal (canonicalized) Route — see
  *  test/route.test.ts's round-trip cases. Trailing empty segments (no

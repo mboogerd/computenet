@@ -46,7 +46,12 @@ function GraphCard(props: { graph: GraphSummary }) {
     <button
       class="graph-card"
       classList={{ 'graph-card--unnamed': !props.graph.name }}
-      title={`${props.graph.health.restarts} restart${props.graph.health.restarts === 1 ? '' : 's'}`}
+      // The tooltip is also this button's accessible name, so it has to lead
+      // with which graph it opens — restarts alone made every card announce
+      // itself as "0 restarts" (M4-EVAL).
+      title={`${props.graph.name ?? props.graph.id} — ${props.graph.cells} cells, ${props.graph.health.restarts} restart${
+        props.graph.health.restarts === 1 ? '' : 's'
+      }`}
       onClick={() => enterGraph(props.graph.id)}
     >
       <div class="graph-card__name">{props.graph.name ?? props.graph.id}</div>
@@ -159,10 +164,13 @@ function ConstellationGrid() {
                   'constellation-card--cold': summary()?.lifecycle === 'cold',
                   'constellation-card--erring': (summary()?.health.deadLetters ?? 0) > 0,
                 }}
+                // Without this the button's only content is a decorative SVG,
+                // so it exposes no accessible name at all (M4-EVAL).
+                aria-label={`Open ${summary()?.name ?? c.graphId}`}
                 onClick={() => enterGraph(c.graphId)}
               >
                 <div class="constellation-card__header">{summary()?.name ?? c.graphId}</div>
-                <svg class="constellation-card__svg" viewBox={`0 0 ${Math.max(c.width, 1)} ${Math.max(c.height, 1)}`}>
+                <svg class="constellation-card__svg" viewBox={c.viewBox} aria-hidden="true">
                   <For each={c.edges}>
                     {(e) => <line class="constellation-edge" x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} />}
                   </For>

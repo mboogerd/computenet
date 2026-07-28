@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatHash, HOME_ROUTE, parseHash, TOGGLE_KEYS, type GraphRoute, type Route } from '../src/nav/route';
+import { formatHash, graphIsGone, HOME_ROUTE, parseHash, TOGGLE_KEYS, type GraphRoute, type Route } from '../src/nav/route';
 
 /** M4-FE ticket Tests: "Vitest: hash round-trip (graph/ref/toggles)". */
 describe('parseHash', () => {
@@ -75,4 +75,31 @@ describe('parseHash(formatHash(route)) round-trips', () => {
       expect(parseHash(formatHash(route))).toEqual(route);
     });
   }
+});
+
+// M4-EVAL fix: a component merging or splitting away while the user is inside
+// it is normal operation (ids are `g-<min member uuid>`), and the UI must say
+// so rather than render an empty canvas that reads as a bug.
+describe('graphIsGone', () => {
+  const known = [{ id: 'g-a' }, { id: 'g-b' }];
+
+  it('is false on Home (no graph selected)', () => {
+    expect(graphIsGone(null, known, true)).toBe(false);
+  });
+
+  it('is false before the graph list has ever loaded, even with an unknown id', () => {
+    expect(graphIsGone('g-zzz', [], false)).toBe(false);
+  });
+
+  it('is false for an id the loaded list contains', () => {
+    expect(graphIsGone('g-b', known, true)).toBe(false);
+  });
+
+  it('is true for an id the loaded list no longer contains (merged/split away)', () => {
+    expect(graphIsGone('g-zzz', known, true)).toBe(true);
+  });
+
+  it('is true when every component merged into one with a different id', () => {
+    expect(graphIsGone('g-b', [{ id: 'g-a' }], true)).toBe(true);
+  });
 });

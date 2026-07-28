@@ -6,7 +6,7 @@ import Navigator from './components/Navigator';
 import ToggleBar from './components/ToggleBar';
 import { initDetail } from './solid/detail';
 import { fetchGraphs } from './solid/graphs';
-import { initRoute, screen } from './solid/route';
+import { currentGraphGone, goHome, initRoute, screen } from './solid/route';
 import { connect } from './solid/state';
 import { initTheme } from './solid/theme';
 import './app.css';
@@ -34,10 +34,34 @@ export default function App() {
       >
         <ToggleBar />
         <div class="app-body">
-          <Canvas />
+          <Show when={!currentGraphGone()} fallback={<GraphGone />}>
+            <Canvas />
+          </Show>
           <DetailPanel />
         </div>
       </Show>
+    </div>
+  );
+}
+
+/** Shown when the component being viewed no longer exists (see
+ *  `solid/route.ts`'s `currentGraphGone`). M4-EVAL asks the UI not to pretend
+ *  continuity across a merge or split: the id is gone, the graph the user was
+ *  looking at is now part of (or split out of) a different component, and
+ *  saying that plainly is better than an empty canvas. */
+function GraphGone() {
+  return (
+    <div class="canvas">
+      <div class="canvas__gone">
+        <p class="canvas__gone-title">This graph no longer exists.</p>
+        <p class="canvas__gone-body">
+          Graphs are connected components over the live link set, so they merge and split whenever links change — and
+          their ids change with them. Its cells are still running, under a different component.
+        </p>
+        <button class="canvas__gone-action" onClick={goHome}>
+          Back to graphs
+        </button>
+      </div>
     </div>
   );
 }

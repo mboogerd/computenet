@@ -6,12 +6,14 @@ import graphsFixture from '../fixtures/graphs.json';
 import searchNameFixture from '../fixtures/search-name.json';
 import searchProblemsFixture from '../fixtures/search-problems.json';
 import topology from '../fixtures/topology.json';
+import topologyMultihost from '../fixtures/topology-multihost.json';
 
 const graphs = graphsFixture as GraphList;
 const errorsSnapshot = errorsFixture as ErrorSnapshot;
 const topologySnapshot = topology as TopologySnapshot;
 const searchName = searchNameFixture as SearchResult;
 const searchProblems = searchProblemsFixture as SearchResult;
+const multihost = topologyMultihost as TopologySnapshot;
 
 /** M4-FE ticket Implement §5: "Fixtures: fixtures/graphs.json,
  *  fixtures/search-*.json per contract" — exercised the same way
@@ -87,5 +89,37 @@ describe('fixtures/search-problems.json', () => {
       expect(g).toBeDefined();
       expect(g!.health.deadLetters > 0 || g!.health.parked > 0 || g!.health.restarts > 0).toBe(true);
     }
+  });
+});
+
+// M4-EVAL fix: both topology fixtures still carried `"graph": null` on every
+// node, which the M4 server can no longer emit — `Node.graph` is non-null for
+// every published cell, since an unlinked cell is a component of one. Left
+// alone, the fixtures would have taught the offline dev loop (and every test
+// reading them) a shape the real backend never produces again.
+describe('topology fixtures carry a component id on every node (M4)', () => {
+  for (const [label, snapshot] of [
+    ['topology.json', topologySnapshot],
+    ['topology-multihost.json', multihost],
+  ] as const) {
+    it(`${label}: every node has a non-null "g-" graph id`, () => {
+      for (const n of snapshot.nodes) {
+        expect(n.graph, `${label} node ${n.ref}`).not.toBeNull();
+        expect(n.graph!.startsWith('g-')).toBe(true);
+      }
+    });
+
+    it(`${label}: it is one connected component, named by its lexicographically-min member uuid`, () => {
+      const ids = new Set(snapshot.nodes.map((n) => n.graph));
+      expect(ids.size).toBe(1);
+      const min = snapshot.nodes.map((n) => n.ref.split(':')[0]).sort()[0];
+      expect([...ids][0]).toBe(`g-${min}`);
+    });
+  }
+
+  it("topology.json's component id is the one graphs.json calls \"skillmatch\"", () => {
+    const named = graphs.graphs.find((g) => g.name === 'skillmatch')!;
+    expect(topologySnapshot.nodes[0].graph).toBe(named.id);
+    expect(named.cells).toBe(topologySnapshot.nodes.length);
   });
 });

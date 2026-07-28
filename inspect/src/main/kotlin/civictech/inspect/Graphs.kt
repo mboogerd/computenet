@@ -309,9 +309,12 @@ internal object Graphs {
         )
     }
 
-    private fun describe(health: GraphHealth): String = listOf(
+    /** A problems hit's `detail`: the nonzero counters, most severe first. */
+    internal fun describe(health: GraphHealth): String = listOf(
         health.deadLetters to "dead",
         health.parked to "parked",
-        health.restarts to "restarts",
+        // "dead" and "parked" are adjectives and read the same at any count;
+        // "restart" is a noun and does not
+        health.restarts to if (health.restarts == 1) "restart" else "restarts",
     ).filter { it.first > 0 }.joinToString(" · ") { "${it.first} ${it.second}" }
 }

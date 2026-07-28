@@ -142,6 +142,20 @@ class InspectorSearchTest {
         release(refC)
     }
 
+    /**
+     * The hit `detail` the navigator renders verbatim. "dead" and "parked" are
+     * adjectives and read the same at any count; "restart" is a noun and does
+     * not, which the first cut got wrong ("1 restarts").
+     */
+    @Test
+    fun `a problems detail lists its nonzero counters, and counts restarts in English`() {
+        Graphs.describe(GraphHealth(deadLetters = 2, parked = 0, restarts = 0)) shouldBe "2 dead"
+        Graphs.describe(GraphHealth(deadLetters = 0, parked = 1, restarts = 0)) shouldBe "1 parked"
+        Graphs.describe(GraphHealth(deadLetters = 0, parked = 0, restarts = 1)) shouldBe "1 restart"
+        Graphs.describe(GraphHealth(deadLetters = 0, parked = 0, restarts = 3)) shouldBe "3 restarts"
+        Graphs.describe(GraphHealth(deadLetters = 1, parked = 11, restarts = 1)) shouldBe "1 dead · 11 parked · 1 restart"
+    }
+
     @Test
     fun `a healthy process has no problems`() {
         twoGraphs()

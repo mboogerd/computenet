@@ -30,7 +30,10 @@ describe('fixtures/topology.json', () => {
     expect(snapshot.edges.every((e) => e.fused === false)).toBe(true);
     // placeholders the contract fixes until later milestones
     expect(snapshot.nodes.every((n) => n.net === 'local')).toBe(true);
-    expect(snapshot.nodes.every((n) => n.graph === null)).toBe(true);
+    // M4 filled `graph` in: it is one component, so every node carries the
+    // same non-null id (see test/graphs-fixture.test.ts for the id itself)
+    expect(new Set(snapshot.nodes.map((n) => n.graph)).size).toBe(1);
+    expect(snapshot.nodes.every((n) => n.graph !== null)).toBe(true);
     expect(snapshot.nodes.every((n) => n.lifecycle === 'HOT')).toBe(true);
   });
 

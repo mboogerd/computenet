@@ -1,5 +1,6 @@
 import { createEffect } from 'solid-js';
-import { formatHash, TOGGLE_KEYS, type Route, type ToggleKey } from '../nav/route';
+import { formatHash, graphIsGone, TOGGLE_KEYS, type Route, type ToggleKey } from '../nav/route';
+import { graphs, graphsLoaded } from './graphs';
 import { selection, setSelection } from './selection';
 import { currentGraphId, initialRoute, screen, setCurrentGraphId, setScreen } from './routeState';
 import { setGraphFilter } from './state';
@@ -32,6 +33,21 @@ function activeToggles(): ToggleKey[] {
 function applyToggles(toggles: readonly ToggleKey[]): void {
   const active = new Set(toggles);
   for (const k of TOGGLE_KEYS) TOGGLE_SETTERS[k](active.has(k));
+}
+
+/** True when the Graph screen is showing a component id the loaded
+ *  `GraphList` no longer contains — i.e. the component merged into another
+ *  one or split away while the user was inside it.
+ *
+ *  Component ids are `g-<lexicographically-min member uuid>` and therefore
+ *  change on every merge and split *by design* (20-api-contract.md
+ *  §GraphList; 10-target-v3.md §Known kernel gaps). The honest answer is to
+ *  say so — a merged component is a genuinely different graph, not a
+ *  continuation of this one — rather than silently render an empty canvas
+ *  that reads as a bug. Gated on {@link graphsLoaded} so a boot frame, where
+ *  no list has arrived yet, never trips it. */
+export function currentGraphGone(): boolean {
+  return graphIsGone(currentGraphId(), graphs(), graphsLoaded());
 }
 
 /** Wire the M4 navigation lifecycle (10-target-v3.md Navigator; M4-FE ticket

@@ -10,7 +10,12 @@ import { defaultGraphsTransport, type GraphsTransport } from '../sync/graphsClie
 const [graphs, setGraphs] = createSignal<readonly GraphSummary[]>([]);
 const [graphsLoading, setGraphsLoading] = createSignal(false);
 const [graphsError, setGraphsError] = createSignal<unknown>(null);
-export { graphs, graphsError, graphsLoading };
+/** True once a `GET /graphs` has succeeded at least once. Distinguishes "no
+ *  graph list yet" from "the list is loaded and this id is not in it" — the
+ *  difference between a boot frame and a component that merged away
+ *  (`solid/route.ts`'s `currentGraphGone`). */
+const [graphsLoaded, setGraphsLoaded] = createSignal(false);
+export { graphs, graphsError, graphsLoaded, graphsLoading };
 
 let transport: GraphsTransport = defaultGraphsTransport;
 
@@ -28,6 +33,7 @@ export function fetchGraphs(): void {
       setGraphsLoading(false);
       setGraphs(list.graphs);
       setGraphsError(null);
+      setGraphsLoaded(true);
     },
     (err) => {
       setGraphsLoading(false);
