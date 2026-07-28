@@ -2,7 +2,7 @@
 
 > **Status**: Partial (handshake phase 1 implemented: Link/LinkResult/unlink/policies; suspension lifecycle and async cross-host results open; rebind, admission/activation, cycle-check, edge-event, and saturation rules decided in 93, unimplemented)
 > **Sources**: ADR — Task Connectivity, ADR — Computelet Kernel, ADR — Anatomy of Cellular Programs
-> **Implementation**: `cell.port.Link`/`LinkResult`/`LinkSupport`/`LinkPolicy`, `cell.port.LinkTo`/`LinkFrom`, `ManagedHost.connect`
+> **Implementation**: `cell.link.Link`/`LinkResult`/`LinkSupport`/`LinkPolicy`, `cell.port.LinkTo`/`LinkFrom`, `ManagedHost.connect`
 
 ## Definition
 
@@ -85,7 +85,7 @@ count/log policy for protocols dropped before handler install; and a typed
 rejection surface for wrong-color or invalid remote spawns pinned against
 G-26/G-12 (93 I-26/I-15).
 
-*(G-12 phase 1 implemented: `cell.port.Link`/`LinkResult`/`LinkSupport`.
+*(G-12 phase 1 implemented: `cell.link.Link`/`LinkResult`/`LinkSupport`.
 [13-LINK-03] `linkTo(LinkFrom)` runs the target-side handshake — policies → cardinality →
 `onLink` — and returns `Connected(link)` / `Rejected(reason)`; the link is
 retained by both ports (`port.linking.links`); [13-LINK-01] `link.unlink()` is idempotent,

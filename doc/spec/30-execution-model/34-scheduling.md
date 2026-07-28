@@ -303,7 +303,7 @@ versioned ProtocolId↔contractId negotiation handshake remain open follow-up
 7. **Magnitude joins interest at the dispatch max** (implemented, M17).
    Data urgency is the dual of subscriber interest: interest flows upstream
    over the metadata plane, magnitude rides *with* the data (a
-   `cell.data.Magnitude` payload declares `size(): Double`, ≥ 0, `0.0` ⇔ no
+   `cell.control.Magnitude` payload declares `size(): Double`, ≥ 0, `0.0` ⇔ no
    effective change — the I-6 contract). Opt-in via
    `AttentionPolicy.magnitudeBands: ((Double) -> AttentionBand)?`
    (null = off, order byte-identical to pre-M17): at staging the host folds

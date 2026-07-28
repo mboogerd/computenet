@@ -2,7 +2,7 @@
 
 > **Status**: Specified and implemented (core); suspension states in 30/33; admission/activation split decided in 93 I-26 (parked-tail window unimplemented)
 > **Sources**: ADR — Task Definitions, ADR — Computelet Kernel
-> **Implementation**: `cell.Cell.onActivate`, `cell.host.ManagedHost.spawn`, `cell.port.PortDelegates`, `cell.port.PortRegistry`
+> **Implementation**: `cell.Cell.onActivate`, `cell.host.ManagedHost.spawn`, `cell.port.PortDelegateProvider`, `cell.port.PortRegistry`
 
 ## The unified model
 

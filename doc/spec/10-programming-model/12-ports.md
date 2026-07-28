@@ -197,7 +197,7 @@ generic protocols (attention propagation 30/34, time/consistency requests
 20/22, link management 10/13) stacked beside the cell-specific contract, with
 composable handlers.
 
-⚠ GAP (G-13, minimal form landed M6.1): `cell.port.ProtocolSupport` gives any
+⚠ GAP (G-13, minimal form landed M6.1): `cell.protocol.ProtocolSupport` gives any
 port sub-channels keyed by well-known `ProtocolId`s, sharing the port's
 existing links (which now carry in-process endpoint objects); one map lookup
 per delivery (P2), handlers outside cell logic. Attention (34) and suspension

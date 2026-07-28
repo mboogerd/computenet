@@ -2,7 +2,7 @@
 
 > **Status**: Implemented (M5, W3.2) — in-process transparency, the wire layer, and generic-protocol/EdgeEvent wire crossing; generated boundary proxies (point 2) remain interim JDK proxies; remote construction is still decided design (93), unimplemented
 > **Sources**: ADR 3, ADR — Task Connectivity (§4)
-> **Implementation**: `cell.proxy.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; `gen.wire.ContractProcessor` + `ContractRegistry`; `cell.wire` (WireCodec, bridge cells, Peering, `WireEdgeLink`); `:wire` (WebSocket transport)
+> **Implementation**: `cell.host.HostedCellProxy`, `HostProxy`, `Invocation`, host routing; `gen.wire.ContractProcessor` + `ContractRegistry`; `cell.wire` (WireCodec, bridge cells, Peering, `WireEdgeLink`); `:wire` (WebSocket transport)
 
 ## Requirement
 
@@ -190,7 +190,7 @@ local and remote links negotiate differently — a location-transparency bug
    **location-transparency bug**. `WireEdgeLink.bridgeTo`/`bridgeFrom`
    (`cell.wire`) install the link by calling `linking.register` directly and
    fire `EdgeOpen` from a raw `Protocols.sendDownstream`, never routing through
-   `handshake()` (`cell.port.Link`). A bridged edge therefore skips everything
+   `handshake()` (`cell.link.Link`). A bridged edge therefore skips everything
    the local link path runs: the link policies and the peer allowlist (43 —
    the `TrustBoundaryTest` `allowPeers` gate does not fire on bridged edges),
    the cardinality/cycle checks, and the negotiated `EdgeOpen`/`EdgeClose`

@@ -599,7 +599,7 @@ credence, so attacks-on-attacks (and edge-on-edge generally) are first-class
 needs only two small kernel deltas and is itself the motivating consumer
 (and empirical probe) for the M13.5 cycle-guard work.*
 
-1. ~~M17.1 — kernel: magnitude-band dispatch (34 decision 7) — `cell.data.Magnitude`
+1. ~~M17.1 — kernel: magnitude-band dispatch (34 decision 7) — `cell.control.Magnitude`
    (the exact I-6 contract), opt-in `AttentionPolicy.magnitudeBands`, effective
    band = `max(interest, staged urgency)` with boost lifetime = the pending
    queue; order byte-identical when off (`MagnitudeSchedulingTest`).~~
