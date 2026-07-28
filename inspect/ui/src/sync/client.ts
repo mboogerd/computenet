@@ -33,6 +33,11 @@ export class TopologyClient {
   private hadError = false;
   private resyncing = false;
   private stopped = false;
+  private started = false;
+  /** M4-FE ticket Implement §1: "Entering a graph fetches filtered
+   *  topology" — the `?graph=g-…` filter from 20-api-contract.md's `GET
+   *  /topology` scoping (M4-BE ticket §5). Null means unfiltered (Home). */
+  private graphFilter: string | null = null;
 
   constructor(
     private readonly handlers: TopologyClientHandlers,
@@ -40,6 +45,7 @@ export class TopologyClient {
   ) {}
 
   async start(): Promise<void> {
+    this.started = true;
     this.stopped = false;
     this.setState('connecting');
     await this.refetch();
@@ -53,11 +59,26 @@ export class TopologyClient {
     this.es = undefined;
   }
 
+  /** Change which graph's topology this client tracks (null = unfiltered).
+   *  A no-op call (same filter as already set) never refetches. Called
+   *  before `start()`, this only records the filter for `start()`'s own
+   *  first fetch to pick up — avoids an unfiltered-then-refiltered double
+   *  round trip when the app boots straight into a deep-linked graph URL.
+   *  Called after `start()`, it immediately triggers a fresh, correctly-
+   *  scoped resync via the same `refetch()` path a seq gap or reconnect
+   *  uses. */
+  setGraphFilter(graph: string | null): void {
+    if (this.graphFilter === graph) return;
+    this.graphFilter = graph;
+    if (this.started && !this.stopped) void this.refetch();
+  }
+
   private async refetch(): Promise<void> {
     this.resyncing = true;
     try {
-      const res = await fetch(`${this.baseUrl}/topology`);
-      if (!res.ok) throw new Error(`GET ${this.baseUrl}/topology -> ${res.status}`);
+      const qs = this.graphFilter ? `?graph=${encodeURIComponent(this.graphFilter)}` : '';
+      const res = await fetch(`${this.baseUrl}/topology${qs}`);
+      if (!res.ok) throw new Error(`GET ${this.baseUrl}/topology${qs} -> ${res.status}`);
       const snapshot = (await res.json()) as TopologySnapshot;
       if (this.stopped) return;
       this.lastSeq = snapshot.seq;
@@ -118,6 +139,19 @@ export class TopologyClient {
       return;
     }
     this.lastSeq = event.seq;
+
+    if (event.kind === 'graphs.changed') {
+      // M4: components may have merged/split, so every node's `.graph` stamp
+      // in whatever snapshot we're currently holding (filtered or not) can be
+      // stale — a resync here is this transport's own contract-conformance
+      // concern (20-api-contract.md: "hint to refetch GraphList"; a stale
+      // `.graph` field is a topology fact, not a GraphList one, so it is this
+      // client's job, not the app layer's, to refresh it). Forwarded to
+      // `onEvent` below too, same as any other known kind, so the app can
+      // separately refetch `GraphList` for the Home cards.
+      void this.refetch();
+    }
+
     if (KNOWN_EVENT_KINDS.has(event.kind)) {
       // Safe: KNOWN_EVENT_KINDS is exactly the InspectEvent union's kinds.
       this.handlers.onEvent(event as InspectEvent);

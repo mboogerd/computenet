@@ -209,6 +209,66 @@ export interface FlowRatesEvent {
   payload: FlowRatesPayload;
 }
 
+// --- M4: graphs + search (20-api-contract.md "GraphList (M4)", "SearchResult
+// (M4/M5)") ---------------------------------------------------------------
+
+export interface GraphHealth {
+  deadLetters: number;
+  parked: number;
+  restarts: number;
+}
+
+/** "cold" arrives with M5 — M4-BE always reports "hot" (contract: "lifecycle
+ *  is always 'hot' (cold is M5)"). Kept as a two-value type (not a boolean)
+ *  so the M5 addition is additive, not a breaking rename. */
+export type GraphLifecycle = 'hot' | 'cold';
+
+export interface GraphSummary {
+  id: string;
+  /** From an optional host-side naming annotation; null = unnamed — the UI
+   *  renders the id and must never invent a name (10-target-v3.md "Known
+   *  kernel gaps": "do NOT invent names"). */
+  name: string | null;
+  cells: number;
+  hosts: number;
+  nets: number;
+  health: GraphHealth;
+  lifecycle: GraphLifecycle;
+}
+
+/** `GET /api/inspect/graphs`. */
+export interface GraphList {
+  graphs: readonly GraphSummary[];
+}
+
+export type SearchMode = 'name' | 'problems' | 'data';
+
+export interface SearchHit {
+  graph: string;
+  ref: Ref | null;
+  label: string;
+  detail: string;
+}
+
+export interface SearchCost {
+  cellsQueried: number;
+  coldSkipped: number;
+}
+
+/** `GET /api/inspect/search?mode={name|problems|data}&q=`. `cost` is
+ *  data-mode-only (M5); always null for name/problems (contract). */
+export interface SearchResult {
+  mode: SearchMode;
+  hits: readonly SearchHit[];
+  cost: SearchCost | null;
+}
+
+export interface GraphsChangedEvent {
+  seq: number;
+  kind: 'graphs.changed';
+  payload: Record<string, never>;
+}
+
 // --- SSE events -------------------------------------------------------
 
 export interface TopologyNodeEvent {
@@ -321,7 +381,8 @@ export type InspectEvent =
   | ErrorDeadLetterEvent
   | ErrorParkedEvent
   | ErrorRestartEvent
-  | FlowRatesEvent;
+  | FlowRatesEvent
+  | GraphsChangedEvent;
 
 /** The wire-level shape before we know whether `kind` is one M0 understands.
  *  Deliberately NOT a member of the `InspectEvent` union: adding a
@@ -349,4 +410,5 @@ export const KNOWN_EVENT_KINDS = new Set<string>([
   'error.parked',
   'error.restart',
   'flow.rates',
+  'graphs.changed',
 ]);

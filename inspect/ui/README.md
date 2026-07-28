@@ -129,6 +129,60 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M3-FE.md`:
   `fixtures/topology.json`) so the toggle, pulses, fused rendering, and the
   Flow subsection can all be checked by hand ahead of M3-BE.
 
+## M4: navigator (cards, constellation, name/problems search)
+
+Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M4-FE.md`:
+
+- **Two screens, one hash.** `App` (`src/app.tsx`) switches between Home
+  (`Navigator.tsx`) and the existing Graph screen (ToggleBar + Canvas +
+  DetailPanel) purely on a `screen()` signal — no router library
+  (10-target-v3.md Navigator; agora precedent). `src/nav/route.ts` is the
+  framework-free hash parse/format pair (`#/` for Home,
+  `#/g/<graphId>/<ref>/<toggles>` for a Graph screen); `src/solid/route.ts`
+  wires it up (`initRoute()`, `enterGraph()`, `goHome()`) and drives
+  `TopologyClient.setGraphFilter` so entering a graph fetches its `?graph=`-
+  filtered topology (M4-BE ticket §5) while the shared SSE connection stays
+  global and the client filters deltas itself (`solid/state.ts`).
+  `solid/routeState.ts` is the raw `screen`/`currentGraphId` signal pair, in
+  its own leaf module for the same cycle-avoidance reason `solid/selection.ts`
+  already is.
+- **Graph cards + live refresh** (`Navigator.tsx`'s `GraphCards`): `GET
+  /graphs` (`solid/graphs.ts`) refetched once on boot and again on every
+  `graphs.changed` SSE event; health pills derived by `src/nav/health.ts`
+  (dead/parked pills only when nonzero, a lifecycle pill always). An unnamed
+  graph (`name: null`) renders the id with a dashed border
+  (10-target-v3.md: "do NOT invent names").
+- **Constellation** (`Navigator.tsx`'s `ConstellationGrid`,
+  `src/layout/constellation.ts`): groups the shared topology store's nodes/
+  edges by `Node.graph` and lays out each component independently via
+  `layout/layered.ts`'s Sugiyama layering — now parameterized
+  (`LayeredLayoutConfig`) so this thumbnail-scale caller and the full-size
+  canvas share one algorithm instead of two. Dots only, faint edges, no
+  labels beyond the card header; a graph with `deadLetters > 0` gets a red
+  border/dots, `lifecycle: "cold"` dims the card (M5 — always "hot" today).
+- **Search** (`Navigator.tsx`'s `SearchPanel`, `solid/search.ts`,
+  `src/nav/search.ts`): `name` mode searches as-you-type; `problems` mode
+  searches once on chip-select; `data` mode's chip is disabled with an
+  "arrives in M5" tooltip and never issues a request (ahead of the BE's own
+  501). Clicking a `problems` hit opens its graph with the Errors toggle
+  forced on (`enterGraph(..., { forceErrors: true })`); toggle state itself
+  is untouched by navigation (`solid/toggles.ts`'s existing module-level
+  signals), so "thumbnail click-through preserves toggles" holds for free.
+- `TopologyClient` (`sync/client.ts`) gained `setGraphFilter` (threads
+  `?graph=` into its own fetch) and now also force-resyncs topology on a
+  `graphs.changed` event, not just forwarding it — a merge/split can leave
+  `Node.graph` stale on cells the contract otherwise has no delta for.
+- `mock/serve.mjs` splices a second, small, unnamed component into its
+  served (never the checked-in) snapshot and implements `/graphs`,
+  `/search`, and the `?graph=` filter dynamically against it — M4-BE runs in
+  parallel and does not exist in this worktree, same reasoning as the M2/M3
+  mock extensions.
+- `fixtures/graphs.json`, `fixtures/search-name.json`,
+  `fixtures/search-problems.json` are new, hand-authored per contract; the
+  named graph's id/counts/health cross-reference the existing
+  `fixtures/topology.json`/`fixtures/errors.json` (see
+  `test/graphs-fixture.test.ts`).
+
 ## Notes
 
 - `fixtures/topology.json` is a verbatim capture of the real skillmatch
@@ -153,9 +207,10 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M3-FE.md`:
   then select a node). Still not a semantics stand-in — single global
   observation slot, one fake dataset.
 
-## Deferred (M4+, per the ticket's Exclusions)
+## Deferred (M5+, per the tickets' Exclusions)
 
-Network-host hulls, the multi-graph navigator, per-message flow animation
-(M3-FE's own Exclusions: "not in v3 v1 scope"). No optimistic writes — this
-is a read-only instrument. No CSS framework, router, or state library
+Network-host hulls, cold-graph UX, data search, per-message flow animation
+(M3-FE's own Exclusions: "not in v3 v1 scope"; M4-FE's own Exclusions:
+"Cold-graph UX, data search, network hulls (M5)"). No optimistic writes —
+this is a read-only instrument. No CSS framework, router, or state library
 (agora precedent).

@@ -155,17 +155,20 @@ describe('TopologyClient', () => {
     expect(onSnapshot).toHaveBeenCalledTimes(1); // no spurious resync
   });
 
-  it('advances lastSeq for an unrecognized (future-milestone) event kind without erroring', async () => {
+  it('advances lastSeq for an unrecognized event kind without erroring', async () => {
     mockFetchOnce(10);
     await client.start();
     const es = MockEventSource.last!;
     es.open();
 
     // M2-EVAL swapped this placeholder from 'error.deadLetter' to
-    // 'flow.rates' once M2 made the former a recognized kind; M3-FE now
-    // makes 'flow.rates' recognized too (see the dedicated test below), so
-    // this swaps again to 'graphs.changed' (M4) — the next still-unimplemented kind.
-    es.message(evt(11, 'graphs.changed')); // M4 kind — additive evolution, not yet understood
+    // 'flow.rates' once M2 made the former a recognized kind; M3-FE swapped
+    // it to 'graphs.changed'; M4-FE now makes 'graphs.changed' recognized too
+    // (see the dedicated tests below) — and 20-api-contract.md's SSE events
+    // table has no further kind left undefined, so this is now a genuinely
+    // fictional kind rather than "the next milestone's", purely to exercise
+    // the additive-evolution fallback itself.
+    es.message(evt(11, 'inspect.someFutureKind'));
     expect(onEvent).not.toHaveBeenCalled();
 
     es.message(evt(12, 'lifecycle')); // must be accepted, not treated as a gap
@@ -210,5 +213,58 @@ describe('TopologyClient', () => {
     expect(onEvent).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'flow.rates', payload: expect.objectContaining({ window: 1000 }) }),
     );
+  });
+
+  it('recognizes graphs.changed (M4) as a known kind, forwards it, AND resyncs topology', async () => {
+    // 20-api-contract.md: "hint to refetch GraphList" — but component
+    // merge/split can also stale every node's `.graph` stamp in whatever
+    // topology snapshot this client already holds, with no other delta ever
+    // announcing that (sync/client.ts's own doc comment on this case). So a
+    // graphs.changed event must ALSO trigger the same refetch() a seq gap
+    // does, in addition to being forwarded like any other known kind.
+    mockFetchOnce(10);
+    await client.start();
+    const es = MockEventSource.last!;
+    es.open();
+
+    mockFetchOnce(20); // the resync graphs.changed itself triggers
+    es.message(evt(11, 'graphs.changed'));
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'graphs.changed' }));
+    await vi.waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(2));
+    expect(onSnapshot).toHaveBeenLastCalledWith(snapshot(20));
+  });
+
+  describe('setGraphFilter', () => {
+    it('includes ?graph= on every fetch once set, and omits it when null', async () => {
+      mockFetchOnce(10);
+      client.setGraphFilter('g-abc'); // before start() — recorded, not fetched yet
+      await client.start();
+      expect(fetchMock).toHaveBeenCalledWith('/api/inspect/topology?graph=g-abc');
+
+      mockFetchOnce(11);
+      client.setGraphFilter(null);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/inspect/topology'));
+    });
+
+    it('a no-op call (same filter) never refetches', async () => {
+      mockFetchOnce(10);
+      await client.start();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      client.setGraphFilter(null); // already null — no-op
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('changing the filter after start() immediately triggers a fresh, scoped resync', async () => {
+      mockFetchOnce(10);
+      await client.start();
+      expect(onSnapshot).toHaveBeenCalledTimes(1);
+
+      mockFetchOnce(15);
+      client.setGraphFilter('g-xyz');
+      expect(fetchMock).toHaveBeenLastCalledWith('/api/inspect/topology?graph=g-xyz');
+      await vi.waitFor(() => expect(onSnapshot).toHaveBeenCalledTimes(2));
+    });
   });
 });

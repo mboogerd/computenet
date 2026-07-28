@@ -4,6 +4,8 @@ import type { Edge, EdgeRemoval, InspectEvent, Ref } from '../api/types';
 import { onStateSummary } from './detail';
 import { fetchErrorSnapshot, onErrorDeadLetter, onErrorParked, onErrorRestart } from './errors';
 import { onFlowRates } from './flow';
+import { fetchGraphs } from './graphs';
+import { currentGraphId } from './routeState';
 import { selection, setSelection } from './selection';
 import { TopologyClient, type ConnState } from '../sync/client';
 import type { EdgeRec, NodeRec } from '../sync/records';
@@ -66,12 +68,36 @@ function mirror(): void {
 function applyEvent(event: InspectEvent): void {
   switch (event.kind) {
     case 'topology.node':
-      if (event.payload.op === 'added') store.applyNodeAdded(event.payload.node);
-      else store.applyNodeRemoved(event.payload.node.ref);
+      if (event.payload.op === 'added') {
+        // M4: SSE stays global — "the server sends every graph's events
+        // regardless of the currently-viewed one" (20-api-contract.md §5,
+        // M4-BE ticket) — so a client scoped to one graph (currentGraphId()
+        // non-null) must filter deltas itself. `Node.graph` is stamped on
+        // every add, so this is a direct field check; store.ts's own
+        // add/remove/lifecycle mutators already no-op defensively for a ref
+        // this (filtered) store never had, so no other case here needs one.
+        const g = currentGraphId();
+        if (g !== null && event.payload.node.graph !== g) break;
+        store.applyNodeAdded(event.payload.node);
+      } else {
+        store.applyNodeRemoved(event.payload.node.ref);
+      }
       break;
     case 'topology.link':
-      if (event.payload.op === 'added') store.applyEdgeAdded(event.payload.edge as Edge);
-      else store.applyEdgeRemoved(event.payload.edge as EdgeRemoval);
+      if (event.payload.op === 'added') {
+        const edge = event.payload.edge as Edge;
+        // An edge has no `.graph` field of its own (contract) — but an edge
+        // only ever connects two cells within the same component, so "both
+        // endpoints are already known to this (graph-scoped) store" is an
+        // equivalent, self-contained membership check that needs no extra
+        // bookkeeping. When unfiltered (Home, currentGraphId() === null)
+        // every edge is accepted, matching the M0-M3 behavior this preserves.
+        const g = currentGraphId();
+        if (g !== null && !(store.get(edge.from.ref) && store.get(edge.to.ref))) break;
+        store.applyEdgeAdded(edge);
+      } else {
+        store.applyEdgeRemoved(event.payload.edge as EdgeRemoval);
+      }
       break;
     case 'lifecycle':
       store.applyLifecycle(event.payload.ref, event.payload.lifecycle, event.payload.generation);
@@ -102,6 +128,14 @@ function applyEvent(event: InspectEvent): void {
       // just the selected cell's).
       onFlowRates(event.payload);
       break;
+    case 'graphs.changed':
+      // TopologyClient already resyncs topology itself on this event (see
+      // sync/client.ts) — this is the domain-level half: refresh the
+      // GraphList the Home cards render from (contract: "hint to refetch
+      // GraphList"). Unconditional (not gated on the current screen) so the
+      // cards are already fresh the next time Home is shown.
+      fetchGraphs();
+      break;
     default:
       break; // heartbeat, and any later-milestone kind: no local state to update yet
   }
@@ -128,4 +162,11 @@ const client = new TopologyClient({
 /** Start the sync layer. Call once, on app mount. */
 export function connect(): void {
   void client.start();
+}
+
+/** M4-FE ticket Implement §1: "Entering a graph fetches filtered topology."
+ *  Thin wrapper over the client's own filter (`sync/client.ts`) — the only
+ *  caller is `solid/route.ts`'s `currentGraphId()` effect. */
+export function setGraphFilter(graph: string | null): void {
+  client.setGraphFilter(graph);
 }

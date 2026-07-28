@@ -13,6 +13,20 @@ const COL_GAP = 96;
 const ROW_GAP = 28;
 const MARGIN = 32;
 
+/** Sizing knobs for {@link createLayeredLayout} — defaults reproduce the
+ *  canvas's full-size card layout exactly (the constants above). M4-FE
+ *  ticket Implement §3: "Constellation ... reuse the layout module at
+ *  thumbnail scale" — `layout/constellation.ts` is the other caller,
+ *  passing a much smaller `nodeW`/`nodeH`/gaps rather than duplicating the
+ *  Sugiyama layering algorithm for a second, dot-sized geometry. */
+export interface LayeredLayoutConfig {
+  readonly nodeW?: number;
+  readonly nodeH?: number;
+  readonly colGap?: number;
+  readonly rowGap?: number;
+  readonly margin?: number;
+}
+
 export interface LayoutNode {
   ref: Ref;
   layer: number;
@@ -57,7 +71,13 @@ export interface Layout {
  * skillmatch's pipeline is acyclic, so this path is untested against real
  * fixture data.
  */
-export function createLayeredLayout() {
+export function createLayeredLayout(config: LayeredLayoutConfig = {}) {
+  const nodeW = config.nodeW ?? NODE_W;
+  const nodeH = config.nodeH ?? NODE_H;
+  const colGap = config.colGap ?? COL_GAP;
+  const rowGap = config.rowGap ?? ROW_GAP;
+  const margin = config.margin ?? MARGIN;
+
   const assigned = new Map<Ref, { layer: number; slot: number }>();
   const nextSlot = new Map<number, number>();
 
@@ -84,15 +104,15 @@ export function createLayeredLayout() {
         ref,
         layer: l,
         slot,
-        x: MARGIN + l * (NODE_W + COL_GAP),
-        y: MARGIN + slot * (NODE_H + ROW_GAP),
-        w: NODE_W,
-        h: NODE_H,
+        x: margin + l * (nodeW + colGap),
+        y: margin + slot * (nodeH + rowGap),
+        w: nodeW,
+        h: nodeH,
       });
     }
     const maxRows = maxSlot.size ? Math.max(...maxSlot.values()) + 1 : 0;
-    const width = refs.length ? MARGIN * 2 + (maxLayer + 1) * NODE_W + maxLayer * COL_GAP : 0;
-    const height = refs.length ? MARGIN * 2 + maxRows * NODE_H + Math.max(0, maxRows - 1) * ROW_GAP : 0;
+    const width = refs.length ? margin * 2 + (maxLayer + 1) * nodeW + maxLayer * colGap : 0;
+    const height = refs.length ? margin * 2 + maxRows * nodeH + Math.max(0, maxRows - 1) * rowGap : 0;
     return { nodes, width, height };
   }
 

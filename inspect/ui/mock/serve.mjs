@@ -7,11 +7,15 @@
 // in parallel and may not be merged yet — this mock is the only way to
 // screenshot the Errors toggle/subsection without it; extended again by
 // M3-FE for flow.rates, same reasoning — M3-BE (the real tap-based flow
-// feed) runs in parallel and does not exist in this worktree either).
+// feed) runs in parallel and does not exist in this worktree either);
+// extended again by M4-FE for /graphs, /search, and the `?graph=` topology
+// filter, same reasoning — M4-BE runs in parallel and does not exist in
+// this worktree either.
 //
 // No deps — Node's built-in http module only. NOT a stand-in for the real
 // server's semantics (single global observation slot, one fake "live"
-// dataset) — just enough for a human to see the M0+M1+M2 UI work end to end.
+// dataset) — just enough for a human to see the M0+M1+M2+M4 UI work end to
+// end.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +28,121 @@ const port = Number(process.env.PORT ?? 7071);
 const snapshot = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const detailFixture = JSON.parse(readFileSync(detailFixturePath, 'utf8'));
 const errorsSnapshot = JSON.parse(readFileSync(errorsFixturePath, 'utf8'));
+
+// --- M4: multi-graph simulation ------------------------------------------
+// M4-BE runs in parallel and does not exist in this worktree; this mock
+// synthesizes the multi-graph scenario 20-api-contract.md's GraphList/search
+// describe so Home/Navigator (M4-FE ticket) can be checked by hand. The real
+// skillmatch capture is already one real connected pipeline, so it becomes
+// ONE (named) component; a second, small, UNNAMED component is fabricated
+// and spliced into the served snapshot only — never into the checked-in
+// fixtures/topology.json (same "served copy only" discipline the M3-FE
+// fused-edge simulation below already established).
+function minUuid(nodes) {
+  return [...nodes].map((n) => n.ref.split(':')[0]).sort()[0];
+}
+
+const SKILLMATCH_GRAPH = `g-${minUuid(snapshot.nodes)}`;
+for (const n of snapshot.nodes) n.graph = SKILLMATCH_GRAPH;
+
+const BATCH_NODES = [
+  {
+    ref: 'aaaaaaaa-0000-0000-0000-000000000001:0',
+    name: 'batchIngest',
+    typeFqn: 'civictech.cell.data.SetCell',
+    color: 'PURE',
+    manifests: [],
+    ports: [{ name: 'outlet', dir: 'OUT', contractFqn: 'civictech.cell.Propagate' }],
+    host: 'batch-host',
+    net: 'local',
+    lifecycle: 'HOT',
+    generation: 0,
+    graph: null,
+  },
+  {
+    ref: 'aaaaaaaa-0000-0000-0000-000000000002:0',
+    name: null,
+    typeFqn: 'civictech.cell.observe.ObserveCell',
+    color: 'PURE',
+    manifests: [],
+    ports: [{ name: 'inlet', dir: 'IN', contractFqn: 'civictech.cell.Propagate' }],
+    host: 'batch-host',
+    net: 'local',
+    lifecycle: 'HOT',
+    generation: 0,
+    graph: null,
+  },
+];
+const BATCH_GRAPH = `g-${minUuid(BATCH_NODES)}`;
+for (const n of BATCH_NODES) n.graph = BATCH_GRAPH;
+snapshot.nodes.push(...BATCH_NODES);
+snapshot.edges.push({
+  id: 'e-batch-1',
+  from: { ref: BATCH_NODES[0].ref, port: 'outlet' },
+  to: { ref: BATCH_NODES[1].ref, port: 'inlet' },
+  role: 'CONSUME',
+  fused: null,
+});
+
+function graphIdsInSnapshot() {
+  return [...new Set(snapshot.nodes.map((n) => n.graph).filter(Boolean))];
+}
+
+function graphSummary(graphId) {
+  const members = snapshot.nodes.filter((n) => n.graph === graphId);
+  const refs = new Set(members.map((n) => n.ref));
+  const hosts = new Set(members.map((n) => n.host).filter(Boolean));
+  const nets = new Set(members.map((n) => n.net).filter(Boolean));
+  const health = {
+    deadLetters: errorsState.deadLetters.filter((d) => refs.has(d.ref)).length,
+    parked: errorsState.parked.filter((p) => refs.has(p.ref)).reduce((sum, p) => sum + p.count, 0),
+    restarts: errorsState.restarts.filter((r) => refs.has(r.ref)).length,
+  };
+  return {
+    id: graphId,
+    name: graphId === SKILLMATCH_GRAPH ? 'skillmatch' : null,
+    cells: members.length,
+    hosts: hosts.size,
+    nets: nets.size,
+    health,
+    lifecycle: 'hot',
+  };
+}
+
+function graphsList() {
+  return { graphs: graphIdsInSnapshot().map(graphSummary) };
+}
+
+function searchName(q) {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return [];
+  const hits = [];
+  for (const g of graphIdsInSnapshot()) {
+    const label = g === SKILLMATCH_GRAPH ? 'skillmatch' : null;
+    if (label && label.toLowerCase().includes(needle)) hits.push({ graph: g, ref: null, label, detail: 'graph' });
+  }
+  for (const n of snapshot.nodes) {
+    const name = (n.name ?? '').toLowerCase();
+    const type = n.typeFqn.toLowerCase();
+    if (name.includes(needle) || type.includes(needle)) {
+      hits.push({ graph: n.graph, ref: n.ref, label: n.name ?? n.ref, detail: n.typeFqn });
+    }
+  }
+  return hits;
+}
+
+function searchProblems() {
+  return graphIdsInSnapshot()
+    .map(graphSummary)
+    .filter((g) => g.health.deadLetters > 0 || g.health.parked > 0 || g.health.restarts > 0)
+    .sort((a, b) => b.health.deadLetters - a.health.deadLetters || b.health.parked - a.health.parked)
+    .map((g) => ({
+      graph: g.id,
+      ref: null,
+      label: g.name ?? g.id,
+      detail: `${g.health.deadLetters} dead · ${g.health.parked} parked · ${g.health.restarts} restart${g.health.restarts === 1 ? '' : 's'}`,
+    }));
+}
 
 /** Shared across every connected /events client — the contract's `seq` is a
  *  single monotonic counter, not per-connection. */
@@ -212,7 +331,28 @@ const server = createServer((req, res) => {
   const path = url.pathname;
 
   if (path === '/api/inspect/topology') {
-    sendJson(res, 200, { ...snapshot, seq });
+    // M4-BE ticket §5: "GET /topology gains an optional ?graph=g-… filter
+    // (unfiltered remains valid)".
+    const graphFilter = url.searchParams.get('graph');
+    const nodes = graphFilter ? snapshot.nodes.filter((n) => n.graph === graphFilter) : snapshot.nodes;
+    const refs = new Set(nodes.map((n) => n.ref));
+    const edges = graphFilter ? snapshot.edges.filter((e) => refs.has(e.from.ref) && refs.has(e.to.ref)) : snapshot.edges;
+    sendJson(res, 200, { seq, nodes, edges });
+    return;
+  }
+
+  if (path === '/api/inspect/graphs') {
+    sendJson(res, 200, graphsList());
+    return;
+  }
+
+  if (path === '/api/inspect/search') {
+    const mode = url.searchParams.get('mode');
+    const q = url.searchParams.get('q') ?? '';
+    if (mode === 'name') { sendJson(res, 200, { mode, hits: searchName(q), cost: null }); return; }
+    if (mode === 'problems') { sendJson(res, 200, { mode, hits: searchProblems(), cost: null }); return; }
+    if (mode === 'data') { sendJson(res, 501, { error: 'data search arrives in M5' }); return; }
+    res.writeHead(400, { 'Content-Type': 'text/plain' }).end('unknown search mode');
     return;
   }
 
@@ -272,7 +412,7 @@ const server = createServer((req, res) => {
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain' });
-  res.end('not found — this is the M0/M1/M2/M3-FE fixture mock, not the real :inspect server');
+  res.end('not found — this is the M0/M1/M2/M3/M4-FE fixture mock, not the real :inspect server');
 });
 
 server.listen(port, () => {
