@@ -1,9 +1,11 @@
 import { For, Show, createMemo, type JSX } from 'solid-js';
 import type { DeadLetterEntry, ParkedEntry, RestartEntry } from '../api/types';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
+import { portFlowRows, type PortFlowRow } from '../util/flow';
 import { cellDetail, cellState, detailError, detailLoading, stateError, stateLoading } from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
-import { selection, setSelection } from '../solid/state';
+import { flowStore, flowVersion } from '../solid/flow';
+import { edges, selection, setSelection } from '../solid/state';
 import ValueView from './ValueView';
 import './DetailPanel.css';
 
@@ -167,10 +169,56 @@ function StateSection() {
   );
 }
 
+/** M3-FE ticket Implement §4: "Flow subsection (detail panel, replaces
+ *  placeholder): per-port table for the selected cell — direction, rate
+ *  (sum of that port's edges), last wave; fused ports labeled." Reads
+ *  `flowStore` directly (imperatively), gated on `flowVersion()` +
+ *  `selection()`, same pattern as `ErrorsSection` below — not gated on the
+ *  canvas Flow *toggle* (10-target-v3.md: "the detail panel is not
+ *  perspective-dependent"; only the canvas overlay is toggle-gated, per the
+ *  M1/M2 precedent this section follows). */
 function FlowSection() {
+  const rows = createMemo<readonly PortFlowRow[]>(() => {
+    flowVersion();
+    const ref = selection();
+    const detail = cellDetail();
+    if (!ref || !detail) return [];
+    return portFlowRows(detail.ports, ref, Object.values(edges), (id) => flowStore.get(id));
+  });
+
   return (
     <Section title="Flow">
-      <p class="detail-section__status">arrives with the Flow milestone</p>
+      <Show when={!detailLoading()} fallback={<p class="detail-section__status">Loading…</p>}>
+        <Show when={rows().length} fallback={<p class="detail-section__status">This cell has no ports.</p>}>
+          <table class="flow-table">
+            <thead>
+              <tr>
+                <th>Port</th>
+                <th>Dir</th>
+                <th>Rate</th>
+                <th>Last wave</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={rows()}>
+                {(r) => (
+                  <tr>
+                    <td class="mono">{r.port}</td>
+                    <td class="detail-muted">{r.dir}</td>
+                    <td class="mono">
+                      <Show when={!r.fused} fallback={<span class="flow-table__fused">fused</span>}>
+                        {r.rate > 0 ? `${r.rate.toFixed(1)}/s` : '—'}
+                      </Show>
+                    </td>
+                    <td class="mono">{r.lastWave ? `${r.lastWave.source.slice(0, 8)} · ${r.lastWave.counter}` : '—'}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </Show>
+      </Show>
+      <p class="detail-section__footnote">1 Hz aggregate — not per-message; per-cell consistent, cross-panel alignment not guaranteed</p>
     </Section>
   );
 }

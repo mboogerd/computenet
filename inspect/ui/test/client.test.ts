@@ -161,7 +161,11 @@ describe('TopologyClient', () => {
     const es = MockEventSource.last!;
     es.open();
 
-    es.message(evt(11, 'flow.rates')); // M3 kind — additive evolution, not yet understood
+    // M2-EVAL swapped this placeholder from 'error.deadLetter' to
+    // 'flow.rates' once M2 made the former a recognized kind; M3-FE now
+    // makes 'flow.rates' recognized too (see the dedicated test below), so
+    // this swaps again to 'graphs.changed' (M4) — the next still-unimplemented kind.
+    es.message(evt(11, 'graphs.changed')); // M4 kind — additive evolution, not yet understood
     expect(onEvent).not.toHaveBeenCalled();
 
     es.message(evt(12, 'lifecycle')); // must be accepted, not treated as a gap
@@ -193,5 +197,18 @@ describe('TopologyClient', () => {
 
     expect(onEvent).toHaveBeenCalledTimes(3);
     expect(onEvent.mock.calls.map((c) => c[0].kind)).toEqual(['error.deadLetter', 'error.parked', 'error.restart']);
+  });
+
+  it('recognizes flow.rates (M3) as a known kind and forwards it', async () => {
+    mockFetchOnce(10);
+    await client.start();
+    const es = MockEventSource.last!;
+    es.open();
+
+    es.message({ seq: 11, kind: 'flow.rates', payload: { window: 1000, edges: [{ id: 'e1', rate: 12.5, lastWave: null, hop: 1 }] } });
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'flow.rates', payload: expect.objectContaining({ window: 1000 }) }),
+    );
   });
 });

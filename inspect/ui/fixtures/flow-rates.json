@@ -1,0 +1,33 @@
+[
+  {
+    "seq": 601,
+    "kind": "flow.rates",
+    "payload": {
+      "window": 1000,
+      "edges": [
+        { "id": "327ab252-b906-4236-9194-9b7e2f7b7b60", "rate": 12.5, "lastWave": { "source": "9c41a2f0", "counter": 288 }, "hop": 1 },
+        { "id": "3c1e56b2-8d06-4307-a31f-1bef6ad566f5", "rate": 2.0, "lastWave": { "source": "9c41a2f0", "counter": 250 }, "hop": 2 }
+      ]
+    }
+  },
+  {
+    "seq": 602,
+    "kind": "flow.rates",
+    "payload": {
+      "window": 1000,
+      "edges": [
+        { "id": "327ab252-b906-4236-9194-9b7e2f7b7b60", "rate": 30.0, "lastWave": { "source": "9c41a2f0", "counter": 289 }, "hop": 1 }
+      ]
+    }
+  },
+  {
+    "seq": 603,
+    "kind": "flow.rates",
+    "payload": {
+      "window": 1000,
+      "edges": [
+        { "id": "327ab252-b906-4236-9194-9b7e2f7b7b60", "rate": 31.0, "lastWave": { "source": "9c41a2f0", "counter": 290 }, "hop": 1 }
+      ]
+    }
+  }
+]

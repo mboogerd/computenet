@@ -93,6 +93,42 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M1-FE.md`:
   `state.summary` events; since only the selected cell is ever observed in
   M1, at most one node ever shows a chip at a time.
 
+## M3: flow toggle (pulses, rates, fused edges)
+
+Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M3-FE.md`:
+
+- **Flow store** (`src/sync/flowStore.ts`): per-edge `{rate, lastWave, hop}`
+  from `flow.rates` SSE batches (no snapshot endpoint exists for this feed —
+  see `src/api/types.ts`'s M3 comment). An edge absent from a batch keeps its
+  last reading through one missed 1 Hz window (grace) and decays to zero
+  (removed) on a second *consecutive* miss.
+- **Canvas overlay** (`src/components/Canvas.tsx`, `src/util/flow.ts`): a
+  rate label + SMIL `animateMotion` pulses per active edge, count/speed
+  stepped by one of three rate bands (never per-message); a fused edge gets
+  a thick stroke and a "fused" label instead, no pulses, ever (M3-BE "never
+  emit[s] rates for [fused edges]"). Under `prefers-reduced-motion: reduce`
+  (`src/solid/motion.ts`) no pulses render at all — a static per-band
+  `data-band` stroke class carries the signal instead. A wide invisible
+  `.edge-hit` line (the visible lines stay under `.canvas__svg`'s blanket
+  `pointer-events: none`) carries the hover tooltip: route, last wave, hop,
+  rate (or the fused wording).
+- **Flow subsection** (`src/components/DetailPanel.tsx`, replacing the M1/M2
+  placeholder): a per-port table for the selected cell — direction, the
+  summed rate of every non-fused edge touching that port, last wave; a port
+  whose every edge is fused is labeled `fused` instead of a rate.
+- **State toggle chips**: already shipped in M1 (`src/solid/detail.ts` +
+  `Canvas.tsx`'s `.node-state-chip` layer, driven by `state.summary`) — this
+  ticket's Implement §5 follow-through found nothing left to do.
+- `fixtures/flow-rates.json` is a M3-FE addition: a *sequence* of three
+  `flow.rates` SSE envelopes (there being no snapshot to pair with a single
+  fixture the way `fixtures/errors.json` pairs with `GET /errors`),
+  deliberately built to exercise the decay rule end to end — see
+  `test/flow-fixture.test.ts`.
+- `mock/serve.mjs` gained a synthetic `flow.rates` broadcaster (one edge
+  marked `fused: true` in its own served copy only — never in the checked-in
+  `fixtures/topology.json`) so the toggle, pulses, fused rendering, and the
+  Flow subsection can all be checked by hand ahead of M3-BE.
+
 ## Notes
 
 - `fixtures/topology.json` is a verbatim capture of the real skillmatch
@@ -117,8 +153,9 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M1-FE.md`:
   then select a node). Still not a semantics stand-in — single global
   observation slot, one fake dataset.
 
-## Deferred (M2+, per the ticket's Exclusions)
+## Deferred (M4+, per the ticket's Exclusions)
 
-Real errors/flow rendering, the multi-graph navigator. No optimistic writes
-— this is a read-only instrument. No CSS framework, router, or state
-library (agora precedent).
+Network-host hulls, the multi-graph navigator, per-message flow animation
+(M3-FE's own Exclusions: "not in v3 v1 scope"). No optimistic writes — this
+is a read-only instrument. No CSS framework, router, or state library
+(agora precedent).
