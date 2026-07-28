@@ -60,14 +60,17 @@ import java.util.concurrent.TimeUnit
  *
  * ### Which cells are candidates
  *
- * Locally hosted, not held mid-migration, not suspended, and readable — an open
- * observation, or a `Stateful` the host answers for. Everything else is skipped
- * and counted:
+ * Locally hosted, not held mid-migration, not suspended, not on a drained host,
+ * and readable — an open observation, or a `Stateful` the host answers for.
+ * Everything else is skipped and counted:
  *
- * - **not hot** (suspended, or held for a migration flip) → [SearchCost.coldSkipped].
- *   The contract calls this field "cold", and until M5-COLD widens the predicate
- *   to whole components this is the honest per-cell version of it: in an all-hot
- *   process it reads 0, exactly as the contract's "0 until M5-COLD" says.
+ * - **not hot** ([Heat.isReadable] false: suspended, on a drained host, or held
+ *   for a migration flip) → [SearchCost.coldSkipped]. M5-COLD widened this from
+ *   M5-SEARCH's per-cell predicate to the whole-component one its ticket asks
+ *   for: a component the navigator lists as cold is skipped *as a component*,
+ *   without a per-cell registry walk, and every one of its candidate cells is
+ *   counted. The per-cell test still runs for the rest, so a lone parked cell
+ *   inside an otherwise-running graph is skipped and counted too.
  * - **not locally hosted** (a mirrored/announced ref — M5-NET) → counted and
  *   reported in the closing notice. Cross-JVM search is out of scope.
  *
@@ -110,9 +113,22 @@ internal class DataSearch(
         var unanswered = 0
         var capReached = false
         var budgetSpent = false
+        var coldGraphs = 0
 
         val ours = instruments()
         components@ for (component in components()) {
+            // M5-COLD ticket Implement §3: a cold component is skipped whole,
+            // and its candidate cells are what `coldSkipped` counts. Reading
+            // even one of them would be exactly the touching the cold screen
+            // promises not to do — and the cheapest correct thing is also the
+            // most honest one.
+            if (component.lifecycle == GraphSummary.COLD) {
+                coldGraphs += 1
+                coldSkipped += component.nodes.count { node ->
+                    InspectorServer.decodeRef(node.ref)?.let { it !in ours } ?: false
+                }
+                continue
+            }
             for (node in component.nodes) {
                 val ref = InspectorServer.decodeRef(node.ref) ?: continue
                 if (ref in ours) continue
@@ -159,17 +175,16 @@ internal class DataSearch(
             }
         }
 
-        notice(capReached, budgetSpent, truncatedReads, unanswered, remoteSkipped)?.let { hits += it }
+        notice(capReached, budgetSpent, truncatedReads, unanswered, remoteSkipped, coldGraphs)?.let { hits += it }
         return SearchResult(SearchResult.DATA, hits, SearchCost(cellsQueried = queried, coldSkipped = coldSkipped))
     }
 
     /** Why a candidate was (or was not) queried — the whole skip vocabulary in one place. */
     private enum class Candidacy { HOT, COLD, REMOTE }
 
-    private fun candidacy(ref: CellRef): Candidacy {
-        val host = registry.locate(ref) ?: return Candidacy.REMOTE
-        // held: mid-migration, its traffic is parking by design (LocationRegistry.hold)
-        return if (registry.isHeld(ref) || host.isSuspended(ref)) Candidacy.COLD else Candidacy.HOT
+    private fun candidacy(ref: CellRef): Candidacy = when (val heat = Heat.of(registry, ref)) {
+        Heat.UNHOSTED -> Candidacy.REMOTE
+        else -> if (heat.isReadable) Candidacy.HOT else Candidacy.COLD
     }
 
     /** The outcome of one candidate read — "nothing to read" and "did not answer" are not the same. */
@@ -297,6 +312,7 @@ internal class DataSearch(
         truncatedReads: Int,
         unanswered: Int,
         remoteSkipped: Int,
+        coldGraphs: Int,
     ): SearchHit? {
         val reasons = buildList {
             if (cap) add("stopped at the $maxCells-cell cap")
@@ -306,6 +322,11 @@ internal class DataSearch(
                 add("$truncatedReads ${cells(truncatedReads)} read only to the first ${ValueEncoder.MAX_ROWS} rows")
             }
             if (remoteSkipped > 0) add("$remoteSkipped remote ${cells(remoteSkipped)} skipped")
+            // M5-COLD: the one skip a user can do something about, so it names
+            // the remedy rather than only the fact
+            if (coldGraphs > 0) {
+                add("$coldGraphs cold ${if (coldGraphs == 1) "graph" else "graphs"} skipped — wake to include")
+            }
         }
         if (reasons.isEmpty()) return null
         val partial = cap || budget || unanswered > 0 || truncatedReads > 0

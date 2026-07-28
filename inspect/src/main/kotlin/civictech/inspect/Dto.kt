@@ -55,6 +55,15 @@ data class Node(
     companion object {
         const val LOCAL_NET = "local"
         const val HOT = "HOT"
+
+        /**
+         * The contract's other `lifecycle` value. Reported for a cell the
+         * kernel is not running: individually suspended, or on a drained host
+         * — see [Heat] for the whole vocabulary and why those two collapse into
+         * this one word (the contract offers `"HOT" | "SUSPENDED"` and no
+         * third).
+         */
+        const val SUSPENDED = "SUSPENDED"
     }
 }
 
@@ -298,12 +307,16 @@ data class GraphSummary(
     val health: GraphHealth,
     /**
      * The contract's `"hot" | "cold"`, lowercase (unlike [Node.lifecycle]).
-     * Always [HOT] in M4: cold-graph listing is M5-COLD.
+     * [COLD] once every member cell is parked — see [Component.lifecycle] for
+     * the predicate and [Heat] for what each parked state means.
      */
     val lifecycle: String = HOT,
 ) {
     companion object {
         const val HOT = "hot"
+
+        /** M5-COLD: every member cell is suspended, or on a drained host. */
+        const val COLD = "cold"
     }
 }
 

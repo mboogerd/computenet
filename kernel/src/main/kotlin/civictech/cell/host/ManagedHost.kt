@@ -180,7 +180,28 @@ open class ManagedHost(
 
     private enum class State { RUNNING, DRAINING, DRAINED }
 
+    // @Volatile for the same reason [suspendedCells] became concurrent: every
+    // writer is the scheduler thread, but [isDrained] is read from an
+    // observer's own thread.
+    @Volatile
     private var state = State.RUNNING
+
+    /**
+     * Has this host finished draining (spec 33 §Drain, G-16) — intake closed,
+     * every accepted invocation flushed, every cell deactivated and
+     * snapshotted, awaiting [HostManagementApi.resumeHost]?
+     *
+     * Read-only introspection, safe from any thread, and deliberately **not**
+     * true mid-drain: `DRAINING` is a host that is still flushing work it
+     * accepted, so calling it drained would be a lie in both directions — an
+     * observer would report a graph parked while it is still computing, and
+     * `resumeHost` (which requires `DRAINED`) would be refused. The inspector's
+     * cold-graph screen (spec 90/97 M5) is the caller: a drained host's cells
+     * stay published — a drain unpublishes nothing — so their structure remains
+     * readable as registry metadata while nothing about them runs, which is
+     * exactly the state that screen exists to name and to offer to end.
+     */
+    val isDrained: Boolean get() = state == State.DRAINED
 
     /** Snapshots captured by the last drain (spec 33 step 3; starts G-25). */
     private val snapshots = mutableMapOf<CellRef, Serializable>()

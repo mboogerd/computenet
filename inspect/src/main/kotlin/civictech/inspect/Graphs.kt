@@ -198,6 +198,28 @@ internal data class Component(
 
     /** What the navigator shows when there is no name: the id itself. */
     val label: String get() = name ?: id
+
+    /**
+     * M5-COLD — `GraphSummary.lifecycle`: [GraphSummary.COLD] when every member
+     * cell is parked, [GraphSummary.HOT] otherwise.
+     *
+     * Derived from the members' own already-stamped [Node.lifecycle] rather
+     * than re-read from the registry, so a card and the canvas behind it can
+     * never disagree about the same cells — [InspectorModel] stamps both from
+     * one [Heat] read, under one monitor.
+     *
+     * **All**, not any: one running cell means the graph is computing, and a
+     * screen that told the user otherwise — and offered to "wake" what is
+     * already awake — would be worse than no screen. An empty component cannot
+     * occur (a component is a non-empty set of cells by construction) and
+     * reports hot rather than claiming coldness about nothing.
+     */
+    val lifecycle: String
+        get() = if (nodes.isNotEmpty() && nodes.all { it.lifecycle == Node.SUSPENDED }) {
+            GraphSummary.COLD
+        } else {
+            GraphSummary.HOT
+        }
 }
 
 /**
@@ -221,6 +243,7 @@ internal object Graphs {
                 hosts = component.nodes.mapNotNull { it.host }.distinct().size,
                 nets = component.nodes.map { it.net }.distinct().size,
                 health = health(component, errors),
+                lifecycle = component.lifecycle,
             )
         },
     )
