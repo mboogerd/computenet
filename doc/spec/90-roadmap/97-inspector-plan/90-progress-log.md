@@ -130,3 +130,224 @@ ticket's own acceptance list.
 5. **`describe(ref)` returns `Class<out Cell>?`** — deliberately the smallest
    thing M0 needs. M1 will want state views and attention through this seam;
    widening it is an M1-BE decision.
+
+---
+
+## M1 — Selection + state (evaluated 2026-07-28)
+
+Merged: `worktree-wf_61385043-d56-1` (M1-BE) + `worktree-wf_61385043-d56-2`
+(M1-FE) into evaluator branch `worktree-wf_61385043-d56-3`, head `74db7f9`.
+Verdict: **accepted**; one real cross-side defect and one fixture/dead-code
+mismatch fixed in the eval session, no bounce needed.
+
+### Environment note (same class of issue as M0's item, recurred)
+
+Both worker worktrees, and this evaluator's own, were handed branches at
+`46d5a4a` — an ancestor of main predating the entire M0 merge (`inspect/`
+absent). M1-BE independently fast-forwarded its branch to main with
+`git reset --hard main` before starting; M1-FE could not (no git authority
+per its own discipline) and instead copied `inspect/ui/` from main verbatim
+as an isolated commit (`a076abd`). This evaluator fast-forwarded its own
+branch to main (`8cb285d`) first — clean, working tree was empty — then
+merged BE (clean, its `fa7029f` merge-base is an ancestor of main, no
+overlapping files) then FE. FE's merge produced 12 `add/add` conflicts
+(the `46d5a4a` merge-base has no `inspect/ui/` at all, so git could not
+3-way-merge); each was verified by diff to be a pure superset of main's M0
+baseline before resolving to FE's side — no work lost. **Flagging again for
+the orchestrator**: this is the second consecutive milestone where worker
+worktrees were not branched from current main; worth fixing before M2.
+
+### Tests run
+
+| Suite | Result |
+|---|---|
+| `./gradlew :inspect:test` | 53 passed (10 M0 + 43 new: `ValueEncoderTest` 18, `InspectorObserveTest` 13, `ObservationsIdleTest` 7, `InspectorCellDetailTest` 5) |
+| `npm run typecheck` (`inspect/ui/`) | clean |
+| `npm test` (`inspect/ui/`) | 65/65 passed / 10 files (was 43/7 at M0; +3 new files, +2 net new tests after the fixture fix below) |
+| `npm run build` | clean; `dist/` removed, not committed |
+| `./gradlew test` (repo gate, `--rerun-tasks`, this worktree) | BUILD SUCCESSFUL in 2m9s, 75/75 tasks, incl. `:concord:test`, `:demo:exchange:test`, `:demo:agora:test`, `:wire:test`, `:gen:test` |
+
+Live verification: `:demo:skillmatch:installDist` run on port 8393 with
+`--inspect-port 7393`; `npm run dev` (port 5493) proxying the real backend
+via `INSPECT_BACKEND`. Screenshots captured in-session for: graph with no
+prior observe traffic, `candSkills` selected (all four stacked subsections,
+descriptor/placement/state/flow-placeholder/errors-placeholder), live state
+update after a `POST /op` mutation (frontier `3adb86c5·5`), Process-hosts +
+State toggles on (dashed `skillmatch` hull, one chip on the observed node
+only), and post-deselect (panel empty, chip gone).
+
+### Contract conformance (`20-api-contract.md`)
+
+`CellDetail`, `CellState`, observe endpoints, `state.summary` — diffed
+against live captures from the real server (curl + browser network log), not
+just the FE's own fixtures. Matched exactly except the two defects below,
+both in the FE's `Value` handling, both now fixed and reconciled to the
+server per this ticket's own instruction.
+
+### Defects found and fixed by the evaluator
+
+1. **Real defect — FE's `opaqueOf()` used the wrong key and shape.**
+   `ValueEncoder.kt` emits the reserved key `$opaque` holding
+   `{"type": ..., "text": ...}`; `inspect/ui/src/api/types.ts`'s `opaqueOf`
+   read the bare key `opaque` and expected a plain string. Every server
+   `$opaque` value would have silently fallen through to the tree/scalar
+   renderer instead of the code-block branch — confirmed by reading both
+   sides' source (skillmatch's pipeline never produces an opaque value, so
+   this could not be triggered live; the mismatch is unambiguous from the
+   two encoders' definitions alone). Fixed `opaqueOf` (correct key, returns
+   `{type, text}`), `ValueView.tsx`'s rendering (shows both), `ValueView.css`,
+   `fixtures/cell-state-opaque.json`, and `test/value.test.ts`.
+2. **Fixture/dead-code mismatch — a tombstoned `$table` row the server never
+   sends.** `fixtures/cell-state-table.json` fabricated a
+   `{cells: [...], tombstoned: true}` row to exercise the ticket's
+   "tombstone-style strikethrough" rendering. Verified live against
+   skillmatch's `candSkills` `SetCell` (added two skills, removed a third):
+   `ValueEncoder.orSetMembership` excludes tombstoned elements from the
+   encoded state entirely — a removed element just disappears from `rows`;
+   the wire never carries a tombstone marker of any shape. Reconciled the
+   fixture and its test to the real 2-row shape; left `isTombstoneRow`/
+   `rowCells` and the `.is-tombstoned` CSS class in place as harmless,
+   explicitly-documented forward compatibility (dead code today, no server
+   response can construct it) rather than ripping them out.
+
+No other defects found. `InspectorServer`'s `serveCell` ref parsing
+(split on `/`, ref itself unencoded) matches FE's `defaultDetailTransport`
+assumption exactly — no fix needed there.
+
+### Acceptance items verified live
+
+- **Observer-effect discipline (P6, priority 1)**: browsing the graph before
+  any selection issued zero `/observe` calls (network log). Selecting
+  `candSkills` issued exactly one `POST .../observe` (204); reselecting
+  `jobSkills` issued exactly one `DELETE` for `candSkills` then one `POST`
+  for `jobSkills`; clicking the panel's close (×) issued exactly one
+  `DELETE`. After a full select → mutate → reselect → deselect loop,
+  `GET /api/inspect/topology` reported the same 16 nodes / 18 edges as the
+  clean baseline — no leaked `ObserveCell` sinks, matching M1-BE's own
+  `InspectorObserveTest` assertions (`sinkRef !in registry.localRefs()` after
+  release).
+- **Vertical smoke**: selected `candSkills`, table showed `alice/kotlin`,
+  `alice/typescript`; `curl .../op` adding `carol/rust` produced a live
+  `state.summary` → refetch → `carol/rust` appeared, frontier advanced to
+  `3adb86c5·5`, staleness reset. Bulk-seeded 250 more candidate/skill pairs
+  (253 total live elements); server response carried `rows.length === 200`
+  and `{"$truncated":{"total":253,"shown":200}}` exactly per contract; the
+  State canvas chip read "253 rows · 3adb86·255 · 0ms".
+- **Snapshot thread-safety (priority 4)**: code review, not a live trigger
+  (see Deviations #1 below) — `SnapshotSource`'s shipped default
+  (`Unavailable`) means `kind: "snapshot"` is unreachable in this milestone;
+  `serveState` never reads a live cell off the HTTP thread. M1-BE's own test
+  suite covers the seam's injected behavior; the host-routed executing-thread
+  assertion the ticket asks for cannot exist until the seam is wired (open
+  question #1, carried from M1-BE).
+- All four detail-panel subsections stack on every selection (Descriptor &
+  placement, State, Flow placeholder "arrives with the Flow milestone",
+  Errors placeholder "arrives with the Errors milestone") — verified on both
+  an occupied cell (`candSkills`) and an empty one (`jobSkills`, 0 rows,
+  value `[]`, no crash).
+- Process-hosts toggle: one dashed hull labelled `skillmatch` beneath the
+  edges. State toggle: exactly one chip, on the observed node only, tracking
+  live cardinality/frontier/staleness.
+
+### Kernel invariant audit (BE diff)
+
+M1-BE touched no kernel files at all (`git diff fa7029f..worktree-wf_61385043-d56-1`
+is confined to `inspect/src/**`), so this is a code-review confirmation, not a
+kernel-surface review:
+
+- **P2**: no per-message hook; the only new feed is one ordinary
+  `ObserveCell` per active observation, ended explicitly.
+- **P6**: `Observations.start`/`stop` are the only path that spawns/links a
+  sink; `serveDetail`/`serveState`(unobserved)/`snapshotReading`(default)
+  never do. Verified both by code review and live network/topology counts
+  above.
+- **Ownership**: the observation sink is a normal `View`-folding consumer of
+  the outlet's own delta stream (`Borrowed`, same as any other consumer) —
+  no tap, no exclusive-payload path touched.
+- **Release correctness**: `Observations.release` runs `link.unlink()` then
+  `despawn(sinkRef)`, in that order, exactly as documented and tested
+  (`InspectorObserveTest`'s "no further onChange" + despawn assertions).
+- **Transport-neutral**: zero kernel files in the diff.
+- Main advanced during M1-BE's run to include `851ab0c` (`ObserveCell`
+  reopens its dispatcher on `onActivate`) — M1-BE reviewed this diff and
+  found every API surface `Observations.kt` uses unchanged; this evaluator
+  independently confirms the merged tree (which includes `851ab0c`) passes
+  the full `./gradlew test` gate.
+
+### Diff hygiene
+
+`git diff main HEAD --name-only` touches only `inspect/src/**` and
+`inspect/ui/**` (verified via grep for `concord`, `kernel/`, `build/`,
+`dist/`, `node_modules` — all empty). No gap/consistency markers removed. No
+weakened tests — the two fixture fixes above strengthened assertions to
+match verified server behavior rather than loosening them.
+
+### Deviations from ticket or contract (all accepted)
+
+1. **`Stateful.snapshot()` host-routed fallback not wired** (M1-BE Implement
+   §3, second branch). No kernel seam exists to run it on the owning host's
+   thread, and the ticket's own Exclusions require stopping and flagging
+   rather than editing the kernel without sign-off. `SnapshotSource` is
+   declared and the whole `kind: "snapshot"` path is implemented and tested
+   behind it; shipped default is `Unavailable` (→ `kind: "unavailable"`).
+   Practical blast radius: cells with no delta outlet (chiefly `ObserveCell`
+   sinks) permanently report unavailable until this is approved. See open
+   question #1.
+2. **`POST /observe` can answer `409`**, not only the contract's `204`, when
+   the cell has no built-in fold. A client that ignores it still behaves
+   correctly (`GET state` reports `unavailable`). Accepted; contract
+   addition needed (open question #2a).
+3. **`$opaque` is a new reserved key** beyond the contract's `$table`/
+   `$truncated`, shape `{type, text}`. Accepted — realizes the ticket's
+   "safe reflective-toString last resort clearly marked opaque"; now
+   correctly consumed on the FE side after this evaluation's fix. Contract
+   addition needed (open question #2b).
+4. **`attention` always `null`, `links.taps` always `0`** — both explicitly
+   permitted by the ticket (kernel access limits: `AttentionSupport`/
+   `FanOutlet.tap` bookkeeping are not reachable from the seams M1 grants).
+   Confirmed live: `candSkills`' panel showed `Attention —`, `taps 0`.
+5. **State canvas chips ship in M1**, per the ticket's own later "Correction
+   for clarity" overriding its earlier Exclusions sentence — FE followed the
+   correction; verified live (chip appears only for an actively-observed
+   cell, never a merely-browsed one).
+6. **A freshly-opened observation reports `frontier: null`** even though its
+   fold is already populated (the producer's late-join catch-up baseline is
+   deliberately not a wave position, spec 20/21 §Pull, 93 I-24). Verified
+   live: `candSkills`' first read showed no frontier chip; one appeared after
+   the first live mutation.
+7. **An empty collection of records encodes as `[]`, not an empty `$table`**
+   — columns are only discoverable from an element. Verified live:
+   `jobSkills` (0 rows) rendered as an empty list, no crash, "0 rows" chip.
+
+### Open questions for M2
+
+1. **Snapshot seam approval, carried from M1-BE**: add
+   `ManagedHost.snapshotOf(ref): Serializable?`
+   (`enqueueAwaiting(0) { (cells[ref] as? Stateful)?.snapshot() }`)? Until
+   approved, `kind: "snapshot"` stays unreachable in production.
+2. **Contract updates still needed in `20-api-contract.md`** (implemented in
+   code, verified correct by this evaluation, not yet written into the
+   contract file — evaluators do not edit it unilaterally): (a) `POST
+   /observe` may return `409` when the cell has no observable outlet; (b)
+   `$opaque` as a third reserved `Value` key, shape `{type: string, text:
+   string}` (this evaluation corrected the FE's guess at both the key name
+   and the shape — the contract should specify the real one); (c) a sentence
+   confirming `$table` never carries a tombstone-marked row today (tombstoned
+   elements are excluded from encoded state entirely, not flagged).
+3. **`:concord:check`'s `docLints` task fails**, independent of this
+   milestone: every file under `doc/spec/90-roadmap/97-inspector-plan/`
+   lacks the bold `**Status**:` header the lint requires, going back to the
+   folder's first commit (`57a5844`, pre-M0). Not part of the specified
+   repo gate (`./gradlew test`, which is green) and out of this ticket's
+   scope (`concord/` is off-limits; fixing plan-doc headers is a docs
+   maintenance task, not an M1-EVAL one) — flagging for the orchestrator to
+   schedule.
+4. **Worktree provisioning recurred** (see Environment note above) — the
+   second consecutive milestone where worker branches were not cut from
+   current main. Worth fixing in the harness before M2's workers are
+   dispatched.
+5. **`state.summary` rate**, carried from M1-BE: emitted per settled
+   effective change with no coalescing, sharing `seq` with topology deltas.
+   Correct per this ticket and never blocks the graph (bounded drop-oldest
+   queue), but a hot cell produces a high frame rate; M3 introduces 1 Hz
+   `flow.rates` batching and may want the same applied to `state.summary`.
