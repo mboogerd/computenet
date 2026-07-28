@@ -40,6 +40,15 @@ internal class InspectorModel(
     private val cellNames: Map<CellRef, String>,
     /** Non-blocking sink for one serialized SSE frame. */
     private val emit: (String) -> Unit,
+    /**
+     * M3's flow feed, read through a supplier so the collector — which emits
+     * its batches back through [flowRates] — can be constructed after this
+     * model (the same read-through shape [InspectorServer] uses for its
+     * `SnapshotSource`). Defaults to [FlowBinding.None]: a model built without
+     * a collector reports every edge's `fused` as the contract's `null`,
+     * exactly as M0 did.
+     */
+    private val flow: () -> FlowBinding = { FlowBinding.None },
 ) {
     private val lock = Any()
     private val hostNames: Map<ManagedHost, String> = hosts.entries.associate { (name, host) -> host to name }
@@ -163,6 +172,15 @@ internal class InspectorModel(
     }
 
     /**
+     * `flow.rates` (contract §SSE): one 1 Hz aggregation window from
+     * [FlowCollector]. Rides the same monotonic [seq] as every other event —
+     * one stream, one gap detector (mirrors [stateSummary]).
+     */
+    fun flowRates(batch: FlowBatch) = synchronized(lock) {
+        emitEvent(Event.FLOW_RATES, inspectorJson.encodeToJsonElement(batch).jsonObject)
+    }
+
+    /**
      * A local publish. A ref the view has not seen is a new node; a ref it has
      * is a re-publish (`resumeHost`, a returning migration) — the node is
      * refreshed and reported as a [Event.LIFECYCLE] change rather than a
@@ -191,6 +209,10 @@ internal class InspectorModel(
         // served from the view — the last node the client was told about
         val node = nodes.remove(ref) ?: return@synchronized
         portNames.remove(ref)
+        // a despawn unpublishes but does not unlink (only an explicit
+        // `Link.unlink` retracts an edge), so the flow feed's taps on this
+        // cell's outlets are released from here, not from [unlinked]
+        flow().dropCell(ref)
         emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
             put("op", Event.REMOVED)
             put("node", inspectorJson.encodeToJsonElement(node))
@@ -208,6 +230,7 @@ internal class InspectorModel(
 
     fun unlinked(id: UUID) = synchronized(lock) {
         if (edges.remove(id) == null) return@synchronized
+        flow().unbind(id)
         // contract: a removal carries only the id
         emitEvent(Event.TOPOLOGY_LINK, buildJsonObject {
             put("op", Event.REMOVED)
@@ -258,6 +281,13 @@ internal class InspectorModel(
         )
     }
 
+    /**
+     * Registers [link] with the flow feed and encodes it. Binding here rather
+     * than at the two call sites keeps "an edge the client has been told about"
+     * and "an edge the collector is watching" the same set by construction —
+     * and makes the contract's `fused` the collector's answer for that very
+     * edge rather than a second, independently-derived guess.
+     */
     private fun edgeOf(link: TopologyLink): Edge = Edge(
         id = link.id.toString(),
         from = endpointOf(link.from),
@@ -265,8 +295,7 @@ internal class InspectorModel(
         // every edge in the topology index comes from `ManagedHost.connect`,
         // which links consume-role; taps (`FanOutlet.tap`) are not indexed
         role = Edge.CONSUME,
-        // fusion is not cheaply detectable in M0 — null, never a guess
-        fused = null,
+        fused = flow().bind(link),
     )
 
     private fun endpointOf(port: PortRef): Endpoint =

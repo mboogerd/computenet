@@ -960,6 +960,35 @@ open class ManagedHost(
         return RoutedInletResolution.Usable(apiClass)
     }
 
+    /**
+     * Observe-role attachment seam (spec 20/23 §Taps): the broadcasting outlet
+     * [port] names on a cell hosted here, so an observer that did not build the
+     * graph can [FanOutlet.tap] it. Null when [port] names no locally hosted
+     * cell, no registered port of that cell, or a port that is not a
+     * [FanOutlet].
+     *
+     * A null for a *known* endpoint is information, not an error: a topology
+     * edge whose producing endpoint is not a [FanOutlet] has no emission point
+     * of its own — a delegating pass-through (spec 20/21 §Fusion, 10/14
+     * "chains of delegation MUST flatten") — so there is nothing observable on
+     * that edge, and a flow feed must report it as fused rather than as zero
+     * traffic.
+     *
+     * Resolution is by [PortRef.id] rather than by registered name because a
+     * `TopologyLink`'s endpoint is a ref, and a cell whose ports were never
+     * name-derived (PN-1) has no recoverable name at all. Everything handed
+     * back is already reachable via `PortRegistry.of(cell)` to any caller
+     * holding the cell object; this only threads the host's own [cells] map
+     * into that lookup instead of reflecting the map out of it.
+     */
+    fun outletAt(port: PortRef): FanOutlet<*>? {
+        val cell = port.cell?.let { cells[it] } ?: return null
+        val ports = PortRegistry.of(cell)
+        return ports.names().firstNotNullOfOrNull { name ->
+            (ports[name] as? FanOutlet<*>)?.takeIf { it.ref.id == port.id }
+        }
+    }
+
     // wouldCloseCycle: moved onto TopologyIndex itself (RS-8.4) — it only
     // ever read its `topology` parameter, so it fits as a member; it is now
     // called as `reg.wouldCloseCycle(from, to)` from LinkAdmission.admitCycle

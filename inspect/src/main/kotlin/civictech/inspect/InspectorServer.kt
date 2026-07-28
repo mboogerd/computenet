@@ -3,6 +3,7 @@ package civictech.inspect
 import civictech.cell.CellRef
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.port.PortRef
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.beginSse
 import civictech.demo.shell.respond
@@ -87,7 +88,16 @@ class InspectorServer(
 
     private val shell = DemoShell(port)
     private val broadcaster = SseBroadcaster()
-    private val model = InspectorModel(registry, hosts, cellNames, broadcaster::publish)
+
+    // `flow` is declared below and read through the supplier, so the two can
+    // reference each other without a construction cycle: the model asks the
+    // collector for an edge's `fused`, the collector hands its windows back to
+    // the model's `flowRates`. The supplier only runs after construction.
+    private val model: InspectorModel =
+        InspectorModel(registry, hosts, cellNames, broadcaster::publish, flow = { flow })
+
+    /** M3 — the flow feed (see [FlowCollector]); attaches taps as edges appear. */
+    private val flow: FlowCollector = FlowCollector(registry, onBatch = model::flowRates)
 
     /**
      * The `Stateful.snapshot()` fallback, absent by default — see
@@ -247,6 +257,13 @@ class InspectorServer(
             { runCatching { errors.poll() } },
             ERROR_POLL_SECONDS, ERROR_POLL_SECONDS, TimeUnit.SECONDS,
         )
+        // M3: the flow feed's single aggregation thread is this same scheduler
+        // — snapshot-and-reset is a handful of atomic reads, and sharing the
+        // one daemon thread keeps the inspector at exactly the threads it had
+        heartbeats.scheduleAtFixedRate(
+            { runCatching { flow.sample() } },
+            FlowCollector.WINDOW_MS, FlowCollector.WINDOW_MS, TimeUnit.MILLISECONDS,
+        )
     }
 
     fun stop() = close()
@@ -258,6 +275,8 @@ class InspectorServer(
         // still-attached client should see its own subscriptions retract
         observations.close()
         errors.close()
+        // untaps every outlet: a stopped inspector leaves no handler on a live graph
+        flow.close()
         broadcaster.close()
         shell.stop()
     }
@@ -270,6 +289,12 @@ class InspectorServer(
 
     /** Run the error-lane poll now instead of waiting for its 2 s schedule — tests. */
     internal fun pollErrorsNow() = errors.poll()
+
+    /** Close the flow window now instead of waiting for its 1 s schedule — tests. */
+    internal fun sampleFlowNow() = flow.sample()
+
+    /** Outlets the flow feed currently taps — tests. */
+    internal val tappedOutlets: Set<PortRef> get() = flow.tappedOutlets
 
     /** `GET /api/inspect/errors`'s body, decoded — tests. */
     internal fun errorSnapshot(): ErrorSnapshot = errors.snapshot()

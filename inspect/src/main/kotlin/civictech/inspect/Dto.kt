@@ -75,7 +75,13 @@ data class Edge(
     val to: Endpoint,
     /** `CONSUME` or `OBSERVE`. */
     val role: String = CONSUME,
-    /** Best-effort; null when unknown — M0 does not detect fusion and never guesses. */
+    /**
+     * Best-effort. `false` once M3 has a tap on the producing outlet, `true`
+     * for a producing endpoint with no emission point of its own (a delegating
+     * pass-through — spec 20/21 §Fusion), and `null` when this inspector
+     * cannot tell: a producer it does not host, or an inspector running without
+     * the flow feed (see [FlowBinding]).
+     */
     val fused: Boolean? = null,
 ) {
     companion object {
@@ -159,6 +165,32 @@ data class CellState(
 @Serializable
 data class WaveStamp(val source: String, val counter: Long)
 
+/**
+ * `flow.rates` (contract §SSE) — one aggregation window. Edges that carried no
+ * traffic in the window are omitted, so an all-quiet window is an empty
+ * [edges]; the batch itself is still sent, because the client's decay rule
+ * counts *received* windows.
+ */
+@Serializable
+data class FlowBatch(
+    /** The aggregation window in milliseconds. */
+    val window: Long,
+    val edges: List<FlowEdgeRate>,
+)
+
+/** One edge's traffic in one [FlowBatch] window. */
+@Serializable
+data class FlowEdgeRate(
+    /** The [Edge.id] this rate belongs to. */
+    val id: String,
+    /** Messages per second over the window. */
+    val rate: Double,
+    /** The wave the window's last observed emission carried, when one was stamped. */
+    val lastWave: WaveStamp? = null,
+    /** That emission's `MessageContext.hop`. */
+    val hop: Int? = null,
+)
+
 /** The SSE envelope: `data: {"seq":…,"kind":…,"payload":{…}}\n\n`. */
 @Serializable
 data class Event(
@@ -174,6 +206,7 @@ data class Event(
         const val ERROR_DEAD_LETTER = "error.deadLetter"
         const val ERROR_PARKED = "error.parked"
         const val ERROR_RESTART = "error.restart"
+        const val FLOW_RATES = "flow.rates"
         const val HEARTBEAT = "heartbeat"
 
         const val ADDED = "added"

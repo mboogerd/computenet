@@ -86,10 +86,12 @@ class InspectorTopologyTest {
         edge.from shouldBe Endpoint("${source.ref.id}:${source.ref.instanceId}", "outlet")
         edge.to shouldBe Endpoint("${replica.ref.id}:${replica.ref.instanceId}", "deltaInlet")
         edge.role shouldBe "CONSUME"
-        edge.fused shouldBe null
+        // M3 upgraded M0's `null`: the producing endpoint is a real outlet, so
+        // the flow feed has a tap on it and the edge is demonstrably not fused
+        edge.fused shouldBe false
         // the contract's client ignores unknown fields but reads declared ones:
         // a field omitted because it equals its default is not the same as null
-        body shouldContain "\"fused\":null"
+        body shouldContain "\"fused\":false"
     }
 
     @Test
