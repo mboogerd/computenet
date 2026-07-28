@@ -1,5 +1,7 @@
 # M4-FE — Navigator: cards, constellation, name/problems search
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-sonnet-5` (effort xhigh) · Track: frontend · Depends: M3-EVAL
 merged · Parallel with: M4-BE (code against contract + fixtures)
 

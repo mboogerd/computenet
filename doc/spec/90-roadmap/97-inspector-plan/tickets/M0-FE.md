@@ -1,5 +1,7 @@
 # M0-FE — Inspector UI scaffold: live topology canvas
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-sonnet-5` (effort xhigh) · Track: frontend · Depends: — ·
 Parallel with: M0-BE (file-disjoint — you own `inspect/ui/**` only)
 

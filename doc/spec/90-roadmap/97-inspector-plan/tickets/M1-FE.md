@@ -1,5 +1,7 @@
 # M1-FE — Detail panel (all-properties) + state view + process-host hulls
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-sonnet-5` (effort xhigh) · Track: frontend · Depends: M0-EVAL
 merged · Parallel with: M1-BE (code against the contract + fixtures)
 

@@ -1,6 +1,6 @@
 # Inspector delivery plan — orchestration
 
-Status: ACTIVE PLAN (2026-07-27). Owner: Merlijn. Consumed by: an orchestrating
+**Status**: Living — active plan (2026-07-27). Owner: Merlijn. Consumed by: an orchestrating
 LLM that assigns tickets to sub-agents, sequences them, and gates merges through
 evaluators.
 

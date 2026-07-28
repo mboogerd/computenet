@@ -1,5 +1,7 @@
 # M5-SEARCH — Content search: find the cell holding a record (full vertical)
 
+**Status**: Specified — not yet dispatched (see `00-orchestration.md` §Ticket index).
+
 Model: `claude-opus-5` (effort xhigh) · Track: full vertical (BE + FE) ·
 Depends: M4-EVAL merged · Parallel with: M5-NET (disjoint files) · M5-COLD
 runs AFTER this merges (both touch navigator search UI)

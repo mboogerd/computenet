@@ -1,5 +1,7 @@
 # M2-BE — Error lane feed
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-sonnet-5` (effort xhigh) · Track: backend · Depends: M1-EVAL
 merged · Parallel with: M2-FE
 

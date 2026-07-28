@@ -1,5 +1,7 @@
 # Inspector delivery plan — progress log
 
+**Status**: Living — living log, appended by each milestone's evaluator (see `00-orchestration.md` §Evaluation protocol).
+
 Appended by each milestone's EVAL ticket (see `00-orchestration.md` §Evaluation
 protocol step 5). Newest entry last.
 

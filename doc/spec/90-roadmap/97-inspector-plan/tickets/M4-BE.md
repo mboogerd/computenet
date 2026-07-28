@@ -1,5 +1,7 @@
 # M4-BE — Multi-graph: components, identity, search (name/problems)
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-opus-5` (effort xhigh) · Track: backend · Depends: M3-EVAL
 merged · Parallel with: M4-FE
 

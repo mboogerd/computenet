@@ -1,5 +1,7 @@
 # Inspector API contract
 
+**Status**: Living — reference doc for the in-progress inspector delivery plan (see `00-orchestration.md`).
+
 The contract between `:inspect` (server) and `inspect/ui` (client). Both sides
 implement against this document so BE and FE tickets can run in parallel.
 **Neither side edits this file unilaterally** — change requests go to the

@@ -1,5 +1,7 @@
 # M3-EVAL — Evaluate & merge the flow vertical
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-opus-5` (effort high) · Fresh session · Depends: M3-BE + M3-FE.
 You are the arbiter: verify, fix or bounce, then merge.
 

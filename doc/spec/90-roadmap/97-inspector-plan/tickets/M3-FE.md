@@ -1,5 +1,7 @@
 # M3-FE — Flow toggle: pulses, rates, flow subsection
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-sonnet-5` (effort xhigh) · Track: frontend · Depends: M2-EVAL
 merged · Parallel with: M3-BE (code against contract + a `flow.rates` fixture
 you create)

@@ -1,5 +1,7 @@
 # M1-EVAL — Evaluate & merge the selection/state vertical
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-sonnet-5` (effort high) · Fresh session · Depends: M1-BE + M1-FE.
 You are the arbiter: verify, fix or bounce, then merge.
 

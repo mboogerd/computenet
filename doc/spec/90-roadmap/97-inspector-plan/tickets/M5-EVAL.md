@@ -1,5 +1,7 @@
 # M5-EVAL — Final acceptance: the inspector vs the v3 vision
 
+**Status**: Specified — not yet dispatched (see `00-orchestration.md` §Ticket index).
+
 Model: `claude-fable-5` (effort high; raise to xhigh for the invariant audit
 if findings warrant) · Fresh session · Depends: M5-NET, M5-SEARCH, M5-COLD
 merged-or-ready per the orchestrator's sequencing. You are the final arbiter

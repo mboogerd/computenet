@@ -1,5 +1,7 @@
 # M4-EVAL — Evaluate & merge the navigator vertical
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-opus-5` (effort high) · Fresh session · Depends: M4-BE + M4-FE.
 You are the arbiter: verify, fix or bounce, then merge.
 

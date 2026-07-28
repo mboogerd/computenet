@@ -1,5 +1,7 @@
 # M0-BE — `:inspect` module: topology snapshot + SSE delta feed
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-opus-5` (effort xhigh) · Track: backend · Depends: — ·
 Parallel with: M0-FE (file-disjoint)
 

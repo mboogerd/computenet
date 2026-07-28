@@ -1,5 +1,7 @@
 # M5-COLD — Cold graphs: list without waking, wake explicitly (full vertical)
 
+**Status**: Specified — not yet dispatched (see `00-orchestration.md` §Ticket index).
+
 Model: `claude-opus-5` (effort xhigh) · Track: full vertical (BE + FE) ·
 Depends: M5-SEARCH merged (shares navigator UI files) · Parallel with: M5-NET
 

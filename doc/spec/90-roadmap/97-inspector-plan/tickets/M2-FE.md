@@ -1,5 +1,7 @@
 # M2-FE — Errors toggle + errors subsection
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-sonnet-5` (effort xhigh) · Track: frontend · Depends: M1-EVAL
 merged · Parallel with: M2-BE (code against contract + fixtures)
 

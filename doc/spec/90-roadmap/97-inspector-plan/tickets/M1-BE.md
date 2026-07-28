@@ -1,5 +1,7 @@
 # M1-BE — Cell detail + state preview endpoints
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-opus-5` (effort xhigh) · Track: backend · Depends: M0-EVAL
 merged · Parallel with: M1-FE
 

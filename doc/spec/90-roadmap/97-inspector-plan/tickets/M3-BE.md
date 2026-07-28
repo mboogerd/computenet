@@ -1,5 +1,7 @@
 # M3-BE — Flow feed: tap-based edge rates
 
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
+
 Model: `claude-opus-5` (effort xhigh) · Track: backend · Depends: M2-EVAL
 merged · Parallel with: M3-FE
 
