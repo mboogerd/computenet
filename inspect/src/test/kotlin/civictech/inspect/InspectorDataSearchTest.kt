@@ -257,8 +257,12 @@ class InspectorDataSearchTest {
 
         val result = search("alice")
 
-        result.hits.shouldBeEmpty()
         result.cost shouldBe SearchCost(cellsQueried = 0, coldSkipped = 1)
+        // M5-COLD: the lone suspended cell is a component of one, so that whole
+        // component is cold — and a search that skipped a graph says so rather
+        // than reporting a bare "not found"
+        result.hits.single().graph shouldBe DataSearch.NOTICE_GRAPH
+        result.hits.single().detail shouldContain "1 cold graph skipped — wake to include"
         // M1-EVAL's leak check: searching created no ObserveCell sink, so it
         // raised no attention on the cone it declined to read
         serving.observedRefs.shouldBeEmpty()
