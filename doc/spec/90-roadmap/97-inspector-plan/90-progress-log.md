@@ -530,3 +530,229 @@ fixed above.
 3. **`docLints` header gap** (carried from M1-EVAL): still unresolved,
    still out of every milestone's declared scope; still tracked for a
    documentation pass after M5.
+
+---
+
+## M3 — Flow (evaluated 2026-07-28)
+
+Merged: `worktree-wf_633d4319-b71-1` (M3-BE, `668cb64` + `35ea34d`) +
+`worktree-wf_633d4319-b71-2` (M3-FE, `d31dfde`) + three evaluator commits
+(`f255d42`, `08e033f`, `b672a52`), as `inspector(M3): …`. Verdict:
+**accepted**; two defects fixed in the eval session, no bounce needed. Both
+worker branches sat on current `main` and merged with zero conflicts —
+`inspect/src/**` and `inspect/ui/**` are still perfectly file-disjoint.
+
+### Environment note
+
+This evaluator's worktree was stale at start (`46d5a4a`, predating the whole
+`97-inspector-plan/` folder — the same staleness M1-EVAL and M2-EVAL each hit,
+and which both workers reported hitting too). `git reset --hard main` to
+`4eed35a` before reading anything.
+
+### Tests run
+
+All results are fresh runs on the final tree.
+
+| Suite | Result |
+|---|---|
+| `./gradlew :inspect:test` | 79 passed (15 new: `InspectorFlowTest` 10, `InspectorFlowStreamTest` 5) |
+| `./gradlew :kernel:test --tests OutletAtTest` | 4 passed (new, added by this evaluation) |
+| `./gradlew :demo:skillmatch:test` | passed |
+| `npm test` (`inspect/ui/`) | 141 passed / 16 files (139 from FE + 2 added by this evaluation) |
+| `npm run typecheck` | clean |
+| `npm run build` | clean; `dist/` removed after, not committed |
+| `./gradlew test --rerun-tasks` (repo gate) | **BUILD SUCCESSFUL** — every module re-executed from scratch, nothing from cache |
+
+### Live verification (real server + real UI, not the mock)
+
+Ran the real pilot (`:demo:skillmatch:installDist`, demo on 8395, inspector on
+7093) with the real built `inspect/ui` proxied at it via `INSPECT_BACKEND`.
+
+- **Contract conformance, byte-level.** `GET /api/inspect/topology` → 16 nodes
+  / 18 edges, `fused: false` on all 18. A captured `flow.rates` frame matches
+  `20-api-contract.md` §SSE field for field: envelope `{seq, kind, payload}`,
+  payload `{window: 1000, edges: [{id, rate, lastWave: {source, counter},
+  hop}]}`, `seq` strictly monotonic and shared with every other event kind.
+- **Attribution (M3-EVAL item 4).** Under load: 17 of 18 edges reported, the
+  18th correctly omitted for zero traffic; rates spanning 2–79 msg/s with
+  busy edges proportionally higher than quiet ones (43 vs 18 in one window),
+  hops 0–3, two distinct wave sources. Quiet edges stayed dark and carried the
+  "no observed traffic" tooltip rather than a fabricated zero.
+- **Viz never blocks (10-target-v3 §Constraints 6).** Measured, not asserted:
+  300 ops with no SSE client = 1794 ops/s; with a deliberately *stalled* SSE
+  client that opens `/events` and never reads a byte = 1803 ops/s; after it
+  detached = 1898 ops/s. Identical within noise, with the live browser UI
+  attached throughout.
+- **Flow toggle.** Active edges tint amber with a midpoint rate pill and
+  travelling pulses; toggling off clears the overlay with no re-layout. Rate
+  bands landed well on real traffic — the observed 2–79 msg/s spread exercised
+  all three of M3-FE's bands rather than saturating the top one, so its
+  thresholds (5 / 25) are kept as validated rather than guessed.
+- **Hover tooltips.** Verified on all 18 edges via the DOM:
+  `jobSkills.outlet → required.inlet — wave c6d8c48e·1556 · hop 0 · 11.0/s`
+  for active edges, `… — no observed traffic` for quiet ones.
+- **Fused, end-to-end (M3-EVAL item 3).** The skillmatch pilot contains no
+  fused edge — every one of its 18 producing endpoints is a real outlet — so a
+  disposable harness (deleted before committing; never in the diff) booted a
+  real `InspectorServer` on a graph carrying one genuine delegating
+  pass-through beside one tapped edge. The real server answered `fused: true`
+  on the pass-through and `false` on the tapped edge; the real UI rendered the
+  fused edge as a thick static double-stroke with an italic "fused" pill, zero
+  pulses, and the tooltip `relay.inlet → relayed.inlet — fused — no observable
+  messages`, next to the tapped edge's `15.0/s` and its pulses. Over 12
+  consecutive live windows the fused edge id appeared **0** times in
+  `flow.rates` while the tapped edge appeared 12 — fused means unobserved, never
+  a zero rate.
+
+### Defects found / fixed
+
+1. **The detail panel's per-port rate multiplied every OUT port by its
+   fan-out** (`f255d42`). M3-BE attributes an outlet's emission count to *each*
+   of its outgoing edges (broadcast — duplicated, never divided, and correctly
+   so); M3-FE then summed a port's edges, following the M3-FE ticket's own
+   wording "rate (sum of that port's edges)". Each side is defensible alone;
+   composed, they over-report. Caught live and quantified rather than inferred:
+   `jobSkills.outlet` genuinely emitting 6 msg/s across 5 edges was displayed as
+   `30.0/s`, and at higher load 21 msg/s across 6 edges as `126.0/s`. Fixed by
+   making the combination directional — an OUT port is one `FanOutlet`, so its
+   edges are all readings of one counter and the reading is taken once (max,
+   robust to an edge bound mid-window); an IN port's edges come from distinct
+   producing outlets, so those genuinely add and still sum. Re-verified live:
+   the same port now reads `21.0/s` against a raw feed showing `21.0` per edge.
+   Two tests added, the misleading one rewritten to the corrected semantics.
+2. **`fixtures/topology.json` went stale at `"fused": null`** (`08e033f`) —
+   flagged by M3-BE itself as out of its owned files. The contract documents
+   this fixture as a verbatim capture of the real pilot's
+   `GET /api/inspect/topology`, and M0-EVAL reconciled it against the live
+   server for exactly that reason. Re-captured (18 edges, `false` on all 18);
+   only the `fused` field changed, so no other fixture-backed test moved.
+
+Also added, not a defect: **a kernel-side test for `ManagedHost.outletAt`**
+(`b672a52`). M3-BE covered its new kernel accessor only transitively through
+`:inspect`; a new public kernel surface should be pinned where it lives, so its
+contract is now tested directly — the outlet it resolves, plus the two nulls a
+flow feed reads differently ("registered port but not an emission point" →
+fused, versus "not hosted here" → unknown).
+
+No structural defects; neither worker needed rework. No weakened tests — the
+two pre-existing test edits in the workers' diffs were both verified as
+necessary corrections (`InspectorTopologyTest`'s `fused` null→false, and
+`client.test.ts` moving its "unrecognized future kind" placeholder from
+`flow.rates` to `graphs.changed` now that `flow.rates` is understood). No
+`concord/` edits, no generated/build output, no gap markers removed (`G-47` is
+cited in new KDoc, not closed).
+
+### Kernel-invariant audit
+
+- **P2 — fast path (M3-EVAL item 1, bounce-level).** Read the handler line by
+  line; M3-BE's stated cost is accurate. Per message per tapped outlet it does
+  one reference comparison (screening `Object`'s own methods off the counting
+  path, so a null return cannot NPE on `hashCode` unboxing), one
+  `AtomicLong.incrementAndGet`, one `ThreadLocal` read, one volatile reference
+  store. Zero allocations, zero locks, zero map lookups, nothing proportional to
+  payload size. The collector's `lock` is never taken on the graph thread; the
+  aggregation runs on the inspector's own pre-existing daemon scheduler, and
+  `sample()` releases that lock *before* handing the batch to the model, so the
+  two lock orders (model→collector on link, collector-then-model on sample) can
+  never close a cycle. Around the handler sits the kernel's own pre-existing tap
+  dispatch, unchanged — including `FanOutlet.call`'s `tapOrder.toList()`, which
+  allocates on every emission whether or not a tap is installed, and the
+  `disclosureFilter` + `method.invoke` spread. That dispatch cost is inherent to
+  the seam the M3-BE ticket itself prescribed, not something this milestone
+  introduced; `FanOutlet` semantics are untouched.
+- **Ownership (item 2).** Confirmed against the source: the handler never reads
+  or retains `args` — the only path that touches it is the `Object`-method
+  screen, which compares `args?.firstOrNull()` by identity for `equals`. Taps
+  attach via `Use.fixed`, which is not `Linked`, so `FanOutlet.tap` takes its
+  unnegotiated path (`putTap`, `LinkRole.Observe`) — never `subscribe`, never
+  consuming, and firing no `onLinked` hook, so the inspector's own attachments
+  never appear as edges it then reports. The one retained object is the
+  `MessageContext` the outlet had already built (`Timestamp`, `PortRef`,
+  optional `ReBaselineNotice`/`TagFrontier`, `hop`) — verified to carry no
+  payload reference. No `Owned`/`Leased` payload is consumed, copied, delayed
+  or dropped.
+- **Lifecycle (item 5).** Covered by tests and confirmed by review: unlink
+  untaps through the topology hook, despawn untaps through the *unpublish* hook
+  (despawn does not unlink), an outlet keeps its tap while any of its edges
+  survives (refcounted per outlet), an inspector started against an
+  already-wired graph taps what its startup sync adopts, and `close()` untaps
+  everything so a stopped inspector leaves no handler on a live graph.
+- **Kernel seam.** `ManagedHost.outletAt(PortRef)` (~6 lines) is **approved** as
+  arbiter. It is not the route M3-BE's ticket sanctioned, and M3-BE flagged that
+  correctly rather than taking it silently. The sanctioned fallback was measured
+  and genuinely cannot work: a co-hosted chain runs as nested direct calls, so
+  `enqueueHostedInvocation` sees only the ingress to the first cell and *zero*
+  internal-edge traffic — in the pilot graph it would report nothing at all. The
+  accessor is what `10-target-v3.md` §Constraints 5 explicitly permits ("small,
+  explicitly-listed accessors, threaded through existing structures — never
+  runtime reflection"): it resolves through the host's own `cells` map and
+  `PortRegistry`, hands back only what any caller holding the cell object can
+  already reach, and adds no runtime reflection. Now covered by its own kernel
+  test.
+
+### Deviations from ticket or contract
+
+1. **`fused` means something narrower than the M3-BE ticket's premise — and
+   this is the right call.** The ticket (and `10-target-v3.md` §Constraints 1)
+   assumes "fused co-hosted chains compile to direct calls — there is no message
+   to observe on a fused edge." That premise does not survive contact with the
+   tap seam the same ticket prescribes: the tap sits on the emitting outlet,
+   *upstream* of the decision to call directly or enqueue, so co-hosted and
+   cross-host edges are observed identically. Taking the premise literally would
+   mark every edge in a single-host graph fused and report no rates at all,
+   making the whole feed vacuous. What genuinely has no observable message is an
+   edge whose producing endpoint is not a `FanOutlet` — a delegating
+   pass-through (spec 10/14 "chains of delegation MUST flatten", 20/21 §Fusion).
+   So `true` = no emission point at the producing endpoint, `false` = tapped,
+   `null` = producer not locally hosted. Verified end-to-end above. **This wants
+   writing into `20-api-contract.md`'s `Edge.fused` line and
+   `10-target-v3.md` §Constraints 1**, which still carry the old premise — an
+   orchestrator edit, not a unilateral one (same discipline as M1-EVAL's
+   `$opaque`/409 and M2-EVAL's `cause` nullability).
+2. **`rate` unit.** The contract does not state one. The server emits
+   messages/second (`count × 1000 / window`), which is exactly what M3-FE
+   assumed and labels "N.n/s". Confirmed live — the two sides agree, so M3-FE's
+   open question 1 is resolved, and the unit is worth writing into the contract.
+3. **Fan-out attribution is duplicated, not divided** (M3-BE's documented
+   choice, KDoc'd). Correct for the broadcast fan-out the kernel implements, and
+   correct per-edge. It is only the *per-port aggregate* that had to change —
+   see defect 1.
+4. **`prefers-reduced-motion` not screenshotted.** M3-FE flagged this honestly
+   and it stands: the sandboxed browser exposes no reduced-motion emulation, and
+   a synthetic `change` dispatch cannot reach the app's own `MediaQueryList`
+   instance. Verified instead at unit-test level (`pulsesToRender` returns 0 for
+   every band) plus CSS review — the static-intensity styling is a plain
+   `@media (prefers-reduced-motion: reduce)` block keyed on the `data-band`
+   attribute, and that attribute was confirmed present in the live DOM, so the
+   path is real and needs no JS to engage.
+5. **M3-BE's kernel edit** — approved above rather than treated as a deviation
+   to carry forward.
+
+### Open questions for M4
+
+1. **The canvas silently drops an edge whose endpoint port is not in the node's
+   `ports` list.** Found while building the fused harness: a cell with no
+   KSP descriptor reports `ports: []` and `color: null`, its topology edges name
+   ports by raw ref id, and the canvas — having no port dot to anchor to — draws
+   nothing at all. The edge is in the snapshot and simply never appears. Not an
+   M3 defect (no such cell exists in the pilot, and both harness variants were
+   mine), and pre-existing since M0, but M4's multi-graph navigator will render
+   graphs nobody curated, so it is likely to bite there. A visible fallback
+   (anchor to the node's edge, mark the port unknown) beats silent omission.
+2. **Contract additions to fold in** (from Deviations 1 and 2): the M3 meaning
+   of `Edge.fused`, `flow.rates.rate`'s unit, and the fact that `flow.rates` is
+   the one feed with no paired snapshot/GET endpoint (M3-FE's open question 2 —
+   currently documented only in its own code comment).
+3. **`docLints` header gap** (carried from M1-EVAL and M2-EVAL, restated by
+   M3-BE): `./gradlew :concord:check` is red on `main` with 23 fatal "Missing
+   Status header" findings, every one of them on `97-inspector-plan/**` docs.
+   Confirmed pre-existing and untouched by this milestone, whose only markdown
+   changes are this log entry and `inspect/ui/README.md` (inside M3-FE's owned
+   scope) — nothing under `doc/spec/` but this file. Still out of every declared
+   scope; still tracked for a documentation pass after M5. Worth doing before
+   M4 if any gate is ever wired to `:concord:check` rather than `:concord:test`.
+4. **`state.summary` coalescing** (carried from M1/M2-EVAL): M3's `flow.rates`
+   settled the batching question for its own feed with a 1 Hz snapshot-and-reset
+   window that publishes even when quiet (so the client's decay rule can key on
+   *received* windows). `state.summary` still has no equivalent; the flow window
+   is the pattern to copy if it is ever revisited.
