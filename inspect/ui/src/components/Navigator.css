@@ -119,6 +119,29 @@
   color: var(--text-muted);
 }
 
+/* A closing notice row (M5): what the search did not cover. Not navigable,
+   so it must not read as a button — dashed, flat, no pointer. */
+.search-hit--notice {
+  border-style: dashed;
+  background: none;
+  cursor: default;
+}
+
+.search-hit--notice .search-hit__label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* The data-mode cost line (M5-SEARCH Implement §2). Deliberately plain and
+   always present for a data result — the price of a content search is part
+   of its answer, not a diagnostic. */
+.search-cost {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- graph cards --- */
 
 .graph-cards {

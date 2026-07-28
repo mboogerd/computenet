@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ErrorSnapshot, GraphList, SearchResult, TopologySnapshot } from '../src/api/types';
 import { deriveHealthPills } from '../src/nav/health';
+import { formatSearchCost, isNoticeHit } from '../src/nav/search';
 import errorsFixture from '../fixtures/errors.json';
 import graphsFixture from '../fixtures/graphs.json';
+import searchDataFixture from '../fixtures/search-data.json';
 import searchNameFixture from '../fixtures/search-name.json';
 import searchProblemsFixture from '../fixtures/search-problems.json';
 import topology from '../fixtures/topology.json';
@@ -13,6 +15,7 @@ const errorsSnapshot = errorsFixture as ErrorSnapshot;
 const topologySnapshot = topology as TopologySnapshot;
 const searchName = searchNameFixture as SearchResult;
 const searchProblems = searchProblemsFixture as SearchResult;
+const searchData = searchDataFixture as SearchResult;
 const multihost = topologyMultihost as TopologySnapshot;
 
 /** M4-FE ticket Implement §5: "Fixtures: fixtures/graphs.json,
@@ -89,6 +92,44 @@ describe('fixtures/search-problems.json', () => {
       expect(g).toBeDefined();
       expect(g!.health.deadLetters > 0 || g!.health.parked > 0 || g!.health.restarts > 0).toBe(true);
     }
+  });
+});
+
+/** M5-SEARCH ticket Implement §1-2. Captured from a live `?mode=data&q=alice`
+ *  against the skillmatch pilot (18 cells queried across the two components the
+ *  pilot runs) and re-keyed onto this fixture set's own ids, the same way
+ *  `search-name.json` was. */
+describe('fixtures/search-data.json', () => {
+  it('is mode "data" and — unlike name/problems — always carries a cost', () => {
+    expect(searchData.mode).toBe('data');
+    expect(searchData.cost).not.toBeNull();
+    expect(formatSearchCost(searchData.cost)).toBe('queried 18 cells · 0 cold skipped');
+  });
+
+  it('every navigable hit names a real graph and a real node of fixtures/topology.json', () => {
+    const ids = new Set(graphs.graphs.map((g) => g.id));
+    const refs = new Set(topologySnapshot.nodes.map((n) => n.ref));
+    const navigable = searchData.hits.filter((h) => !isNoticeHit(h));
+    expect(navigable.length).toBeGreaterThan(0);
+    for (const hit of navigable) {
+      expect(ids.has(hit.graph)).toBe(true);
+      // a data hit always points at the cell holding the record
+      expect(hit.ref).not.toBeNull();
+      expect(refs.has(hit.ref!)).toBe(true);
+    }
+  });
+
+  it("every hit's detail follows the server's 'graph / cell · type — n record(s)' shape", () => {
+    for (const hit of searchData.hits.filter((h) => !isNoticeHit(h))) {
+      expect(hit.detail).toMatch(/^.+ \/ .+ · .+ — \d+ records?$/u);
+    }
+  });
+
+  it('carries exactly one closing notice, last, with no ref to navigate to', () => {
+    const notices = searchData.hits.filter(isNoticeHit);
+    expect(notices).toHaveLength(1);
+    expect(searchData.hits[searchData.hits.length - 1]).toBe(notices[0]);
+    expect(notices[0].ref).toBeNull();
   });
 });
 
