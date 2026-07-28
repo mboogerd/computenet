@@ -379,3 +379,154 @@ match verified server behavior rather than loosening them.
    `git reset --hard main` first if their worktree predates the prior
    milestone's merge, rather than discovering it mid-ticket.
 5. **`state.summary` coalescing**: noted for M3; no action needed at M2.
+
+
+---
+
+## M2 — Errors (evaluated 2026-07-28)
+
+Merged: `worktree-wf_6329fc15-cdf-1` (M2-BE, `9abf6b4`) +
+`worktree-wf_6329fc15-cdf-2` (M2-FE, `960f7f7`) + one evaluator defect-fix
+commit (`433930f`), as `inspector(M2): …`. Verdict: **accepted**; one small
+defect fixed in the eval session, no bounce needed.
+
+### Environment note
+
+This evaluator's worktree was stale at start (`46d5a4a`, missing the entire
+`97-inspector-plan/` folder — predated even M0). Fast-forwarded with
+`git reset --hard main` before reading anything, per this milestone's own
+instruction to check for exactly this. Both worker branches, by contrast,
+were clean single commits already sitting on current `main` — no rebasing
+needed on the merge side, and both merged with zero conflicts (`inspect/src/**`
+and `inspect/ui/**` are still perfectly file-disjoint).
+
+### Tests run
+
+- `./gradlew :inspect:test --tests 'civictech.inspect.InspectorErrorsTest'
+  --tests 'civictech.inspect.RingBufferTest'` — 12/12 new BE tests PASSED.
+- `./gradlew :inspect:test` (full module, 63 tests) — all PASSED, no
+  regressions in any M0/M1 suite.
+- `npm test` in `inspect/ui/` — 96/96 PASSED (95 from the FE worker + 1 new
+  store test added by this evaluation for the `cause: null` fix below).
+- `npm run typecheck` — clean. `npm run build` — clean production build;
+  `dist/` removed after, not committed.
+- `./gradlew test` (repo-wide gate, post-merge, post-fix) — **BUILD
+  SUCCESSFUL**: kernel, gen, wire, concord (`:concord:test` UP-TO-DATE, no
+  edits under `concord/`), testkit, every demo module including
+  `:demo:skillmatch:test`.
+
+### Live vertical smoke (full stack, real server + real UI)
+
+skillmatch's own public HTTP surface validates its inputs before ever
+reaching the kernel (confirmed by both workers), so it cannot itself induce
+a dead letter, restart, or park — there is no error-induction recipe against
+the demo binary as shipped. Rather than settle for BE's server-only curl
+transcript and FE's mock-server screenshot (each already individually
+sufficient per their tickets' own allowances), this evaluation built one
+additional real, disposable harness: a temporary JUnit test
+(`ScratchLiveHarness.kt`, deleted before the final commit — never part of the
+diff) that boots a real `InspectorServer` on a real `ManagedHost`, induces a
+genuine unknown-port dead letter (drop, `cause: null`), a genuine thrown-
+exception dead letter + supervision RESTART, and genuine parked traffic
+(`registry.hold` + queued calls), then blocks. Pointed the real (built, not
+mocked) `inspect/ui` dev server at it via `INSPECT_BACKEND` and drove it with
+the browser tool:
+
+- Header counter strip read "2 dead · 2 parked · 1 restarts", exactly
+  matching a concurrent `curl /api/inspect/errors`.
+- Errors toggle on: the cell with a real thrown-exception dead letter got a
+  red badge ("1") and a red-tinted border; toggle off cleared both instantly,
+  canvas structure untouched (no re-layout) — confirmed by the accessibility
+  tree, not just a screenshot.
+- Detail panel Errors subsection: dead-letter card showed cause
+  (`IllegalStateException`) bold, description, "—" for the null wave stamp,
+  and a real timestamp; a separate cell's parked row showed
+  `inlet · 2 parked · oldest ~33s ago`. The subsection stayed visible with
+  the toggle off (correct — only the canvas overlay is toggle-gated per the
+  ticket's own wording, the detail panel is not).
+- Live-confirmed BE's own documented deviation #5 firsthand: the induced
+  RESTART bumped `generationOf` before the poller's first tick ever observed
+  that ref, so `counters.restarts` read `1` (true total, off
+  `supervisionAccounting()`) while `restarts[]` stayed empty (first-sight
+  seeding, no fabricated history) — both server and client reported this
+  identically, confirming the FE store didn't paper over or diverge from the
+  server's own documented approximation.
+- The host-level routerInlet dead letter (drop, no target cell) correctly
+  produced no canvas badge on any cell — its `ref` falls back to the host's
+  own ref per BE's documented deviation #2, and the host itself is not a
+  topology node, so there is nothing to badge. Expected, not a defect.
+
+### Defects found / fixed
+
+1. **`DeadLetterEntry.cause` typed non-nullable in the FE, but the server
+   legitimately sends `null`** (a drop — unknown target, no thrown
+   exception to name; verified live above and exercised by BE's own
+   `InspectorErrorsTest`'s first test). `20-api-contract.md`'s DTO block
+   doesn't spell out nullability in its illustrative example, but the real
+   server behavior (and BE's own `DeadLetterRow.cause: String? = null`) is
+   unambiguous. Not a crash (Solid renders `null` as nothing), but a real
+   type-conformance gap and a cosmetic one — the dead-letter card rendered
+   an empty bold-red line for a drop instead of anything meaningful. Fixed
+   directly: `cause: string | null` in `src/api/types.ts`, a
+   `dl.cause ?? 'dropped (unknown target)'` fallback in
+   `DetailPanel.tsx`, and a new `ErrorStore` test locking in the null-cause
+   path (`inspect/ui/test/errorStore.test.ts`). Commit `433930f`.
+
+No structural defects — neither worker's output needed rework. No weakened
+tests (the one pre-existing test edit, `client.test.ts`'s
+`error.deadLetter` → `flow.rates` future-kind swap, was FE's own required
+correction once `error.deadLetter` became a recognized M2 kind — verified
+correct, not loosened). No gap/consistency markers touched. No files outside
+`inspect/src/**` / `inspect/ui/**`. No `concord/` edits.
+
+### No-consumption invariant (M2-EVAL check 1)
+
+Verified by code review: `Errors.kt`'s only attachment to
+`ManagedHost.deadLetterOutlet` is `.tap(Use.fixed(...))` — confirmed against
+`FanOutlet.tap`'s source that a non-`Linked` `Use.fixed` target always takes
+the unnegotiated fallback (`putTap` directly, `LinkRole.Observe`), never the
+negotiated-handshake branch and never `subscribe`/consuming. `grep`'d the
+full BE diff for any retained `DeadLetter`/`HostedPortInvocation` reference
+beyond `onDeadLetterReceived`'s conversion — none found; the function reads
+`letter.invocation?.cellRef`, `letter.cause?.javaClass?.simpleName`,
+`letter.description`, and one `Timestamp` field, builds a `DeadLetterRow` of
+plain strings/primitives, and returns — no field of `Errors` holds a
+`DeadLetter` or `HostedPortInvocation` anywhere. Confirmed live: a dead
+letter carrying a payload never blocked or was double-consumed (parked/dead
+letter counts moved independently and correctly through the smoke test
+above).
+
+### Contract conformance
+
+`ErrorSnapshot`, `DeadLetterRow`/`Entry`, `ParkedRow`/`Entry`,
+`RestartRow`/`Entry`, `error.deadLetter`/`error.parked`/`error.restart` all
+match `20-api-contract.md` field-for-field, both in the Kotlin DTOs and the
+TS types (after the one nullability fix above) — checked by direct field
+comparison and by the live curl-vs-UI cross-check in the smoke test.
+
+### Deviations from ticket or contract (all accepted, none new beyond what BE/FE already flagged)
+
+Carried from the workers' own reports, verified correct by this evaluation
+and not repeated in full here (see `worktree-wf_6329fc15-cdf-1` /
+`-cdf-2`'s reports for detail): restart-ring-buffer cap reuse at 200,
+dead-letter `ref` host-fallback for host-level failures, `cause` as the
+exception's simple class name, `oldestMs` as inspector-side "first seen"
+bookkeeping, and the first-poll-window restart-history under-report (all
+five live-confirmed above where applicable). One new item, `cause`
+nullability, is not a deviation but a genuine FE type-conformance defect,
+fixed above.
+
+### Open questions for M3
+
+1. **`error.deadLetter`'s `cause` nullability should be written into
+   `20-api-contract.md`'s `ErrorSnapshot` DTO block explicitly** (the
+   illustrative example only shows the non-null case) — this evaluation
+   fixed the FE-side symptom but, per this plan's own discipline, an
+   evaluator does not unilaterally edit the contract file; flagging for the
+   orchestrator the same way M1-EVAL flagged its own contract additions.
+2. **`state.summary` coalescing** (carried from M1-EVAL, restated by
+   M2-BE's own report): still relevant for M3's `flow.rates` 1 Hz batching
+   design — no action needed at M2, but M3-BE should look at both together.
+3. **`docLints` header gap** (carried from M1-EVAL): still unresolved,
+   still out of every milestone's declared scope; still tracked for a
+   documentation pass after M5.
