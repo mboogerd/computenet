@@ -131,6 +131,20 @@
   color: var(--text-secondary);
 }
 
+/* The "peer" marker beside a remote cell's network host (M5-NET), matching
+   the canvas net hull's own peer tint so the two read as one signal. */
+.detail-tag {
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  border: 1px solid var(--cell-suspending);
+  color: var(--cell-suspending);
+  vertical-align: middle;
+}
+
 .ports-list {
   list-style: none;
   margin: 0;

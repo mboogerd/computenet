@@ -37,11 +37,13 @@
   stroke-width: 1;
 }
 
+/* Solid, per 10-target-v3.md's toggle table ("Process hosts — Solid hulls").
+   It was dashed until M5-NET, which is when the distinction started carrying
+   information: the network hull nested around it is the dashed one. */
 .host-hull__rect {
   fill: var(--surface-raised);
   stroke: var(--hairline-strong);
   stroke-width: 1;
-  stroke-dasharray: 4 3;
   opacity: 0.6;
 }
 
@@ -51,6 +53,39 @@
   fill: var(--text-muted);
   pointer-events: none;
   user-select: none;
+}
+
+/* "Network hosts — Dashed hulls grouping by JVM/peer; nests with process
+   hulls" (10-target-v3.md). Unfilled, so a process hull inside it keeps its
+   own surface rather than stacking two translucent fills. */
+.net-hull__rect {
+  fill: none;
+  stroke: var(--hairline-strong);
+  stroke-width: 1.5;
+  stroke-dasharray: 7 4;
+  opacity: 0.75;
+}
+
+.net-hull--peer .net-hull__rect {
+  stroke: var(--cell-suspending);
+}
+
+.net-hull__label {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  fill: var(--text-muted);
+  pointer-events: none;
+  user-select: none;
+}
+
+.net-hull--peer .net-hull__label {
+  fill: var(--cell-suspending);
+}
+
+.net-hull__tag {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .node-state-chip {

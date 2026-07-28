@@ -6,8 +6,15 @@ import { cellDetail, cellState, detailError, detailLoading, stateError, stateLoa
 import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
 import { edges, selection, setSelection } from '../solid/state';
+import { REMOTE_NOTICE, isRemotePlacement } from '../util/placement';
 import ValueView from './ValueView';
 import './DetailPanel.css';
+
+/** M5-NET Exclusions: a peer-hosted cell shows descriptor + placement, and
+ *  this one sentence everywhere else. Derived from the loaded `CellDetail`
+ *  rather than the topology store so it agrees with the placement rows
+ *  rendered right above it. */
+const remoteSelected = () => isRemotePlacement(cellDetail());
 
 /** M1-FE ticket Implement §1: the detail panel always stacks all four
  *  subsections on selection — no perspective switching (that was v2; see
@@ -100,11 +107,26 @@ function DescriptorSection() {
                 </Show>
               </dd>
 
+              {/* M5-NET ticket Implement §2: "Placement subsection in the
+                  detail panel shows both levels." A peer-announced cell has
+                  no process host to report (its location names a bridge, not
+                  a ManagedHost) — say so, rather than showing a bare dash
+                  that reads as "unknown". */}
               <dt>Process host</dt>
-              <dd class="mono">{d().host ?? '—'}</dd>
+              <dd class="mono">
+                <Show when={!isRemotePlacement(d())} fallback={<span class="detail-muted">not reported (remote)</span>}>
+                  {d().host}
+                </Show>
+              </dd>
 
               <dt>Network host</dt>
-              <dd class="mono">{d().net ?? '—'}</dd>
+              <dd class="mono">
+                {d().net ?? '—'}
+                <Show when={isRemotePlacement(d())}>
+                  {' '}
+                  <span class="detail-tag">peer</span>
+                </Show>
+              </dd>
 
               <dt>Generation</dt>
               <dd>{d().generation}</dd>
@@ -140,6 +162,7 @@ function StateSection() {
 
   return (
     <Section title="State">
+      <Show when={!remoteSelected()} fallback={<p class="detail-section__status">{REMOTE_NOTICE}</p>}>
       <Show when={!stateLoading()} fallback={<p class="detail-section__status">Loading…</p>}>
         <Show
           when={cellState()}
@@ -163,6 +186,7 @@ function StateSection() {
             </>
           )}
         </Show>
+      </Show>
       </Show>
       <p class="detail-section__footnote">per-cell consistent — cross-panel alignment not guaranteed</p>
     </Section>
@@ -191,6 +215,7 @@ function FlowSection() {
 
   return (
     <Section title="Flow">
+      <Show when={!remoteSelected()} fallback={<p class="detail-section__status">{REMOTE_NOTICE}</p>}>
       <Show when={!detailLoading()} fallback={<p class="detail-section__status">Loading…</p>}>
         <Show when={rows().length} fallback={<p class="detail-section__status">This cell has no ports.</p>}>
           <table class="flow-table">
@@ -220,6 +245,7 @@ function FlowSection() {
             </tbody>
           </table>
         </Show>
+      </Show>
       </Show>
       <p class="detail-section__footnote">1 Hz aggregate — not per-message; per-cell consistent, cross-panel alignment not guaranteed</p>
     </Section>
@@ -255,6 +281,7 @@ function ErrorsSection() {
 
   return (
     <Section title="Errors">
+      <Show when={!remoteSelected()} fallback={<p class="detail-section__status">{REMOTE_NOTICE}</p>}>
       <Show when={hasAny()} fallback={<p class="detail-section__status">No local errors</p>}>
         <Show when={deadLetters().length}>
           <div class="error-group">
@@ -308,6 +335,7 @@ function ErrorsSection() {
             </ul>
           </div>
         </Show>
+      </Show>
       </Show>
     </Section>
   );
