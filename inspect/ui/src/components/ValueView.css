@@ -58,3 +58,9 @@
   font-family: var(--font-mono);
   font-size: 0.72rem;
 }
+
+.value-view__opaque-type {
+  display: block;
+  color: var(--text-muted);
+  margin-bottom: 0.2rem;
+}

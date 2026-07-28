@@ -30,16 +30,24 @@ function state(fixture: unknown): CellState {
 }
 
 describe('Value shape dispatch, one fixture per contract shape', () => {
-  it('$table: a set/map-like collection, with a tombstoned row struck through', () => {
+  it('$table: a set/map-like collection', () => {
+    // M1-EVAL correction: verified live against skillmatch's candSkills
+    // SetCell (add two skills, remove a third) that the real ValueEncoder
+    // never emits a tombstoned row — a removed element simply disappears
+    // from the $table ("live membership, tombstones excluded",
+    // ValueEncoder.kt's orSetMembership). The original fixture fabricated a
+    // `{cells, tombstoned: true}` row no server response can produce;
+    // reconciled to match. `isTombstoneRow`/`rowCells` stay in
+    // api/types.ts and ValueView.tsx as harmless, currently-unexercised
+    // forward compatibility, in case that encoding decision changes.
     const { value } = state(cellStateTable);
     const table = tableOf(value);
     expect(table).toBeDefined();
     expect(table!.columns).toEqual(['skill']);
-    expect(table!.rows).toHaveLength(3);
-    expect(table!.rows.filter((r) => isTombstoneRow(r))).toHaveLength(1);
-    const tombstoned = table!.rows.find((r) => isTombstoneRow(r))!;
-    expect(rowCells(tombstoned)).toEqual(['COBOL']);
+    expect(table!.rows).toHaveLength(2);
+    expect(table!.rows.filter((r) => isTombstoneRow(r))).toHaveLength(0);
     expect(rowCells(table!.rows[0])).toEqual(['Kotlin']);
+    expect(rowCells(table!.rows[1])).toEqual(['TypeScript']);
     expect(truncatedOf(value)).toBeUndefined();
     expect(opaqueOf(value)).toBeUndefined();
   });
@@ -72,9 +80,15 @@ describe('Value shape dispatch, one fixture per contract shape', () => {
   });
 
   it('opaque: the reflective-toString last resort renders as a code block, not a tree', () => {
+    // M1-EVAL correction: the real server's reserved key is `$opaque`
+    // holding `{type, text}`, not a bare `opaque` string — verified against
+    // a live skillmatch read (ValueEncoder.kt's `OPAQUE`/`opaque()`).
     const { value } = state(cellStateOpaque);
     const opaque = opaqueOf(value);
-    expect(opaque).toBe('AdvertisedLedger@3f2c1a{entries=12, tombstones=2}');
+    expect(opaque).toEqual({
+      type: 'civictech.demo.skillmatch.AdvertisedLedger',
+      text: 'AdvertisedLedger@3f2c1a{entries=12, tombstones=2}',
+    });
     expect(tableOf(value)).toBeUndefined();
   });
 

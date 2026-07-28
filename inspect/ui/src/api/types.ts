@@ -96,11 +96,18 @@ export interface CellState {
 export type ValueScalar = string | number | boolean | null;
 
 /** A `$table` row: either a plain array of per-column Values, or the
- *  tombstone-wrapper variant the ticket names ("tombstone-style
- *  strikethrough when a row object carries `"tombstoned": true`"). Neither
- *  the contract nor the M1-BE ticket spells out the wire shape for a
- *  tombstoned row precisely, so this is an FE-side assumption flagged for
- *  M1-EVAL's "reconcile fixtures to the server, not vice versa" step. */
+ *  tombstone-wrapper variant the ticket named ("tombstone-style
+ *  strikethrough when a row object carries `"tombstoned": true`").
+ *
+ *  M1-EVAL resolution: verified live against skillmatch's `candSkills`
+ *  `SetCell` that the real `ValueEncoder` (`inspect/src/.../ValueEncoder.kt`)
+ *  never emits this shape — `orSetMembership` excludes tombstoned elements
+ *  from the encoded state entirely ("live membership, tombstones excluded"),
+ *  so a removed element just disappears from `rows`, full stop. The
+ *  `{cells, tombstoned}` wrapper this type still allows, and the
+ *  `isTombstoneRow`/`rowCells` guards below, are kept as harmless forward
+ *  compatibility (dead code today, never constructed by the server) rather
+ *  than ripped out, in case that encoding decision changes later. */
 export type TableRow = readonly Value[] | { readonly cells: readonly Value[]; readonly tombstoned: true };
 
 export interface TableShape {
@@ -141,12 +148,25 @@ export function truncatedOf(v: Value): TruncatedMarker | undefined {
   return t as unknown as TruncatedMarker;
 }
 
-/** Returns the opaque reflective-toString string when `v` is the M1-BE
- *  "safe reflective-toString last resort" shape. */
-export function opaqueOf(v: Value): string | undefined {
+export interface OpaqueMarker {
+  type: string;
+  text: string;
+}
+
+/** Returns the opaque reflective-toString marker when `v` is the M1-BE
+ *  "safe reflective-toString last resort" shape. M1-EVAL correction: the real
+ *  server (`ValueEncoder.kt`'s `OPAQUE`/`opaque()`) emits the reserved key
+ *  `$opaque` (not `opaque`) holding `{type, text}` (not a bare string) —
+ *  verified against a live skillmatch read. The original FE guess used the
+ *  wrong key and shape; fixed here to match the server, per this ticket's
+ *  "reconcile fixtures to the server, not vice versa". */
+export function opaqueOf(v: Value): OpaqueMarker | undefined {
   if (!isPlainValueObject(v)) return undefined;
-  const o = v['opaque'];
-  return typeof o === 'string' ? o : undefined;
+  const o = v['$opaque'];
+  if (!isPlainValueObject(o)) return undefined;
+  const type = o['type'];
+  const text = o['text'];
+  return typeof type === 'string' && typeof text === 'string' ? { type, text } : undefined;
 }
 
 export function isTombstoneRow(row: TableRow): row is { readonly cells: readonly Value[]; readonly tombstoned: true } {

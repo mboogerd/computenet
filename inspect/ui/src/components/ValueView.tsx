@@ -45,7 +45,8 @@ function renderValue(value: Value, depth: number): JSX.Element {
   if (opaque !== undefined) {
     return (
       <pre class="value-view__opaque">
-        <code>{opaque}</code>
+        <span class="value-view__opaque-type">{opaque.type}</span>
+        <code>{opaque.text}</code>
       </pre>
     );
   }
