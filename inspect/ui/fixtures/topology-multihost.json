@@ -1,0 +1,131 @@
+{
+  "seq": 0,
+  "nodes": [
+    {
+      "ref": "11111111-1111-1111-1111-111111111111:0",
+      "name": "ingest",
+      "typeFqn": "civictech.cell.data.SetCell",
+      "color": "PURE",
+      "manifests": ["DURABLE"],
+      "ports": [{ "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }],
+      "host": "host-a",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "22222222-2222-2222-2222-222222222222:0",
+      "name": "normalize",
+      "typeFqn": "civictech.cell.data.op.GroupByCell",
+      "color": "PURE",
+      "manifests": ["DURABLE"],
+      "ports": [
+        { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }
+      ],
+      "host": "host-a",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "33333333-3333-3333-3333-333333333333:0",
+      "name": "join",
+      "typeFqn": "civictech.cell.data.op.JoinSetCell",
+      "color": "PURE",
+      "manifests": ["DURABLE"],
+      "ports": [
+        { "name": "left", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+        { "name": "right", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }
+      ],
+      "host": "host-b",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "44444444-4444-4444-4444-444444444444:0",
+      "name": "enrich",
+      "typeFqn": "civictech.cell.data.op.LookupJoinCell",
+      "color": "PURE",
+      "manifests": ["DURABLE"],
+      "ports": [
+        { "name": "dimension", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+        { "name": "fact", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+        { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }
+      ],
+      "host": "host-b",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "55555555-5555-5555-5555-555555555555:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": ["DURABLE"],
+      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.Propagate" }],
+      "host": "host-c",
+      "net": "local",
+      "lifecycle": "HOT",
+      "generation": 0,
+      "graph": null
+    },
+    {
+      "ref": "66666666-6666-6666-6666-666666666666:0",
+      "name": null,
+      "typeFqn": "civictech.cell.observe.ObserveCell",
+      "color": "PURE",
+      "manifests": ["DURABLE"],
+      "ports": [{ "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.Propagate" }],
+      "host": "host-c",
+      "net": "local",
+      "lifecycle": "SUSPENDED",
+      "generation": 1,
+      "graph": null
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-1",
+      "from": { "ref": "11111111-1111-1111-1111-111111111111:0", "port": "outlet" },
+      "to": { "ref": "22222222-2222-2222-2222-222222222222:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e-2",
+      "from": { "ref": "22222222-2222-2222-2222-222222222222:0", "port": "outlet" },
+      "to": { "ref": "33333333-3333-3333-3333-333333333333:0", "port": "left" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e-3",
+      "from": { "ref": "33333333-3333-3333-3333-333333333333:0", "port": "outlet" },
+      "to": { "ref": "44444444-4444-4444-4444-444444444444:0", "port": "fact" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e-4",
+      "from": { "ref": "44444444-4444-4444-4444-444444444444:0", "port": "outlet" },
+      "to": { "ref": "55555555-5555-5555-5555-555555555555:0", "port": "inlet" },
+      "role": "CONSUME",
+      "fused": null
+    },
+    {
+      "id": "e-5",
+      "from": { "ref": "44444444-4444-4444-4444-444444444444:0", "port": "outlet" },
+      "to": { "ref": "66666666-6666-6666-6666-666666666666:0", "port": "inlet" },
+      "role": "OBSERVE",
+      "fused": null
+    }
+  ]
+}
