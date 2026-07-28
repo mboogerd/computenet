@@ -124,6 +124,11 @@ object ValueEncoder {
     /**
      * A collection of same-shaped records is a table (columns from the record);
      * anything else is the contract's plain `[Value]` list.
+     *
+     * Note for the client: columns are discoverable only from an element, so an
+     * *empty* set of records is `[]`, not an empty `$table`. A cell's state can
+     * therefore switch between the two forms as it empties and refills — both
+     * are contract `Value`s, and a renderer must accept either.
      */
     private fun sequenceValue(items: List<Any?>, budget: Budget): JsonElement {
         val record = uniformRecord(items)

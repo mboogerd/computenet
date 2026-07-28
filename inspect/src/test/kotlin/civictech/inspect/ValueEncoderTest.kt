@@ -131,6 +131,14 @@ class ValueEncoderTest {
     }
 
     @Test
+    fun `an empty collection of records is a list, since columns need an element`() {
+        // the shape a cell's state takes when it empties out; the client must
+        // accept both this and the `$table` the same cell reports when full
+        encoded(emptySet<Reading>()) shouldBe "[]"
+        encoded(listOf(Reading("roof", 1.5))) shouldContain ValueEncoder.TABLE
+    }
+
+    @Test
     fun `a value with no safe decomposition is marked opaque, never guessed at`() {
         val encoded = ValueEncoder.encode(Opaque("x")).jsonObject.getValue(ValueEncoder.OPAQUE).jsonObject
 

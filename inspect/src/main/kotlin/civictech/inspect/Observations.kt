@@ -324,6 +324,15 @@ internal class Observations(
  * ticket's "when the view exposes one" is satisfied without widening the kernel
  * interface.
  *
+ * **A freshly-opened observation reports a null frontier**, even though its
+ * fold is already full. That is correct, not a gap: the state it starts from
+ * arrives as the producer's `catchUpOnLinked` baseline, delivered with
+ * `at(link.to).propagate(...)` under no ambient context — and a baseline is
+ * deliberately *not* a wave position (spec 20/21 §Pull, 93 I-24: it "MUST NOT
+ * be admitted to any wave-completeness set"). The stamp appears with the first
+ * live wave the fold sees. Claiming a wave for baseline state would be exactly
+ * the lie the frontier exists to prevent.
+ *
  * Per-cell only: nothing here claims cross-cell wave alignment (10-target-v3
  * §Constraints 4, defect class F-5 — accepted).
  */
