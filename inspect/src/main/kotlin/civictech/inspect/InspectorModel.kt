@@ -67,7 +67,7 @@ internal class InspectorModel(
      * of the cell, and re-stamping on read is what keeps a merge or split from
      * having to rewrite every node it touched.
      */
-    private val components = ComponentIndex()
+    private val componentIndex = ComponentIndex()
 
     /**
      * Graph names, anchored to a cell rather than to a component id — ids
@@ -89,16 +89,16 @@ internal class InspectorModel(
     fun sync() = synchronized(lock) {
         registry.localRefs().forEach { ref ->
             nodes.getOrPut(ref) { nodeOf(ref) }
-            components.addCell(ref)
+            componentIndex.addCell(ref)
         }
         topologyLinks().forEach { link ->
             edges.getOrPut(link.id) { edgeOf(link) }
-            components.addLink(link.id, link.from.cell, link.to.cell)
+            componentIndex.addLink(link.id, link.from.cell, link.to.cell)
         }
         // the components a client's first `GET /graphs` will see: announcing
         // them again on the first tick would be a gap signal for a change that
         // never happened
-        announced = components.components()
+        announced = componentIndex.components()
     }
 
     /**
@@ -144,7 +144,7 @@ internal class InspectorModel(
      * so both endpoints list graphs the same way between refreshes.
      */
     fun components(): List<Component> = synchronized(lock) {
-        components.components().entries.sortedBy { it.key }.map { (id, refs) ->
+        componentIndex.components().entries.sortedBy { it.key }.map { (id, refs) ->
             Component(
                 id = id,
                 name = nameOf(refs),
@@ -183,7 +183,7 @@ internal class InspectorModel(
      * changes the card the client is showing.
      */
     fun publishGraphChanges() = synchronized(lock) {
-        val current = components.components()
+        val current = componentIndex.components()
         if (current == announced) return@synchronized
         announced = current
         emitEvent(Event.GRAPHS_CHANGED, JsonObject(emptyMap()))
@@ -196,7 +196,7 @@ internal class InspectorModel(
         ?.let(graphAnchors::get)
 
     /** [node] with the contract's `graph` field resolved from the current partition. */
-    private fun withGraph(ref: CellRef, node: Node): Node = node.copy(graph = components.componentOf(ref))
+    private fun withGraph(ref: CellRef, node: Node): Node = node.copy(graph = componentIndex.componentOf(ref))
 
     /** Has this view ever been told [ref] is published here? (404 vs 200 at the routes.) */
     fun knows(ref: CellRef): Boolean = synchronized(lock) { ref in nodes }
@@ -301,7 +301,7 @@ internal class InspectorModel(
         val known = ref in nodes
         val node = nodeOf(ref)
         nodes[ref] = node
-        components.addCell(ref)
+        componentIndex.addCell(ref)
         if (known) {
             emitEvent(Event.LIFECYCLE, buildJsonObject {
                 put("ref", node.ref)
@@ -322,7 +322,7 @@ internal class InspectorModel(
         val node = nodes.remove(ref)?.let { withGraph(ref, it) } ?: return@synchronized
         // read the component id above, before the vertex leaves the index: a
         // removal reports the graph the cell was in, not the one it is not in
-        components.removeCell(ref)
+        componentIndex.removeCell(ref)
         portNames.remove(ref)
         // a despawn unpublishes but does not unlink (only an explicit
         // `Link.unlink` retracts an edge), so the flow feed's taps on this
@@ -339,7 +339,7 @@ internal class InspectorModel(
         edges[link.id] = edge
         // undirected for component purposes: an edge means "same graph",
         // whichever way the messages run
-        components.addLink(link.id, link.from.cell, link.to.cell)
+        componentIndex.addLink(link.id, link.from.cell, link.to.cell)
         emitEvent(Event.TOPOLOGY_LINK, buildJsonObject {
             put("op", Event.ADDED)
             put("edge", inspectorJson.encodeToJsonElement(edge))
@@ -349,7 +349,7 @@ internal class InspectorModel(
     fun unlinked(id: UUID) = synchronized(lock) {
         if (edges.remove(id) == null) return@synchronized
         // may split the component in two — the next read sweeps and finds out
-        components.removeLink(id)
+        componentIndex.removeLink(id)
         flow().unbind(id)
         // contract: a removal carries only the id
         emitEvent(Event.TOPOLOGY_LINK, buildJsonObject {
