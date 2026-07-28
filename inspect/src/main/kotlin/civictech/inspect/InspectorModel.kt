@@ -400,8 +400,8 @@ internal class InspectorModel(
      */
     fun mirroredPublish(ref: CellRef) = synchronized(lock) {
         val node = nodeOf(ref)
-        if (nodes.put(ref, node) == node) return@synchronized
         mirrored += ref
+        if (nodes.put(ref, node) == node) return@synchronized
         componentIndex.addCell(ref)
         emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
             put("op", Event.ADDED)
@@ -426,7 +426,11 @@ internal class InspectorModel(
      *    re-announce, and `onLocalTopology` fires only for *local* links — so
      *    the peer's own edges appear and disappear in
      *    [LocationRegistry.all] with no delta anywhere. A set difference
-     *    against this view supplies them.
+     *    against this view supplies them. A mirrored link also has to be
+     *    dropped when the peer goes: `unpublishRemotes` clears *locations*, not
+     *    the topology index, so a partition leaves the peer's edges behind with
+     *    both endpoints gone — a mirrored link is therefore retained only while
+     *    at least one of its endpoints is still a cell this view knows.
      * 3. **Late-discovered remote refs.** Ordinarily the publish hook is first,
      *    but an announcement whose ref reaches us only as a link endpoint (or a
      *    replica instance discovered through [LocationRegistry.instancesOf])
@@ -439,10 +443,17 @@ internal class InspectorModel(
         mirrored.filterNot(peers::isRemote).toList().forEach(::unpublished)
         discoverRemotes().forEach(::mirroredPublish)
 
-        val live = topologyLinks().associateBy { it.id }
+        // a local link is authoritative on its own (its hooks are exact); a
+        // mirrored one is only as live as the cells it names
+        val localIds = registry.localLinks().mapTo(HashSet()) { it.id }
+        val live = topologyLinks().filter { it.id in localIds || anchored(it) }.associateBy { it.id }
         live.forEach { (id, link) -> if (id !in edges) linked(link) }
         edges.keys.filter { it !in live && it !in declared }.toList().forEach(::unlinked)
     }
+
+    /** Does [link] still name a cell this view holds? (See [reconcilePeers] point 2.) */
+    private fun anchored(link: TopologyLink): Boolean =
+        link.from.cell?.let { it in nodes } == true || link.to.cell?.let { it in nodes } == true
 
     /**
      * Every peer-announced ref the registry currently holds that this view has
@@ -455,8 +466,11 @@ internal class InspectorModel(
      * Residual, honestly stated: a remote cell that is neither linked to
      * anything nor a replica of a locally published cell is invisible to a
      * *catch-up* read. It is still picked up by the publish hook, so the only
-     * case that loses it is an inspector started after such a cell was
-     * announced.
+     * case that loses it is an inspector constructed after such a cell was
+     * announced — and even then only until the peer re-announces (a reconnect
+     * replays `localRefs()`) or the cell acquires a link. Closing the hole
+     * outright wants a remote-refs projection on `LocationRegistry`, next to
+     * `localRefs()`; that is a kernel change M5-NET does not own.
      */
     private fun discoverRemotes(): List<CellRef> {
         val found = LinkedHashSet<CellRef>()

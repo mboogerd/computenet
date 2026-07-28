@@ -456,6 +456,9 @@ class InspectorServer(
     /** Reconcile peer refs/links now instead of waiting for the 1 s schedule — tests. */
     internal fun reconcilePeersNow() = model.reconcilePeers()
 
+    /** Has this view adopted [ref] yet? The barrier a peer-announcement test waits on. */
+    internal fun knowsNow(ref: CellRef): Boolean = model.knows(ref)
+
     /** The live components, as `GET /graphs` and `GET /search` see them — tests. */
     internal fun componentsNow(): List<Component> = model.components()
 
