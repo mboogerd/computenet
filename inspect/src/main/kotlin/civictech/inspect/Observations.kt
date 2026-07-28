@@ -14,6 +14,8 @@ import civictech.cell.data.op.IntersectSetApi
 import civictech.cell.data.op.JoinApi
 import civictech.cell.data.op.JoinSetApi
 import civictech.cell.data.op.LookupJoinApi
+import civictech.cell.data.op.MergeableGroupByCell
+import civictech.cell.data.op.PresenceCountApi
 import civictech.cell.data.op.QuorumSetApi
 import civictech.cell.data.op.SemiJoinApi
 import civictech.cell.data.op.UnionSetApi
@@ -24,6 +26,7 @@ import civictech.cell.link.LinkResult
 import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
+import civictech.cell.partition.ShardCell
 import civictech.nature.ContractRegistry
 import civictech.nature.PortDirection
 import java.io.Serializable
@@ -307,11 +310,12 @@ internal class Observations(
             SetApi::class.java, KeyedSetApi::class.java, UnionSetApi::class.java,
             IntersectSetApi::class.java, FilterSetApi::class.java, QuorumSetApi::class.java,
             JoinSetApi::class.java, SemiJoinApi::class.java, FlatMapSetApi::class.java,
+            ShardCell::class.java,
         )
 
         private val MAP_OUTLETS = listOf(
             MapApi::class.java, JoinApi::class.java, LookupJoinApi::class.java,
-            CombineLatestApi::class.java,
+            CombineLatestApi::class.java, PresenceCountApi::class.java,
         )
 
         /**
@@ -320,14 +324,22 @@ internal class Observations(
          * outlet emits, which is the only thing a `View` cares about:
          *
          * - `SetDelta` producers fold with `View.set()`;
-         * - `MapDelta` producers with `View.map()`, except a `GroupByApi`,
-         *   whose per-key aggregate is the shape `View.count()` names (its
-         *   `CountView` is a `MapView` with a zero-defaulting accessor, so the
-         *   fold is identical either way — this only keeps the sink honest
-         *   about what it is folding);
+         * - `MapDelta` producers with `View.map()`, except a `GroupByApi` (and
+         *   its mergeable sibling `MergeableGroupByCell` — same per-key
+         *   generic-aggregate shape, `MapDelta<K, A>` out, just replicated by
+         *   commutative-associative merge instead of recomputed from convergent
+         *   membership), whose per-key aggregate is the shape `View.count()`
+         *   names (its `CountView` is a `MapView` with a zero-defaulting
+         *   accessor, so the fold is identical either way — this only keeps
+         *   the sink honest about what it is folding);
          * - anything else (`CounterDelta`, `ListDelta`, a sink with no outlet)
          *   has no built-in fold, and is reported unobservable rather than
          *   forced into a mismatched one.
+         *
+         * `MergeableGroupByCell` and `ShardCell` declare no separate `@CellBase`
+         * Api marker interface of their own (plain `Cell` implementations with
+         * `registerPort` calls) — so unlike every other entry here, their table
+         * membership is keyed on the concrete cell class, not an Api type.
          *
          * The `Any?` type arguments mirror `ObserveAllBuilder`'s untyped
          * overloads: the element type is erased in the fold, and the encoder
@@ -337,6 +349,7 @@ internal class Observations(
             @Suppress("UNCHECKED_CAST")
             return when {
                 GroupByApi::class.java.isAssignableFrom(type) -> View.count<Any?>()
+                MergeableGroupByCell::class.java.isAssignableFrom(type) -> View.count<Any?>()
                 MAP_OUTLETS.any { it.isAssignableFrom(type) } -> View.map<Any?, Any?>()
                 SET_OUTLETS.any { it.isAssignableFrom(type) } -> View.set<Any?>()
                 else -> null

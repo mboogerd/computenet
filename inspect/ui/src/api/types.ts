@@ -23,7 +23,7 @@ export interface Node {
   manifests: readonly string[];
   ports: readonly Port[];
   host: string | null; // process host (ManagedHost) name
-  net: string | null; // network host / peer id — "local" until M5
+  net: string | null; // network host / peer id — "local" for a single-JVM component; a peer-announced cell's connection-derived label otherwise (M5-NET)
   lifecycle: Lifecycle;
   generation: number;
   graph: string | null; // component id — null until M4

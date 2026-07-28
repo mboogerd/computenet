@@ -34,12 +34,13 @@ class ObservationsCompletenessTest {
         /**
          * Cells whose outlet shape is foldable but which `viewFor` does not
          * yet cover. Seeded 2026-07-28 from the audit; shrink to empty.
+         *
+         * T20 folded all three seeded entries (`PresenceCountCell` via
+         * `PresenceCountApi` in `MAP_OUTLETS`, `ShardCell` via its concrete
+         * class in `SET_OUTLETS`, `MergeableGroupByCell` via its concrete
+         * class in the `GroupByApi` count branch) — shrunk to empty.
          */
-        val knownBlind = setOf(
-            "civictech.cell.data.op.PresenceCountCell",
-            "civictech.cell.data.op.MergeableGroupByCell",
-            "civictech.cell.partition.ShardCell",
-        )
+        val knownBlind = emptySet<String>()
     }
 
     /** Every raw class simple-name reachable in a generic type tree. */
