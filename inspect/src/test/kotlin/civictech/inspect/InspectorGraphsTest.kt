@@ -129,6 +129,10 @@ class InspectorGraphsTest {
         val events = listen()
         pair(A, B)
         server.tickAll()
+        // the SSE frame for this tick's one graphs_changed is delivered on a
+        // background reader thread — wait for it before taking the baseline,
+        // or it can land late and get misattributed to the idle window below.
+        events.awaitKind(Event.GRAPHS_CHANGED, 1)
         val announced = events.countOfKind(Event.GRAPHS_CHANGED)
 
         // nothing moved between these two ticks

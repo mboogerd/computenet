@@ -30,12 +30,30 @@ class ExchangeScaffoldTest {
     // so its own per-process log file (not INHERIT) is the first diagnostic you
     // want on failure — kept local deliberately (RS-9.2 divergence, mirrors
     // CrashRestartConvergenceTest).
-    private fun launch(vararg appArgs: String): Process {
+    private class LaunchedPeer(val process: Process, val log: File)
+
+    private fun launch(vararg appArgs: String): LaunchedPeer {
         val java = File(System.getProperty("java.home"), "bin/java").absolutePath
         val log = File.createTempFile("computenet-exchange-peer-", ".log").apply { deleteOnExit() }
-        return ProcessBuilder(
+        val process = ProcessBuilder(
             java, "-cp", System.getProperty("java.class.path"), "civictech.demo.exchange.MainKt", *appArgs
         ).redirectErrorStream(true).redirectOutput(log).start()
+        return LaunchedPeer(process, log)
+    }
+
+    // CI's "both peers serving HTTP" timeout has no other diagnostic: the
+    // peer's stdout/stderr goes to its own log file (not INHERIT), so on
+    // failure that log is the only way to see whether the JVM even started.
+    private fun awaitBothUp(httpA: Int, httpB: Int, peers: List<LaunchedPeer>) {
+        try {
+            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
+        } catch (e: AssertionError) {
+            peers.forEach { peer ->
+                System.err.println("---- peer log (${peer.log.absolutePath}) ----")
+                System.err.println(runCatching { peer.log.readText() }.getOrDefault("<unreadable>"))
+            }
+            throw e
+        }
     }
 
     /** One SSE frame from /events — a fresh tab is sent the current board immediately. */
@@ -80,7 +98,7 @@ class ExchangeScaffoldTest {
         val peerA = launch("$httpA", "--listen", "$ws")
         val peerB = launch("$httpB", "--peer", "ws://localhost:$ws")
         try {
-            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
+            awaitBothUp(httpA, httpB, listOf(peerA, peerB))
 
             // orders written on BOTH peers, two regions
             post(httpA, "add", "north", "o1", 10)
@@ -101,7 +119,7 @@ class ExchangeScaffoldTest {
             awaitUntil("A re-folds after retraction", timeoutMs = 45_000) { boardOf(httpA) == """{"north":10,"south":5}""" }
             awaitUntil("B re-folds after retraction", timeoutMs = 45_000) { boardOf(httpB) == """{"north":10,"south":5}""" }
         } finally {
-            JvmPeer.destroy(peerA, peerB)
+            JvmPeer.destroy(peerA.process, peerB.process)
         }
     }
 
@@ -115,7 +133,7 @@ class ExchangeScaffoldTest {
         val peerA = launch("$httpA", "--listen", "$ws")
         var peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
         try {
-            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
+            awaitBothUp(httpA, httpB, listOf(peerA, peerB))
 
             // shared pre-crash state: north written AT A, south written AT B (B journals its own)
             post(httpA, "add", "north", "o1", 10)
@@ -125,7 +143,7 @@ class ExchangeScaffoldTest {
             }
 
             // B is kill -9'd mid-session
-            peerB.destroyForcibly()
+            peerB.process.destroyForcibly()
             awaitUntil("peer B is gone", timeoutMs = 45_000) { down(httpB) }
 
             // life goes on at A: this order parks at A until B returns
@@ -145,7 +163,7 @@ class ExchangeScaffoldTest {
             post(httpB, "add", "south", "o4", 8)
             awaitUntil("post-restart edit visible on A", timeoutMs = 45_000) { boardOf(httpA) == """{"north":17,"south":13}""" }
         } finally {
-            JvmPeer.destroy(peerA, peerB)
+            JvmPeer.destroy(peerA.process, peerB.process)
             journalB.deleteRecursively()
         }
     }
