@@ -178,6 +178,7 @@ function SearchHitRow(props: { hit: SearchHit }) {
       >
         <button
           class="search-hit"
+          aria-label={`${props.hit.label} — ${props.hit.detail}`}
           onClick={() =>
             enterGraph(props.hit.graph, { ref: props.hit.ref, forceErrors: searchMode() === 'problems' })
           }
