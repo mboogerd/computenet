@@ -14,9 +14,17 @@
 # T11-A: link -> control ADDED — hasDampingWitness moved from ManagedHost
 # into link/Handshake.kt, next to reconcileNatures (the nature-reconciliation
 # code it belongs with); the predicate's Magnitude::class check needs
-# civictech.cell.control.Magnitude. host already had both host -> control
-# and host -> port for the pre-move code, so this is a relocation of an
-# existing dependency, not a new direction in the graph.
+# civictech.cell.control.Magnitude. The dependency on control is inherited
+# from the pre-move code (host -> control already existed), but the EDGE is
+# genuinely new: nothing under civictech.cell.link imported .control before.
+# Because control -> link already exists, the addition closes a new
+# control <-> link 2-cycle, exactly replacing the control <-> host one T11-C
+# removes below — 9 direct 2-cycles before T11, 9 after, so T11 does not net
+# reduce the entanglement G-63 records (all 20 non-leaf packages remain one
+# SCC either way). The zero-edge alternative, if this ever needs revisiting,
+# is civictech.cell.port (next to FeedbackInlet/natures, whose port -> control
+# edge already exists); link/ was chosen for the reconcileNatures adjacency
+# the T11 ticket named.
 #
 # T11-C: control -> host REMOVED — AttentionPolicy moved host -> control;
 # AttentionScheduler.kt's `import civictech.cell.host.AttentionPolicy` was
@@ -31,7 +39,10 @@
 # .consistency); the predicate reads WatermarkCell.rows/closed/suspended/
 # members/slotId, so the file needs civictech.cell.data.WatermarkCell. No
 # file under civictech.cell.data imports civictech.cell.consistency.* (also
-# verified by grep), so this is a new one-way edge, not a new cycle.
+# verified by grep), so this is a new one-way edge and no new 2-cycle. (It is
+# not cycle-free in the transitive sense — data -> link -> nature ->
+# consistency already closed a loop back — but per G-63 every non-leaf package
+# is in one SCC regardless, so no reachability changes here.)
 cell -> port
 consistency -> cell
 consistency -> control
