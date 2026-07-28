@@ -1,6 +1,7 @@
 package buildsrc.convention
 
 import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
 import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.kotlin.dsl.getByType
 
@@ -56,5 +57,9 @@ tasks.withType<Test>().configureEach {
             TestLogEvent.PASSED,
             TestLogEvent.SKIPPED
         )
+        // SHORT (the default) prints only the exception class name — CI's log
+        // for a failing test carried no message, no stack, nothing to diagnose
+        // from. FULL is the whole point of a CI log existing.
+        exceptionFormat = TestExceptionFormat.FULL
     }
 }

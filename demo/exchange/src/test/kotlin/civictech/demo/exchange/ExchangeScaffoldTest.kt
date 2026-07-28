@@ -44,15 +44,17 @@ class ExchangeScaffoldTest {
     // CI's "both peers serving HTTP" timeout has no other diagnostic: the
     // peer's stdout/stderr goes to its own log file (not INHERIT), so on
     // failure that log is the only way to see whether the JVM even started.
+    // Folded into the exception message (not println'd) since Gradle's
+    // console only ever renders a failed test's exception, never its stdout.
     private fun awaitBothUp(httpA: Int, httpB: Int, peers: List<LaunchedPeer>) {
         try {
             awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
         } catch (e: AssertionError) {
-            peers.forEach { peer ->
-                System.err.println("---- peer log (${peer.log.absolutePath}) ----")
-                System.err.println(runCatching { peer.log.readText() }.getOrDefault("<unreadable>"))
+            val logs = peers.joinToString("\n\n") { peer ->
+                "---- peer log (${peer.log.absolutePath}) ----\n" +
+                    runCatching { peer.log.readText() }.getOrDefault("<unreadable>")
             }
-            throw e
+            throw AssertionError("${e.message}\n\n$logs", e)
         }
     }
 
