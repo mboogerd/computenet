@@ -351,3 +351,31 @@ match verified server behavior rather than loosening them.
    Correct per this ticket and never blocks the graph (bounded drop-oldest
    queue), but a hot cell produces a high frame rate; M3 introduces 1 Hz
    `flow.rates` batching and may want the same applied to `state.summary`.
+
+### Orchestrator addendum (resolving M1's open questions before M2)
+
+1. **Snapshot seam**: approved in principle
+   (`ManagedHost.snapshotOf(ref): Serializable?` via `enqueueAwaiting`), but
+   **not scheduled now** — it is a kernel edit outside every currently-planned
+   ticket's declared scope, and the degraded behavior (`kind: "unavailable"`
+   for snapshot-only cells, chiefly `ObserveCell` sinks) is not blocking M2+.
+   Left as backlog: pick up opportunistically in a future ticket that already
+   touches `ManagedHost`, or file it in `backlog/` if none does before M5.
+2. **Contract updates (a)/(b)/(c)**: applied directly to `20-api-contract.md`
+   — `POST .../observe` now documents its `409`; `Value`'s comment block now
+   names `$opaque` (`{type, text}`) as a third reserved key and states that a
+   tombstoned element is excluded from encoded state entirely (no tombstone
+   row shape exists).
+3. **`docLints` header gap**: acknowledged, deliberately not fixed now — it
+   predates M0, is outside `./gradlew test` (the specified gate), and touching
+   every file under this plan folder is unrelated churn mid-run. Tracked here
+   for a documentation pass after M5.
+4. **Worktree provisioning drift**: root cause is the isolation harness
+   snapshotting a worktree base at dispatch time that can predate a
+   just-merged milestone by the time the agent actually starts (both M0→M1
+   worker sets exhibited it). Every worker so far detected and repaired it
+   correctly (fast-forward or verbatim baseline copy) at some token cost. From
+   M2 on, each ticket prompt explicitly tells workers to check for this and
+   `git reset --hard main` first if their worktree predates the prior
+   milestone's merge, rather than discovering it mid-ticket.
+5. **`state.summary` coalescing**: noted for M3; no action needed at M2.

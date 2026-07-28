@@ -20,7 +20,7 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 | `GET /api/inspect/events` | M0 | SSE stream of `Event` |
 | `GET /api/inspect/cell/{ref}` | M1 | `CellDetail` |
 | `GET /api/inspect/cell/{ref}/state` | M1 | `CellState` |
-| `POST /api/inspect/cell/{ref}/observe` | M1 | 204; starts state summaries for this cell |
+| `POST /api/inspect/cell/{ref}/observe` | M1 | 204; starts state summaries for this cell. 409 if the cell has no built-in fold to observe (no delta outlet, or an outlet kind with no `View`) — a client that ignores the 409 still behaves correctly, since `GET .../state` reports `kind: "unavailable"` for that cell |
 | `DELETE /api/inspect/cell/{ref}/observe` | M1 | 204; stops them |
 | `GET /api/inspect/errors` | M2 | `ErrorSnapshot` |
 | `GET /api/inspect/graphs` | M4 | `GraphList` |
@@ -79,8 +79,15 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // Value — generic JSON-ish encoding of cell state (M1-BE defines the encoder;
 // inspired by concord's neutral Value model, but independent of :concord)
 //   scalar | [Value] | {"k": Value} | {"$table": {"columns": [...], "rows": [[...]]}}
+//   | {"$opaque": {"type": "civictech.foo.Bar", "text": "..."}}   // reflective toString last resort
+// An empty collection of records encodes as [], not an empty $table (columns
+// are only discoverable from an element) — clients must accept either as a
+// cell's value drains and refills.
 // The encoder truncates: max 200 rows / 50 KB per response, with
-//   {"$truncated": {"total": 1800, "shown": 200}} appended when it does.
+//   {"$truncated": {"total": 1800, "shown": 200}} appended when it does
+//   (as a sibling of "$table" on a table, or as the appended last element on a plain array).
+// A tombstoned element (e.g. a removed OR-set member) is excluded from encoded
+// state entirely, never emitted as a marked row — there is no tombstone row shape.
 
 // ErrorSnapshot (M2)
 {
