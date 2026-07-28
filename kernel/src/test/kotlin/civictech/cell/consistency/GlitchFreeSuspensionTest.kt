@@ -2,7 +2,7 @@ package civictech.cell.consistency
 
 import civictech.cell.*
 import civictech.cell.control.AttentionSupport
-import civictech.cell.host.AttentionPolicy
+import civictech.cell.control.AttentionPolicy
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.link.*

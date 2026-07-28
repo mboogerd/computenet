@@ -8,7 +8,7 @@ package civictech.cell.control
  *
  * Consumers today: magnitude-band dispatch (spec 34 — a host boosts a cell's
  * band to match its largest staged payload, opt-in via
- * [civictech.cell.host.AttentionPolicy.magnitudeBands]). The decided
+ * [AttentionPolicy.magnitudeBands]). The decided
  * CycleHead feedback-inlet threshold (93 I-5/I-6, unbuilt) will read the same
  * interface. Detection is a runtime `is`-check for now — advisory only, a
  * payload without [Magnitude] simply gets no boost; the KSP `magnitude`

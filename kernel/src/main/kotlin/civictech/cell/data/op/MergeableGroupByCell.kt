@@ -49,16 +49,13 @@ class MergeableGroupByCell<E, K, A : Serializable>(
     private val merge: (A, A) -> A,
 ) : Cell, Stateful, Replicable<MapDelta<K, A>> {
 
-    @Suppress("UNCHECKED_CAST")
-    val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<E>>>))
+    val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
 
-    @Suppress("UNCHECKED_CAST")
     override val outlet =
-        registerPort("outlet", FanOutlet(Propagate::class.java as Class<Propagate<MapDelta<K, A>>>))
+        registerPort("outlet", FanOutlet.create<Propagate<MapDelta<K, A>>>())
 
-    @Suppress("UNCHECKED_CAST")
     override val deltaInlet =
-        registerPort("deltaInlet", FanInlet(Propagate::class.java as Class<Propagate<MapDelta<K, A>>>))
+        registerPort("deltaInlet", FanInlet.create<Propagate<MapDelta<K, A>>>())
 
     private val groups = mutableMapOf<K, A>()
 

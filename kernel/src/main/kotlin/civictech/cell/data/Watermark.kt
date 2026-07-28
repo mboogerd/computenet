@@ -22,6 +22,34 @@ import java.util.*
  * and [close] (nothing flows through gen/); only the delta stream and the peer
  * merge inlet are ports. Effective-only re-emission (spec 21): only entries that
  * RAISED a watermark propagate, which terminates mesh echoes.
+ *
+ * **Four independent lattices** (T11-F self-documentation — SRP audit: this
+ * class carries four settlement concerns with no prior enumeration), each
+ * grow-only/pointwise-monotone in its own right and each added by a distinct
+ * fix as the cross-replica settlement read ([civictech.cell.consistency.ReplicaQuorum])
+ * hardened:
+ *
+ *  1. **`rows`** — the base per-(replica, source) delivered-counter map (spec
+ *     40/42 E3.2, the reason this class exists): [advance]/[applyRemote]
+ *     pointwise-max merge it, [rows] reads it.
+ *  2. **`closed`** (PN-0c) — the grow-only set of cleanly-departed replica
+ *     slots: [close] marks one, so a downstream quorum stops waiting on a row
+ *     that provably can never advance again.
+ *  3. **`suspendEpoch`** (PN-19) — the per-slot recoverable-suspend epoch (odd
+ *     = suspended): [suspend]/[resume] toggle it, the DEGRADE-mode analogue of
+ *     `closed` for a member that may still come back.
+ *  4. **`members`** (FU-2) — the grow-only set of covering-member slots that
+ *     have [announceMember]ed their existence, converging membership itself
+ *     faster than the point-to-point topology announcements
+ *     [civictech.cell.host.LocationRegistry.instancesOf] feeds off.
+ *
+ * **The rule for a fifth lane**: don't add one here. Each lane above answers a
+ * different "what do I know about this replica slot" question, and
+ * [ReplicaQuorum.frontier] already reads all four independently — a fifth
+ * settlement concern (e.g. a future per-slot property unrelated to delivery/
+ * departure/suspension/membership) is a signal this cell is doing more than
+ * one job and should split into a sibling membership cell instead of growing
+ * a fifth `Mutable*` field here (the deferred design; no ticket owns it yet).
  */
 class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     Cell, Stateful, Replicable<WatermarkDelta> {
@@ -56,7 +84,7 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
     /**
      * Covering member slots the companion has learned of (FU-2): every replica that
      * has [announceMember]ed its existence, merged over the mesh. The
-     * converged-membership barrier ([civictech.cell.replication.Replication.replicaFrontier])
+     * converged-membership barrier ([civictech.cell.consistency.ReplicaQuorum.frontier])
      * holds a keyed wave while this set names a slot the settling node's
      * [civictech.cell.host.LocationRegistry.instancesOf] view has not yet accounted for.
      */

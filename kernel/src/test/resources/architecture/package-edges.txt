@@ -10,16 +10,38 @@
 #
 # See kernel/src/test/kotlin/civictech/cell/architecture/ArchitectureRatchetTest.kt
 # and doc/spec/90-roadmap/91-gap-analysis.md G-63 for context.
+#
+# T11-A: link -> control ADDED — hasDampingWitness moved from ManagedHost
+# into link/Handshake.kt, next to reconcileNatures (the nature-reconciliation
+# code it belongs with); the predicate's Magnitude::class check needs
+# civictech.cell.control.Magnitude. host already had both host -> control
+# and host -> port for the pre-move code, so this is a relocation of an
+# existing dependency, not a new direction in the graph.
+#
+# T11-C: control -> host REMOVED — AttentionPolicy moved host -> control;
+# AttentionScheduler.kt's `import civictech.cell.host.AttentionPolicy` was
+# the only thing forcing this edge (the control <-> host package cycle
+# doc/ARCHITECTURE.md:107/116 flagged as anomalous). No other file under
+# civictech.cell.control imports civictech.cell.host.* (verified by grep),
+# so the edge is genuinely gone, not just relocated.
+#
+# T11-D: consistency -> data ADDED — Replication.replicaFrontier moved into
+# consistency/ReplicaQuorum.kt (the settlement predicate belongs with
+# ReplicaFrontier/WaveFrontier, its interface and consumer, both already in
+# .consistency); the predicate reads WatermarkCell.rows/closed/suspended/
+# members/slotId, so the file needs civictech.cell.data.WatermarkCell. No
+# file under civictech.cell.data imports civictech.cell.consistency.* (also
+# verified by grep), so this is a new one-way edge, not a new cycle.
 cell -> port
 consistency -> cell
 consistency -> control
+consistency -> data
 consistency -> host
 consistency -> link
 consistency -> port
 consistency -> protocol
 consistency -> proxy
 control -> cell
-control -> host
 control -> link
 control -> port
 control -> protocol
@@ -52,6 +74,7 @@ host -> protocol
 host -> proxy
 host -> wire
 link -> cell
+link -> control
 link -> nature
 link -> port
 link -> protocol

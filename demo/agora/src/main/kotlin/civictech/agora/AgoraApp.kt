@@ -3,7 +3,7 @@ package civictech.agora
 import civictech.agora.cell.Polarity
 import civictech.cell.CellRef
 import civictech.cell.durability.FileJournal
-import civictech.cell.host.AttentionPolicy
+import civictech.cell.control.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.demo.shell.DemoShell

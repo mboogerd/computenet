@@ -8,7 +8,6 @@ import civictech.cell.consistency.ReplicaFrontier
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
-import civictech.cell.host.AttentionPolicy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
