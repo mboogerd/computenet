@@ -1,0 +1,7 @@
+{
+  "ref": "53340c2c-48cf-4f9b-b949-ace044fbf311:0",
+  "frontier": { "source": "c110ffab90", "counter": 5 },
+  "kind": "view",
+  "value": 42,
+  "staleMs": 12
+}

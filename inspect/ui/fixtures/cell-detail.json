@@ -1,0 +1,19 @@
+{
+  "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+  "name": "candSkills",
+  "typeFqn": "civictech.cell.data.SetCell",
+  "color": "PURE",
+  "manifests": ["DURABLE", "REPLICATED"],
+  "ports": [
+    { "name": "deltaInlet", "dir": "IN", "contractFqn": "civictech.cell.Propagate" },
+    { "name": "inlet", "dir": "IN", "contractFqn": "civictech.cell.data.SetOps" },
+    { "name": "outlet", "dir": "OUT", "contractFqn": "civictech.cell.Propagate" }
+  ],
+  "host": "skillmatch",
+  "net": "local",
+  "lifecycle": "HOT",
+  "generation": 0,
+  "graph": null,
+  "attention": "idle",
+  "links": { "inbound": 0, "outbound": 3, "taps": 1 }
+}

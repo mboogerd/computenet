@@ -1,0 +1,17 @@
+{
+  "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+  "frontier": { "source": "d42e771a55", "counter": 900 },
+  "kind": "view",
+  "value": {
+    "$table": {
+      "columns": ["id", "name"],
+      "rows": [
+        ["1", "a"],
+        ["2", "b"],
+        ["3", "c"]
+      ]
+    },
+    "$truncated": { "total": 1800, "shown": 200 }
+  },
+  "staleMs": 5
+}

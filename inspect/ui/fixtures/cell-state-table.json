@@ -1,0 +1,16 @@
+{
+  "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+  "frontier": { "source": "a3f2c9de1b", "counter": 412 },
+  "kind": "view",
+  "value": {
+    "$table": {
+      "columns": ["skill"],
+      "rows": [
+        ["Kotlin"],
+        ["TypeScript"],
+        { "cells": ["COBOL"], "tombstoned": true }
+      ]
+    }
+  },
+  "staleMs": 40
+}

@@ -1,0 +1,10 @@
+{
+  "ref": "6b04c703-78a8-4c58-9136-a646dc4e64d6:0",
+  "frontier": { "source": "b91af04c22", "counter": 88 },
+  "kind": "view",
+  "value": {
+    "alice": { "skills": ["Kotlin", "Rust"], "score": 0.82 },
+    "bob": { "skills": ["TypeScript"], "score": 0.5 }
+  },
+  "staleMs": 0
+}
