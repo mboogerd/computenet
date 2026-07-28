@@ -1177,3 +1177,41 @@ consistency markers were removed at any point.
    (M3-EVAL question 1 / M4-EVAL question 2 — dropped edges, fixed by
    `cardAnchor`; M4-EVAL question 3 — partially, mirrored refs are now
    vertices).
+
+---
+
+## Orchestrator closing note (2026-07-28)
+
+All six milestones (M0–M5) are merged to `main`. Housekeeping from the
+closing report, done:
+
+- Every contract addition listed above (wake endpoint, `Node.host`'s
+  null-means-remote / `Node.net`'s peer-label semantics, `Node.lifecycle`'s
+  drained-host meaning, `SearchResult.cost`'s always-non-null-in-data-mode
+  guarantee, the empty-graph notice-hit convention, the instrument-exclusion
+  guarantee) is folded into `20-api-contract.md`. `10-target-v3.md`'s "Known
+  kernel gaps" section is re-trued against what actually shipped (MRB-156,
+  MRB-157 — including the correction that content search does not use
+  `StateRequest`, since it is wave-perturbing).
+- `./gradlew :concord:docLints` is clear (every doc in this folder now
+  carries the required `**Status**:` header) and `:concord:check` is green.
+- Status headers across the folder now read `Implemented`.
+
+Decisions on the remaining open items:
+
+- **`POST /cell/{ref}/observe` refusing a cold cell server-side**: left as
+  client-side-only, as delivered. The gate is verified live and P6 is not
+  violated by it today; adding a defence-in-depth 409 changes an M1
+  endpoint's contract for a case with no observed exploit path, and no
+  ticket in this plan owns that edit. Backlog, not a defect.
+- **Stable peer identity across a reconnect, layout clustering by
+  placement, remote port names, per-cell `state.summary`/lifecycle push
+  instead of poll, accessible names on any remaining unlabeled controls**:
+  genuine, but each is either a peering-protocol change, a layout redesign,
+  or new kernel surface outside every ticket's granted scope — left for
+  the backlog rather than expanding M5 after whole-product acceptance.
+- The five "Recommended next increments" above stand as the roadmap
+  starting point for whatever comes after this plan.
+
+The inspector v3 dashboard described in `10-target-v3.md` is delivered and
+accepted. This orchestration run is complete.
