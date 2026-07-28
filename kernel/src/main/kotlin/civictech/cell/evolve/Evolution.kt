@@ -258,10 +258,8 @@ object Promotion {
      * This is additive: single-instance [promote] is unchanged.
      *
      * PRECHECK (no side effects, freely abortable), then COMMIT via
-     * [civictech.cell.replication.Replication.rebind] (T11-D: this bare
-     * `[Replication.rebind]` reference did not resolve — `Replication` is
-     * not imported here, only used as an FQN parameter type above — so the
-     * link was undiscoverable from this end; fully qualifying it fixes that):
+     * [civictech.cell.replication.Replication.rebind] (fully qualified because
+     * `Replication` is not imported in this file — T11-D):
      *  - [judge], when supplied, must return [PromotionVerdict.Accept] (same
      *    contract as [promote]).
      *  - the candidate MUST reuse the incumbent's [CellRef]. A fresh ref re-mints

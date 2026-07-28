@@ -218,9 +218,12 @@ class WaveFrontier(
      *  - The remaining (fall-through) arm is the ordinary **waved** data
      *    path below, buffered until its edge frontier completes.
      *
-     * T02's divergence marker: G-18 designed on-demand pull as a *distinct*,
-     * later mechanism from the original push-based late-join catch-up
-     * (G-22) without retrofitting the older push path onto the newer
+     * The divergence itself (no `T02` marker records it — T02's markers are
+     * G-63, the `LocationRegistry` lane C-marker, the `ProtocolSupport`
+     * retention G-marker and the G-26 amendment; the ids that actually carry
+     * this one are G-18/G-22/G-38 and 93 I-24): G-18 designed on-demand pull
+     * as a *distinct*, later mechanism from the original push-based late-join
+     * catch-up (G-22) without retrofitting the older push path onto the newer
      * baseline stamp — so this inlet permanently carries two catch-up
      * dialects, not a transitional one. Treat the null arm as a second,
      * load-bearing catch-up path, not an incidental default.

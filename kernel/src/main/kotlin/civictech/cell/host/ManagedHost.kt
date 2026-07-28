@@ -961,13 +961,16 @@ open class ManagedHost(
     }
 
     // wouldCloseCycle: moved onto TopologyIndex itself (RS-8.4) — it only
-    // ever read its `topology` parameter, so it fits as a member; call site
-    // above is now `reg.wouldCloseCycle(from, to)`, routed through
-    // LocationRegistry's read-only projection (T03) rather than the raw
-    // TopologyIndex (which `LocationRegistry.topology` no longer exposes).
+    // ever read its `topology` parameter, so it fits as a member; it is now
+    // called as `reg.wouldCloseCycle(from, to)` from LinkAdmission.admitCycle
+    // (T11-B), routed through LocationRegistry's read-only projection (T03)
+    // rather than the raw TopologyIndex (which `LocationRegistry.topology` no
+    // longer exposes).
 
     // hasDampingWitness: moved to civictech.cell.link.Handshake.kt (T11-A) —
     // it reads nature vectors the same way Handshake's reconcileNatures does,
     // and both are link-admission-time nature predicates; see that file for
-    // the FU-8 KDoc. Call site above is now the top-level `hasDampingWitness`.
+    // the FU-8 KDoc. Its call site moved out of this file too (T11-B): it is
+    // now the top-level `hasDampingWitness` invoked from
+    // LinkAdmission.admitCycle.
 }
