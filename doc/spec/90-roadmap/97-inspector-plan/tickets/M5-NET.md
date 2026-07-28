@@ -1,6 +1,6 @@
 # M5-NET — Network hosts: peer topology + nested hulls (full vertical)
 
-**Status**: Specified — not yet dispatched (see `00-orchestration.md` §Ticket index).
+**Status**: Implemented — merged to main (see `90-progress-log.md`).
 
 Model: `claude-opus-5` (effort xhigh) · Track: full vertical (BE + FE) ·
 Depends: M4-EVAL merged · Parallel with: M5-SEARCH (disjoint: NET owns

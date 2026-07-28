@@ -1,6 +1,7 @@
 # Inspector delivery plan — orchestration
 
-**Status**: Living — active plan (2026-07-27). Owner: Merlijn. Consumed by: an orchestrating
+**Status**: Implemented — all six milestones (M0-M5) merged to main; see
+`90-progress-log.md` for the closing report. Owner: Merlijn. Consumed by: an orchestrating
 LLM that assigns tickets to sub-agents, sequences them, and gates merges through
 evaluators.
 

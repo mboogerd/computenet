@@ -1,6 +1,6 @@
 # Inspector v3 — target design
 
-**Status**: Living — reference doc for the in-progress inspector delivery plan (see `00-orchestration.md`).
+**Status**: Implemented — reference doc for the completed inspector delivery plan (see `00-orchestration.md`).
 
 The ComputeNet Inspector is a real-time dashboard for the dataflow graphs a
 host process runs: topology, placement, per-cell state, errors, and traffic —

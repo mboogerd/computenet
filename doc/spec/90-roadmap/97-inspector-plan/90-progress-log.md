@@ -1,6 +1,6 @@
 # Inspector delivery plan — progress log
 
-**Status**: Living — living log, appended by each milestone's evaluator (see `00-orchestration.md` §Evaluation protocol).
+**Status**: Implemented — closing log of a completed delivery plan; see the M5-EVAL entry for the final acceptance report.
 
 Appended by each milestone's EVAL ticket (see `00-orchestration.md` §Evaluation
 protocol step 5). Newest entry last.
