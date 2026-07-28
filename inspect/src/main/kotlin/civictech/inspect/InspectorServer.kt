@@ -373,6 +373,11 @@ class InspectorServer(
      * declaring the same stream twice is idempotent.
      *
      * Nothing about the graph changes — no link is created here, only reported.
+     * A declared edge therefore also *survives* the peer going away, unlike a
+     * mirrored one: the subscription is still there and still emitting (into
+     * the registry's park queue), so retracting the edge would misreport the
+     * process. The target cell leaves the topology, and a client draws what it
+     * can anchor.
      */
     fun declareLink(
         fromRef: CellRef,
