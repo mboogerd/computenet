@@ -676,8 +676,7 @@ class ExchangeCompositionExitTest {
         private val predicate: (String) -> Boolean,
         override val ref: CellRef = CellRef(UUID.randomUUID()),
     ) : Cell {
-        @Suppress("UNCHECKED_CAST")
-        val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<String>>>))
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
         val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<String>>>())
 
         init {
@@ -714,8 +713,7 @@ class ExchangeCompositionExitTest {
         val observed = mutableListOf<SetDelta<String>>()
         val observer = object : Cell {
             override val ref = CellRef(UUID.randomUUID())
-            @Suppress("UNCHECKED_CAST")
-            val inlet = registerPort("inlet", FanInlet(Propagate::class.java as Class<Propagate<SetDelta<String>>>))
+            val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<String>>>())
 
             init {
                 inlet.onEach { observed += it }
