@@ -106,8 +106,9 @@ private fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, targetR
  *
  *  1. **Magnitude payload** — the weak-tier quiescence damper is live. Tested
  *     the same way [FeedbackInlet] dispatches at runtime (`is Magnitude`),
- *     here against the reified payload class the [feedbackInlet] delegate
- *     records; equivalently the KSP scan stamps such a producer MONOTONE (2).
+ *     here against the reified payload class the
+ *     [civictech.cell.port.feedbackInlet] delegate records; equivalently the
+ *     KSP scan stamps such a producer MONOTONE (2).
  *  2. **Fixpoint convergence** — the producer declares [Monotonicity.MONOTONE]
  *     or an [MergeClass.IDEMPOTENT] merge, so laps fold to a fixpoint.
  *  3. **Explicit quiescence override** — the head was constructed with a
@@ -116,8 +117,9 @@ private fun checkPayload(portOut: Any, target: Any, portOutRef: PortRef, targetR
  * Moved from `ManagedHost` (T11-A): a link-admission-time predicate over
  * nature vectors, the same shape as [reconcileNatures] above — both read a
  * port's [natures] to decide whether a link (here, a cycle-closing one)
- * proceeds. `internal` (not `private`): `ManagedHost.connect`, in
- * `civictech.cell.host`, is still the only caller.
+ * proceeds. `internal` (not `private`): the sole caller is
+ * `civictech.cell.host.LinkAdmission.admitCycle` (T11-B), behind
+ * `ManagedHost.connect`.
  */
 internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
     head.payloadType?.let { if (Magnitude::class.java.isAssignableFrom(it)) return true }

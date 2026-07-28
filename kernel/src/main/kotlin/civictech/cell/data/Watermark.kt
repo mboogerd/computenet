@@ -45,7 +45,8 @@ import java.util.*
  *
  * **The rule for a fifth lane**: don't add one here. Each lane above answers a
  * different "what do I know about this replica slot" question, and
- * [ReplicaQuorum.frontier] already reads all four independently — a fifth
+ * [civictech.cell.consistency.ReplicaQuorum.frontier] already reads all four
+ * independently — a fifth
  * settlement concern (e.g. a future per-slot property unrelated to delivery/
  * departure/suspension/membership) is a signal this cell is doing more than
  * one job and should split into a sibling membership cell instead of growing
