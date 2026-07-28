@@ -57,7 +57,13 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
   "from": { "ref": "uuid:0", "port": "out" },
   "to":   { "ref": "uuid:0", "port": "in" },
   "role": "CONSUME" | "OBSERVE",
-  "fused": false                   // best-effort; null when unknown (M0 may emit null)
+  "fused": false                   // true: the producing endpoint has no emission point at all
+                                    //   (a delegating pass-through) — genuinely no message to observe.
+                                    // false: tapped — a real per-message flow rate is observable (M3+).
+                                    // null: producer not locally hosted / not resolvable (M0 may emit null
+                                    //   for any edge, since flow observation lands in M3).
+                                    // NOT "co-hosted" — a tap sits upstream of the direct-call-vs-enqueue
+                                    // decision, so co-hosted and cross-host edges are observed identically.
 }
 
 // CellDetail (M1) — Node plus:
@@ -139,7 +145,7 @@ not replayed). Server sends `heartbeat` every 15 s.
 | `error.deadLetter` | M2 | one `deadLetters[]` element |
 | `error.parked` | M2 | one `parked[]` element (send on change; `count: 0` clears) |
 | `error.restart` | M2 | one `restarts[]` element |
-| `flow.rates` | M3 | `{ "window": 1000, "edges": [ { "id", "rate", "lastWave": {...}\|null, "hop": 2\|null } ] }` — 1 Hz batch; edges with rate 0 omitted |
+| `flow.rates` | M3 | `{ "window": 1000, "edges": [ { "id", "rate", "lastWave": {...}\|null, "hop": 2\|null } ] }` — 1 Hz batch; `rate` is messages/second (a Double; with `window: 1000` numerically equal to the raw count); edges with no traffic that window are omitted (not sent as `rate: 0`). Publishes every second while anything is tapped, even an all-empty window (so a client's decay logic can key off "window received" rather than off silence), then one trailing empty window after the last tap detaches, then nothing. Unlike every other feed in this table, `flow.rates` has no paired snapshot/`GET` endpoint — a client's only source of truth for flow is this stream |
 | `graphs.changed` | M4 | `{}` — hint to refetch `GraphList` (components merged/split) |
 | `heartbeat` | M0 | `{}` |
 

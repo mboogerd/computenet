@@ -77,8 +77,15 @@ Selection, viewport, and toggle set persist while navigating within a graph.
 ## Constraints (kernel invariants — binding on every ticket)
 
 1. **P2 — fast path untouched.** No per-message hook on the data path.
-   Observation happens at taps/crossings. Fused co-hosted edges have no
-   observable messages; the UI renders them as fused, never fakes activity.
+   Observation happens at taps/crossings. A tap sits on the emitting outlet,
+   upstream of the direct-call-vs-enqueue decision, so co-hosted and
+   cross-host edges are observed identically — a co-hosted edge is not
+   automatically "fused" for observation purposes (M3 correction: the
+   original premise here, that co-hosted chains are unobservable, does not
+   hold for tap-based flow; see `Edge.fused` in `20-api-contract.md`).
+   `fused: true` means the edge's producing endpoint has no emission point at
+   all (a delegating pass-through) — genuinely no message to observe; the UI
+   renders those as fused, never fakes activity.
 2. **P6 — observation is causal.** Subscribing raises attention and can
    un-park cones. v1–v4 rule: state subscriptions are created on node
    selection and released on deselection; browsing/listing never subscribes.
