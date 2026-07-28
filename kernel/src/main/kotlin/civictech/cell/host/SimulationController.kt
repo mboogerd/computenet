@@ -23,8 +23,13 @@ import kotlin.coroutines.resume
  * resumption re-enters the simulation as an ordinary step, dispatched by the task that
  * unblocked it. A quiescent simulation with a parked task is a faithful deadlock.
  *
- * Everything (submission, stepping, awaiting) is expected on one thread; this class is not
- * thread-safe by design.
+ * Stepping and awaiting are expected on one thread — the controller's own — and are not
+ * thread-safe by design: that single-threadedness *is* the determinism. Submission is the
+ * documented exception (T18, finding B10): [HostScheduler.submit] is contractually callable
+ * from any thread, so each scheduler's pending queue is guarded. Only the enqueue is; the
+ * drain order is untouched, and every simulation that submits from the controller's own
+ * thread — which is all of them today — traces exactly as it did before. See
+ * [SimulatedScheduler.submit] for that argument in full.
  */
 class SimulationController(seed: Long? = null) {
 
@@ -80,6 +85,23 @@ class SimulationController(seed: Long? = null) {
     }
 
     private inner class SimulatedScheduler(override val color: HostColor) : HostScheduler {
+
+        /**
+         * Guards [queue] and [sequence], and nothing else (T18). Those two are
+         * the whole of this scheduler's state that a foreign thread can reach —
+         * it reaches them only through [submit]. Everything else here
+         * ([inFlight], [resumptions], the coroutine machinery, and the
+         * controller's [schedulers] list) stays controller-thread-only, which is
+         * what keeps the simulation deterministic; widening this lock to cover
+         * them would buy nothing and hide that boundary.
+         *
+         * Held by the controller-thread readers too ([hasWork], [stepOne],
+         * [shutdown]): a lock that only the producer takes excludes nothing.
+         * Uncontended in every existing simulation, since they submit from the
+         * controller's thread.
+         */
+        private val queueLock = Any()
+
         private val queue = PriorityQueue<ScheduledTask>()
         private var sequence = 0L
 
@@ -89,8 +111,30 @@ class SimulationController(seed: Long? = null) {
         /** Resumptions of the in-flight task, delivered by [SimulatedDispatcher]; run as steps. */
         private val resumptions = ArrayDeque<Runnable>()
 
+        /**
+         * Thread-safe enqueue (T18, finding B10), honoring [HostScheduler.submit]'s
+         * threading contract. This used to be a bare `queue.add` on a plain
+         * [PriorityQueue], relying on the class-wide "one thread" assumption a
+         * caller had no way to see: a foreign-thread submit — `ManagedHost.snapshotOf`
+         * from an observer thread, or a dead letter raised off-host (T04 finding 6) —
+         * raced the controller's own `poll`, and the failure mode was a corrupted
+         * heap or a silently dropped task rather than an exception. No wired call
+         * site hit it yet; the first deterministic inspector test would have.
+         *
+         * **Determinism argument.** The lock covers enqueue only. A task is still
+         * stamped `(priority, ++sequence)` at submission, and [step]/[runToIdle]
+         * still drain strictly in that order, one task at a time, on the
+         * controller's thread — nothing about *what runs next* changed, and no
+         * randomness was added. Every simulation in the repo submits from the
+         * controller's thread, so its sequence numbering, and therefore its whole
+         * trace under any seed, is identical to before. A caller that deliberately
+         * submits from another thread buys ordinary cross-thread nondeterminism
+         * about *where* its own task lands — inherent to submitting concurrently,
+         * and the exact price [HostScheduler.submit] names — while every task that
+         * does land is drained in the one deterministic order.
+         */
         override fun submit(priority: Int, action: suspend () -> Unit) {
-            queue.add(ScheduledTask(priority, ++sequence, action))
+            synchronized(queueLock) { queue.add(ScheduledTask(priority, ++sequence, action)) }
         }
 
         override fun <T> await(future: CompletableFuture<T>): T {
@@ -105,14 +149,21 @@ class SimulationController(seed: Long? = null) {
         }
 
         override fun shutdown() {
-            queue.clear()
+            synchronized(queueLock) { queue.clear() }
         }
 
-        fun hasWork(): Boolean = resumptions.isNotEmpty() || (!inFlight && queue.isNotEmpty())
+        fun hasWork(): Boolean =
+            resumptions.isNotEmpty() || (!inFlight && synchronized(queueLock) { queue.isNotEmpty() })
 
         fun stepOne() {
             resumptions.pollFirst()?.let { it.run(); return }
-            val task = queue.poll() ?: return
+            // the poll is inside the lock, the task's execution deliberately
+            // outside it: the lock's scope is the queue, not the drain. Holding
+            // it across execution would not deadlock (monitors are reentrant, so
+            // the ordinary re-entrant submit — see SimulationControllerTest —
+            // would still pass) but it would block foreign submitters for a whole
+            // task's duration and quietly re-widen the invariant this narrows.
+            val task = synchronized(queueLock) { queue.poll() } ?: return
             inFlight = true
             val completion = object : Continuation<Unit> {
                 override val context: CoroutineContext = SimulatedDispatcher()

@@ -1050,13 +1050,42 @@ open class ManagedHost(
      * path (P2) and raises no attention or subscription (P6) — nothing is
      * linked, nothing is emitted, no wave counter moves — but it is not free,
      * and a caller that fans it out must bound the fan-out.
+     *
+     * **Callable from any thread, against any scheduler (T18, finding B10).**
+     * The hand-off is [HostScheduler.submit], whose threading contract now says
+     * so explicitly: every implementation accepts a foreign-thread enqueue. The
+     * two production schedulers always did (concurrent queues);
+     * [SimulationController]'s guards its queue as of T18, so an observer on an
+     * HTTP thread may read a *simulated* host's cell as safely as a threaded
+     * one's. Only the enqueue is concurrent — the snapshot itself still runs on
+     * this host's execution context, which is the whole point of routing it —
+     * and on a simulated host that means the read lands on the next `step()` /
+     * `runToIdle()`, not before. There is no scheduler class this refuses to
+     * submit to; the sole null-completing scheduler case remains a *terminated*
+     * one, below.
+     *
+     * **Cancellation is honored (T18).** A caller that abandons the read at its
+     * own deadline — the inspector's content search does, with `cancel(false)` —
+     * leaves a task already queued here. The task checks the future before
+     * touching the cell, so an abandoned read costs a dequeue instead of a whole
+     * state copy. It is not withdrawn from the queue: nothing in the ordering
+     * contract lets a submitted task be recalled, and nothing needs to be, since
+     * the caller blocks per read and so has at most one in flight.
      */
     fun snapshotOf(ref: CellRef): CompletableFuture<Serializable?> {
         val future = CompletableFuture<Serializable?>()
         val cell = cells[ref]
         if (cell !is Stateful) return future.also { it.complete(null) }
         return try {
-            scheduler.submit(0) { future.complete(runCatching { cell.snapshot() }.getOrNull()) }
+            scheduler.submit(0) {
+                // cancellation check before the copy (T18): `isCancelled` only
+                // ever transitions false -> true, so the check races nothing
+                // that matters — a cancellation landing after it wastes one
+                // snapshot exactly as before, one landing before it saves the
+                // copy. `complete` on an already-completed future is a no-op
+                // either way; what is being avoided is `snapshot()` itself.
+                if (!future.isCancelled) future.complete(runCatching { cell.snapshot() }.getOrNull())
+            }
             future
         } catch (_: IllegalStateException) {
             // terminated scheduler (T04 finding 5): a dead host has no state to read
