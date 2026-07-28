@@ -101,8 +101,7 @@ class ExchangeScaffoldTest {
             awaitUntil("A re-folds after retraction", timeoutMs = 45_000) { boardOf(httpA) == """{"north":10,"south":5}""" }
             awaitUntil("B re-folds after retraction", timeoutMs = 45_000) { boardOf(httpB) == """{"north":10,"south":5}""" }
         } finally {
-            peerA.destroy(); peerB.destroy()
-            peerA.destroyForcibly(); peerB.destroyForcibly()
+            JvmPeer.destroy(peerA, peerB)
         }
     }
 
@@ -146,8 +145,7 @@ class ExchangeScaffoldTest {
             post(httpB, "add", "south", "o4", 8)
             awaitUntil("post-restart edit visible on A", timeoutMs = 45_000) { boardOf(httpA) == """{"north":17,"south":13}""" }
         } finally {
-            peerA.destroy(); peerB.destroy()
-            peerA.destroyForcibly(); peerB.destroyForcibly()
+            JvmPeer.destroy(peerA, peerB)
             journalB.deleteRecursively()
         }
     }

@@ -102,8 +102,7 @@ class CrashRestartConvergenceTest {
             post(httpB, user = "bob", action = "add", item = "dates")
             awaitUntil("post-restart edit visible on A", timeoutMs = 45_000) { "dates" in items(httpA) }
         } finally {
-            peerA.destroy()
-            peerB.destroyForcibly()
+            JvmPeer.destroy(peerA, peerB)
             journalB.deleteRecursively()
         }
     }

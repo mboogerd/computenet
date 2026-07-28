@@ -65,8 +65,7 @@ class TwoJvmConvergenceTest {
                 "apples" !in currentState(httpB).substringAfter("\"items\":").substringBefore("]")
             }
         } finally {
-            peerA.destroy()
-            peerB.destroy()
+            JvmPeer.destroy(peerA, peerB)
         }
     }
 }
