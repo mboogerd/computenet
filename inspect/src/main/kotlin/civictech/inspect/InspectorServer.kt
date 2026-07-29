@@ -210,7 +210,7 @@ class InspectorServer(
 
     private val observations = Observations(
         registry = registry,
-        onChange = model::stateSummary,
+        onSummary = model::stateSummary,
         // read through, so a source installed after construction takes effect
         snapshots = SnapshotSource { ref -> snapshots.snapshotOf(ref) },
     )
@@ -602,6 +602,16 @@ class InspectorServer(
         // contract §SSE: "Server sends `heartbeat` every 15 s".
         Tick("heartbeat", HEARTBEAT_SECONDS * 1_000) { model.heartbeat() },
         Tick("sweep", SWEEP_SECONDS * 1_000) { observations.sweep() },
+        // V1A-BE: the `state.summary` window, the same shape and the same
+        // scheduler as `"flowSample"` below — an arbitrary number of settled
+        // effective changes on an observed cell coalesces into one summary
+        // carrying the latest reading, and a window is published even when
+        // nothing changed so a client ages what it shows off received windows
+        // rather than off silence. Registered after `"sweep"`: an observation
+        // the sweep just released has already published its one trailing
+        // window by the time this runs, so a single `tickAll()` never
+        // publishes both a scheduled and a trailing summary for it.
+        Tick("stateSummary", Observations.WINDOW_MS) { observations.sample() },
         Tick("errorPoll", ERROR_POLL_SECONDS * 1_000) { errors.poll() },
         // M3: the flow feed's single aggregation thread is this same
         // scheduler — snapshot-and-reset is a handful of atomic reads, and

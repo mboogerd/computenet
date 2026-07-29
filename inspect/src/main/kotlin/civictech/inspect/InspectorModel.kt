@@ -357,17 +357,29 @@ internal class InspectorModel(
     }
 
     /**
-     * `state.summary` (contract §SSE): emitted only for a cell with an active
-     * observe subscription, once per settled effective change plus the
-     * subscription's own immediate catch-up. Rides the same monotonic [seq] as
-     * the topology deltas — one stream, one gap detector.
+     * `state.summary` (contract §SSE): emitted only for a cell with an observe
+     * subscription — one coalesced window per [Observations.WINDOW_MS] while
+     * that subscription is open (even a quiet one), plus the single trailing
+     * window its release publishes. [Observations.sample] owns that cadence;
+     * this is only the emission point. Rides the same monotonic [seq] as the
+     * topology deltas — one stream, one gap detector.
+     *
+     * `changes` is additive to the four fields M1 shipped (V1A-BE): how many
+     * settled effective changes this window coalesced, `0` for a quiet one. A
+     * client that ignores it is still correct — `staleMs` is computed at
+     * publish time, so it drops when something settled and grows across quiet
+     * windows — but it cannot tell a change that landed exactly one window
+     * after the previous one (identical `staleMs`) from a quiet window, and it
+     * cannot say *how many* changes a window stood for. `changes` answers both
+     * exactly.
      */
-    fun stateSummary(ref: CellRef, reading: StateReading) = synchronized(lock) {
+    fun stateSummary(summary: StateSummary) = synchronized(lock) {
         emitEvent(Event.STATE_SUMMARY, buildJsonObject {
-            put("ref", encode(ref))
-            put("cardinality", ValueEncoder.cardinality(reading.value))
-            put("frontier", stampJson(reading.frontier))
-            put("staleMs", reading.staleMs)
+            put("ref", encode(summary.ref))
+            put("cardinality", ValueEncoder.cardinality(summary.reading.value))
+            put("frontier", stampJson(summary.reading.frontier))
+            put("staleMs", summary.reading.staleMs)
+            put("changes", summary.changes)
         })
     }
 

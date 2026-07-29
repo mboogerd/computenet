@@ -30,6 +30,8 @@ import civictech.cell.partition.ShardCell
 import civictech.nature.ContractRegistry
 import civictech.nature.PortDirection
 import java.io.Serializable
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * One consistent read of a cell's state, plus the metadata the contract's
@@ -41,6 +43,21 @@ internal data class StateReading(
     val value: Any?,
     val frontier: Timestamp?,
     val staleMs: Long,
+)
+
+/**
+ * One published `state.summary` window for one observed cell (V1A-BE).
+ *
+ * [reading] is built *at publish time*, never at change time: that is what
+ * makes `staleMs` the honest age of the last effective change on the wire, so
+ * it decreases exactly in a window where something settled and grows by a full
+ * window across quiet ones. [changes] is how many settled effective changes
+ * this window coalesced — 0 for a quiet window.
+ */
+internal data class StateSummary(
+    val ref: CellRef,
+    val reading: StateReading,
+    val changes: Long,
 )
 
 /**
@@ -118,17 +135,54 @@ fun interface SnapshotSource {
  * than through the `host.observe(...)` helper the ticket names: `observe`
  * discards the `LinkResult`, and without the `Link` step 1 above is impossible.
  * The two calls below are `observe`'s body verbatim, with the link kept.
+ *
+ * ### The summary window (V1A-BE)
+ *
+ * Summaries are **coalesced into a per-cell window**, on exactly the pattern
+ * [FlowCollector] established for `flow.rates`:
+ *
+ * - one summary per open observation per [WINDOW_MS] window, however many
+ *   settled effective changes landed in it — driven by [sample] off the
+ *   inspector's single existing scheduler thread ([InspectorServer]'s `Tick`
+ *   list), so this adds no thread and stays reachable through `tickAll()`;
+ * - **published even when the window was quiet**, so a client's decay/aging
+ *   logic keys on *received* windows rather than on silence (which would
+ *   otherwise be indistinguishable from a released observation, a dropped
+ *   frame, or a stopped server);
+ * - exactly **one trailing window** when the observation is released — by
+ *   `DELETE`, by [sweep], or by [close] — and then nothing at all. A closed
+ *   inspector is silent, not one trailing frame short of it.
+ *
+ * The per-change path therefore no longer emits anything: [StampedView] records
+ * the wave, the wall-clock instant and a change counter as the fold settles
+ * (three cheap stores, no allocation, no lock the HTTP or graph side contends
+ * on), and the window reads them. Nothing here polls, so P6 holds unchanged: a
+ * window exists only for a cell someone explicitly observed, and disappears
+ * with it.
  */
 internal class Observations(
     private val registry: LocationRegistry,
-    /** Fires on every settled effective change of an open observation. */
-    private val onChange: (CellRef, StateReading) -> Unit,
+    /** Non-blocking sink for one published window (see [sample]). */
+    private val onSummary: (StateSummary) -> Unit,
     private val snapshots: SnapshotSource = SnapshotSource.Unavailable,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : AutoCloseable {
 
     private val lock = Any()
     private val open = LinkedHashMap<CellRef, Observation>()
+
+    /**
+     * Serializes *publication* — a scheduled window against the trailing
+     * window a release owes — so "one trailing summary, then silence" survives
+     * a `DELETE` landing mid-tick rather than holding only when the two happen
+     * not to overlap. Held for the duration of one publish pass and never
+     * across a management call (release does its unlink/despawn after leaving
+     * it), so nothing that can block ever runs underneath it.
+     *
+     * Lock order is always [publishLock] → [lock] → the model's own monitor;
+     * nothing takes [publishLock] from inside the model.
+     */
+    private val publishLock = Any()
 
     /** Refs with a live observation — diagnostics and tests. */
     val openRefs: Set<CellRef> get() = synchronized(lock) { open.keys.toSet() }
@@ -188,21 +242,26 @@ internal class Observations(
             return false
         }
 
-        val observation = Observation(host, sink, sink.ref, result.link, view, clock())
+        val observation = Observation(ref, host, sink, sink.ref, result.link, view, clock())
         val existing = synchronized(lock) {
             open[ref] ?: run { open[ref] = observation; null }
         }
         if (existing != null) {
-            // lost a concurrent POST race: keep the winner, release this one
-            release(observation)
+            // lost a concurrent POST race: keep the winner, release this one.
+            // No trailing window: this observation never published one, and the
+            // cell it names is still observed by the winner — a trailing
+            // summary here would announce a release that did not happen.
+            release(observation, announce = false)
             existing.touch(clock())
             return true
         }
 
-        // Registered last, exactly like `observe`'s optional listener: its
-        // built-in late-join catch-up then already carries the connected
-        // producer's current state, so a client sees one summary immediately.
-        sink.onChange { value -> onChange(ref, observation.reading(value, clock())) }
+        // No `sink.onChange` listener any more (V1A-BE). The producer's
+        // late-join catch-up still runs — `connect` above pushed the baseline
+        // through the fold — but it now lands as a counted change on
+        // [StampedView] instead of as an immediate SSE frame, so the first
+        // window this observation publishes already carries it. Nothing at all
+        // sits on the per-change path except the fold's own three stores.
         return true
     }
 
@@ -234,6 +293,26 @@ internal class Observations(
     }
 
     /**
+     * One window: exactly one summary per open observation, published whether
+     * or not anything settled in it. Runs on the inspector's scheduler thread
+     * (`InspectorServer`'s `"stateSummary"` `Tick`), never on a graph thread.
+     *
+     * Each summary is *built* under [lock] — a handful of volatile reads plus
+     * one `getAndSet` on the change counter, no blocking call — and published
+     * outside it, so a slow consumer of [onSummary] can never delay a `POST
+     * observe` or a fold.
+     *
+     * Nothing is published for a cell with no open observation: no polling,
+     * no synthesis, no summary for a cell nobody asked about (P6).
+     */
+    fun sample() {
+        synchronized(publishLock) {
+            val windows = synchronized(lock) { open.values.mapNotNull { it.window(clock()) } }
+            windows.forEach(onSummary)
+        }
+    }
+
+    /**
      * Idle safety net: release observations no client has read for
      * [IDLE_RELEASE_MS]. A tab closed without a `DELETE` (or a client that
      * crashed mid-session) must not keep a cone's attention raised forever.
@@ -254,11 +333,29 @@ internal class Observations(
     }
 
     /**
+     * The one trailing window a released observation owes its client, then
+     * silence for that cell. Published *before* the sink is torn down — its
+     * fold is still the authoritative value — and under [publishLock] so it
+     * cannot be overtaken by a scheduled window for the same cell. The
+     * `compareAndSet` in [Observation.trailingWindow] is what makes "exactly
+     * one" structural rather than a consequence of who called [release].
+     */
+    private fun trailing(observation: Observation) {
+        synchronized(publishLock) {
+            (synchronized(lock) { observation.trailingWindow(clock()) } ?: return).let(onSummary)
+        }
+    }
+
+    /**
      * Unlink then despawn — both halves, in that order, so the producer stops
      * pushing before the sink stops existing. Failures are swallowed: a release
      * racing a despawned target must not fail the request that asked for it.
+     *
+     * [trailing] is the summary feed's half of the same release, published
+     * first and outside every management call.
      */
-    private fun release(observation: Observation) {
+    private fun release(observation: Observation, announce: Boolean = true) {
+        if (announce) trailing(observation) else observation.suppressTrailing()
         runCatching { observation.link.unlink() }
         runCatching { observation.host.managementInlet.call.despawn(observation.sinkRef) }
         // after despawn: a despawned ref never returns (each ObserveCell has a
@@ -268,6 +365,7 @@ internal class Observations(
     }
 
     private class Observation(
+        val ref: CellRef,
         val host: ManagedHost,
         val sink: ObservationSink<*>,
         val sinkRef: CellRef,
@@ -279,6 +377,9 @@ internal class Observations(
         var lastTouchedMs: Long = openedAtMs
             private set
 
+        /** Set once, by whichever of the three release paths gets there first. */
+        private val trailed = AtomicBoolean(false)
+
         fun touch(now: Long) {
             lastTouchedMs = now
         }
@@ -289,11 +390,43 @@ internal class Observations(
             frontier = view.frontier,
             staleMs = (now - view.changedAtMs).coerceAtLeast(0),
         )
+
+        /**
+         * This observation's scheduled window, or null once its trailing one
+         * has gone out. The reading is the *latest* one — `current()` is a
+         * volatile read of an already-materialized immutable snapshot, and the
+         * stamps come off [StampedView] — so a window never carries an
+         * intermediate value from earlier in it.
+         */
+        fun window(now: Long): StateSummary? =
+            if (trailed.get()) null else StateSummary(ref, reading(sink.current(), now), view.drainChanges())
+
+        /** The last window this observation will ever publish; null if it already did. */
+        fun trailingWindow(now: Long): StateSummary? =
+            if (trailed.compareAndSet(false, true)) {
+                StateSummary(ref, reading(sink.current(), now), view.drainChanges())
+            } else {
+                null
+            }
+
+        /** Retire without a trailing window — the lost-POST-race path only. */
+        fun suppressTrailing() {
+            trailed.set(true)
+        }
     }
 
     internal companion object {
         /** Contract/ticket: "auto-release after 5 min without a matching `GET state`". */
         const val IDLE_RELEASE_MS = 5 * 60 * 1000L
+
+        /**
+         * The `state.summary` coalescing window (V1A-BE). Deliberately *the*
+         * flow window rather than a second, independently-drifting constant:
+         * both feeds exist so a client can key its freshness/decay logic on
+         * received windows, and a client aging two feeds against two different
+         * periods would be answering the same question twice, differently.
+         */
+        const val WINDOW_MS = FlowCollector.WINDOW_MS
 
         /**
          * Which outlet to fold. The kernel's convention is a single outlet
@@ -399,11 +532,30 @@ internal class StampedView<D : Any, S>(
     var changedAtMs: Long = clock()
         private set
 
+    /**
+     * Settled effective changes since the last window drained this (V1A-BE).
+     *
+     * Counted *here*, beside [changedAtMs], rather than off the sink's
+     * `onChange` listener, for two reasons. It is the cheaper of the two — one
+     * atomic add on a path that was already doing two volatile stores, with no
+     * listener registration, no dispatcher hop, no lambda and no `StateReading`
+     * allocation per change. And it is the *consistent* one: a count taken on
+     * the sink's dispatcher thread could lag the `changedAtMs` store across a
+     * window boundary, publishing a window whose `staleMs` dropped while its
+     * count said nothing happened. Incrementing where the stamp is written
+     * means the two can only ever agree.
+     */
+    private val changes = AtomicLong()
+
+    /** Take and reset this window's change count — the publishing thread's only write. */
+    fun drainChanges(): Long = changes.getAndSet(0)
+
     override fun apply(delta: D): Boolean {
         val changed = delegate.apply(delta)
         if (changed) {
             frontier = CurrentContext.get()?.timestamp
             changedAtMs = clock()
+            changes.incrementAndGet()
         }
         return changed
     }

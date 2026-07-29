@@ -24,7 +24,7 @@ class ObservationsIdleTest {
 
     private val observations = Observations(
         registry = registry,
-        onChange = { ref, _ -> synchronized(summaries) { summaries += ref } },
+        onSummary = { summary -> synchronized(summaries) { summaries += summary.ref } },
         clock = now::get,
     )
 

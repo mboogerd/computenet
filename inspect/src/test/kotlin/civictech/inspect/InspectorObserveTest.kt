@@ -19,6 +19,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 import java.io.Serializable
@@ -104,21 +105,19 @@ class InspectorObserveTest {
     }
 
     @Test
-    fun `a released observation fires no further onChange`() {
+    fun `a released observation's sink is never folded again`() {
         val cell = set()
-        val events = listen()
         probe.postForm("", observePath(cell.ref)).statusCode() shouldBe 204
         val sinkRef = awaitSink(cell.ref)
         add(cell, "ada")
-        // catch-up summary plus the one for this add
-        events.awaitKind(Event.STATE_SUMMARY, 2)
+        awaitUntil("the fold caught the add") { state(cell.ref).value.toString() == """["ada"]""" }
 
         probe.delete(observePath(cell.ref)).statusCode() shouldBe 204
         awaitUntil("observe sink despawned") { sinkRef !in registry.localRefs() }
-        val summariesAtRelease = events.countOfKind(Event.STATE_SUMMARY)
 
         // the cell keeps working, and its outlet no longer reaches the sink:
-        // the fold is not merely ignored, it is never invoked again
+        // the fold is not merely ignored, it is never invoked again — a
+        // delivery to the despawned sink would dead-letter
         val deadLettersBefore = host.supervisionAccounting().deadLetters
         add(cell, "grace")
         // the add is observable through a *fresh* subscription, so waiting on
@@ -128,10 +127,6 @@ class InspectorObserveTest {
             state(cell.ref).value.toString() == """["ada","grace"]"""
         }
 
-        // the released sink contributed nothing to that: every summary since
-        // the release belongs to the new subscription, and no delivery to the
-        // despawned sink dead-lettered
-        events.countOfKind(Event.STATE_SUMMARY) shouldBe summariesAtRelease + 1
         host.supervisionAccounting().deadLetters shouldBe deadLettersBefore
     }
 
@@ -230,27 +225,108 @@ class InspectorObserveTest {
     }
 
     @Test
-    fun `an open subscription streams state summaries, and only for the subscribed cell`() {
+    fun `an open subscription streams windowed state summaries, and only for the subscribed cell`() {
         val observed = set()
         val ignored = set()
         val events = listen()
 
         probe.postForm("", observePath(observed.ref)).statusCode() shouldBe 204
-        // the subscription's own late-join catch-up is the first summary
-        val first = events.awaitKind(Event.STATE_SUMMARY, 1).single()
+        // V1A-BE: the window publishes, not the change. Before this ticket the
+        // subscription's own late-join catch-up emitted a summary the instant
+        // the listener was registered; it is now folded into the first window,
+        // which the tick — here driven synchronously — is what releases.
+        server.tickAll()
+        val first = events.awaitKind(Event.STATE_SUMMARY, 1).first()
         first["ref"]!!.jsonPrimitive.content shouldBe InspectorServer.encodeRef(observed.ref)
         first["cardinality"]!!.jsonPrimitive.content shouldBe "0 rows"
 
         add(observed, "ada")
         add(ignored, "noise")
+        awaitUntil("the fold caught the add") { state(observed.ref).value.toString() == """["ada"]""" }
+        server.tickAll()
 
-        val summaries = events.awaitKind(Event.STATE_SUMMARY, 2)
-        summaries.size shouldBe 2
-        summaries.map { it["ref"]!!.jsonPrimitive.content }.toSet() shouldBe
+        awaitUntil("a window carrying the settled add") {
+            events.payloadsOf(Event.STATE_SUMMARY).any { it["cardinality"]!!.jsonPrimitive.content == "1 row" }
+        }
+        val settled = events.payloadsOf(Event.STATE_SUMMARY)
+            .first { it["cardinality"]!!.jsonPrimitive.content == "1 row" }
+        settled["frontier"]!!.jsonObject["counter"]!!.jsonPrimitive.content shouldBe "1"
+        // additive to M1's four fields: how many settled effective changes the
+        // window coalesced (see InspectorModel.stateSummary)
+        (settled["changes"]!!.jsonPrimitive.long >= 1) shouldBe true
+        // the other cell has no observation, so it has no window at all (P6)
+        events.payloadsOf(Event.STATE_SUMMARY).map { it["ref"]!!.jsonPrimitive.content }.toSet() shouldBe
             setOf(InspectorServer.encodeRef(observed.ref))
-        val latest = summaries.last()
-        latest["cardinality"]!!.jsonPrimitive.content shouldBe "1 row"
-        latest["frontier"]!!.jsonObject["counter"]!!.jsonPrimitive.content shouldBe "1"
+    }
+
+    @Test
+    fun `a quiet window is published too, with staleMs growing and nothing else moving`() {
+        val cell = set()
+        val events = listen()
+        probe.postForm("", observePath(cell.ref)).statusCode() shouldBe 204
+        add(cell, "ada")
+        awaitUntil("the fold caught the add") { state(cell.ref).value.toString() == """["ada"]""" }
+
+        // three windows, nothing happening in any of them: silence would be
+        // indistinguishable from a released observation, a dropped frame or a
+        // stopped server, so a quiet window says "quiet" instead
+        repeat(4) { server.tickAll() }
+        val quiet = events.awaitKind(Event.STATE_SUMMARY, 4).takeLast(3)
+
+        quiet.map { it["changes"]!!.jsonPrimitive.long } shouldBe listOf(0L, 0L, 0L)
+        quiet.map { it["cardinality"]!!.jsonPrimitive.content }.toSet() shouldBe setOf("1 row")
+        quiet.map { it["frontier"]!!.jsonObject["counter"]!!.jsonPrimitive.content }.toSet() shouldBe setOf("1")
+        val stale = quiet.map { it["staleMs"]!!.jsonPrimitive.long }
+        stale.zipWithNext().forEach { (earlier, later) -> (later >= earlier) shouldBe true }
+    }
+
+    @Test
+    fun `an effective change is announced within one window, and the state read on it is fresh`() {
+        val cell = set()
+        val events = listen()
+        probe.postForm("", observePath(cell.ref)).statusCode() shouldBe 204
+
+        add(cell, "ada")
+
+        // deliberately no `tickAll()`: the *scheduled* window is what has to
+        // announce this, which is the freshness guarantee the whole live-value
+        // story rests on. The wait is bounded at several windows so it proves
+        // the announcement happens without asserting on scheduler timing. The
+        // fold is empty until the add, so a "1 row" window can only be one
+        // that carries it.
+        awaitUntil("the scheduled window announced the change", timeoutMs = 5 * Observations.WINDOW_MS) {
+            events.payloadsOf(Event.STATE_SUMMARY).any {
+                it["cardinality"]!!.jsonPrimitive.content == "1 row" && it["changes"]!!.jsonPrimitive.long > 0
+            }
+        }
+        // what the client does on a summary it judges to indicate change
+        state(cell.ref).value.toString() shouldBe """["ada"]"""
+    }
+
+    @Test
+    fun `releasing publishes a trailing summary, and then the feed is silent for that cell`() {
+        val cell = set()
+        val events = listen()
+        probe.postForm("", observePath(cell.ref)).statusCode() shouldBe 204
+        server.tickAll()
+        events.awaitKind(Event.STATE_SUMMARY, 1)
+
+        probe.delete(observePath(cell.ref)).statusCode() shouldBe 204
+
+        // a frame of another kind is the flush barrier: one SSE connection
+        // delivers in order, so once it lands every summary queued before it
+        // has landed too — no sleep, no count racing the socket
+        set()
+        events.awaitKind(Event.TOPOLOGY_NODE, 1)
+        val atRelease = events.countOfKind(Event.STATE_SUMMARY)
+
+        repeat(3) { server.tickAll() }
+        set()
+        events.awaitKind(Event.TOPOLOGY_NODE, 2)
+
+        // exactly nothing after the trailing one: a released observation owns
+        // no window, so neither the ticks above nor the scheduler produce one
+        events.countOfKind(Event.STATE_SUMMARY) shouldBe atRelease
     }
 
     @Test
@@ -394,6 +470,9 @@ class InspectorObserveTest {
         }
 
         fun countOfKind(kind: String): Int = frames.count { it.kind == kind }
+
+        /** Every payload of [kind] received so far, in arrival order — no waiting. */
+        fun payloadsOf(kind: String): List<JsonObject> = frames.filter { it.kind == kind }.map { it.payload }
 
         fun awaitKind(kind: String, count: Int): List<JsonObject> {
             awaitUntil("$count '$kind' frames", timeoutMs = 10_000) {
