@@ -1,0 +1,71 @@
+/* FE-CANVAS ticket Solution direction §5: absolutely positioned in a corner
+   of `.canvas` (which stays `position: relative` — Canvas.css), styled from
+   `styles/tokens.css` variables only so both themes read correctly.
+   Top-right, not bottom-right: `ActivityLog.css`'s `.activity-log` is a
+   `position: fixed` strip pinned to the *viewport* bottom (z-index 30, up to
+   `max-height: 40vh` when expanded) — a bottom-anchored corner here would be
+   covered by it (collapsed, its header row already overlaps a bottom:1rem
+   placement) regardless of this component's own z-index, since the log
+   floats above `.canvas`'s true bottom edge rather than shrinking it. */
+.zoom-controls {
+  position: absolute;
+  right: 1rem;
+  top: 1rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18);
+}
+
+.zoom-controls__btn,
+.zoom-controls__readout {
+  height: 28px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.zoom-controls__btn {
+  width: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+}
+
+.zoom-controls__readout {
+  min-width: 3.4rem;
+  padding: 0 0.4rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.zoom-controls__fit {
+  width: auto;
+  padding: 0 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.zoom-controls__btn:hover,
+.zoom-controls__readout:hover {
+  background: var(--surface-raised);
+  border-color: var(--hairline-strong);
+}
+
+.zoom-controls__btn:focus-visible,
+.zoom-controls__readout:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}

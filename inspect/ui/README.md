@@ -233,6 +233,22 @@ Open the UI, enter the `shopping` graph (16 cells · 2 nets), and turn on
 Process hosts + Network hosts. Add an item at <http://localhost:18081> to
 give the Flow toggle something to show on the cross-boundary edge.
 
+## FE-CANVAS: canvas viewport (zoom/pan/fit)
+
+Per `doc/spec/90-roadmap/98-inspector-v4-plan/tickets/FE-CANVAS.md`: the
+canvas gained a real viewport instead of raw browser scrollbars. Mouse wheel
+or trackpad scroll pans; Ctrl/Cmd-modified wheel (and trackpad pinch, which
+arrives as the same event) zooms about the cursor; dragging the background
+pans; the corner `ZoomControls` (`−` / percentage / `+` / `Fit`) and the
+`+`/`-`/`0` keys work the same way. Entering a graph for the first time fits
+it to screen; leaving and re-entering the same graph restores the viewport
+you left it at, per graph id, for the session (`src/solid/viewport.ts`) — not
+in the URL hash, which stays the shareable graph/selection/toggle identity.
+The pure zoom/pan/fit maths lives in `src/nav/viewport.ts`
+(`test/viewport.test.ts`); `Canvas.tsx` applies it as a single CSS transform
+on one `.canvas__pan` wrapper around the existing SVG + card layers, so they
+cannot diverge from each other.
+
 ## Notes
 
 - M4-EVAL re-stamped `Node.graph` on both topology fixtures: after M4 the

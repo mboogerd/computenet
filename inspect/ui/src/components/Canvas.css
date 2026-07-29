@@ -1,6 +1,10 @@
+/* FE-CANVAS ticket Solution direction §3: the browser's own scrollbars are
+   replaced by pan — `overflow: hidden` (was `auto`) turns `.canvas` into the
+   fixed *viewport window*, with `.canvas__pan` below doing the actual
+   scene->client mapping. */
 .canvas {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
   background: var(--page);
 }
@@ -10,8 +14,35 @@
   color: var(--text-muted);
 }
 
+/* FE-CANVAS ticket Solution direction §3: the *one* element carrying the
+   shared CSS transform (`transform-origin: 0 0`, set inline in `Canvas.tsx`
+   from `viewport()` — `translate(x, y) scale(scale)`, matching
+   `nav/viewport.ts`'s `client = scene * scale + (x, y)` mapping exactly).
+   `.canvas__scene` (the SVG layer + every absolutely-positioned DOM overlay
+   layer below it) is its only child, so both layers are descendants of one
+   transformed element and cannot diverge — there is no second transform
+   applied anywhere else (not on `.canvas__svg`'s `viewBox`, not per-layer).
+   Deliberately no `will-change: transform` / `transform: translateZ(0)`
+   here: either would promote this to its own GPU layer, rasterized once at
+   one scale — precisely how scaled DOM text goes blurry. Deliberately no
+   `transition` either: it would fight per-frame wheel/drag updates. */
+.canvas__pan {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
 .canvas__scene {
   position: relative;
+  cursor: grab;
+}
+
+/* FE-CANVAS ticket Solution direction §4: `grab`/`grabbing` on the
+   background; `.node-card`'s own `cursor: pointer` (below) is a more
+   specific selector and is unaffected. */
+.canvas__scene.is-panning {
+  cursor: grabbing;
 }
 
 .canvas__svg {
