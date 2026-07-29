@@ -1,4 +1,5 @@
-import type { Dir, Frontier, Port, Ref } from '../api/types';
+import type { Dir, EdgeRole, Frontier, Port, Ref } from '../api/types';
+import type { TooltipRow } from '../nav/tooltip';
 import type { FlowEdgeState } from '../sync/flowStore';
 
 /** Pulse count/speed step by band, not by raw rate (M3-FE ticket Implement
@@ -106,22 +107,53 @@ export function formatRoute(from: RouteEndpoint, to: RouteEndpoint, nameOf: (ref
   return `${label(from)} → ${label(to)}`;
 }
 
-/** M3-FE ticket Implement §3: "Edge hover tooltip (only when toggle on):
- *  route, last wave (source · counter), hop, rate." The fused case's exact
- *  wording ("fused — no observable messages") is the ticket's own Implement
- *  §2 text, quoted verbatim rather than reworded. `overlay` is `undefined`
+/** FE-TOOLTIPS ticket Solution direction §4 "Edge": the route + role rows,
+ *  always present regardless of the Flow toggle — "structural facts, true
+ *  whether or not anyone is watching rates" (ticket Problem #2). Split out
+ *  from {@link edgeFlowRows} (rather than one function that takes an
+ *  `enabled` flag) because "when the toggle is off ... the flow rows are
+ *  simply absent" (Solution direction §4) means the *caller* decides whether
+ *  to concatenate the flow rows at all, not this module — mirrors
+ *  `deriveEdgeFlowOverlays`'s own `enabled` gating being a call-site concern
+ *  in `Canvas.tsx`, not baked into a single do-everything function. */
+export function edgeRouteRoleRows(route: string, role: EdgeRole): TooltipRow[] {
+  return [
+    { label: 'route', value: route },
+    { label: 'role', value: role },
+  ];
+}
+
+/** FE-TOOLTIPS ticket Solution direction §4 "Edge": the flow-derived rows —
+ *  last wave / hop / rate for an active edge, the fused explanation, or the
+ *  quiet explanation — replacing the M3-FE `flowTooltip` string's
+ *  flattening (deleted by this ticket; see its own test's replacement below)
+ *  with labelled rows a `Tooltip.tsx` row primitive can render directly.
+ *  Wording ("fused — no observable messages", "no observed traffic") is
+ *  M3-FE's own Implement §2/§3 text, kept verbatim. `overlay` is `undefined`
  *  for an edge the Flow toggle has nothing active to report for (never
- *  observed, or decayed to zero) — the tooltip still names the route so
- *  hovering any edge while the toggle is on is informative, not just the
- *  ones currently pulsing. */
-export function flowTooltip(route: string, overlay: EdgeFlowOverlay | undefined): string {
-  if (overlay?.kind === 'fused') return `${route} — fused — no observable messages`;
+ *  observed, or decayed to zero) — the quiet row still shows so hovering any
+ *  edge while the toggle is on is informative, not just the pulsing ones. */
+export function edgeFlowRows(overlay: EdgeFlowOverlay | undefined): TooltipRow[] {
+  if (overlay?.kind === 'fused') return [{ label: 'flow', value: 'fused — no observable messages' }];
   if (overlay?.kind === 'active') {
     const wave = overlay.lastWave ? `${overlay.lastWave.source.slice(0, 8)}·${overlay.lastWave.counter}` : '—';
-    const hop = overlay.hop ?? '—';
-    return `${route} — wave ${wave} · hop ${hop} · ${overlay.rate.toFixed(1)}/s`;
+    return [
+      { label: 'last wave', value: wave },
+      { label: 'hop', value: String(overlay.hop ?? '—') },
+      { label: 'rate', value: `${overlay.rate.toFixed(1)}/s` },
+    ];
   }
-  return `${route} — no observed traffic`;
+  return [{ label: 'flow', value: 'no observed traffic' }];
+}
+
+/** The full edge tooltip — route + role + flow, all in one call — for a
+ *  caller that always wants every row (e.g. a future non-toggle-gated
+ *  consumer, or a test exercising the whole shape at once). `Canvas.tsx`
+ *  itself calls {@link edgeRouteRoleRows} and {@link edgeFlowRows}
+ *  separately so it can omit the latter while the Flow toggle is off — see
+ *  the doc comment on {@link edgeRouteRoleRows}. */
+export function flowTooltipRows(route: string, role: EdgeRole, overlay: EdgeFlowOverlay | undefined): TooltipRow[] {
+  return [...edgeRouteRoleRows(route, role), ...edgeFlowRows(overlay)];
 }
 
 // --- Flow subsection: per-port rate table (10-target-v3.md detail

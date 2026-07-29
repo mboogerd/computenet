@@ -1,0 +1,78 @@
+/* FE-TOOLTIPS ticket Solution direction §2: `position: fixed` in client
+   space — mounted outside `.canvas__pan` (app.tsx), so this never sits
+   under FE-CANVAS's `translate(x, y) scale(s)` transform and never needs a
+   counter-scale. `z-index` well above `ZoomControls` (2) and `ActivityLog`
+   (30) — the highest fixed-position layer in the app. `pointer-events: none`
+   throughout: a tooltip is never interactive (ticket Solution direction §2:
+   "no links, no buttons, nothing focusable inside it"). */
+.tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 22rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+  /* No `transition` on `left`/`top` — a cursor-follow edge tooltip repositions
+     every animation frame, and a transition there would make it visibly lag
+     the pointer. Only the one-time appear animation below moves anything. */
+}
+
+/* Ticket Solution direction §2: "a short fade/offset-in only when
+   `prefersReducedMotion()` is false ... otherwise it appears instantly."
+   `Tooltip.tsx` only ever applies this class on the element's *first*
+   render for a hover/focus session — see its own doc comment on the
+   `<Show>` accessor-child pattern — so it plays once per session, never
+   replayed by a same-session retarget. */
+.tooltip--animated {
+  animation: tooltip-in 120ms ease-out;
+}
+
+/* Belt-and-suspenders: `styles/tokens.css`'s global
+   `@media (prefers-reduced-motion: reduce) { * { animation: none !important } }`
+   already overrides this — this component never applies `.tooltip--animated`
+   at all when `prefersReducedMotion()` is true (`Tooltip.tsx`'s `classList`) —
+   but an OS toggle flipped mid-session updates that class reactively, so this
+   rule stays as the belt to that JS-driven suspender. */
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.tooltip__title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.3rem;
+  word-break: break-word;
+}
+
+.tooltip__rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.6rem;
+  row-gap: 0.15rem;
+  margin: 0;
+}
+
+.tooltip__label {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.tooltip__value {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  word-break: break-word;
+}

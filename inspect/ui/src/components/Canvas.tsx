@@ -19,6 +19,16 @@ import { currentGraphId } from '../solid/route';
 import { edges, nodes, selection, setSelection, store, structuralVersion } from '../solid/state';
 import { showErrors, showFlow, showHosts, showNet, showState } from '../solid/toggles';
 import {
+  activeKey,
+  cursorAnchorRect,
+  dismissTooltip,
+  elementAnchor,
+  hideTooltip,
+  reportCursorPosition,
+  showTooltip,
+  TOOLTIP_ID,
+} from '../solid/tooltip';
+import {
   ensureFirstFit,
   enterGraphViewport,
   fitToScreen,
@@ -33,13 +43,15 @@ import { colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { cellErrorBadges, deriveEdgeParkedCounts } from '../util/errors';
 import {
   deriveEdgeFlowOverlays,
+  edgeFlowRows,
+  edgeRouteRoleRows,
   flowLabelText,
-  flowTooltip,
   formatRoute,
   pulseDurationMsFor,
   pulsesToRender,
   type EdgeFlowOverlay,
 } from '../util/flow';
+import { REMOTE_HOST_LABEL } from '../util/placement';
 import ZoomControls from './ZoomControls';
 import './Canvas.css';
 
@@ -303,17 +315,38 @@ export default function Canvas() {
   });
 
   // Drag-to-pan (Solution direction §4): `pointerdown` on the scene
-  // background only — the exact same `e.currentTarget === e.target` test
-  // `onSceneClick` already used pre-ticket, so a pointerdown that bubbled up
-  // from a card never starts a pan. `setPointerCapture` means a drag that
+  // background, or on `.edge-hit` — the exact same `e.currentTarget ===
+  // e.target` test `onSceneClick` already used pre-ticket, plus an explicit
+  // allowance for the hit-line, so a pointerdown that bubbled up from a
+  // *card* still never starts a pan. `setPointerCapture` means a drag that
   // leaves the browser window still ends cleanly on `pointerup`/
   // `pointercancel`. `dragMoved` (not reset until the following `click`) is
   // how `onSceneClick` tells a real drag apart from a below-threshold click.
+  //
+  // FE-TOOLTIPS ticket Solution direction §4: `.edge-hit` is now always
+  // rendered (not just while the Flow toggle is on), so a pointerdown that
+  // lands on one is no longer rare. The ticket asks for a pan that neither
+  // starts nor is suppressed by that pointerdown — before this ticket, an
+  // edge-hit pointerdown fell into the same bucket as a card's (bubbled,
+  // `e.target !== e.currentTarget`, so `dragStart` was never set), which
+  // would have *suppressed* every drag gesture that happened to begin on
+  // one of these visually-invisible 12px-wide stroke targets. The explicit
+  // `isEdgeHit` check below is the fix: a pointerdown on the hit-line still
+  // starts a pan if the pointer then moves past the threshold, and still
+  // does nothing (no select, no deselect — `onSceneClick` below) if it
+  // doesn't. `setPointerCapture` on the scene element means the hit-line's
+  // own `pointermove` (the edge tooltip's cursor-follow — `EdgeLine` below)
+  // stops receiving events for the rest of that gesture once a real drag
+  // starts, which is fine: any actual pan moves the viewport, and
+  // `solid/tooltip.ts`'s `initTooltipDismissal` already dismisses the
+  // tooltip on every viewport change.
   let dragStart: { x: number; y: number } | null = null;
   let dragMoved = false;
 
   function onScenePointerDown(e: PointerEvent): void {
-    if (e.currentTarget !== e.target) return;
+    const isBackground = e.currentTarget === e.target;
+    const isEdgeHit = e.target instanceof Element && e.target.classList.contains('edge-hit');
+    if (!isBackground && !isEdgeHit) return;
     if (e.button !== 0) return;
     dragStart = { x: e.clientX, y: e.clientY };
     dragMoved = false;
@@ -435,8 +468,6 @@ export default function Canvas() {
                   const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
                   const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
                   const overlay = () => flowOverlays().get(id);
-                  const tooltip = () =>
-                    showFlow() && e() ? flowTooltip(formatRoute(e()!.from, e()!.to, nameOf), overlay()) : undefined;
                   // V2-FE ticket Implement §12(b): the same ghosting as a
                   // suspended node card, applied to any edge with a suspended
                   // endpoint — either side, not just the one the edge points at.
@@ -448,6 +479,7 @@ export default function Canvas() {
                   return (
                     <Show when={e() && from() && to()}>
                       <EdgeLine
+                        edgeId={id}
                         role={e()!.role}
                         fused={e()!.fused === true}
                         x1={from()!.x}
@@ -455,8 +487,9 @@ export default function Canvas() {
                         x2={to()!.x}
                         y2={to()!.y}
                         flow={overlay()}
+                        flowEnabled={showFlow()}
+                        route={formatRoute(e()!.from, e()!.to, nameOf)}
                         reducedMotion={prefersReducedMotion()}
-                        tooltip={tooltip()}
                         dimmed={dimmed()}
                       />
                     </Show>
@@ -473,13 +506,30 @@ export default function Canvas() {
                     <For each={rec()?.ports ?? []}>
                       {(p) => {
                         const a = () => anchors()?.get(p.name);
+                        // FE-TOOLTIPS ticket Context table site "port dot":
+                        // native `<title>` replaced by the shared tooltip
+                        // layer. A port dot is never focusable (an SVG
+                        // `<circle>` cannot take a `tabindex`), so — like the
+                        // edge hit-line below — its tooltip is hover-only.
+                        let dotEl: SVGCircleElement | undefined;
                         return (
                           <Show when={a()}>
-                            <circle class="port-dot" data-dir={p.dir} cx={a()!.x} cy={a()!.y} r="3">
-                              <title>
-                                {p.name} ({p.dir})
-                              </title>
-                            </circle>
+                            <circle
+                              class="port-dot"
+                              data-dir={p.dir}
+                              cx={a()!.x}
+                              cy={a()!.y}
+                              r="3"
+                              ref={dotEl}
+                              onPointerEnter={() =>
+                                showTooltip({
+                                  key: `port:${ref}:${p.name}`,
+                                  content: { rows: [{ label: 'port', value: `${p.name} (${p.dir})` }] },
+                                  anchor: () => elementAnchor(dotEl!),
+                                })
+                              }
+                              onPointerLeave={() => hideTooltip()}
+                            />
                           </Show>
                         );
                       }}
@@ -493,10 +543,38 @@ export default function Canvas() {
               {(ref) => {
                 const rec = () => nodes[ref];
                 const ln = () => layout().nodes.get(ref);
+                // FE-TOOLTIPS ticket Context table sites "color chip",
+                // "type row" and "manifest badge" — plus the placement/
+                // lifecycle facts no single one of those titles ever
+                // carried — consolidated into ONE tooltip for the whole
+                // card (Solution direction §4 "Node card"), shown on
+                // hover/focus of the card itself rather than three
+                // separately-hoverable sub-elements. `host: null` (a
+                // peer-announced cell no local `LocationRegistry` ever
+                // located) reads as `REMOTE_HOST_LABEL`, never a bare dash
+                // (`util/placement.ts`).
+                const cardKey = `card:${ref}`;
+                const cardTooltip = () => {
+                  const r = rec()!;
+                  return {
+                    title: r.name ?? ref.slice(0, 8),
+                    rows: [
+                      { label: 'type', value: r.typeFqn },
+                      { label: 'color', value: r.color ?? 'color unknown' },
+                      { label: 'manifests', value: r.manifests.length ? r.manifests.join(', ') : 'none' },
+                      { label: 'lifecycle', value: r.lifecycle },
+                      { label: 'generation', value: String(r.generation) },
+                      { label: 'host', value: r.host ?? REMOTE_HOST_LABEL },
+                      { label: 'net', value: r.net ?? '—' },
+                    ],
+                  };
+                };
+                let cardEl: HTMLDivElement | undefined;
                 return (
                   <Show when={rec() && ln()}>
                     <div
                       class="node-card"
+                      ref={cardEl}
                       classList={{
                         'is-selected': selection() === ref,
                         'is-suspended': rec()!.lifecycle === 'SUSPENDED',
@@ -511,18 +589,37 @@ export default function Canvas() {
                       role="button"
                       tabIndex={0}
                       aria-pressed={selection() === ref}
+                      // FE-TOOLTIPS ticket Solution direction §3: the node
+                      // card is the one focusable anchor among the eight
+                      // tooltip sites this ticket wires up, so it is the
+                      // only one that sets `aria-describedby` — the SVG
+                      // edge hit-line below is explicitly NOT focusable
+                      // (an SVG `<line>` cannot take a `tabindex` without
+                      // `focusable="true"` plus a `role`, which would also
+                      // require its own keyboard activation semantics this
+                      // ticket does not add); its tooltip stays hover-only.
+                      aria-describedby={activeKey() === cardKey ? TOOLTIP_ID : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         setSelection(ref);
                       }}
                       onKeyDown={(e) => onCardKeyDown(e, ref)}
+                      onPointerEnter={() =>
+                        showTooltip({ key: cardKey, content: cardTooltip(), anchor: () => elementAnchor(cardEl!) })
+                      }
+                      onPointerLeave={() => hideTooltip()}
+                      onFocusIn={() =>
+                        showTooltip({
+                          key: cardKey,
+                          content: cardTooltip(),
+                          anchor: () => elementAnchor(cardEl!),
+                          immediate: true,
+                        })
+                      }
+                      onBlur={() => dismissTooltip()}
                     >
                       <div class="node-card__top">
-                        <span
-                          class="node-card__chip"
-                          data-color={rec()!.color ?? 'unknown'}
-                          title={rec()!.color ?? 'color unknown'}
-                        >
+                        <span class="node-card__chip" data-color={rec()!.color ?? 'unknown'}>
                           {colorGlyph(rec()!.color)}
                         </span>
                         <span class="node-card__name">{rec()!.name ?? ref.slice(0, 8)}</span>
@@ -566,18 +663,10 @@ export default function Canvas() {
                           📌
                         </button>
                       </div>
-                      <div class="node-card__type" title={rec()!.typeFqn}>
-                        {shortType(rec()!.typeFqn)}
-                      </div>
+                      <div class="node-card__type">{shortType(rec()!.typeFqn)}</div>
                       <Show when={rec()!.manifests.length}>
                         <div class="node-card__badges">
-                          <For each={rec()!.manifests}>
-                            {(m) => (
-                              <span class="node-card__badge" title={m}>
-                                {manifestBadge(m)}
-                              </span>
-                            )}
-                          </For>
+                          <For each={rec()!.manifests}>{(m) => <span class="node-card__badge">{manifestBadge(m)}</span>}</For>
                         </div>
                       </Show>
                     </div>
@@ -604,6 +693,26 @@ export default function Canvas() {
                 const ln = () => layout().nodes.get(ref);
                 const summary = () => stateSummaries[ref];
                 const isSnapshotOnly = () => observed().has(ref) && snapshotOnly().has(ref);
+                // FE-TOOLTIPS ticket Context table site "state chip": the
+                // cryptic `cardinality · frontier · staleness` legend
+                // becomes labelled rows over the real values (Solution
+                // direction §4 "Overlay chips").
+                let chipEl: HTMLDivElement | undefined;
+                const chipTooltip = () =>
+                  isSnapshotOnly()
+                    ? { rows: [{ label: 'mode', value: 'pinned · snapshot only' }, { label: 'note', value: 'no live fold to observe' }] }
+                    : {
+                        rows: [
+                          { label: 'cardinality', value: summary()!.cardinality ?? '—' },
+                          {
+                            label: 'frontier',
+                            value: summary()!.frontier
+                              ? `${summary()!.frontier!.source.slice(0, 6)}·${summary()!.frontier!.counter}`
+                              : '—',
+                          },
+                          { label: 'staleness', value: `${summary()!.staleMs}ms` },
+                        ],
+                      };
                 return (
                   <Show when={showState() && ln() && (summary() || isSnapshotOnly())}>
                     <div
@@ -611,7 +720,11 @@ export default function Canvas() {
                       classList={{ 'node-state-chip--snapshot': isSnapshotOnly() }}
                       data-mode={isSnapshotOnly() ? 'snapshot' : 'live'}
                       style={{ left: `${ln()!.x}px`, top: `${ln()!.y + ln()!.h + 4}px`, width: `${ln()!.w}px` }}
-                      title={isSnapshotOnly() ? 'pinned · snapshot only (no live fold to observe)' : 'cardinality · frontier · staleness'}
+                      ref={chipEl}
+                      onPointerEnter={() =>
+                        showTooltip({ key: `state:${ref}`, content: chipTooltip(), anchor: () => elementAnchor(chipEl!) })
+                      }
+                      onPointerLeave={() => hideTooltip()}
                     >
                       <Show when={!isSnapshotOnly()} fallback="pinned · snapshot only">
                         {summary()!.cardinality ?? '—'} ·{' '}
@@ -634,12 +747,29 @@ export default function Canvas() {
               {(ref) => {
                 const ln = () => layout().nodes.get(ref);
                 const count = () => cellBadges().get(ref);
+                // FE-TOOLTIPS ticket Context table site "error badge": the
+                // combined count becomes its dead-letter/restart split
+                // (Solution direction §4 "Overlay chips"), read live from
+                // `errorStore` at hover time rather than carried in the
+                // (combined-only) `cellBadges()` memo.
+                let badgeEl: HTMLDivElement | undefined;
+                const badgeTooltip = () => ({
+                  title: `${count()} error${count() === 1 ? '' : 's'}`,
+                  rows: [
+                    { label: 'dead letters', value: String(errorStore.deadLettersFor(ref).length) },
+                    { label: 'restarts', value: String(errorStore.restartsFor(ref).length) },
+                  ],
+                });
                 return (
                   <Show when={ln() && count()}>
                     <div
                       class="node-error-badge"
                       style={{ left: `${ln()!.x + ln()!.w}px`, top: `${ln()!.y}px` }}
-                      title={`${count()} error${count() === 1 ? '' : 's'} (dead letters + restarts)`}
+                      ref={badgeEl}
+                      onPointerEnter={() =>
+                        showTooltip({ key: `error:${ref}`, content: badgeTooltip(), anchor: () => elementAnchor(badgeEl!) })
+                      }
+                      onPointerLeave={() => hideTooltip()}
                     >
                       {count()}
                     </div>
@@ -658,6 +788,16 @@ export default function Canvas() {
                 const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
                 const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
                 const count = () => edgeParked().get(id);
+                // FE-TOOLTIPS ticket Context table site "parked pill": names
+                // the port and count (Solution direction §4 "Overlay
+                // chips") rather than the flattened "N parked" string.
+                let pillEl: HTMLDivElement | undefined;
+                const pillTooltip = () => ({
+                  rows: [
+                    { label: 'port', value: e()!.to.port },
+                    { label: 'count', value: String(count()) },
+                  ],
+                });
                 return (
                   <Show when={e() && from() && to() && count()}>
                     <div
@@ -666,7 +806,11 @@ export default function Canvas() {
                         left: `${(from()!.x + to()!.x) / 2}px`,
                         top: `${(from()!.y + to()!.y) / 2}px`,
                       }}
-                      title={`${count()} parked`}
+                      ref={pillEl}
+                      onPointerEnter={() =>
+                        showTooltip({ key: `parked:${id}`, content: pillTooltip(), anchor: () => elementAnchor(pillEl!) })
+                      }
+                      onPointerLeave={() => hideTooltip()}
                     >
                       ▮ {count()} parked
                     </div>
@@ -715,6 +859,7 @@ export default function Canvas() {
 }
 
 function EdgeLine(props: {
+  edgeId: string;
   role: EdgeRole;
   fused: boolean;
   x1: number;
@@ -724,11 +869,16 @@ function EdgeLine(props: {
   /** Flow toggle overlay for this edge — `undefined` when the toggle is off
    *  or this edge has nothing to show (10-target-v3.md Flow toggle). */
   flow?: EdgeFlowOverlay;
+  /** Whether the Flow toggle is on — gates the tooltip's flow-derived rows
+   *  (FE-TOOLTIPS ticket Solution direction §4: "when the toggle is off ...
+   *  the flow rows are simply absent"), independently of `.edge-hit` itself,
+   *  which now renders unconditionally (see below). */
+  flowEnabled: boolean;
+  /** `producer.port → consumer.port` (`util/flow.ts`'s `formatRoute`) — a
+   *  structural fact, true regardless of the Flow toggle (ticket Problem
+   *  #2), so it is always part of the tooltip. */
+  route: string;
   reducedMotion: boolean;
-  /** Hover tooltip text (M3-FE ticket Implement §3) — `undefined` renders no
-   *  hit-line at all, so the base `pointer-events: none` click-through
-   *  behavior (`.canvas__svg`) is unaffected while the toggle is off. */
-  tooltip?: string;
   /** V2-FE ticket Implement §12(b): true when either endpoint is a
    *  suspended cell — reuses `.node-card.is-suspended`'s own
    *  `--ghost-opacity` token so an edge and the suspended card(s) it touches
@@ -791,17 +941,45 @@ function EdgeLine(props: {
         </g>
       </Show>
 
-      {/* Flow toggle: a wide, invisible hit-line carrying the hover tooltip
-          (M3-FE ticket Implement §3). The visible line(s) above stay under
-          `.canvas__svg`'s blanket `pointer-events: none`, preserving normal
-          click-through-to-deselect; `.edge-hit` (Canvas.css) is the one
-          element that opts back into pointer events, and only exists while
-          `tooltip` is set (i.e. the Flow toggle is on). */}
-      <Show when={props.tooltip}>
-        <line class="edge-hit" x1={props.x1} y1={props.y1} x2={props.x2} y2={props.y2}>
-          <title>{props.tooltip}</title>
-        </line>
-      </Show>
+      {/* FE-TOOLTIPS ticket Solution direction §4: a wide, invisible hit-line
+          carrying the hover tooltip, now rendered UNCONDITIONALLY — route
+          and role are structural facts "true whether or not anyone is
+          watching rates" (ticket Problem #2), so an edge is hoverable with
+          the Flow toggle off too; the flow-derived rows are simply omitted
+          then (`props.flowEnabled` below), not the whole hit-line. The
+          visible line(s) above stay under `.canvas__svg`'s blanket
+          `pointer-events: none`, preserving normal click-through-to-
+          deselect; `.edge-hit` (Canvas.css) is the one element that opts
+          back into pointer events.
+
+          Anchored to the CURSOR, not this line's own bounding box (Solution
+          direction §3): a long diagonal edge has no useful bounding-box
+          anchor. `reportCursorPosition` coalesces to one update per
+          animation frame; `onPointerEnter` seeds the position immediately
+          so the first frame is not anchored at `(0, 0)`.
+
+          Accessibility limitation, stated plainly (ticket Solution
+          direction §3): an SVG `<line>` cannot become a keyboard focus
+          stop without also inventing bespoke `tabindex`/`role`/keydown
+          semantics this ticket does not add, so this tooltip is
+          **hover-only** — there is no way to reach it, or the route/role
+          facts it carries, from the keyboard. */}
+      <line
+        class="edge-hit"
+        x1={props.x1}
+        y1={props.y1}
+        x2={props.x2}
+        y2={props.y2}
+        onPointerEnter={(ev) => {
+          reportCursorPosition(ev.clientX, ev.clientY);
+          const rows = props.flowEnabled
+            ? [...edgeRouteRoleRows(props.route, props.role), ...edgeFlowRows(props.flow)]
+            : edgeRouteRoleRows(props.route, props.role);
+          showTooltip({ key: `edge:${props.edgeId}`, content: { rows }, anchor: cursorAnchorRect, prefer: 'right' });
+        }}
+        onPointerMove={(ev) => reportCursorPosition(ev.clientX, ev.clientY)}
+        onPointerLeave={() => hideTooltip()}
+      />
 
       {/* Flow toggle: pulses travelling source -> target, count/speed
           stepped by rate band, never per-message (10-target-v3.md Flow

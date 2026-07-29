@@ -23,3 +23,10 @@ export const REMOTE_NOTICE = 'remote — state/flow/errors not available in this
 export function isRemotePlacement(node: Pick<Node, 'host'> | CellDetail | null | undefined): boolean {
   return !!node && node.host === null;
 }
+
+/** FE-TOOLTIPS ticket Solution direction §4 "Node card": the node-card
+ *  tooltip's host row for a peer-hosted cell. `host: null` is the server's
+ *  own statement that no `LocationRegistry` on this JVM ever located the
+ *  cell (see {@link isRemotePlacement}) — a known placement, not a missing
+ *  value, so the tooltip must never render a bare dash for it. */
+export const REMOTE_HOST_LABEL = 'not reported (remote)';

@@ -7,12 +7,14 @@ import Header from './components/Header';
 import Legend from './components/Legend';
 import Navigator from './components/Navigator';
 import ToggleBar from './components/ToggleBar';
+import Tooltip from './components/Tooltip';
 import { currentGraphCold } from './solid/cold';
 import { initDetail } from './solid/detail';
 import { fetchGraphs } from './solid/graphs';
 import { currentGraphGone, goHome, initRoute, screen } from './solid/route';
 import { connect } from './solid/state';
 import { initTheme } from './solid/theme';
+import { initTooltipDismissal } from './solid/tooltip';
 import './app.css';
 
 /** 10-target-v3.md "Navigator (home screen, M4)": two screens, Home and
@@ -27,6 +29,7 @@ export default function App() {
     initRoute();
     connect();
     fetchGraphs();
+    initTooltipDismissal();
   });
 
   return (
@@ -57,6 +60,11 @@ export default function App() {
             own flex children, collapsed or not). */}
         <ActivityLog />
       </Show>
+      {/* FE-TOOLTIPS ticket Solution direction §2: mounted once, near the app
+          root — a sibling of `.canvas`, never a descendant of `.canvas__pan`
+          — so FE-CANVAS's `translate(x, y) scale(s)` transform never applies
+          to it. `position: fixed` (Tooltip.css) does the rest. */}
+      <Tooltip />
     </div>
   );
 }

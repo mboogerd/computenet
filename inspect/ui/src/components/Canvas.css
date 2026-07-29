@@ -76,6 +76,15 @@
   fill: var(--text-muted);
   stroke: var(--surface);
   stroke-width: 1;
+  /* FE-TOOLTIPS ticket: `.canvas__svg`'s blanket `pointer-events: none`
+     covers this circle too (it predates this ticket's own `.edge-hit`
+     opt-in comment below) — without opting back in here, `Canvas.tsx`'s
+     `onPointerEnter`/`onPointerLeave` on this element, and the pre-ticket
+     native `<title>` it replaced, are equally unreachable on hover. `auto`
+     hit-tests against the circle's own fill, which is exactly what a small
+     filled dot needs (no separate invisible hit-area the way the edge
+     line's `stroke`-only hit-test does). */
+  pointer-events: auto;
 }
 
 /* Solid, per 10-target-v3.md's toggle table ("Process hosts — Solid hulls").
@@ -141,7 +150,14 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  pointer-events: none;
+  /* FE-TOOLTIPS ticket: was `pointer-events: none` pre-ticket (a plain
+     decorative label, native `title=` never actually reachable on hover
+     either — hovering here hit `.canvas__scene` beneath it, not this
+     element). `Canvas.tsx` now wires `onPointerEnter`/`onPointerLeave` here,
+     so this chip must opt back into pointer events to receive them, same
+     reasoning as `.edge-hit` opting back in under `.canvas__svg`'s blanket
+     `none`. */
+  pointer-events: auto;
 }
 
 /* V1B-FE ticket Solution direction §4: the "pinned, snapshot only" variant —
@@ -333,7 +349,11 @@
   align-items: center;
   justify-content: center;
   line-height: 1;
-  pointer-events: none;
+  /* FE-TOOLTIPS ticket: see `.node-state-chip`'s own comment above — this
+     was `pointer-events: none` pre-ticket, which silently made the old
+     native `title=` unreachable on hover too; `Canvas.tsx`'s
+     `onPointerEnter`/`onPointerLeave` need this opted back in. */
+  pointer-events: auto;
   box-shadow: 0 0 0 2px var(--surface);
 }
 
@@ -349,7 +369,11 @@
   background: var(--parked);
   color: #1a1300;
   white-space: nowrap;
-  pointer-events: none;
+  /* FE-TOOLTIPS ticket: see `.node-state-chip`'s own comment above — this
+     was `pointer-events: none` pre-ticket, which silently made the old
+     native `title=` unreachable on hover too; `Canvas.tsx`'s
+     `onPointerEnter`/`onPointerLeave` need this opted back in. */
+  pointer-events: auto;
 }
 
 /* Flow toggle (M3-FE): an active (non-fused) edge tints its line amber; the
@@ -385,11 +409,16 @@
   stroke-width: 3;
 }
 
-/* Flow toggle: the wide invisible hit-line carrying the hover tooltip
-   (M3-FE ticket Implement §3). `pointer-events: stroke` needs an actual
-   (even fully transparent) stroke to hit-test against; `.canvas__svg`'s
+/* The wide invisible hit-line carrying the hover tooltip. Originally
+   M3-FE-only (rendered while the Flow toggle was on); FE-TOOLTIPS ticket
+   Solution direction §4 makes it unconditional — route/role are structural
+   facts, hoverable regardless of the toggle — so this rule now always
+   applies, not just while Flow is on. `pointer-events: stroke` needs an
+   actual (even fully transparent) stroke to hit-test against; `.canvas__svg`'s
    blanket `pointer-events: none` is inherited by every other edge/port
-   element, but this one explicitly opts back in. */
+   element, but this one explicitly opts back in. A pointerdown on this line
+   is also explicitly allowed to start a drag-pan (`Canvas.tsx`'s
+   `onScenePointerDown`) — see its own comment for why. */
 .edge-hit {
   stroke: transparent;
   stroke-width: 12;

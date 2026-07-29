@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { FlowEdgeState } from '../src/sync/flowStore';
 import {
   deriveEdgeFlowOverlays,
+  edgeFlowRows,
+  edgeRouteRoleRows,
   flowLabelText,
-  flowTooltip,
+  flowTooltipRows,
   formatRoute,
   portFlowRows,
   pulseCountFor,
@@ -115,7 +117,7 @@ describe('flowLabelText', () => {
   });
 });
 
-describe('formatRoute + flowTooltip', () => {
+describe('formatRoute', () => {
   const nameOf = (ref: string) => (ref === 'a:0' ? 'candSkills' : null);
 
   it('formats a route using cell names where known, else a shortened ref', () => {
@@ -123,12 +125,37 @@ describe('formatRoute + flowTooltip', () => {
       'candSkills.outlet → b:0.inlet',
     );
   });
+});
 
-  it('uses the ticket\'s exact fused wording', () => {
-    expect(flowTooltip('X.out → Y.in', { kind: 'fused' })).toBe('X.out → Y.in — fused — no observable messages');
+// FE-TOOLTIPS ticket: `flowTooltip` (the flattened string form) is deleted —
+// its native-`title=` ceiling ("a single unstyled string ... no line
+// structure") is exactly Problem #1 this ticket exists to fix — and its
+// tests below (the `formatRoute + flowTooltip` describe block, previously
+// here) are replaced by the structured-rows tests below, covering the same
+// wording (fused / active / quiet) plus the route+role split `Canvas.tsx`
+// uses to keep flow rows conditional on the Flow toggle.
+describe('edgeRouteRoleRows', () => {
+  it('always includes route and role, regardless of any flow state', () => {
+    expect(edgeRouteRoleRows('X.out → Y.in', 'CONSUME')).toEqual([
+      { label: 'route', value: 'X.out → Y.in' },
+      { label: 'role', value: 'CONSUME' },
+    ]);
   });
 
-  it('includes wave, hop, and rate for an active overlay', () => {
+  it('reports the OBSERVE role verbatim', () => {
+    expect(edgeRouteRoleRows('X.out → Y.in', 'OBSERVE')).toEqual([
+      { label: 'route', value: 'X.out → Y.in' },
+      { label: 'role', value: 'OBSERVE' },
+    ]);
+  });
+});
+
+describe('edgeFlowRows', () => {
+  it('uses the ticket\'s exact fused wording', () => {
+    expect(edgeFlowRows({ kind: 'fused' })).toEqual([{ label: 'flow', value: 'fused — no observable messages' }]);
+  });
+
+  it('includes last wave, hop, and rate for an active overlay', () => {
     const overlay: EdgeFlowOverlay = {
       kind: 'active',
       rate: 12.5,
@@ -136,16 +163,37 @@ describe('formatRoute + flowTooltip', () => {
       lastWave: { source: '9c41a2f0', counter: 288 },
       hop: 1,
     };
-    expect(flowTooltip('X.out → Y.in', overlay)).toBe('X.out → Y.in — wave 9c41a2f0·288 · hop 1 · 12.5/s');
+    expect(edgeFlowRows(overlay)).toEqual([
+      { label: 'last wave', value: '9c41a2f0·288' },
+      { label: 'hop', value: '1' },
+      { label: 'rate', value: '12.5/s' },
+    ]);
   });
 
   it('falls back to placeholders for an active overlay with no wave/hop yet', () => {
     const overlay: EdgeFlowOverlay = { kind: 'active', rate: 3, band: 1, lastWave: null, hop: null };
-    expect(flowTooltip('X.out → Y.in', overlay)).toBe('X.out → Y.in — wave — · hop — · 3.0/s');
+    expect(edgeFlowRows(overlay)).toEqual([
+      { label: 'last wave', value: '—' },
+      { label: 'hop', value: '—' },
+      { label: 'rate', value: '3.0/s' },
+    ]);
   });
 
   it('reports "no observed traffic" for an edge with no overlay at all', () => {
-    expect(flowTooltip('X.out → Y.in', undefined)).toBe('X.out → Y.in — no observed traffic');
+    expect(edgeFlowRows(undefined)).toEqual([{ label: 'flow', value: 'no observed traffic' }]);
+  });
+});
+
+describe('flowTooltipRows', () => {
+  it('concatenates route+role with the flow rows', () => {
+    const overlay: EdgeFlowOverlay = { kind: 'active', rate: 3, band: 1, lastWave: null, hop: null };
+    expect(flowTooltipRows('X.out → Y.in', 'CONSUME', overlay)).toEqual([
+      { label: 'route', value: 'X.out → Y.in' },
+      { label: 'role', value: 'CONSUME' },
+      { label: 'last wave', value: '—' },
+      { label: 'hop', value: '—' },
+      { label: 'rate', value: '3.0/s' },
+    ]);
   });
 });
 
