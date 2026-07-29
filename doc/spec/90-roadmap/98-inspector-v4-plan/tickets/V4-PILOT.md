@@ -137,7 +137,7 @@ ever crossed a real socket in this repository.**
   and `:128`.
 - **Named, reconnect-stable peer labels.** Wave 9's `V4-PEERID` threads `PeerId`
   to the registry, so the peer-hull label no longer flips on reconnect
-  (`90-progress-log.md:1138-1141` is the problem it solves; `Peers.kt:57-83`
+  (`90-progress-log.md:1151-1154` is the problem it solves; `Peers.kt:57-83`
   is the label derivation, whose `peer-` prefix is `Peers.PREFIX` at `:67`).
   Build on it: your reconnect assertions may name the peer label, and your
   findings should say whether it held across the disconnect. If wave 9's shape
@@ -527,7 +527,7 @@ does, that is a report line, not a silent edit.
 
 - `doc/spec/90-roadmap/98-inspector-v4-plan/10-design-notes.md` §"Binding
   constraints" (all ten) and §"Standing file split".
-- `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md:1114-1141` — the
+- `doc/spec/90-roadmap/97-inspector-plan/90-progress-log.md:1114-1154` — the
   open items this ticket feeds, including the peer-identity item `V4-PEERID`
   closed in wave 9; and `:889-893` — M4-EVAL's original component-identity line.
 - `doc/spec/40-distribution/42-replication.md` — in full, but at minimum

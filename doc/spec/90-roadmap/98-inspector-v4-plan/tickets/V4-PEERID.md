@@ -51,7 +51,7 @@ claim (`LocationRegistry.kt`, `wire/Peering.kt`) is disjoint from `V2-KERNEL`'s
 
 ### The open item you are closing
 
-`90-progress-log.md:1137-1141`, verbatim:
+`90-progress-log.md:1150-1154`, verbatim:
 
 > **Peer identity across reconnects**: `PeerId` reaches only the transport
 > ingress; a reconnect relabels the peer's hull (observed live:
