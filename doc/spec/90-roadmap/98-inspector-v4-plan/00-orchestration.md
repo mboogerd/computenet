@@ -75,7 +75,7 @@ Parallel: V0-BE ∥ V0-FE — file claims disjoint (`inspect/src` vs `inspect/ui
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | V0-BE | Wire SnapshotSource→snapshotOf; serve built UI from InspectorServer | sonnet | fresh | ticket/v0-be | sonnet | not-started |
-| V0-FE | showNet route bug; legend; dead-code removal; README refresh | sonnet | fresh | ticket/v0-fe | sonnet | not-started |
+| V0-FE | showNet route bug; legend; dead-code removal; README refresh | sonnet | fresh | ticket/v0-fe | sonnet | merged |
 
 **Checkpoint C1 — verification.** Fresh evaluator per ticket; judge against
 the ticket only; merge on pass; run the repo gate.

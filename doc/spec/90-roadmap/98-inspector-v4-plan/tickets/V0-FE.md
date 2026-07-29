@@ -1,6 +1,6 @@
 # V0-FE — Fix the net-toggle URL bug, delete dead toggle code, add a canvas legend
 
-**Status**: Specified — not-started. (`:concord:docLints` accepts only
+**Status**: Implemented — merged. (`:concord:docLints` accepts only
 `Specified|Partial|Implemented|Exploratory|Historical|Living` as the first
 word of this line; the ticket's own lifecycle word follows it. Move to
 `Partial — in-progress` while working, `Implemented — merged` once merged.)
