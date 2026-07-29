@@ -1,6 +1,6 @@
 # V1C-DESIGN — design note: the wave-neutral bounded state read (MRB-157)
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that also fails, stop and hand the ticket back to the
 orchestrator — do not attempt a third pass.

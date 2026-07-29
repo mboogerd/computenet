@@ -141,7 +141,7 @@ start as early as after C3 if the orchestrator has idle capacity).
 | FE-CANVAS | Zoom/pan/fit-to-screen on the canvas | sonnet | fresh | ticket/fe-canvas | sonnet | not-started |
 | FE-TOOLTIPS | Rich positioned tooltips replacing native title | sonnet | fork FE-CANVAS | ticket/fe-tooltips | sonnet | not-started |
 | FE-TESTS | Component/DOM smoke tests for the rendering layer | sonnet | fresh | ticket/fe-tests | sonnet | not-started |
-| V1C-DESIGN | Design note: wave-neutral bounded state read (MRB-157) | opus | fresh | ticket/v1c-design | opus | not-started |
+| V1C-DESIGN | Design note: wave-neutral bounded state read (MRB-157) | opus | fresh | ticket/v1c-design | opus | merged |
 
 **Checkpoint C6 — verification.** As C1. For V1C-DESIGN the evaluator judges
 the document against its ticket's acceptance criteria (no code to merge
