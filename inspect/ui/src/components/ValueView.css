@@ -64,3 +64,43 @@
   color: var(--text-muted);
   margin-bottom: 0.2rem;
 }
+
+/* V1A-FE ticket Implement §2: row-flash on a changed/added `$table` row or
+   plain-array element (`data-flash` set by `ValueView.tsx`, computed by
+   `sync/valueDiff.ts`'s `diffRows`). `color-mix` against `--surface` keeps
+   the tint theme-correct in both light and dark without a separate alpha
+   token. Purely decorative (the row's own content already carries the
+   information — unlike Canvas.css's flow bands, there is no
+   information-critical static substitute needed), so unlike that precedent
+   this relies entirely on tokens.css's blanket
+   `@media (prefers-reduced-motion: reduce) { * { animation: none !important } }`
+   rather than a bespoke `[data-band]`-style static fallback: with the
+   animation suppressed, a changed/added row is still visible as a plain,
+   unhighlighted row. */
+@keyframes value-view-flash-added {
+  from {
+    background-color: color-mix(in srgb, var(--status-live) 35%, var(--surface));
+  }
+  to {
+    background-color: var(--surface);
+  }
+}
+
+@keyframes value-view-flash-changed {
+  from {
+    background-color: color-mix(in srgb, var(--flow-pulse) 35%, var(--surface));
+  }
+  to {
+    background-color: var(--surface);
+  }
+}
+
+.value-view__table tbody tr[data-flash='added'],
+.value-view__tree > li[data-flash='added'] {
+  animation: value-view-flash-added 700ms ease-out 1;
+}
+
+.value-view__table tbody tr[data-flash='changed'],
+.value-view__tree > li[data-flash='changed'] {
+  animation: value-view-flash-changed 700ms ease-out 1;
+}

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CellDetail, CellState } from '../src/api/types';
+import type { CellDetail, CellState, StateSummaryPayload } from '../src/api/types';
 import { DetailController, type DetailTransport } from '../src/sync/detailClient';
 
 function detail(ref: string): CellDetail {
@@ -22,6 +22,10 @@ function detail(ref: string): CellDetail {
 
 function state(ref: string): CellState {
   return { ref, frontier: null, kind: 'view', value: 1, staleMs: 0 };
+}
+
+function summary(ref: string, overrides: Partial<StateSummaryPayload> = {}): StateSummaryPayload {
+  return { ref, cardinality: '3 rows', frontier: { source: 'host0000', counter: 3 }, staleMs: 0, ...overrides };
 }
 
 describe('DetailController', () => {
@@ -97,20 +101,116 @@ describe('DetailController', () => {
     expect(transport.observeStop).not.toHaveBeenCalled();
   });
 
-  it('onSummary(ref) refetches state only when ref matches the current selection', async () => {
+  it('onSummary ignores a summary for a non-selected ref (existing behavior preserved)', async () => {
     controller.select('a');
     await flush();
     onState.mockClear();
     transport.fetchState.mockClear();
 
-    controller.onSummary('b'); // not selected — ignored
+    controller.onSummary(summary('b')); // not selected — ignored
     await flush();
     expect(transport.fetchState).not.toHaveBeenCalled();
+  });
 
-    controller.onSummary('a'); // selected — refetches
+  it('onSummary refetches on the first summary since selection (prev undefined -> indicatesChange true)', async () => {
+    controller.select('a');
+    await flush();
+    transport.fetchState.mockClear();
+
+    controller.onSummary(summary('a'));
     await flush();
     expect(transport.fetchState).toHaveBeenCalledTimes(1);
     expect(transport.fetchState).toHaveBeenCalledWith('a');
+  });
+
+  /** V1A-FE ticket Implement §1 / acceptance criteria: the load-bearing case.
+   *  Once V1A-BE's coalesced feed publishes even-when-quiet windows, a naive
+   *  "refetch on every summary" turns into a 1 Hz polling loop against an
+   *  unchanged value — this is the gate that prevents that. */
+  describe('change-gated refetch', () => {
+    it('a run of quiet summaries triggers zero further fetchState calls; the next changed summary triggers exactly one', async () => {
+      controller.select('a');
+      await flush();
+      transport.fetchState.mockClear();
+
+      const base = summary('a', { cardinality: '3 rows', frontier: { source: 'host0000', counter: 3 }, staleMs: 0 });
+      controller.onSummary(base); // first summary since selection -> refetches
+      await flush();
+      transport.fetchState.mockClear();
+
+      controller.onSummary({ ...base, staleMs: 1000 }); // quiet window
+      controller.onSummary({ ...base, staleMs: 2000 }); // quiet window
+      controller.onSummary({ ...base, staleMs: 3000 }); // quiet window
+      await flush();
+      expect(transport.fetchState).not.toHaveBeenCalled();
+
+      controller.onSummary({
+        ...base,
+        staleMs: 0,
+        cardinality: '4 rows',
+        frontier: { source: 'host0000', counter: 4 },
+      }); // an effective change settled
+      await flush();
+      expect(transport.fetchState).toHaveBeenCalledTimes(1);
+      expect(transport.fetchState).toHaveBeenCalledWith('a');
+    });
+
+    it('a descriptor-only (cold) selection still refetches nothing on any summary, changed or not', async () => {
+      controller.select('a', 'descriptor');
+      await flush();
+
+      controller.onSummary(summary('a', { staleMs: 0 }));
+      controller.onSummary(summary('a', { staleMs: 0, cardinality: '9 rows' }));
+      await flush();
+
+      expect(transport.fetchState).not.toHaveBeenCalled();
+    });
+
+    it('re-selecting the same ref always refetches once, even if the next summary looks quiet', async () => {
+      controller.select('a');
+      await flush();
+      controller.onSummary(summary('a', { staleMs: 0 }));
+      await flush();
+
+      controller.deselect();
+      await flush();
+      controller.select('a');
+      await flush();
+      transport.fetchState.mockClear();
+
+      // Same-looking payload as before the deselect/reselect — but the held
+      // "last seen" payload was cleared on select(), so this is a first
+      // summary again and must refetch.
+      controller.onSummary(summary('a', { staleMs: 0 }));
+      await flush();
+      expect(transport.fetchState).toHaveBeenCalledTimes(1);
+    });
+
+    it('a fetchState triggered by onSummary is still discarded by the epoch guard if superseded by a re-selection before it resolves', async () => {
+      let resolveA!: (s: CellState) => void;
+      transport.fetchState.mockImplementation(
+        (ref: string) =>
+          new Promise<CellState>((resolve) => {
+            if (ref === 'a') resolveA = resolve;
+            else resolve(state(ref));
+          }),
+      );
+
+      controller.select('a');
+      await flush(); // initial fetchState('a') is pending, never resolved in this test
+      onState.mockClear();
+
+      controller.onSummary(summary('a')); // first summary since selection -> another pending fetchState('a')
+      await flush();
+
+      controller.select('b'); // supersedes 'a' before either fetchState('a') resolves
+      await flush();
+
+      resolveA(state('a'));
+      await flush();
+
+      expect(onState).not.toHaveBeenCalledWith('a', expect.anything());
+    });
   });
 
   it('discards a stale response from a superseded selection (rapid re-select)', async () => {
@@ -173,7 +273,7 @@ describe('DetailController', () => {
       controller.select('a', 'descriptor');
       await flush();
 
-      controller.onSummary('a');
+      controller.onSummary(summary('a'));
       await flush();
 
       expect(transport.fetchState).not.toHaveBeenCalled();

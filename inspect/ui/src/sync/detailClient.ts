@@ -1,4 +1,5 @@
-import type { CellDetail, CellState, Ref } from '../api/types';
+import type { CellDetail, CellState, Ref, StateSummaryPayload } from '../api/types';
+import { indicatesChange } from './summaryChange';
 
 /** The M1 REST surface (20-api-contract.md "Endpoints"): everything the
  *  detail panel needs beyond the topology/SSE seam. A separate interface
@@ -67,6 +68,15 @@ export class DetailController {
    *  {@link select}) — so a `state.summary` for some other, still-observed cell
    *  cannot pull this one's state in through the back door. */
   private descriptorOnly = false;
+  /** V1A-FE ticket Implement §1: the last `state.summary` seen for the
+   *  current selection, so {@link onSummary} can gate its refetch on
+   *  `indicatesChange` rather than refetching unconditionally on every
+   *  summary (which, once V1A-BE's coalesced feed publishes even-when-quiet
+   *  windows, would turn into a 1 Hz polling loop against an unchanged
+   *  value). Reset on every {@link select}/{@link deselect} so a
+   *  re-selection always refetches once, exactly like the epoch counter
+   *  resets the async-staleness guard. */
+  private lastSummary: StateSummaryPayload | undefined;
 
   constructor(
     private readonly transport: DetailTransport,
@@ -95,6 +105,7 @@ export class DetailController {
     const wasObserved = prev !== null && !this.descriptorOnly;
     this.current = ref;
     this.descriptorOnly = mode === 'descriptor';
+    this.lastSummary = undefined;
     const epoch = ++this.epoch;
 
     // only release what was actually acquired — a descriptor-only selection
@@ -118,16 +129,26 @@ export class DetailController {
     const wasObserved = !this.descriptorOnly;
     this.current = null;
     this.descriptorOnly = false;
+    this.lastSummary = undefined;
     this.epoch++;
     if (wasObserved) void this.transport.observeStop(prev);
   }
 
   /** Called for every `state.summary` SSE event, regardless of ref — a no-op
    *  unless it names the currently-observed cell. Descriptor-only selections
-   *  are not observed, so they never re-read state from one either. */
-  onSummary(ref: Ref): void {
-    if (ref !== this.current || this.descriptorOnly) return;
-    void this.loadState(ref, this.epoch);
+   *  are not observed, so they never re-read state from one either.
+   *
+   *  V1A-FE ticket Implement §1: refetches only when {@link indicatesChange}
+   *  says this summary represents an effective change versus the last one
+   *  seen since selection — not on every summary. The epoch guard on
+   *  `loadState` is unchanged and remains the sole mechanism for discarding a
+   *  response that lands after a re-selection; this adds no second staleness
+   *  mechanism, only a *trigger* gate. */
+  onSummary(payload: StateSummaryPayload): void {
+    if (payload.ref !== this.current || this.descriptorOnly) return;
+    const changed = indicatesChange(this.lastSummary, payload);
+    this.lastSummary = payload;
+    if (changed) void this.loadState(payload.ref, this.epoch);
   }
 
   private async loadDetail(ref: Ref, epoch: number): Promise<void> {

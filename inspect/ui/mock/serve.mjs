@@ -163,6 +163,8 @@ function broadcast(kind, payload) {
 let observedRef = null;
 let liveRows = 3;
 let observeTimer = null;
+let observeWindowTick = 0;
+let observeStaleMs = 0;
 
 function stateFor(ref) {
   return {
@@ -178,25 +180,46 @@ function stateFor(ref) {
         ],
       },
     },
-    staleMs: 0,
+    staleMs: observeStaleMs,
   };
+}
+
+function summaryFor(ref) {
+  return {
+    ref,
+    cardinality: `${liveRows} rows`,
+    frontier: { source: 'mock0000ab', counter: liveRows },
+    staleMs: observeStaleMs,
+  };
+}
+
+// V1A-FE ticket Implement §4: "offline dev exercises the real path" — the
+// real V1A-BE coalesced state.summary publishes a 1 Hz window per observed
+// cell on change *and* even when quiet, with staleMs computed at publish time
+// (resets ~0 on a change window, grows by ~1000 across quiet ones). This mock
+// mirrors that shape (mutating on roughly every 4th window, not every one) so
+// the FE's change-gated refetch, row-flash, and change-log panel all have
+// something real to run against under `npm run dev` — a mock that always
+// sent `staleMs: 0` (as before this ticket) would silently mask a bug in the
+// FE's `indicatesChange` predicate, which depends on staleMs actually
+// shrinking/growing.
+function tickObserveWindow() {
+  observeWindowTick += 1;
+  if (observeWindowTick % 4 === 0) {
+    liveRows += 1;
+    observeStaleMs = 0;
+  } else {
+    observeStaleMs += 1000;
+  }
+  broadcast('state.summary', summaryFor(observedRef));
 }
 
 function startObserving(ref) {
   observedRef = ref;
   stopTimer();
-  // Simulates "the demo mutates" (M1-FE ticket's manual acceptance item):
-  // grows the fake table every 2s and announces it via state.summary, so a
-  // selected cell's State subsection can be watched live-updating.
-  observeTimer = setInterval(() => {
-    liveRows += 1;
-    broadcast('state.summary', {
-      ref: observedRef,
-      cardinality: `${liveRows} rows`,
-      frontier: { source: 'mock0000ab', counter: liveRows },
-      staleMs: 0,
-    });
-  }, 2000);
+  observeWindowTick = 0;
+  observeStaleMs = 0;
+  observeTimer = setInterval(tickObserveWindow, 1000);
 }
 
 function stopTimer() {
@@ -206,8 +229,13 @@ function stopTimer() {
 
 function stopObserving(ref) {
   if (observedRef !== ref) return; // DELETE for a ref that isn't the active one — no-op
-  observedRef = null;
   stopTimer();
+  // "one trailing summary" (ticket Implement §4): one more quiet window's
+  // worth of staleness, same as the real coalesced feed's trailing window
+  // after release.
+  observeStaleMs += 1000;
+  broadcast('state.summary', summaryFor(ref));
+  observedRef = null;
 }
 
 // --- errors state ----------------------------------------------------------
