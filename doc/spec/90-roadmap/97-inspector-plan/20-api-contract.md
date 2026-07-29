@@ -111,15 +111,49 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // A tombstoned element (e.g. a removed OR-set member) is excluded from encoded
 // state entirely, never emitted as a marked row — there is no tombstone row shape.
 
-// ErrorSnapshot (M2)
+// ErrorSnapshot (M2, V3-BE)
 {
-  "counters": { "deadLetters": 3, "parked": 14, "restarts": 1, "drainedOnTeardown": 0 },
+  "counters": { "deadLetters": 3, "parked": 14, "restarts": 1, "drainedOnTeardown": 0, "waveHealth": 2 },
   "deadLetters": [ { "ref": "uuid:0", "cause": "OwnershipViolation" | null,  // null for a plain drop (e.g. unknown target), no thrown exception
                      "description": "...", "wave": {"source":"9c41","counter":288} | null,
-                     "atMs": 1753600000000 } ],
+                     "atMs": 1753600000000,
+                     "invocation": {                    // V3-BE — null: a plain host-level drop, no invocation
+                       "port": "left", "type": "PORT_API" | "PORT_MANAGEMENT" | "PORT_PROTOCOL",
+                       "method": "propagate", "parameterTypes": ["civictech.cell.data.SetDelta"],
+                       "argCount": 1, "hop": 2 | null
+                     } | null,
+                     "disposition": [                   // one entry per argument, in order; [] when no invocation/no args
+                       { "index": 0, "ownership": "frozen" | "redacted" | "borrowed" | "owned" | "leased" | "plain",
+                         "reason": "Leased payload released at dead-letter capture" | null }
+                     ] } ],
   "parked": [ { "ref": "uuid:0", "port": "left", "count": 11, "oldestMs": 41000 } ],
-  "restarts": [ { "ref": "uuid:0", "generation": 1, "atMs": ... } ]
+  "restarts": [ { "ref": "uuid:0", "generation": 1, "atMs": ...,
+                  "cause": "IllegalStateException" | null,     // V3-BE, see below
+                  "causeAtMs": 1753600000000 | null,
+                  "reBaselineAtMs": 1753600000000 | null } ],
+  "waveHealth": [ /* WaveHealthRow, open rows only — see the SSE table's error.waveHealth row */ ]
 }
+// V3-BE's dead-letter `invocation`/`disposition` is the kernel's own dead-letter sanitization
+// outcome read back, not an inspector classification: the dead-letter outlet is a fan-out, so an
+// Owned argument arrives already Frozen (or Redacted if consumed before capture) and a Leased
+// argument arrives released and replaced by Redacted. "owned"/"leased" remain in the vocabulary as
+// the honesty case — a live exclusive handle reaching this outlet is a kernel invariant violation,
+// and the row says so rather than mislabelling it. `reason` is populated only for "redacted", is the
+// kernel-authored Redacted.reason truncated at 200 characters, and is the only text ever taken from
+// the argument. Never-retain guarantee: no argument value appears on the row in any form — not the
+// value, not its toString(), not an encoded form — and no reference to it survives the capture call.
+// `parameterTypes` are declared type names, never values.
+//
+// `restarts[].cause`/`.causeAtMs` are a TIME-WINDOW CORRELATION, not a kernel-reported restart
+// cause: no seam reports the failure and the restart as one event. `cause` is the simple class name
+// of the most recent dead letter captured for the same ref within 5000ms preceding the observed
+// generation bump; a coincidental dead letter for the same ref inside that window would be
+// attributed here. Both null when no candidate exists — never a guess.
+// `reBaselineAtMs` is when a re-baseline beat was observed on one of this cell's tapped outgoing
+// edges. null means NOT OBSERVED, never "did not happen": only a ReBaselineEmitting cell
+// re-baselines at all (today civictech.cell.data.op.UnionSetCell is the only kernel implementation),
+// and the cell needs at least one tapped outgoing edge for the inspector to see the beat. Clients
+// must render absence, not a negative claim.
 
 // GraphList (M4)
 {
@@ -138,6 +172,12 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // components sharing a host. Consequence: health is bounded by however much
 // row history the error feed's ring buffers (cap 200 each) still retain — GET
 // /api/inspect/errors' counters remain the true, unbounded per-host totals.
+// Open question (V3-BE, deliberately unanswered): should health roll up
+// wave-health rows too? Wave-health rows are per-(edge, cell) and their subject
+// set is scoped by which cells a client happens to be observing, so a
+// component-level roll-up would be a function of client attention rather than
+// of the component itself — and needs a rule for what health means when a
+// component has zero observed cells. Flagged for the replan checkpoint.
 
 // SearchResult (M4/M5)
 {
@@ -175,9 +215,10 @@ not replayed). Server sends `heartbeat` every 15 s.
 | `lifecycle` | M0, V2-BE | `{ "ref", "lifecycle", "generation" }` — mechanism change, not a shape change (V2-BE): pushed at the transition off the kernel's lifecycle listener rather than sampled at 1 Hz, and fires exactly once per real transition (a re-publish that does not move the lifecycle, e.g. a host resume observed while still draining, emits nothing) |
 | `activity` | V2-BE | one `ActivityEntry`: `{ "ref", "kind": "passivated"\|"activated"\|"drained"\|"woken"\|"restarted", "atMs", "generation"\|omitted }` — `generation` present only on `restarted`. `passivated`/`activated`/`drained` come from the kernel's per-cell lifecycle listener (passivated covers both an explicit suspend and a supervision suspend, indistinguishable at this seam); `woken` is the inspector's own causal act (`POST /graph/{id}/wake`), recorded before the resume calls it triggers, so it precedes the `activated` it causes — a single wake legitimately yields both, neither is suppressed; `restarted` is a supervision restart, observed as a generation increase. Rides the shared monotonic `seq`. Paired with `GET /api/inspect/activity` → `{"entries": [ActivityEntry]}`, oldest first, bounded at 200 for the whole process (not per cell); an empty ring answers `{"entries": []}`, never 404 |
 | `state.summary` | M1, V1A-BE | `{ "ref", "cardinality": "4 rows"\|null, "frontier": {...}\|null, "staleMs", "changes": 3 }` — only for cells a client explicitly observed: every summary belongs to an observation that was open when the window was built, including the single trailing window a release publishes as its last act; a cell with no observe subscription never produces one. One coalesced window per second per observed cell (V1A-BE) — an arbitrary number of settled effective changes inside a window produce **one** summary carrying the *latest* reading, never an intermediate one. Publishes every window while the observation is open, even a quiet one (so a client's staleness/decay logic can key off "window received" rather than off silence), then exactly one trailing window when the observation is released — by `DELETE`, the 5-minute idle sweep, or inspector shutdown — then nothing for that cell. `staleMs` is computed at publish time from the last effective change: it decreases in a window where something settled and grows by roughly one window across consecutive quiet ones. `changes` is additive: how many settled effective changes this window coalesced, `0` for a quiet window — the exact change signal, where `staleMs`'s decrease is a heuristic that can miss a change landing almost exactly one window after the previous one. Guarantee: an effective state change on an observed cell is announced within one window, so a client that refetches `GET /cell/{ref}/state` on a summary it judges to indicate change can never be left holding a stale value indefinitely. There is no immediate catch-up summary at observe-start beyond the first scheduled window (≤1s later) — a client wanting an instant first paint does its own `GET /cell/{ref}/state` on observe success, as `inspect/ui` already does |
-| `error.deadLetter` | M2 | one `deadLetters[]` element |
+| `error.deadLetter` | M2, V3-BE | one `deadLetters[]` element, now with `invocation`/`disposition` — see the `ErrorSnapshot` DTO note above |
 | `error.parked` | M2 | one `parked[]` element (send on change; `count: 0` clears) |
-| `error.restart` | M2 | one `restarts[]` element |
+| `error.restart` | M2, V3-BE | one `restarts[]` element, now with `cause`/`causeAtMs`/`reBaselineAtMs` — see the `ErrorSnapshot` DTO note above |
+| `error.waveHealth` | V3-BE | one `WaveHealthRow`: `{ "id", "kind": "frontierLag"\|"stalledWave", "state": "open"\|"cleared", "ref", "edge", "wave": {...}\|null, "frontier": {...}\|null, "lagWaves": 7\|null, "heldMs", "atMs", "heuristic": true, "description" }`. `id` is `"<kind>:<edgeId>:<ref>"`, stable across the open row, its updates and its clear. `state: "cleared"` retires the open row with the same `id` and carries its last known field values — the same discipline `error.parked`'s `count: 0` already established. `wave`/`frontier` may be null; `lagWaves` is populated only when both stamps share a `source` (two different sources are incomparable and never subtracted). Paired with `ErrorSnapshot.waveHealth` (open rows only, a gauge like `parked`, never a history log) and `counters.waveHealth` (also a gauge, unlike its monotonic siblings). Bounded at 200 simultaneously open rows; an eviction forced by that cap emits the evicted row's `cleared` event. **This class is a heuristic diagnostic, not kernel-grade detection** — computed by the inspector from outside the graph by correlating a tapped outlet's last observed wave with an explicitly-observed cell's frontier stamp. Absorption, filtering and aggregation are legitimate and indistinguishable from a stall at this vantage point (spec 20/22, completeness over silent/stuck edges, **G-40**). Every row carries `heuristic: true` and its `description` opens with the word "heuristic"; no row asserts that a wave *is* lost, that a cell *is* stuck, or that glitch-freedom *is* violated |
 | `flow.rates` | M3 | `{ "window": 1000, "edges": [ { "id", "rate", "lastWave": {...}\|null, "hop": 2\|null } ] }` — 1 Hz batch; `rate` is messages/second (a Double; with `window: 1000` numerically equal to the raw count); edges with no traffic that window are omitted (not sent as `rate: 0`). Publishes every second while anything is tapped, even an all-empty window (so a client's decay logic can key off "window received" rather than off silence), then one trailing empty window after the last tap detaches, then nothing. Unlike every other feed in this table, `flow.rates` has no paired snapshot/`GET` endpoint — a client's only source of truth for flow is this stream |
 | `graphs.changed` | M4 | `{}` — refetch both `GraphList` **and** any held `TopologySnapshot` (filtered or not). Fires on any component membership change or a `nameGraph` rename, not only merge/split. Required, not optional: a cell is published (stamped with its own singleton `Node.graph`) *before* the link that merges it into an existing component, so a client applying deltas alone holds a stale `Node.graph` until it resyncs |
 | `heartbeat` | M0 | `{}` |
