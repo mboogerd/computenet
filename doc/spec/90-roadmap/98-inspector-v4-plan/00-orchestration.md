@@ -156,8 +156,344 @@ tickets (appended here) for whichever of V1c-implementation, V4 distribution
 (PeerId→registry, descriptors over the wire, replicated pilot), and V5
 cold/checkpoint reader are now justified — or a decision to stop.
 
-## Wave 7+ — intent only, not yet ticketed
+## Wave 7+ — the bounded state read, stable peer identity, a replicated pilot
 
-V1c implementation (kernel primitive + graph-wide state chips + search
-rebuild), V4 distribution truth, V5 inspect-the-not-running. Shapes sketched
-in `10-design-notes.md` §Verticals; research gates MRB-156/MRB-157 apply.
+**C-replan ran 2026-07-29** against `main` at `7125455` (all six waves merged,
+V1C-DESIGN accepted). It re-entered the `create-implementation-plan` skill and
+read: the merged waves, `20-wave-neutral-read-design.md` in full,
+`../97-inspector-plan/90-progress-log.md`'s open items and recommended
+increments, `../97-inspector-plan/20-api-contract.md` (including V3-BE's one
+OPEN question), V3-BE's G-40 kernel-gap flag as it survives in
+`inspect/src/main/kotlin/civictech/inspect/WaveHealth.kt:8-119`, and the current
+state of the durability and peering subsystems.
+
+The three items it was asked to decide split into six verdicts. Each stop is
+argued in "Not ticketed, and why" below; none is a deferral for want of time.
+
+| Item | Verdict |
+|---|---|
+| **V1c — local bounded read** | **Go, behind a measurement gate.** Seven tickets, waves 7–11. |
+| **V1c — remote arm** | **No-go.** Not ticketed. Disclosure question unanswered. |
+| **V4 — PeerId → registry** | **Go.** One ticket, wave 9 (`V4-PEERID`). |
+| **V4 — descriptors over the wire** | **No-go.** Not ticketed. Wire break for a cosmetic benefit, and a disclosure decision in disguise. |
+| **V4 — replicated pilot** | **Go, as an evidence ticket.** Wave 10 (`V4-PILOT`). |
+| **V5 — cold/checkpoint reader** | **Stop.** Not ticketed. Its cheap half is already inside `V1C-KERNEL`; its real half is blocked on a durability decision that is not an inspector concern. |
+
+Two checkpoint-level actions were taken directly rather than ticketed, and are
+already on `main`: the four-site correction of the stale
+`waveState().highWater` claim (commit `1677953`), and the resolution of
+`GraphList.health`'s wave-health roll-up question to **no** (commit `74c7bc6`).
+Both are described at the end of this section.
+
+### Standing rules, addenda for waves 7+
+
+Everything under "Standing rules" above still applies. Additionally:
+
+- **Wave 8 is the only kernel-interface wave.** `V1C-KERNEL` is the sole owner
+  of `kernel/.../host/ManagedHost.kt` and `kernel/.../data/SetCell.kt` for the
+  whole of waves 7–11. No other ticket may touch either file.
+- **Wave 9's three tickets have disjoint kernel claims**, and that disjointness
+  is the only reason they run in parallel: `V1C-CELLS` owns
+  `cell/data/{MapCell,KeyedSetCell,ListCell,Watermark}.kt`,
+  `cell/replication/InstanceSet.kt`, `cell/partition/ShardCell.kt`; `V1C-OPS`
+  owns `cell/data/op/**`; `V4-PEERID` owns `cell/host/LocationRegistry.kt`,
+  `cell/wire/Peering.kt`, `wire/.../WsTransport.kt`, `inspect/.../Peers.kt` and
+  the two demo launchers. Test directories split the same way and it matters:
+  `V1C-CELLS` owns `kernel/src/test/.../cell/data/` (where the `ShardCell`
+  tests already live, there being no `cell/partition/` test package) and
+  `V1C-OPS` owns `cell/data/op/` — a subdirectory, so still disjoint at file
+  level, but each ticket is told to create nothing in the other's.
+- **Binding constraint 7 ("no edits under `concord/`",
+  `10-design-notes.md:140`) stays in force for every ticket except
+  `V1C-CONCORD`**, for which this checkpoint lifts it. That lift is not a
+  loosening: `concord/schema/scenario.md:6-9` requires schema growth to be *"a
+  deliberate schema-change ticket between waves, not a corpus-authoring
+  convenience"*, and `V1C-CONCORD` is exactly that ticket, scheduled in its own
+  wave after everything it describes has shipped.
+- **`doc/spec/90-roadmap/95-research-plan.md` is not edited by any ticket or
+  checkpoint in this plan.** The four research questions the design note
+  proposed are named at the end of this section; placing them in that file is
+  the spec owner's call, not a checkpoint's.
+- **`../97-inspector-plan/20-api-contract.md` remains orchestrator-only.**
+  `V1C-BE` and `V4-PEERID` both propose wording in their reports; neither edits
+  it.
+
+## Wave 7 — V1c measurement gate · branches from `main` after C-replan
+
+Runs alone. `V1C-BENCH` is doc-producing, in the register `V1C-DESIGN`
+established: its deliverable is
+`30-bounded-read-measurement.md`, and it checks in no benchmark test (this
+repository has no JMH, no benchmark source set and no slow-test gating
+convention; adding that for a one-shot measurement is a permanent tax).
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| V1C-BENCH | Measure the whole-copy cost; GO / RESIZE / NO-GO on the V1c chain | sonnet | fresh | ticket/v1c-bench | opus | not-started |
+
+**Checkpoint C7 — the gate, not a verification.** The evaluator judges the
+document against the ticket *and acts on its recommendation*:
+
+- **GO** → waves 8–11 proceed as written.
+- **RESIZE** → the orchestrator narrows `V1C-CELLS`' and `V1C-OPS`' cell lists
+  to the families the measurement supports, records the narrowing in each
+  ticket file before dispatch, and proceeds.
+- **NO-GO** → `V1C-KERNEL`, `V1C-CELLS`, `V1C-OPS`, `V1C-BE`, `V1C-FE` and
+  `V1C-CONCORD` are all cancelled (Status → `Historical — cancelled at C7`,
+  with the measurement cited). Wave 9 collapses to `V4-PEERID` alone, wave 10
+  to `V4-PILOT` alone, wave 11 disappears, and the plan runs straight to
+  C-replan-2 after wave 10. This is a real branch of the plan, not a
+  formality: `20-wave-neutral-read-design.md` §4.3 argues the status quo is a
+  defensible answer, and the measurement is what decides between them.
+
+## Wave 8 — the kernel primitive · branches from `main` after C7
+
+Runs alone — it is the only ticket permitted to touch `kernel/**` in this wave,
+and every wave-9 and wave-10 ticket is written against its interface.
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| V1C-KERNEL | `BoundedStateful` + `ManagedHost.readState` + provenance arms + `SetCell` reference impl | opus | fresh | ticket/v1c-kernel | opus | not-started |
+
+**Checkpoint C8 — verification plus a kernel-invariant audit**, in the shape C4
+used for `V2-KERNEL`. Before anything merges, audit the diff for: P2 (no
+per-message call site), P6 (no link, no tap, no attention raised), read-only-ness,
+transport-neutrality, `Stateful` unchanged, `StateRequest` unchanged, no wire or
+codec change. Then run `./gradlew :demo:exchange:test` as the neutrality gate.
+
+**The evaluator has one further job, and it is not optional.** `V1C-CELLS`,
+`V1C-OPS` and `V1C-BE` are written against this ticket's *sketch* of the
+interface. If the shipped signatures differ, the evaluator edits those three
+ticket files to match the shipped shape before wave 9 is dispatched, and says so
+in the merge message. A worker discovering the drift for itself is a wave-9
+failure caused here.
+
+## Wave 9 — cell coverage and stable peer identity · branches from `main` after C8
+
+Parallel: V1C-CELLS ∥ V1C-OPS ∥ V4-PEERID — kernel claims disjoint (see the
+addenda above).
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| V1C-CELLS | `BoundedStateful` on the six map/set-backed data cells (incl. `ShardCell`'s composite) | opus | fork V1C-KERNEL | ticket/v1c-cells | opus | not-started |
+| V1C-OPS | `BoundedStateful` on the composite operator cells; cross-sub-state cursor ordering | opus | fresh + handoff | ticket/v1c-ops | opus | not-started |
+| V4-PEERID | `PeerId` reaches the registry; peer labels survive a reconnect | opus | fresh | ticket/v4-peerid | opus | not-started |
+
+`V1C-CELLS` forks `V1C-KERNEL` because it copies the `SetCell` pattern almost
+literally. `V1C-OPS` does not: its work is exploratory — deciding a total order
+across two or three sub-states per operator — and an exploratory ticket needs
+its own reading rather than an inherited one.
+
+**Checkpoint C9 — verification.** As C1, plus: `./gradlew :demo:exchange:test`
+after the two cell tickets merge; and for `V4-PEERID` a live two-JVM
+disconnect/reconnect run through `scripts/demo-shopping-two-inspectors.sh`,
+confirming each side's `Node.net` is the other's `--net-name` and is *stable*
+across the reconnect.
+
+Two things the C9 evaluator should expect rather than treat as scope creep.
+`wire/.../WsTransport.kt` is very likely in `V4-PEERID`'s diff: a listener-side
+`Session` spawns its registry mirror in its own constructor, before any peer
+name has arrived, so the peer must be late-bound; the ticket predicts the edit
+and owes a happens-before argument for it. Conversely, a diff that touches
+`ManagedHost`'s `PORT_API` branch gets the same P2 audit C8 applies, or is
+rejected — that is the per-message path and the ticket forbids it.
+
+## Wave 10 — the consumers and the pilot · branches from `main` after C9
+
+Parallel: V1C-BE ∥ V1C-FE ∥ V4-PILOT — `inspect/src` vs `inspect/ui` vs
+`demo/`, disjoint. V1C-FE codes against the contract-binding JSON in
+`V1C-BE`'s ticket text, the pattern waves 2 and 5 already used.
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| V1C-BE | Paged state endpoint; `DataSearch` rewired; suspended and drained cells become readable | opus | fresh | ticket/v1c-be | opus | not-started |
+| V1C-FE | Paged big-cell state view; browse-everything state chips; honest cold preview | sonnet | fresh | ticket/v1c-fe | opus | not-started |
+| V4-PILOT | First same-logical-id replicated pilot over a real socket, two inspectors, findings | opus | fresh | ticket/v4-pilot | opus | not-started |
+
+`V4-PILOT` extends `demo/shopping` behind a bare `--replicate` flag defaulted
+off, rather than adding a demo module: every prerequisite the pilot needs —
+real `--listen`/`--peer` peering, the `:inspect` dependency with
+`--inspect-port`/`--net-name`, graph naming, cross-JVM `declareLink`, a
+multi-JVM test lane and a two-inspector script — exists only there, and a new
+module would spend the ticket's risk budget rebuilding scaffolding instead of
+driving replication across a socket. Its `Main.kt` claim overlaps `V4-PEERID`'s,
+which is why the two are in consecutive waves rather than the same one.
+
+**Checkpoint C10 — verification.** As C1, plus the evaluator drives a real
+inspector against a cell of ~10⁵ entries and walks it page by page end to end,
+confirming the graph keeps serving traffic throughout — the claim the whole V1c
+chain rests on. For `V4-PILOT` the evaluator **reads the findings and does not
+act on them**: defects it reveals are sized at C-replan-2, not patched inside a
+One seam between `V1C-BE` and `V1C-FE` needs an explicit ruling at C10 rather
+than a per-ticket answer: `SearchCost.coldSkipped` narrows its meaning to
+held-for-migration only *after* `V1C-BE` merges, and a browser cannot tell which
+server build it is talking to. The FE ticket requires wording that is true under
+both; confirm it is, against both a pre- and post-merge server.
+
+One `V4-PILOT` finding needs care rather than a yes/no: `ComponentIndex`
+groups by graph-id *string* while its sweep can yield two genuinely
+disconnected components, and `idOf` uses the *logical* uuid — so two replicas
+can share a graph id with no edge between them, which would read as a "yes" on
+MRB-156 for the wrong reason. The report must say which case holds.
+
+## Wave 11 — conformance · branches from `main` after C10
+
+Runs alone. Skipped entirely if C7 returned NO-GO.
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| V1C-CONCORD | Spec requirement text → concord schema change → three scenarios | opus | fresh | ticket/v1c-concord | opus | not-started |
+
+**Checkpoint C11 — verification.** `./gradlew :concord:check` green with zero
+dangling `covers:` ids and zero orphan scenarios; `doc/spec/CONCORDANCE.md`
+regenerated and not hand-edited; `:concord:docLints` clean. A requirement that
+could not be checked honestly must appear in `concord/corpus/DISPUTES.md` — a
+scenario weakened until it passes is a rejection, not a deviation.
+
+**Checkpoint C-replan-2.** Trigger: wave 11 merged (or wave 10, under a C7
+NO-GO). Fresh `claude-opus-5` session, `create-implementation-plan` again.
+Inspect: `V4-PILOT`'s findings, `V1C-BENCH`'s measurement against what the
+chain actually delivered, `V1C-CONCORD`'s report on whether wave-neutrality is
+expressible implementation-neutrally, and whether any of the three no-go
+decisions below has had its blocker removed.
+
+## Not ticketed, and why
+
+Three deliberate stops. Each is a decision, not a deferral for want of time.
+
+**1. V1c's remote arm — no-go, unchanged from the design note's own verdict.**
+A bounded read is wave-neutral *because* it is not an emission, and this
+repository's only disclosure seam is an emission seam
+(`kernel/.../port/FanOutlet.kt:105-117`, `:293`; 93 I-28 "filtered, not forked",
+`doc/spec/20-dataflow-semantics/21-propagation.md:72-76`). A read crossing a
+membrane or a bridge therefore has no filter to pass through. Shipping one would
+be a disclosure regression wearing a feature's clothes. The blocker is the first
+research question below; until it is answered, a `host: null` cell keeps
+answering `unavailable` and the plan says so out loud rather than half-building
+the capability.
+
+**2. Descriptors over the wire — no-go, for two independent reasons.** First,
+mechanics: an announce carrying a cell's type FQN means changing
+`RegistryAnnounce.published`'s signature, and `methodId` is
+`StableHash.of("$fqn#$name$descriptor")`
+(`gen/.../wire/ContractProcessor.kt:385`), so the id repoints and
+`WireCodec.decode`'s `checkNotNull(ContractRegistry.method(...))` throws on the
+old frame (`kernel/.../wire/WireCodec.kt:278-280`); adding a *new* method
+instead leaves old receivers unable to resolve it, and no capability
+negotiation exists for announces (only
+`BridgeIngressCell.protocolCapabilities`, for `PORT_PROTOCOL`,
+`kernel/.../wire/BridgeCells.kt:71-72`). `AGENTS.md` requires wire compatibility
+to be preserved unless a cited spec demands otherwise, and none does. Second,
+and more decisively: *what one peer may learn about another's cells is a
+disclosure decision*, not plumbing — the same seam that blocks (1). The benefit
+is real but small, and the v3 closing report itself files "remote endpoints show
+raw port uuids" under **Cosmetics**
+(`../97-inspector-plan/90-progress-log.md:1169-1172`). Note what makes this
+tractable *later*: the minimum payload is one string, because
+`PortRef.of(cell, name)` is name-derived and `ContractRegistry.cellDescriptor`
+can rebuild color, manifests and port names locally from an FQN. The work is
+small; the decision in front of it is not.
+
+**3. V5 cold/checkpoint reader — stop, and the reason is structural.**
+
+- *Its cheap half is already ticketed.* "Show a drained host's state" needs no
+  journal work at all: `ManagedHost.beginDrain` already retains
+  `snapshots[cellRef] = cell.snapshot()` (`ManagedHost.kt:499-502`, written at
+  `:501`) for exactly the window in which the inspector reports the component
+  cold. `V1C-KERNEL`'s Decision 7 answers such a read with
+  `provenance = CHECKPOINT`, and `V1C-BE`'s part 4 surfaces it. That is the v3
+  cold screen's missing preview, delivered inside the V1c chain.
+- *Its real half is blocked on something that is not an inspector concern.*
+  **Nothing in production calls `ManagedHost.checkpoint(journal)`** — the only
+  callers anywhere are `concord`'s durability driver and five kernel tests. So a
+  real journal directory written by any demo contains only frame and frontier
+  records, never a checkpoint, and reading state out of it means re-running the
+  fold, which means starting a host — the exact thing "inspect the not-running"
+  exists to avoid. Introducing a checkpoint cadence is a durability-subsystem
+  decision touching `HostDurability.checkpoint`'s PN-0b guard
+  (`HostDurability.kt:224-229`); it belongs to the durability roadmap and to the
+  spec owner, not to an inspector plan.
+- *And even with checkpoints, the canvas cannot be drawn from a directory.*
+  `doc/spec/30-execution-model/31-hosts.md:91-92` is normative: the journal
+  "does not journal topology at all — the graph must be rebuilt out-of-band
+  before `recoverFrom`". Frame records additionally need the app's
+  `ContractRegistry` and ServiceLoader-discovered `WireSerializers` to decode
+  (`kernel/.../wire/WireCodec.kt:194-198`, `:278-280`), so an "out-of-process"
+  reader is really "in the app's JVM without a running host". The only tractable
+  scope is cold *state* for a graph whose *structure* a running inspector still
+  knows — which is the cheap half, already ticketed.
+
+Consequence for the UI: `inspect/ui/src/nav/cold.ts:7-13`'s
+`COLD_NOTICE = 'cold — parked; state/flow unavailable without waking'` becomes
+partly wrong once `V1C-BE` lands the drained-checkpoint arm. `V1C-FE` owns that
+string; it must say what is now available and stay honest about what is not.
+
+## Two actions taken at the checkpoint rather than ticketed
+
+**The stale `waveState().highWater` claim, corrected in all four sites**
+(commit `1677953`). `20-wave-neutral-read-design.md` §1.2 established that the
+mechanism this repository records for "why a read-only instrument cannot use
+`StateRequest`" does not exist — nothing under `civictech.cell.replication`
+reads `FanOutlet.waveState()`, and a targeted `at` delivery fires no tap and
+moves no watermark row. The design note called this the zero-cost item and
+recommended it before either arm of the work, because the discarded sentence was
+being cited as a design constraint by new work. It was a KDoc-and-prose edit
+with no behaviour change, so the checkpoint took it directly rather than
+spending a ticket. Corrected: `kernel/.../link/CatchUp.kt` (the origin),
+`inspect/.../DataSearch.kt` (which quoted it verbatim),
+`../97-inspector-plan/90-progress-log.md` (the MRB-157 finding and the closing
+note's echo) and `../97-inspector-plan/10-target-v3.md` (the "Known kernel
+gaps" restatement — a fourth site the design note had not found). Every
+conclusion survives; only the reason changed, from wave perturbation to
+topology (P6).
+
+**`GraphList.health` does not roll up wave-health rows** (commit `74c7bc6`).
+V3-BE raised this deliberately unanswered and handed it here. `health`'s three
+existing fields are properties of the component; a wave-health row is a property
+of *(a tapped edge, a cell some client chose to observe)*. Rolling them up would
+make a server-wide snapshot field a function of one client's attention, with no
+place to say whose, and would render "unexamined" as "healthy" whenever a
+component has no observed cells. A client that wants the number can compute it
+exactly from `ErrorSnapshot.waveHealth` plus `Node.graph` — and computing it
+client-side keeps the caveat attached to it. This was the last OPEN question in
+`../97-inspector-plan/20-api-contract.md`.
+
+## Research questions named, not placed
+
+`20-wave-neutral-read-design.md` §7 proposes four entries for
+`doc/spec/90-roadmap/95-research-plan.md`. That file is owner-maintained and
+this checkpoint does not edit it; the questions are recorded here so the
+no-go decisions above are traceable to a blocker rather than to a shrug.
+
+1. **Disclosure for non-emitting reads.** 93 I-28's seam 3 filters *emissions*.
+   A wave-neutral read has no emission and therefore no filter — already true of
+   shipped `snapshotOf`, tolerable only because `InspectorServer` binds
+   loopback-only. Does "filtered, not forked" have a read-side twin? **Blocks
+   V1c's remote arm and, in substance, descriptors over the wire.**
+2. **Ownership in `Stateful.snapshot()`.** `23-ownership.md` has no rule for a
+   fold whose state contains `Owned`/`Leased` values, yet drain, migration and
+   checkpointing all serialize that state; G-46 (`23-ownership.md:220`) covers
+   only the crash-loss half. `V1C-KERNEL` gives the bounded read a *stricter*
+   contract and explicitly declines to inherit the older seam's undefined one.
+3. **Cursor semantics across a scatter-gather boundary.** A partitioned pull is
+   per-shard-consistent and cross-shard-arbitrary
+   (`doc/spec/40-distribution/42-replication.md:401`) and the answering instance
+   may change between pages. One token or a vector of per-instance tokens?
+4. **The `Effectful` processed frontier and baselines.** `WaveFrontier` and
+   `absorbAck` exempt baselines; `ManagedHost`'s `PORT_API` branch does not.
+   Should a baseline-stamped arrival advance a durable suppression frontier at
+   all? This is the residual blocker for PN-2's push/pull catch-up unification
+   now that the `waveState()` claim is corrected.
+
+A fifth, from V3-BE's G-40 flag rather than from the design note, and the one
+this checkpoint judges highest-leverage: **making absorption observable.**
+`inspect/.../WaveHealth.kt:83-92` states plainly that absorption is "the single
+largest source of honest lag and the reason this class is heuristic", and that
+"the only defence available without kernel watermarks is a conservative
+`LAG_THRESHOLD_WAVES` plus `LAG_GRACE_MS`". Per-source per-edge delivered
+watermarks — whose max-contiguous-prefix algebra already exists in
+`DeliveredFrontier` for replica tags but is applied to neither waves nor edges —
+and `Progress` absorb-acks made observable to an Observe-role attachment would
+between them collapse the largest false-positive class and turn three of G-40's
+four cases from guesswork into reported fact. That is `.verify`/kernel work
+(`22-consistency.md:198-207`), outside every inspector plan's scope, and it is
+the thing to reach for when one is opened.

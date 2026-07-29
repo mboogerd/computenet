@@ -148,6 +148,15 @@ cells, invocation payload labels.
 ## Standing file split
 
 BE tickets own `inspect/src/**` (+ explicitly listed kernel/demo files); FE
-tickets own `inspect/ui/**` only. `V2-KERNEL` is the only ticket allowed to
-touch `kernel/**`, and only the files it lists. Two tickets run in parallel
-only when file claims are disjoint.
+tickets own `inspect/ui/**` only. `V2-KERNEL` is the only ticket **in waves
+1–6** allowed to touch `kernel/**`, and only the files it lists. Two tickets run
+in parallel only when file claims are disjoint.
+
+**Superseded for waves 7+.** The C-replan checkpoint (2026-07-29) opened the
+kernel to three further tickets, under a split stated in
+`00-orchestration.md` §"Standing rules, addenda for waves 7+": `V1C-KERNEL`
+(wave 8, sole owner of `ManagedHost.kt` and `SetCell.kt` for the rest of the
+plan), then `V1C-CELLS`, `V1C-OPS` and `V4-PEERID` in wave 9 over disjoint
+kernel claims. Read that section, not this paragraph, when dispatching a wave-7+
+ticket. The same checkpoint lifted constraint 7 (`concord/`) for `V1C-CONCORD`
+alone.
