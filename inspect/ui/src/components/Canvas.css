@@ -103,6 +103,18 @@
   pointer-events: none;
 }
 
+/* V1B-FE ticket Solution direction §4: the "pinned, snapshot only" variant —
+   a 409'd observe (no built-in fold) never gets a live cardinality/frontier/
+   staleness reading, so it is styled distinctly (dashed border, muted text,
+   no mono font since there is no data to align in columns) rather than
+   reusing the live chip's markup verbatim. */
+.node-state-chip--snapshot {
+  font-family: inherit;
+  font-style: italic;
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
 .node-card {
   position: absolute;
   background: var(--surface);
@@ -176,6 +188,42 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* V1B-FE ticket Solution direction §4: the per-card pin toggle, pushed to
+   the row's trailing edge (`margin-left: auto` would also work, but the
+   name's own `flex: 1 1 auto` above already consumes the remaining space,
+   so this just needs to not shrink). Dim until pinned or hovered/focused, so
+   an unpinned card's row does not look busier than the M0-era one-chip-one-
+   name layout it is extending. */
+.node-card__pin {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.35;
+}
+
+.node-card__pin:hover,
+.node-card__pin:focus-visible {
+  opacity: 0.8;
+}
+
+.node-card__pin.is-pinned {
+  opacity: 1;
+}
+
+.node-card__pin:disabled {
+  opacity: 0.15;
+  cursor: not-allowed;
 }
 
 .node-card__type {

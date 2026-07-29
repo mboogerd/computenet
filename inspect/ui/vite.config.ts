@@ -15,6 +15,16 @@ export default defineConfig({
       '/api/inspect': { target: backend, changeOrigin: true },
     },
   },
+  // Under `environment: 'node'`, Vitest's SSR pipeline otherwise resolves
+  // solid-js via its "node" export condition (`solid-js/dist/server.js`) —
+  // the SSR build, whose `createEffect` is a render-time no-op rather than a
+  // reactive subscription. That silently breaks any test exercising a
+  // `createEffect`-driven bridge (e.g. `solid/detail.ts`'s `initDetail()`).
+  // Forcing the "browser" condition for module resolution (test runs only —
+  // `VITEST` is set by the test runner, never during `vite`/`vite build`)
+  // picks the real reactive build instead; none of this suite's tests touch
+  // the DOM, so no jsdom/happy-dom environment is needed for that.
+  resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],

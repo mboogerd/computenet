@@ -9,11 +9,24 @@ import { indicatesChange } from './summaryChange';
 export interface DetailTransport {
   fetchDetail(ref: Ref): Promise<CellDetail>;
   fetchState(ref: Ref): Promise<CellState>;
-  /** `POST /cell/{ref}/observe` — starts `state.summary` events for `ref`. */
-  observeStart(ref: Ref): Promise<void>;
+  /** `POST /cell/{ref}/observe` — starts `state.summary` events for `ref`,
+   *  unless the target has no built-in fold to observe, in which case the
+   *  server answers 409 (20-api-contract.md:25) and this resolves
+   *  `'refused'` rather than throwing — V1B-FE ticket Solution direction §3:
+   *  a refused observe is a normal, handled outcome (the ref stays pinned,
+   *  "snapshot only"), not a transport error. */
+  observeStart(ref: Ref): Promise<ObserveOutcome>;
   /** `DELETE /cell/{ref}/observe` — stops them. */
   observeStop(ref: Ref): Promise<void>;
 }
+
+/** V1B-FE ticket Solution direction §3. `'refused'` is the 409 case — the
+ *  target cell has no built-in fold to observe ("no delta outlet, or an
+ *  outlet kind with no `View`", `Observations.kt`'s documented refusal
+ *  cases) — carried as a resolved value rather than a rejection so callers
+ *  can distinguish "the server declined this subscription" from "the
+ *  request itself failed" (network error, 5xx, etc.), which still throws. */
+export type ObserveOutcome = 'started' | 'refused';
 
 function baseUrl(): string {
   return '/api/inspect';
@@ -37,55 +50,99 @@ async function expectJson<T>(res: Response): Promise<T> {
 export const defaultDetailTransport: DetailTransport = {
   fetchDetail: (ref) => fetch(`${baseUrl()}/cell/${ref}`).then((r) => expectJson<CellDetail>(r)),
   fetchState: (ref) => fetch(`${baseUrl()}/cell/${ref}/state`).then((r) => expectJson<CellState>(r)),
-  observeStart: (ref) => fetch(`${baseUrl()}/cell/${ref}/observe`, { method: 'POST' }).then(() => undefined),
+  observeStart: (ref) =>
+    fetch(`${baseUrl()}/cell/${ref}/observe`, { method: 'POST' }).then((res): ObserveOutcome => {
+      if (res.status === 409) return 'refused';
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${res.url}`);
+      return 'started';
+    }),
   observeStop: (ref) => fetch(`${baseUrl()}/cell/${ref}/observe`, { method: 'DELETE' }).then(() => undefined),
 };
 
 export interface DetailHandlers {
   onDetail: (ref: Ref, detail: CellDetail | undefined, error?: unknown) => void;
   onState: (ref: Ref, state: CellState | undefined, error?: unknown) => void;
+  /** V1B-FE ticket Solution direction §2: fired whenever the explicit pinned
+   *  set or the snapshot-only annotations change (pin/unpin/unpinAll, or a
+   *  409 arriving asynchronously for a ref opened via {@link
+   *  DetailController.pin} or {@link DetailController.select}) — the bridge
+   *  `solid/detail.ts` turns into `pinned()`/`snapshotOnly()` signals. Both
+   *  sets are snapshots (safe to retain by reference). */
+  onPinsChanged: (pinned: ReadonlySet<Ref>, snapshotOnly: ReadonlySet<Ref>) => void;
 }
 
 /**
  * Owns the M1 observer-effect discipline (10-target-v3.md constraint P6 /
- * M1-BE ticket §2): selecting a node issues exactly one `observe` POST;
- * deselecting (or selecting something else) issues exactly one `observe`
- * DELETE for whatever was previously selected. Browsing without selecting
- * never calls this class at all.
+ * M1-BE ticket §2), generalized by V1B-FE from "exactly one observed ref"
+ * (the selected one) to a **pinned set** plus the current **selection**,
+ * which behaves as an implicit pin that follows the cursor. The full
+ * observed set is `pinned ∪ {selection}` (selection only counts while it is
+ * not descriptor-only — see {@link select}).
  *
  * Framework-free (no Solid import) so it is directly unit-testable against a
  * mock `DetailTransport`, the same pattern as `sync/client.ts` /
  * `test/client.test.ts`. `solid/detail.ts` is the only caller.
  *
- * An `epoch` counter guards against a stale async response landing after a
- * rapid re-selection (select A, then B before A's fetch resolves): A's
- * eventual detail/state response must never overwrite B's.
+ * Every tracked ref gets its own epoch counter (`Map<Ref, number>`), bumped
+ * whenever a *fresh* observation is opened for it (a `select`/`pin` call
+ * that was not already observing it) or whenever it is (re)selected as the
+ * descriptor target — so a stale async response for a ref that has since
+ * been unpinned/deselected/re-opened is discarded, the same property the
+ * pre-V1b single-ref `epoch` counter enforced, now scoped per ref instead of
+ * globally (so pinning/unpinning one ref never invalidates another ref's
+ * in-flight fetch).
  */
 export class DetailController {
+  /** Explicit, user-controlled pins (`pin`/`unpin`/`unpinAll`). Does not
+   *  include the current selection unless it was also explicitly pinned.
+   *
+   *  Idle release: a pin can go stale if the server's idle sweep releases
+   *  its observation after `Observations.IDLE_RELEASE_MS` (5 minutes,
+   *  `Observations.kt:291-292`) with no activity — e.g. the pinned cell's
+   *  host suspends and stops publishing summaries. This class deliberately
+   *  builds no client-side keep-alive/touch loop or re-observe-on-silence
+   *  detector to paper over that (mirrors {@link FlowStore}'s
+   *  `DECAY_AFTER_MISSED_WINDOWS` in choosing the simpler of two behaviors,
+   *  `sync/flowStore.ts`): the existing `staleMs` reading already shows a
+   *  value that has stopped advancing, and the fix is for the user to
+   *  unpin/re-pin, not an automatic mechanism. */
+  private pinned = new Set<Ref>();
+  /** Refs whose `observeStart` most recently resolved `'refused'` (409): kept
+   *  in the observed/pinned set (a no-fold cell can still be "watched", it
+   *  just never streams) but never re-read from a `state.summary` — none
+   *  ever arrive for it — and excluded from the "live observed" count. */
+  private snapshotOnly = new Set<Ref>();
+  /** The selected ref, or null. */
   private current: Ref | null = null;
-  private epoch = 0;
   /** True while the current selection is descriptor-only (a cold graph, see
    *  {@link select}) — so a `state.summary` for some other, still-observed cell
-   *  cannot pull this one's state in through the back door. */
+   *  cannot pull this one's state in through the back door, and so selection
+   *  contributes nothing to the observed set while cold. */
   private descriptorOnly = false;
-  /** V1A-FE ticket Implement §1: the last `state.summary` seen for the
-   *  current selection, so {@link onSummary} can gate its refetch on
-   *  `indicatesChange` rather than refetching unconditionally on every
-   *  summary (which, once V1A-BE's coalesced feed publishes even-when-quiet
-   *  windows, would turn into a 1 Hz polling loop against an unchanged
-   *  value). Reset on every {@link select}/{@link deselect} so a
-   *  re-selection always refetches once, exactly like the epoch counter
-   *  resets the async-staleness guard. */
-  private lastSummary: StateSummaryPayload | undefined;
+  private epochs = new Map<Ref, number>();
+  /** Per-ref last `state.summary` seen since the ref's observation was last
+   *  (re)opened — V1A-FE ticket Implement §1, generalized per ref: gates
+   *  {@link onSummary}'s refetch on `indicatesChange` rather than
+   *  refetching unconditionally on every summary (which, once V1A-BE's
+   *  coalesced feed publishes even-when-quiet windows, would turn into a
+   *  1 Hz polling loop against an unchanged value). Cleared whenever a
+   *  ref's observation is freshly (re)opened, so a re-pin/re-selection
+   *  always refetches once, exactly like the epoch map resets the
+   *  async-staleness guard for that ref. */
+  private lastSummary = new Map<Ref, StateSummaryPayload>();
 
   constructor(
     private readonly transport: DetailTransport,
     private readonly handlers: DetailHandlers,
   ) {}
 
-  /** Currently selected/observed ref, or null. */
+  /** Currently selected ref, or null. */
   get selected(): Ref | null {
     return this.current;
+  }
+
+  isPinned(ref: Ref): boolean {
+    return this.pinned.has(ref);
   }
 
   /**
@@ -98,78 +155,228 @@ export class DetailController {
    * (10-target-v3.md §Constraints 2), so a graph the UI has just told the user
    * is parked must not be woken by the act of looking at it. Waking is the
    * explicit button, never a side effect of selection.
+   *
+   * V1B-FE ticket Solution direction §1: releasing the previous selection's
+   * observation is conditional — skipped if the previous ref is still
+   * pinned. Opening the new selection's observation is likewise conditional
+   * — skipped if the new ref is already pinned (it is already observed for
+   * another reason). Note: this method deliberately has no notion of "cold"
+   * beyond the `mode` parameter passed in by the caller — the same is true
+   * of `pin` (see its doc comment) — cold-gating a pin control is a UI-layer
+   * responsibility (`solid/cold.ts`'s `currentGraphCold()`), not this
+   * class's.
    */
   select(ref: Ref, mode: 'live' | 'descriptor' = 'live'): void {
     if (this.current === ref && this.descriptorOnly === (mode === 'descriptor')) return;
     const prev = this.current;
-    const wasObserved = prev !== null && !this.descriptorOnly;
+    const prevWasLive = prev !== null && !this.descriptorOnly;
+    const prevPinned = prev !== null && this.pinned.has(prev);
+
     this.current = ref;
     this.descriptorOnly = mode === 'descriptor';
-    this.lastSummary = undefined;
-    const epoch = ++this.epoch;
 
-    // only release what was actually acquired — a descriptor-only selection
-    // never opened an observation to release
-    if (prev && wasObserved) void this.transport.observeStop(prev);
+    // only release what was actually acquired, and only if nothing else
+    // (a pin) still wants it kept open
+    if (prev && prevWasLive && !prevPinned) this.releaseObservation(prev);
 
+    const epoch = this.bumpEpoch(ref);
     void this.loadDetail(ref, epoch);
-    if (this.descriptorOnly) return;
+    if (this.descriptorOnly) {
+      this.notifyPinsChanged();
+      return;
+    }
 
-    void this.transport
-      .observeStart(ref)
-      .then(() => this.loadState(ref, epoch))
-      .catch((err) => {
-        if (epoch === this.epoch && this.current === ref) this.handlers.onState(ref, undefined, err);
-      });
+    if (this.pinned.has(ref)) {
+      // already observed via an existing pin — no new POST, just read the
+      // current value for the panel
+      void this.loadState(ref, epoch);
+    } else {
+      this.lastSummary.delete(ref);
+      this.openLiveObservation(ref, epoch);
+    }
+    this.notifyPinsChanged();
   }
 
   deselect(): void {
-    if (!this.current) return;
+    if (this.current === null) return;
     const prev = this.current;
-    const wasObserved = !this.descriptorOnly;
+    const prevWasLive = !this.descriptorOnly;
+    const prevPinned = this.pinned.has(prev);
     this.current = null;
     this.descriptorOnly = false;
-    this.lastSummary = undefined;
-    this.epoch++;
-    if (wasObserved) void this.transport.observeStop(prev);
+    if (prevWasLive && !prevPinned) this.releaseObservation(prev);
+    this.notifyPinsChanged();
+  }
+
+  /**
+   * Pin `ref`: add it to the explicit pinned set. If it was not already
+   * observed (not already pinned, not already the live-observed selection),
+   * opens exactly one observation for it (`POST .../observe` + one initial
+   * `GET .../state`); a no-op transport-wise if it was already observed.
+   *
+   * Like {@link select}'s `mode: 'descriptor'` gate, this method has no
+   * cold-graph awareness of its own — the caller (`solid/detail.ts`'s
+   * bridge, driven by the pin control's `disabled`/hidden state) must not
+   * invoke it at all while the target's graph is cold, mirroring how
+   * `initDetail` decides `mode` before calling `select`.
+   *
+   * Edge case the design notes leave open: a ref already pinned *before* its
+   * graph goes cold. Chosen behavior is "leave it open" — nothing here (or
+   * in `solid/detail.ts`) force-releases an existing pin's observation when
+   * `currentGraphCold()` flips true; only the pin *control* is disabled, so
+   * no new pins can be added while cold (`Canvas.tsx`'s
+   * `disabled={currentGraphCold()}`). Rationale: the observation was opened
+   * deliberately by the user and the cone is presumably already awake
+   * (something must be publishing for the pin to have been useful); tearing
+   * it down automatically on a transient cold flag would be a surprising,
+   * unrequested side effect, and the user can always unpin explicitly. This
+   * mirrors selecting the simpler of two behaviors, the same call made for
+   * idle release above.
+   */
+  pin(ref: Ref): void {
+    if (this.pinned.has(ref)) return;
+    const alreadyLive = this.current === ref && !this.descriptorOnly;
+    this.pinned.add(ref);
+    if (!alreadyLive) {
+      const epoch = this.bumpEpoch(ref);
+      this.lastSummary.delete(ref);
+      this.openLiveObservation(ref, epoch);
+    }
+    this.notifyPinsChanged();
+  }
+
+  /**
+   * Unpin `ref`. If it is not the current selection and had an open
+   * (non-refused) observation, releases it (`DELETE .../observe`) and drops
+   * its cached summary/snapshot-only flag. If it **is** the current
+   * selection, the observation and cached state are left untouched — the
+   * implicit selection-pin keeps it alive. A no-op if `ref` was not pinned.
+   */
+  unpin(ref: Ref): void {
+    if (!this.pinned.has(ref)) return;
+    this.pinned.delete(ref);
+    if (ref !== this.current) this.releaseObservation(ref);
+    this.notifyPinsChanged();
+  }
+
+  /** Release every pinned ref that is not the current selection (same rule
+   *  as {@link unpin}, applied to each) in one pass, then clear the pinned
+   *  set, notifying listeners exactly once regardless of how many refs were
+   *  released. */
+  unpinAll(): void {
+    if (this.pinned.size === 0) return;
+    for (const ref of this.pinned) {
+      if (ref !== this.current) this.releaseObservation(ref);
+    }
+    this.pinned.clear();
+    this.notifyPinsChanged();
   }
 
   /** Called for every `state.summary` SSE event, regardless of ref — a no-op
-   *  unless it names the currently-observed cell. Descriptor-only selections
-   *  are not observed, so they never re-read state from one either.
+   *  unless it names a ref that is currently live-observed (pinned or the
+   *  live-mode selection) and not snapshot-only (no summary ever arrives for
+   *  a refused ref in practice, but this stays defensive rather than
+   *  assuming that of the server).
    *
    *  V1A-FE ticket Implement §1: refetches only when {@link indicatesChange}
    *  says this summary represents an effective change versus the last one
-   *  seen since selection — not on every summary. The epoch guard on
-   *  `loadState` is unchanged and remains the sole mechanism for discarding a
-   *  response that lands after a re-selection; this adds no second staleness
-   *  mechanism, only a *trigger* gate. */
+   *  seen since the ref's observation was (re)opened — not on every summary.
+   *  The per-ref epoch guard on `loadState` is unchanged and remains the
+   *  sole mechanism for discarding a response that lands after the ref
+   *  stops being tracked; this adds no second staleness mechanism, only a
+   *  *trigger* gate. */
   onSummary(payload: StateSummaryPayload): void {
-    if (payload.ref !== this.current || this.descriptorOnly) return;
-    const changed = indicatesChange(this.lastSummary, payload);
-    this.lastSummary = payload;
-    if (changed) void this.loadState(payload.ref, this.epoch);
+    const ref = payload.ref;
+    if (!this.isObservedLive(ref) || this.snapshotOnly.has(ref)) return;
+    const prev = this.lastSummary.get(ref);
+    const changed = indicatesChange(prev, payload);
+    this.lastSummary.set(ref, payload);
+    if (changed) void this.loadState(ref, this.epochOf(ref));
+  }
+
+  private isObservedLive(ref: Ref): boolean {
+    return this.pinned.has(ref) || (this.current === ref && !this.descriptorOnly);
+  }
+
+  private epochOf(ref: Ref): number {
+    return this.epochs.get(ref) ?? 0;
+  }
+
+  private bumpEpoch(ref: Ref): number {
+    const epoch = this.epochOf(ref) + 1;
+    this.epochs.set(ref, epoch);
+    return epoch;
+  }
+
+  /** `ref` is still the thing an in-flight state fetch was issued for: it
+   *  remains tracked (pinned or the current selection) and no fresher
+   *  observation has since been opened for it. */
+  private isTracked(ref: Ref, epoch: number): boolean {
+    return epoch === this.epochOf(ref) && (this.pinned.has(ref) || this.current === ref);
+  }
+
+  private isSelected(ref: Ref, epoch: number): boolean {
+    return epoch === this.epochOf(ref) && this.current === ref;
+  }
+
+  /** `POST .../observe` then one initial `GET .../state`, shared by {@link
+   *  select} and {@link pin} for the "not already observed" case. Handles
+   *  the 409 ("refused") outcome by flagging `ref` snapshot-only rather than
+   *  treating it as a failure — the observe response itself is the signal
+   *  (V1B-FE ticket Solution direction §3), never `CellState.kind`. */
+  private openLiveObservation(ref: Ref, epoch: number): void {
+    void this.transport
+      .observeStart(ref)
+      .then((outcome) => {
+        if (outcome === 'refused' && this.isTracked(ref, epoch)) {
+          this.snapshotOnly.add(ref);
+          this.notifyPinsChanged();
+        }
+        return this.loadState(ref, epoch);
+      })
+      .catch((err) => {
+        if (this.isTracked(ref, epoch)) this.handlers.onState(ref, undefined, err);
+      });
+  }
+
+  /** Fully releases `ref`'s observation: drops its per-ref caches and, unless
+   *  it was snapshot-only (in which case no real server-side subscription
+   *  was ever open), issues the `DELETE .../observe`. Callers are
+   *  responsible for calling {@link notifyPinsChanged} themselves — exactly
+   *  once per public method invocation, even when this is called in a loop
+   *  (see {@link unpinAll}).
+   *
+   *  Deliberately does NOT reset `ref`'s epoch counter — a re-open (a later
+   *  `pin`/`select` for the same ref) always bumps *forward* from whatever
+   *  the counter already holds, so a stale response from this now-closed
+   *  observation can never coincidentally match the epoch a later reopen
+   *  produces (which a reset-to-zero-then-rebump would risk on the very
+   *  first reopen). */
+  private releaseObservation(ref: Ref): void {
+    this.lastSummary.delete(ref);
+    const wasSnapshotOnly = this.snapshotOnly.delete(ref);
+    if (!wasSnapshotOnly) void this.transport.observeStop(ref);
+  }
+
+  private notifyPinsChanged(): void {
+    this.handlers.onPinsChanged(new Set(this.pinned), new Set(this.snapshotOnly));
   }
 
   private async loadDetail(ref: Ref, epoch: number): Promise<void> {
     try {
       const detail = await this.transport.fetchDetail(ref);
-      if (this.isCurrent(ref, epoch)) this.handlers.onDetail(ref, detail);
+      if (this.isSelected(ref, epoch)) this.handlers.onDetail(ref, detail);
     } catch (err) {
-      if (this.isCurrent(ref, epoch)) this.handlers.onDetail(ref, undefined, err);
+      if (this.isSelected(ref, epoch)) this.handlers.onDetail(ref, undefined, err);
     }
   }
 
   private async loadState(ref: Ref, epoch: number): Promise<void> {
     try {
       const state = await this.transport.fetchState(ref);
-      if (this.isCurrent(ref, epoch)) this.handlers.onState(ref, state);
+      if (this.isTracked(ref, epoch)) this.handlers.onState(ref, state);
     } catch (err) {
-      if (this.isCurrent(ref, epoch)) this.handlers.onState(ref, undefined, err);
+      if (this.isTracked(ref, epoch)) this.handlers.onState(ref, undefined, err);
     }
-  }
-
-  private isCurrent(ref: Ref, epoch: number): boolean {
-    return epoch === this.epoch && this.current === ref;
   }
 }

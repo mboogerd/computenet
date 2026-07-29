@@ -83,6 +83,27 @@
   border-color: var(--error);
 }
 
+/* V1B-FE ticket Solution direction §4: the observation cost indicator —
+   same shape as `.error-counters` (border/background/radius), no `is-active`
+   state of its own since it does not gate a canvas toggle, just unpins
+   everything on click. */
+.observed-counter {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.55rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.observed-counter:hover {
+  border-color: var(--hairline-strong);
+}
+
 .error-counters__item--dead {
   color: var(--error);
   font-weight: 600;

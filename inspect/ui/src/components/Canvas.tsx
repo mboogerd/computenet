@@ -10,7 +10,8 @@ import {
 } from '../layout/hulls';
 import { cardAnchor, portAnchors } from '../layout/ports';
 import { layoutEngine } from '../solid/layout';
-import { stateSummaries } from '../solid/detail';
+import { currentGraphCold } from '../solid/cold';
+import { isPinned, observed, pin, snapshotOnly, stateSummaries, unpin } from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
 import { prefersReducedMotion } from '../solid/motion';
@@ -264,6 +265,34 @@ export default function Canvas() {
                         {colorGlyph(rec()!.color)}
                       </span>
                       <span class="node-card__name">{rec()!.name ?? ref.slice(0, 8)}</span>
+                      {/* V1B-FE ticket Solution direction §4: a pin toggle on
+                          every node card, next to the color chip.
+                          `stopPropagation` so pinning does not also select
+                          the card. Disabled while the graph is cold — same
+                          gate as selection's own `mode: 'descriptor'`
+                          (P6: subscribing raises attention and can un-park a
+                          cone; a graph the UI has called parked must not be
+                          woken by pinning it either). */}
+                      <button
+                        type="button"
+                        class="node-card__pin"
+                        classList={{ 'is-pinned': isPinned(ref) }}
+                        disabled={currentGraphCold()}
+                        title={
+                          currentGraphCold()
+                            ? 'Pinning is disabled while this graph is cold'
+                            : isPinned(ref)
+                              ? 'Unpin (stop observing when not selected)'
+                              : 'Pin (keep observing alongside the selection)'
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isPinned(ref)) unpin(ref);
+                          else pin(ref);
+                        }}
+                      >
+                        📌
+                      </button>
                     </div>
                     <div class="node-card__type" title={rec()!.typeFqn}>
                       {shortType(rec()!.typeFqn)}
@@ -289,22 +318,34 @@ export default function Canvas() {
               (not nested inside `.node-card`, which clips overflow for its
               own text-ellipsis rows) anchored just below each card. M1-FE
               ticket "Correction for clarity": driven purely by received
-              `state.summary` events; only the observed (== selected) cell
-              ever has one, so an unselected cell simply shows no chip. */}
+              `state.summary` events. V1B-FE ticket Solution direction §4:
+              generalized from "only the selected cell ever has one" to one
+              chip per entry in the observed set (pinned ∪ selection) — a
+              cell outside that set still shows no chip. A `snapshotOnly`
+              ref (409'd observe) never receives a `state.summary` (no
+              server-side sink exists for it), so it gets a visually
+              distinct "pinned · snapshot only" variant instead of the
+              cardinality/frontier/staleness line, which is summary-only
+              data it will never have. */}
           <For each={nodeRefs()}>
             {(ref) => {
               const ln = () => layout().nodes.get(ref);
               const summary = () => stateSummaries[ref];
+              const isSnapshotOnly = () => observed().has(ref) && snapshotOnly().has(ref);
               return (
-                <Show when={showState() && ln() && summary()}>
+                <Show when={showState() && ln() && (summary() || isSnapshotOnly())}>
                   <div
                     class="node-state-chip"
+                    classList={{ 'node-state-chip--snapshot': isSnapshotOnly() }}
+                    data-mode={isSnapshotOnly() ? 'snapshot' : 'live'}
                     style={{ left: `${ln()!.x}px`, top: `${ln()!.y + ln()!.h + 4}px`, width: `${ln()!.w}px` }}
-                    title="cardinality · frontier · staleness"
+                    title={isSnapshotOnly() ? 'pinned · snapshot only (no live fold to observe)' : 'cardinality · frontier · staleness'}
                   >
-                    {summary()!.cardinality ?? '—'} ·{' '}
-                    {summary()!.frontier ? `${summary()!.frontier!.source.slice(0, 6)}·${summary()!.frontier!.counter}` : '—'} ·{' '}
-                    {summary()!.staleMs}ms
+                    <Show when={!isSnapshotOnly()} fallback="pinned · snapshot only">
+                      {summary()!.cardinality ?? '—'} ·{' '}
+                      {summary()!.frontier ? `${summary()!.frontier!.source.slice(0, 6)}·${summary()!.frontier!.counter}` : '—'} ·{' '}
+                      {summary()!.staleMs}ms
+                    </Show>
                   </div>
                 </Show>
               );

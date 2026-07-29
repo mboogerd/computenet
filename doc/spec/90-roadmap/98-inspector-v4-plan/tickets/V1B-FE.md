@@ -1,6 +1,6 @@
 # V1B-FE — Pin multiple cells for simultaneous observation, surface the observation cost
 
-**Status**: Specified — not-started
+**Status**: Implemented — fix-and-recheck pass landed (state-bleed regression fixed, idle-release/cold-pin doc gaps closed); pending merge to main
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`
 **Wave:** 3 · **Branches:** `ticket/v1b-fe`
 

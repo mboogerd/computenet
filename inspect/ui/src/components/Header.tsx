@@ -1,4 +1,5 @@
 import { createMemo, Show } from 'solid-js';
+import { observed, snapshotOnly, unpinAll } from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
 import { goHome, screen } from '../solid/route';
 import { conn, nodes } from '../solid/state';
@@ -43,6 +44,7 @@ export default function Header() {
         <span class="conn-pip__dot" /> {CONN_LABEL[conn()] ?? conn()}
       </span>
       <ErrorCounters />
+      <ObservedCounter />
       <div class="app-header__spacer" />
       <button class="icon-btn" title="Toggle light / dark" onClick={toggleTheme}>
         {theme() === 'dark' ? '☀ Light' : '☾ Dark'}
@@ -72,6 +74,31 @@ function ErrorCounters() {
       <span class="error-counters__item error-counters__item--dead">{counters().deadLetters} dead</span>
       <span class="error-counters__item error-counters__item--parked">{counters().parked} parked</span>
       <span class="error-counters__item error-counters__item--restarts">{counters().restarts} restarts</span>
+    </button>
+  );
+}
+
+/** V1B-FE ticket Solution direction §4: "a small 'N cells observed'
+ *  affordance in the header, mirroring `ErrorCounters`' pattern — a button,
+ *  always visible, click toggles a related overlay" — here, click unpins
+ *  everything, since there is no separate overlay to toggle. The count is
+ *  the size of the *live* observed set (`pinned ∪ {selection}`), excluding
+ *  `snapshotOnly` refs: a refused (409) observe never opened a real
+ *  server-side subscription, so it should not count toward "cones you are
+ *  touching" (P6, 10-design-notes.md §Binding constraints 2). */
+function ObservedCounter() {
+  const count = createMemo(() => {
+    let n = 0;
+    for (const ref of observed()) if (!snapshotOnly().has(ref)) n++;
+    return n;
+  });
+  return (
+    <button
+      class="observed-counter"
+      title="Cells currently observed (live state subscriptions) — click to unpin all"
+      onClick={unpinAll}
+    >
+      {count()} observed
     </button>
   );
 }
