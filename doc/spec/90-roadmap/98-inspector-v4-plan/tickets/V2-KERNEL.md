@@ -1,6 +1,6 @@
 # V2-KERNEL — lifecycle transitions and the attention band become observable without polling
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 4 · **Branches:** `ticket/v2-kernel`

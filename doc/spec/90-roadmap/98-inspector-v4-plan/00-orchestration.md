@@ -111,7 +111,7 @@ parallel with both (ui only, fixture-driven).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| V2-KERNEL | Lifecycle listener, attention accessor, hook deregistration, remoteRefs() | opus | fresh | ticket/v2-kernel | opus | not-started |
+| V2-KERNEL | Lifecycle listener, attention accessor, hook deregistration, remoteRefs() | opus | fresh | ticket/v2-kernel | opus | merged |
 | V2-BE | Consume seams (drop polls); activity feed (ring + GET + SSE); attention in CellDetail | opus | fork V2-KERNEL | ticket/v2-be | opus | not-started |
 | V2-FE | Activity feed panel; attention display; suspended emphasis | sonnet | fresh | ticket/v2-fe | opus | merged |
 
