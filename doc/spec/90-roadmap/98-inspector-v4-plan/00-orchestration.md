@@ -86,7 +86,7 @@ Parallel: V1A-BE ∥ V1A-FE (FE codes against the contract addition + fixture).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| V1A-BE | Coalesced state.summary (flow.rates pattern); summary drives value freshness | opus | fresh | ticket/v1a-be | opus | not-started |
+| V1A-BE | Coalesced state.summary (flow.rates pattern); summary drives value freshness | opus | fresh | ticket/v1a-be | opus | merged |
 | V1A-FE | Live ValueView: refetch-on-summary, row-flash, onChange log panel | sonnet | fresh | ticket/v1a-fe | opus | not-started |
 
 **Checkpoint C2 — verification.** As C1; the evaluator additionally exercises

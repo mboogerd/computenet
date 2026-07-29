@@ -1,7 +1,6 @@
 # V1A-BE — `state.summary` becomes a coalesced, self-announcing freshness feed
 
-**Status**: Partial — in-progress (implemented on `ticket/v1a-be`, awaiting
-merge). (`:concord:docLints` accepts only
+**Status**: Implemented — merged. (`:concord:docLints` accepts only
 `Specified|Partial|Implemented|Exploratory|Historical|Living` as the first word
 of this line; the ticket's own lifecycle word follows it. Move to
 `Partial — in-progress` while working, `Implemented — merged` once merged.)
