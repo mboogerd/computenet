@@ -1,6 +1,6 @@
 # V1A-FE — The observed cell's value goes live: change-gated refetch, row-flash, onChange log
 
-**Status**: Partial — in-progress. (`:concord:docLints` accepts only
+**Status**: Implemented — merged. (`:concord:docLints` accepts only
 `Specified|Partial|Implemented|Exploratory|Historical|Living` as the first word
 of this line; the ticket's own lifecycle word follows it. Move to
 `Partial — in-progress` while working, `Implemented — merged` once merged.)
