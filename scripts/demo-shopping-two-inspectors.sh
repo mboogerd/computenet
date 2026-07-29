@@ -58,9 +58,10 @@ wait_for "http://localhost:$INSPECT_A/api/inspect/topology" "inspector A"
 wait_for "http://localhost:$INSPECT_B/api/inspect/topology" "inspector B"
 
 echo "==> starting inspector UI dev servers"
-(cd "$ROOT/inspect/ui" && INSPECT_BACKEND="http://localhost:$INSPECT_A" npx vite --port "$UI_A" --strictPort) &
+VITE_BIN="$ROOT/inspect/ui/node_modules/.bin/vite"
+(cd "$ROOT/inspect/ui" && INSPECT_BACKEND="http://localhost:$INSPECT_A" exec "$VITE_BIN" --port "$UI_A" --strictPort) &
 PIDS+=($!)
-(cd "$ROOT/inspect/ui" && INSPECT_BACKEND="http://localhost:$INSPECT_B" npx vite --port "$UI_B" --strictPort) &
+(cd "$ROOT/inspect/ui" && INSPECT_BACKEND="http://localhost:$INSPECT_B" exec "$VITE_BIN" --port "$UI_B" --strictPort) &
 PIDS+=($!)
 
 wait_for "http://localhost:$UI_A/" "inspector UI A"
