@@ -231,6 +231,109 @@ open class ManagedHost(
     fun isSuspended(ref: CellRef): Boolean = suspendedCells.containsKey(ref)
 
     /**
+     * A cell's coarse lifecycle transition on its host (V2-KERNEL): the four
+     * state changes [isSuspended] and [isDrained] already expose *as
+     * predicates*, named as events.
+     *
+     * The predicates say what is true now; they cannot say *when* it became
+     * true, and they cannot report a change that flips back between two reads
+     * at all. Sampling them is what an out-of-kernel observer had to do
+     * (spec 90/98 V2, the per-cell activity log), and a transition is
+     * individually rare — so the cost belongs on the rare path that causes it,
+     * not on a periodic sweep of every known cell.
+     *
+     * Deliberately *not* an exhaustive lifecycle vocabulary: spawn and despawn
+     * are already announced by [LocationRegistry.onPublish]/[LocationRegistry.onUnpublish],
+     * a `SupervisionPolicy.RESTART` is already countable through [generationOf],
+     * and a migration is a drain plus a publish elsewhere. Only the four
+     * transitions with no existing seam are here.
+     */
+    enum class LifecycleTransition {
+        /**
+         * The cell was parked — `SupervisionPolicy.SUSPEND` on a failure, or an
+         * explicit [HostManagementApi.suspend]. [isSuspended] is true.
+         */
+        SUSPENDED,
+
+        /**
+         * The cell was unparked by [HostManagementApi.resume]. [isSuspended] is
+         * false; its parked traffic replays immediately after.
+         */
+        RESUMED,
+
+        /**
+         * This host finished draining (spec 33 §Drain, G-16) — reported once per
+         * cell the host held at that moment. [isDrained] is true.
+         */
+        DRAINED,
+
+        /**
+         * This host was resumed by [HostManagementApi.resumeHost] — reported once
+         * per cell it holds. [isDrained] is false.
+         */
+        HOST_RESUMED,
+    }
+
+    /**
+     * Registered [LifecycleTransition] observers. [CopyOnWriteArrayList] for the
+     * same reason [LocationRegistry]'s hooks use one: a listener may register or
+     * deregister from inside a notification.
+     */
+    private val lifecycleListeners = CopyOnWriteArrayList<(CellRef, LifecycleTransition) -> Unit>()
+
+    /**
+     * Subscribe to this host's per-cell [LifecycleTransition]s (V2-KERNEL),
+     * returning a deregistration handle exactly like [LocationRegistry]'s hooks.
+     *
+     * **On the host, not the registry**, because every transition is a host
+     * concern and a host may run registry-less (`ManagedHost(registry = null)`);
+     * a registry-level fan-in would need a host→registry back-edge that does not
+     * exist. **Per cell**, because a host-level drain is a per-cell fact to every
+     * consumer that keeps per-cell rows.
+     *
+     * Contract, identical to [LocationRegistry]'s announcement hooks:
+     * notification is **synchronous, on the mutating thread** — this host's
+     * scheduler, management band for suspend/resume/resumeHost and drain
+     * priority 30 for the drain — and runs **after the state change is
+     * visible**, so a listener that re-reads [isSuspended]/[isDrained] sees the
+     * transition it was told about.
+     *
+     * **Notifications, not participation.** A throwing listener is contained
+     * (stderr, carry on): it must not break a suspend, a drain, or the
+     * invocation whose failure triggered supervision. Nothing here is on the
+     * per-message data path (P2) — the call sites are the four rare
+     * state-transition points themselves.
+     *
+     * **Idempotence follows the kernel's, not the listener's convenience.** A
+     * transition is reported only where one actually happened: [HostManagementApi.suspend]
+     * on an already-suspended cell is a no-op today and stays silent, and so
+     * does a second `SupervisionPolicy.SUSPEND` on the same cell.
+     */
+    fun onLifecycle(listener: (CellRef, LifecycleTransition) -> Unit): AutoCloseable {
+        lifecycleListeners += listener
+        return AutoCloseable { lifecycleListeners -= listener }
+    }
+
+    /**
+     * Containment for [onLifecycle], mirroring [LocationRegistry]'s hook-failure
+     * rule (`LocationRegistry.notify`). Widened to `Throwable` for this file's own
+     * reason (T04 finding 5.3, [enqueue] and [deliver]): a listener's `TODO()` or
+     * `NoClassDefFoundError` is an `Error`, and letting one abort a drain
+     * mid-flight would make an observer a participant. `VirtualMachineError`
+     * stays fatal.
+     */
+    private fun notifyLifecycle(cellRef: CellRef, transition: LifecycleTransition) {
+        lifecycleListeners.forEach { listener ->
+            try {
+                listener(cellRef, transition)
+            } catch (e: Throwable) {
+                if (e is VirtualMachineError) throw e
+                System.err.println("[ManagedHost] lifecycle listener failed for $cellRef/$transition: $e")
+            }
+        }
+    }
+
+    /**
      * Host-held per-instance recovery generation (spec 00/03 glossary
      * "Generation"; 93 I-22 R1): never on the wire, outside the `Stateful`
      * checkpoint, bumped on every RESTART *before* reactivation so a
@@ -398,6 +501,11 @@ open class ManagedHost(
                 if (cell is Stateful) snapshots[cellRef] = cell.snapshot()
             }
             state = State.DRAINED
+            // V2-KERNEL: per cell, after [isDrained] is true and *before*
+            // [andThen] — migrate's continuation clears [cells], so the set this
+            // drain actually deactivated is only nameable here. Scheduler
+            // thread, drain band (priority 30).
+            cells.keys.forEach { notifyLifecycle(it, LifecycleTransition.DRAINED) }
             andThen()
         }
     }
@@ -561,6 +669,42 @@ open class ManagedHost(
         else -> cells[cellRef]?.let { AttentionSupport.of(it).band } ?: AttentionBand.NORMAL
     }
 
+    /**
+     * [ref]'s current [AttentionBand] (spec 34, G-6; V2-KERNEL) — the band this
+     * host's own dispatch uses, made readable. [bandOf] above is the dispatch
+     * path's version and must answer with a band for every cell it schedules;
+     * this one answers an *observer*, so it distinguishes "no band" from
+     * "middle band" instead of folding both to `NORMAL`.
+     *
+     * **Null, not a guess.** Null when [ref] is not hosted here, and null when
+     * this host runs without an [AttentionPolicy]: with no policy, scheduling is
+     * plain FIFO and no band is in effect anywhere, so reporting `NORMAL` would
+     * invent a scheduling fact. Neutral `NORMAL` — "nobody said anything" —
+     * remains a real answer on a host that *does* have a policy.
+     *
+     * **The read never raises attention (P6) and never mutates.**
+     * [AttentionSupport.of] lazily *creates and wires* a support object for a
+     * cell that has none — installing protocol handlers and unlink listeners as
+     * a side effect of what its caller thinks is a read. That is why the
+     * `attention == null` gate comes first and is not merely a formatting
+     * choice: a host **with** a policy already called [AttentionSupport.of] for
+     * every cell at spawn, so here `of` is a pure lookup, and a host **without**
+     * one never reaches the call at all. Nothing else is touched — no
+     * [AttentionSupport.refresh], no [AttentionSupport.attend]: both `recompute`,
+     * which can change the band, fire listeners and push attention up the cone.
+     *
+     * Cost is one map lookup plus one volatile field read, on the caller's
+     * thread. Nothing is enqueued on this host, no cell is entered, and
+     * [dataLock] is not taken. The read is racy with a concurrent recompute by
+     * construction, which is exactly what the dispatch path already does with
+     * the same field — attention is advisory scheduling metadata (spec 34).
+     */
+    fun attentionOf(ref: CellRef): AttentionBand? {
+        if (attention == null) return null
+        val cell = cells[ref] ?: return null
+        return AttentionSupport.of(cell).band
+    }
+
     // suspensionRegionOf, hasFrontierPolicy, bfs, notifyDownstream: moved to
     // TopologyWalks.kt (RS-8.4) — same package, so every existing bare call
     // site (notifyDownstream(...) below and in deliver()/resume()/suspend())
@@ -708,7 +852,18 @@ open class ManagedHost(
                     notifyDownstream(cell, StallNotice.Resume)
                 }
                 SupervisionPolicy.SUSPEND -> {
-                    suspendedCells[cellRef] = ParkQueue()
+                    // V2-KERNEL: idempotent, exactly like [HostManagementApi.suspend].
+                    // This branch IS reachable on an already-suspended cell: the
+                    // park gate above exempts PORT_PROTOCOL, so a metadata-plane
+                    // handler can still fail here while the cell is parked.
+                    // Re-installing a fresh [ParkQueue] there would silently
+                    // discard everything the first suspension parked —
+                    // Owned/Leased payloads included, with no dead letter and no
+                    // accounting. No state changes, so nothing is notified either.
+                    if (!suspendedCells.containsKey(cellRef)) {
+                        suspendedCells[cellRef] = ParkQueue()
+                        notifyLifecycle(cellRef, LifecycleTransition.SUSPENDED)
+                    }
                     notifyDownstream(cell, StallNotice.Stall(StallReason.SUSPENDED))
                 }
             }
@@ -863,6 +1018,13 @@ open class ManagedHost(
                 val parked = (suspendedCells.remove(ref)
                     ?: throw IllegalArgumentException("Cell not suspended: $ref")).drain()
                 cells[ref]?.let { notifyDownstream(it, StallNotice.Resume) }
+                // V2-KERNEL: before the replay, not after. [isSuspended] is
+                // already false — the state change is complete — and the replay
+                // is its consequence, not part of it: `enqueueHostedInvocation`
+                // refuses a closed intake, so notifying afterwards would lose a
+                // transition that definitively happened (resuming a cell on a
+                // drained host does exactly that).
+                notifyLifecycle(ref, LifecycleTransition.RESUMED)
                 // re-enqueue at data priority: replay order = park order (sequence tiebreaker)
                 parked.forEach { this@ManagedHost.enqueueHostedInvocation(it) }
             }
@@ -872,6 +1034,9 @@ open class ManagedHost(
                 if (!suspendedCells.containsKey(ref)) {
                     suspendedCells[ref] = ParkQueue()
                     cells[ref]?.let { notifyDownstream(it, StallNotice.Stall(StallReason.SUSPENDED)) }
+                    // V2-KERNEL: inside the guard — a repeated suspend changes
+                    // nothing and so reports nothing.
+                    notifyLifecycle(ref, LifecycleTransition.SUSPENDED)
                 }
             }
 
@@ -889,6 +1054,10 @@ open class ManagedHost(
                 // republish only after the intake reopens: replay enqueues here (spec 33 step 7)
                 cells.keys.forEach { registry?.publish(it, this@ManagedHost) }
                 state = State.RUNNING
+                // V2-KERNEL: last, so a listener sees a fully resumed host —
+                // reactivated, intake open, republished, [isDrained] false.
+                // Scheduler thread, management band (priority 0).
+                cells.keys.forEach { notifyLifecycle(it, LifecycleTransition.HOST_RESUMED) }
             }
 
             override fun migrate(to: Use<HostManagementApi>) = beginDrain {
