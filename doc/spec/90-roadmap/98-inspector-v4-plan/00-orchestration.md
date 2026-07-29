@@ -125,7 +125,7 @@ Parallel: V3-BE ∥ V3-FE.
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | V3-BE | Wave-health heuristic rows; supervision-timeline capture; richer dead-letter detail | opus | fresh | ticket/v3-be | opus | not-started |
-| V3-FE | Wave-health UI; supervision timeline; dead-letter detail cards | sonnet | fresh | ticket/v3-fe | opus | not-started |
+| V3-FE | Wave-health UI; supervision timeline; dead-letter detail cards | sonnet | fresh | ticket/v3-fe | opus | merged |
 
 **Checkpoint C5 — verification.** As C1; evaluator drives a stalled-wave
 scenario live and confirms a heuristic row appears and clears.
