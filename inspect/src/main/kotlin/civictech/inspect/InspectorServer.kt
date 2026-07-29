@@ -120,9 +120,11 @@ class InspectorServer(
      * disk, or a path that simply does not exist yet. Resolved against the
      * process's working directory, so the default
      * (`inspect/ui/dist`, Vite's own default output directory) only ever
-     * finds a real build when this JVM was launched from the repo root —
-     * `./gradlew :demo:skillmatch:run` and an installed distribution both
-     * qualify (`inspect/ui/README.md`'s "Run" section). A caller with a
+     * finds a real build when this JVM was launched from the repo root — an
+     * installed distribution launched from there qualifies
+     * (`inspect/ui/README.md`'s "Run" section); `./gradlew :demo:skillmatch:run`
+     * does not, since Gradle's `run` task defaults to the subproject's own
+     * directory as its working directory, not the repo root. A caller with a
      * different working-directory convention, or one that wants to point at
      * a build copied elsewhere, passes an explicit path; nothing here
      * invokes `npm run build` itself (binding constraint 10).
