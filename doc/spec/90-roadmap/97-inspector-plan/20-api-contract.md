@@ -172,12 +172,24 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // components sharing a host. Consequence: health is bounded by however much
 // row history the error feed's ring buffers (cap 200 each) still retain — GET
 // /api/inspect/errors' counters remain the true, unbounded per-host totals.
-// Open question (V3-BE, deliberately unanswered): should health roll up
-// wave-health rows too? Wave-health rows are per-(edge, cell) and their subject
-// set is scoped by which cells a client happens to be observing, so a
-// component-level roll-up would be a function of client attention rather than
-// of the component itself — and needs a rule for what health means when a
-// component has zero observed cells. Flagged for the replan checkpoint.
+// RESOLVED — health does NOT roll up wave-health rows, and will not.
+// (V3-BE raised it deliberately unanswered; decided at the inspector-v4
+// C-replan checkpoint, 2026-07-29.) The three fields health already carries are
+// properties of the component: dead letters arrive on a per-host tap, parked and
+// restarts are sampled over every known ref, all without a client asking for
+// anything. Wave-health rows are not. A row exists only for a (tapped edge,
+// explicitly-observed cell) pair, and the observed set is exactly what some
+// client asked for — so "waveHealth: 2" on a component would mean "2 rows among
+// the cells somebody happens to be watching", and GraphList is one server-wide
+// snapshot with no place to say whose attention produced it. The zero-observation
+// case has no honest value either: 0 would render as healthy where it means
+// unexamined. health is already softened by ring-buffer retention (above);
+// compounding that with an attention-dependent term would make the field mean
+// nothing in particular.
+// A client that wants the roll-up can compute it exactly and label it honestly:
+// ErrorSnapshot.waveHealth carries every open row with its ref, and the client
+// knows each ref's Node.graph. Doing it client-side keeps the caveat — "scoped to
+// your own observations" — attached to the number, which is the whole point.
 
 // SearchResult (M4/M5)
 {
