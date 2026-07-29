@@ -1,13 +1,24 @@
 import { For, Show, createMemo, type JSX } from 'solid-js';
-import type { DeadLetterEntry, ParkedEntry, RestartEntry } from '../api/types';
+import type { DeadLetterEntry, Frontier, ParkedEntry, RestartEntry, Value } from '../api/types';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { portFlowRows, type PortFlowRow } from '../util/flow';
 import { COLD_NOTICE } from '../nav/cold';
 import { currentGraphCold } from '../solid/cold';
-import { cellDetail, cellState, detailError, detailLoading, stateError, stateLoading } from '../solid/detail';
+import {
+  cellDetail,
+  cellState,
+  changeLog,
+  changeLogVersion,
+  detailError,
+  detailLoading,
+  stateError,
+  stateLoading,
+} from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
 import { edges, selection, setSelection } from '../solid/state';
+import type { ChangeLogEntry } from '../sync/changeLog';
+import { diffRows, type RowFlash } from '../sync/valueDiff';
 import { REMOTE_NOTICE, isRemotePlacement } from '../util/placement';
 import ValueView from './ValueView';
 import './DetailPanel.css';
@@ -156,10 +167,32 @@ function DescriptorSection() {
  *  what it is handed. The fixed footnote and staleness/frontier chip are
  *  part of this subsection specifically — F-5 (10-target-v3.md constraint
  *  4): "cross-panel wave alignment is NOT guaranteed". */
+/** Shared by the state-meta frontier chip and the change-log entries below —
+ *  the ticket's own "reuse the existing frontier-chip formatting" note. */
+function formatFrontier(f: Frontier | null | undefined): string {
+  return f ? `${f.source.slice(0, 8)} · ${f.counter}` : '—';
+}
+
 function StateSection() {
-  const frontierLabel = createMemo(() => {
-    const f = cellState()?.frontier;
-    return f ? `${f.source.slice(0, 8)} · ${f.counter}` : '—';
+  const frontierLabel = createMemo(() => formatFrontier(cellState()?.frontier));
+
+  // V1A-FE ticket Implement §2: holds the previously rendered value across
+  // renders (plain closure variables — this setup function runs once per
+  // component mount, exactly like the `frontierLabel` memo above), reset
+  // whenever the selection changes so a freshly selected cell's first paint
+  // never flashes against a different cell's last value.
+  let prevRef: string | null = null;
+  let prevValue: Value | undefined;
+  const flash = createMemo<RowFlash>(() => {
+    const ref = selection();
+    const value = cellState()?.value;
+    if (ref !== prevRef) {
+      prevRef = ref;
+      prevValue = undefined;
+    }
+    const result = value === undefined ? { added: new Set<string>(), changed: new Set<string>() } : diffRows(prevValue, value);
+    prevValue = value;
+    return result;
   });
 
   return (
@@ -192,16 +225,50 @@ function StateSection() {
                 when={s().kind !== 'unavailable'}
                 fallback={<p class="detail-section__status">State unavailable for this cell.</p>}
               >
-                <ValueView value={s().value} />
+                <ValueView value={s().value} flash={flash()} />
               </Show>
             </>
           )}
         </Show>
       </Show>
+      {/* V1A-FE ticket Implement §3: the onChange log — gated on the same
+          cold/remote guards as the value above (a cold or remote selection is
+          not observed, so it has no log), but NOT on `stateLoading()`/
+          `cellState()` — the log reflects the observation's history, not the
+          latest fetch's own loading state. */}
+      <ChangeLogPanel />
       </Show>
       </Show>
       <p class="detail-section__footnote">per-cell consistent — cross-panel alignment not guaranteed</p>
     </Section>
+  );
+}
+
+function ChangeLogPanel() {
+  const entries = createMemo<readonly ChangeLogEntry[]>(() => {
+    changeLogVersion();
+    return changeLog.entries;
+  });
+
+  return (
+    <div class="state-changelog">
+      <h4 class="state-changelog__title">Change log</h4>
+      <Show when={entries().length} fallback={<p class="detail-section__status">no changes observed yet</p>}>
+        <ul class="state-changelog__list">
+          <For each={entries()}>
+            {(e) => (
+              <li>
+                <span class="mono">{formatTime(e.atMs)}</span>
+                <span class="detail-muted">{e.cardinality ?? '—'}</span>
+                <span class="mono" title="frontier stamp (source · counter)">
+                  {formatFrontier(e.frontier)}
+                </span>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+    </div>
   );
 }
 

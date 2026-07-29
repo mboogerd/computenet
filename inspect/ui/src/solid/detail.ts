@@ -1,6 +1,7 @@
 import { createEffect, createSignal } from 'solid-js';
 import { createStore, unwrap } from 'solid-js/store';
 import type { CellDetail, CellState, Ref, StateSummaryPayload } from '../api/types';
+import { ChangeLog } from '../sync/changeLog';
 import { DetailController, defaultDetailTransport } from '../sync/detailClient';
 import { currentGraphCold } from './cold';
 import { selection } from './selection';
@@ -22,7 +23,15 @@ const [stateLoading, setStateLoading] = createSignal(false);
  *  "cells without an active observation simply show no chip" (ticket). */
 const [stateSummaries, setStateSummaries] = createStore<Record<Ref, StateSummaryPayload>>({});
 
-export { cellDetail, cellState, detailError, detailLoading, stateError, stateLoading, stateSummaries };
+/** V1A-FE ticket Implement §3: the onChange log for the currently selected
+ *  cell — at most one cell is ever observed at a time in M1 (same as
+ *  `DetailController`/`stateSummaries` above), so a single instance is
+ *  cleared and re-fed on every selection change rather than keyed by ref. */
+const changeLog = new ChangeLog();
+const [changeLogVersion, setChangeLogVersion] = createSignal(0);
+changeLog.subscribe(() => setChangeLogVersion((v) => v + 1));
+
+export { cellDetail, cellState, changeLog, changeLogVersion, detailError, detailLoading, stateError, stateLoading, stateSummaries };
 
 const controller = new DetailController(defaultDetailTransport, {
   onDetail: (_ref, detail, error) => {
@@ -58,6 +67,7 @@ export function initDetail(): void {
     if (ref === prev && cold === prevCold) return;
 
     clearSummary(prev);
+    changeLog.clear();
     setCellDetail(null);
     setCellState(null);
     setDetailError(null);
@@ -80,8 +90,9 @@ export function initDetail(): void {
 /** Fed from `solid/state.ts`'s SSE event router on every `state.summary`
  *  event, regardless of ref. */
 export function onStateSummary(payload: StateSummaryPayload): void {
-  controller.onSummary(payload.ref);
+  controller.onSummary(payload);
   if (payload.ref === selection()) {
     setStateSummaries(payload.ref, payload);
+    changeLog.onSummary(payload);
   }
 }
