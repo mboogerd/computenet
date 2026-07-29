@@ -1,6 +1,6 @@
 # V1-DEMO — Two-JVM shopping convergence runbook: an inspector per peer, side by side
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-haiku-4-5` · **Escalate to:** `claude-sonnet-5`
 **Wave:** 3 · **Branches:** `ticket/v1-demo`
 
