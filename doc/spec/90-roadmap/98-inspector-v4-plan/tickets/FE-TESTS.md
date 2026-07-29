@@ -1,6 +1,6 @@
 # FE-TESTS — the rendering layer gets DOM tests: real Solid components, real fixtures
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 6 · **Branches:** `ticket/fe-tests`
