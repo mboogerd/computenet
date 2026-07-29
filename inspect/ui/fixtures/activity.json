@@ -1,0 +1,35 @@
+{
+  "entries": [
+    {
+      "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+      "kind": "passivated",
+      "atMs": 1753601000000
+    },
+    {
+      "ref": "e7651ef0-8140-48c3-b9a9-647bac311c4c:0",
+      "kind": "activated",
+      "atMs": 1753601060000
+    },
+    {
+      "ref": "6b04c703-78a8-4c58-9136-a646dc4e64d6:0",
+      "kind": "drained",
+      "atMs": 1753601120000
+    },
+    {
+      "ref": "497567e0-5dcf-4a09-b54c-6ae21a903378:0",
+      "kind": "woken",
+      "atMs": 1753601180000
+    },
+    {
+      "ref": "497567e0-5dcf-4a09-b54c-6ae21a903378:0",
+      "kind": "activated",
+      "atMs": 1753601181000
+    },
+    {
+      "ref": "8d2b9ed1-bcb6-4c82-aab4-e0fcffc929c9:0",
+      "kind": "restarted",
+      "atMs": 1753601240000,
+      "generation": 3
+    }
+  ]
+}

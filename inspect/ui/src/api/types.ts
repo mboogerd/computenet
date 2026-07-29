@@ -372,6 +372,40 @@ export interface ErrorRestartEvent {
   payload: RestartEntry;
 }
 
+// --- V2: activity (98-inspector-v4-plan/10-design-notes.md "V2 — activity";
+// V2-FE ticket "The contract shapes you code against", frozen by V2-BE in
+// this same wave) ---------------------------------------------------------
+
+/** Kind meanings (V2-FE ticket): `passivated` = the cell was suspended
+ *  (explicitly or by supervision); `activated` = it resumed; `drained` = its
+ *  host finished draining; `woken` = a user pressed the wake button and this
+ *  cell was in the blast radius; `restarted` = supervision restarted it
+ *  (`generation` names the new generation). A wake legitimately produces
+ *  both a `woken` and an `activated` entry for the same ref — both are
+ *  rendered, never de-duplicated. */
+export type ActivityKind = 'activated' | 'passivated' | 'drained' | 'woken' | 'restarted';
+
+/** One activity-log row. `generation` is present only on a `restarted`
+ *  entry — absent otherwise (contract). */
+export interface ActivityEntry {
+  ref: Ref;
+  kind: ActivityKind;
+  atMs: number;
+  generation?: number;
+}
+
+/** `GET /api/inspect/activity` — "catch-up, oldest first, at most 200
+ *  entries" (contract). */
+export interface ActivitySnapshot {
+  entries: readonly ActivityEntry[];
+}
+
+export interface ActivityEvent {
+  seq: number;
+  kind: 'activity';
+  payload: ActivityEntry;
+}
+
 /** The kinds this client understands — a clean discriminated union on `kind`. */
 export type InspectEvent =
   | TopologyNodeEvent
@@ -383,7 +417,8 @@ export type InspectEvent =
   | ErrorParkedEvent
   | ErrorRestartEvent
   | FlowRatesEvent
-  | GraphsChangedEvent;
+  | GraphsChangedEvent
+  | ActivityEvent;
 
 /** The wire-level shape before we know whether `kind` is one M0 understands.
  *  Deliberately NOT a member of the `InspectEvent` union: adding a
@@ -412,4 +447,5 @@ export const KNOWN_EVENT_KINDS = new Set<string>([
   'error.restart',
   'flow.rates',
   'graphs.changed',
+  'activity',
 ]);

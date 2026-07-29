@@ -1,4 +1,5 @@
 import { onMount, Show } from 'solid-js';
+import ActivityLog from './components/ActivityLog';
 import Canvas from './components/Canvas';
 import ColdScreen from './components/ColdScreen';
 import DetailPanel from './components/DetailPanel';
@@ -50,6 +51,11 @@ export default function App() {
           </Show>
           <DetailPanel />
         </div>
+        {/* V2-FE ticket Implement §9: the activity log panel — graph screen
+            only, not the Navigator, mounted below `.app-body` (a fixed
+            overlay per `ActivityLog.css`, so it never resizes `.app-body`'s
+            own flex children, collapsed or not). */}
+        <ActivityLog />
       </Show>
     </div>
   );

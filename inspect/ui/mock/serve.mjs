@@ -10,12 +10,14 @@
 // feed) runs in parallel and does not exist in this worktree either);
 // extended again by M4-FE for /graphs, /search, and the `?graph=` topology
 // filter, same reasoning — M4-BE runs in parallel and does not exist in
-// this worktree either.
+// this worktree either); extended again by V2-FE for /activity + `activity`
+// events, same reasoning — V2-BE runs in parallel and does not exist in this
+// worktree either.
 //
 // No deps — Node's built-in http module only. NOT a stand-in for the real
 // server's semantics (single global observation slot, one fake "live"
-// dataset) — just enough for a human to see the M0+M1+M2+M4 UI work end to
-// end.
+// dataset) — just enough for a human to see the M0+M1+M2+M4+V2 UI work end
+// to end.
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -23,11 +25,13 @@ import { fileURLToPath } from 'node:url';
 const fixturePath = fileURLToPath(new URL('../fixtures/topology.json', import.meta.url));
 const detailFixturePath = fileURLToPath(new URL('../fixtures/cell-detail.json', import.meta.url));
 const errorsFixturePath = fileURLToPath(new URL('../fixtures/errors.json', import.meta.url));
+const activityFixturePath = fileURLToPath(new URL('../fixtures/activity.json', import.meta.url));
 const port = Number(process.env.PORT ?? 7071);
 
 const snapshot = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const detailFixture = JSON.parse(readFileSync(detailFixturePath, 'utf8'));
 const errorsSnapshot = JSON.parse(readFileSync(errorsFixturePath, 'utf8'));
+const activityFixture = JSON.parse(readFileSync(activityFixturePath, 'utf8'));
 
 // --- M4: multi-graph simulation ------------------------------------------
 // M4-BE runs in parallel and does not exist in this worktree; this mock
@@ -293,6 +297,33 @@ setInterval(bumpParked, 5000);
 setInterval(emitDeadLetter, 12000);
 setInterval(bumpRestart, 20000);
 
+// --- V2: activity state --------------------------------------------------
+// Simulates the V2 activity feed (V2-FE ticket §16 "optional" mock
+// extension) so the activity log panel — filter, bounded rendering, empty
+// state, badges — can be checked by hand against `npm run dev` ahead of
+// V2-BE, which runs in parallel and does not exist in this worktree. A
+// mutable working copy of fixtures/activity.json, capped at the same 200
+// the real server's ring and this client's own ActivityStore both enforce.
+const ACTIVITY_CAP = 200;
+const activityState = JSON.parse(JSON.stringify(activityFixture));
+
+const ACTIVITY_CYCLE = ['passivated', 'activated', 'drained', 'woken', 'restarted'];
+let activityTick = 0;
+let activityGeneration = 3;
+
+function emitActivity() {
+  const ref = snapshot.nodes[activityTick % snapshot.nodes.length]?.ref;
+  if (!ref) return;
+  const kind = ACTIVITY_CYCLE[activityTick % ACTIVITY_CYCLE.length];
+  activityTick += 1;
+  const entry = kind === 'restarted' ? { ref, kind, atMs: Date.now(), generation: ++activityGeneration } : { ref, kind, atMs: Date.now() };
+  activityState.entries.push(entry);
+  if (activityState.entries.length > ACTIVITY_CAP) activityState.entries.shift();
+  broadcast('activity', entry);
+}
+
+setInterval(emitActivity, 8000);
+
 // --- flow state --------------------------------------------------------
 // Simulates the M3 tap-based flow feed (M3-FE ticket) so the Flow toggle,
 // pulses, rate labels, fused rendering, and the per-port Flow subsection can
@@ -386,6 +417,11 @@ const server = createServer((req, res) => {
 
   if (path === '/api/inspect/errors') {
     sendJson(res, 200, errorsState);
+    return;
+  }
+
+  if (path === '/api/inspect/activity') {
+    sendJson(res, 200, activityState);
     return;
   }
 

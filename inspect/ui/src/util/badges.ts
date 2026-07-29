@@ -42,3 +42,12 @@ export function shortType(typeFqn: string): string {
   const i = typeFqn.lastIndexOf('.');
   return i === -1 ? typeFqn : typeFqn.slice(i + 1);
 }
+
+/** V2-FE ticket Implement §10: "capitalize the server's string for display —
+ *  the server sends lowercase band names; render whatever string arrives, do
+ *  not switch exhaustively on a closed set, so an unknown future value still
+ *  displays." A plain first-letter uppercase, not a lookup table — the whole
+ *  point is that it works for a band name this client has never seen. */
+export function capitalize(s: string): string {
+  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1);
+}

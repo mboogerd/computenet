@@ -185,6 +185,14 @@ export default function Canvas() {
                 const overlay = () => flowOverlays().get(id);
                 const tooltip = () =>
                   showFlow() && e() ? flowTooltip(formatRoute(e()!.from, e()!.to, nameOf), overlay()) : undefined;
+                // V2-FE ticket Implement §12(b): the same ghosting as a
+                // suspended node card, applied to any edge with a suspended
+                // endpoint — either side, not just the one the edge points at.
+                const dimmed = () => {
+                  const edge = e();
+                  if (!edge) return false;
+                  return nodes[edge.from.ref]?.lifecycle === 'SUSPENDED' || nodes[edge.to.ref]?.lifecycle === 'SUSPENDED';
+                };
                 return (
                   <Show when={e() && from() && to()}>
                     <EdgeLine
@@ -197,6 +205,7 @@ export default function Canvas() {
                       flow={overlay()}
                       reducedMotion={prefersReducedMotion()}
                       tooltip={tooltip()}
+                      dimmed={dimmed()}
                     />
                   </Show>
                 );
@@ -265,6 +274,17 @@ export default function Canvas() {
                         {colorGlyph(rec()!.color)}
                       </span>
                       <span class="node-card__name">{rec()!.name ?? ref.slice(0, 8)}</span>
+                      {/* V2-FE ticket Implement §12(a): the delta on top of
+                          the pre-existing ghosted-card treatment
+                          (`.is-suspended` below, already there before this
+                          ticket) — a small explicit tag, since a dashed
+                          border + reduced opacity alone is easy to miss at a
+                          glance across a busy graph. */}
+                      <Show when={rec()!.lifecycle === 'SUSPENDED'}>
+                        <span class="node-card__tag" title="suspended">
+                          suspended
+                        </span>
+                      </Show>
                       {/* V1B-FE ticket Solution direction §4: a pin toggle on
                           every node card, next to the color chip.
                           `stopPropagation` so pinning does not also select
@@ -452,6 +472,11 @@ function EdgeLine(props: {
    *  hit-line at all, so the base `pointer-events: none` click-through
    *  behavior (`.canvas__svg`) is unaffected while the toggle is off. */
   tooltip?: string;
+  /** V2-FE ticket Implement §12(b): true when either endpoint is a
+   *  suspended cell — reuses `.node-card.is-suspended`'s own
+   *  `--ghost-opacity` token so an edge and the suspended card(s) it touches
+   *  read as one consistent ghosting signal. */
+  dimmed?: boolean;
 }) {
   const dx = () => props.x2 - props.x1;
   const dy = () => props.y2 - props.y1;
@@ -459,7 +484,7 @@ function EdgeLine(props: {
   const nx = () => (-dy() / len()) * FUSED_OFFSET;
   const ny = () => (dx() / len()) * FUSED_OFFSET;
   const dash = () => (props.role === 'OBSERVE' ? '5 3' : undefined);
-  const cls = () => `edge edge--${props.role.toLowerCase()}`;
+  const cls = () => `edge edge--${props.role.toLowerCase()}${props.dimmed ? ' edge--dimmed' : ''}`;
 
   // M3-FE ticket Implement §2: "when the [Flow] toggle is on, make the
   // fused state visibly explicit" (thick stroke, on top of the M0/M1 base

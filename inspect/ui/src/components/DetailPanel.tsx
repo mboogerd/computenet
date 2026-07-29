@@ -1,6 +1,6 @@
 import { For, Show, createMemo, type JSX } from 'solid-js';
 import type { DeadLetterEntry, Frontier, ParkedEntry, RestartEntry, Value } from '../api/types';
-import { colorGlyph, manifestBadge, shortType } from '../util/badges';
+import { capitalize, colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { portFlowRows, type PortFlowRow } from '../util/flow';
 import { COLD_NOTICE } from '../nav/cold';
 import { currentGraphCold } from '../solid/cold';
@@ -174,7 +174,20 @@ function DescriptorSection() {
               <dd>{d().lifecycle}</dd>
 
               <dt>Attention</dt>
-              <dd>{d().attention ?? '—'}</dd>
+              <dd>
+                {/* V2-FE ticket Implement §10: null means the cell's host
+                    runs without an attention policy, not "unknown" — say so
+                    in the title rather than leaving the dash unexplained.
+                    A non-null value is rendered verbatim (capitalized for
+                    display only) instead of switched on exhaustively, so an
+                    attention band this client has never seen still shows. */}
+                <Show
+                  when={d().attention !== null}
+                  fallback={<span title="no attention policy configured for this cell's host">—</span>}
+                >
+                  {capitalize(d().attention!)}
+                </Show>
+              </dd>
 
               <dt>Links</dt>
               <dd>

@@ -1,0 +1,153 @@
+/* V2-FE ticket Implement §9: mounted as a fixed overlay, not a normal flex
+   sibling of `.app-body` — the ticket requires "the canvas and detail panel
+   keep their current sizes when it is collapsed", and the only way to
+   guarantee that in both the collapsed and expanded state (not just
+   collapsed) is for this strip to never participate in `.app`'s flex
+   layout at all. It floats above the canvas's bottom edge instead. */
+.activity-log {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-top: 1px solid var(--hairline-strong);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+  max-height: 40vh;
+}
+
+.activity-log__header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.3rem 0.75rem;
+  flex: 0 0 auto;
+}
+
+.activity-log__toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.15rem 0.2rem;
+}
+
+.activity-log__chevron {
+  color: var(--text-muted);
+  width: 0.8em;
+  display: inline-block;
+}
+
+.activity-log__count {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+}
+
+.activity-log__filter {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-left: auto;
+  cursor: pointer;
+}
+
+.activity-log__filter.is-disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.activity-log__body {
+  overflow-y: auto;
+  border-top: 1px solid var(--hairline);
+  padding: 0.25rem 0.75rem 0.5rem;
+}
+
+.activity-log__empty {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 0.5rem 0;
+}
+
+.activity-log__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-log__row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.2rem 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 0.78rem;
+}
+
+.activity-log__row:last-child {
+  border-bottom: none;
+}
+
+.activity-log__time {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  flex: 0 0 auto;
+}
+
+.activity-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--activity-badge-color);
+  color: var(--activity-badge-color);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.activity-badge__glyph {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.activity-log__cell {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-log__gen {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.activity-log__hidden-note {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  padding-top: 0.35rem;
+  margin: 0;
+}

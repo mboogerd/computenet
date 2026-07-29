@@ -1,6 +1,7 @@
 import { batch, createSignal } from 'solid-js';
 import { createStore, produce } from 'solid-js/store';
 import type { Edge, EdgeRemoval, InspectEvent, Ref } from '../api/types';
+import { fetchActivitySnapshot, onActivity } from './activity';
 import { onStateSummary } from './detail';
 import { fetchErrorSnapshot, onErrorDeadLetter, onErrorParked, onErrorRestart } from './errors';
 import { onFlowRates } from './flow';
@@ -121,6 +122,14 @@ function applyEvent(event: InspectEvent): void {
     case 'error.restart':
       onErrorRestart(event.payload);
       break;
+    case 'activity':
+      // Never touches the topology store — routed to the V2 activity store
+      // (solid/activity.ts), which like errors/flow is independent of
+      // selection: the log is host-wide by default, filtered to the
+      // selected cell only in the panel's own component-local UI state
+      // (V2-FE ticket Implement §6), not by what this switch forwards.
+      onActivity(event.payload);
+      break;
     case 'flow.rates':
       // Never touches the topology store — routed to the M3 flow store
       // (solid/flow.ts), which like errors is independent of selection (a
@@ -151,6 +160,10 @@ const client = new TopologyClient({
     // topology resync, so errors get refreshed alongside topology rather
     // than only once ever. See solid/errors.ts's fetchErrorSnapshot doc.
     fetchErrorSnapshot();
+    // V2-FE ticket Implement §1.3: fetch on connect from the same place
+    // errors are fetched, so a reconnect/post-gap resync re-syncs the
+    // activity log too.
+    fetchActivitySnapshot();
   },
   onEvent: (event) => {
     applyEvent(event);

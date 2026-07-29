@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { colorGlyph, manifestBadge, shortType } from '../src/util/badges';
+import { capitalize, colorGlyph, manifestBadge, shortType } from '../src/util/badges';
 
 describe('colorGlyph', () => {
   it('maps the three cell colors to their P/B/S glyph', () => {
@@ -34,5 +34,20 @@ describe('shortType', () => {
 
   it('returns the whole string when there is no dot', () => {
     expect(shortType('GroupByCell')).toBe('GroupByCell');
+  });
+});
+
+describe('capitalize', () => {
+  it('uppercases the first letter of a lowercase server string', () => {
+    expect(capitalize('focus')).toBe('Focus');
+    expect(capitalize('idle')).toBe('Idle');
+  });
+
+  it('still works for an unrecognized future value, not just the two known bands', () => {
+    expect(capitalize('deep-sleep')).toBe('Deep-sleep');
+  });
+
+  it('handles an empty string without throwing', () => {
+    expect(capitalize('')).toBe('');
   });
 });

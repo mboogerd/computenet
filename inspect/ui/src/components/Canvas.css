@@ -31,6 +31,16 @@
   stroke: var(--edge-observe);
 }
 
+/* V2-FE ticket Implement §12(b): the canvas-wide delta on top of the
+   pre-existing `.node-card.is-suspended` ghosting (already there before this
+   ticket, below) — an edge with a suspended endpoint gets the same
+   `--ghost-opacity` treatment, so a suspended cell and the edges touching it
+   read as one dimmed unit rather than a ghosted card wired to full-opacity
+   lines. */
+.edge--dimmed {
+  opacity: var(--ghost-opacity);
+}
+
 .port-dot {
   fill: var(--text-muted);
   stroke: var(--surface);
@@ -141,6 +151,24 @@
 .node-card.is-suspended {
   opacity: var(--ghost-opacity);
   border-style: dashed;
+}
+
+/* V2-FE ticket Implement §12(a): the small "suspended" tag delta, styled
+   like `DetailPanel.css`'s `.detail-tag` pill (own class here, same
+   per-component-stylesheet convention `.node-card__badge` vs
+   `.detail-badge` already established) — neutral/muted rather than
+   `--cell-suspending`, which already names the unrelated SUSPENDING
+   *dataflow color*, not the SUSPENDED *lifecycle* this tag reports. */
+.node-card__tag {
+  flex: 0 0 auto;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  border: 1px solid var(--text-muted);
+  color: var(--text-muted);
 }
 
 /* Errors toggle: red-tinted border on an erring cell (10-target-v3.md
