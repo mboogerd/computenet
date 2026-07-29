@@ -1,6 +1,6 @@
 # FE-CANVAS — the canvas gets a viewport: cursor-anchored zoom, drag-pan, fit-to-screen
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 6 · **Branches:** `ticket/fe-canvas`
