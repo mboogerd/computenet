@@ -1,0 +1,18 @@
+{
+  "seq": 504,
+  "kind": "error.waveHealth",
+  "payload": {
+    "id": "wh-1",
+    "kind": "frontierLag",
+    "state": "cleared",
+    "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+    "edge": "327ab252-b906-4236-9194-9b7e2f7b7b60",
+    "wave": { "source": "9c41a2f0", "counter": 296 },
+    "frontier": { "source": "9c41a2f0", "counter": 296 },
+    "lagWaves": 0,
+    "heldMs": 6800,
+    "atMs": 1753600606800,
+    "heuristic": true,
+    "description": "Heuristic: frontier lag cleared — this cell's frontier has caught up to the tapped edge's last observed wave."
+  }
+}

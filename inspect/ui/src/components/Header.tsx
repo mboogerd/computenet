@@ -68,12 +68,13 @@ function ErrorCounters() {
     <button
       class="error-counters"
       classList={{ 'is-active': showErrors() }}
-      title="Errors: dead letters / parked / restarts — click to toggle the Errors overlay"
+      title="Errors: dead letters / parked / restarts / wave-health (heuristic, informational — not a defect count) — click to toggle the Errors overlay"
       onClick={() => setShowErrors((v) => !v)}
     >
       <span class="error-counters__item error-counters__item--dead">{counters().deadLetters} dead</span>
       <span class="error-counters__item error-counters__item--parked">{counters().parked} parked</span>
       <span class="error-counters__item error-counters__item--restarts">{counters().restarts} restarts</span>
+      <span class="error-counters__item error-counters__item--wave">{counters().waveHealth} wave</span>
     </button>
   );
 }

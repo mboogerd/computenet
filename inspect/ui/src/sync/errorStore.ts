@@ -1,6 +1,20 @@
-import type { DeadLetterEntry, ErrorCounters, ErrorSnapshot, ParkedEntry, Ref, RestartEntry } from '../api/types';
+import type {
+  DeadLetterEntry,
+  ErrorCounters,
+  ErrorSnapshot,
+  ParkedEntry,
+  Ref,
+  RestartEntry,
+  WaveHealthEntry,
+} from '../api/types';
 
-const EMPTY_COUNTERS: ErrorCounters = { deadLetters: 0, parked: 0, restarts: 0, drainedOnTeardown: 0 };
+const EMPTY_COUNTERS: ErrorCounters = {
+  deadLetters: 0,
+  parked: 0,
+  restarts: 0,
+  drainedOnTeardown: 0,
+  waveHealth: 0,
+};
 
 /** The M2 sync seam (20-api-contract.md "ErrorSnapshot (M2)", "error.*
  *  events"), mirroring `sync/store.ts`'s shape: fetch the snapshot once,
@@ -17,6 +31,12 @@ const EMPTY_COUNTERS: ErrorCounters = { deadLetters: 0, parked: 0, restarts: 0, 
  *     clears" (contract). `counters.parked` is therefore recomputed as the
  *     live sum over every tracked (ref, port) row after each update, so it
  *     can never drift from what `parkedFor()` actually reports.
+ *   - `waveHealth` (V3) copies the `parked` discipline, not the append-only
+ *     one: it holds only currently-*open* rows, keyed by `id` (the field the
+ *     open row, its updates and its `state: 'cleared'` clear all carry).
+ *     `counters.waveHealth` is recomputed as the live size of the open set
+ *     after every update — never incremented — so it cannot drift from what
+ *     `waveHealthFor()` reports, exactly like `parked`.
  *
  *  Indexed by ref throughout (M2-FE ticket Implement §1: "index by ref") so
  *  the detail panel's Errors subsection (per-cell) and the canvas overlay
@@ -28,6 +48,13 @@ export class ErrorStore {
   /** ref -> port -> current parked row (count > 0 only; a clear deletes the entry). */
   private _parked = new Map<Ref, Map<string, ParkedEntry>>();
   private _restarts = new Map<Ref, RestartEntry[]>();
+  /** id -> open row — the primary index; `applyWaveHealth` upserts/deletes by
+   *  this key, "the same discipline `ParkedEntry`'s `count: 0` already
+   *  established" (ticket). */
+  private _waveHealth = new Map<string, WaveHealthEntry>();
+  /** ref -> id -> open row — kept in lockstep with `_waveHealth` so per-cell
+   *  reads (`waveHealthFor`) are O(1), like every other accessor here. */
+  private _waveHealthByRef = new Map<Ref, Map<string, WaveHealthEntry>>();
   private subs = new Set<() => void>();
 
   get counters(): ErrorCounters {
@@ -53,6 +80,18 @@ export class ErrorStore {
     const out: ParkedEntry[] = [];
     for (const m of this._parked.values()) out.push(...m.values());
     return out;
+  }
+
+  /** Currently-open wave-health rows for one cell — `[]` for an unknown ref,
+   *  matching `parkedFor`'s contract. */
+  waveHealthFor(ref: Ref): readonly WaveHealthEntry[] {
+    const m = this._waveHealthByRef.get(ref);
+    return m ? [...m.values()] : [];
+  }
+
+  /** Every currently-open wave-health row across every cell. */
+  allWaveHealth(): readonly WaveHealthEntry[] {
+    return [...this._waveHealth.values()];
   }
 
   subscribe(fn: () => void): () => void {
@@ -94,6 +133,26 @@ export class ErrorStore {
     }
     this._restarts = restarts;
 
+    // V3: tolerate a missing `waveHealth` field (older server) as an empty
+    // list — the same defensive style `sync/records.ts`'s `dto.manifests ??
+    // []` already established for a DTO field a client might outrun.
+    const waveHealth = new Map<string, WaveHealthEntry>();
+    const waveHealthByRef = new Map<Ref, Map<string, WaveHealthEntry>>();
+    for (const w of snapshot.waveHealth ?? []) {
+      if (w.state !== 'open') continue; // defensive: a snapshot row should never be a cleared one
+      waveHealth.set(w.id, w);
+      const forRef = waveHealthByRef.get(w.ref) ?? new Map<string, WaveHealthEntry>();
+      forRef.set(w.id, w);
+      waveHealthByRef.set(w.ref, forRef);
+    }
+    this._waveHealth = waveHealth;
+    this._waveHealthByRef = waveHealthByRef;
+    // Recomputed from the live open set rather than trusted verbatim off
+    // `snapshot.counters` (unlike every other field above) so it can never
+    // drift from what `waveHealthFor`/`allWaveHealth` actually report — the
+    // same guarantee `applyWaveHealth` gives it below.
+    this._counters = { ...this._counters, waveHealth: waveHealth.size };
+
     this.notify();
   }
 
@@ -125,6 +184,38 @@ export class ErrorStore {
     next.set(entry.ref, [...(next.get(entry.ref) ?? []), entry]);
     this._restarts = next;
     this._counters = { ...this._counters, restarts: this._counters.restarts + 1 };
+    this.notify();
+  }
+
+  /** Follows `applyParked`, not `applyDeadLetter`/`applyRestart`:
+   *  `state === 'cleared'` **deletes** the row with that `id`; otherwise it
+   *  upserts. `counters.waveHealth` is recomputed as the live size of the
+   *  open set — never incremented — so it cannot drift from what
+   *  `waveHealthFor`/`allWaveHealth` report. */
+  applyWaveHealth(entry: WaveHealthEntry): void {
+    const nextById = new Map(this._waveHealth);
+    const nextByRef = new Map(this._waveHealthByRef);
+
+    const prev = nextById.get(entry.id);
+    if (prev) {
+      const priorForRef = new Map(nextByRef.get(prev.ref) ?? []);
+      priorForRef.delete(entry.id);
+      if (priorForRef.size === 0) nextByRef.delete(prev.ref);
+      else nextByRef.set(prev.ref, priorForRef);
+    }
+
+    if (entry.state === 'cleared') {
+      nextById.delete(entry.id);
+    } else {
+      nextById.set(entry.id, entry);
+      const forRef = new Map(nextByRef.get(entry.ref) ?? []);
+      forRef.set(entry.id, entry);
+      nextByRef.set(entry.ref, forRef);
+    }
+
+    this._waveHealth = nextById;
+    this._waveHealthByRef = nextByRef;
+    this._counters = { ...this._counters, waveHealth: nextById.size };
     this.notify();
   }
 }

@@ -1,7 +1,8 @@
 import { For, Show, createMemo, type JSX } from 'solid-js';
-import type { DeadLetterEntry, Frontier, ParkedEntry, RestartEntry, Value } from '../api/types';
+import type { DeadLetterEntry, Frontier, ParkedEntry, RestartEntry, Value, WaveHealthEntry, WaveHealthKind } from '../api/types';
 import { capitalize, colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { portFlowRows, type PortFlowRow } from '../util/flow';
+import { buildSupervisionTimeline, type SupervisionStep } from '../util/supervision';
 import { COLD_NOTICE } from '../nav/cold';
 import { currentGraphCold } from '../solid/cold';
 import {
@@ -377,6 +378,11 @@ function FlowSection() {
  *  (unlike the State subsection): the error feed is not per-cell observed,
  *  it is a standing SSE stream the whole app already receives (M2-BE ticket
  *  Exclusions: "No per-cell subscriptions for error data"). */
+const WAVE_HEALTH_LABEL: Record<WaveHealthKind, string> = {
+  frontierLag: 'frontier lag',
+  stalledWave: 'stalled wave',
+};
+
 function ErrorsSection() {
   const ref = () => selection();
 
@@ -395,12 +401,66 @@ function ErrorsSection() {
     const r = ref();
     return r ? errorStore.restartsFor(r) : [];
   });
-  const hasAny = createMemo(() => deadLetters().length > 0 || parked().length > 0 || restarts().length > 0);
+  // V3: a heuristic diagnostic class of its own — see `errorStore.ts`'s
+  // `waveHealthFor` (the `parked` discipline: open rows only, upserted /
+  // deleted by `id`, never an append-only log).
+  const waveHealth = createMemo<readonly WaveHealthEntry[]>(() => {
+    errorVersion();
+    const r = ref();
+    return r ? errorStore.waveHealthFor(r) : [];
+  });
+  // V3: replaces the old flat "Restart history" list (Problem #2) — a pure,
+  // separately unit-tested builder (`util/supervision.ts`); this memo only
+  // feeds it this cell's own rows and follows the same errorVersion()+ref
+  // gating as every other memo here, so it never caches across a selection
+  // change.
+  const timeline = createMemo<readonly SupervisionStep[]>(() => buildSupervisionTimeline(restarts(), deadLetters()));
+  const hasAny = createMemo(
+    () => deadLetters().length > 0 || parked().length > 0 || restarts().length > 0 || waveHealth().length > 0,
+  );
 
   return (
     <Section title="Errors">
       <Show when={!remoteSelected()} fallback={<p class="detail-section__status">{REMOTE_NOTICE}</p>}>
       <Show when={hasAny()} fallback={<p class="detail-section__status">No local errors</p>}>
+        {/* V3: rendered above the append-only groups below and visually
+            distinct (informational/amber, never the dead-letter card's red)
+            — a heuristic diagnostic is "worth a look", not a defect claim
+            (10-design-notes.md §V3; ticket Solution direction §3b). */}
+        <Show when={waveHealth().length}>
+          <div class="error-group error-group--wave-health">
+            <h4 class="error-group__title">
+              Wave health <span class="wave-health-heuristic-tag">(heuristic)</span>
+            </h4>
+            <For each={waveHealth()}>
+              {(w) => (
+                <div class="wave-health-row">
+                  <div class="wave-health-row__head">
+                    <span class="wave-health-row__kind">{WAVE_HEALTH_LABEL[w.kind]}</span>
+                    <span
+                      class="wave-health-row__badge"
+                      title="heuristic diagnostic, computed inspector-side — not kernel-grade detection"
+                    >
+                      heuristic
+                    </span>
+                  </div>
+                  {/* The server writes this and it already contains the word
+                      "heuristic" — rendered verbatim, never paraphrased or
+                      stripped (ticket). */}
+                  <div class="wave-health-row__desc">{w.description}</div>
+                  <div class="wave-health-row__meta">
+                    <span class="mono" title="last observed wave on the tapped edge -> this cell's frontier (source · counter)">
+                      {formatFrontier(w.wave)} → {formatFrontier(w.frontier)}
+                      <Show when={w.lagWaves !== null}> ({w.lagWaves} behind)</Show>
+                    </span>
+                    <span class="detail-muted">held {w.heldMs}ms</span>
+                  </div>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+
         <Show when={deadLetters().length}>
           <div class="error-group">
             <h4 class="error-group__title">Dead letters</h4>
@@ -409,6 +469,44 @@ function ErrorsSection() {
                 <div class="dead-letter-card">
                   <div class="dead-letter-card__cause">{dl.cause ?? 'dropped (unknown target)'}</div>
                   <div class="dead-letter-card__desc">{dl.description}</div>
+                  {/* V3: the failing call, when the drop happened during an
+                      invocation — absent (older server) or `null` (plain
+                      host-level drop) renders nothing extra, so a card
+                      without the new fields is byte-for-byte unchanged. */}
+                  <Show when={dl.invocation}>
+                    {(inv) => (
+                      <div
+                        class="dead-letter-card__invocation mono"
+                        title={`parameterTypes: ${inv().parameterTypes.join(', ') || '—'} · argCount: ${inv().argCount}${
+                          inv().hop !== null ? ` · hop ${inv().hop}` : ''
+                        }`}
+                      >
+                        {inv().port} · {inv().method} <span class="detail-muted">({inv().type})</span>
+                      </div>
+                    )}
+                  </Show>
+                  {/* V3: one chip per sanitized argument. `frozen`/`redacted`
+                      are the exclusive-payload cases (an `Owned` arriving
+                      frozen, a `Leased` arriving released-and-redacted) — the
+                      whole reason the field exists — so they get a visually
+                      stronger treatment than `borrowed`/`owned`/`leased`/`plain`. */}
+                  <Show when={dl.disposition?.length}>
+                    <div class="dead-letter-card__disposition">
+                      <For each={dl.disposition}>
+                        {(d) => (
+                          <span
+                            class="disposition-chip"
+                            classList={{
+                              'disposition-chip--exclusive': d.ownership === 'frozen' || d.ownership === 'redacted',
+                            }}
+                            title={d.reason ?? undefined}
+                          >
+                            #{d.index} {d.ownership}
+                          </span>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
                   <div class="dead-letter-card__meta">
                     <span class="mono" title="wave stamp (source · counter)">
                       {dl.wave ? `${dl.wave.source.slice(0, 8)} · ${dl.wave.counter}` : '—'}
@@ -438,15 +536,23 @@ function ErrorsSection() {
           </div>
         </Show>
 
-        <Show when={restarts().length}>
+        {/* V3: replaces the old flat "Restart history" list — a causal
+            sequence (crash -> restart -> re-baseline) per restart, newest
+            restart first (ticket Solution direction §3c). */}
+        <Show when={timeline().length}>
           <div class="error-group">
-            <h4 class="error-group__title">Restart history</h4>
-            <ul class="restart-rows">
-              <For each={restarts()}>
-                {(r) => (
-                  <li>
-                    <span>generation {r.generation}</span>
-                    <span>{formatTime(r.atMs)}</span>
+            <h4 class="error-group__title">Supervision timeline</h4>
+            <ul class="supervision-timeline">
+              <For each={timeline()}>
+                {(s) => (
+                  <li class="supervision-step" data-kind={s.kind}>
+                    <span class="supervision-step__glyph" aria-hidden="true">
+                      {s.glyph}
+                    </span>
+                    <span class="supervision-step__label" title={s.detail ?? undefined}>
+                      {s.label}
+                    </span>
+                    <span class="supervision-step__time">{formatTime(s.atMs)}</span>
                   </li>
                 )}
               </For>

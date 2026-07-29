@@ -6,6 +6,8 @@ import errorsFixture from '../fixtures/errors.json';
 import deadLetterEvent from '../fixtures/error-event-dead-letter.json';
 import parkedEvent from '../fixtures/error-event-parked.json';
 import restartEvent from '../fixtures/error-event-restart.json';
+import waveHealthEvent from '../fixtures/error-event-wave-health.json';
+import waveHealthClearedEvent from '../fixtures/error-event-wave-health-cleared.json';
 import topology from '../fixtures/topology.json';
 
 const snapshot = errorsFixture as ErrorSnapshot;
@@ -20,6 +22,7 @@ describe('fixtures/errors.json', () => {
     expect(snapshot.counters.deadLetters).toBe(snapshot.deadLetters.length);
     expect(snapshot.counters.restarts).toBe(snapshot.restarts.length);
     expect(snapshot.counters.parked).toBe(snapshot.parked.reduce((sum, p) => sum + p.count, 0));
+    expect(snapshot.counters.waveHealth).toBe(snapshot.waveHealth.length);
   });
 
   it('every row references a ref that is a real node in fixtures/topology.json', () => {
@@ -27,6 +30,12 @@ describe('fixtures/errors.json', () => {
     for (const dl of snapshot.deadLetters) expect(refs.has(dl.ref), dl.ref).toBe(true);
     for (const p of snapshot.parked) expect(refs.has(p.ref), p.ref).toBe(true);
     for (const r of snapshot.restarts) expect(refs.has(r.ref), r.ref).toBe(true);
+    for (const w of snapshot.waveHealth) expect(refs.has(w.ref), w.ref).toBe(true);
+  });
+
+  it("every wave-health row's edge is a real edge in fixtures/topology.json", () => {
+    const edgeIds = new Set(topologySnapshot.edges.map((e) => e.id));
+    for (const w of snapshot.waveHealth) expect(edgeIds.has(w.edge), w.edge).toBe(true);
   });
 
   it('loads into ErrorStore, indexed by ref, matching store totals to the snapshot counters', () => {
@@ -94,5 +103,35 @@ describe('event fixtures — one per error.* kind', () => {
     store.applyRestart(event.payload);
     expect(store.counters.restarts).toBe(before + 1);
     expect(store.restartsFor(event.payload.ref)).toHaveLength(2);
+  });
+
+  it('error-event-wave-health.json updates the existing open snapshot row for the same id', () => {
+    const event = waveHealthEvent as InspectEvent;
+    expect(event.kind).toBe('error.waveHealth');
+    if (event.kind !== 'error.waveHealth') throw new Error('unreachable');
+    expect(event.payload.id).toBe(snapshot.waveHealth[0].id);
+    expect(event.payload.state).toBe('open');
+
+    const store = new ErrorStore();
+    store.applySnapshot(snapshot);
+    store.applyWaveHealth(event.payload);
+    expect(store.waveHealthFor(event.payload.ref)).toEqual([event.payload]);
+    expect(store.counters.waveHealth).toBe(1);
+  });
+
+  it('error-event-wave-health-cleared.json clears the same id the open event named', () => {
+    const openEvent = waveHealthEvent as InspectEvent;
+    const clearedEvent = waveHealthClearedEvent as InspectEvent;
+    expect(clearedEvent.kind).toBe('error.waveHealth');
+    if (clearedEvent.kind !== 'error.waveHealth' || openEvent.kind !== 'error.waveHealth') throw new Error('unreachable');
+    expect(clearedEvent.payload.id).toBe(openEvent.payload.id);
+    expect(clearedEvent.payload.state).toBe('cleared');
+
+    const store = new ErrorStore();
+    store.applySnapshot(snapshot);
+    store.applyWaveHealth(clearedEvent.payload);
+    expect(store.waveHealthFor(clearedEvent.payload.ref)).toEqual([]);
+    expect(store.counters.waveHealth).toBe(0);
+    expect(store.allWaveHealth()).toEqual([]);
   });
 });
