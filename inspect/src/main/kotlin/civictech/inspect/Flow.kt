@@ -2,6 +2,7 @@ package civictech.inspect
 
 import civictech.cell.CellRef
 import civictech.cell.MessageContext
+import civictech.cell.Timestamp
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.TopologyLink
 import civictech.cell.port.FanOutlet
@@ -110,12 +111,29 @@ internal class FlowCollector(
     private val onBatch: (FlowBatch) -> Unit,
     /** The contract's `flow.rates.window`, in milliseconds. */
     private val windowMs: Long = WINDOW_MS,
+    /**
+     * Wall clock, read **on a graph thread** by the re-baseline branch in
+     * [TapSite]'s handler and nowhere else (V3-BE part 2). Injectable so a test
+     * can pin the timeline without sleeping; the default is the same
+     * `System::currentTimeMillis` every other collaborator here uses.
+     */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : FlowBinding, AutoCloseable {
 
     private val lock = Any()
 
     /** Live edges, by id — the mapping from a contract `Edge.id` to its producing outlet. */
     private val edges = LinkedHashMap<UUID, PortRef>()
+
+    /**
+     * The *consuming* cell of each live edge, by id (V3-BE). [edges] answers
+     * "which outlet produces this edge"; the wave-health evaluator additionally
+     * needs "and which cell does it feed", so it can pair a tapped outlet's
+     * last wave with the frontier of an observed cell downstream of it. A
+     * free-standing consumer with no cell (a `Use.fixed` target) is simply not
+     * recorded — it can never be an observed subject.
+     */
+    private val edgeTargets = LinkedHashMap<UUID, CellRef>()
 
     /** One tap per producing outlet, shared by every edge that outlet feeds. */
     private val sites = LinkedHashMap<PortRef, TapSite>()
@@ -140,13 +158,15 @@ internal class FlowCollector(
         synchronized(lock) {
             if (link.id in edges) return false
             edges[link.id] = producer
-            sites.getOrPut(producer) { TapSite(outlet) }.edges += link.id
+            link.to.cell?.let { edgeTargets[link.id] = it }
+            sites.getOrPut(producer) { TapSite(outlet, clock) }.edges += link.id
         }
         return false
     }
 
     override fun unbind(id: UUID) {
         val orphaned = synchronized(lock) {
+            edgeTargets.remove(id)
             val producer = edges.remove(id) ?: return
             val site = sites[producer] ?: return
             site.edges -= id
@@ -207,6 +227,7 @@ internal class FlowCollector(
             val snapshot = sites.values.toList()
             sites.clear()
             edges.clear()
+            edgeTargets.clear()
             // a closed collector is silent, not one trailing batch short of it
             everSampled = false
             snapshot
@@ -218,15 +239,69 @@ internal class FlowCollector(
     internal val tappedOutlets: Set<PortRef> get() = synchronized(lock) { sites.keys.toSet() }
 
     /**
+     * V3-BE — what the wave-health evaluator ([WaveHealth]) reads, once per
+     * evaluation tick, on the inspector's own scheduler thread.
+     *
+     * Everything here is *already recorded*: [TapSite.lastContext] is the
+     * volatile the tap handler has always written, and [edgeTargets] comes off
+     * the same `bind` the topology feed already drives. No tap is installed,
+     * no outlet is touched and nothing is subscribed to answer this (P6/P2) —
+     * which is the whole reason the diagnostic is admissible at all.
+     */
+    internal fun tapReadings(): List<TapReading> = synchronized(lock) {
+        sites.map { (producer, site) ->
+            TapReading(
+                producer = producer,
+                edges = site.edges.mapNotNull { id -> edgeTargets[id]?.let { id to it } },
+                lastWave = liveWaveOf(site.lastContext),
+            )
+        }
+    }
+
+    /**
+     * V3-BE part 2 — when a **re-baseline beat** was last observed on any
+     * tapped outlet of [cell], or null when none ever was.
+     *
+     * A `SupervisionPolicy.RESTART` completes by re-baselining over the
+     * ordinary catch-up path (`ManagedHost`'s RESTART branch), and
+     * `FanOutlet.reBaseline` stages a `ReBaselineNotice` that the minted
+     * [MessageContext] then carries — so the payload-agnostic observer this
+     * class already installs sees the beat with one null check (see [TapSite]).
+     *
+     * Null therefore means **not observed**, never "did not happen": only a
+     * `ReBaselineEmitting` cell re-baselines at all, and only a cell with a
+     * tapped outgoing edge is visible here at all.
+     */
+    internal fun reBaselineAtMsOf(cell: CellRef): Long? = synchronized(lock) {
+        sites.entries
+            .filter { (producer, _) -> producer.cell == cell }
+            .mapNotNull { (_, site) -> site.reBaselineAtMs.takeIf { it > 0L } }
+            .maxOrNull()
+    }
+
+    /**
      * One outlet's tap and its window counter. The counter and [lastContext]
      * are the only state a graph thread touches; [edges] is written under
      * [FlowCollector.lock] and read from the sampling thread inside that same
      * monitor, never from the tap handler.
      */
-    private class TapSite(source: FanOutlet<*>) {
+    private class TapSite(source: FanOutlet<*>, private val clock: () -> Long) {
         val edges = LinkedHashSet<UUID>()
 
         private val count = AtomicLong()
+
+        /**
+         * Wall clock of the last observed re-baseline beat on this outlet, or
+         * `0` when none has been seen (V3-BE part 2). Written only inside the
+         * handler's taken branch below; read from the scheduler thread.
+         *
+         * A plain volatile long for the same reason [lastContext] is a plain
+         * volatile reference: a reader that loses the race merely reports the
+         * previous beat, and nothing sums these.
+         */
+        @Volatile
+        var reBaselineAtMs: Long = 0L
+            private set
 
         /**
          * The wave the last observed emission carried. A plain volatile
@@ -265,10 +340,25 @@ internal class FlowCollector(
         private val observed: FanOutlet<*> = source.also { outlet ->
             outlet.observe(tapRef) { context ->
                 // The whole per-message cost: one atomic add, one volatile
-                // store. The context is the wave-plane object the outlet had
-                // already built, handed straight over.
+                // store, and (V3-BE) one reference-null comparison. The context
+                // is the wave-plane object the outlet had already built, handed
+                // straight over.
                 count.incrementAndGet()
                 lastContext = context
+                // V3-BE part 2, the one thing this ticket adds to the data
+                // path, and its cost is pinned: **one reference-null
+                // comparison per message**, plus — only inside the taken branch
+                // — one clock read and one volatile long store. No allocation,
+                // no lock, no map lookup, no payload access, on either side of
+                // the branch. `reBaseline` is a plain nullable field of the
+                // context object already in a register here.
+                //
+                // Sampling `lastContext` from the scheduler instead would be
+                // free, and wrong: a re-baseline beat is a single emission and
+                // live traffic resumes immediately after a restart, so the
+                // scheduler would find the beat overwritten in exactly the case
+                // this exists to report.
+                if (context.reBaseline != null) reBaselineAtMs = clock()
             }
         }
 
@@ -280,5 +370,43 @@ internal class FlowCollector(
     internal companion object {
         /** Contract §SSE `flow.rates`: `"window": 1000` — one batch per second. */
         const val WINDOW_MS = 1000L
+
+        /**
+         * A site's **wave position**, or null when the last emission it
+         * observed does not carry one.
+         *
+         * Two contexts are deliberately refused (V3-BE guard 3):
+         *
+         * - `baseline != null` — a catch-up baseline is a topology-versioned
+         *   state-as-delta reply carrying a merge-tag frontier, and is
+         *   explicitly *not* a wave position (spec 20/21 §Pull, 20/22
+         *   §Interaction, 93 I-24; a glitch-free consumer must not admit it to
+         *   any wave-completeness set). Reading its timestamp as "the wave this
+         *   edge just carried" would be the exact lie the frontier exists to
+         *   prevent.
+         * - `reBaseline != null` — a RESTART re-baseline *is* a fresh
+         *   origination and so does carry a real wave position, of a
+         *   **brand-new epoch**. Refusing it is stricter than the letter of the
+         *   guard, and deliberately so: the first wave of a fresh epoch is the
+         *   worst possible reference point for a lag comparison against a
+         *   frontier still stamped with the dead epoch, and skipping it costs
+         *   nothing but one tick of latency.
+         */
+        fun liveWaveOf(context: MessageContext?): Timestamp? =
+            context?.takeIf { it.baseline == null && it.reBaseline == null }?.timestamp
     }
 }
+
+/**
+ * One tapped producing outlet as [WaveHealth] sees it — a value snapshot taken
+ * under [FlowCollector]'s own monitor, so the evaluator never reads live
+ * collector state (V3-BE).
+ */
+internal data class TapReading(
+    /** The producing outlet this tap is installed on. */
+    val producer: PortRef,
+    /** `(contract Edge.id, the consuming cell)` for every edge this outlet feeds. */
+    val edges: List<Pair<UUID, CellRef>>,
+    /** The last *live* wave position observed here — see [FlowCollector.liveWaveOf]. */
+    val lastWave: Timestamp?,
+)

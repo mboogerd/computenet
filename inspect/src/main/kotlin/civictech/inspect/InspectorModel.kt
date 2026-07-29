@@ -460,6 +460,18 @@ internal class InspectorModel(
     }
 
     /**
+     * `error.waveHealth` (V3): one [WaveHealthRow] — a heuristic diagnostic, and
+     * never a claim that a wave *is* lost (see [WaveHealth]). A row carrying
+     * `state: "cleared"` retires the open row with the same `id`, the same
+     * convention `error.parked`'s `count: 0` already established, so the client
+     * needs no new discipline for it. [WaveHealth] owns the open set and the
+     * cadence; this is only the emission point (mirrors [stateSummary]).
+     */
+    fun waveHealthEvent(row: WaveHealthRow) = synchronized(lock) {
+        emitEvent(Event.ERROR_WAVE_HEALTH, inspectorJson.encodeToJsonElement(row).jsonObject)
+    }
+
+    /**
      * `flow.rates` (contract §SSE): one 1 Hz aggregation window from
      * [FlowCollector]. Rides the same monotonic [seq] as every other event —
      * one stream, one gap detector (mirrors [stateSummary]).

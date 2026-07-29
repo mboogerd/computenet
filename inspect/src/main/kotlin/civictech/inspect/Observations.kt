@@ -277,6 +277,24 @@ internal class Observations(
         synchronized(lock) { open[ref] }?.touch(clock())
     }
 
+    /**
+     * V3-BE — [ref]'s current frontier stamp, or null when it is not observed
+     * *or* has no wave position yet.
+     *
+     * The narrowest possible read for the wave-health evaluator: one volatile
+     * read off [StampedView], no fold materialization (unlike [reading]) and —
+     * critically — **no [touch]**. Renewing the idle deadline here would make a
+     * diagnostic keep alive the very observation it is diagnosing, which is
+     * exactly the "extend an observation's lifetime to keep a subject alive"
+     * P6 forbids. A subject whose observation expires simply stops being one.
+     *
+     * A null answer for an *open* observation is meaningful and common: a
+     * freshly-opened observation's state arrived as a catch-up baseline, and a
+     * baseline is deliberately not a wave position (see [StampedView]). The
+     * evaluator treats it as "not eligible", never as "at wave zero".
+     */
+    fun frontierOf(ref: CellRef): Timestamp? = synchronized(lock) { open[ref] }?.frontier
+
     /** A consistent read of [ref], or null when it is not observed. */
     fun reading(ref: CellRef): StateReading? {
         val observation = synchronized(lock) { open[ref] } ?: return null
@@ -379,6 +397,9 @@ internal class Observations(
 
         /** Set once, by whichever of the three release paths gets there first. */
         private val trailed = AtomicBoolean(false)
+
+        /** V3-BE — see [Observations.frontierOf]; one volatile read, nothing else. */
+        val frontier: Timestamp? get() = view.frontier
 
         fun touch(now: Long) {
             lastTouchedMs = now

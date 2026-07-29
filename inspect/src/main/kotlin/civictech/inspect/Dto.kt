@@ -296,6 +296,13 @@ data class Event(
         const val ERROR_DEAD_LETTER = "error.deadLetter"
         const val ERROR_PARKED = "error.parked"
         const val ERROR_RESTART = "error.restart"
+
+        /**
+         * V3 — one [WaveHealthRow], the live half of `ErrorSnapshot.waveHealth`.
+         * A row carrying `state: "cleared"` clears the open row with the same
+         * `id`, the same convention `error.parked`'s `count: 0` established.
+         */
+        const val ERROR_WAVE_HEALTH = "error.waveHealth"
         const val FLOW_RATES = "flow.rates"
 
         /** V2 — one [ActivityEntry], the live half of `GET /api/inspect/activity`. */
@@ -315,6 +322,14 @@ data class ErrorSnapshot(
     val deadLetters: List<DeadLetterRow>,
     val parked: List<ParkedRow>,
     val restarts: List<RestartRow>,
+    /**
+     * V3 — the **currently open** wave-health rows (see [WaveHealthRow] and
+     * [WaveHealth]), a live gauge in the manner of [parked] and deliberately
+     * *not* a history log: a row appears while its condition holds and
+     * disappears — with one `state: "cleared"` SSE event — when it resolves.
+     * Bounded by [WaveHealth.WAVE_HEALTH_MAX_OPEN].
+     */
+    val waveHealth: List<WaveHealthRow> = emptyList(),
 )
 
 /**
@@ -331,7 +346,76 @@ data class ErrorCounters(
     val parked: Long,
     val restarts: Long,
     val drainedOnTeardown: Long,
+    /**
+     * V3 — how many wave-health rows are open **right now**. Like [parked] and
+     * unlike its three monotonic siblings this is a *gauge*: it falls as
+     * conditions resolve. It counts a heuristic diagnostic, never a
+     * kernel-grade detection — see [WaveHealthRow].
+     */
+    val waveHealth: Long = 0,
 )
+
+/**
+ * V3 — one wave-health row: a **heuristic diagnostic**, never a kernel-grade
+ * detection of a lost or stuck wave.
+ *
+ * Computed by [WaveHealth] on the inspector's own scheduler thread by
+ * correlating two things it already holds — the last wave observed on a tapped
+ * producing outlet ([FlowCollector]) and the frontier stamp of a cell a client
+ * explicitly observed ([StampedView.frontier]). Real detection needs per-source
+ * per-edge watermarks, `Progress` absorb-acks and typed `Stall` markers that do
+ * not exist (`doc/spec/20-dataflow-semantics/22-consistency.md` §Completeness
+ * over silent or stuck edges, **G-40**), so every row says so: [heuristic] is
+ * always `true` and the word "heuristic" always opens [description]. No row
+ * asserts that a wave *is* lost, that a cell *is* stuck, or that glitch-freedom
+ * *is* violated.
+ */
+@Serializable
+data class WaveHealthRow(
+    /**
+     * `"<kind>:<edgeId>:<ref>"` — stable per (kind, edge, cell), so the open
+     * row, its updates and its clear all carry one id.
+     */
+    val id: String,
+    /** [FRONTIER_LAG] or [STALLED_WAVE]. */
+    val kind: String,
+    /** [OPEN] or [CLEARED]; a [CLEARED] row retires the open row with the same [id]. */
+    val state: String,
+    /** The observed cell whose frontier trails — always one of `Observations.openRefs`. */
+    val ref: String,
+    /** The tapped [Edge.id] the comparison used. */
+    val edge: String,
+    /**
+     * The wave this row is about on that edge: the last live wave observed on
+     * it for [FRONTIER_LAG], and the pinned wave that never arrived for
+     * [STALLED_WAVE]. Baseline and re-baseline emissions are never taken as a
+     * site's wave position (a baseline is deliberately not a wave position —
+     * spec 20/21 §Pull, 93 I-24).
+     */
+    val wave: WaveStamp? = null,
+    /** The observed cell's frontier at evaluation time. */
+    val frontier: WaveStamp? = null,
+    /** `wave.counter - frontier.counter`; only ever populated when the two share a source. */
+    val lagWaves: Long? = null,
+    /** How long the condition has held continuously, in milliseconds. */
+    val heldMs: Long,
+    val atMs: Long,
+    /** Always `true`. This feed never claims certainty. */
+    val heuristic: Boolean = true,
+    /** Human-readable, always beginning with the word "heuristic". */
+    val description: String,
+) {
+    companion object {
+        /** An observed frontier trailing an upstream tapped outlet's last wave by more than a threshold. */
+        const val FRONTIER_LAG = "frontierLag"
+
+        /** A wave observed on a tapped edge that the observed frontier never reached. */
+        const val STALLED_WAVE = "stalledWave"
+
+        const val OPEN = "open"
+        const val CLEARED = "cleared"
+    }
+}
 
 /**
  * One retained dead letter — the ring buffer's element. Built once, at
@@ -349,7 +433,90 @@ data class DeadLetterRow(
     val description: String,
     val wave: WaveStamp? = null,
     val atMs: Long,
+    /**
+     * V3 — what the failing call *was*, when the dead letter carried a
+     * `HostedPortInvocation` at all. Null for a plain host-level drop (a
+     * routing failure that never reached a target port, say).
+     */
+    val invocation: InvocationSummary? = null,
+    /**
+     * V3 — one entry per argument of [invocation], in argument order; empty
+     * when there was no invocation or it took no arguments. Names the kernel's
+     * own sanitization outcome, never a value — see [ArgDisposition].
+     */
+    val disposition: List<ArgDisposition> = emptyList(),
 )
+
+/**
+ * V3 — [DeadLetterRow.invocation]: the failing call's *shape*, read off the
+ * `HostedPortInvocation` at capture time and extracted to primitives there.
+ * Declared type names only; no argument value, encoded or otherwise, appears
+ * here or anywhere else on the row.
+ */
+@Serializable
+data class InvocationSummary(
+    /** `HostedPortInvocation.portName`. */
+    val port: String,
+    /** `PORT_API` / `PORT_MANAGEMENT` / `PORT_PROTOCOL` — `HostedPortInvocation.Type`. */
+    val type: String,
+    /** `Invocation.methodName`. */
+    val method: String,
+    /** `Invocation.parameterTypes` — *declared* type names, not values. */
+    val parameterTypes: List<String> = emptyList(),
+    val argCount: Int,
+    /** The invocation context's `MessageContext.hop`, or null off the data path. */
+    val hop: Int? = null,
+)
+
+/**
+ * V3 — one argument's **ownership disposition**: the outcome of the kernel's
+ * own dead-letter sanitization (`civictech.cell.host.DeadLetters`), read back.
+ *
+ * The dead-letter outlet is a fan-out, so a live exclusive handle must never
+ * enter it (spec 23 R8, G-46): an `Owned` arrives already frozen (or
+ * `Redacted` when it had been consumed before capture), a `Leased` arrives
+ * released and replaced by a `Redacted` marker. That outcome is precisely what
+ * an operator needs to see — "the exclusive payload on this failed call was
+ * frozen / was released / was already consumed".
+ *
+ * [OWNED] and [LEASED] stay in the vocabulary as the honesty case: a live
+ * exclusive handle reaching this outlet would be a kernel invariant violation,
+ * and the row says so rather than mislabelling it.
+ */
+@Serializable
+data class ArgDisposition(
+    /** Position in `Invocation.args`. */
+    val index: Int,
+    /** [FROZEN], [REDACTED], [BORROWED], [OWNED], [LEASED] or [PLAIN]. */
+    val ownership: String,
+    /**
+     * The kernel-authored `Redacted.reason`, truncated at
+     * `Errors.REDACTION_REASON_MAX` characters. Null for every other
+     * disposition — this is the one string on the row that comes from the
+     * payload side, and it is written by the kernel, never by a value.
+     */
+    val reason: String? = null,
+) {
+    companion object {
+        /** `civictech.cell.Frozen` — an `Owned` degenerated at capture. */
+        const val FROZEN = "frozen"
+
+        /** `civictech.cell.Redacted` — a released `Leased`, or an already-consumed `Owned`. */
+        const val REDACTED = "redacted"
+
+        /** `civictech.cell.Borrowed` — a read-only snapshot view, fan-out safe. */
+        const val BORROWED = "borrowed"
+
+        /** `civictech.cell.Owned` reaching the fan-out outlet live — never expected. */
+        const val OWNED = "owned"
+
+        /** `civictech.cell.Leased` reaching the fan-out outlet live — never expected. */
+        const val LEASED = "leased"
+
+        /** An ordinary value under no ownership contract. */
+        const val PLAIN = "plain"
+    }
+}
 
 /** One `(ref, port)` group of currently parked traffic — a live gauge, never retained history. */
 @Serializable
@@ -360,12 +527,47 @@ data class ParkedRow(
     val oldestMs: Long,
 )
 
-/** One observed generation increase — [civictech.cell.host.ManagedHost.generationOf] going up. */
+/**
+ * One observed generation increase — [civictech.cell.host.ManagedHost.generationOf]
+ * going up.
+ *
+ * V3 adds the connective tissue of the supervision *timeline*
+ * (`ManagedHost`'s RESTART branch, in order: dead-letter the failure → bump the
+ * generation → mint a fresh emission epoch per outlet → re-baseline if the cell
+ * is `ReBaselineEmitting`). The kernel reports those as unrelated events, so
+ * the two extra halves below are **observed correlations, not kernel-reported
+ * facts**, and each says exactly how far its honesty reaches.
+ */
 @Serializable
 data class RestartRow(
     val ref: String,
     val generation: Long,
     val atMs: Long,
+    /**
+     * The simple class name of the throwable on the most recent dead letter
+     * captured for this same ref within `Errors.RESTART_CAUSE_WINDOW_MS`
+     * *preceding* this generation bump.
+     *
+     * **A time-window correlation, not a kernel-reported restart cause.** No
+     * seam reports the failure and the restart as one event; a coincidental
+     * dead letter for the same ref inside the window would be attributed here.
+     * Null when no candidate exists — never a guess.
+     */
+    val cause: String? = null,
+    /** When that dead letter was captured, or null when [cause] is null. */
+    val causeAtMs: Long? = null,
+    /**
+     * When a re-baseline beat was **observed** on one of this cell's tapped
+     * outgoing edges, or null.
+     *
+     * **`null` means "not observed", never "did not happen".** Only a cell
+     * implementing `civictech.cell.ReBaselineEmitting` re-baselines at all
+     * (today `civictech.cell.data.op.UnionSetCell` is the only kernel
+     * implementation), and the cell must additionally have at least one tapped
+     * outgoing edge for the inspector to see the beat. A client must render
+     * absence, not a negative claim.
+     */
+    val reBaselineAtMs: Long? = null,
 )
 
 /** `GET /api/inspect/graphs` — every connected component this inspector can see. */
