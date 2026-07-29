@@ -30,10 +30,48 @@ Override the backend port with `INSPECT_BACKEND=http://localhost:<port> npm run 
 ## Test
 
 ```
-npm test        # Vitest — the pure core (sync/diff, sync/store, sync/client, layout/layered)
+npm test        # Vitest — every suite: the pure core (test/*.test.ts, node
+                 # environment) plus the DOM/component suites (test/dom/*.test.tsx,
+                 # jsdom)
 npm run typecheck
 npm run build
 ```
+
+`vite.config.ts`'s `test.include` picks up both `test/**/*.test.ts` (the pure
+core — `sync/diff`, `sync/store`, `sync/client`, `layout/layered`, and the
+`fixtures/*.json` contract-shape suites) and `test/**/*.test.tsx` (the DOM
+suites, below). The default Vitest `environment` stays `node` — fast, no DOM —
+for every `.test.ts` file; each `.test.tsx` file opts into `jsdom` itself with
+a `/** @vitest-environment jsdom */` docblock at the top, so only the suites
+that actually need a DOM pay for one.
+
+### `test/dom/` — component/DOM suites (FE-TESTS)
+
+`test/dom/harness.tsx` seeds the app through its real data path — stubs
+`fetch`/`EventSource`/`ResizeObserver`, then calls `connect()` /
+`fetchGraphs()` / `initDetail()` exactly as `src/app.tsx` does, answering
+every request from the checked-in `fixtures/*.json` — rather than reaching
+into the Solid stores directly. See that file's own doc comment for exactly
+what is stubbed and where a new test would extend it.
+
+- `canvas.test.tsx` — nodes/edges render from `fixtures/topology.json`; card
+  click/background click/keyboard select; the zoom controls' accessible
+  names and `+`'s effect on the pan transform.
+- `detail-panel.test.tsx` — all four sections, and the no-selection/no-errors/
+  state-unavailable empty states.
+- `toggle-bar.test.tsx` — each of the five toggles flips its own signal; the
+  Errors/State canvas overlays appear and disappear with their toggle.
+- `navigator.test.tsx` — graph cards and constellation cards from
+  `fixtures/graphs.json`/`topology.json`, with non-empty accessible names
+  (pins the historical M4-EVAL defect); click enters the graph.
+- `value-view.test.tsx` — `ValueView` is a pure props component (no fetch/SSE
+  involved), so it renders directly with a fixture (or, for the
+  never-served-by-the-real-server tombstoned-row shape, a small inline
+  literal) rather than going through the harness.
+
+A component taking plain props (`ValueView`, `Tooltip`) is rendered directly
+with a value; anything reading the shared Solid stores goes through the
+harness instead.
 
 ## Shape
 
