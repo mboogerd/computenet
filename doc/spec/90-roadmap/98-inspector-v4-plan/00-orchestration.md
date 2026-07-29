@@ -98,7 +98,7 @@ Parallel: V1B-FE ∥ V1-DEMO (ui files vs scripts/docs — disjoint).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| V1B-FE | Pinned multi-cell observations; cost surfacing | sonnet | fork V1A-FE eval-fixed context or fresh+handoff | ticket/v1b-fe | opus | not-started |
+| V1B-FE | Pinned multi-cell observations; cost surfacing | sonnet | fork V1A-FE eval-fixed context or fresh+handoff | ticket/v1b-fe | opus | merged |
 | V1-DEMO | Two-JVM shopping convergence demo runbook + script | haiku | fresh | ticket/v1-demo | sonnet | merged |
 
 **Checkpoint C3 — verification.** As C1; evaluator runs the demo runbook
