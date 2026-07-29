@@ -8,7 +8,7 @@ Architecture copied from `demo/agora/ui/` per the M0-FE ticket.
 
 ## Run
 
-Against a real `:inspect` server (once M0-BE lands):
+Against a real `:inspect` server:
 
 ```
 ./gradlew :demo:skillmatch:run --args="8080 --inspect-port 7071"
@@ -70,8 +70,9 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M1-FE.md`:
 
 - **Detail panel** (`src/components/DetailPanel.tsx`) always stacks all four
   subsections on selection — Descriptor & placement (`GET /cell/{ref}`),
-  State, and Flow/Errors placeholders ("arrives with the ... milestone").
-  No perspective switching (that was v2 — see `10-target-v3.md`).
+  State, Errors (M2), and Flow (M3); the latter two are real subsections
+  today, not placeholders (see the "## M3" section below). No perspective
+  switching (that was v2 — see `10-target-v3.md`).
 - **State subscription lifecycle** (`src/sync/detailClient.ts`,
   `src/solid/detail.ts`): selection drives exactly one `POST .../observe` /
   `DELETE .../observe` pair (P6 — browsing never subscribes); `state.summary`
@@ -88,7 +89,9 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M1-FE.md`:
   nodes by `Node.host`, rendered beneath edges, recomputed on
   `structuralVersion` change *or* a host reassignment (a pure value change
   that does not itself bump `structuralVersion` — see `Canvas.tsx`'s
-  `hostFp` memo). "Network hosts" stays disabled (M5).
+  `hostFp` memo). "Network hosts" became functional in M5-NET (see the
+  "## M5-NET" section below) and, after V0-FE, its state survives reload
+  and deep-link like the other four toggles.
 - **State toggle chips** on the canvas: driven purely by received
   `state.summary` events; since only the selected cell is ever observed in
   M1, at most one node ever shows a chip at a time.
@@ -159,12 +162,14 @@ Per `doc/spec/90-roadmap/97-inspector-plan/tickets/M4-FE.md`:
   (`LayeredLayoutConfig`) so this thumbnail-scale caller and the full-size
   canvas share one algorithm instead of two. Dots only, faint edges, no
   labels beyond the card header; a graph with `deadLetters > 0` gets a red
-  border/dots, `lifecycle: "cold"` dims the card (M5 — always "hot" today).
+  border/dots, `lifecycle: "cold"` dims the card — real cold-lifecycle
+  detection landed in M5-COLD (`Cold.kt`/`Waker.kt` on the backend,
+  `ColdScreen.tsx`/`solid/cold.ts` on the frontend), not just "always hot".
 - **Search** (`Navigator.tsx`'s `SearchPanel`, `solid/search.ts`,
   `src/nav/search.ts`): `name` mode searches as-you-type; `problems` mode
-  searches once on chip-select; `data` mode's chip is disabled with an
-  "arrives in M5" tooltip and never issues a request (ahead of the BE's own
-  501). Clicking a `problems` hit opens its graph with the Errors toggle
+  searches once on chip-select; `data` mode's chip is not gated — M5-SEARCH
+  landed it and it issues a request like the other two modes today.
+  Clicking a `problems` hit opens its graph with the Errors toggle
   forced on (`enterGraph(..., { forceErrors: true })`); toggle state itself
   is untouched by navigation (`solid/toggles.ts`'s existing module-level
   signals), so "thumbnail click-through preserves toggles" holds for free.

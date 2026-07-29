@@ -1,0 +1,123 @@
+/* On-canvas legend strip (V0-FE ticket Problem (c)), a compact chrome bar
+   mounted below ToggleBar — every color below comes from
+   styles/tokens.css custom properties, never a literal hex/rgb value, so
+   it renders correctly in both light and dark theme via that file's
+   :root[data-theme] / @media (prefers-color-scheme: dark) split. */
+
+.legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.35rem 1rem;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.legend__title {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.legend__label {
+  white-space: nowrap;
+}
+
+.legend__swatch {
+  flex: 0 0 auto;
+}
+
+.legend__swatch--row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12rem;
+}
+
+.legend__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  background: var(--cell-unknown);
+}
+
+.legend__dot[data-color='PURE'] {
+  background: var(--cell-pure);
+}
+.legend__dot[data-color='BLOCKING'] {
+  background: var(--cell-blocking);
+}
+.legend__dot[data-color='SUSPENDING'] {
+  background: var(--cell-suspending);
+}
+
+.legend__glyph {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-right: 0.1rem;
+}
+
+.legend__badge {
+  font-size: 0.58rem;
+  font-weight: 700;
+  padding: 0.02rem 0.28rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  color: var(--text-secondary);
+}
+
+.legend__line--consume {
+  stroke: var(--edge-consume);
+  stroke-width: 1.5;
+}
+.legend__line--observe {
+  stroke: var(--edge-observe);
+  stroke-width: 1.5;
+}
+
+.legend__hull {
+  width: 20px;
+  height: 12px;
+  border-radius: 3px;
+  display: inline-block;
+}
+.legend__hull--host {
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+}
+.legend__hull--net {
+  border: 1.5px dashed var(--hairline-strong);
+}
+
+.legend__dot--flow {
+  background: var(--flow-pulse);
+}
+.legend__dot--error {
+  background: var(--error);
+}
+.legend__dot--parked {
+  background: var(--parked);
+}
+
+.legend__state-chip {
+  font-family: var(--font-mono);
+  padding: 0.05rem 0.3rem;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  font-size: 0.6rem;
+  color: var(--text-secondary);
+}

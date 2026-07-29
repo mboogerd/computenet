@@ -5,7 +5,18 @@ import { graphs, graphsLoaded } from './graphs';
 import { selection, setSelection } from './selection';
 import { currentGraphId, initialRoute, screen, setCurrentGraphId, setScreen } from './routeState';
 import { setGraphFilter } from './state';
-import { setShowErrors, setShowFlow, setShowHosts, setShowState, showErrors, showFlow, showHosts, showState } from './toggles';
+import {
+  setShowErrors,
+  setShowFlow,
+  setShowHosts,
+  setShowNet,
+  setShowState,
+  showErrors,
+  showFlow,
+  showHosts,
+  showNet,
+  showState,
+} from './toggles';
 
 // Re-exported so components (`app.tsx`, `Header.tsx`, `Navigator.tsx`) keep
 // importing screen/currentGraphId from here — the M4 navigation module —
@@ -16,12 +27,14 @@ export { currentGraphId, screen };
 
 const TOGGLE_GETTERS: Record<ToggleKey, () => boolean> = {
   hosts: showHosts,
+  net: showNet,
   flow: showFlow,
   errors: showErrors,
   state: showState,
 };
 const TOGGLE_SETTERS: Record<ToggleKey, (v: boolean) => void> = {
   hosts: setShowHosts,
+  net: setShowNet,
   flow: setShowFlow,
   errors: setShowErrors,
   state: setShowState,

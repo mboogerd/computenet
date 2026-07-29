@@ -3,6 +3,7 @@ import Canvas from './components/Canvas';
 import ColdScreen from './components/ColdScreen';
 import DetailPanel from './components/DetailPanel';
 import Header from './components/Header';
+import Legend from './components/Legend';
 import Navigator from './components/Navigator';
 import ToggleBar from './components/ToggleBar';
 import { currentGraphCold } from './solid/cold';
@@ -35,6 +36,7 @@ export default function App() {
         fallback={<Navigator />}
       >
         <ToggleBar />
+        <Legend />
         <div class="app-body">
           <Show when={!currentGraphGone()} fallback={<GraphGone />}>
             {/* M5-COLD: a parked component renders as the cold screen — the

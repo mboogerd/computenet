@@ -17,13 +17,16 @@
 // is a thin, untested-by-design layer over this, same split as
 // `sync/client.ts` vs `solid/state.ts`.
 
-/** The toggle keys that round-trip through the hash — exactly the four
- *  *functional* overlay toggles (`solid/toggles.ts`); "Network hosts" stays
- *  disabled/always-false through M5 (10-target-v3.md toggle table), so it
- *  has no real signal to serialize and is deliberately absent here rather
- *  than faked. */
-export type ToggleKey = 'hosts' | 'flow' | 'errors' | 'state';
-export const TOGGLE_KEYS: readonly ToggleKey[] = ['hosts', 'flow', 'errors', 'state'];
+/** The toggle keys that round-trip through the hash — all five overlay
+ *  toggles (`solid/toggles.ts`), every one of them functional since M5-NET
+ *  made "Network hosts" the last to go live. A hash written before `'net'`
+ *  joined this list (four toggle tokens, never `net`) still parses
+ *  correctly: `parseHash`'s filter-by-`TOGGLE_KEYS` logic below reads a
+ *  missing token as simply absent, which `applyToggles` (`solid/route.ts`)
+ *  then reads as `false` — see test/route.test.ts's backward-compatibility
+ *  case. */
+export type ToggleKey = 'hosts' | 'net' | 'flow' | 'errors' | 'state';
+export const TOGGLE_KEYS: readonly ToggleKey[] = ['hosts', 'net', 'flow', 'errors', 'state'];
 
 export interface HomeRoute {
   readonly screen: 'home';
