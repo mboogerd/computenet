@@ -94,7 +94,18 @@ export interface DetailHandlers {
  */
 export class DetailController {
   /** Explicit, user-controlled pins (`pin`/`unpin`/`unpinAll`). Does not
-   *  include the current selection unless it was also explicitly pinned. */
+   *  include the current selection unless it was also explicitly pinned.
+   *
+   *  Idle release: a pin can go stale if the server's idle sweep releases
+   *  its observation after `Observations.IDLE_RELEASE_MS` (5 minutes,
+   *  `Observations.kt:291-292`) with no activity — e.g. the pinned cell's
+   *  host suspends and stops publishing summaries. This class deliberately
+   *  builds no client-side keep-alive/touch loop or re-observe-on-silence
+   *  detector to paper over that (mirrors {@link FlowStore}'s
+   *  `DECAY_AFTER_MISSED_WINDOWS` in choosing the simpler of two behaviors,
+   *  `sync/flowStore.ts`): the existing `staleMs` reading already shows a
+   *  value that has stopped advancing, and the fix is for the user to
+   *  unpin/re-pin, not an automatic mechanism. */
   private pinned = new Set<Ref>();
   /** Refs whose `observeStart` most recently resolved `'refused'` (409): kept
    *  in the observed/pinned set (a no-fold cell can still be "watched", it
@@ -208,6 +219,19 @@ export class DetailController {
    * bridge, driven by the pin control's `disabled`/hidden state) must not
    * invoke it at all while the target's graph is cold, mirroring how
    * `initDetail` decides `mode` before calling `select`.
+   *
+   * Edge case the design notes leave open: a ref already pinned *before* its
+   * graph goes cold. Chosen behavior is "leave it open" — nothing here (or
+   * in `solid/detail.ts`) force-releases an existing pin's observation when
+   * `currentGraphCold()` flips true; only the pin *control* is disabled, so
+   * no new pins can be added while cold (`Canvas.tsx`'s
+   * `disabled={currentGraphCold()}`). Rationale: the observation was opened
+   * deliberately by the user and the cone is presumably already awake
+   * (something must be publishing for the pin to have been useful); tearing
+   * it down automatically on a transient cold flag would be a surprising,
+   * unrequested side effect, and the user can always unpin explicitly. This
+   * mirrors selecting the simpler of two behaviors, the same call made for
+   * idle release above.
    */
   pin(ref: Ref): void {
     if (this.pinned.has(ref)) return;

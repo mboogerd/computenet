@@ -58,7 +58,11 @@ export {
  *  observation (V1B-FE ticket Solution direction §1's "observed set"), used
  *  by the canvas chip layer and the header's cost indicator. Selection only
  *  contributes while it is not descriptor-only (cold graph) — mirrors
- *  `DetailController`'s own `isObservedLive`. */
+ *  `DetailController`'s own `isObservedLive`. Note `p` (the pinned set) is
+ *  returned as-is, un-filtered by `currentGraphCold()`: a ref already pinned
+ *  before its graph goes cold stays fully in the observed set — see
+ *  `sync/detailClient.ts`'s `pin()` doc comment for the "leave it open"
+ *  choice and its rationale. */
 export function observed(): ReadonlySet<Ref> {
   const p = pinned();
   const sel = selection();
@@ -91,7 +95,16 @@ const controller = new DetailController(defaultDetailTransport, {
     setCellDetail(detail ?? null);
     setDetailError(error ?? null);
   },
-  onState: (_ref, state, error) => {
+  onState: (ref, state, error) => {
+    // Bugfix (post-V1B-FE regression): DetailController.loadState delivers a
+    // state response via onState for ANY tracked ref (pinned or selected —
+    // see detailClient.ts's isTracked), because a pin needs its own state
+    // fetched too. But cellState is a single slot backing the detail panel,
+    // which only ever renders the SELECTED cell — so a pinned-but-not-
+    // selected ref's response must be discarded here, not applied. A pinned
+    // ref's chip is driven by stateSummaries/SSE (see onStateSummary below),
+    // never by this GET /state response.
+    if (ref !== selection()) return;
     setStateLoading(false);
     setCellState(state ?? null);
     setStateError(error ?? null);
