@@ -81,7 +81,11 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // CellDetail (M1) — Node plus:
 {
   ...Node,
-  "attention": "focus" | "idle" | null,
+  "attention": "none" | "low" | "normal" | "high" | null, // V2-BE: widened from "focus"|"idle"|null —
+                                   // the field has never carried a non-null value in any shipped release
+                                   // (hard-coded null through M1-M5), so no client can regress. null means
+                                   // something precise, never a guess: the cell is not locally hosted, or its
+                                   // host runs without an AttentionPolicy (no policy, no band in effect).
   "links": { "inbound": 2, "outbound": 3, "taps": 1 }
 }
 
@@ -168,7 +172,8 @@ not replayed). Server sends `heartbeat` every 15 s.
 |---|---|---|
 | `topology.node` | M0 | `{ "op": "added"\|"removed", "node": Node }` |
 | `topology.link` | M0 | `{ "op": "added"\|"removed", "edge": Edge }` (removed: only `id` required) |
-| `lifecycle` | M0 | `{ "ref", "lifecycle", "generation" }` |
+| `lifecycle` | M0, V2-BE | `{ "ref", "lifecycle", "generation" }` — mechanism change, not a shape change (V2-BE): pushed at the transition off the kernel's lifecycle listener rather than sampled at 1 Hz, and fires exactly once per real transition (a re-publish that does not move the lifecycle, e.g. a host resume observed while still draining, emits nothing) |
+| `activity` | V2-BE | one `ActivityEntry`: `{ "ref", "kind": "passivated"\|"activated"\|"drained"\|"woken"\|"restarted", "atMs", "generation"\|omitted }` — `generation` present only on `restarted`. `passivated`/`activated`/`drained` come from the kernel's per-cell lifecycle listener (passivated covers both an explicit suspend and a supervision suspend, indistinguishable at this seam); `woken` is the inspector's own causal act (`POST /graph/{id}/wake`), recorded before the resume calls it triggers, so it precedes the `activated` it causes — a single wake legitimately yields both, neither is suppressed; `restarted` is a supervision restart, observed as a generation increase. Rides the shared monotonic `seq`. Paired with `GET /api/inspect/activity` → `{"entries": [ActivityEntry]}`, oldest first, bounded at 200 for the whole process (not per cell); an empty ring answers `{"entries": []}`, never 404 |
 | `state.summary` | M1, V1A-BE | `{ "ref", "cardinality": "4 rows"\|null, "frontier": {...}\|null, "staleMs", "changes": 3 }` — only for cells a client explicitly observed: every summary belongs to an observation that was open when the window was built, including the single trailing window a release publishes as its last act; a cell with no observe subscription never produces one. One coalesced window per second per observed cell (V1A-BE) — an arbitrary number of settled effective changes inside a window produce **one** summary carrying the *latest* reading, never an intermediate one. Publishes every window while the observation is open, even a quiet one (so a client's staleness/decay logic can key off "window received" rather than off silence), then exactly one trailing window when the observation is released — by `DELETE`, the 5-minute idle sweep, or inspector shutdown — then nothing for that cell. `staleMs` is computed at publish time from the last effective change: it decreases in a window where something settled and grows by roughly one window across consecutive quiet ones. `changes` is additive: how many settled effective changes this window coalesced, `0` for a quiet window — the exact change signal, where `staleMs`'s decrease is a heuristic that can miss a change landing almost exactly one window after the previous one. Guarantee: an effective state change on an observed cell is announced within one window, so a client that refetches `GET /cell/{ref}/state` on a summary it judges to indicate change can never be left holding a stale value indefinitely. There is no immediate catch-up summary at observe-start beyond the first scheduled window (≤1s later) — a client wanting an instant first paint does its own `GET /cell/{ref}/state` on observe success, as `inspect/ui` already does |
 | `error.deadLetter` | M2 | one `deadLetters[]` element |
 | `error.parked` | M2 | one `parked[]` element (send on change; `count: 0` clears) |
