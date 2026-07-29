@@ -113,7 +113,7 @@ parallel with both (ui only, fixture-driven).
 |---|---|---|---|---|---|---|
 | V2-KERNEL | Lifecycle listener, attention accessor, hook deregistration, remoteRefs() | opus | fresh | ticket/v2-kernel | opus | not-started |
 | V2-BE | Consume seams (drop polls); activity feed (ring + GET + SSE); attention in CellDetail | opus | fork V2-KERNEL | ticket/v2-be | opus | not-started |
-| V2-FE | Activity feed panel; attention display; suspended emphasis | sonnet | fresh | ticket/v2-fe | opus | not-started |
+| V2-FE | Activity feed panel; attention display; suspended emphasis | sonnet | fresh | ticket/v2-fe | opus | merged |
 
 **Checkpoint C4 — verification.** As C1, plus a kernel-invariant audit of the
 V2-KERNEL diff (P2/P6, read-only, transport-neutral) before anything merges.

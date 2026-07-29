@@ -1,6 +1,6 @@
 # V2-FE — activity log, attention band, and suspended emphasis in the UI
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session.
 **Wave:** 4 · **Branches:** `ticket/v2-fe` · **Parallel with:** `V2-KERNEL` and
