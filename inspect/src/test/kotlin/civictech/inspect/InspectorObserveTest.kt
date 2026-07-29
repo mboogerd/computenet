@@ -1,6 +1,9 @@
 package civictech.inspect
 
+import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Stateful
+import civictech.cell.data.CounterApi
 import civictech.cell.data.CounterCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -18,6 +21,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import java.io.Serializable
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -66,9 +70,13 @@ class InspectorObserveTest {
         val cell = set()
         add(cell, "ada")
 
-        // 1. browsing: reading detail and state raises nothing at all
+        // 1. browsing: reading detail and state raises nothing at all — no
+        // subscription is created (server.observedRefs stays empty). V0-BE:
+        // SetCell is Stateful, so the wired snapshot fallback now answers its
+        // raw state here instead of CellState.UNAVAILABLE; that fallback read
+        // is host-routed and one-shot, not an observation.
         probe.get("${InspectorServer.CELL_PATH}/${InspectorServer.encodeRef(cell.ref)}").statusCode() shouldBe 200
-        state(cell.ref).kind shouldBe CellState.UNAVAILABLE
+        state(cell.ref).kind shouldBe CellState.SNAPSHOT
         registry.localRefs() shouldBe setOf(cell.ref)
         server.observedRefs shouldBe emptySet()
 
@@ -90,7 +98,9 @@ class InspectorObserveTest {
         awaitUntil("observe sink $sinkRef despawned") { sinkRef !in registry.localRefs() }
         registry.swapSet(sinkRef) shouldBe emptySet()
         registry.locate(sinkRef) shouldBe null
-        state(cell.ref).kind shouldBe CellState.UNAVAILABLE
+        // released, not gone: the wired snapshot fallback still answers this
+        // Stateful cell's state, exactly as it did before it was ever observed
+        state(cell.ref).kind shouldBe CellState.SNAPSHOT
     }
 
     @Test
@@ -170,7 +180,11 @@ class InspectorObserveTest {
 
         response.statusCode() shouldBe 409
         server.observedRefs shouldBe emptySet()
-        state(counter.ref).kind shouldBe CellState.UNAVAILABLE
+        // V0-BE: no *fold* refuses the subscription, but CounterCell is still
+        // `Stateful` and locally hosted, so InspectorServer's wired snapshot
+        // default now answers it — the seam this ticket exists to close (see
+        // the snapshot-fallback tests below for the dedicated coverage).
+        state(counter.ref).kind shouldBe CellState.SNAPSHOT
     }
 
     @Test
@@ -284,6 +298,57 @@ class InspectorObserveTest {
         awaitSink(cell.ref)
 
         state(cell.ref).kind shouldBe CellState.VIEW
+    }
+
+    @Test
+    fun `the wired default answers a Stateful cell no built-in View can fold, unobserved`() {
+        // CounterDelta has no built-in fold (see the refusal test above), but
+        // CounterCell is Stateful and locally hosted — exactly the case
+        // InspectorServer's *default* SnapshotSource (V0-BE, routed through
+        // ManagedHost.snapshotOf) exists to answer. No SnapshotSource is
+        // assigned here: this exercises the shipped wiring, not a stand-in.
+        val counter = CounterCell().also { host.managementInlet.call.spawn(it) }
+        host.lookup<CounterApi>(counter.ref)!!.inlet.call.increment(5)
+
+        val response = state(counter.ref)
+
+        response.kind shouldBe CellState.SNAPSHOT
+        response.value.toString() shouldBe "5"
+        response.frontier shouldBe null
+    }
+
+    @Test
+    fun `a snapshot read that misses the bounded wait answers unavailable, not a hang`() {
+        val slow = SlowSnapshotCell().also { host.managementInlet.call.spawn(it) }
+
+        // SlowSnapshotCell.snapshot() blocks past InspectorServer's bounded
+        // wait on the host's own thread; the HTTP thread gets the honest "no
+        // fallback" answer within its timeout instead of hanging on it
+        state(slow.ref).kind shouldBe CellState.UNAVAILABLE
+    }
+
+    // -------------------------------------------------------------- fixtures
+
+    /**
+     * A `Stateful` cell whose `snapshot()` blocks well past
+     * [InspectorServer.SNAPSHOT_WAIT_MS] — the fixture for proving the
+     * bounded wait actually bounds it, rather than merely existing in code.
+     * No outlet at all, so it is also unobservable the ordinary way; that is
+     * incidental here, not what this fixture tests.
+     */
+    private class SlowSnapshotCell(override val ref: CellRef = CellRef(java.util.UUID.randomUUID())) :
+        Cell, Stateful {
+        override fun snapshot(): Serializable {
+            Thread.sleep(SLOW_SNAPSHOT_MS)
+            return 0L
+        }
+
+        override fun restore(state: Serializable) = Unit
+
+        companion object {
+            /** Comfortably past [InspectorServer.SNAPSHOT_WAIT_MS] (200ms). */
+            const val SLOW_SNAPSHOT_MS = 1_000L
+        }
     }
 
     // ------------------------------------------------------------- helpers

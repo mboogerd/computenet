@@ -46,10 +46,10 @@ internal data class StateReading(
 /**
  * The `Stateful.snapshot()` fallback seam.
  *
- * **Not wired in M1, deliberately.** The ticket asks for a *host-routed*
+ * **Not wired in M1, deliberately.** The ticket asked for a *host-routed*
  * snapshot: `Stateful.snapshot()` must run on the owning host's execution
  * context, because off-thread it races the cell's own fold. Routing it there
- * needs one of two things the kernel does not expose today —
+ * needed one of two things the kernel did not expose at the time —
  *
  * - the hosted `Cell` instance (`ManagedHost.cells` is private, and
  *   `LocationRegistry.describe` deliberately hands back only the `Class`), or
@@ -58,22 +58,26 @@ internal data class StateReading(
  *   general-purpose form, and `HostedCellProxy` answers `snapshot()` with
  *   `null` because it is neither `getRef` nor a port accessor).
  *
- * Both are kernel edits, which this ticket excludes without orchestrator
- * sign-off ("No kernel edits without orchestrator sign-off"). So the seam is
- * declared, the whole `kind: "snapshot"` path behind it is implemented and
- * tested, and the shipped default reports [CellState.UNAVAILABLE] rather than
- * reading a live cell from the HTTP thread — the one thing the ticket
- * explicitly warns against.
+ * Both were kernel edits, which M1's ticket excluded without orchestrator
+ * sign-off. So the seam was declared, the whole `kind: "snapshot"` path behind
+ * it was implemented and tested, and the shipped default reported
+ * [CellState.UNAVAILABLE] rather than reading a live cell from the HTTP
+ * thread — the one thing the ticket explicitly warned against.
  *
- * **M5 update — the accessor now exists.** `ManagedHost.snapshotOf(ref)` landed
+ * **M5 update — the accessor landed.** `ManagedHost.snapshotOf(ref)` shipped
  * with M5-SEARCH, which needed a host-routed read for content search; it
  * returns a `CompletableFuture` rather than the `Serializable?` predicted here,
- * so the caller owns the deadline instead of inheriting the scheduler's. Wiring
- * it into this seam is still one line at [InspectorServer]'s construction and
- * would finally make `kind: "snapshot"` reachable — but that changes what
- * `GET /cell/{ref}/state` answers for an *unobserved* cell, which belongs to
- * whoever owns M1's remaining residual, not to M5-SEARCH. Left deliberately
- * unwired; [DataSearch] calls the accessor directly.
+ * so the caller owns the deadline instead of inheriting the scheduler's.
+ * [DataSearch] calls the accessor directly for that reason.
+ *
+ * **V0-BE update — wired.** [InspectorServer]'s shipped [InspectorServer.snapshots]
+ * default now routes through [ManagedHost.snapshotOf] under a bounded wait
+ * (`InspectorServer.SNAPSHOT_WAIT_MS`, the same pattern [DataSearch.read] uses
+ * for the identical accessor), so `GET /cell/{ref}/state` for an *unobserved*
+ * `Stateful` cell answers `kind: "snapshot"` instead of always
+ * [CellState.UNAVAILABLE]. A cell with no local host, a non-`Stateful` cell,
+ * or a read that misses the deadline all still resolve to null here, which
+ * this class turns into "no fallback" exactly as before.
  */
 fun interface SnapshotSource {
     /** [ref]'s snapshot, captured on its host's execution context, or null. */

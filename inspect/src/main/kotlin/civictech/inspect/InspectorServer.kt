@@ -14,6 +14,8 @@ import kotlinx.serialization.json.put
 import java.net.InetAddress
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -113,6 +115,19 @@ class InspectorServer(
      * emitted.
      */
     netName: String = Node.LOCAL_NET,
+    /**
+     * (b) — where `inspect/ui`'s built static assets (Vite's `dist/`) live on
+     * disk, or a path that simply does not exist yet. Resolved against the
+     * process's working directory, so the default
+     * (`inspect/ui/dist`, Vite's own default output directory) only ever
+     * finds a real build when this JVM was launched from the repo root —
+     * `./gradlew :demo:skillmatch:run` and an installed distribution both
+     * qualify (`inspect/ui/README.md`'s "Run" section). A caller with a
+     * different working-directory convention, or one that wants to point at
+     * a build copied elsewhere, passes an explicit path; nothing here
+     * invokes `npm run build` itself (binding constraint 10).
+     */
+    uiDist: Path = defaultUiDist(),
 ) : AutoCloseable {
 
     /** Name the hosts by ref — the convenience form when the app has no names of its own. */
@@ -132,6 +147,17 @@ class InspectorServer(
      */
     private val shell = DemoShell(port, InetAddress.getLoopbackAddress())
     private val broadcaster = SseBroadcaster()
+
+    /**
+     * (b) — [uiDist] resolved to a real, existing directory, or null when it
+     * is not one (not yet built, wrong working directory, or a file rather
+     * than a directory). `toRealPath()` both resolves symlinks and fails
+     * fast when nothing is there, so a missing/relocated build degrades to
+     * "serve API only" here, once, at construction — never a per-request
+     * `Files.exists` race, and never a thrown exception a caller has to
+     * handle.
+     */
+    private val uiRoot: Path? = runCatching { uiDist.toRealPath() }.getOrNull()?.takeIf(Files::isDirectory)
 
     /** M5 — the network-host resolver (see [Peers]). */
     private val peers = Peers(registry, netName)
@@ -155,13 +181,32 @@ class InspectorServer(
     private val flow: FlowCollector = FlowCollector(registry, onBatch = model::flowRates)
 
     /**
-     * The `Stateful.snapshot()` fallback, absent by default — see
-     * [SnapshotSource]'s doc for why M1 ships without one. Internal: wiring it
-     * is an orchestrator decision that comes with a kernel accessor, not an
-     * app-facing extension point (an app-supplied source would inherit the
-     * host-thread routing obligation this seam exists to honor).
+     * The `Stateful.snapshot()` fallback — see [SnapshotSource]'s doc for the
+     * seam's history. Wired by default to [ManagedHost.snapshotOf] (V0-BE):
+     * `registry.locate(ref)` is null for a cell with no local host (mirrored,
+     * remote, or unknown) and this resolves to null without ever reaching a
+     * host; [ManagedHost.snapshotOf] itself completes null for a non-
+     * `Stateful` cell or a terminated host. The [SNAPSHOT_WAIT_MS] bounded
+     * wait mirrors [DataSearch.read]'s pattern for the same accessor — this
+     * runs synchronously on the HTTP dispatcher thread inside [serveState],
+     * so a wedged cell must cost this one request its timeout, never hang it
+     * (binding constraint 6, "viz never blocks").
+     *
+     * Internal, and still a `var`: wiring the *default* was the orchestrator
+     * decision (an app-supplied source would otherwise inherit the host-
+     * thread routing obligation this seam exists to honor), but a caller —
+     * chiefly tests standing in for a slow or absent kernel accessor — can
+     * still install its own after construction; [observations]'s own
+     * constructor call reads through this field rather than capturing
+     * today's value, so a later reassignment still takes effect.
      */
-    internal var snapshots: SnapshotSource = SnapshotSource.Unavailable
+    internal var snapshots: SnapshotSource = SnapshotSource { ref ->
+        registry.locate(ref)?.snapshotOf(ref)?.let { pending ->
+            runCatching { pending.get(SNAPSHOT_WAIT_MS, TimeUnit.MILLISECONDS) }
+                .onFailure { pending.cancel(false) }
+                .getOrNull()
+        }
+    }
 
     private val observations = Observations(
         registry = registry,
@@ -236,6 +281,14 @@ class InspectorServer(
         // never lost
         model.sync()
 
+        if (uiRoot == null) {
+            // matching the operator-facing startup message convention in the
+            // demo mains (e.g. SkillMatchApp's "computenet inspector: ..."):
+            // this module has no logging framework dependency and should not
+            // gain one for a one-line note
+            println("computenet inspector: no UI build at $uiDist — serving API only")
+        }
+
         shell.route(TOPOLOGY_PATH) { exchange ->
             exchange.allowCrossOrigin()
             // M4: `?graph=g-…` scopes the snapshot to one component; absent, the
@@ -283,6 +336,13 @@ class InspectorServer(
             runCatching { serveCell(exchange) }
                 .onFailure { failure -> runCatching { exchange.respond(500, problem(failure.toString()), JSON) } }
         }
+        // (b) — the catch-all static route. The JDK http server dispatches by
+        // longest matching path prefix (see [GRAPH_PATH]'s doc for the
+        // general rule this module already relies on), so "/" only ever
+        // serves a request no more specific `/api/inspect/...` context above
+        // claims first; registration order relative to those routes does not
+        // matter.
+        shell.route("/") { exchange -> serveStatic(exchange) }
     }
 
     /**
@@ -426,6 +486,45 @@ class InspectorServer(
         if (!model.knows(ref)) return exchange.respond(404, problem("unknown cell"), JSON)
         if (observations.start(ref)) exchange.noContent()
         else exchange.respond(409, problem("no observable outlet on this cell"), JSON)
+    }
+
+    /**
+     * (b) — `inspect/ui`'s built `dist/`, served directly so a demo started
+     * with `--inspect-port` needs nothing but this one process in
+     * production. Hash-routed app, no server-side path routing
+     * (`inspect/ui/src/nav/route.ts`'s `parseHash`/`formatHash`) — so `GET /`
+     * is the one special path (served as `index.html`); anything else that
+     * does not resolve to a real file under [uiRoot] is a plain 404, not an
+     * SPA fallback.
+     *
+     * `toRealPath()` on the resolved candidate is the traversal/symlink
+     * guard: it both normalizes `..` segments and resolves symlinks, so the
+     * `startsWith(uiRoot)` check below catches a request that would
+     * otherwise escape the dist directory either way, and a request that
+     * resolves to nothing at all simply throws into the same `null` ->
+     * 404 path.
+     */
+    private fun serveStatic(exchange: HttpExchange) {
+        val root = uiRoot ?: return exchange.respond(404, problem("no UI build available"), JSON)
+        val requested = exchange.requestURI.path.removePrefix("/").ifEmpty { INDEX_HTML }
+        val resolved = runCatching { root.resolve(requested).toRealPath() }.getOrNull()
+        if (resolved == null || !resolved.startsWith(root) || !Files.isRegularFile(resolved)) {
+            return exchange.respond(404, problem("not found"), JSON)
+        }
+        exchange.respond(200, Files.readString(resolved), contentTypeFor(resolved.fileName.toString()))
+    }
+
+    /**
+     * The four extensions `inspect/ui`'s Vite build actually produces
+     * (`inspect/ui/package.json`); anything else falls back to a generic
+     * binary content type rather than guessing.
+     */
+    private fun contentTypeFor(fileName: String): String = when {
+        fileName.endsWith(".html") -> "text/html"
+        fileName.endsWith(".js") || fileName.endsWith(".mjs") -> "application/javascript"
+        fileName.endsWith(".css") -> "text/css"
+        fileName.endsWith(".svg") -> "image/svg+xml"
+        else -> "application/octet-stream"
     }
 
     /**
@@ -619,6 +718,25 @@ class InspectorServer(
 
         /** How often pending component changes are announced as `graphs.changed`. */
         const val GRAPHS_POLL_MS = 1_000L
+
+        /**
+         * (a) — the [snapshots] default's bounded wait on
+         * [ManagedHost.snapshotOf]. This runs synchronously on the HTTP
+         * dispatcher thread inside one `GET /cell/{ref}/state` response, not
+         * across a multi-cell fan-out the way [DataSearch.BUDGET_MS]'s 2000ms
+         * budget does — so it is deliberately much shorter: long enough that
+         * an ordinary snapshot (a momentarily busy but live host scheduler)
+         * lands well inside it, short enough that a single slow or wedged
+         * cell costs one HTTP response a barely-noticeable delay rather than
+         * a perceptible stall.
+         */
+        internal const val SNAPSHOT_WAIT_MS = 200L
+
+        /** (b) — Vite's own default build output directory (`inspect/ui/package.json`). */
+        internal fun defaultUiDist(): Path = Path.of("inspect", "ui", "dist")
+
+        /** (b) — `GET /`'s file, since the app is hash-routed and serves no other bare path. */
+        private const val INDEX_HTML = "index.html"
 
         private const val JSON = "application/json"
         private const val STATE = "state"
