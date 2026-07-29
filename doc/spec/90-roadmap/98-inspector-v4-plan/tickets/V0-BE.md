@@ -1,6 +1,6 @@
 # V0-BE — Wire the snapshot fallback; serve the built UI in production
 
-**Status**: Specified — not-started. (`:concord:docLints` accepts only
+**Status**: Partial — implementation complete, verified, pending merge (evaluator/orchestrator to flip to `Implemented — merged`). (`:concord:docLints` accepts only
 `Specified|Partial|Implemented|Exploratory|Historical|Living` as the first
 word of this line; the ticket's own lifecycle word follows it. Move to
 `Partial — in-progress` while working, `Implemented — merged` once merged.)
