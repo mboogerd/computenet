@@ -70,6 +70,17 @@ class FixtureContractTest {
      * only once both branches have merged; that is intended, and noted in the
      * V2-BE report so the repo gate is run after both land rather than against
      * either in isolation.
+     *
+     * `error-event-wave-health.json` / `error-event-wave-health-cleared.json`
+     * are V3's pair, authored by V3-FE and mapped here by V3-BE on the same
+     * arrangement: both are the SSE envelope ([Event]) carrying a
+     * [WaveHealthRow]-shaped `payload` — the `open` row and the `cleared` row
+     * that retires it — and both inherit the `payload`-shape limitation
+     * described above. `errors.json` keeps its existing entry; V3-BE's additive
+     * `ErrorSnapshot.waveHealth` / `ErrorCounters.waveHealth` /
+     * `DeadLetterRow.invocation` / `.disposition` / `RestartRow.cause` fields
+     * all carry defaults, so that fixture strict-decodes both before and after
+     * V3-FE extends it in place.
      */
     private val decoders: Map<String, (String) -> Unit> = mapOf(
         "topology.json" to { s: String -> strict.decodeFromString<TopologySnapshot>(s) },
@@ -95,6 +106,8 @@ class FixtureContractTest {
         "search-data-cold.json" to { s: String -> strict.decodeFromString<SearchResult>(s) },
         "activity.json" to { s: String -> strict.decodeFromString<ActivitySnapshot>(s) },
         "activity-event.json" to { s: String -> strict.decodeFromString<Event>(s) },
+        "error-event-wave-health.json" to { s: String -> strict.decodeFromString<Event>(s) },
+        "error-event-wave-health-cleared.json" to { s: String -> strict.decodeFromString<Event>(s) },
     )
 
     @Test

@@ -1,7 +1,12 @@
 package civictech.inspect
 
+import civictech.cell.Borrowed
 import civictech.cell.CellRef
+import civictech.cell.Frozen
+import civictech.cell.Leased
+import civictech.cell.Owned
 import civictech.cell.Propagate
+import civictech.cell.Redacted
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -47,6 +52,18 @@ internal class Errors(
     private val onDeadLetter: (DeadLetterRow) -> Unit,
     private val onParked: (ParkedRow) -> Unit,
     private val onRestart: (RestartRow) -> Unit,
+    /**
+     * V3 — the currently open wave-health rows ([WaveHealth.openRows]), folded
+     * into this snapshot rather than served on a route of their own: they are an
+     * error class, and `ErrorSnapshot` is where the client already looks.
+     */
+    private val waveHealthRows: () -> List<WaveHealthRow> = ::emptyList,
+    /**
+     * V3 — when a re-baseline beat was last observed on one of [CellRef]'s
+     * tapped outlets ([FlowCollector.reBaselineAtMsOf]), or null. Only ever
+     * consulted at the instant a generation bump is observed.
+     */
+    private val reBaselineAtMsOf: (CellRef) -> Long? = { null },
     private val ringCapacity: Int = RING_CAPACITY,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : AutoCloseable {
@@ -57,6 +74,27 @@ internal class Errors(
     /** Poll-thread-only bookkeeping (the single scheduled task in [InspectorServer.start] drives [poll]). */
     private val lastGeneration = HashMap<CellRef, Long>()
     private val lastParkedCounts = HashMap<Pair<CellRef, String>, Int>()
+
+    /**
+     * V3 — the most recent *thrown* dead letter captured per ref, for
+     * [pollRestarts]'s cause correlation. Written from whichever host thread the
+     * dead-letter tap fires on and read from the poll thread, so it is
+     * concurrent; pruned to [RESTART_CAUSE_WINDOW_MS] on every poll, so it is
+     * bounded by the refs that failed in the last five seconds rather than by
+     * the graph.
+     *
+     * Only dead letters carrying a throwable are candidates. That is not a
+     * convenience: a `SupervisionPolicy.RESTART` is reached exclusively from
+     * `ManagedHost`'s catch block, which always dead-letters with the throwable
+     * it caught, so a causeless drop can never be the cause of a restart.
+     */
+    private val lastFailure = ConcurrentHashMap<CellRef, Failure>()
+
+    /**
+     * The re-baseline beat already attributed to a restart of this ref, so one
+     * beat is never reported twice across two restarts.
+     */
+    private val attributedReBaseline = HashMap<CellRef, Long>()
 
     /**
      * When a `(ref, port)` parked pair was first observed, for [ParkedRow.oldestMs].
@@ -89,16 +127,21 @@ internal class Errors(
     fun snapshot(): ErrorSnapshot {
         val parkedRows = parkedRows(parkedCounts(), clock())
         val accounting = hosts.values.map { it.supervisionAccounting() }
+        // one read, used for both the gauge and the rows, so a row opening
+        // between the two could not make them disagree
+        val waveHealth = waveHealthRows()
         return ErrorSnapshot(
             counters = ErrorCounters(
                 deadLetters = accounting.sumOf { it.deadLetters },
                 parked = parkedRows.sumOf { it.count.toLong() },
                 restarts = accounting.sumOf { it.restarts },
                 drainedOnTeardown = accounting.sumOf { it.parkedDrainedOnTeardown },
+                waveHealth = waveHealth.size.toLong(),
             ),
             deadLetters = deadLetterRing.snapshot(),
             parked = parkedRows,
             restarts = restartRing.snapshot(),
+            waveHealth = waveHealth,
         )
     }
 
@@ -123,19 +166,69 @@ internal class Errors(
      * reference right here — the ticket's "never retain the payload object
      * itself beyond serialization". Neither the [DeadLetter] nor its
      * [civictech.cell.proxy.HostedPortInvocation] survives this call.
+     *
+     * **V3 widens what is extracted, not how long anything is held.** The
+     * invocation summary is port name / invocation type / method name /
+     * *declared* parameter type names / argument count / hop, and the
+     * disposition list is one ownership *class name* per argument plus, for a
+     * [civictech.cell.Redacted] stand-in, the kernel's own reason string
+     * truncated at [REDACTION_REASON_MAX]. No argument value is read, copied,
+     * `toString()`-ed, encoded or referenced — [dispositionOf] receives each
+     * argument only to ask what class it is.
      */
     private fun onDeadLetterReceived(letter: DeadLetter) {
-        val ref = letter.invocation?.cellRef ?: letter.hostRef
-        val wave = letter.invocation?.invocation?.context?.timestamp
+        val hosted = letter.invocation
+        val ref = hosted?.cellRef ?: letter.hostRef
+        val wave = hosted?.invocation?.context?.timestamp
+        val args = hosted?.invocation?.args.orEmpty()
         val row = DeadLetterRow(
             ref = InspectorServer.encodeRef(ref),
             cause = letter.cause?.javaClass?.simpleName,
             description = letter.description,
             wave = wave?.let { WaveStamp(it.sourceId.toString(), it.counter) },
             atMs = clock(),
+            invocation = hosted?.let {
+                InvocationSummary(
+                    port = it.portName,
+                    type = it.type.name,
+                    method = it.invocation.methodName,
+                    parameterTypes = it.invocation.parameterTypes.toList(),
+                    argCount = args.size,
+                    hop = it.invocation.context?.hop,
+                )
+            },
+            disposition = args.mapIndexed { index, arg -> dispositionOf(index, arg) },
         )
+        // V3 — the restart-cause candidate, recorded from the same primitives
+        // the row already carries and keyed by ref. See [lastFailure].
+        val cause = row.cause
+        if (cause != null) lastFailure[ref] = Failure(cause, row.atMs)
         deadLetterRing.add(row)
         onDeadLetter(row)
+    }
+
+    /**
+     * One argument's ownership disposition, classified by its **runtime class
+     * only** (`civictech.cell.Ownership`).
+     *
+     * `DeadLetters.sanitizeForDeadLetter` has already run before the outlet
+     * fanned this letter (spec 23 R8, G-46): an `Owned` arrives as `Frozen`, or
+     * as `Redacted` when it had been consumed before capture; a `Leased`
+     * arrives released and replaced by `Redacted`. Reading that outcome back is
+     * exactly the thing an operator needs — "the exclusive payload on this
+     * failed call was frozen / was released / was already gone".
+     *
+     * [ArgDisposition.OWNED] and [ArgDisposition.LEASED] are the honesty case: a
+     * live exclusive handle must never reach a fan-out outlet, and if one ever
+     * does the row says so rather than mislabelling it `plain`.
+     */
+    private fun dispositionOf(index: Int, arg: Any?): ArgDisposition = when (arg) {
+        is Frozen<*> -> ArgDisposition(index, ArgDisposition.FROZEN)
+        is Redacted -> ArgDisposition(index, ArgDisposition.REDACTED, arg.reason.take(REDACTION_REASON_MAX))
+        is Borrowed<*> -> ArgDisposition(index, ArgDisposition.BORROWED)
+        is Owned<*> -> ArgDisposition(index, ArgDisposition.OWNED)
+        is Leased<*> -> ArgDisposition(index, ArgDisposition.LEASED)
+        else -> ArgDisposition(index, ArgDisposition.PLAIN)
     }
 
     // ------------------------------------------------------------- parked
@@ -196,16 +289,83 @@ internal class Errors(
             val generation = host.generationOf(ref)
             val prior = lastGeneration.put(ref, generation)
             if (prior != null && generation > prior) {
-                val row = RestartRow(InspectorServer.encodeRef(ref), generation, now)
+                val cause = causeFor(ref, now)
+                val row = RestartRow(
+                    ref = InspectorServer.encodeRef(ref),
+                    generation = generation,
+                    atMs = now,
+                    cause = cause?.cause,
+                    causeAtMs = cause?.atMs,
+                    reBaselineAtMs = reBaselineFor(ref, now),
+                )
                 restartRing.add(row)
                 onRestart(row)
             }
         }
         lastGeneration.keys.retainAll(known)
+        lastFailure.entries.removeIf { now - it.value.atMs > RESTART_CAUSE_WINDOW_MS }
+        attributedReBaseline.keys.retainAll(known)
     }
 
-    private companion object {
+    /**
+     * **A correlation, not a kernel-reported restart cause.** The kernel
+     * dead-letters the failure *before* it bumps the generation (`ManagedHost`'s
+     * RESTART branch: `deadLetter(e, …)` then `generations[cellRef] = … + 1`),
+     * and this class already captures both — but no seam reports the two as one
+     * event, so all that can honestly be done is pair a generation bump with the
+     * most recent *thrown* dead letter for the same ref inside
+     * [RESTART_CAUSE_WINDOW_MS] preceding it.
+     *
+     * A coincidental dead letter for that ref inside the window **would** be
+     * attributed here. The window is deliberately only just wider than the 2 s
+     * poll period that bounds how late a bump can be noticed, which is the only
+     * lever available to keep that coincidence narrow. Null when no candidate
+     * exists — never a guess.
+     */
+    private fun causeFor(ref: CellRef, now: Long): Failure? =
+        lastFailure[ref]?.takeIf { now - it.atMs <= RESTART_CAUSE_WINDOW_MS }
+
+    /**
+     * The re-baseline beat this restart completed with, when one was
+     * **observed** on a tapped outlet of [ref] — see [RestartRow.reBaselineAtMs]
+     * for why null is "not observed" and never "did not happen".
+     *
+     * Two conditions, both necessary: the beat must be recent enough to belong
+     * to *this* restart (the same window the cause correlation uses), and it
+     * must not already have been attributed to an earlier one — a cell that
+     * re-baselined once and then restarted again without emitting would
+     * otherwise report the stale beat a second time.
+     */
+    private fun reBaselineFor(ref: CellRef, now: Long): Long? {
+        val beat = reBaselineAtMsOf(ref) ?: return null
+        if (now - beat > RESTART_CAUSE_WINDOW_MS) return null
+        if (beat <= (attributedReBaseline[ref] ?: 0L)) return null
+        attributedReBaseline[ref] = beat
+        return beat
+    }
+
+    /** A captured thrown dead letter, as a restart-cause candidate (see [lastFailure]). */
+    private class Failure(val cause: String, val atMs: Long)
+
+    internal companion object {
         const val RING_CAPACITY = 200
+
+        /**
+         * How far back a generation bump may look for the dead letter that
+         * explains it. Comfortably above the 2 s error-poll period
+         * ([InspectorServer.ERROR_POLL_SECONDS]) so a restart noticed one whole
+         * poll late still finds its cause, and no wider than that — every extra
+         * second widens the coincidence window [causeFor] describes.
+         */
+        const val RESTART_CAUSE_WINDOW_MS = 5_000L
+
+        /**
+         * Cap on the kernel-authored `Redacted.reason` copied onto an
+         * [ArgDisposition]. The kernel's own reasons are two short sentences;
+         * the cap exists so a future (or application-authored) reason cannot
+         * turn a bounded diagnostic row into an unbounded one.
+         */
+        const val REDACTION_REASON_MAX = 200
     }
 }
 

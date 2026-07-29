@@ -188,8 +188,24 @@ class InspectorServer(
             instruments = { ref -> ref in observations.sinkRefs },
         )
 
+    /**
+     * The inspector's own wall clock, read through by the collaborators whose
+     * behaviour is time-shaped — [Errors]' park ages and restart-cause window,
+     * [FlowCollector]'s re-baseline stamp, and [WaveHealth]'s thresholds.
+     *
+     * Internal and a `var` for exactly the reason [snapshots] is: V3's
+     * wave-health conditions are measured in seconds, and a test that waited
+     * them out in wall-clock would be both slow and an assertion on scheduler
+     * timing, which the ticket forbids. Every consumer captures a read-through
+     * lambda rather than today's value, so a test that reassigns this after
+     * construction still takes effect. Untouched, this is
+     * `System::currentTimeMillis` and nothing behaves differently from before.
+     */
+    internal var inspectorClock: () -> Long = System::currentTimeMillis
+
     /** M3 — the flow feed (see [FlowCollector]); attaches taps as edges appear. */
-    private val flow: FlowCollector = FlowCollector(registry, onBatch = model::flowRates)
+    private val flow: FlowCollector =
+        FlowCollector(registry, onBatch = model::flowRates, clock = { inspectorClock() })
 
     /**
      * The `Stateful.snapshot()` fallback — see [SnapshotSource]'s doc for the
@@ -261,6 +277,21 @@ class InspectorServer(
         onLifecycle = model::lifecycleChanged,
     )
 
+    /**
+     * V3 — the wave-health heuristic (see [WaveHealth]). Constructed from
+     * accessors on collaborators that already exist: it installs no tap, opens
+     * no observation and touches no cell, which is the whole reason a diagnostic
+     * of this class is admissible at all (P2/P6).
+     */
+    private val waveHealth = WaveHealth(
+        sites = flow::tapReadings,
+        observed = { observations.openRefs },
+        frontierOf = { ref -> observations.frontierOf(ref) },
+        isCold = { ref -> Heat.of(registry, ref).isCold },
+        onRow = model::waveHealthEvent,
+        clock = { inspectorClock() },
+    )
+
     /** M2 — the error lane (see [Errors]'s doc for the three sources it feeds). */
     private val errors = Errors(
         registry = registry,
@@ -274,6 +305,11 @@ class InspectorServer(
             model.restartEvent(row)
             activity.restarted(row)
         },
+        // V3 — the wave-health rows ride the error snapshot rather than a route
+        // of their own, and the re-baseline beat comes off the flow feed's taps
+        waveHealthRows = waveHealth::openRows,
+        reBaselineAtMsOf = flow::reBaselineAtMsOf,
+        clock = { inspectorClock() },
     )
 
     private val heartbeats = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -678,6 +714,13 @@ class InspectorServer(
         // sharing the one daemon thread keeps the inspector at exactly the
         // threads it had.
         Tick("flowSample", FlowCollector.WINDOW_MS) { flow.sample() },
+        // V3: the wave-health heuristic (see [WaveHealth]). Registered
+        // immediately after `"flowSample"` on purpose — the evaluator reads the
+        // very state that tick has just drained, so this order keeps
+        // `tickAll()` a faithful synchronous stand-in for the scheduled one.
+        // Same period as the flow window: the conditions are measured in whole
+        // seconds, so anything finer would only re-derive the same answer.
+        Tick("waveHealth", WAVE_HEALTH_PERIOD_MS) { waveHealth.evaluate() },
         // M4: `graphs.changed` is published from here rather than from the
         // registry hooks, which coalesces a whole graph build — N publishes
         // and M links — into one hint and keeps the O(V+E) component sweep
@@ -717,6 +760,10 @@ class InspectorServer(
         // still-attached client should see its own subscriptions retract
         observations.close()
         errors.close()
+        // V3 — no kernel attachment to release (the whole point of the class),
+        // only its own open set; cleared here for symmetry so a closed inspector
+        // holds no diagnostics about a graph it is no longer watching
+        waveHealth.close()
         // untaps every outlet: a stopped inspector leaves no handler on a live graph
         flow.close()
         broadcaster.close()
@@ -742,6 +789,15 @@ class InspectorServer(
 
     /** Outlets the flow feed currently taps — tests. */
     internal val tappedOutlets: Set<PortRef> get() = flow.tappedOutlets
+
+    /**
+     * V3-BE — when a re-baseline beat was last observed on a tapped outlet of
+     * [ref] (see [FlowCollector.reBaselineAtMsOf]). A test seam beside
+     * [tappedOutlets], for the one race a supervision-timeline test cannot
+     * otherwise bound: `ManagedHost` bumps the generation *before* it
+     * re-baselines, so waiting on the generation alone can outrun the beat.
+     */
+    internal fun reBaselineAtMsOf(ref: CellRef): Long? = flow.reBaselineAtMsOf(ref)
 
     /** `GET /api/inspect/errors`'s body, decoded — tests. */
     internal fun errorSnapshot(): ErrorSnapshot = errors.snapshot()
@@ -803,6 +859,15 @@ class InspectorServer(
 
         /** How often pending component changes are announced as `graphs.changed`. */
         const val GRAPHS_POLL_MS = 1_000L
+
+        /**
+         * V3 — how often [WaveHealth] re-derives its conditions. The thresholds
+         * it applies are whole seconds ([WaveHealth.LAG_GRACE_MS],
+         * [WaveHealth.STALL_WINDOW_MS]), so a faster cadence would buy nothing
+         * but more passes over the same answer; a slower one would delay the
+         * `cleared` event a resolved condition owes its client.
+         */
+        const val WAVE_HEALTH_PERIOD_MS = FlowCollector.WINDOW_MS
 
         /**
          * (a) — the [snapshots] default's bounded wait on
