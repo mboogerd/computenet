@@ -79,6 +79,16 @@ describe('buildSupervisionTimeline', () => {
     expect(buildSupervisionTimeline([], [])).toEqual([]);
   });
 
+  it('treats cause/causeAtMs/reBaselineAtMs as absent (undefined), not just null, per the optional-tolerant-on-read contract', () => {
+    // An older server may omit these fields entirely rather than sending explicit
+    // nulls (see fixtures/error-event-restart.json, which has no cause/causeAtMs/
+    // reBaselineAtMs keys at all). The builder must not fabricate a crash or
+    // re-baseline step from `undefined`.
+    const r = { ref: 'a:0', generation: 2, atMs: 1753600700000 } as unknown as RestartEntry;
+    const steps = buildSupervisionTimeline([r], []);
+    expect(steps.map((s) => s.kind)).toEqual(['restart']);
+  });
+
   it('every step has a unique key', () => {
     const r1 = restart({ generation: 1, atMs: 1000, cause: 'X', causeAtMs: 900, reBaselineAtMs: 1100 });
     const r2 = restart({ generation: 2, atMs: 2000, cause: 'X', causeAtMs: 1900, reBaselineAtMs: 2100 });

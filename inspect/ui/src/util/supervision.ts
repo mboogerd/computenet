@@ -50,7 +50,7 @@ export function buildSupervisionTimeline(
   for (const r of sorted) {
     const id = `${r.ref}:${r.generation}:${r.atMs}`;
 
-    if (r.cause !== null && r.causeAtMs !== null) {
+    if (r.cause != null && r.causeAtMs != null) {
       const match = deadLetters.find((dl) => dl.ref === r.ref && dl.atMs === r.causeAtMs && dl.cause === r.cause);
       steps.push({
         key: `${id}-crash`,
@@ -71,7 +71,7 @@ export function buildSupervisionTimeline(
       detail: null,
     });
 
-    if (r.reBaselineAtMs !== null) {
+    if (r.reBaselineAtMs != null) {
       steps.push({
         key: `${id}-reBaseline`,
         kind: 'reBaseline',
