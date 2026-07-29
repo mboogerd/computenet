@@ -262,7 +262,15 @@ function bumpParked() {
 }
 
 const DEAD_LETTER_CAUSES = ['OwnershipViolation', 'SerializationFailure', 'PortTypeMismatch'];
+const INVOCATION_PORTS = ['left', 'right', 'inlet'];
 let deadLetterTick = 0;
+// V3: a plain in-memory "last dead letter seen" note, consulted by
+// `bumpRestart` below to fill `cause`/`causeAtMs` — a mock stand-in for the
+// real server's time-window correlation (V3-BE), not a reimplementation of
+// it (this mock is explicitly "NOT a stand-in for the real server's
+// semantics", per the file header).
+let lastDeadLetterCause = null;
+let lastDeadLetterAtMs = null;
 
 function emitDeadLetter() {
   const parkedRef = errorsState.parked[0]?.ref;
@@ -270,16 +278,36 @@ function emitDeadLetter() {
   if (!ref) return;
   deadLetterTick += 1;
   const cause = DEAD_LETTER_CAUSES[deadLetterTick % DEAD_LETTER_CAUSES.length];
+  const atMs = Date.now();
   const entry = {
     ref,
     cause,
     description: `mock ${cause} at tick ${deadLetterTick}`,
     wave: { source: 'mock0000ab', counter: deadLetterTick },
-    atMs: Date.now(),
+    atMs,
+    // V3: invocation summary + ownership disposition, so the enriched
+    // dead-letter card (ticket Solution direction §3d) has something to
+    // draw under `npm run dev`. `OwnershipViolation` gets the "frozen"
+    // exclusive-payload disposition — the case the field exists for —
+    // everything else gets a plain one.
+    invocation: {
+      port: INVOCATION_PORTS[deadLetterTick % INVOCATION_PORTS.length],
+      type: 'PORT_API',
+      method: 'accept',
+      parameterTypes: ['civictech.cell.data.SetOps$Add'],
+      argCount: 1,
+      hop: deadLetterTick % 3,
+    },
+    disposition:
+      cause === 'OwnershipViolation'
+        ? [{ index: 0, ownership: 'frozen', reason: 'Owned payload frozen for dead-letter capture' }]
+        : [{ index: 0, ownership: 'plain', reason: null }],
   };
   errorsState.deadLetters.push(entry);
   errorsState.counters.deadLetters += 1;
   broadcast('error.deadLetter', entry);
+  lastDeadLetterCause = cause;
+  lastDeadLetterAtMs = atMs;
 }
 
 function bumpRestart() {
@@ -287,15 +315,86 @@ function bumpRestart() {
   if (!row) return;
   row.generation += 1;
   row.atMs = Date.now();
+  // V3: fill the supervision-timeline fields (ticket Solution direction
+  // §3c) from whatever dead letter this mock last emitted — a plausible
+  // "time-window correlation" stand-in, same reasoning as the comment above.
+  row.cause = lastDeadLetterCause;
+  row.causeAtMs = lastDeadLetterCause ? lastDeadLetterAtMs : null;
+  row.reBaselineAtMs = row.atMs + 500; // "observed shortly after" — mock-only
   errorsState.counters.restarts += 1;
   broadcast('error.restart', row);
 }
 
+// V3: wave-health heuristic simulation (ticket Solution direction §5) — a
+// row opens, then a few seconds later the same `id` clears, on a loop, so a
+// short manual `npm run dev` session sees both the header's fourth counter
+// and the per-cell Errors group appear and then disappear, matching the
+// acceptance criterion. Riding the same "mutate the working copy, then
+// broadcast" order every other errors mutator here uses, so GET /errors
+// never runs ahead of what the SSE stream already announced.
+const WAVE_HEALTH_EDGE =
+  errorsState.parked[0] && snapshot.edges.find((e) => e.to.ref === errorsState.parked[0].ref && e.to.port === errorsState.parked[0].port);
+let waveHealthSeq = 0;
+let openWaveHealthId = null;
+
+function emitWaveHealthOpen() {
+  if (!WAVE_HEALTH_EDGE) return;
+  waveHealthSeq += 1;
+  const id = `mock-wh-${waveHealthSeq}`;
+  const kind = waveHealthSeq % 2 === 0 ? 'stalledWave' : 'frontierLag';
+  const lag = 3 + (waveHealthSeq % 5);
+  const entry = {
+    id,
+    kind,
+    state: 'open',
+    ref: WAVE_HEALTH_EDGE.to.ref,
+    edge: WAVE_HEALTH_EDGE.id,
+    wave: { source: 'mock0000ab', counter: 100 + waveHealthSeq },
+    frontier: { source: 'mock0000ab', counter: 100 + waveHealthSeq - lag },
+    lagWaves: lag,
+    heldMs: 0,
+    atMs: Date.now(),
+    heuristic: true,
+    description: `Heuristic: ${kind === 'stalledWave' ? 'stalled wave' : 'frontier lag'} detected on this cell (mock tick ${waveHealthSeq}) — may be a legitimate absorbed delta, not necessarily a defect.`,
+  };
+  errorsState.waveHealth.push(entry);
+  errorsState.counters.waveHealth = errorsState.waveHealth.length;
+  broadcast('error.waveHealth', entry);
+  openWaveHealthId = id;
+}
+
+function emitWaveHealthClear() {
+  if (!openWaveHealthId) return;
+  const openRow = errorsState.waveHealth.find((w) => w.id === openWaveHealthId);
+  if (openRow) {
+    const cleared = {
+      ...openRow,
+      state: 'cleared',
+      lagWaves: 0,
+      frontier: openRow.wave,
+      heldMs: Date.now() - openRow.atMs,
+      atMs: Date.now(),
+      description: 'Heuristic: frontier has caught up with the tapped edge — condition cleared.',
+    };
+    errorsState.waveHealth = errorsState.waveHealth.filter((w) => w.id !== openWaveHealthId);
+    errorsState.counters.waveHealth = errorsState.waveHealth.length;
+    broadcast('error.waveHealth', cleared);
+  }
+  openWaveHealthId = null;
+}
+
+function tickWaveHealth() {
+  if (openWaveHealthId) emitWaveHealthClear();
+  else emitWaveHealthOpen();
+}
+
 // Staggered so a short manual-verification session (well under a minute)
-// still sees all three kinds fire at least once.
+// still sees every kind fire at least once, including a wave-health open
+// AND its clear.
 setInterval(bumpParked, 5000);
 setInterval(emitDeadLetter, 12000);
 setInterval(bumpRestart, 20000);
+setInterval(tickWaveHealth, 4000);
 
 // --- V2: activity state --------------------------------------------------
 // Simulates the V2 activity feed (V2-FE ticket §16 "optional" mock

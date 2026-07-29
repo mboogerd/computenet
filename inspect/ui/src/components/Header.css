@@ -113,3 +113,14 @@
   color: var(--parked);
   font-weight: 600;
 }
+
+/* V3: wave-health is informational — a heuristic diagnostic, never a defect
+   claim — so it gets its own warm-but-muted hue (see `--wave-health` in
+   tokens.css), deliberately less weighty than `--dead`'s bold red and
+   distinct from `--parked`'s amber, so the strip reads "worth a look" rather
+   than "another failure count". */
+.error-counters__item--wave {
+  color: var(--wave-health);
+  font-weight: 500;
+  font-style: italic;
+}

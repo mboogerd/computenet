@@ -321,6 +321,30 @@ export interface DeadLetterEntry {
   description: string;
   wave: Frontier | null;
   atMs: number;
+  /** V3: the failing call, when the drop happened during an invocation.
+   *  `null` for a plain host-level drop (no invocation to describe) — an
+   *  older server that omits this field entirely reads the same way (see
+   *  `sync/errorStore.ts` and `components/DetailPanel.tsx`, both defensive
+   *  on read). */
+  invocation: {
+    port: string;
+    type: 'PORT_API' | 'PORT_MANAGEMENT' | 'PORT_PROTOCOL';
+    method: string;
+    parameterTypes: readonly string[];
+    argCount: number;
+    hop: number | null;
+  } | null;
+  /** V3: what the kernel's dead-letter sanitization did to each argument —
+   *  `[]` when there was no invocation or no args. An `Owned` arrives
+   *  `frozen`, a `Leased` arrives released-and-redacted (`redacted`) — the
+   *  exclusive-payload cases this field exists to surface; `borrowed` /
+   *  `owned` / `leased` / `plain` describe the argument's ownership kind
+   *  without a sanitization action having been needed. */
+  disposition: readonly {
+    index: number;
+    ownership: 'frozen' | 'redacted' | 'borrowed' | 'owned' | 'leased' | 'plain';
+    reason: string | null;
+  }[];
 }
 
 /** `error.parked` — "send on change; `count: 0` clears" (contract): a
@@ -337,6 +361,45 @@ export interface RestartEntry {
   ref: Ref;
   generation: number;
   atMs: number;
+  /** V3: a **time-window correlation** with the dead letter that preceded
+   *  this generation bump, not a kernel-reported restart cause. `null` when
+   *  no such correlated dead letter was found. */
+  cause: string | null;
+  /** V3: when the correlated cause (above) was observed; `null` iff `cause`
+   *  is `null`. */
+  causeAtMs: number | null;
+  /** V3: when this generation's re-baseline was observed. `null` means
+   *  **not observed** — never "did not happen" — a supervision timeline
+   *  reading this field must omit the step rather than render a negative
+   *  claim. */
+  reBaselineAtMs: number | null;
+}
+
+export type WaveHealthKind = 'frontierLag' | 'stalledWave';
+
+/** A heuristic wave-health diagnostic — NOT kernel-grade detection. A lagging
+ *  frontier is often legitimate (an absorbed delta, a filtering operator, a
+ *  fresh emission epoch after a restart), so `heuristic` is always true and the
+ *  UI must present these as "worth a look", never as a defect claim. */
+export interface WaveHealthEntry {
+  /** Stable per (kind, edge, ref): the open row, its updates and its clear all
+   *  carry this id. The store keys on it. */
+  id: string;
+  kind: WaveHealthKind;
+  /** `'cleared'` removes the row with this `id` — the same discipline
+   *  `ParkedEntry`'s `count: 0` already established. */
+  state: 'open' | 'cleared';
+  ref: Ref;
+  /** The `Edge.id` whose last observed wave the comparison used. */
+  edge: string;
+  wave: Frontier | null;
+  frontier: Frontier | null;
+  /** Counter delta; null when the two stamps do not share a source. */
+  lagWaves: number | null;
+  heldMs: number;
+  atMs: number;
+  heuristic: boolean;
+  description: string;
 }
 
 export interface ErrorCounters {
@@ -344,6 +407,10 @@ export interface ErrorCounters {
   parked: number;
   restarts: number;
   drainedOnTeardown: number;
+  /** V3: the count of currently **open** wave-health rows — a gauge that
+   *  falls as conditions resolve, like `parked`, unlike the monotonic
+   *  `deadLetters`/`restarts`. */
+  waveHealth: number;
 }
 
 /** `GET /api/inspect/errors`. */
@@ -352,6 +419,8 @@ export interface ErrorSnapshot {
   deadLetters: readonly DeadLetterEntry[];
   parked: readonly ParkedEntry[];
   restarts: readonly RestartEntry[];
+  /** V3: open rows only, never a history log. */
+  waveHealth: readonly WaveHealthEntry[];
 }
 
 export interface ErrorDeadLetterEvent {
@@ -370,6 +439,12 @@ export interface ErrorRestartEvent {
   seq: number;
   kind: 'error.restart';
   payload: RestartEntry;
+}
+
+export interface ErrorWaveHealthEvent {
+  seq: number;
+  kind: 'error.waveHealth';
+  payload: WaveHealthEntry;
 }
 
 // --- V2: activity (98-inspector-v4-plan/10-design-notes.md "V2 — activity";
@@ -416,6 +491,7 @@ export type InspectEvent =
   | ErrorDeadLetterEvent
   | ErrorParkedEvent
   | ErrorRestartEvent
+  | ErrorWaveHealthEvent
   | FlowRatesEvent
   | GraphsChangedEvent
   | ActivityEvent;
@@ -445,6 +521,7 @@ export const KNOWN_EVENT_KINDS = new Set<string>([
   'error.deadLetter',
   'error.parked',
   'error.restart',
+  'error.waveHealth',
   'flow.rates',
   'graphs.changed',
   'activity',

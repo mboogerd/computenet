@@ -1,18 +1,56 @@
 {
-  "counters": { "deadLetters": 1, "parked": 11, "restarts": 1, "drainedOnTeardown": 0 },
+  "counters": { "deadLetters": 1, "parked": 11, "restarts": 1, "drainedOnTeardown": 0, "waveHealth": 1 },
   "deadLetters": [
     {
       "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
       "cause": "OwnershipViolation",
       "description": "Owned payload dropped without discharge on despawn",
       "wave": { "source": "9c41a2f0", "counter": 288 },
-      "atMs": 1753600000000
+      "atMs": 1753600000000,
+      "invocation": {
+        "port": "left",
+        "type": "PORT_API",
+        "method": "accept",
+        "parameterTypes": ["civictech.cell.data.SetOps$Add"],
+        "argCount": 1,
+        "hop": 2
+      },
+      "disposition": [
+        {
+          "index": 0,
+          "ownership": "frozen",
+          "reason": "Owned payload frozen for dead-letter capture (kernel invariant: no consume/copy/delay on a failed path)"
+        }
+      ]
     }
   ],
   "parked": [
     { "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0", "port": "left", "count": 11, "oldestMs": 41000 }
   ],
   "restarts": [
-    { "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0", "generation": 1, "atMs": 1753600500000 }
+    {
+      "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+      "generation": 1,
+      "atMs": 1753600500000,
+      "cause": "OwnershipViolation",
+      "causeAtMs": 1753600000000,
+      "reBaselineAtMs": 1753600500500
+    }
+  ],
+  "waveHealth": [
+    {
+      "id": "wh-1",
+      "kind": "frontierLag",
+      "state": "open",
+      "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+      "edge": "327ab252-b906-4236-9194-9b7e2f7b7b60",
+      "wave": { "source": "9c41a2f0", "counter": 292 },
+      "frontier": { "source": "9c41a2f0", "counter": 288 },
+      "lagWaves": 4,
+      "heldMs": 3000,
+      "atMs": 1753600300000,
+      "heuristic": true,
+      "description": "Heuristic: frontier lag — this cell's frontier trails the tapped edge's last observed wave by 4; may be a legitimate absorbed delta, not necessarily a defect."
+    }
   ]
 }

@@ -3,7 +3,7 @@ import { createStore, produce } from 'solid-js/store';
 import type { Edge, EdgeRemoval, InspectEvent, Ref } from '../api/types';
 import { fetchActivitySnapshot, onActivity } from './activity';
 import { onStateSummary } from './detail';
-import { fetchErrorSnapshot, onErrorDeadLetter, onErrorParked, onErrorRestart } from './errors';
+import { fetchErrorSnapshot, onErrorDeadLetter, onErrorParked, onErrorRestart, onErrorWaveHealth } from './errors';
 import { onFlowRates } from './flow';
 import { fetchGraphs } from './graphs';
 import { currentGraphId } from './routeState';
@@ -121,6 +121,12 @@ function applyEvent(event: InspectEvent): void {
       break;
     case 'error.restart':
       onErrorRestart(event.payload);
+      break;
+    case 'error.waveHealth':
+      // V3: a heuristic diagnostic (never kernel-grade detection), routed to
+      // the same M2 error store as its siblings above — not gated on
+      // selection either, same reasoning.
+      onErrorWaveHealth(event.payload);
       break;
     case 'activity':
       // Never touches the topology store — routed to the V2 activity store

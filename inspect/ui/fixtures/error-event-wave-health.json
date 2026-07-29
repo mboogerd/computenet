@@ -1,0 +1,18 @@
+{
+  "seq": 503,
+  "kind": "error.waveHealth",
+  "payload": {
+    "id": "wh-1",
+    "kind": "frontierLag",
+    "state": "open",
+    "ref": "016eda8f-96de-40e1-a04c-f997395ade62:0",
+    "edge": "327ab252-b906-4236-9194-9b7e2f7b7b60",
+    "wave": { "source": "9c41a2f0", "counter": 296 },
+    "frontier": { "source": "9c41a2f0", "counter": 288 },
+    "lagWaves": 8,
+    "heldMs": 6000,
+    "atMs": 1753600600000,
+    "heuristic": true,
+    "description": "Heuristic: frontier lag — this cell's frontier trails the tapped edge's last observed wave by 8; may be a legitimate absorbed delta, not necessarily a defect."
+  }
+}

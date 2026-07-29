@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { DeadLetterEntry, ErrorSnapshot, ParkedEntry, RestartEntry } from '../src/api/types';
+import type { DeadLetterEntry, ErrorSnapshot, ParkedEntry, RestartEntry, WaveHealthEntry } from '../src/api/types';
 import { ErrorStore } from '../src/sync/errorStore';
 
 function snapshot(over: Partial<ErrorSnapshot> = {}): ErrorSnapshot {
   return {
-    counters: { deadLetters: 0, parked: 0, restarts: 0, drainedOnTeardown: 0 },
+    counters: { deadLetters: 0, parked: 0, restarts: 0, drainedOnTeardown: 0, waveHealth: 0 },
     deadLetters: [],
     parked: [],
     restarts: [],
+    waveHealth: [],
     ...over,
   };
 }
@@ -19,6 +20,8 @@ function deadLetter(over: Partial<DeadLetterEntry> = {}): DeadLetterEntry {
     description: 'boom',
     wave: { source: '9c41', counter: 288 },
     atMs: 1000,
+    invocation: null,
+    disposition: [],
     ...over,
   };
 }
@@ -28,7 +31,25 @@ function parked(over: Partial<ParkedEntry> = {}): ParkedEntry {
 }
 
 function restart(over: Partial<RestartEntry> = {}): RestartEntry {
-  return { ref: 'a:0', generation: 1, atMs: 1000, ...over };
+  return { ref: 'a:0', generation: 1, atMs: 1000, cause: null, causeAtMs: null, reBaselineAtMs: null, ...over };
+}
+
+function waveHealth(over: Partial<WaveHealthEntry> = {}): WaveHealthEntry {
+  return {
+    id: 'wh-1',
+    kind: 'frontierLag',
+    state: 'open',
+    ref: 'a:0',
+    edge: 'e-1',
+    wave: { source: '9c41', counter: 10 },
+    frontier: { source: '9c41', counter: 6 },
+    lagWaves: 4,
+    heldMs: 2000,
+    atMs: 1000,
+    heuristic: true,
+    description: 'heuristic: frontier lag',
+    ...over,
+  };
 }
 
 describe('ErrorStore.applySnapshot', () => {
@@ -36,13 +57,13 @@ describe('ErrorStore.applySnapshot', () => {
     const store = new ErrorStore();
     store.applySnapshot(
       snapshot({
-        counters: { deadLetters: 1, parked: 5, restarts: 1, drainedOnTeardown: 0 },
+        counters: { deadLetters: 1, parked: 5, restarts: 1, drainedOnTeardown: 0, waveHealth: 0 },
         deadLetters: [deadLetter({ ref: 'a:0' })],
         parked: [parked({ ref: 'a:0', port: 'left', count: 5 })],
         restarts: [restart({ ref: 'a:0' })],
       }),
     );
-    expect(store.counters).toEqual({ deadLetters: 1, parked: 5, restarts: 1, drainedOnTeardown: 0 });
+    expect(store.counters).toEqual({ deadLetters: 1, parked: 5, restarts: 1, drainedOnTeardown: 0, waveHealth: 0 });
     expect(store.deadLettersFor('a:0')).toHaveLength(1);
     expect(store.parkedFor('a:0')).toHaveLength(1);
     expect(store.restartsFor('a:0')).toHaveLength(1);
@@ -73,7 +94,7 @@ describe('ErrorStore.applySnapshot', () => {
 describe('ErrorStore.applyDeadLetter', () => {
   it('appends to the ref index and increments counters.deadLetters by one', () => {
     const store = new ErrorStore();
-    store.applySnapshot(snapshot({ counters: { deadLetters: 3, parked: 0, restarts: 0, drainedOnTeardown: 0 } }));
+    store.applySnapshot(snapshot({ counters: { deadLetters: 3, parked: 0, restarts: 0, drainedOnTeardown: 0, waveHealth: 0 } }));
     store.applyDeadLetter(deadLetter({ ref: 'a:0', cause: 'X' }));
     expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: 'X' })]);
     expect(store.counters.deadLetters).toBe(4);
@@ -156,5 +177,82 @@ describe('ErrorStore.allParked', () => {
       parked({ ref: 'a:0', port: 'left', count: 5 }),
       parked({ ref: 'b:0', port: 'in', count: 2 }),
     ]);
+  });
+});
+
+describe('ErrorStore wave-health (V3) — the parked discipline, not the append-only one', () => {
+  it('applySnapshot indexes only open rows by ref and recomputes counters.waveHealth as the live size', () => {
+    const store = new ErrorStore();
+    store.applySnapshot(
+      snapshot({
+        counters: { deadLetters: 0, parked: 0, restarts: 0, drainedOnTeardown: 0, waveHealth: 99 }, // deliberately wrong — must be recomputed, not trusted
+        waveHealth: [waveHealth({ id: 'wh-1', ref: 'a:0' })],
+      }),
+    );
+    expect(store.waveHealthFor('a:0')).toEqual([waveHealth({ id: 'wh-1', ref: 'a:0' })]);
+    expect(store.counters.waveHealth).toBe(1);
+  });
+
+  it('applySnapshot never indexes a non-open row (defensive)', () => {
+    const store = new ErrorStore();
+    store.applySnapshot(snapshot({ waveHealth: [waveHealth({ id: 'wh-1', ref: 'a:0', state: 'cleared' })] }));
+    expect(store.waveHealthFor('a:0')).toEqual([]);
+    expect(store.counters.waveHealth).toBe(0);
+  });
+
+  it('applySnapshot tolerates a missing waveHealth field (older server) as an empty list', () => {
+    const store = new ErrorStore();
+    // Simulates an older server's wire payload, which the declared
+    // `ErrorSnapshot` type says always has `waveHealth` but an actual older
+    // server simply never sends — `as unknown as ErrorSnapshot` rather than
+    // `delete`, since TS (correctly) refuses to `delete` a non-optional
+    // property.
+    const bare = { counters: snapshot().counters, deadLetters: [], parked: [], restarts: [] };
+    store.applySnapshot(bare as unknown as ErrorSnapshot);
+    expect(store.allWaveHealth()).toEqual([]);
+    expect(store.counters.waveHealth).toBe(0);
+  });
+
+  it('waveHealthFor returns [] for an unknown ref, matching parkedFor', () => {
+    const store = new ErrorStore();
+    store.applyWaveHealth(waveHealth({ id: 'wh-1', ref: 'a:0' }));
+    expect(store.waveHealthFor('unknown:0')).toEqual([]);
+  });
+
+  it('applyWaveHealth upserts an open row by id', () => {
+    const store = new ErrorStore();
+    store.applyWaveHealth(waveHealth({ id: 'wh-1', ref: 'a:0', lagWaves: 2 }));
+    expect(store.counters.waveHealth).toBe(1);
+    store.applyWaveHealth(waveHealth({ id: 'wh-1', ref: 'a:0', lagWaves: 6 }));
+    expect(store.waveHealthFor('a:0')).toEqual([waveHealth({ id: 'wh-1', ref: 'a:0', lagWaves: 6 })]);
+    expect(store.counters.waveHealth).toBe(1); // still one row — an update, not a second one
+  });
+
+  it("state: 'cleared' deletes the row entirely, recomputing counters.waveHealth down", () => {
+    const store = new ErrorStore();
+    store.applyWaveHealth(waveHealth({ id: 'wh-1', ref: 'a:0' }));
+    store.applyWaveHealth(waveHealth({ id: 'wh-2', ref: 'a:0' }));
+    expect(store.counters.waveHealth).toBe(2);
+    store.applyWaveHealth(waveHealth({ id: 'wh-1', ref: 'a:0', state: 'cleared' }));
+    expect(store.waveHealthFor('a:0')).toEqual([waveHealth({ id: 'wh-2', ref: 'a:0' })]);
+    expect(store.counters.waveHealth).toBe(1);
+    expect(store.allWaveHealth()).toEqual([waveHealth({ id: 'wh-2', ref: 'a:0' })]);
+  });
+
+  it('a different ref is tracked independently', () => {
+    const store = new ErrorStore();
+    store.applyWaveHealth(waveHealth({ id: 'wh-1', ref: 'a:0' }));
+    store.applyWaveHealth(waveHealth({ id: 'wh-2', ref: 'b:0' }));
+    expect(store.waveHealthFor('a:0')).toHaveLength(1);
+    expect(store.waveHealthFor('b:0')).toHaveLength(1);
+    expect(store.counters.waveHealth).toBe(2);
+  });
+
+  it('notifies subscribers', () => {
+    const store = new ErrorStore();
+    let calls = 0;
+    store.subscribe(() => calls++);
+    store.applyWaveHealth(waveHealth());
+    expect(calls).toBe(1);
   });
 });

@@ -38,6 +38,12 @@
   --error: #dc2626;
   --parked: #d97706;
 
+  /* V3: wave-health heuristic rows — informational, never the dead-letter
+     red; a third warm hue (between --parked's amber and --flow-pulse's
+     yellow) so all three read as distinct at a glance when several are
+     visible at once (header strip, per-cell Errors section). */
+  --wave-health: #a16207;
+
   /* flow (M3: pulses/rate labels — v2 mockup's "amber pulses", a distinct
      warm hue from --parked's amber so the Flow and Errors overlays stay
      tellable apart when both toggles are on at once) */
@@ -72,6 +78,7 @@
   --status-pending: #d99646;
   --error: #f87171;
   --parked: #fbbf24;
+  --wave-health: #eab86c;
   --flow-pulse: #facc15;
 }
 
@@ -97,6 +104,7 @@
     --status-pending: #d99646;
     --error: #f87171;
     --parked: #fbbf24;
+    --wave-health: #eab86c;
     --flow-pulse: #facc15;
   }
 }

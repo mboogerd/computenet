@@ -1,5 +1,5 @@
 import { createSignal } from 'solid-js';
-import type { DeadLetterEntry, ParkedEntry, RestartEntry } from '../api/types';
+import type { DeadLetterEntry, ParkedEntry, RestartEntry, WaveHealthEntry } from '../api/types';
 import { defaultErrorsTransport, type ErrorsTransport } from '../sync/errorsClient';
 import { ErrorStore } from '../sync/errorStore';
 
@@ -48,4 +48,11 @@ export function onErrorParked(entry: ParkedEntry): void {
 
 export function onErrorRestart(entry: RestartEntry): void {
   errorStore.applyRestart(entry);
+}
+
+/** V3: heuristic wave-health rows follow the same routing as every other
+ *  `error.*` kind — independent of selection, per the switch's own comment
+ *  in `solid/state.ts`. */
+export function onErrorWaveHealth(entry: WaveHealthEntry): void {
+  errorStore.applyWaveHealth(entry);
 }
