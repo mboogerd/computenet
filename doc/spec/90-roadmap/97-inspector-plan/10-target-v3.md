@@ -124,9 +124,15 @@ Status as delivered (M5-EVAL whole-product acceptance, see `90-progress-log.md`)
   from a checkpoint/journal without resuming the cell at all) is still
   tracked in MRB-157.
 - **Content-search cost model**: M5-SEARCH deliberately did NOT fan out
-  `StateRequest` — investigation found a pull-serve reply is an emission via
-  `FanOutlet.baselineTo` that inflates the wave-plane high-water mark
-  replication reads, so a read-only search instrument must not use it.
+  `StateRequest`. Its recorded reason — that a pull-serve reply via
+  `FanOutlet.baselineTo` "inflates the wave-plane high-water mark replication
+  reads" — was **corrected at the inspector-v4 C-replan checkpoint
+  (2026-07-29)**: replication reads no such thing (its delivered watermark
+  advances from a tap, and a targeted `at` delivery fires none). The decision
+  stands on its other, load-bearing reason: a reply is a *message*, so an
+  unlinked instrument must first install a link or a tap to receive it —
+  attention raised, cone extended, P6 violated. See
+  `../98-inspector-v4-plan/20-wave-neutral-read-design.md` §1.2-§1.3.
   Instead it matches against cells the inspector can already read cheaply
   (an open observation, or a host-routed `Stateful.snapshot()`), bounded
   (50 cells / 2s deadline), hot cones only, cost surfaced in the UI. This

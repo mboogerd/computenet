@@ -35,18 +35,30 @@ import java.util.concurrent.TimeUnit
  * intact and document the choice". This is that alternative, and the reason is
  * concrete rather than one of convenience:
  *
- * - **A pull reply is an emission.** `pullServe` answers through
- *   `FanOutlet.baselineTo`, which mints a wave from the producing outlet's own
- *   counter (the I-16 reply-sequencing rule). `CatchUp.kt`'s own KDoc records
- *   the consequence: that "inflates the `waveState().highWater` that
+ * - **A pull reply is a message, and this instrument has no topology to receive
+ *   it on.** `FanOutlet.at` delivers only to an entry already in the producing
+ *   outlet's `consumers`/`taps`; an unlinked requester gets nothing and is
+ *   counted as a target miss. So a read-only instrument issuing `StateRequest`
+ *   must first install a hand-built protocol `Link` or a reply *tap* on the
+ *   producing outlet — which raises attention, extends the cone, and (for a
+ *   tap) receives every live emission for the duration of the request. That is
+ *   a **P6** violation with a search box in front of it, and it is the
+ *   load-bearing reason.
+ * - **Correction (C-replan, inspector-v4, 2026-07-29).** This KDoc previously
+ *   gave a *different* first reason, quoting `CatchUp.kt`: that a `baselineTo`
+ *   reply "inflates the `waveState().highWater` that
  *   `civictech.cell.replication` reads directly as a source's delivered
- *   high-water". A read-only instrument must not move a graph's wave plane, and
- *   a search box that silently perturbs replication watermarks is precisely the
- *   kind of observer effect the inspector exists to avoid.
- * - It would also need a hand-built protocol `Link` and a reply *tap* on the
- *   producing outlet (the only way an unlinked requester can receive an `at()`
- *   delivery), which would additionally see every live emission for the
- *   duration of the request.
+ *   high-water". **That mechanism does not exist.** Nothing under
+ *   `civictech.cell.replication` reads `waveState()`; the delivered watermark
+ *   advances from a *tap*, and a targeted `at` delivery fires no tap. A pull
+ *   reply does consume one value from the producing outlet's wave counter, but
+ *   it moves no watermark, arms no join, gates no wave and is admitted to no
+ *   completeness set. The `CatchUp.kt` KDoc has been corrected; the full
+ *   analysis is in
+ *   `doc/spec/90-roadmap/98-inspector-v4-plan/20-wave-neutral-read-design.md`
+ *   §1.2-§1.3. **The M5-SEARCH decision below survives the correction** — the
+ *   P6 argument above was always the real one — but the discarded reason must
+ *   not be cited by new work as a design constraint.
  *
  * `ManagedHost.snapshotOf` moves none of that: it runs the cell's own
  * `Stateful.snapshot()` on the cell's own execution context, links nothing,

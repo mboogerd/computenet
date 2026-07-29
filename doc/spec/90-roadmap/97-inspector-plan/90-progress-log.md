@@ -1122,10 +1122,23 @@ consistency markers were removed at any point.
   but no replicated pilot exercises it). Membranes as naming boundary
   remain the real answer.
 - **Inspect-without-attention + search cost model (MRB-157)**, what this
-  build learned: (a) `StateRequest` is unusable for read-only instruments
-  as long as `pullServe` replies mint waves from the producing outlet's
-  counter (it perturbs replication watermarks; `CatchUp.kt` documents it) —
-  any future cold-read or search protocol needs a wave-neutral reply path.
+  build learned: (a) `StateRequest` is unusable for read-only instruments —
+  **but the mechanism recorded here originally was wrong, corrected at the
+  inspector-v4 C-replan checkpoint (2026-07-29)**. This item claimed a
+  `pullServe` reply "perturbs replication watermarks; `CatchUp.kt` documents
+  it". It does not: nothing under `civictech.cell.replication` reads
+  `waveState()`, the delivered watermark advances from a *tap*, and a
+  targeted `at` delivery fires no tap. A reply does consume one value from
+  the producing outlet's wave counter, and that consumption is *required* by
+  `waveState()`'s one production reader (`evolve`'s preserved-epoch
+  transfer). The real objection is **topology, not wave perturbation**: a
+  reply is a message, so an unlinked instrument must first install a link or
+  a tap to receive it at all — a P6 violation. So what a future cold-read or
+  search protocol needs is not a wave-neutral *reply* path but a read that is
+  not an emission; the enumerated analysis and the resulting design are in
+  `doc/spec/90-roadmap/98-inspector-v4-plan/20-wave-neutral-read-design.md`
+  §1.2-§1.3 and §3. The `CatchUp.kt` and `DataSearch.kt` KDocs that repeated
+  the stale claim are corrected on `main`.
   (b) A cold graph's *structure* is genuinely free today; its *state* needs
   the checkpoint reader — the cold screen's "unavailable" is the honest
   boundary. (c) `snapshot()` is a whole-state copy; a bounded state read
@@ -1192,7 +1205,10 @@ closing report, done:
   guarantee) is folded into `20-api-contract.md`. `10-target-v3.md`'s "Known
   kernel gaps" section is re-trued against what actually shipped (MRB-156,
   MRB-157 — including the correction that content search does not use
-  `StateRequest`, since it is wave-perturbing).
+  `StateRequest`, since it is wave-perturbing). *(That last clause is itself
+  superseded: see the corrected MRB-157 item above and `10-target-v3.md:126`.
+  A pull reply is unusable for an instrument because it is a message needing
+  topology, not because it perturbs the wave plane.)*
 - `./gradlew :concord:docLints` is clear (every doc in this folder now
   carries the required `**Status**:` header) and `:concord:check` is green.
 - Status headers across the folder now read `Implemented`.
