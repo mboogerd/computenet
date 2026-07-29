@@ -68,6 +68,15 @@ import java.util.concurrent.TimeUnit
  * error feeds have nothing to read for them and say so (`GET state` →
  * `unavailable`, `POST observe` → 409).
  *
+ * V2 adds the activity feed (see [Activity]):
+ *
+ * - `GET /api/inspect/activity` — an [ActivitySnapshot], the bounded history of
+ *   `passivated` / `activated` / `drained` / `woken` / `restarted` per cell;
+ * - the matching `activity` SSE event;
+ * - and it turns the `lifecycle` event from a 1 Hz sample into a push, off
+ *   V2-KERNEL's [ManagedHost.onLifecycle]. `CellDetail.attention` stops being
+ *   a hard-coded null in the same wave, off [ManagedHost.attentionOf].
+ *
  * ### What it can and cannot see
  *
  * The inspector reads one [LocationRegistry]. **Cells on registry-less hosts
@@ -229,8 +238,28 @@ class InspectorServer(
         instruments = { observations.sinkRefs },
     )
 
-    /** M5-COLD — the one causal act in the whole inspector (see [Waker]). */
-    private val waker = Waker(registry)
+    /**
+     * M5-COLD — the one causal act in the whole inspector (see [Waker]).
+     *
+     * V2 — and the one activity kind that is the *user's*: the cells a wake
+     * acted on are recorded as `woken` from inside [Waker.wake], before its
+     * resume calls go out, so the feed reads "a user asked, then the kernel
+     * did" rather than the other way round.
+     */
+    private val waker = Waker(registry, onWoken = { refs -> activity.woken(refs) })
+
+    /**
+     * V2 — the activity feed (see [Activity]). It carries the kernel lifecycle
+     * listeners that replaced the `"lifecycleChanged"` poll, so it is also the
+     * path by which a transition reaches [InspectorModel.lifecycleChanged].
+     */
+    private val activity = Activity(
+        registry = registry,
+        hosts = hosts.values,
+        knows = model::knows,
+        onEntry = model::activityEvent,
+        onLifecycle = model::lifecycleChanged,
+    )
 
     /** M2 — the error lane (see [Errors]'s doc for the three sources it feeds). */
     private val errors = Errors(
@@ -238,7 +267,13 @@ class InspectorServer(
         hosts = hosts,
         onDeadLetter = model::deadLetterEvent,
         onParked = model::parkedEvent,
-        onRestart = model::restartEvent,
+        // V2: a supervision restart is the one activity kind with no push seam,
+        // so the feed takes it from the same observed generation increase the
+        // error lane already reports (see [Activity.restarted])
+        onRestart = { row ->
+            model.restartEvent(row)
+            activity.restarted(row)
+        },
     )
 
     private val heartbeats = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -264,8 +299,15 @@ class InspectorServer(
      *   peer's announced eviction, and (T21) a whole peer dropped by
      *   `unpublishRemotes`. It strictly supersets `onLocalUnpublish`, so the
      *   view subscribes to it alone rather than being told twice.
+     *
+     * The first entry is V2's and is registered *before* [InspectorModel]'s own
+     * publish handler on purpose: a host this inspector has not met yet must be
+     * carrying a lifecycle listener before anything it holds can transition
+     * (see [Activity.watchLocatedHosts] for why the declared [hosts] map is not
+     * the whole set).
      */
     private val hooks: List<AutoCloseable> = listOf(
+        registry.onLocalPublish(activity::watchHostOf),
         registry.onLocalPublish(model::published),
         registry.onTopology(model::linked, model::unlinked),
         registry.onPublish { ref -> if (peers.isRemote(ref)) model.mirroredPublish(ref) },
@@ -282,6 +324,11 @@ class InspectorServer(
         // construction is seen by the hook and merely re-confirmed by the sync,
         // never lost
         model.sync()
+        // V2 — the same catch-up for the lifecycle listeners: hosts already
+        // holding published cells at construction never fire the publish hook
+        // that would have attached one (idempotent, so a host reached both ways
+        // is watched once)
+        activity.watchLocatedHosts()
 
         if (uiRoot == null) {
             // matching the operator-facing startup message convention in the
@@ -301,6 +348,14 @@ class InspectorServer(
         shell.route(ERRORS_PATH) { exchange ->
             exchange.allowCrossOrigin()
             exchange.respond(200, inspectorJson.encodeToString(ErrorSnapshot.serializer(), errors.snapshot()), JSON)
+        }
+        // V2 — the activity feed's catch-up read (see [Activity]). Its path
+        // prefixes none of the routes above and none of them prefixes it, so
+        // the JDK server's longest-prefix matching needs no ordering care here
+        // (unlike the GRAPHS_PATH/GRAPH_PATH pair — see [GRAPH_PATH]).
+        shell.route(ACTIVITY_PATH) { exchange ->
+            exchange.allowCrossOrigin()
+            exchange.respond(200, inspectorJson.encodeToString(ActivitySnapshot.serializer(), activity.snapshot()), JSON)
         }
         shell.route(GRAPHS_PATH) { exchange ->
             exchange.allowCrossOrigin()
@@ -591,12 +646,15 @@ class InspectorServer(
      * accessor — is what lets [tickAll] exist as a single seam instead of
      * six.
      *
-     * Order matters for exactly one pair: `"graphsChanged"` before
-     * `"lifecycleChanged"`, both at [GRAPHS_POLL_MS]. Neither reads the
-     * other's output, so nothing breaks if that order is not preserved, but
-     * [tickAll] running them in list order is what keeps a single synchronous
-     * test tick behaviorally identical to the two independent scheduled tasks
-     * this replaces (same single scheduler thread, same submission order).
+     * **V2 retired the sixth.** `"lifecycleChanged"` sampled every known node
+     * once a second because suspend/resume and drain/resumeHost had no
+     * notification hook; V2-KERNEL's [ManagedHost.onLifecycle] reports all four
+     * of those transitions from the host that performs them, so
+     * [InspectorModel.lifecycleChanged] is now reached by push (see [Activity])
+     * and the `graphs.changed` that tick owed the navigator is coalesced into
+     * `"graphsChanged"` below — which was already the tick for exactly that
+     * kind of card invalidation. Nothing that sampled a lifecycle remains, so
+     * no ordering constraint between ticks remains either.
      */
     private class Tick(val name: String, val periodMs: Long, val action: () -> Unit)
 
@@ -628,14 +686,11 @@ class InspectorServer(
         // `model.reconcilePeers()` call that used to share this tick, because
         // peer arrivals and departures now reach the model as registry events
         // (see [hooks]) and are therefore already in the partition when this
-        // tick describes it.
+        // tick describes it. V2 folded the retired `"lifecycleChanged"` tick's
+        // card invalidation in here as well (see [InspectorModel.publishGraphChanges]),
+        // which coalesces a `resumeHost`'s one-transition-per-cell burst into
+        // the single `graphs.changed` the poll used to emit per sweep.
         Tick("graphsChanged", GRAPHS_POLL_MS) { model.publishGraphChanges() },
-        // M5-COLD: suspend/resume and drain/resumeHost are plain management
-        // calls with no notification hook, so a cell going cold (or coming
-        // back) is only observable by asking. Same cadence and same
-        // rationale as the component poll above — metadata reads only, off
-        // every host's thread.
-        Tick("lifecycleChanged", GRAPHS_POLL_MS) { model.publishLifecycleChanges() },
     )
 
     fun start(): InspectorServer = apply {
@@ -655,6 +710,9 @@ class InspectorServer(
         // every registry feed detaches, including the two any-scope ones (T21):
         // a closed inspector is not merely disarmed, it is off the registry
         hooks.forEach { runCatching { it.close() } }
+        // V2 — and every kernel lifecycle listener with them: a stopped
+        // inspector is off every host it was watching, not merely quiet
+        activity.close()
         // before the broadcaster: releasing a sink emits topology deltas, and a
         // still-attached client should see its own subscriptions retract
         observations.close()
@@ -672,8 +730,9 @@ class InspectorServer(
      * Run every scheduled [Tick]'s action once, synchronously, on the calling
      * thread — the single test seam that replaces the six `…Now()` accessors
      * this ticket (T24) collapsed (`sweepIdleObservations`, `pollErrorsNow`,
-     * `sampleFlowNow`, `publishGraphChangesNow`, `publishLifecycleChangesNow`,
-     * plus the heartbeat tick no accessor ever exposed). Every action here is
+     * `sampleFlowNow`, `publishGraphChangesNow`, `publishLifecycleChangesNow`
+     * — the last of which V2 retired outright with its tick — plus the
+     * heartbeat tick no accessor ever exposed). Every action here is
      * a read-then-maybe-emit pass over its own collaborator's independent
      * state, so running them together introduces no test-visible interference
      * beyond an extra `heartbeat` frame on the wire, which every test that
@@ -686,6 +745,13 @@ class InspectorServer(
 
     /** `GET /api/inspect/errors`'s body, decoded — tests. */
     internal fun errorSnapshot(): ErrorSnapshot = errors.snapshot()
+
+    /**
+     * `GET /api/inspect/activity`'s body, decoded — tests. Readable after
+     * [close] too, which is how a test asserts that closing genuinely detached
+     * the kernel listeners: the ring is still there, and it stops growing.
+     */
+    internal fun activitySnapshot(): ActivitySnapshot = activity.snapshot()
 
     /** Has this view adopted [ref] yet? The barrier a peer-announcement test waits on. */
     internal fun knowsNow(ref: CellRef): Boolean = model.knows(ref)
@@ -701,6 +767,13 @@ class InspectorServer(
         const val CELL_PATH = "$BASE_PATH/cell"
         const val ERRORS_PATH = "$BASE_PATH/errors"
         const val GRAPHS_PATH = "$BASE_PATH/graphs"
+
+        /**
+         * V2 — the activity feed's catch-up read (see [Activity]). Neither a
+         * prefix nor a prefixee of any other route under [BASE_PATH], so it is
+         * exempt from the registration-order discipline [GRAPH_PATH] documents.
+         */
+        const val ACTIVITY_PATH = "$BASE_PATH/activity"
 
         /**
          * M5-COLD — the per-graph action subtree: `POST $GRAPH_PATH/{id}/wake`.

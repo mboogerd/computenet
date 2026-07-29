@@ -60,6 +60,16 @@ class FixtureContractTest {
      * file's top-level keys), so it is mapped as `List<Event>` here instead —
      * the ticket's candidate mapping named `FlowBatch`, but this is what the
      * fixture's actual content requires.
+     *
+     * `activity.json` / `activity-event.json` are V2's pair, authored by V2-FE
+     * and mapped here by V2-BE: the first is the `GET /api/inspect/activity`
+     * body ([ActivitySnapshot]), the second one `activity` SSE envelope
+     * ([Event]) — and carries the same `payload`-shape limitation the three
+     * `error-event-*.json` entries above describe. Because the mapping is
+     * asserted to *equal* the directory's contents, these two entries are green
+     * only once both branches have merged; that is intended, and noted in the
+     * V2-BE report so the repo gate is run after both land rather than against
+     * either in isolation.
      */
     private val decoders: Map<String, (String) -> Unit> = mapOf(
         "topology.json" to { s: String -> strict.decodeFromString<TopologySnapshot>(s) },
@@ -83,6 +93,8 @@ class FixtureContractTest {
         "search-problems.json" to { s: String -> strict.decodeFromString<SearchResult>(s) },
         "search-data.json" to { s: String -> strict.decodeFromString<SearchResult>(s) },
         "search-data-cold.json" to { s: String -> strict.decodeFromString<SearchResult>(s) },
+        "activity.json" to { s: String -> strict.decodeFromString<ActivitySnapshot>(s) },
+        "activity-event.json" to { s: String -> strict.decodeFromString<Event>(s) },
     )
 
     @Test

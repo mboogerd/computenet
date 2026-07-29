@@ -144,7 +144,16 @@ internal enum class Heat {
  * so the UI can say so instead of implying the wake was confined to the
  * component.
  */
-internal class Waker(private val registry: LocationRegistry) {
+internal class Waker(
+    private val registry: LocationRegistry,
+    /**
+     * V2 — the component's cold cells, reported **before** the resume calls go
+     * out (see [wake]). A constructor callback rather than a field on
+     * [WakeReport], for the same reason [Errors] reports its rows that way: the
+     * moment of capture is the interesting one, and here it is load-bearing.
+     */
+    private val onWoken: (Collection<CellRef>) -> Unit = {},
+) {
 
     /**
      * Resume everything cold in [component]. Idempotent and safe on a hot
@@ -156,14 +165,40 @@ internal class Waker(private val registry: LocationRegistry) {
         val refs = component.nodes.mapNotNull { InspectorServer.decodeRef(it.ref) }
         val drained = LinkedHashSet<ManagedHost>()
         val suspended = ArrayList<Pair<ManagedHost, CellRef>>()
+        // V2 — the component's own cells this wake is about to end the coldness
+        // of, in the order they were considered.
+        //
+        // **The component's cold cells, not the blast radius.** A `resumeHost()`
+        // reactivates every cell its host holds, including cells of components
+        // the user never asked about — but "the user woke this" is a claim
+        // about what was asked for, and [WakeReport.hosts] is already how the
+        // wider radius is reported. Nothing outside the component is lost
+        // either: the kernel reports each of those cells as an ordinary
+        // `activated` through `HOST_RESUMED`, which is the honest split — the
+        // kernel did that, the user did not ask for it.
+        val woken = LinkedHashSet<CellRef>()
         refs.forEach { ref ->
             val host = registry.locate(ref) ?: return@forEach
             when (Heat.of(registry, ref)) {
-                Heat.DRAINED -> drained += host
-                Heat.SUSPENDED -> suspended += host to ref
+                Heat.DRAINED -> {
+                    drained += host
+                    woken += ref
+                }
+
+                Heat.SUSPENDED -> {
+                    suspended += host to ref
+                    woken += ref
+                }
+
                 else -> Unit
             }
         }
+        // V2 — before the resumes, not after: "a user asked" causally precedes
+        // "the kernel did", and a management call can complete (and fire its
+        // own lifecycle notification) before this method returns, so recording
+        // afterwards would put the activity feed's `woken` *behind* the
+        // `activated` it caused
+        onWoken(woken)
         // a refused management call would land as a dead letter in the very
         // error lane this inspector serves, so each call is guarded by the
         // predicate the kernel itself requires

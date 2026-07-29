@@ -214,26 +214,37 @@ class InspectorColdTest {
         awaitUntil("the card goes hot") { graphs().graphs.single().lifecycle == "hot" }
     }
 
-    /** The transition is *logged*: the client learns it from the event stream. */
+    /**
+     * The transition is *logged*: the client learns it from the event stream.
+     *
+     * V2 changed how, not what: the `lifecycle` events are pushed by the
+     * kernel's own suspend/resume notification
+     * (`ManagedHost.onLifecycle` → [InspectorModel.lifecycleChanged]), so the
+     * `tickAll()` that used to be needed to *produce* them is gone — the
+     * suspends before [listen] have already been announced by the time a client
+     * attaches. The remaining `tickAll()` drives only the coalesced
+     * `graphs.changed` card invalidation, which stays on the 1 Hz
+     * `"graphsChanged"` tick by design (see [InspectorModel.publishGraphChanges]).
+     */
     @Test
     fun `a wake is announced as lifecycle events`() {
         val (a, b) = pair(host, A, B)
         val serving = started()
         suspendCells(host, a, b)
-        serving.tickAll()
         val events = listen()
 
         wake("g-$A").statusCode() shouldBe 202
         awaitUntil("both cells resumed") { !host.isSuspended(a) && !host.isSuspended(b) }
-        serving.tickAll()
 
         events.awaitKind(Event.LIFECYCLE, 2)
         events.lifecyclesOf(encoded(a)) shouldContainExactly listOf("HOT")
         events.lifecyclesOf(encoded(b)) shouldContainExactly listOf("HOT")
         // and the card the navigator is showing is invalidated with them
+        serving.tickAll()
         events.awaitKind(Event.GRAPHS_CHANGED, 1)
     }
 
+    /** V2: pushed by the suspend itself — no tick, and still nothing asked. */
     @Test
     fun `going cold is announced too, without anything asking the cells`() {
         val (a, b) = pair(host, A, B)
@@ -241,7 +252,6 @@ class InspectorColdTest {
         val events = listen()
 
         suspendCells(host, a, b)
-        serving.tickAll()
 
         events.awaitKind(Event.LIFECYCLE, 2)
         events.lifecyclesOf(encoded(a)) shouldContainExactly listOf("SUSPENDED")

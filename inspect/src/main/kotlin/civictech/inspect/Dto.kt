@@ -1,5 +1,7 @@
 package civictech.inspect
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -133,11 +135,21 @@ data class CellDetail(
     val generation: Long = 0,
     val graph: String? = null,
     /**
-     * `"focus"` / `"idle"`, or null. **Always null in M1**: the attention band
-     * lives on the cell object (`AttentionSupport.of(cell).band`, reachable
-     * only through `ManagedHost`'s private `cells` map), and the ticket
-     * forbids adding kernel surface for it — so the contract's null is the
-     * honest answer rather than a guess.
+     * The cell's current attention band, lowercased: `"none"` / `"low"` /
+     * `"normal"` / `"high"` (`civictech.cell.control.AttentionBand`), or null.
+     *
+     * V2-BE — no longer "always null". `ManagedHost.attentionOf(ref)`
+     * (V2-KERNEL) made the band readable without touching the cell, so this
+     * field now carries it. Null still means something precise and is never a
+     * guess: the cell is not locally hosted, or its host runs without an
+     * `AttentionPolicy` — with no policy no band is in effect anywhere, and
+     * reporting `"normal"` would invent a scheduling fact.
+     *
+     * **Widens the contract**, which documents `"focus" | "idle" | null`
+     * (`20-api-contract.md` §CellDetail). The widening is safe because the
+     * field has never carried a non-null value in any release, so no client
+     * can regress on it; flagged in the V2-BE report rather than edited into
+     * the contract, which is orchestrator-owned.
      */
     val attention: String? = null,
     val links: LinkCounts,
@@ -211,6 +223,64 @@ data class FlowEdgeRate(
     val hop: Int? = null,
 )
 
+/**
+ * V2 — one row of the activity feed (`98-inspector-v4-plan/10-design-notes.md`
+ * §"Verticals → V2"): *when* a cell changed lifecycle, not merely what it is
+ * now. The `lifecycle` SSE event says "this cell is suspended"; this says "it
+ * was passivated at 14:02:11 and woken at 14:02:40".
+ *
+ * Built from extracted primitives at capture time and never holding anything
+ * of the cell — the same rule [DeadLetterRow] follows, for the same reason.
+ * See [Activity] for the five kinds' sources.
+ */
+@Serializable
+data class ActivityEntry(
+    /** `InspectorServer.encodeRef` — the same `"<uuid>:<instanceId>"` every other row carries. */
+    val ref: String,
+    /** [ACTIVATED], [PASSIVATED], [DRAINED], [WOKEN] or [RESTARTED]. */
+    val kind: String,
+    /** Wall clock at capture, as [DeadLetterRow.atMs]. */
+    val atMs: Long,
+    /**
+     * The new recovery generation — present on a [RESTARTED] entry, **absent**
+     * on every other kind.
+     *
+     * `@EncodeDefault(NEVER)` rather than the module-wide `encodeDefaults =
+     * true` (see [inspectorJson]): here the default genuinely means "this kind
+     * of entry has no generation", and the contract V2-FE codes against says
+     * absent, not `null`. The client's optional-field decode reads both the
+     * same way, so this is a fidelity choice, not a compatibility one.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @OptIn(ExperimentalSerializationApi::class)
+    val generation: Long? = null,
+) {
+    companion object {
+        /** A cell resumed, or was reactivated by `resumeHost`. */
+        const val ACTIVATED = "activated"
+
+        /** A cell was suspended — explicit `suspend`, or `SupervisionPolicy.SUSPEND`. */
+        const val PASSIVATED = "passivated"
+
+        /** The cell's host finished draining; one entry per cell it held. */
+        const val DRAINED = "drained"
+
+        /** The inspector's own `POST /graph/{id}/wake` acted on this cell (see [Waker]). */
+        const val WOKEN = "woken"
+
+        /** A supervision restart, observed as a generation increase (see [Errors]). */
+        const val RESTARTED = "restarted"
+    }
+}
+
+/**
+ * `GET /api/inspect/activity` — the retained activity ring, oldest first, at
+ * most `Activity.RING_CAPACITY` entries; an empty ring answers
+ * `{"entries": []}`, never a 404.
+ */
+@Serializable
+data class ActivitySnapshot(val entries: List<ActivityEntry>)
+
 /** The SSE envelope: `data: {"seq":…,"kind":…,"payload":{…}}\n\n`. */
 @Serializable
 data class Event(
@@ -227,6 +297,9 @@ data class Event(
         const val ERROR_PARKED = "error.parked"
         const val ERROR_RESTART = "error.restart"
         const val FLOW_RATES = "flow.rates"
+
+        /** V2 — one [ActivityEntry], the live half of `GET /api/inspect/activity`. */
+        const val ACTIVITY = "activity"
         const val GRAPHS_CHANGED = "graphs.changed"
         const val HEARTBEAT = "heartbeat"
 

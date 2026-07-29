@@ -66,8 +66,10 @@ class InspectorCellDetailTest {
 
         // the M1 half
         detail.links shouldBe LinkCounts(inbound = 0, outbound = 1, taps = 0)
-        // not cheaply readable from the registry or host, and the ticket forbids
-        // adding kernel surface for it — the contract's null, not a guess
+        // V2 made the band readable (`ManagedHost.attentionOf`), and null is
+        // now a *fact* rather than a placeholder: this host runs without an
+        // `AttentionPolicy`, so no band is in effect for it anywhere. A host
+        // that has one reports the band by name — see [InspectorActivityTest].
         detail.attention shouldBe null
     }
 

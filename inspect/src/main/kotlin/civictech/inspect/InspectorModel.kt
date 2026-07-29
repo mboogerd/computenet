@@ -11,6 +11,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -114,12 +115,26 @@ internal class InspectorModel(
 
     /**
      * The per-cell lifecycle last announced (M5-COLD); drives
-     * [publishLifecycleChanges]. Kept beside [announced] rather than inside the
-     * node records because lifecycle is *read* from the host on every stamp
+     * [lifecycleChanged]. Kept beside [announced] rather than inside the node
+     * records because lifecycle is *read* from the host on every stamp
      * ([stamped]) — this map is only the memory of what a client was last told,
-     * so a change can be detected without polling turning into a change.
+     * so a transition reported by two sources is still announced once.
      */
     private val announcedLifecycle = HashMap<CellRef, String>()
+
+    /**
+     * V2 — a `lifecycle` change is pending a `graphs.changed` (a cold pill on a
+     * navigator card moved), but the component *membership* did not change, so
+     * [publishGraphChanges]' own comparison would not notice.
+     *
+     * Set on the push path and cleared by the next `"graphsChanged"` tick,
+     * rather than emitted inline: a `resumeHost` reports one transition per
+     * cell it holds, and coalescing those into the one 1 Hz card invalidation
+     * the tick already exists for is the same bargain [publishGraphChanges]
+     * makes for a whole graph build. The retired 1 Hz lifecycle sweep coalesced
+     * the same way, by construction.
+     */
+    private var lifecycleCardsDirty = false
 
     private var seq = 0L
 
@@ -242,45 +257,63 @@ internal class InspectorModel(
      *
      * Compares full membership, not just the id set: growing a component
      * without displacing its minimum member leaves the id alone but still
-     * changes the card the client is showing.
+     * changes the card the client is showing. Also carries the card
+     * invalidation a lifecycle change owes the navigator, coalesced through
+     * [lifecycleCardsDirty] — a suspend or a wake does not move the partition,
+     * but it does change the cold pill on a card.
      */
     fun publishGraphChanges() = synchronized(lock) {
         val current = componentIndex.components()
-        if (current == announced) return@synchronized
+        if (current == announced && !lifecycleCardsDirty) return@synchronized
         announced = current
+        lifecycleCardsDirty = false
         emitEvent(Event.GRAPHS_CHANGED, JsonObject(emptyMap()))
     }
 
     /**
-     * `lifecycle` (contract §SSE, M5-COLD): one `topology.node`-shaped
-     * lifecycle event per cell whose observed lifecycle changed since the last
-     * announcement, plus a single `graphs.changed` when any did — a suspend or
-     * a wake changes a navigator card's cold pill, and nothing else would tell
-     * the client to refetch it.
+     * `lifecycle` (contract §SSE, M5-COLD): [ref]'s observed lifecycle may have
+     * moved — announce it if, and only if, it differs from what this client was
+     * last told.
      *
-     * Polled from the inspector's scheduler for the same reason
-     * [publishGraphChanges] is: `HostManagementApi.suspend`/`resume` and
-     * `drainHost`/`resumeHost` are ordinary management calls with no
-     * notification hook, so there is nothing to subscribe to. The poll reads
-     * host metadata only ([Heat]) — no cell is touched and no attention raised.
+     * **V2: pushed, not sampled.** Until V2 this was a 1 Hz sweep of every
+     * known node, because — as its own KDoc said — `HostManagementApi.suspend`/
+     * `resume` and `drainHost`/`resumeHost` were ordinary management calls with
+     * no notification hook. V2-KERNEL's [ManagedHost.onLifecycle] made that
+     * false, so the cost now sits on the rare transition that caused it instead
+     * of on a per-second walk of the whole graph. What is *announced* is
+     * unchanged — same event, same shape, same two-valued vocabulary.
      *
-     * A resume that republishes (`resumeHost`) is already reported by
-     * [published]; that path updates [announcedLifecycle] too, so this poll
-     * does not double-announce it.
+     * The compare-and-set against [announcedLifecycle] is what keeps "exactly
+     * one event per real transition" true now that two sources can see the same
+     * `resumeHost`: it republishes every cell it holds (reaching [published])
+     * *and* reports `HOST_RESUMED` per cell (reaching here). Whichever observes
+     * the transition first announces it; the other finds nothing to say.
+     *
+     * Reads host metadata only ([Heat]) — no cell is touched and no attention
+     * raised (P6). A ref this view does not hold — never published here, already
+     * despawned, or one of the inspector's own instrument sinks — is ignored.
      */
-    fun publishLifecycleChanges() = synchronized(lock) {
-        var changed = false
-        nodes.keys.toList().forEach { ref ->
-            val now = lifecycleOf(ref)
-            if (announcedLifecycle.put(ref, now) == now) return@forEach
-            changed = true
-            emitEvent(Event.LIFECYCLE, buildJsonObject {
-                put("ref", encode(ref))
-                put("lifecycle", now)
-                put("generation", nodes[ref]?.generation ?: 0L)
-            })
-        }
-        if (changed) emitEvent(Event.GRAPHS_CHANGED, JsonObject(emptyMap()))
+    fun lifecycleChanged(ref: CellRef) = synchronized(lock) {
+        val node = nodes[ref] ?: return@synchronized
+        val now = lifecycleOf(ref)
+        if (announcedLifecycle.put(ref, now) == now) return@synchronized
+        lifecycleCardsDirty = true
+        emitEvent(Event.LIFECYCLE, buildJsonObject {
+            put("ref", encode(ref))
+            put("lifecycle", now)
+            put("generation", node.generation)
+        })
+    }
+
+    /**
+     * `activity` (V2): one retained [ActivityEntry], rides the same monotonic
+     * [seq] as every other event — [Activity] is the collaborator that captures
+     * and bounds these, this is only the emission point, kept here so the one
+     * gap detector covers topology, state, error and activity events alike
+     * (mirrors [stateSummary]).
+     */
+    fun activityEvent(entry: ActivityEntry) = synchronized(lock) {
+        emitEvent(Event.ACTIVITY, inspectorJson.encodeToJsonElement(entry).jsonObject)
     }
 
     /** The name of whichever anchor in [refs] sorts first by uuid, or null when none is anchored. */
@@ -328,12 +361,30 @@ internal class InspectorModel(
         val links = linkCounts(node.ref)
         buildJsonObject {
             inspectorJson.encodeToJsonElement(node).jsonObject.forEach { (key, value) -> put(key, value) }
-            // the band lives on the cell object, out of reach without new
-            // kernel surface the ticket forbids — the contract's null
-            put("attention", JsonNull)
+            put("attention", attentionOf(ref)?.let(::JsonPrimitive) ?: JsonNull)
             put("links", inspectorJson.encodeToJsonElement(links))
         }.toString()
     }
+
+    /**
+     * V2 — [CellDetail.attention]: the cell's current
+     * [civictech.cell.control.AttentionBand], lowercased, or null.
+     *
+     * Until V2 this was a hard-coded null: the band lives on the cell object
+     * behind `ManagedHost`'s private `cells` map. V2-KERNEL's
+     * [ManagedHost.attentionOf] made it readable *as an observer* — it answers
+     * null for a cell this host does not hold and null for a host with no
+     * `AttentionPolicy` (with no policy, no band is in effect anywhere, so
+     * `"normal"` would be an invented scheduling fact), and it neither
+     * refreshes, recomputes nor lazily wires anything on the way (P6 — reading
+     * the band must not raise attention). Nothing is added here on top of that:
+     * no fallback, no retry, no touch of the cell.
+     *
+     * A non-locally-hosted ref (mirrored from a peer) never reaches the host at
+     * all — [LocationRegistry.locate] answers null and so does this.
+     */
+    private fun attentionOf(ref: CellRef): String? =
+        registry.locate(ref)?.attentionOf(ref)?.name?.lowercase()
 
     /**
      * The per-cell link census, counted off this view's own edges — which are
@@ -422,6 +473,17 @@ internal class InspectorModel(
      * is a re-publish (`resumeHost`, a returning migration) — the node is
      * refreshed and reported as a [Event.LIFECYCLE] change rather than a
      * duplicate add.
+     *
+     * **V2 — a re-publish announces only what actually moved.** This path and
+     * [lifecycleChanged] can now both observe one `resumeHost`: it republishes
+     * every cell it holds *before* flipping the host out of `DRAINED`, then
+     * notifies `HOST_RESUMED` per cell. So the re-publish seen here still reads
+     * `SUSPENDED` — unchanged — and announcing it would emit a transition that
+     * never happened, immediately followed by the real one. Both sources
+     * therefore go through the same compare-and-set on [announcedLifecycle],
+     * and exactly one event comes out. (Before V2 the same double announcement
+     * existed against the 1 Hz sweep; the seam that makes it detectable is what
+     * makes it fixable.)
      */
     fun published(ref: CellRef) = synchronized(lock) {
         // the inspector's own observation sink: real in the registry, but not
@@ -431,17 +493,17 @@ internal class InspectorModel(
         val node = nodeOf(ref)
         nodes[ref] = node
         componentIndex.addCell(ref)
-        // a re-publish is how `resumeHost` reports a wake, so the announced
-        // lifecycle moves here too — otherwise [publishLifecycleChanges] would
-        // announce the same transition a second time on its next tick
         val lifecycle = lifecycleOf(ref)
-        announcedLifecycle[ref] = lifecycle
+        val moved = announcedLifecycle.put(ref, lifecycle) != lifecycle
+        if (moved) lifecycleCardsDirty = true
         if (known) {
-            emitEvent(Event.LIFECYCLE, buildJsonObject {
-                put("ref", node.ref)
-                put("lifecycle", lifecycle)
-                put("generation", node.generation)
-            })
+            if (moved) {
+                emitEvent(Event.LIFECYCLE, buildJsonObject {
+                    put("ref", node.ref)
+                    put("lifecycle", lifecycle)
+                    put("generation", node.generation)
+                })
+            }
         } else {
             emitEvent(Event.TOPOLOGY_NODE, buildJsonObject {
                 put("op", Event.ADDED)
