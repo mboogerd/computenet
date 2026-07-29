@@ -37,19 +37,29 @@ describe('DetailController', () => {
   };
   let onDetail: ReturnType<typeof vi.fn>;
   let onState: ReturnType<typeof vi.fn>;
+  let onPinsChanged: ReturnType<typeof vi.fn>;
   let controller: DetailController;
 
   beforeEach(() => {
     transport = {
       fetchDetail: vi.fn(async (ref: string) => detail(ref)),
       fetchState: vi.fn(async (ref: string) => state(ref)),
-      observeStart: vi.fn(async () => undefined),
+      observeStart: vi.fn(async () => 'started' as const),
       observeStop: vi.fn(async () => undefined),
     };
     onDetail = vi.fn();
     onState = vi.fn();
-    controller = new DetailController(transport as unknown as DetailTransport, { onDetail, onState });
+    onPinsChanged = vi.fn();
+    controller = new DetailController(transport as unknown as DetailTransport, { onDetail, onState, onPinsChanged });
   });
+
+  /** The last (pinned, snapshotOnly) pair `onPinsChanged` was called with, or
+   *  undefined if it was never called. */
+  function lastPins(): { pinned: Set<string>; snapshotOnly: Set<string> } | undefined {
+    if (onPinsChanged.mock.calls.length === 0) return undefined;
+    const [pinned, snapshotOnly] = onPinsChanged.mock.calls[onPinsChanged.mock.calls.length - 1];
+    return { pinned, snapshotOnly };
+  }
 
   it('selecting a node issues exactly one observe POST and fetches detail + state', async () => {
     controller.select('a');
@@ -312,6 +322,251 @@ describe('DetailController', () => {
       expect(transport.observeStop).toHaveBeenCalledTimes(1);
       expect(transport.observeStop).toHaveBeenCalledWith('a');
       expect(transport.observeStart).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /** V1B-FE ticket Solution direction §1 / acceptance criteria: the pinned
+   *  set generalizes "exactly one observed ref" to "pinned ∪ {selection}". */
+  describe('pin / unpin / unpinAll', () => {
+    it('pinning an unobserved cell issues exactly one observe POST and one initial state fetch', async () => {
+      controller.pin('a');
+      await flush();
+
+      expect(transport.observeStart).toHaveBeenCalledTimes(1);
+      expect(transport.observeStart).toHaveBeenCalledWith('a');
+      expect(transport.fetchState).toHaveBeenCalledTimes(1);
+      expect(transport.fetchState).toHaveBeenCalledWith('a');
+      expect(controller.isPinned('a')).toBe(true);
+      expect(lastPins()?.pinned).toEqual(new Set(['a']));
+    });
+
+    it('pinning an already-pinned cell is a no-op', async () => {
+      controller.pin('a');
+      await flush();
+      transport.observeStart.mockClear();
+      transport.fetchState.mockClear();
+
+      controller.pin('a');
+      await flush();
+
+      expect(transport.observeStart).not.toHaveBeenCalled();
+      expect(transport.fetchState).not.toHaveBeenCalled();
+    });
+
+    it('pinning the currently-selected cell issues no further transport call', async () => {
+      controller.select('a');
+      await flush();
+      transport.observeStart.mockClear();
+      transport.fetchState.mockClear();
+
+      controller.pin('a');
+      await flush();
+
+      expect(transport.observeStart).not.toHaveBeenCalled();
+      expect(transport.fetchState).not.toHaveBeenCalled();
+      expect(controller.isPinned('a')).toBe(true);
+    });
+
+    it('unpinning a cell that is not the current selection issues exactly one observe DELETE', async () => {
+      controller.pin('a');
+      await flush();
+      transport.observeStop.mockClear();
+
+      controller.unpin('a');
+      await flush();
+
+      expect(transport.observeStop).toHaveBeenCalledTimes(1);
+      expect(transport.observeStop).toHaveBeenCalledWith('a');
+      expect(controller.isPinned('a')).toBe(false);
+      expect(lastPins()?.pinned).toEqual(new Set());
+    });
+
+    it('unpinning the current selection issues no observe DELETE and leaves the observation open', async () => {
+      controller.select('a');
+      await flush();
+      controller.pin('a');
+      await flush();
+      transport.observeStop.mockClear();
+
+      controller.unpin('a');
+      await flush();
+
+      expect(transport.observeStop).not.toHaveBeenCalled();
+      expect(controller.isPinned('a')).toBe(false);
+      // the observation itself is still alive: a later summary still refetches
+      transport.fetchState.mockClear();
+      controller.onSummary(summary('a'));
+      await flush();
+      expect(transport.fetchState).toHaveBeenCalledTimes(1);
+    });
+
+    it('unpinning a cell that was never pinned is a no-op', () => {
+      controller.unpin('z');
+      expect(transport.observeStop).not.toHaveBeenCalled();
+      expect(onPinsChanged).not.toHaveBeenCalled();
+    });
+
+    it('unpinAll releases every pinned, non-selected cell in one pass and notifies once', async () => {
+      controller.select('a');
+      await flush();
+      controller.pin('a'); // 'a' is both the selection and explicitly pinned
+      controller.pin('b');
+      controller.pin('c');
+      await flush();
+      transport.observeStop.mockClear();
+      onPinsChanged.mockClear();
+
+      controller.unpinAll();
+      await flush();
+
+      expect(transport.observeStop).toHaveBeenCalledTimes(2);
+      expect(transport.observeStop).toHaveBeenCalledWith('b');
+      expect(transport.observeStop).toHaveBeenCalledWith('c');
+      expect(transport.observeStop).not.toHaveBeenCalledWith('a');
+      expect(onPinsChanged).toHaveBeenCalledTimes(1);
+      // the explicit pin on 'a' is gone (unpinAll clears the whole pinned
+      // set) but its observation survives via the implicit selection-pin
+      expect(controller.isPinned('a')).toBe(false);
+      expect(controller.isPinned('b')).toBe(false);
+      expect(controller.isPinned('c')).toBe(false);
+      transport.fetchState.mockClear();
+      controller.onSummary(summary('a'));
+      await flush();
+      expect(transport.fetchState).toHaveBeenCalledTimes(1);
+    });
+
+    it('unpinAll on an empty pinned set is a no-op', () => {
+      controller.unpinAll();
+      expect(onPinsChanged).not.toHaveBeenCalled();
+    });
+
+    it('deselecting a pinned selection leaves its observation open (the implicit pin is gone, the explicit one remains)', async () => {
+      controller.select('a');
+      await flush();
+      controller.pin('a');
+      await flush();
+      transport.observeStop.mockClear();
+
+      controller.deselect();
+      await flush();
+
+      expect(transport.observeStop).not.toHaveBeenCalled();
+      expect(controller.isPinned('a')).toBe(true);
+    });
+
+    it('selecting a different ref releases the previous selection unless it is pinned', async () => {
+      controller.select('a');
+      await flush();
+      controller.pin('a');
+      await flush();
+      transport.observeStop.mockClear();
+      transport.observeStart.mockClear();
+
+      controller.select('b');
+      await flush();
+
+      expect(transport.observeStop).not.toHaveBeenCalledWith('a');
+      expect(transport.observeStart).toHaveBeenCalledTimes(1);
+      expect(transport.observeStart).toHaveBeenCalledWith('b');
+    });
+
+    it('a stale state response for a ref unpinned before it resolves is discarded (per-ref epoch guard)', async () => {
+      let resolveA!: (s: CellState) => void;
+      transport.fetchState.mockImplementation(
+        (ref: string) =>
+          new Promise<CellState>((resolve) => {
+            if (ref === 'a') resolveA = resolve;
+            else resolve(state(ref));
+          }),
+      );
+
+      controller.pin('a'); // fetchState('a') now pending
+      await flush();
+      onState.mockClear();
+
+      controller.unpin('a'); // no longer tracked before the fetch resolves
+      await flush();
+
+      resolveA(state('a'));
+      await flush();
+
+      expect(onState).not.toHaveBeenCalledWith('a', expect.anything());
+    });
+
+    it('a stale response for a re-pinned ref from a superseded (earlier) open is discarded', async () => {
+      let resolveFirst!: (s: CellState) => void;
+      let calls = 0;
+      transport.fetchState.mockImplementation(
+        (ref: string) =>
+          new Promise<CellState>((resolve) => {
+            calls += 1;
+            if (ref === 'a' && calls === 1) resolveFirst = resolve;
+            else resolve(state(ref));
+          }),
+      );
+
+      controller.pin('a'); // first open, fetchState('a') pending (call 1)
+      await flush();
+      controller.unpin('a');
+      await flush();
+      controller.pin('a'); // second open — a fresh epoch for 'a'
+      await flush();
+      onState.mockClear();
+
+      resolveFirst(state('a')); // the FIRST open's response, arriving late
+      await flush();
+
+      expect(onState).not.toHaveBeenCalledWith('a', expect.anything());
+    });
+
+    describe('the 409 "snapshot only" case', () => {
+      it('a refused observe keeps the ref pinned, fetches state exactly once, and is flagged from the observe response itself', async () => {
+        transport.observeStart.mockImplementation(async (ref: string) => (ref === 'a' ? 'refused' : 'started'));
+
+        controller.pin('a');
+        await flush();
+
+        expect(transport.observeStart).toHaveBeenCalledTimes(1);
+        expect(transport.fetchState).toHaveBeenCalledTimes(1);
+        expect(transport.fetchState).toHaveBeenCalledWith('a');
+        expect(controller.isPinned('a')).toBe(true);
+        expect(lastPins()?.snapshotOnly).toEqual(new Set(['a']));
+      });
+
+      it('a state.summary for a refused ref triggers no further transport call', async () => {
+        transport.observeStart.mockImplementation(async () => 'refused' as const);
+
+        controller.pin('a');
+        await flush();
+        transport.fetchState.mockClear();
+
+        controller.onSummary(summary('a'));
+        await flush();
+
+        expect(transport.fetchState).not.toHaveBeenCalled();
+      });
+
+      it('unpinning a refused ref issues no observe DELETE (no real subscription was ever open)', async () => {
+        transport.observeStart.mockImplementation(async () => 'refused' as const);
+
+        controller.pin('a');
+        await flush();
+
+        controller.unpin('a');
+        await flush();
+
+        expect(transport.observeStop).not.toHaveBeenCalled();
+      });
+
+      it('a non-409 observe failure still throws/rejects rather than being treated as a handled refusal', async () => {
+        const err = new Error('network boom');
+        transport.observeStart.mockRejectedValueOnce(err);
+
+        controller.pin('a');
+        await flush();
+
+        expect(onState).toHaveBeenCalledWith('a', undefined, err);
+      });
     });
   });
 });

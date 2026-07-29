@@ -1,6 +1,6 @@
 # V1B-FE — Pin multiple cells for simultaneous observation, surface the observation cost
 
-**Status**: Specified — not-started
+**Status**: Partial — in-progress
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`
 **Wave:** 3 · **Branches:** `ticket/v1b-fe`
 

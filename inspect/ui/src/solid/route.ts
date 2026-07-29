@@ -1,6 +1,7 @@
 import { createEffect } from 'solid-js';
 import { formatHash, graphIsGone, TOGGLE_KEYS, type Route, type ToggleKey } from '../nav/route';
 import { clearWake } from './cold';
+import { unpinAll } from './detail';
 import { graphs, graphsLoaded } from './graphs';
 import { selection, setSelection } from './selection';
 import { currentGraphId, initialRoute, screen, setCurrentGraphId, setScreen } from './routeState';
@@ -105,6 +106,12 @@ export function enterGraph(graphId: string, opts: { ref?: string | null; forceEr
   // M5-COLD: wake state (a pending confirmation, a failed attempt) belongs to
   // the graph it was raised for and must not follow the user to the next one.
   clearWake();
+  // V1B-FE ticket Solution direction §2: pins are session-local, released on
+  // navigation, never in the URL hash. Called before `setSelection` below so
+  // that a pinned *and* selected ref (the implicit-pin case `unpinAll` itself
+  // leaves untouched) still gets released once the selection change that
+  // follows deselects it.
+  unpinAll();
   setCurrentGraphId(graphId);
   setSelection(opts.ref ?? null);
   if (opts.forceErrors) setShowErrors(true);
@@ -118,6 +125,9 @@ export function enterGraph(graphId: string, opts: { ref?: string | null; forceEr
  *  refreshing the data Home's constellation reads from. */
 export function goHome(): void {
   clearWake();
+  // V1B-FE ticket Solution direction §2 — see the identical call in
+  // `enterGraph` above.
+  unpinAll();
   setSelection(null);
   setCurrentGraphId(null);
   setScreen('home');

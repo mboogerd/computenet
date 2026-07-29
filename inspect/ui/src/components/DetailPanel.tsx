@@ -11,8 +11,11 @@ import {
   changeLogVersion,
   detailError,
   detailLoading,
+  isPinned,
+  pin,
   stateError,
   stateLoading,
+  unpin,
 } from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
@@ -42,13 +45,36 @@ export default function DetailPanel() {
           <>
             <div class="detail-panel__head">
               <h2 class="detail-panel__name">{cellDetail()?.name ?? ref()}</h2>
-              <button
-                class="icon-btn detail-panel__close"
-                title="Close (deselect)"
-                onClick={() => setSelection(null)}
-              >
-                ×
-              </button>
+              <div class="detail-panel__head-actions">
+                {/* V1B-FE ticket Solution direction §4: the same pin toggle
+                    as the node card, near the close button. Disabled while
+                    cold — mirrors the node-card control's gate; pinning a
+                    cell must not be a side effect of merely looking at it
+                    while its graph is parked. */}
+                <button
+                  type="button"
+                  class="icon-btn detail-panel__pin"
+                  classList={{ 'is-pinned': isPinned(ref()) }}
+                  disabled={currentGraphCold()}
+                  title={
+                    currentGraphCold()
+                      ? 'Pinning is disabled while this graph is cold'
+                      : isPinned(ref())
+                        ? 'Unpin (stop observing when not selected)'
+                        : 'Pin (keep observing alongside the selection)'
+                  }
+                  onClick={() => (isPinned(ref()) ? unpin(ref()) : pin(ref()))}
+                >
+                  📌
+                </button>
+                <button
+                  class="icon-btn detail-panel__close"
+                  title="Close (deselect)"
+                  onClick={() => setSelection(null)}
+                >
+                  ×
+                </button>
+              </div>
             </div>
             <DescriptorSection />
             <StateSection />

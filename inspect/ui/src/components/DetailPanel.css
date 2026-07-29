@@ -27,10 +27,35 @@
   word-break: break-all;
 }
 
+.detail-panel__head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.3rem;
+}
+
 .detail-panel__close {
   flex: 0 0 auto;
   line-height: 1;
   padding: 0.15rem 0.5rem;
+}
+
+/* V1B-FE ticket Solution direction §4: same pin toggle as the node card's
+   `.node-card__pin` — dim until pinned, full opacity while pinned, so the
+   panel head does not look busier than before for a plain (unpinned)
+   selection. */
+.detail-panel__pin {
+  line-height: 1;
+  padding: 0.15rem 0.5rem;
+  opacity: 0.5;
+}
+
+.detail-panel__pin:hover {
+  opacity: 0.85;
+}
+
+.detail-panel__pin.is-pinned {
+  opacity: 1;
+  border-color: var(--focus-ring);
 }
 
 .detail-section {
