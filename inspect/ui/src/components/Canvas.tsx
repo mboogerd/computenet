@@ -1,4 +1,4 @@
-import { For, Show, createMemo } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Dir, EdgeRole, Ref } from '../api/types';
 import {
   computeHostHulls,
@@ -15,8 +15,20 @@ import { isPinned, observed, pin, snapshotOnly, stateSummaries, unpin } from '..
 import { errorStore, errorVersion } from '../solid/errors';
 import { flowStore, flowVersion } from '../solid/flow';
 import { prefersReducedMotion } from '../solid/motion';
+import { currentGraphId } from '../solid/route';
 import { edges, nodes, selection, setSelection, store, structuralVersion } from '../solid/state';
 import { showErrors, showFlow, showHosts, showNet, showState } from '../solid/toggles';
+import {
+  ensureFirstFit,
+  enterGraphViewport,
+  fitToScreen,
+  panByAmount,
+  setSceneSize,
+  setViewSize,
+  viewport,
+  viewSize,
+  zoomBy,
+} from '../solid/viewport';
 import { colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { cellErrorBadges, deriveEdgeParkedCounts } from '../util/errors';
 import {
@@ -28,9 +40,27 @@ import {
   pulsesToRender,
   type EdgeFlowOverlay,
 } from '../util/flow';
+import ZoomControls from './ZoomControls';
 import './Canvas.css';
 
 const FUSED_OFFSET = 2.5;
+
+/** Drag-vs-click movement threshold, in client px (FE-CANVAS ticket
+ *  Solution direction §4: "prescribe 4 px"). Below it, a pointerdown/up
+ *  pair on the background is a click (deselects); at or above it, it was a
+ *  pan, and the resulting `click` must not also deselect. */
+const DRAG_THRESHOLD_PX = 4;
+/** Multiplicative step for one keyboard/button zoom action (`+`/`-`, the
+ *  zoom controls' `+`/`-` buttons) — not specified numerically by the
+ *  ticket; chosen for a visibly-stepped-but-not-jumpy feel. */
+const ZOOM_STEP = 1.2;
+/** Wheel-zoom sensitivity: `factor = exp(-deltaY * WHEEL_ZOOM_SENSITIVITY)`,
+ *  continuous rather than stepped so a trackpad pinch (which arrives as many
+ *  small-`deltaY` wheel events) feels smooth. Tuned so one full mouse-wheel
+ *  notch (`deltaY` ~ ±100–120, browser-dependent) is roughly a 12–13% step —
+ *  a single higher-sensitivity value (0.01) made one notch a ~3.3x jump,
+ *  confirmed live against the mock backend during the manual pass. */
+const WHEEL_ZOOM_SENSITIVITY = 0.0012;
 
 export default function Canvas() {
   // Structure-only dependency: a value-only change (a lifecycle flip, say)
@@ -108,6 +138,212 @@ export default function Canvas() {
     return deriveEdgeFlowOverlays(targets, (id) => flowStore.get(id), showFlow());
   });
 
+  // FE-CANVAS ticket Solution direction §2 + §5: one canvas viewport per
+  // graph. Canvas only mounts while the Graph screen shows a *hot* graph
+  // (`app.tsx`'s `Show when={!currentGraphCold()} fallback={<ColdScreen />}>`
+  // around `<Canvas />`, itself inside `Show when={screen() === 'graph'}`),
+  // so a Canvas mount/unmount already coincides with "entering"/"leaving" a
+  // graph in this app's navigation model — there is no way to swap
+  // `currentGraphId` while a single Canvas instance stays mounted. Reading
+  // it once here (not inside an effect) captures the graph id for this
+  // mount, exactly once, before the first render — restoring a stored
+  // viewport verbatim, or resetting to identity and leaving the first-entry
+  // fit to the layout-size effect below.
+  const graphId = currentGraphId() ?? '';
+  enterGraphViewport(graphId);
+
+  let canvasEl: HTMLDivElement | undefined;
+  const [isPanning, setIsPanning] = createSignal(false);
+
+  // Guards the race the ticket's "the first render is an empty scene"
+  // assumption doesn't cover: switching *from one graph to another*
+  // (Home -> graph A -> Home -> graph B) leaves the shared, module-level
+  // `store` (`solid/state.ts`) holding graph A's — or Home's unfiltered —
+  // nodes for one or more renders after Canvas has already mounted for B,
+  // because `TopologyClient.setGraphFilter`'s refetch is async and nothing
+  // clears the store while it's in flight. Without this check,
+  // `ensureFirstFit` would fit against the *stale* (wrong, and generally
+  // larger) scene the instant it first sees a non-zero size, then never
+  // correct itself once the right snapshot lands (`resolvedGraphIds` in
+  // `solid/viewport.ts` treats that graph id as done). Every node the sync
+  // layer hands back is stamped with the component id it belongs to
+  // (`NodeRec.graph`, non-null since M4) — trusting the scene only once
+  // every currently-known node actually carries *this* graph's id is a
+  // direct, local test for "the filtered snapshot has actually landed",
+  // with no change to the sync layer itself.
+  const sceneReadyForFit = createMemo(() => nodeRefs().every((ref) => nodes[ref]?.graph === graphId));
+
+  // First-entry fit (Solution direction §2): "entering a graph with no
+  // stored viewport fits it to screen once the layout first reports a
+  // non-zero size" — the topology fetch is async, so the first render or
+  // two is an empty scene. `resolvedGraphIds` inside `solid/viewport.ts`
+  // makes every call after the first successful one a no-op, so a later
+  // structural change (a node arriving after the user has since panned/
+  // zoomed) never re-fits and discards it.
+  //
+  // Reading `viewSize()` here — unconditionally, every run, not only
+  // indirectly via `ensureFirstFit`'s own internal read — matters more than
+  // it looks: a `ResizeObserver` typically notifies exactly once for a
+  // `.canvas` box whose size never changes again afterward (this ticket's
+  // own manual pass confirmed it), so if that one notification lands before
+  // `sceneReadyForFit()` first turns true, an effect that only reaches
+  // `viewSize()` from inside that gated branch is not yet subscribed to it
+  // when the one-and-only update fires — it never sees a later value, and
+  // the fit deadlocks forever. Reading it up front every run means this
+  // effect is subscribed to `viewSize` from its very first execution, so
+  // whichever of "the topology settles" and "the canvas is measured"
+  // happens last is guaranteed to trigger the re-run that completes the fit.
+  createEffect(() => {
+    setSceneSize({ w: layout().width, h: layout().height });
+    viewSize();
+    if (sceneReadyForFit()) ensureFirstFit(graphId);
+  });
+
+  // The live client size of `.canvas` (Solution direction §5): a
+  // `ResizeObserver` rather than a one-time read, so a window resize or a
+  // detail-panel width change never leaves a stale fit basis — the *next*
+  // Fit/`0`/first-entry action always measures the canvas as it is now, not
+  // as it was at mount. `ResizeObserver` fires once synchronously on
+  // `observe()`, so this doubles as the initial read too.
+  onMount(() => {
+    if (!canvasEl) return;
+    const el = canvasEl;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      setViewSize({ w: entry.contentRect.width, h: entry.contentRect.height });
+      if (sceneReadyForFit()) ensureFirstFit(graphId);
+    });
+    ro.observe(el);
+    onCleanup(() => ro.disconnect());
+  });
+
+  // Wheel (Solution direction §4): registered explicitly with
+  // `{ passive: false }` so `preventDefault()` actually stops the browser's
+  // own page-zoom/scroll — a passive listener cannot. Ctrl/meta-modified
+  // wheel zooms, cursor-anchored (macOS trackpad pinch arrives as a wheel
+  // event with `ctrlKey: true`, so pinch is covered by the same path); plain
+  // wheel pans. Coalesced to at most one update per animation frame: rapid
+  // trackpad events accumulate into `pendingPan`/`pendingZoomFactor` and a
+  // single `requestAnimationFrame` flushes them, rather than committing a
+  // viewport update per DOM event.
+  let pendingPanDx = 0;
+  let pendingPanDy = 0;
+  let pendingZoomFactor = 1;
+  let pendingZoomAnchor: { x: number; y: number } | null = null;
+  let flushScheduled = false;
+
+  function scheduleFlush(): void {
+    if (flushScheduled) return;
+    flushScheduled = true;
+    requestAnimationFrame(() => {
+      flushScheduled = false;
+      if (pendingPanDx !== 0 || pendingPanDy !== 0) {
+        panByAmount(pendingPanDx, pendingPanDy);
+        pendingPanDx = 0;
+        pendingPanDy = 0;
+      }
+      if (pendingZoomAnchor && pendingZoomFactor !== 1) {
+        zoomBy(pendingZoomFactor, pendingZoomAnchor);
+        pendingZoomFactor = 1;
+        pendingZoomAnchor = null;
+      }
+    });
+  }
+
+  function onWheel(e: WheelEvent): void {
+    e.preventDefault();
+    if (!canvasEl) return;
+    if (e.ctrlKey || e.metaKey) {
+      const rect = canvasEl.getBoundingClientRect();
+      pendingZoomAnchor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      pendingZoomFactor *= Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+    } else {
+      pendingPanDx += e.deltaX;
+      pendingPanDy += e.deltaY;
+    }
+    scheduleFlush();
+  }
+
+  onMount(() => {
+    if (!canvasEl) return;
+    const el = canvasEl;
+    el.addEventListener('wheel', onWheel, { passive: false });
+    onCleanup(() => el.removeEventListener('wheel', onWheel));
+  });
+
+  // Keyboard (Solution direction §5): bound on the Graph screen only — this
+  // listener lives for exactly as long as Canvas is mounted, which (see the
+  // viewport-mount comment above) is exactly the hot-graph lifetime of the
+  // Graph screen. Ignored while typing in a field, and while a modifier
+  // that means something else (Ctrl/Cmd browser zoom, in particular) is
+  // held. Enter/Space on a focused card is handled by `onCardKeyDown` below
+  // and is untouched by this listener (neither key is in its set).
+  function onWindowKeyDown(e: KeyboardEvent): void {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const target = e.target;
+    if (target instanceof HTMLElement) {
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+    }
+    if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      zoomBy(ZOOM_STEP);
+    } else if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      zoomBy(1 / ZOOM_STEP);
+    } else if (e.key === '0') {
+      e.preventDefault();
+      fitToScreen();
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener('keydown', onWindowKeyDown);
+    onCleanup(() => window.removeEventListener('keydown', onWindowKeyDown));
+  });
+
+  // Drag-to-pan (Solution direction §4): `pointerdown` on the scene
+  // background only — the exact same `e.currentTarget === e.target` test
+  // `onSceneClick` already used pre-ticket, so a pointerdown that bubbled up
+  // from a card never starts a pan. `setPointerCapture` means a drag that
+  // leaves the browser window still ends cleanly on `pointerup`/
+  // `pointercancel`. `dragMoved` (not reset until the following `click`) is
+  // how `onSceneClick` tells a real drag apart from a below-threshold click.
+  let dragStart: { x: number; y: number } | null = null;
+  let dragMoved = false;
+
+  function onScenePointerDown(e: PointerEvent): void {
+    if (e.currentTarget !== e.target) return;
+    if (e.button !== 0) return;
+    dragStart = { x: e.clientX, y: e.clientY };
+    dragMoved = false;
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  }
+
+  function onScenePointerMove(e: PointerEvent): void {
+    if (!dragStart) return;
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (!dragMoved) {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+      dragMoved = true;
+      setIsPanning(true);
+    }
+    // Grab-drag semantics: content follows the pointer 1:1 — `panByAmount`
+    // uses wheel "scroll" sign convention, so the pointer's client delta is
+    // negated here (`nav/viewport.ts`'s `panBy` doc comment).
+    panByAmount(-dx, -dy);
+    dragStart = { x: e.clientX, y: e.clientY };
+  }
+
+  function onScenePointerEnd(e: PointerEvent): void {
+    if (dragStart && (e.currentTarget as Element).hasPointerCapture(e.pointerId)) {
+      (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+    }
+    dragStart = null;
+    setIsPanning(false);
+  }
+
   function nameOf(ref: Ref): string | null {
     return nodes[ref]?.name ?? null;
   }
@@ -132,326 +368,347 @@ export default function Canvas() {
   }
 
   // Click-through-to-deselect only when the click landed on the scene
-  // background itself, not a card bubbling up.
+  // background itself, not a card bubbling up — and only below the drag
+  // threshold: a real drag (`dragMoved`) must never also deselect (Solution
+  // direction §4). The flag is consumed (reset) here rather than on
+  // `pointerup`, since the browser's own `click` fires after `pointerup`.
   function onSceneClick(e: MouseEvent) {
+    if (dragMoved) {
+      dragMoved = false;
+      return;
+    }
     if (e.currentTarget === e.target) setSelection(null);
   }
 
   return (
-    <div class="canvas">
+    <div class="canvas" ref={canvasEl}>
       <Show when={nodeRefs().length > 0} fallback={<p class="canvas__empty">No cells reported yet.</p>}>
         <div
-          class="canvas__scene"
-          style={{ width: `${layout().width}px`, height: `${layout().height}px` }}
-          onClick={onSceneClick}
+          class="canvas__pan"
+          style={{ transform: `translate(${viewport().x}px, ${viewport().y}px) scale(${viewport().scale})` }}
         >
-          <svg class="canvas__svg" width={layout().width} height={layout().height}>
-            {/* Hulls first: SVG paints in document order, so "rendered beneath
-                edges" (10-target-v3.md toggle table) means listing them
-                before the edges/ports below. Network hulls come before
-                process hulls for the same reason — "net outside, proc inside"
-                (M5-NET ticket Implement §2) is both a geometric nesting
-                (`computeNetHulls`' wider padding) and a paint order. */}
-            <For each={netHulls()}>
-              {(h) => (
-                <g class="net-hull" classList={{ 'net-hull--peer': h.peer }}>
-                  <rect class="net-hull__rect" x={h.x} y={h.y} width={h.w} height={h.h} rx={16} ry={16} />
-                  <text class="net-hull__label" x={h.x + 12} y={h.y + 18}>
-                    {h.net}
-                    <Show when={h.peer}>
-                      <tspan class="net-hull__tag"> peer</tspan>
+          <div
+            class="canvas__scene"
+            classList={{ 'is-panning': isPanning() }}
+            style={{ width: `${layout().width}px`, height: `${layout().height}px` }}
+            onClick={onSceneClick}
+            onPointerDown={onScenePointerDown}
+            onPointerMove={onScenePointerMove}
+            onPointerUp={onScenePointerEnd}
+            onPointerCancel={onScenePointerEnd}
+          >
+            <svg class="canvas__svg" width={layout().width} height={layout().height}>
+              {/* Hulls first: SVG paints in document order, so "rendered beneath
+                  edges" (10-target-v3.md toggle table) means listing them
+                  before the edges/ports below. Network hulls come before
+                  process hulls for the same reason — "net outside, proc inside"
+                  (M5-NET ticket Implement §2) is both a geometric nesting
+                  (`computeNetHulls`' wider padding) and a paint order. */}
+              <For each={netHulls()}>
+                {(h) => (
+                  <g class="net-hull" classList={{ 'net-hull--peer': h.peer }}>
+                    <rect class="net-hull__rect" x={h.x} y={h.y} width={h.w} height={h.h} rx={16} ry={16} />
+                    <text class="net-hull__label" x={h.x + 12} y={h.y + 18}>
+                      {h.net}
+                      <Show when={h.peer}>
+                        <tspan class="net-hull__tag"> peer</tspan>
+                      </Show>
+                    </text>
+                  </g>
+                )}
+              </For>
+  
+              <For each={hulls()}>
+                {(h) => (
+                  <g class="host-hull">
+                    <rect class="host-hull__rect" x={h.x} y={h.y} width={h.w} height={h.h} rx={12} ry={12} />
+                    <text class="host-hull__label" x={h.x + 10} y={h.y + 16}>
+                      {h.host}
+                    </text>
+                  </g>
+                )}
+              </For>
+  
+              <For each={edgeIds()}>
+                {(id) => {
+                  const e = () => edges[id];
+                  const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
+                  const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
+                  const overlay = () => flowOverlays().get(id);
+                  const tooltip = () =>
+                    showFlow() && e() ? flowTooltip(formatRoute(e()!.from, e()!.to, nameOf), overlay()) : undefined;
+                  // V2-FE ticket Implement §12(b): the same ghosting as a
+                  // suspended node card, applied to any edge with a suspended
+                  // endpoint — either side, not just the one the edge points at.
+                  const dimmed = () => {
+                    const edge = e();
+                    if (!edge) return false;
+                    return nodes[edge.from.ref]?.lifecycle === 'SUSPENDED' || nodes[edge.to.ref]?.lifecycle === 'SUSPENDED';
+                  };
+                  return (
+                    <Show when={e() && from() && to()}>
+                      <EdgeLine
+                        role={e()!.role}
+                        fused={e()!.fused === true}
+                        x1={from()!.x}
+                        y1={from()!.y}
+                        x2={to()!.x}
+                        y2={to()!.y}
+                        flow={overlay()}
+                        reducedMotion={prefersReducedMotion()}
+                        tooltip={tooltip()}
+                        dimmed={dimmed()}
+                      />
                     </Show>
-                  </text>
-                </g>
-              )}
+                  );
+                }}
+              </For>
+  
+              <For each={nodeRefs()}>
+                {(ref) => {
+                  const rec = () => nodes[ref];
+                  const ln = () => layout().nodes.get(ref);
+                  const anchors = () => (rec() && ln() ? portAnchors(ln()!, rec()!.ports) : undefined);
+                  return (
+                    <For each={rec()?.ports ?? []}>
+                      {(p) => {
+                        const a = () => anchors()?.get(p.name);
+                        return (
+                          <Show when={a()}>
+                            <circle class="port-dot" data-dir={p.dir} cx={a()!.x} cy={a()!.y} r="3">
+                              <title>
+                                {p.name} ({p.dir})
+                              </title>
+                            </circle>
+                          </Show>
+                        );
+                      }}
+                    </For>
+                  );
+                }}
+              </For>
+            </svg>
+  
+            <For each={nodeRefs()}>
+              {(ref) => {
+                const rec = () => nodes[ref];
+                const ln = () => layout().nodes.get(ref);
+                return (
+                  <Show when={rec() && ln()}>
+                    <div
+                      class="node-card"
+                      classList={{
+                        'is-selected': selection() === ref,
+                        'is-suspended': rec()!.lifecycle === 'SUSPENDED',
+                        'is-erring': !!cellBadges().get(ref),
+                      }}
+                      style={{
+                        left: `${ln()!.x}px`,
+                        top: `${ln()!.y}px`,
+                        width: `${ln()!.w}px`,
+                        height: `${ln()!.h}px`,
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={selection() === ref}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelection(ref);
+                      }}
+                      onKeyDown={(e) => onCardKeyDown(e, ref)}
+                    >
+                      <div class="node-card__top">
+                        <span
+                          class="node-card__chip"
+                          data-color={rec()!.color ?? 'unknown'}
+                          title={rec()!.color ?? 'color unknown'}
+                        >
+                          {colorGlyph(rec()!.color)}
+                        </span>
+                        <span class="node-card__name">{rec()!.name ?? ref.slice(0, 8)}</span>
+                        {/* V2-FE ticket Implement §12(a): the delta on top of
+                            the pre-existing ghosted-card treatment
+                            (`.is-suspended` below, already there before this
+                            ticket) — a small explicit tag, since a dashed
+                            border + reduced opacity alone is easy to miss at a
+                            glance across a busy graph. */}
+                        <Show when={rec()!.lifecycle === 'SUSPENDED'}>
+                          <span class="node-card__tag" title="suspended">
+                            suspended
+                          </span>
+                        </Show>
+                        {/* V1B-FE ticket Solution direction §4: a pin toggle on
+                            every node card, next to the color chip.
+                            `stopPropagation` so pinning does not also select
+                            the card. Disabled while the graph is cold — same
+                            gate as selection's own `mode: 'descriptor'`
+                            (P6: subscribing raises attention and can un-park a
+                            cone; a graph the UI has called parked must not be
+                            woken by pinning it either). */}
+                        <button
+                          type="button"
+                          class="node-card__pin"
+                          classList={{ 'is-pinned': isPinned(ref) }}
+                          disabled={currentGraphCold()}
+                          title={
+                            currentGraphCold()
+                              ? 'Pinning is disabled while this graph is cold'
+                              : isPinned(ref)
+                                ? 'Unpin (stop observing when not selected)'
+                                : 'Pin (keep observing alongside the selection)'
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isPinned(ref)) unpin(ref);
+                            else pin(ref);
+                          }}
+                        >
+                          📌
+                        </button>
+                      </div>
+                      <div class="node-card__type" title={rec()!.typeFqn}>
+                        {shortType(rec()!.typeFqn)}
+                      </div>
+                      <Show when={rec()!.manifests.length}>
+                        <div class="node-card__badges">
+                          <For each={rec()!.manifests}>
+                            {(m) => (
+                              <span class="node-card__badge" title={m}>
+                                {manifestBadge(m)}
+                              </span>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
+                    </div>
+                  </Show>
+                );
+              }}
             </For>
-
-            <For each={hulls()}>
-              {(h) => (
-                <g class="host-hull">
-                  <rect class="host-hull__rect" x={h.x} y={h.y} width={h.w} height={h.h} rx={12} ry={12} />
-                  <text class="host-hull__label" x={h.x + 10} y={h.y + 16}>
-                    {h.host}
-                  </text>
-                </g>
-              )}
+  
+            {/* State toggle chips — a separate absolutely-positioned layer
+                (not nested inside `.node-card`, which clips overflow for its
+                own text-ellipsis rows) anchored just below each card. M1-FE
+                ticket "Correction for clarity": driven purely by received
+                `state.summary` events. V1B-FE ticket Solution direction §4:
+                generalized from "only the selected cell ever has one" to one
+                chip per entry in the observed set (pinned ∪ selection) — a
+                cell outside that set still shows no chip. A `snapshotOnly`
+                ref (409'd observe) never receives a `state.summary` (no
+                server-side sink exists for it), so it gets a visually
+                distinct "pinned · snapshot only" variant instead of the
+                cardinality/frontier/staleness line, which is summary-only
+                data it will never have. */}
+            <For each={nodeRefs()}>
+              {(ref) => {
+                const ln = () => layout().nodes.get(ref);
+                const summary = () => stateSummaries[ref];
+                const isSnapshotOnly = () => observed().has(ref) && snapshotOnly().has(ref);
+                return (
+                  <Show when={showState() && ln() && (summary() || isSnapshotOnly())}>
+                    <div
+                      class="node-state-chip"
+                      classList={{ 'node-state-chip--snapshot': isSnapshotOnly() }}
+                      data-mode={isSnapshotOnly() ? 'snapshot' : 'live'}
+                      style={{ left: `${ln()!.x}px`, top: `${ln()!.y + ln()!.h + 4}px`, width: `${ln()!.w}px` }}
+                      title={isSnapshotOnly() ? 'pinned · snapshot only (no live fold to observe)' : 'cardinality · frontier · staleness'}
+                    >
+                      <Show when={!isSnapshotOnly()} fallback="pinned · snapshot only">
+                        {summary()!.cardinality ?? '—'} ·{' '}
+                        {summary()!.frontier ? `${summary()!.frontier!.source.slice(0, 6)}·${summary()!.frontier!.counter}` : '—'} ·{' '}
+                        {summary()!.staleMs}ms
+                      </Show>
+                    </div>
+                  </Show>
+                );
+              }}
             </For>
-
+  
+            {/* Errors toggle: red badge with count, one per erring cell
+                (10-target-v3.md Errors toggle: "Red badges on erring cells";
+                M2-FE ticket Implement §2). A separate layer for the same
+                reason the state chip above is: `.node-card` clips via
+                `overflow: hidden`, and this badge deliberately pokes past the
+                card's top-right corner. */}
+            <For each={nodeRefs()}>
+              {(ref) => {
+                const ln = () => layout().nodes.get(ref);
+                const count = () => cellBadges().get(ref);
+                return (
+                  <Show when={ln() && count()}>
+                    <div
+                      class="node-error-badge"
+                      style={{ left: `${ln()!.x + ln()!.w}px`, top: `${ln()!.y}px` }}
+                      title={`${count()} error${count() === 1 ? '' : 's'} (dead letters + restarts)`}
+                    >
+                      {count()}
+                    </div>
+                  </Show>
+                );
+              }}
+            </For>
+  
+            {/* Errors toggle: amber "n parked" pill at the midpoint of every
+                edge whose target (ref, port) has parked traffic
+                (10-target-v3.md Errors toggle: "amber 'n parked' pills on
+                edges"; M2-FE ticket Implement §2). */}
+            <For each={edgeIds()}>
+              {(id) => {
+                const e = () => edges[id];
+                const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
+                const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
+                const count = () => edgeParked().get(id);
+                return (
+                  <Show when={e() && from() && to() && count()}>
+                    <div
+                      class="edge-parked-pill"
+                      style={{
+                        left: `${(from()!.x + to()!.x) / 2}px`,
+                        top: `${(from()!.y + to()!.y) / 2}px`,
+                      }}
+                      title={`${count()} parked`}
+                    >
+                      ▮ {count()} parked
+                    </div>
+                  </Show>
+                );
+              }}
+            </For>
+  
+            {/* Flow toggle: rate label ("N.n/s") or "fused" label at the edge
+                midpoint (10-target-v3.md Flow toggle: "rate labels at edge
+                midpoints; fused edges marked, never animated"; M3-FE ticket
+                Implement §2). Offset a few px above the parked pill's own
+                midpoint position so the two overlays stay legible together
+                when both toggles are on. */}
             <For each={edgeIds()}>
               {(id) => {
                 const e = () => edges[id];
                 const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
                 const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
                 const overlay = () => flowOverlays().get(id);
-                const tooltip = () =>
-                  showFlow() && e() ? flowTooltip(formatRoute(e()!.from, e()!.to, nameOf), overlay()) : undefined;
-                // V2-FE ticket Implement §12(b): the same ghosting as a
-                // suspended node card, applied to any edge with a suspended
-                // endpoint — either side, not just the one the edge points at.
-                const dimmed = () => {
-                  const edge = e();
-                  if (!edge) return false;
-                  return nodes[edge.from.ref]?.lifecycle === 'SUSPENDED' || nodes[edge.to.ref]?.lifecycle === 'SUSPENDED';
-                };
                 return (
-                  <Show when={e() && from() && to()}>
-                    <EdgeLine
-                      role={e()!.role}
-                      fused={e()!.fused === true}
-                      x1={from()!.x}
-                      y1={from()!.y}
-                      x2={to()!.x}
-                      y2={to()!.y}
-                      flow={overlay()}
-                      reducedMotion={prefersReducedMotion()}
-                      tooltip={tooltip()}
-                      dimmed={dimmed()}
-                    />
+                  <Show when={e() && from() && to() && overlay()}>
+                    <div
+                      class="edge-flow-label"
+                      classList={{ 'edge-flow-label--fused': overlay()!.kind === 'fused' }}
+                      style={{
+                        left: `${(from()!.x + to()!.x) / 2}px`,
+                        top: `${(from()!.y + to()!.y) / 2 - 11}px`,
+                      }}
+                    >
+                      {flowLabelText(overlay()!)}
+                    </div>
                   </Show>
                 );
               }}
             </For>
-
-            <For each={nodeRefs()}>
-              {(ref) => {
-                const rec = () => nodes[ref];
-                const ln = () => layout().nodes.get(ref);
-                const anchors = () => (rec() && ln() ? portAnchors(ln()!, rec()!.ports) : undefined);
-                return (
-                  <For each={rec()?.ports ?? []}>
-                    {(p) => {
-                      const a = () => anchors()?.get(p.name);
-                      return (
-                        <Show when={a()}>
-                          <circle class="port-dot" data-dir={p.dir} cx={a()!.x} cy={a()!.y} r="3">
-                            <title>
-                              {p.name} ({p.dir})
-                            </title>
-                          </circle>
-                        </Show>
-                      );
-                    }}
-                  </For>
-                );
-              }}
-            </For>
-          </svg>
-
-          <For each={nodeRefs()}>
-            {(ref) => {
-              const rec = () => nodes[ref];
-              const ln = () => layout().nodes.get(ref);
-              return (
-                <Show when={rec() && ln()}>
-                  <div
-                    class="node-card"
-                    classList={{
-                      'is-selected': selection() === ref,
-                      'is-suspended': rec()!.lifecycle === 'SUSPENDED',
-                      'is-erring': !!cellBadges().get(ref),
-                    }}
-                    style={{
-                      left: `${ln()!.x}px`,
-                      top: `${ln()!.y}px`,
-                      width: `${ln()!.w}px`,
-                      height: `${ln()!.h}px`,
-                    }}
-                    role="button"
-                    tabIndex={0}
-                    aria-pressed={selection() === ref}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelection(ref);
-                    }}
-                    onKeyDown={(e) => onCardKeyDown(e, ref)}
-                  >
-                    <div class="node-card__top">
-                      <span
-                        class="node-card__chip"
-                        data-color={rec()!.color ?? 'unknown'}
-                        title={rec()!.color ?? 'color unknown'}
-                      >
-                        {colorGlyph(rec()!.color)}
-                      </span>
-                      <span class="node-card__name">{rec()!.name ?? ref.slice(0, 8)}</span>
-                      {/* V2-FE ticket Implement §12(a): the delta on top of
-                          the pre-existing ghosted-card treatment
-                          (`.is-suspended` below, already there before this
-                          ticket) — a small explicit tag, since a dashed
-                          border + reduced opacity alone is easy to miss at a
-                          glance across a busy graph. */}
-                      <Show when={rec()!.lifecycle === 'SUSPENDED'}>
-                        <span class="node-card__tag" title="suspended">
-                          suspended
-                        </span>
-                      </Show>
-                      {/* V1B-FE ticket Solution direction §4: a pin toggle on
-                          every node card, next to the color chip.
-                          `stopPropagation` so pinning does not also select
-                          the card. Disabled while the graph is cold — same
-                          gate as selection's own `mode: 'descriptor'`
-                          (P6: subscribing raises attention and can un-park a
-                          cone; a graph the UI has called parked must not be
-                          woken by pinning it either). */}
-                      <button
-                        type="button"
-                        class="node-card__pin"
-                        classList={{ 'is-pinned': isPinned(ref) }}
-                        disabled={currentGraphCold()}
-                        title={
-                          currentGraphCold()
-                            ? 'Pinning is disabled while this graph is cold'
-                            : isPinned(ref)
-                              ? 'Unpin (stop observing when not selected)'
-                              : 'Pin (keep observing alongside the selection)'
-                        }
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isPinned(ref)) unpin(ref);
-                          else pin(ref);
-                        }}
-                      >
-                        📌
-                      </button>
-                    </div>
-                    <div class="node-card__type" title={rec()!.typeFqn}>
-                      {shortType(rec()!.typeFqn)}
-                    </div>
-                    <Show when={rec()!.manifests.length}>
-                      <div class="node-card__badges">
-                        <For each={rec()!.manifests}>
-                          {(m) => (
-                            <span class="node-card__badge" title={m}>
-                              {manifestBadge(m)}
-                            </span>
-                          )}
-                        </For>
-                      </div>
-                    </Show>
-                  </div>
-                </Show>
-              );
-            }}
-          </For>
-
-          {/* State toggle chips — a separate absolutely-positioned layer
-              (not nested inside `.node-card`, which clips overflow for its
-              own text-ellipsis rows) anchored just below each card. M1-FE
-              ticket "Correction for clarity": driven purely by received
-              `state.summary` events. V1B-FE ticket Solution direction §4:
-              generalized from "only the selected cell ever has one" to one
-              chip per entry in the observed set (pinned ∪ selection) — a
-              cell outside that set still shows no chip. A `snapshotOnly`
-              ref (409'd observe) never receives a `state.summary` (no
-              server-side sink exists for it), so it gets a visually
-              distinct "pinned · snapshot only" variant instead of the
-              cardinality/frontier/staleness line, which is summary-only
-              data it will never have. */}
-          <For each={nodeRefs()}>
-            {(ref) => {
-              const ln = () => layout().nodes.get(ref);
-              const summary = () => stateSummaries[ref];
-              const isSnapshotOnly = () => observed().has(ref) && snapshotOnly().has(ref);
-              return (
-                <Show when={showState() && ln() && (summary() || isSnapshotOnly())}>
-                  <div
-                    class="node-state-chip"
-                    classList={{ 'node-state-chip--snapshot': isSnapshotOnly() }}
-                    data-mode={isSnapshotOnly() ? 'snapshot' : 'live'}
-                    style={{ left: `${ln()!.x}px`, top: `${ln()!.y + ln()!.h + 4}px`, width: `${ln()!.w}px` }}
-                    title={isSnapshotOnly() ? 'pinned · snapshot only (no live fold to observe)' : 'cardinality · frontier · staleness'}
-                  >
-                    <Show when={!isSnapshotOnly()} fallback="pinned · snapshot only">
-                      {summary()!.cardinality ?? '—'} ·{' '}
-                      {summary()!.frontier ? `${summary()!.frontier!.source.slice(0, 6)}·${summary()!.frontier!.counter}` : '—'} ·{' '}
-                      {summary()!.staleMs}ms
-                    </Show>
-                  </div>
-                </Show>
-              );
-            }}
-          </For>
-
-          {/* Errors toggle: red badge with count, one per erring cell
-              (10-target-v3.md Errors toggle: "Red badges on erring cells";
-              M2-FE ticket Implement §2). A separate layer for the same
-              reason the state chip above is: `.node-card` clips via
-              `overflow: hidden`, and this badge deliberately pokes past the
-              card's top-right corner. */}
-          <For each={nodeRefs()}>
-            {(ref) => {
-              const ln = () => layout().nodes.get(ref);
-              const count = () => cellBadges().get(ref);
-              return (
-                <Show when={ln() && count()}>
-                  <div
-                    class="node-error-badge"
-                    style={{ left: `${ln()!.x + ln()!.w}px`, top: `${ln()!.y}px` }}
-                    title={`${count()} error${count() === 1 ? '' : 's'} (dead letters + restarts)`}
-                  >
-                    {count()}
-                  </div>
-                </Show>
-              );
-            }}
-          </For>
-
-          {/* Errors toggle: amber "n parked" pill at the midpoint of every
-              edge whose target (ref, port) has parked traffic
-              (10-target-v3.md Errors toggle: "amber 'n parked' pills on
-              edges"; M2-FE ticket Implement §2). */}
-          <For each={edgeIds()}>
-            {(id) => {
-              const e = () => edges[id];
-              const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
-              const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
-              const count = () => edgeParked().get(id);
-              return (
-                <Show when={e() && from() && to() && count()}>
-                  <div
-                    class="edge-parked-pill"
-                    style={{
-                      left: `${(from()!.x + to()!.x) / 2}px`,
-                      top: `${(from()!.y + to()!.y) / 2}px`,
-                    }}
-                    title={`${count()} parked`}
-                  >
-                    ▮ {count()} parked
-                  </div>
-                </Show>
-              );
-            }}
-          </For>
-
-          {/* Flow toggle: rate label ("N.n/s") or "fused" label at the edge
-              midpoint (10-target-v3.md Flow toggle: "rate labels at edge
-              midpoints; fused edges marked, never animated"; M3-FE ticket
-              Implement §2). Offset a few px above the parked pill's own
-              midpoint position so the two overlays stay legible together
-              when both toggles are on. */}
-          <For each={edgeIds()}>
-            {(id) => {
-              const e = () => edges[id];
-              const from = () => (e() ? anchorOf(e()!.from.ref, e()!.from.port, 'OUT') : undefined);
-              const to = () => (e() ? anchorOf(e()!.to.ref, e()!.to.port, 'IN') : undefined);
-              const overlay = () => flowOverlays().get(id);
-              return (
-                <Show when={e() && from() && to() && overlay()}>
-                  <div
-                    class="edge-flow-label"
-                    classList={{ 'edge-flow-label--fused': overlay()!.kind === 'fused' }}
-                    style={{
-                      left: `${(from()!.x + to()!.x) / 2}px`,
-                      top: `${(from()!.y + to()!.y) / 2 - 11}px`,
-                    }}
-                  >
-                    {flowLabelText(overlay()!)}
-                  </div>
-                </Show>
-              );
-            }}
-          </For>
+          </div>
         </div>
+        {/* FE-CANVAS ticket Solution direction §5: rendered inside `.canvas`
+            but a sibling of `.canvas__pan`, not a descendant of it, so it
+            never scales with the zoom transform. */}
+        <ZoomControls />
       </Show>
     </div>
   );
