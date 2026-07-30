@@ -20,6 +20,10 @@ class ScenarioParseTest {
         "corpus/21-propagation/21-PIPE-01.yaml",
         "corpus/22-consistency/22-GF-DIAMOND-01.yaml",
         "corpus/controls/CTL-GOLDEN-01.yaml",
+        // D-CONCORD (B2): the parser is lenient (unknown keys ignored), so a
+        // round-trip is the only typo catch for a newly authored file.
+        "corpus/24-data-cells/24-OP-COMBINE-02.yaml",
+        "corpus/24-data-cells/24-REPLAY-01.yaml",
     )
 
     @TestFactory

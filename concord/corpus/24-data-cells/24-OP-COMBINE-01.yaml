@@ -1,15 +1,18 @@
-# Dispute note (W3-2, not a full DISPUTES.md entry — see cell-catalog.md
-# kernel-binding-status gap 1 / BatchOracle.kt): the kernel's `combine-latest
-# fn:sum` binding (`ScalarSumCombineCell`) is order-independent AT QUIESCENCE
-# but is NOT wave-aligned — an observer can transiently see a torn (partial)
-# sum mid-wave. So this scenario asserts `final-view` ONLY; a stream-level
-# check (`observations-all-satisfy`/glitch-freedom) awaits a genuine
-# wave-aligned scalar combine, which does not exist in the kernel today (the
-# same gap `22-GF-DIAMOND-01` documents for the fork-join case). `covers:`
-# names the general accepted-op convergence property (21-PROP-01) — chapter 24
-# has no EARS id dedicated to `combine-latest` itself.
+# This scenario drives the PLAIN (non-`glitch-free`) scalar `combine-latest`:
+# two genuinely independent inlets summed into one value. Its binding
+# (`ScalarSumCombineCell`) folds each arm's arrival straight into the running
+# sum, so it is order-independent at quiescence — `final-view` holds under every
+# schedule — but deliberately NOT wave-aligned: across a *fork* an observer can
+# transiently fold a torn intermediate sum, which is what the `CTL-GF-01`
+# control pins. That is now documented semantics of this form, not a kernel gap:
+# the wave-aligned form exists (D-COMBINE's `CoalescingCombineCell`), is selected
+# by `glitch-free: true`, and carries the positive stream-level assertion
+# (`observations-all-satisfy(even)` over a real fork-join diamond) in the
+# companion scenario **24-OP-COMBINE-02**. `covers:` names the general accepted-op
+# convergence property (21-PROP-01) — chapter 24 has no EARS id dedicated to
+# `combine-latest` itself.
 id: 24-OP-COMBINE-01
-title: Combine-latest sums the latest value of each inlet (final-view only — not wave-aligned)
+title: Combine-latest sums the latest value of each independent inlet (the plain, non-wave-aligned form)
 covers: [21-PROP-01]
 profile: core
 kind: example

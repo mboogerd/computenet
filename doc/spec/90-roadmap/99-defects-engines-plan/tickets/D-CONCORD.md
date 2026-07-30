@@ -1,6 +1,6 @@
 # D-CONCORD — corpus closure for the two merged defect fixes: the coalescing combine bound and positively glitch-free-asserted, `CTL-GF-01` retired as a gap sentinel, `24-REPLAY-01` authored on the dur profile, both DISPUTES entries resolved honestly
 
-**Status**: Specified — not-started
+**Status**: Implemented
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5, fresh session
 **Wave:** B2 · **Branches:** ticket/d-concord
 

@@ -1,0 +1,52 @@
+# Concord corpus scenario (D-CONCORD, wave B2). The positive scalar glitch-free
+# assertion the `24-OP-COMBINE-01` / `CTL-GF-01` dispute promised to restore
+# "once a wave-coalescing scalar combine lands in the kernel" (DISPUTES.md) — it
+# landed with D-COMBINE (`civictech.cell.data.op.CoalescingCombineCell`).
+#
+# The shape is the genuine fork-join DIAMOND, not two independent sources: over
+# independent sources every wave is single-arm and a glitch-free assertion would
+# be vacuous. Here one counter source forks through two identity arms into the
+# combine, so each increment reaches it as TWO contributions of one wave — the
+# exact shape that tears under the plain (non-wave-aligned) form, which
+# `CTL-GF-01` pins as a control.
+#
+# `glitch-free: true` is what selects the wave-coalescing binding (scenario.md:
+# "request wave-aligned semantics on a fan-in cell"). That cell is
+# version-buffered: it buffers each wave's per-arm contributions and emits their
+# NET as one delta once the wave's expected-edge set is complete, so the observer
+# folds +2 per increment and never the odd intermediate. Both neutral arms land
+# on its single unrestricted `inlet` (as `union`/`quorum-set` arms do) — still one
+# link each, hence one expected edge each in the completeness set.
+#
+# `incremental-equals-batch` is deliberately absent: the batch oracle folds
+# `combine-latest` as the sum of its inlets' folds, which over a FORK is twice the
+# source's accepted-op fold (100, not 50). The golden below states that directly.
+id: 24-OP-COMBINE-02
+title: A wave-coalescing scalar combine over a fork-join diamond never exposes a torn sum
+covers: [22-GF-01]
+profile: core
+kind: example
+narrative:
+  given: one counter source forked through two identity arms into a wave-aligned summing combine, observed through a value view
+  when: the source is incremented repeatedly
+  then: every observation on the view is an even running sum — one coalesced delta per completed wave, never a
+    half-delivered (odd) intermediate — and at quiescence the view equals twice the source's total
+graph:
+  cells:
+    - {id: n, type: counter-source}
+    - {id: l, type: map, fn: identity}
+    - {id: r, type: map, fn: identity}
+    - {id: s, type: combine-latest, fn: sum, glitch-free: true}
+    - {id: v, type: value-view}
+  links:
+    - {from: n, to: l}
+    - {from: n, to: r}
+    - {from: l, to: s}
+    - {from: r, to: s}
+    - {from: s, to: v}
+script:
+  - {type: apply, on: n, op: increment, times: 50}
+checks:
+  - {type: final-view, view: v, equals: 100}
+  - {type: observations-all-satisfy, view: v, fn: even}
+  - {type: no-dead-letters}

@@ -68,23 +68,29 @@ class IdentityCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cel
 }
 
 /**
- * Binds the catalog `combine-latest` operator with `fn: sum` over two **scalar
- * counter** arms — the shape of the glitch-free diamond (22-GF-DIAMOND-01).
+ * Binds the **plain** (non-`glitch-free`) catalog `combine-latest` operator with
+ * `fn: sum` over two **scalar counter** arms — two independent inlets summed into
+ * one value (`24-OP-COMBINE-01`).
  *
  * The kernel's [civictech.cell.data.CombineLatestCell] is a *keyed-map* outer
  * combine (`MapDelta<K, …>`), so it cannot combine two `CounterDelta` streams;
  * this adapter holds each arm's running total and emits the *change in the sum*
  * as a `CounterDelta`, which a `value-view` folds back to the scalar sum. Sum of
  * all emitted deltas equals `left + right` regardless of arrival order, so the
- * final value is order-independent (final-view only — see the report).
+ * final value is order-independent — `final-view` holds under any schedule.
  *
- * NOTE / gap: this is **not** wave-aligned. `glitch-free: true` now spawns a
- * downstream GlitchFreeCell (W3-4 driver wiring), but that does not rescue the
- * scalar case: each arm emits its own CounterDelta under a distinct source wave
- * and GlitchFreeCell replays per-invocation, so intermediate (odd) sums are still
- * observable mid-wave — `observations-all-satisfy(even)` is NOT guaranteed, only
- * `final-view` is. A genuine wave-coalescing scalar combine (one delta per
- * completed wave) is a §5 kernel gap.
+ * Deliberately **not** wave-aligned, and no longer a gap: it folds each arm's
+ * arrival straight into the running sum, so the two arms of one *forked* source
+ * wave arrive as distinct waves and a scalar observer can fold the torn
+ * intermediate sum (`CTL-GF-01`, the control that pins exactly this). Wrapping it
+ * in a downstream `GlitchFreeCell` cannot rescue that — the per-arm emissions are
+ * two *complete* one-edge waves, which the wrapper faithfully replays. A scenario
+ * that wants wave-aligned scalar semantics asks for them with `glitch-free: true`,
+ * which binds the kernel's `CoalescingCombineCell` instead (version-buffered, one
+ * delta per completed wave — D-COMBINE, `24-OP-COMBINE-02`, `[22-GF-01]`). This
+ * form is retained because that one is a *fork-join* operator: its completeness
+ * set is every open Consume inlink, so it aligns arms of one source, whereas this
+ * one combines genuinely independent inlets.
  */
 class ScalarSumCombineCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Stateful {
     val left = registerPort("left", FanInlet.create<Propagate<CounterDelta>>())

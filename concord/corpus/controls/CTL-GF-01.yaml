@@ -1,19 +1,30 @@
-# Concord CONTROL scenario (W3-3). kind: control — it MUST fail; the runner
-# asserts its failure (Concord P7 — the harness must be able to fail).
-# Same fork-join diamond as 22-GF-DIAMOND-01, but asserting the real
-# glitch-freedom invariant (observations-all-satisfy even) against the driver's
-# ScalarSumCombineCell binding, which cell-catalog.md documents as NOT
-# wave-aligned (kernel gap 1) — a genuinely torn (odd) intermediate sum is
-# expected to surface on at least one run of the sweep.
+# Concord CONTROL scenario (W3-3; retired as a gap sentinel and reframed by
+# D-CONCORD, wave B2). kind: control — it MUST fail; the runner asserts its
+# failure (Concord P7 — the harness must be able to fail).
+#
+# The wrongness is in the EXPECTATION, exactly as CTL-GOLDEN-01's is in its
+# golden: the graph asks for the PLAIN scalar `combine-latest` — the form
+# `cell-catalog.md` documents as order-independent at quiescence but NOT
+# wave-aligned — and then asserts wave-aligned semantics of it
+# (observations-all-satisfy even) over a fork-join diamond, where a genuinely
+# torn (odd) intermediate sum surfaces on at least one run of the sweep.
+#
+# This is no longer a KERNEL-GAP sentinel. A wave-coalescing scalar combine
+# exists (D-COMBINE's `CoalescingCombineCell`); a scenario asks for it with
+# `glitch-free: true`, and `24-OP-COMBINE-02` asserts this very invariant
+# positively over the same diamond. What this control now pins is that asking
+# for the plain form and expecting the aligned one really does fail — i.e. that
+# the two forms are observably different, and that the harness catches it.
 id: CTL-GF-01
-title: Control — even-sum invariant asserted over a deliberately non-glitch-free combine
+title: Control — wave-aligned semantics asserted of the plain, non-wave-aligned combine
 covers: [22-GF-01]
 profile: core
 kind: control
 narrative:
-  given: one counter source forked through two identity arms into a summing combine that is NOT wave-aligned
+  given: one counter source forked through two identity arms into the plain summing combine, which is documented as NOT wave-aligned
   when: the source is incremented repeatedly
-  then: an observer sees a torn (odd) intermediate sum on some run — the deliberate even-only assertion fails, and the runner asserts this control fails
+  then: an observer sees a torn (odd) intermediate sum on some run — the deliberately mismatched even-only assertion
+    fails, and the runner asserts this control fails (the aligned form, asked for with glitch-free, is 24-OP-COMBINE-02)
 graph:
   cells:
     - {id: n, type: counter-source}

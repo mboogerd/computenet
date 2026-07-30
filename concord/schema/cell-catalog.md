@@ -38,7 +38,7 @@ no ops (they react to their inlets).
 | `semi-join` | `fn` (`key-of`) | Emits left elements whose key is present on the right. |
 | `lookup-join` | `fn` (`key-of`) | Enriches a stream with values looked up from a keyed side. |
 | `group-by` | `fn` (`key-of`), `agg` | Partitions elements by key and folds each group with an aggregator (`agg` = `count`\|`sum`\|`min`\|`max`, default `count`; non-count aggregators fold the elements' value components). Observed through a `count-view`/`map-view`. |
-| `combine-latest` | `fn`, `glitch-free?` | Combines the latest value of each inlet with a pure function. **Only `fn: sum` is bound, final-view only** — see note 1. |
+| `combine-latest` | `fn`, `glitch-free?` | Combines the latest value of each inlet with a pure function. **Only `fn: sum` is bound**, in two forms: plain — independent inlets, order-independent at quiescence but not wave-aligned; `glitch-free: true` — a wave-coalescing fork-join combine emitting one delta per completed wave. See note 1. |
 | `count` | — | Distinct-element count of a set stream; emits a counter delta. |
 | `presence-count` | — | Count of currently-present elements (presence, not distinct history). |
 | `quorum-set` | `k` | **Fan-in operator** over set streams (kernel `QuorumSetCell`): one link per source; an element is emitted once `k` of the `n` live source links assert it. `k` optional, default `n` (all sources ⇒ an intersection). k-of-n admission observable (24-OP-QUORUM-01). |
@@ -76,8 +76,8 @@ The cycle-closing edge names its ports explicitly: `{from: fb, to: fb, outlet: l
 
 ## Kernel-binding status (W3-0 — the driver is catalog-complete)
 
-The kernel driver (`civictech.concord.driver.kernel`) binds every catalog id below
-except the one honest gap in bold. Sources bind to `civictech.cell.data` cells;
+The kernel driver (`civictech.concord.driver.kernel`) binds every catalog id below.
+Sources bind to `civictech.cell.data` cells;
 views and the two adapters (`map fn:identity`, scalar `combine-latest`) and the
 scalar/list view folds and the `feedback` head live in the driver's
 `KernelAdapters`.
@@ -94,7 +94,9 @@ scalar/list view folds and the `feedback` head live in the driver's
 (pass-through, works for set *and* scalar arms); `map fn:<other>`/`flatmap`→
 `FlatMapSetCell` (singleton / general); `join`/`lookup-join`→`JoinSetCell` (over set
 streams of pairs, with different `combine`); `semi-join`→`SemiJoinCell`;
-`combine-latest fn:sum`→`ScalarSumCombineCell`; `value-view`→a scalar `View` folding
+plain `combine-latest fn:sum`→`ScalarSumCombineCell` (the wave-aligned form,
+`combine-latest fn:sum, glitch-free:true`, binds **directly** to the kernel's
+`CoalescingCombineCell` — see note 1); `value-view`→a scalar `View` folding
 both `CounterDelta` and `PnCounterDelta`; `list-view`→a list `View`; `feedback`/
 `feedback-undamped`→`FeedbackCell` (a `CycleHead`); `nature-gate`→
 `NatureGatedSinkCell` (a hand-registered `ContractRegistry` descriptor projects a
@@ -111,15 +113,34 @@ oracle), not the kernel's map-stream `JoinCell`/`LookupJoinCell` — those are k
 map joins with a different element shape, and the corpus's join operators consume
 set sources.
 
-### The one honest gap (§5 — corpus disputes)
+### Binding notes (no gap remains here)
 
-1. **No wave-aligned scalar `combine-latest`.** `ScalarSumCombineCell` is
-   order-independent at quiescence (`final-view` holds) but **not** wave-aligned:
-   intermediate mid-wave sums may be observed, so `observations-all-satisfy(even)`
-   is NOT guaranteed for a nested diamond. A genuine glitch-free scalar combine
-   does not exist in the kernel. `22-GF-NESTED-01` (product/even invariant over the
-   stream) is a kernel gap; treat it as a dispute. `combine-latest` with any `fn`
-   other than `sum` throws `UnsupportedCatalogBinding`.
+1. **The scalar `combine-latest` has two bound forms**, selected by the existing
+   `glitch-free` descriptor param — the driver binds both, and the catalog id and
+   its params are unchanged.
+   - **Plain** (`glitch-free` absent/false) → `ScalarSumCombineCell`: it folds each
+     arm's arrival straight into the running sum, so it is order-independent at
+     quiescence (`final-view` holds) but deliberately **not** wave-aligned —
+     `observations-all-satisfy(even)` is not guaranteed across a fork, which is what
+     the `CTL-GF-01` control pins. This is the form that combines two *independent*
+     inlets (`24-OP-COMBINE-01`).
+   - **`glitch-free: true`** → the kernel's `CoalescingCombineCell` (D-COMBINE):
+     version-buffered, emitting exactly one delta per **completed** input wave, so
+     no torn intermediate sum is observable. `24-OP-COMBINE-02` asserts that
+     positively (`observations-all-satisfy(even)` over a real fork-join diamond,
+     `[22-GF-01]`). Like every wave-aligned fan-in its completeness set is its open
+     inlinks, so it belongs on the arms of one forked source, not on independent
+     ones. Both neutral arms resolve onto its single unrestricted `inlet` (as
+     `union`/`quorum-set` arms do), each still its own link and its own expected
+     edge.
+
+   `combine-latest` with any `fn` other than `sum` throws
+   `UnsupportedCatalogBinding`.
+
+   *Resolved (D-CONCORD, wave B2): this entry used to read "No wave-aligned scalar
+   `combine-latest`" — the one remaining glitch-free `kernel-gap`. The kernel
+   capability landed (D-COMBINE), the driver binds it, and the positive assertion
+   is authored; see `concord/corpus/DISPUTES.md`.*
 
 `window` was resolved (R2-B, `24-OP-WINDOW-01`/`-02`): the dispute filed it as a
 `kernel-gap`, but spec 24 §Grouped aggregation names the exact composition —
