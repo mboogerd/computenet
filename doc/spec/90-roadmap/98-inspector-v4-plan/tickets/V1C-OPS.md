@@ -41,6 +41,46 @@ The four you will lean on hardest, in one line each:
 `V1C-KERNEL` also fixed the shape of the interface. If your work forces a
 change to it, that is a **cross-ticket event** — see Report on completion.
 
+### What C8 corrected in this ticket, before you design anything
+
+`V1C-KERNEL` merged at `4f633d2` with a `StatePage` **wider than the sketch this
+ticket was written against**. Three sentences below are now wrong, and one of
+them would push you into a worse design if you followed it.
+
+- **`StatePage` has an `attributes: Map<String, Serializable>` field.** So
+  Decision D's scalar riders — `JoinSetCell`'s and `SemiJoinCell`'s mint
+  counter, and anything else that is cell-level rather than per-entry — go
+  **there**, on every page, rather than being smuggled into entries. `SetCell`
+  sets the precedent with its tag `counter`, and `V1C-CELLS` puts `ShardCell`'s
+  `interest`/`assignedEpoch` there. Attributes do not count against `limit`,
+  which is the property Decision D asks for and could not get from an entry.
+  **The instruction "Do not invent a third `StatePage` field for it" stands** —
+  you still add no field; you use the one that shipped.
+- **Decision A's sub-state label stays inside the entry.** `attributes` is
+  keyed cell-level state, not a per-entry discriminator, so it is the wrong
+  home for `"left"`/`"right"`/`"ledger"`. Everything this ticket says about
+  labelling entries is unchanged; only the *rider* half moves.
+- **`StatePage` also has `caveats: Set<ReadCaveat>`**, with arms
+  `STALE_FRONTIER` and `POSITIONAL_CURSOR`. Two consequences. A composite whose
+  frontier is expensive to recompute per page may stamp it exactly on the first
+  and last page only and declare `STALE_FRONTIER` in between — that is what
+  `SetCell` does, and Decision 5's stability check survives it because a
+  `TagFrontier` is monotone, so equal endpoints prove every intermediate stamp
+  equal. And if any sub-state of yours ends up positionally cursored, the page
+  must say `POSITIONAL_CURSOR` rather than only saying it in KDoc.
+- **`BoundedStateful` carries `supportsSince`/`supportsScope`, both defaulting
+  to `false`,** and `ManagedHost.readState` refuses a `since`/`scope` a cell has
+  not declared, on the caller's thread. A composite that cannot honour either
+  simply does not override them — you write no check for it.
+
+One correction to Decision 5 as restated above: the across-page claim is now
+"equal endpoint frontiers ⇒ the union is exactly a snapshot **for a family in
+which every state change mints or absorbs a tag**". The check detects tag
+*gains* and only tag gains. If one of your composites can change state without
+minting a tag — an operator whose sub-state is retracted rather than tombstoned
+is the case to look for — its `readBounded` KDoc must say so, in the terms
+`SetCell`'s does.
+
 ### Your place in wave 9
 
 Wave 9 branches from `main` after wave 8 merged, and runs three tickets
@@ -104,7 +144,8 @@ three distinct defects follow, all of which are silent:
    so `V1C-KERNEL`'s per-page consistency holds — a page that mixes "the tail
    of `leftState`" with "the head of `ledger`" is only meaningful if the
    consumer can tell which is which. Today's `StatePage.entries: List<Serializable>`
-   has no place to say so.
+   has no place to say so. (Nor does the shipped `attributes` map, which is
+   cell-level; Decision A resolves this inside the entry.)
 
 There is a fourth defect that only shows up when you read the backing
 structures rather than the snapshot shapes: **insertion order is not a stable
@@ -145,7 +186,9 @@ self-describing and a later encoder change cannot silently renumber it.
 
 `StatePage.entries` is `List<Serializable>`; the label lives inside the entry
 you construct. Do not change `StatePage` for this — `V1C-CELLS` runs
-concurrently against the same type.
+concurrently against the same type. (The shipped `StatePage.attributes` is
+*not* the home for this label: it is cell-level, not per-entry. See "What C8
+corrected in this ticket".)
 
 ### Decision B — the cursor is lexicographic `(subStateOrdinal, intraStateKey)`
 
@@ -207,6 +250,11 @@ rule the design note states for `ShardCell`'s `interest`/`assignedEpoch`
 (`20-wave-neutral-read-design.md:643-646`). A consumer that abandons a walk
 after page 1 or resumes from a mid-walk cursor must still see it. Riders do not
 count against `limit`.
+
+**Riders go in `StatePage.attributes`** (C8): the shipped page has a keyed
+cell-level map for exactly this, so a rider is neither an entry nor a new field,
+and "does not count against `limit`" falls out for free instead of needing an
+accounting rule.
 
 ### Decision E — the walk's content domain is exactly `snapshot()`'s
 

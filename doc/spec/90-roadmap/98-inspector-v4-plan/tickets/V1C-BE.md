@@ -30,26 +30,100 @@ before you:
 - **`V1C-CELLS`** and **`V1C-OPS`** (wave 9) implemented `BoundedStateful`
   across the data-cell and operator families.
 
-The sketch `V1C-KERNEL` was written against, restated here so you know what to
-look for (**verify each against the merged code before you use it**):
+The **shipped** interface, transcribed from `kernel/src/main/kotlin/civictech/cell/BoundedRead.kt`
+at merge `4f633d2` by the C8 checkpoint. This replaces the sketch this ticket
+was originally written against; the four differences that change your work are
+called out under "What C8 corrected" below. Read `BoundedRead.kt`'s KDoc in
+full anyway — the contract sentences you put on the wire are written there.
 
 ```kotlin
-interface BoundedStateful : Stateful { fun readBounded(request: StateRead): StatePage }
+interface BoundedStateful : Stateful {
+    fun readBounded(request: StateRead): StatePage        // bare page; the result arms are the host's
+    val supportsSince: Boolean get() = false              // constant for the cell's lifetime
+    val supportsScope: Boolean get() = false
+}
 
 data class StateRead(
     val cursor: Cursor? = null, val limit: Int = 200, val byteBudget: Int = 50_000,
     val scope: Interest? = null, val since: TagFrontier? = null, val allowWholeCopy: Boolean = false,
 )
 data class StatePage(
-    val entries: List<Serializable>, val next: Cursor?, val frontier: TagFrontier?,
-    val provenance: Provenance, val exclusivesElided: Int,
+    val entries: List<Serializable>,                      // may contain ExclusiveEntry descriptors
+    val next: Cursor? = null,
+    val frontier: TagFrontier? = null,
+    val provenance: Provenance = Provenance.LIVE,
+    val exclusivesElided: Int = 0,
+    val attributes: Map<String, Serializable> = emptyMap(),
+    val caveats: Set<ReadCaveat> = emptySet(),
 )
 @JvmInline value class Cursor(val token: Serializable)
 enum class Provenance { LIVE, LIVE_SUSPENDED, CHECKPOINT }
-// StateReadResult = Page(StatePage) | Unbounded(Serializable) | Unavailable(Reason)
+enum class ReadCaveat { STALE_FRONTIER, POSITIONAL_CURSOR }
+data class ExclusiveEntry(
+    val key: Serializable?, val typeName: String, val identity: Int, val disposition: Disposition,
+) : Serializable { enum class Disposition { HELD, DISCHARGED, UNKNOWN } }
+
+sealed interface StateReadResult {
+    data class Page(val page: StatePage) : StateReadResult
+    data class Unbounded(val state: Serializable, val provenance: Provenance = Provenance.LIVE) : StateReadResult
+    data class Unavailable(val reason: Reason) : StateReadResult
+    enum class Reason {
+        NOT_HOSTED, NOT_STATEFUL, NOT_BOUNDED, CHECKPOINT_NOT_BOUNDED, MIGRATING,
+        SINCE_UNSUPPORTED, SCOPE_UNSUPPORTED, SCHEDULER_TERMINATED, READ_FAILED,
+    }
+}
 
 fun ManagedHost.readState(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult>
 ```
+
+### What C8 corrected in this ticket
+
+Four shipped facts differ from the sketch above the way this ticket was
+originally written, and one of them changes a semantic you were told to put on
+the wire. Treat these as ticket text, not as background.
+
+1. **`walkStable` cannot be computed by comparing every page against page 1.**
+   The shipped `SetCell` stamps `frontier` **exactly on the first and last page
+   of a walk only**; an intermediate page carries the *opening* frontier and
+   declares `ReadCaveat.STALE_FRONTIER`. A per-page equality test would
+   therefore report `true` on every intermediate page of a walk whose fold had
+   already moved, and only flip to `false` on the closing page — the opposite of
+   an honest verdict. **Compute `walkStable` as: `null` while any page so far
+   carried `STALE_FRONTIER` and the walk has not closed; `true` when the closing
+   page's frontier equals page 1's; `false` when it does not.** A `TagFrontier`
+   is monotone, so equal endpoints prove every intermediate stamp equal too —
+   the verdict is complete, it is just not available before the walk closes. Say
+   so in the field's own wire comment, and do not weaken the `false` case: an
+   advanced frontier is still the documented smear.
+2. **`walkStable: true` is necessary, not sufficient, for the OR-set family.**
+   `StatePage`'s KDoc now says the check detects tag *gains* and only tag gains.
+   An OR-set observed-remove mints no tag, so a mid-walk removal of an
+   already-paged element leaves both endpoint stamps equal while the union still
+   names that element present. Your wire comment for `true` must not promise
+   more than the kernel does — "no tag was gained during this walk", not "this
+   is certainly a snapshot".
+3. **`StatePage.attributes` exists**, and carries cell-level state that is not a
+   per-entry row and rides *every* page — `SetCell`'s tag `counter`, and (from
+   `V1C-CELLS`) `ShardCell`'s `interest`/`assignedEpoch`. Decide and state
+   whether `page` surfaces it or drops it; dropping it silently is not an
+   option, because a client reading page 4 of a shard walk would then be unable
+   to tell whether the walk straddled a repartition.
+4. **`Reason` has nine arms, not the four this ticket assumed.** Your
+   `unreadable` vocabulary must map `SCHEDULER_TERMINATED` and `READ_FAILED`
+   explicitly rather than letting them fall through to `"unknown"` — both are
+   real, reachable answers about a live local host, which is exactly what
+   `"unknown"` was reserved *not* to mean. `NOT_BOUNDED`,
+   `CHECKPOINT_NOT_BOUNDED`, `SINCE_UNSUPPORTED` and `SCOPE_UNSUPPORTED` are
+   unreachable for you as long as you pass `allowWholeCopy = true` and neither
+   `since` nor `scope`; say that in the report rather than mapping them blind.
+
+Two smaller confirmations, so you do not have to derive them: Decision 7's
+drained arm shipped as **`Unbounded(blob, Provenance.CHECKPOINT)`** under
+`allowWholeCopy` (so a drained cell answers `kind: "snapshot"`, never
+`kind: "page"`, and the acceptance criterion at the end of this ticket resolves
+to the `"snapshot"` branch); and **`provenance` is minted by the host, not the
+cell** — `readState` overwrites a cell's `LIVE` with `LIVE_SUSPENDED` when the
+ref is parked, and the cell never sees `CHECKPOINT` at all.
 
 `readState` is modelled line-for-line on `ManagedHost.snapshotOf`
 (`kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt:1201-1263`,

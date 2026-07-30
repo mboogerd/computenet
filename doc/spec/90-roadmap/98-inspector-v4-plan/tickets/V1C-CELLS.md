@@ -52,6 +52,60 @@ anything, read what actually shipped:
   one interface six different ways is a worse outcome than six cells that all
   look like `SetCell`.
 
+### What C8 resolved for you, before you go looking
+
+`V1C-KERNEL` merged at `4f633d2`. It shipped four things this ticket was written
+without, three of which close questions this ticket explicitly left open and told
+you to raise as interface-shape findings. **They are answered; do not re-raise
+them, and do not invent a second mechanism beside them.**
+
+1. **A cell says "I cannot honour `since`/`scope`" by declaring it, and the host
+   refuses the request before anything is submitted.** `BoundedStateful` carries
+   `val supportsSince: Boolean get() = false` and `val supportsScope: Boolean get() = false`.
+   `ManagedHost.readState` reads them **on the caller's thread** and answers
+   `Unavailable(SINCE_UNSUPPORTED)` / `Unavailable(SCOPE_UNSUPPORTED)` without a
+   scheduler round trip; `Interest.Total` is not a narrowing and is never
+   refused. This is the mechanism this ticket's "decide how the shipped
+   `BoundedRead.kt` lets a cell say so" asked for, and it answers the `scope`
+   half by the same rule. So: `MapCell`, `ListCell`, `WatermarkCell` and
+   `InstanceSet` **override neither** — the safe default refuses for them, and
+   your `readBounded` never has to check. `KeyedSetCell` and `ShardCell`
+   override `supportsSince = true`; `ShardCell` also `supportsScope = true`
+   (it already scopes a pull with its `keyFn`), and `MapCell`/`KeyedSetCell`
+   override `supportsScope` only if you can apply `Interest.admits(key)` without
+   inventing a key semantics the cell does not have. **Both properties must be
+   constants for the cell's lifetime** — they are read off-thread.
+2. **`StatePage.attributes: Map<String, Serializable>` exists**, and is where
+   cell-level state that is not a per-entry row goes. This answers this ticket's
+   "did `StatePage` carry them naturally or did you have to encode them into
+   entries" for both open cases: `ShardCell`'s `interest`/`assignedEpoch` and
+   `KeyedSetCell`'s `tagCounter` ride `attributes` on **every** page, not
+   inside entries and not only on page 1. `SetCell` sets the precedent with its
+   tag `counter`. Attributes do not count against `limit`.
+3. **A positional cursor declares itself in the types, not only in KDoc.**
+   `ReadCaveat.POSITIONAL_CURSOR` shipped for exactly this, and `StatePage`
+   carries `caveats: Set<ReadCaveat>`. `ListCell` must set it on **every** page
+   it returns. Keep the KDoc sentence this ticket specifies as well — the
+   caveat is what a machine reads, the KDoc is what a maintainer reads.
+4. **`readBounded` returns a bare `StatePage`.** `Unavailable` and `Unbounded`
+   are minted by `ManagedHost.readState`, never by a cell — so where this ticket
+   says a non-implementing cell "answers `Unavailable(NOT_BOUNDED)`", read that
+   as *the host answers that on its behalf*. A cell that cannot produce a page
+   throws or returns an empty one; a throw is caught and reported as
+   `Unavailable(READ_FAILED)`.
+
+One inherited-decision correction, from the same audit. `StatePage`'s
+across-page contract now reads "equal endpoint frontiers ⇒ the union is exactly
+a snapshot **for a family in which every state change mints or absorbs a tag**",
+because the check detects tag *gains* and only tag gains. `SetCell`'s
+observed-remove mints no tag, so a mid-walk removal is invisible to it. Two
+consequences for you: the frontier need only be **exact on the first and last
+page** of a walk (an intermediate page may carry the opening stamp plus
+`ReadCaveat.STALE_FRONTIER`, which is what `SetCell` does, precisely because a
+per-page exact frontier costs an O(n) rescan per page and `ShardCell`'s
+`currentFrontier` has the same shape); and any cell of yours whose mutations do
+not all mint tags must say so on its own `readBounded`, in `SetCell`'s terms.
+
 ### The parallel tickets, and the file split that keeps you out of each other's way
 
 Wave 9 runs three tickets concurrently from the post-wave-8 `main`:

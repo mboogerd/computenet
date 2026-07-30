@@ -284,7 +284,7 @@ and every wave-9 and wave-10 ticket is written against its interface.
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| V1C-KERNEL | `BoundedStateful` + `ManagedHost.readState` + provenance arms + `SetCell` reference impl | opus | fresh | ticket/v1c-kernel | opus | not-started |
+| V1C-KERNEL | `BoundedStateful` + `ManagedHost.readState` + provenance arms + `SetCell` reference impl | opus | fresh | ticket/v1c-kernel | opus | merged |
 
 **Checkpoint C8 — verification plus a kernel-invariant audit**, in the shape C4
 used for `V2-KERNEL`. Before anything merges, audit the diff for: P2 (no
@@ -298,6 +298,39 @@ interface. If the shipped signatures differ, the evaluator edits those three
 ticket files to match the shipped shape before wave 9 is dispatched, and says so
 in the merge message. A worker discovering the drift for itself is a wave-9
 failure caused here.
+
+**C8 resolved PASS on 2026-07-30**, merging `V1C-KERNEL` at `4f633d2` after one
+in-place repair on the branch. The shipped shape *did* differ from the sketch,
+so all three downstream tickets were edited, plus a path typo in `V4-PEERID`:
+
+- `StatePage` gained `attributes: Map<String, Serializable>` (cell-level state
+  that rides every page) and `caveats: Set<ReadCaveat>`
+  (`STALE_FRONTIER`/`POSITIONAL_CURSOR`). This closes `V1C-CELLS`' open question
+  about where `ShardCell`'s `interest`/`assignedEpoch` and `KeyedSetCell`'s
+  `tagCounter` live, and **contradicts** `V1C-OPS`' flat assertion that no such
+  channel exists — its Decision D riders move there.
+- `BoundedStateful` gained `supportsSince`/`supportsScope`, defaulting to
+  `false`, with `readState` refusing an undeclared bound **on the caller's
+  thread** (`SINCE_UNSUPPORTED`/`SCOPE_UNSUPPORTED`). This is the mechanism
+  `V1C-CELLS` was told to flag as an interface-shape finding if it did not
+  exist; it exists, and it covers `scope` as well as `since`.
+- `Reason` has nine arms, not four; `Unbounded` gained a `provenance` so the
+  drained arm can answer `CHECKPOINT`.
+- **The one that would have bitten wave 10 silently:** `SetCell` stamps
+  `frontier` exactly on the *first and last* page of a walk only, declaring
+  `STALE_FRONTIER` in between, because an exact per-page frontier costs an O(n)
+  rescan per page — the O(n²) shape C7 ruled out. `V1C-BE`'s `walkStable` was
+  written to compare every page against page 1, which would report `true`
+  through a walk whose fold had already moved. Corrected in that ticket: the
+  verdict is `null` until the walk closes, and complete once it does.
+
+One repair the evaluator made rather than flagged: `StatePage`'s across-page
+contract claimed, unqualified, that equal endpoint frontiers imply the union is
+exactly a snapshot. A `TagFrontier` measures tag *gains*, and an OR-set
+observed-remove mints no tag — so a remove-only mid-walk mutation is invisible
+to the check. Both KDocs now say the check is necessary but not sufficient for
+such a family, and a kernel test pins it. `V1C-CONCORD` must not write a
+`[21-PULL-03]`-style stability scenario over a removal.
 
 ## Wave 9 — cell coverage and stable peer identity · branches from `main` after C8
 

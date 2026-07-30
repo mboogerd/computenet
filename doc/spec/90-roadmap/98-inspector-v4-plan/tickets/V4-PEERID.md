@@ -298,7 +298,7 @@ discover:
   not plumbing. Not this ticket.
 - **Authentication.** See above: this ticket makes an existing claim *visible*,
   not *trustworthy*.
-- **`concord/**`** (binding constraint 7), `kernel/.../host/BoundedRead.kt`,
+- **`concord/**`** (binding constraint 7), `kernel/.../cell/BoundedRead.kt`,
   `ManagedHost.readState`, and everything the V1C chain owns:
   `cell/data/{MapCell,KeyedSetCell,ListCell,Watermark}.kt`,
   `cell/replication/InstanceSet.kt`, `cell/partition/ShardCell.kt` (V1C-CELLS,
