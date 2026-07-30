@@ -1,6 +1,6 @@
 # D-UNION — one remove retracts a shared item: union-scoped observed-remove
 
-**Status**: Specified — not-started
+**Status**: Implemented (shape 1 — `UnionSetCell.removeInlet.removeObserved`)
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5, fresh session
 **Wave:** B1 · **Branches:** ticket/d-union
 

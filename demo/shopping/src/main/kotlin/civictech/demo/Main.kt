@@ -29,6 +29,8 @@ import java.net.URLDecoder
 import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.ObservedRemoveOps
+import civictech.cell.data.op.UnionSetApi
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.IntersectSetCell
 
@@ -199,6 +201,16 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             }
         }
 
+    /**
+     * The shared list's union-scoped remove (D-UNION), reached the same way
+     * the per-user writers are: a routed proxy, so the invocation is
+     * write-ahead journaled and replays deterministically after `kill -9`.
+     * Lazy because [itemsUnion] is spawned in [init].
+     */
+    private val itemsRemoveOps: ObservedRemoveOps<String> by lazy {
+        host.lookup(TypedRef<UnionSetApi<String>>(itemsUnion.ref))!!.removeInlet.call
+    }
+
     private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
         RoutedPropagate(ref, "inlet", registry::deliver)
 
@@ -215,13 +227,25 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         val (itemOps, voteOps) = writerFor(user)
         when (params["action"]) {
             "add" -> itemOps.add(item)
-            // ponytail: remove is writer-local — it tombstones only this user's
-            // own add-tags, so an item added by another user survives until that
-            // user removes it too. This keeps the per-user writer identity that
-            // makes journal replay deterministic (M10.4). Upgrade path for
-            // shared removal: tombstone the element's currently-observed union
-            // tags across writers, not just the caller's.
-            "remove" -> itemOps.remove(item)
+            // The two removal intents this demo used to conflate (D-UNION):
+            //
+            // "remove"  — remove *the item*: a union-scoped observed remove
+            //   over the shared list. It tombstones every add-tag the merged
+            //   view currently holds for the item, whichever user minted it,
+            //   so one click retracts the item for everyone — the behavior the
+            //   UI has always offered. Only tags this JVM has already observed
+            //   are covered; a concurrent add at the peer survives by add-wins
+            //   (spec 24 [24-SET-03]), which is the intended boundary.
+            // "remove-mine" — retract *my* contribution: the writer-local op,
+            //   which tombstones only this user's own add-tags and leaves
+            //   another user's add of the same item standing.
+            //
+            // Both are routed (hence journaled) invocations, so replay stays
+            // deterministic and the per-user writer identity M10.4 depends on
+            // is untouched — the union-scoped del is minted at the union, not
+            // by borrowing another user's writer.
+            "remove" -> itemsRemoveOps.removeObserved(item)
+            "remove-mine" -> itemOps.remove(item)
             "vote" -> voteOps.add(item)
             else -> return exchange.respond(400, "unknown action")
         }
@@ -390,7 +414,9 @@ new EventSource('/events').onmessage = e => {
       li.textContent = item;
       if (s.votes.includes(item)) { li.classList.add('voted'); li.textContent += ' ★'; }
       if (actions) {
-        for (const [label, action] of [['vote','vote'],['remove','remove']]) {
+        // "remove" is union-scoped — it retracts the item for everyone;
+        // "remove mine" retracts only this user's own add (D-UNION).
+        for (const [label, action] of [['vote','vote'],['remove','remove'],['remove mine','remove-mine']]) {
           const b = document.createElement('button');
           b.textContent = label; b.onclick = () => op(action, item);
           li.appendChild(b);

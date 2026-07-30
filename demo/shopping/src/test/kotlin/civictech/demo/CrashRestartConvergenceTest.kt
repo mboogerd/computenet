@@ -78,6 +78,19 @@ class CrashRestartConvergenceTest {
                 "apples" in items(httpB) && "bread" in items(httpA)
             }
 
+            // D-UNION criterion (c): a union-scoped observed remove, made at
+            // the peer about to be kill -9'd, of an item ANOTHER user added on
+            // the other JVM. Its del is minted at B's union — bob's writer has
+            // no tombstone for it, and alice's writer re-mints the very tag it
+            // covers on replay (ref-derived tag sources, M10.1) — so only the
+            // replayed remove's retained tombstones keep it out afterwards.
+            post(httpA, user = "alice", action = "add", item = "olives")
+            awaitUntil("olives converged", timeoutMs = 45_000) { "olives" in items(httpB) }
+            post(httpB, user = "bob", action = "remove", item = "olives")
+            awaitUntil("pre-crash cross-user removal converged", timeoutMs = 45_000) {
+                "olives" !in items(httpB) && "olives" !in items(httpA)
+            }
+
             // B is kill -9'd mid-session
             peerB.destroyForcibly()
             awaitUntil("peer B is gone", timeoutMs = 45_000) { down(httpB) }
@@ -101,6 +114,15 @@ class CrashRestartConvergenceTest {
             // and the session is fully live again, both directions
             post(httpB, user = "bob", action = "add", item = "dates")
             awaitUntil("post-restart edit visible on A", timeoutMs = 45_000) { "dates" in items(httpA) }
+
+            // D-UNION criterion (c): with everything else converged in both
+            // directions, the observed-removed item is still gone — journal
+            // replay reproduced the post-remove membership rather than
+            // resurrecting it out of the re-minted add-tags
+            check("olives" !in items(httpB) && "olives" !in items(httpA)) {
+                "an observed-removed item came back after journal replay: " +
+                    "A=${items(httpA)} B=${items(httpB)}"
+            }
         } finally {
             JvmPeer.destroy(peerA, peerB)
             journalB.deleteRecursively()

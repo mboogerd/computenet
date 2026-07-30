@@ -25,6 +25,10 @@ class TwoJvmConvergenceTest {
         }.also { connection.disconnect() }
     }
 
+    /** Just the `items` array — a vote for a since-removed item legitimately stays in `votes`. */
+    private fun items(httpPort: Int): String =
+        currentState(httpPort).substringAfter("\"items\":").substringBefore("]")
+
     private fun post(httpPort: Int, user: String, action: String, item: String) {
         val connection = URI("http://localhost:$httpPort/op").toURL().openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
@@ -62,7 +66,53 @@ class TwoJvmConvergenceTest {
             post(httpA, user = "alice", action = "remove", item = "apples")
             awaitUntil("removal visible on peer B") {
                 // scope to the items array — the vote for apples legitimately remains
-                "apples" !in currentState(httpB).substringAfter("\"items\":").substringBefore("]")
+                "apples" !in items(httpB)
+            }
+        } finally {
+            JvmPeer.destroy(peerA, peerB)
+        }
+    }
+
+    /**
+     * D-UNION, criterion (d): the case the test above never exercises —
+     * the **remover is not the adder**. Before the union-scoped observed
+     * remove, `bob remove apples` tombstoned only bob's own (nonexistent)
+     * add-tags: a silent no-op, on a button the UI offered to everyone.
+     * It must now retract alice's add on both JVMs — and the writer-local
+     * intent must still be reachable, and still writer-local.
+     */
+    @Tag("multi-jvm")
+    @Test
+    fun `a remove by a user who did not add the item converges on both JVMs`() {
+        val httpA = JvmPeer.freePort()
+        val httpB = JvmPeer.freePort()
+        val ws = JvmPeer.freePort()
+        val peerA = JvmPeer.launch("civictech.demo.MainKt", "$httpA", "--listen", "$ws")
+        val peerB = JvmPeer.launch("civictech.demo.MainKt", "$httpB", "--peer", "ws://localhost:$ws")
+        try {
+            awaitUntil("both peers serving HTTP") { up(httpA) && up(httpB) }
+
+            post(httpA, user = "alice", action = "add", item = "apples")
+            awaitUntil("apples visible on peer B") { "apples" in items(httpB) }
+
+            // bob never added apples, and is on the other JVM
+            post(httpB, user = "bob", action = "remove", item = "apples")
+            awaitUntil("cross-user removal visible on peer B") { "apples" !in items(httpB) }
+            awaitUntil("cross-user removal converged on peer A") { "apples" !in items(httpA) }
+
+            // the distinct writer-local intent survives: "remove mine" of an
+            // item bob never added retracts nothing
+            post(httpA, user = "alice", action = "add", item = "bread")
+            awaitUntil("bread visible on peer B") { "bread" in items(httpB) }
+            post(httpB, user = "bob", action = "remove-mine", item = "bread")
+            // a later op flowing end-to-end is the "everything before it has
+            // been processed" marker — no sleep, no negative await
+            post(httpB, user = "bob", action = "add", item = "dates")
+            awaitUntil("a later edit has converged both ways") {
+                "dates" in items(httpA) && "dates" in items(httpB)
+            }
+            check("bread" in items(httpA) && "bread" in items(httpB)) {
+                "remove-mine must stay writer-local: bread was added by alice, not bob"
             }
         } finally {
             JvmPeer.destroy(peerA, peerB)

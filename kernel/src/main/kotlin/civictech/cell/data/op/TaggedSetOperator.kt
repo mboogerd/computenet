@@ -21,8 +21,11 @@ import java.io.Serializable
  * supplies only its own transform — the practical reading of "each operator
  * becomes just its transform expression" under that constraint.
  */
-class TaggedSetOperator<E> {
-    internal val state = TagState<E>()
+class TaggedSetOperator<E>(
+    /** Retain folded del-tags — see [TagState] (D-UNION); only [UnionSetCell] opts in. */
+    retainTombstones: Boolean = false,
+) {
+    internal val state = TagState<E>(retainTombstones)
 
     fun snapshot(): Serializable = state.snapshot()
     fun restore(saved: Serializable) = state.restore(saved)
