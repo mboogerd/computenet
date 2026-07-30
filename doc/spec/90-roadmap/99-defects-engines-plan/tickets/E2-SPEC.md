@@ -1,6 +1,6 @@
 # E2-SPEC — the observation frontier becomes normative spec text: internal consistency, aligned composites, absorb-acks, and non-monotone emission gating
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** claude-sonnet-5 (effort xhigh) · **Escalate to:** claude-opus-5, fresh session
 **Wave:** B2 · **Branches:** ticket/e2-spec
 

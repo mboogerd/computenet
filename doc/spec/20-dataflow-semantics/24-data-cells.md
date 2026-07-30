@@ -176,6 +176,43 @@ semantics only — neither is a convergent merge under concurrent writers
     memberships (duplicates converge on membership, not tags); the operator
     is not glitch-free on its own (State-driven). Set semantics only — bag
     semantics (EXCEPT ALL) would need a weighted family (see below).
+    Antijoin membership flips are **absence assertions**: emitting or
+    retracting a row because the *other* side does or doesn't hold a
+    matching key needs knowing non-membership, which is non-monotone in the
+    CALM sense — confluent, coordination-free composition is available only
+    to monotone operators (`03-lasp-crdt-lattice.md` §5); antijoin needs
+    sealing. [24-OP-SEMIJOIN-04] WHERE `emitOnFrontier` gating is enabled, a
+    `SemiJoinCell` antijoin's output SHALL emit only at wave completeness,
+    coalesced to the wave's net minted enter/exit set, such that a
+    transient enter-then-exit within one wave is never observed on the
+    outlet (Optional feature). The gate is opt-in; the default stays
+    ungated, so a transient flicker within one wave may still reach the
+    outlet, remediated only by 22's glitch-free wrapper rather than by a
+    smarter convergent cell — research rejects a convergent fix here
+    (absence-based emission is non-monotone; some sealing is unavoidable,
+    and per-wave sealing over `cell.consistency.WaveFrontier` is the
+    cheapest ComputeNet has). See 20/22 §The observation frontier for the
+    guarantee this gate serves. *(Spec-ahead-of-code: `emitOnFrontier` is
+    specified here before its implementation — 96 §E2.4. Today every
+    `SemiJoinCell` runs the ungated default.)*
+  - `CombineLatestCell` — incremental keyed **outer** combine over two map
+    streams (the outer sibling of `JoinCell`); a key present on only one
+    side still emits, computed as `combine(k, v, null)` / `combine(k, null,
+    w)`. A null-extension is an **absence assertion** exactly like
+    antijoin's — it asserts the other side holds no value for `k` at this
+    frontier (CALM, `03-lasp-crdt-lattice.md` §5) — and is the
+    internal-consistency essay's exact outer-join failure mode: a
+    null-extended row can be emitted and then retracted within one wave as
+    the other side's real value arrives
+    (`04-cross-cutting-watermarks-consistency.md` §3). Ungated (the
+    default), a null-extension may ride the outlet and be retracted moments
+    later, remediated only by 22's wrapper; gated (`emitOnFrontier`,
+    mirroring `SemiJoinCell` above), the null-extension emits only once the
+    wave has settled, so a same-wave retraction never reaches the outlet.
+    See 20/22 §The observation frontier. *(Spec-ahead-of-code, as for
+    `SemiJoinCell` above — 96 §E2.4. Note also that `CombineLatestCell` does
+    not yet absorb-ack a wave it silently swallows, the one open divergence
+    from 20/22 §Completeness over silent or stuck edges.)*
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
     tagged set stream, input tags passing through. Sound because tag algebra
     is per-(element, tag): colliding outputs **union** their preimages' tag

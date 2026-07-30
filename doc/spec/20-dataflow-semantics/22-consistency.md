@@ -1,6 +1,6 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), while `Progress` absorb-acks and the handshake-routed bridged open are decided design (CP-A2), unimplemented
+> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), and `Progress` absorb-acks are implemented both in-process (`cell.control.absorbAck`, CP-A3) and across a bridge, over the handshake-routed bridged open (CP-A2)
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext), 93 (feature-interaction resolutions I-1/4/5/11/13/14/18/23/24)
 > **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.FanOutlet`, `cell.consistency.GlitchFreeCell`
 
@@ -172,7 +172,7 @@ with a control run proving the harness produces glitches without the wrapper.
 Upstream frontier traversal awaits multiplex ports (G-13) — its traversal
 model is decided, see plan item 4; unwaved traffic passes through.)*
 
-### Completeness over silent or stuck edges (decided in 93 I-18, unimplemented)
+### Completeness over silent or stuck edges (decided in 93 I-18; implemented — in-process CP-A3/CP-A4, bridged CP-A2)
 
 [22-LIVE-01] IF an independent source feeding a multi-source join is silent for
 a wave, THEN the join SHALL NOT block updates from other sources from becoming
@@ -195,16 +195,134 @@ RESTART: the join drops it and re-runs frontier discovery + catch-up
 (re-catch-up, not restore) — safe precisely because unflushed buffers were
 never observed downstream.
 
-⚠ GAP (G-40): a glitch-free join cannot distinguish an effective-only-silent
-arm from a dead one — wave completeness blocks forever on absorbing,
-suspended, restarting, or dead-lettered frontier edges. Proposal: per-source
-per-edge watermarks advanced by real deltas, by metadata-plane Progress
-absorb-acks emitted at a precisely defined quiescence boundary, or by later
-waves (monotone close); typed Stall(reason, recoverable) markers with
-per-edge WAIT | DEGRADE | RE-SCOPE policies keyed on recoverability; pin the
-DEGRADE correctness contract (how downstream distinguishes a degraded
-emission), calibrate the backstop deadline against frontier depth, and build
-the generative completeness harness (93 I-18).
+**The absorb-ack rule (96 §E2.1 rule 3).** [22-LIVE-01] makes non-delivery
+observable at the join's boundary; this rule is its emitting-side obligation.
+An operator cell whose waved input yields no effective output MUST advance
+downstream watermarks via a metadata-plane `Progress(sourceId, thru)`
+absorb-ack, riding the exact wave it would otherwise have silently swallowed
+— the second of the three watermark-advance mechanisms named above (delta,
+`Progress`, later wave). Without it, a downstream join can only settle an
+absorbing arm from real data arrivals, and a mid-pipeline filter/join/
+antijoin that drops the final wave strands the join forever (the G-40
+family). `cell.control.absorbAck` is the shared helper (an extension on
+`FanOutlet`, CP-A3): it reads the wave off the current
+invocation's context, skips baseline and spontaneous emissions — already
+excluded from every completeness set above — and fans the ack over the
+outlet's real links only, so a topology-blind subscriber pays nothing. The
+per-cell call site is the uniform emit-or-absorb-ack shape (`emitOrAbsorb` in
+`civictech.cell.data.op`): propagate a non-empty delta, or absorb-ack the
+swallowed wave. Adopted across the operator suite — `FilterCell`,
+`SemiJoinCell`, `IntersectSetCell`, `JoinCell`, `JoinSetCell`, `GroupByCell`,
+`FlatMapSetCell`, `UnionSetCell`, `QuorumSetCell`, `CountCell`, and
+`CoalescingCombineCell`, all under `civictech.cell.data.op` — call it at the
+end of their waved handler exactly when the wave produced no outlet
+emission. *(One absorbing operator does not yet satisfy this MUST:
+`cell.data.op.CombineLatestCell` drops an effective-only-silent wave without
+an ack. A known divergence, not an exemption — the rule binds it.)* The
+consumer is the per-inlet watermark fold this subsection
+describes, landed as `cell.consistency.WaveFrontier` (CP-A4, §The
+observation frontier below): its `Progress` handler folds the ack into the
+same per-edge, per-source watermark map a real delta advances, so an
+absorbing arm is retired by whatever it next produces — a delta, an ack, or
+a later wave — never left silently stuck. The rule holds identically
+in-process and bridged: CP-A2 routed the bridge install through the shared
+`handshake()`, and the absorb-ack rides the same `topology-order` frame path
+as `EdgeOpen`/`EdgeClose`, so an absorbing **remote** arm settles a far-host
+wave exactly as a local one does. *(§Bridged frontier below still labels the
+`Progress` crossing and the handshake-routed bridged open unimplemented —
+a stale label against this landed code, not a live residual.)*
+
+⚠ GAP (G-40): *(residual narrowed by CP-A2/CP-A3/CP-A4 — the core mechanism is
+landed; see §Completeness over silent or stuck edges above)*. Landed:
+per-source per-edge watermarks advanced by real deltas, by the `Progress`
+absorb-ack rule above (in-process CP-A3, bridged CP-A2), or by later waves
+(monotone close); typed
+`Stall(reason, recoverable)` markers with per-edge WAIT | DEGRADE | RE-SCOPE
+policies keyed on recoverability — both folded by
+`cell.consistency.WaveFrontier`. Open: pin the DEGRADE correctness contract
+(how downstream distinguishes a degraded emission from a genuine one),
+calibrate the backstop deadline against frontier depth, and build the
+generative completeness harness proving the mechanism under randomized
+absorb/suspend/restart/dead-letter schedules (93 I-18); and bring
+`cell.data.op.CombineLatestCell` — the one absorbing operator still missing
+its ack — under the rule.
+
+## The observation frontier
+
+A multi-view observation edge — several named outlets folded into one
+composite read, `cell.observe.CompositeSink`'s honest point-consistency
+problem — needs its own consistency ideal, distinct from a single glitch-free
+cell's diamond guarantee above: the target is not "this cell never mixes
+pre/post-wave state" but "this composite read never mixes waves across its
+contributing views" (backlog `consistent-multiview-snapshot.md`, F-5;
+advances G-13's frontier residual and G-40; 96 §E2.1).
+
+### The guarantee: internal consistency by per-source vector-frontier alignment
+
+The observation edge's target guarantee is **internal consistency**: "every
+output is the correct output for some subset of the inputs provided so far"
+(`doc/research/incremental-engines/04-cross-cutting-watermarks-consistency.md`
+§3). [22-OBS-01] The composite observation edge SHALL achieve internal
+consistency as **per-source-vector-frontier alignment**: every emitted
+composite output SHALL be the correct output for some per-source vector
+frontier of this replica's inputs (Ubiquitous).
+
+Materialize's alternative is explicitly rejected: a single scalar virtual
+time assigned to every event at ingestion, so every operator's output aligns
+at identical timestamps, requires a coordination point — a timestamp oracle —
+that ComputeNet's coordination-free replication model refuses (P4;
+`04-cross-cutting-watermarks-consistency.md` §4;
+`02-timely-differential-materialize.md` §7). A per-source vector frontier is
+the coordination-free analog of the same alignment idea: per-source-prefix
+batch-equivalence *per replica*, the shape Feldera's strong-consistency claim
+names but can only offer globally, under one total order
+(`01-dbsp-feldera.md` §6) — ComputeNet trades that global guarantee for a
+per-replica one it can get without a coordination point.
+
+### The aligned-composite rule
+
+[22-OBS-02] A composite for wave `(s, t)` SHALL be assembled only after every
+contributing view has settled every wave at or below the shared frontier, and
+the composite's inlets SHALL be **per-name**, preserving each contributing
+view's identity, rather than replaying every view's raw deltas into one
+anonymous stream (State-driven). Per-name inlets are what dissolve
+`observeAll`'s documented blocker 1: `GlitchFreeCell` replays raw deltas to a
+single outlet, erasing which named source each delta came from, so two
+`set(...)`-registered views emitting the same delta type become
+indistinguishable downstream (`observeAll`'s KDoc, `cell.observe`). A
+per-view identity tag on each buffered delta is what lets the
+aligned sink fold each named view under its own accumulator and release one
+snapshot at completeness, instead of one shared accumulator that cannot tell
+its inputs apart.
+
+*(Spec-ahead-of-code: this is the specification for the future
+`observeAligned` sink — 96 §E2.3 — written before its implementation.
+`cell.observe.CompositeSink` is today's point-consistent fallback, already
+honestly documented as not wave-aligned; it does not yet satisfy this rule.)*
+
+**What this section already governs.** `cell.consistency.WaveFrontier` — the
+per-inlet wave-completeness fold extracted from `GlitchFreeCell` (CP-A4) — is
+the landed completeness primitive this guarantee is built from: "every
+contributing view has settled every wave ≤ the shared frontier" is exactly
+the per-inlet completeness test `WaveFrontier` already computes, one inlet
+short of the many-named-inlet aligned composite the rule above describes.
+The absorb-ack rule above (§Completeness over silent or stuck edges) is a
+prerequisite this guarantee assumes: without it, a `WaveFrontier` spanning an
+absorbing view can stall short of the shared frontier indefinitely rather
+than ever reach it.
+
+### Acceptance benchmark: the balanced-transfer suite
+
+The named acceptance benchmark for this guarantee is the **balanced-transfer
+suite** (`04-cross-cutting-watermarks-consistency.md` §3, the "$1-transfer"
+experiment): a generative stream of balanced transfers — every debit paired
+with a credit in one wave — driven through a credit/debit join, a grouped
+aggregate, and an outer self-join, with the invariant (the running total is
+always zero; no observed output corresponds to a partially-applied transfer)
+checked at *every* observed output, not only at idle. A point-consistent
+composite and an ungated (non-monotone) outer join are the suite's documented
+failure controls (04 §3; the outer-join gating rule is 20/24 §Operator
+library, below).
 
 ## Topology versioning
 
