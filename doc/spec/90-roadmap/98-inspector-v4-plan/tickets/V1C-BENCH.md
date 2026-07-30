@@ -1,6 +1,6 @@
 # V1C-BENCH — measure what a whole-state snapshot actually costs, before anyone implements a bounded read
 
-**Status**: Specified — not-started
+**Status**: Specified — measurement complete, awaiting C7 evaluation (recommendation: GO). See `../30-bounded-read-measurement.md`.
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 7 · **Branches:** `ticket/v1c-bench`
