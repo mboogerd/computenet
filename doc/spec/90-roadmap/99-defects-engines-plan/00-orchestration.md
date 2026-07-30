@@ -153,7 +153,7 @@ D-CONCORD is the only concord writer in flight (rule 3).
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | D-CONCORD | Bind the coalescing combine in the driver; positive glitch-free assertion on `24-OP-COMBINE-01`; retire `CTL-GF-01` as failing sentinel; author `24-REPLAY-01.yaml`; resolve both DISPUTES entries | opus | fresh | ticket/d-concord | opus | Specified — not-started |
-| E2-SPEC | 96 §E2.1 becomes normative spec text (§The observation frontier, absorb-ack rule) | sonnet | fresh | ticket/e2-spec | opus | Specified — not-started |
+| E2-SPEC | 96 §E2.1 becomes normative spec text (§The observation frontier, absorb-ack rule) | sonnet | fresh | ticket/e2-spec | opus | Implemented — merged |
 
 **Checkpoint CB2 — verification.** D-CONCORD: `./gradlew :concord:check` green,
 zero dangling `covers:` ids, zero orphan scenarios, `doc/spec/CONCORDANCE.md`
