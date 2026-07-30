@@ -96,7 +96,10 @@ object WsTransport {
      * local peer name; a listener with an allowlist refuses unlisted peers at
      * hello time (M8.3) — the connection closes before any announcement or
      * frame is accepted. The ingress exists only after an admitted hello, and
-     * stamps every delivery with the peer's identity.
+     * stamps every delivery with the peer's identity; since V4-PEERID the
+     * registry mirror is bound to that same identity at the same point, so the
+     * `LocationRegistry.Remote` locations this connection installs name the
+     * peer rather than only the (per-connection, reconnect-fresh) egress.
      */
     internal class Session(
         private val side: Peering.Side,
@@ -104,7 +107,14 @@ object WsTransport {
         private val refuse: () -> Unit,
     ) {
         val egress = BridgeEgressCell()
-        private val mirrorRef = Peering.spawnMirror(side, toPeer = egress)
+
+        /**
+         * Spawned here, before any peer name exists, because [hello] must carry
+         * its ref. Its peer is therefore late-bound in [onText] (V4-PEERID) —
+         * `RegistryMirrorCell.peer` carries the happens-before argument that
+         * makes that safe.
+         */
+        private val mirror = Peering.spawnMirror(side, toPeer = egress)
 
         @Volatile
         private var ingress: Propagate<ByteArray>? = null
@@ -139,7 +149,7 @@ object WsTransport {
             }, PortRef.generate()))
         }
 
-        fun hello(): String = HELLO + mirrorRef.id + (side.peer?.let { " ${it.name}" } ?: "")
+        fun hello(): String = HELLO + mirror.ref.id + (side.peer?.let { " ${it.name}" } ?: "")
 
         fun onText(message: String) {
             require(message.startsWith(HELLO)) { "unexpected text message: $message" }
@@ -150,6 +160,15 @@ object WsTransport {
                 refuse()
                 return
             }
+            // V4-PEERID: bind the mirror's peer BEFORE announcing, so every
+            // Remote location this connection installs — including the peer's
+            // own catch-up burst, which cannot start before it has seen our
+            // hello — records the peer's name. A listener builds a fresh
+            // Session (hence a fresh egress) per reconnect, so the name is the
+            // only part of a peer's identity that survives one. Re-assigned on
+            // a re-hello for the same reason the announcer below is replaced:
+            // a client keeps one Session across reconnects.
+            mirror.peer = peer
             ingress = Peering.hostIngress(side, fromPeer = peer)
             announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
             announcement = Peering.announceTo(side, CellRef(UUID.fromString(parts[0])), via = egress)
