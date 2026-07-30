@@ -134,7 +134,7 @@ wave 7 runs concurrently (its claim is a doc in the 98 folder).
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | D-REPLAY | `PresenceLanes`/`QuorumSetCell` consult `MessageContext.baseline`; recovered arm state installs instead of vanishing | opus | fresh | ticket/d-replay | opus | Implemented — merged |
-| D-COMBINE | Wave-coalescing scalar combine cell (version-buffered, one delta per completed wave) | opus | fresh | ticket/d-combine | opus | Specified — not-started |
+| D-COMBINE | Wave-coalescing scalar combine cell (version-buffered, one delta per completed wave) | opus | fresh | ticket/d-combine | opus | Implemented — merged |
 | D-UNION | Union-scoped observed remove primitive + `demo/shopping` adoption | opus | fresh | ticket/d-union | opus | Implemented — merged |
 | E1-SPEC | 96 §E1.1 becomes normative spec text (§Tagged maps, `TaggedMapDelta`) | sonnet | fresh | ticket/e1-spec | opus | Implemented — merged |
 
