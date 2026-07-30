@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, tag-epoch continuity, and restart supersession design decided, unbuilt)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, tag-epoch continuity, and restart supersession design decided, unbuilt)
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.leftJoin`/`rightJoin`/`fullJoin` (outer joins)
 
@@ -86,8 +86,11 @@ Elements of the pattern:
 by a 200-seed interleaving test with a control run proving arrival-order
 application diverges. `MapDelta`/`ListDelta` instead carry **documented
 convergence limits** — arrival-order key puts and index-addressed edits are
-single-stream semantics; stable multi-writer forms wait for replication
-pressure (42). `[24-OP-MAP-01]` `[24-OP-LIST-01]` `MapDelta`'s arrival-order
+single-stream semantics. The keyed multi-writer form is no longer an open
+wait: the convergent design is decided — see §Tagged maps below, an
+additive `TaggedMapDelta` beside `MapDelta`, which stays single-stream; the
+positionally-indexed list form still waits for replication pressure (42).
+`[24-OP-MAP-01]` `[24-OP-LIST-01]` `MapDelta`'s arrival-order
 key puts and `ListDelta`'s index-addressed edits SHALL remain single-stream
 semantics only — neither is a convergent merge under concurrent writers
 (Ubiquitous).)*
@@ -190,6 +193,109 @@ semantics only — neither is a convergent merge under concurrent writers
   Verified: a seeded writers→union→filter→count pipeline equals a batch
   recompute over final writer state on every seed (the prototype invariant
   for the generative harness, 52).
+
+## Tagged maps
+
+**Design decided, unbuilt** (closes G-23 for keyed structures; 96 §E1) —
+this section is the normative content 96 §E1.2 (`OrMapCell` core) and §E1.3
+(replication) build against. It is an **additive new delta type**:
+`MapDelta` and its single-writer cells (`MapCell`, `JoinCell`, `GroupByCell`)
+are untouched, and `KeyedSetCell` is untouched — this resolves backlog
+`06-or-map-tagged-map-delta.md`'s open choice in favor of addition over
+replacement.
+
+A tagged map generalizes the observed-remove idiom above from *elements* to
+*per-key values*: the Riak-map / delta-ORMap design, adapted to
+ComputeNet's existing tag machinery
+(`doc/research/incremental-engines/03-lasp-crdt-lattice.md` §4;
+`05-gap-mapping.md` §Gap 2). `KeyedSetCell` already does per-key
+observed-remove with atomic retract+add, and `Timestamp(sourceId, counter)`
+tags are already dot-shaped, so this section reads as `SetDelta`'s idiom
+lifted one level, from a live/tombstoned tag per element to a live/
+tombstoned **dot** per key:
+
+```kotlin
+interface MapOps<K, V> { fun put(key: K, value: V); fun remove(key: K) }
+data class TaggedMapDelta<K, V>(              // per-key dots (G-23)
+    val puts: Map<K, Map<Timestamp, V>>,      // live dots carrying values
+    val dels: Map<K, Set<Timestamp>>,         // tombstoned observed-remove dots
+) : Serializable {
+    fun merge(other: TaggedMapDelta<K, V>): TaggedMapDelta<K, V>  // pointwise dot union
+}
+```
+
+Each put mints a unique `Timestamp` dot carrying that put's value; a key's
+live dots are its `puts[key]` entries not covered by `dels[key]`. All dots
+for the whole map share **one causal namespace** — there is no per-key
+context (decided point 1 below).
+
+**The four laws** (verbatim from 96 §E1.1):
+
+- **Merge** is pointwise dot union, idempotent because a dot's value is
+  immutable. `[24-TMAP-01]` `TaggedMapDelta` merge (pointwise dot union)
+  SHALL be commutative, associative, and idempotent, such that a key's
+  presence and value converge to the same result regardless of delivery
+  order (Ubiquitous).
+- **Presence** is add-wins: a key is live iff it has any live (not
+  tombstoned) dot. `[24-TMAP-02]` A key SHALL be present iff it has at
+  least one live dot — add-wins (Ubiquitous).
+- **Value** is Last-Writer-Wins **by dot order** `(counter, sourceId)` —
+  never wall clock. `[24-TMAP-03]` A key's exposed value SHALL be the value
+  of its live dot with the greatest `(counter, sourceId)` order, and MUST
+  NOT be selected by wall-clock time (Ubiquitous).
+- **`remove(k)` is reset-remove**: it tombstones every dot the remover
+  observed live at `k`; a concurrent put's dot, not observed by that
+  remove, survives the merge as `k`'s remaining live value.
+  `[24-TMAP-04]` A `remove(k)` SHALL tombstone every dot observed live at
+  `k` at the time of the remove, such that a concurrent put's dot — not
+  observed by that remove — survives the merge (reset-remove,
+  Ubiquitous).
+
+**Decided points** (96 §E1.1, each traced to its research citation):
+
+1. **One shared causal namespace for the whole map**, never per-key —
+   per-key contexts re-admit stale values on key re-creation
+   (`03-lasp-crdt-lattice.md` §4; `05-gap-mapping.md` §Gap 2).
+2. **Tombstoned dels subsume deferred context ops.** The tagged map follows
+   `SetCell`'s tombstoned idiom (dels stored as covered dots, not a
+   context-only causal record), so Riak's deferred-operations list is
+   unnecessary here: a remove's dots arriving before their put simply sit
+   in `dels` and cover the put on arrival, exactly as `SetCell`'s
+   `applyRemote` already behaves for elements
+   (`kernel/src/main/kotlin/civictech/cell/data/SetCell.kt:107-116`).
+3. **Embedded values are restricted to the idempotent-mergeable class**
+   (`MergeablePayload`) — Riak's embedded-counter anomaly (a non-idempotent
+   embedded CRDT cannot get full reset-remove without a dot per increment)
+   is the documented counterexample (`03-lasp-crdt-lattice.md` §4). Research
+   `05-gap-mapping.md` §Gap 2 phrases the same restriction as "the
+   `Replicable` class"; `MergeablePayload` is the decided wording carried
+   here (96 §E1.1) — `Replicable` is the wire-replication contract a cell
+   implements, `MergeablePayload` is the payload-level merge capability an
+   embedded value must have.
+4. **Dot-metadata bloat is a codec-layer concern from day one** — Riak
+   names actor-metadata repetition "a serious issue" for size
+   (`03-lasp-crdt-lattice.md` §4); deduping (e.g. grouping dots by
+   `sourceId`) is a wire-encoding responsibility, not part of this delta
+   type's merge semantics.
+5. **The Lasp determinism caveat is normative for downstream adopters**
+   (`03-lasp-crdt-lattice.md` §1, "Determinism caveat"): state convergence
+   (SEC) alone does not make value-keyed derivation deterministic — whether
+   a concurrent remove cancels a concurrent put can depend on the merge
+   schedule for an operator that reads a *value*, not just presence.
+   Tag-precise removes — a remove carries exactly the dots it observed,
+   never a value-level predicate — are what keep value-keyed derivation
+   deterministic here; an operator deriving from `value(k)` inherits this
+   caveat and must not assume a wall-clock or arrival-order resolution.
+
+**Excluded from this milestone.** The tombstone-free (context-only) wire
+form — `dels` shipped as causal context alone, with no tombstone payload —
+is deliberately not part of `TaggedMapDelta`. It needs the causal-merging
+condition (`03-lasp-crdt-lattice.md` §2: join `Δⱼ^{a,b}` into `Xᵢ` only if
+`Xᵢ ⊒ Xⱼᵃ`), whose delivered-watermark prerequisite lands with E3; tracked
+as [95 §R10](../90-roadmap/95-research-plan.md). Multi-value exposure
+mechanics, the `MapOps` contract surface, catch-up/snapshot mechanics, and
+replication wiring (gossip, baseline, re-origination) are 96 §E1.2/§E1.3
+code-path material — named here, not specified here.
 
 ## Grouped aggregation (M11.3)
 

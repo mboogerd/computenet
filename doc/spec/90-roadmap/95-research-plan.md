@@ -143,8 +143,10 @@ correspondence recorded in 20/24). (2) bags as element→PN-column multiplicity
 **Actions**: resolved by the incremental-engines research
 (`doc/research/incremental-engines/`): direction (1) is decided — per-key dot map
 with LWW-by-dot-order plus opt-in merged/multi-value exposure — and scheduled as
-[96 §E1](96-incremental-engines-plan.md); the bags half (direction 2) is sharpened
-into R17. Entry retained for the record.
+[96 §E1](96-incremental-engines-plan.md); the decided design is now normative
+spec text at [20/24 §Tagged maps](../20-dataflow-semantics/24-data-cells.md)
+(`TaggedMapDelta`, 96 §E1.1 — was plan-only); the bags half (direction 2) is
+sharpened into R17. Entry retained for the record.
 
 ## R9 — Instance-selection policy (G-57 residual)
 
