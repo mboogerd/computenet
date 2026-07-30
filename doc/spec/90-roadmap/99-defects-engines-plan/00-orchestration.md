@@ -135,7 +135,7 @@ wave 7 runs concurrently (its claim is a doc in the 98 folder).
 | D-REPLAY | `PresenceLanes`/`QuorumSetCell` consult `MessageContext.baseline`; recovered arm state installs instead of vanishing | opus | fresh | ticket/d-replay | opus | Specified — not-started |
 | D-COMBINE | Wave-coalescing scalar combine cell (version-buffered, one delta per completed wave) | opus | fresh | ticket/d-combine | opus | Specified — not-started |
 | D-UNION | Union-scoped observed remove primitive + `demo/shopping` adoption | opus | fresh | ticket/d-union | opus | Specified — not-started |
-| E1-SPEC | 96 §E1.1 becomes normative spec text (§Tagged maps, `TaggedMapDelta`) | sonnet | fresh | ticket/e1-spec | opus | Specified — not-started |
+| E1-SPEC | 96 §E1.1 becomes normative spec text (§Tagged maps, `TaggedMapDelta`) | sonnet | fresh | ticket/e1-spec | opus | Implemented — merged |
 
 **Checkpoint CB1 — verification.** Fresh evaluator per ticket at the tier in
 the table. Kernel tickets: their named tests plus `./gradlew :kernel:test`;

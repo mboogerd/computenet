@@ -1,7 +1,6 @@
 # E1-SPEC — the decided OR-map design (96 §E1.1) becomes normative spec text
 
-**Status**: Partial — implementation complete on `ticket/e1-spec`, awaiting
-orchestrator merge (`:concord:docLints` and `:concord:check` green)
+**Status**: Implemented — merged
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** B1 · **Branches:** `ticket/e1-spec`
