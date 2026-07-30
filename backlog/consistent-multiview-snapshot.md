@@ -2,7 +2,11 @@
 
 > **Absorbed into the roadmap**: scheduled as
 > [96 §E2](../doc/spec/90-roadmap/96-incremental-engines-plan.md) (the aligned
-> multi-view sink; acceptance = E2.3/E2.5/E2.6).
+> multi-view sink; acceptance = E2.3/E2.5/E2.6). The guarantee itself is now
+> **normative** at
+> [20/22 §The observation frontier](../doc/spec/20-dataflow-semantics/22-consistency.md)
+> (96 §E2.1); this backlog entry stays the acceptance-scoped pointer to the
+> unbuilt sink (E2.3/E2.5/E2.6).
 
 ## Origin
 `demo/shopping` renders four independently-derived views (`items`, `produce`,
