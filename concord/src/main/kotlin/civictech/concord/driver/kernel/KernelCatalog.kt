@@ -2,6 +2,7 @@ package civictech.concord.driver.kernel
 
 import civictech.cell.Cell
 import civictech.cell.data.Aggregator
+import civictech.cell.data.op.CoalescingCombineCell
 import civictech.cell.data.op.CountCell
 import civictech.cell.data.CounterCell
 import civictech.cell.data.op.FilterCell
@@ -57,6 +58,17 @@ internal object KernelCatalog {
          * through it, so downstream links read the wave-aligned outlet.
          */
         val glitchFree: Boolean = false,
+        /**
+         * The built cell coalesces **at the operator** — it emits one delta per
+         * *completed* input wave, so the requested `glitch-free` semantics are
+         * already its own (`CoalescingCombineCell`, `[22-GF-01]`). Two
+         * consequences the driver reads off this flag: no downstream
+         * [civictech.cell.consistency.GlitchFreeCell] wrapper is spawned (there is
+         * no torn stream left to buffer — see [build]), and the cell's fan-in is a
+         * single unrestricted `inlet` rather than the plain form's `left`/`right`
+         * port pair (see [inletName]).
+         */
+        val waveAligned: Boolean = false,
     )
 
     /**
@@ -72,6 +84,11 @@ internal object KernelCatalog {
         // FU-6: a view/cell declaring `inlet-mode: single-writer` binds a strict
         // point-to-point (single-writer) FanInlet, so a second writer's connect is Rejected.
         val singleWriter = (params["inlet-mode"] as? Value.StrVal)?.value == "single-writer"
+        // `glitch-free: true` (scenario.md: "request wave-aligned semantics on a
+        // fan-in cell"). Read here as well as at the bottom of this function
+        // because one binding — the scalar `combine-latest` — has two honest
+        // kernel forms and the param selects between them.
+        val glitchFreeRequested = (params["glitch-free"] as? Value.BoolVal)?.value == true
         val built = when (type) {
             // ---- sources ----------------------------------------------------
             "set-source" -> Built(SetCell<Any?>())
@@ -130,13 +147,32 @@ internal object KernelCatalog {
             )
             "group-by" -> Built(groupBy(KernelFunctions.aggregator(agg)))
             "partition" -> Built(partitioned(KernelFunctions.aggregator(agg)))
+            // The scalar `combine-latest fn: sum` has TWO bound forms, selected by
+            // the existing `glitch-free` descriptor param (no new catalog id, no new
+            // field):
+            //  - plain (`glitch-free` absent/false) → the driver adapter
+            //    [ScalarSumCombineCell]: it folds each arm's arrival straight into
+            //    the running sum, so it is order-independent at quiescence
+            //    (`final-view` holds) but deliberately NOT wave-aligned — a torn
+            //    intermediate sum is observable mid-wave (`CTL-GF-01`). It combines
+            //    two *independent* inlets, the shape `24-OP-COMBINE-01` drives.
+            //  - `glitch-free: true` → the kernel's [CoalescingCombineCell]
+            //    (D-COMBINE): version-buffered, emitting exactly one delta per
+            //    *completed* input wave, so no torn sum is ever observable
+            //    (`24-OP-COMBINE-02`, `[22-GF-01]`). Wave-alignment is a property of
+            //    a fork-join: its completeness set is every open Consume inlink, so
+            //    this form belongs on arms of one forked source (as any wave-aligned
+            //    fan-in does), not on two independent sources.
             "combine-latest" -> when (fn) {
-                "sum" -> Built(ScalarSumCombineCell())
+                "sum" -> {
+                    if (glitchFreeRequested) Built(CoalescingCombineCell(), waveAligned = true)
+                    else Built(ScalarSumCombineCell())
+                }
                 else -> throw UnsupportedCatalogBinding(
                     "combine-latest with fn='$fn' has no honest kernel binding — only the scalar fn=sum " +
-                        "arm is bound, and it is final-view only (NOT wave-aligned; see ScalarSumCombineCell). " +
-                        "A genuine glitch-free scalar combine for nested diamonds does not exist in the kernel " +
-                        "(§5 kernel gap).",
+                        "arm is bound (plain → ScalarSumCombineCell, order-independent at quiescence but not " +
+                        "wave-aligned; `glitch-free: true` → the kernel's wave-coalescing CoalescingCombineCell). " +
+                        "Combining with any other pure function is unbound.",
                 )
             }
             // `window` (M11.6 "windowing = key derivation", spec 24 §Grouped aggregation,
@@ -183,8 +219,11 @@ internal object KernelCatalog {
         // output through it — the wave-completeness gate the kernel packages
         // (GlitchFreeOperatorSuiteTest construction). The wrap lives in the driver
         // (it needs a real host link so the frontier sees EdgeOpen/Progress), not
-        // here — build only records the request via [Built.glitchFree].
-        return if ((params["glitch-free"] as? Value.BoolVal)?.value == true) built.copy(glitchFree = true) else built
+        // here — build only records the request via [Built.glitchFree]. A cell that
+        // already coalesces at the operator ([Built.waveAligned]) is exempt: its
+        // outlet carries one delta per completed wave, so a wrapper would re-buffer
+        // an already wave-aligned stream rather than align anything.
+        return if (glitchFreeRequested && !built.waveAligned) built.copy(glitchFree = true) else built
     }
 
     private fun requireFn(type: String, fn: String?): String =
@@ -266,13 +305,21 @@ internal object KernelCatalog {
      * family) keep their distinct `left`/`right` ports. Everything else uses the
      * given name or defaults to `inlet` — which lets a cycle edge name
      * `feedbackInput` and a seed edge default to `inlet`.
+     *
+     * [waveAligned] is the target's [Built.waveAligned]: the wave-coalescing
+     * `combine-latest` ([CoalescingCombineCell]) is a genuine single-port
+     * unrestricted fan-in like `quorum-set`, so *both* neutral arms collapse onto
+     * its one `inlet` — each still its own link, hence its own expected edge in
+     * the cell's completeness set.
      */
-    fun inletName(targetType: String, scenarioInlet: String?): String = when (targetType) {
+    fun inletName(targetType: String, scenarioInlet: String?, waveAligned: Boolean = false): String = when {
         // union/quorum-set are single fan-in ports (one `inlet`, left/right merge on it);
         // intersect is NOT — IntersectSetCell exposes distinct `left`/`right` ports (its
         // contract has no `inlet` port), so it routes through the two-input branch.
-        "union", "quorum-set" -> "inlet"
-        "intersect", "combine-latest", "join", "semi-join", "lookup-join" -> scenarioInlet ?: "left"
+        targetType == "union" || targetType == "quorum-set" -> "inlet"
+        targetType == "combine-latest" -> if (waveAligned) "inlet" else scenarioInlet ?: "left"
+        targetType == "intersect" || targetType == "join" ||
+            targetType == "semi-join" || targetType == "lookup-join" -> scenarioInlet ?: "left"
         else -> scenarioInlet ?: "inlet"
     }
 

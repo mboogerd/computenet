@@ -74,7 +74,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 21-PULL-02 | — | gap |
 | 21-PULL-03 | — | gap |
 | 21-REBASE-01 | — | gap |
-| 22-GF-01 | 22-GF-DIAMOND-01, 22-WAVE-FANIN-01, CTL-GF-01 | covered |
+| 22-GF-01 | 22-GF-DIAMOND-01, 22-WAVE-FANIN-01, 24-OP-COMBINE-02, CTL-GF-01 | covered |
 | 22-GF-02 | 22-GF-NESTED-01 | covered |
 | 22-GF-03 | — | gap |
 | 22-LIVE-01 | 22-LIVE-01 | covered |
@@ -119,7 +119,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-PART-03 | 24-OP-PARTITION-01 | covered |
 | 24-PART-04 | — | gap |
 | 24-PART-05 | — | gap |
-| 24-REPLAY-01 | — | gap |
+| 24-REPLAY-01 | 24-REPLAY-01 | covered |
 | 24-SCOPED-01 | — | gap |
 | 24-SCOPED-02 | — | gap |
 | 24-SET-01 | 24-OP-SET-01 | covered |
@@ -190,7 +190,6 @@ None.
 - Coverage gap: requirement '24-PART-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-PART-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-PART-05' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
-- Coverage gap: requirement '24-REPLAY-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-SCOPED-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-SCOPED-02' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-SHARD-01' (20-dataflow-semantics/24-data-cells.md) has no covering scenario

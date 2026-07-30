@@ -8,6 +8,7 @@ import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.op.QuorumSetCell
 import civictech.cell.durability.InMemoryJournal
 import civictech.cell.durability.Journal
 import civictech.cell.evolve.Effectful
@@ -78,6 +79,9 @@ import java.util.UUID
  *  - `set-source` / `set-view` on `host: dur` — **volatile** members of the durable
  *                           host: rebuilt fresh on crash, never journaled/replayed
  *                           (per-cell durability, `24-DUR-01`/`24-DUR-03`).
+ *  - `quorum-set`         — the volatile lane-counting SET fan-in a journaled arm
+ *                           replays into (`24-REPLAY-01`); the catalog id and its
+ *                           `k` are the core profile's, only the dur binding is new.
  *  - `journal`            — the crash/recover controller (no kernel cell).
  *
  * A `snapshot` of a journaled cell lowers to `host.checkpoint(journal)` (state +
@@ -95,6 +99,9 @@ internal class KernelDriverDur(
     companion object {
         const val DUR_HOST: HostId = "dur"
         private val JOURNALED_TYPES = setOf("journal-set-source", "journal-set-view", "effect-sink")
+
+        /** The lane-counting SET fan-in: its edges are real links, not intake subscriptions (see `linkEdge`). */
+        private const val LANE_FAN_IN = "quorum-set"
     }
 
     /** One surviving write-ahead journal, shared across crashes (it *is* "the disk"). */
@@ -189,6 +196,21 @@ internal class KernelDriverDur(
             Bound(spec.ref, spec.type, cell, null, KernelCatalog.ViewKind.NONE)
         }
 
+        // `quorum-set` (`24-REPLAY-01`): the lane-counting SET fan-in, always a
+        // **volatile** durable-host member — it is the *consumer* of a journaled
+        // arm's replayed baseline, never journaled itself (mirroring
+        // `DurableQuorumReplayTest`, where only the durable arm tees to the WAL and
+        // the quorum is re-minted empty on every rebuild). Constructed here rather
+        // than through [KernelCatalog.build] for one reason: the dur driver rebuilds
+        // every cell under its **recorded** [CellRef] after a crash (PN-1's derived
+        // port identity), and `KernelCatalog.build` mints a fresh random ref. The
+        // `k` reading is the catalog's own (`k` optional, default `n` ⇒ intersection).
+        "quorum-set" -> {
+            val k = (spec.params["k"] as? Value.IntVal)?.value?.toInt()
+            val cell = if (k != null) QuorumSetCell<Any?>(spec.ref) { k } else QuorumSetCell.intersection(spec.ref)
+            Bound(spec.ref, spec.type, cell, null, KernelCatalog.ViewKind.NONE)
+        }
+
         else -> throw UnsupportedCatalogBinding("no durable kernel binding for catalog type '${spec.type}'")
     }
 
@@ -209,11 +231,48 @@ internal class KernelDriverDur(
         return LinkResult.Connected("dur:$from->$to")
     }
 
-    /** Subscribe [src]'s outlet to an intake-routed proxy of [dst]'s inlet. */
+    /**
+     * Subscribe [src]'s outlet to an intake-routed proxy of [dst]'s inlet — the
+     * durable default. The one exception, an edge incident to a lane-counting
+     * fan-in, is [linkEdge].
+     */
     private fun wire(src: Bound, dst: Bound) {
+        // An edge incident to a lane-counting fan-in must be a REAL link, not an
+        // intake subscription — see [linkEdge].
+        if (src.type == LANE_FAN_IN || dst.type == LANE_FAN_IN) return linkEdge(src, dst)
         val sinkInlet = (HostedCellProxy.create(dst.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
         @Suppress("UNCHECKED_CAST")
         (src.cell as SetApi<Any?>).outlet.subscribe(Use.fixed(sinkInlet, PortRef.generate()))
+    }
+
+    /**
+     * The one edge shape the intake subscription above cannot express: an edge
+     * touching a **lane-counting fan-in** (`quorum-set` / `PresenceLanes`).
+     * Such a cell keeps one `TagState` lane per *open source link* and opens a
+     * lane on the `EdgeOpen` a link handshake announces; a `subscribe(Use.fixed(…))`
+     * is not a link, so no lane would ever open, every delivery would be
+     * unattributable, and the cell would silently fold nothing at all (the exact
+     * shape `PresenceLanes.laneFor` returns null for). So this edge is installed
+     * through the kernel's own link admission — the same
+     * `ManagedHost.connect(from, "outlet", to, "inlet")` every core-profile link
+     * uses — which is *not* the "raw port `linkTo`" the durability modeling notes
+     * warn against.
+     *
+     * Nothing is bypassed by that choice, because the intake funnel's two
+     * guarantees are about the **destination**: it tees a journaled sink's frames
+     * to the WAL and enforces the `Effectful` processed-frontier. A `quorum-set`
+     * is neither journaled nor `Effectful` (see [build]), and the *view* it feeds
+     * on this path is a volatile one; the journaled endpoint in a `24-REPLAY-01`
+     * graph is the arm **source**, whose own accepted ops still ride the intake
+     * through [apply]. This mirrors `DurableQuorumReplayTest` exactly: there too
+     * the root→journaled-relay edge goes through the host queue while both
+     * fan-in arms are ordinary `linkTo` links.
+     */
+    private fun linkEdge(src: Bound, dst: Bound) {
+        val result = host.managementInlet.call.connect(src.ref, "outlet", dst.ref, "inlet")
+        check(result is civictech.cell.link.LinkResult.Connected) {
+            "durable link ${src.type} -> ${dst.type} was not admitted: $result"
+        }
     }
 
     /**

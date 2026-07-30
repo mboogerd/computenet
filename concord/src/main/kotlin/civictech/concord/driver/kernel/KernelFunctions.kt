@@ -17,7 +17,9 @@ import civictech.cell.data.Aggregators
  * Three kinds, exactly as the catalog: **predicates** `(Any?) -> Boolean` (filter,
  * observation checks); **transforms** `(Any?) -> Any?` (map); **aggregators**, here
  * as kernel [Aggregator] builders (group-by / partition). `combine-latest`'s only
- * bound combiner (`sum`) lives in [ScalarSumCombineCell], not here.
+ * bound combiner (`sum`) is folded by its bound cell — [ScalarSumCombineCell] for
+ * the plain form, the kernel's `CoalescingCombineCell` for `glitch-free: true` —
+ * not here.
  */
 internal object KernelFunctions {
 

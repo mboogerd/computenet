@@ -1,0 +1,106 @@
+# Concord corpus scenario (D-CONCORD, wave B2) for the D-REPLAY kernel fix.
+# Mirrors the construction of the kernel's own `DurableQuorumReplayTest`: one
+# JOURNALED arm and one VOLATILE arm into a lane-counting SET fan-in
+# (`quorum-set`, threshold 2), observed through a set view, across a crash and a
+# journal replay.
+#
+# Why threshold 2 is load-bearing: `k: 1` is met by any single lane and would
+# pass with or without baseline handling — uninformative. With two arms, `k: 2`
+# is also the default-`k` intersection, so the recovered arm alone cannot carry
+# an element unless the replayed frames are genuinely installed as arm state.
+# Before D-REPLAY they were not: the replayed frames stuck at lane-count 1 < 2
+# forever and the recovered view was empty (the confirmed defect, R3).
+#
+# THE HONEST LIMITATION this scenario encodes rather than papers over. The
+# baseline install is *arm* state, and the quorum itself is volatile: it holds no
+# record of its own pre-crash view, so the replayed arm's state is the only
+# recovery information it has. When the two arms had DIVERGED before the crash —
+# an element the durable arm asserted alone, below the quorum — the recovered
+# view therefore **over-approximates**, installing that element too, until a live
+# delta re-touches it. That is the decided behavior (the dispute's own Resolves
+# clause), not a bug: baseline-installed elements are not pinned, and the next
+# live delta (or an EdgeOpen/EdgeClose shifting `n`) re-evaluates them under the
+# ordinary threshold. The script below therefore does two things instead of
+# asserting exact pre-crash equality over a divergent state: it keeps the arms in
+# AGREEMENT on the elements whose recovery it asserts (e1, e2 — for those, the
+# recovered view equals the pre-crash view exactly), and it carries one
+# deliberately DIVERGENT element (e4, the durable arm's alone) whose
+# over-approximation converges back out under a live re-evaluation, which the
+# final golden does pin.
+#
+# Driving conventions (DISPUTES.md §"How it is driven"): everything on the
+# reserved host id `dur`; the `journal`-typed controller pseudo-cell is the crash
+# handle (`despawn` of it = crash + `recoverFrom` in one step). One deviation the
+# fan-in forces, documented in `KernelDriverDur.linkEdge`: an edge incident to a
+# lane-counting fan-in is installed through the kernel's own link admission
+# (`ManagedHost.connect`), not an intake subscription, because a lane opens on
+# the `EdgeOpen` a link handshake announces and a subscription is not a link.
+# Nothing is bypassed: the intake funnel's guarantees (WAL tee, `Effectful`
+# frontier) are about the destination, and the quorum is neither journaled nor
+# effectful — the journaled endpoint here is the arm source, whose accepted ops
+# still ride the intake.
+id: 24-REPLAY-01
+title: A journaled arm's replayed frames are installed as recovered quorum arm state
+covers: [24-REPLAY-01]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a journaled set source and a volatile set source, both
+    feeding one 2-of-2 quorum fan-in observed through a set view, plus a journal
+    controller. Only the journaled arm's accepted ops reach the write-ahead log;
+    the volatile arm, the quorum and the view are re-minted empty on a crash.
+  when: >
+    both arms assert e1 and e2 (so each meets the 2-of-2 quorum and the view holds
+    them), the durable arm alone additionally asserts e4 (below the quorum, absent
+    from the view), then the whole durable host crashes and is rebuilt from its
+    surviving journal — the replayed frames re-entering flagged as a baseline —
+    after which live traffic resumes on both arms
+  then: >
+    the view again holds its pre-crash membership: the replayed frames were
+    installed as recovered arm state instead of sticking below the live threshold
+    and being dropped. Post-recovery the graph is ordinary again — a fresh element
+    still needs a live 2-of-2 quorum to enter (e3 does, on both arms), and the
+    over-approximated e4 leaves as soon as a live delta re-evaluates it under that
+    same threshold
+graph:
+  cells:
+    # the journaled arm: its accepted ops tee to the WAL and replay after the crash
+    - {id: jarm, type: journal-set-source, host: dur}
+    # the volatile arm: dies with the crash, replays nothing, ever
+    - {id: varm, type: set-source, host: dur}
+    # the lane-counting fan-in under test — volatile, one lane per open source link
+    - {id: q, type: quorum-set, k: 2, host: dur}
+    - {id: v, type: set-view, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: jarm, to: q}
+    - {from: varm, to: q}
+    - {from: q, to: v}
+script:
+  # both arms agree on e1/e2 — each reaches the 2-of-2 quorum and enters the view
+  - {type: apply, on: jarm, op: add, value: e1}
+  - {type: apply, on: varm, op: add, value: e1}
+  - {type: apply, on: jarm, op: add, value: e2}
+  - {type: apply, on: varm, op: add, value: e2}
+  # the divergent element: asserted by the durable arm alone, so lane count 1 < 2
+  - {type: apply, on: jarm, op: add, value: e4}
+  - {type: quiesce}
+  # pre-crash view: [e1, e2]
+  # CRASH + journal replay: discard every instance, rebuild with the same refs,
+  # recoverFrom the surviving journal — the journaled arm's frames re-enter as a
+  # baseline and are installed as its recovered lane state
+  - {type: despawn, on: ctl}
+  # recovered view: [e1, e2] plus the documented over-approximation e4
+  # live traffic resumes: a fresh element still needs a live 2-of-2 quorum
+  - {type: apply, on: jarm, op: add, value: e3}
+  - {type: apply, on: varm, op: add, value: e3}
+  # ...and a live delta on the divergent element re-evaluates it under the
+  # ordinary threshold (lane count 1 < 2), so the over-approximation converges out
+  - {type: apply, on: jarm, op: add, value: e4}
+  - {type: quiesce}
+checks:
+  # e1/e2 recovered (the pre-crash membership), e3 admitted live, e4 never quorate
+  - {type: final-view, view: v, equals: [e1, e2, e3]}
+  - {type: no-dead-letters}

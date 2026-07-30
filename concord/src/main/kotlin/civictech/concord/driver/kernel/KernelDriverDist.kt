@@ -147,7 +147,7 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
         inlet: String?,
         outlet: String?,
     ): LinkResult {
-        val inletName = KernelCatalog.inletName(dst.type, inlet)
+        val inletName = KernelCatalog.inletName(dst.type, inlet, dst.waveAligned)
         if (inletName != "inlet") {
             throw UnsupportedCatalogBinding(
                 "cross-host connect is bound only for targets whose inlet is the primary `inlet` port " +

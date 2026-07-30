@@ -25,8 +25,11 @@
 # terminal's element shape, so they are not listed here. Deliberately EXCLUDED (the
 # honesty rule — these are not honestly checkable generatively at v1):
 #   - `window`  — no kernel cell binding and no oracle model (cell-catalog.md n.5).
-#   - `combine-latest` — only the scalar fn=sum arm binds, and it is final-view-only
-#     (not wave-aligned), so it cannot satisfy views-converge under the sweep (§5).
+#   - `combine-latest` — only the scalar fn=sum arm binds; its plain form is
+#     final-view-only (not wave-aligned) and its wave-aligned form (`glitch-free:
+#     true`, D-COMBINE's CoalescingCombineCell) is a fork-join operator, so neither
+#     satisfies views-converge over a randomly generated pipeline. Covered instead
+#     by the dedicated `24-OP-COMBINE-01`/`-02` scenarios.
 #   - keyed/counter/list/map sources and the semi/lookup-join and partition/quorum
 #     operators are covered by their dedicated 24-OP-* scenarios; the generative
 #     sweep stays on the set-algebra core where all four properties hold on every
