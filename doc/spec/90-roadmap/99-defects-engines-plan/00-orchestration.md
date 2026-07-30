@@ -14,7 +14,8 @@ Three tracks to done:
   `../98-inspector-v4-plan/00-orchestration.md` (waves 7–11, checkpoints
   C7–C11, C-replan-2). That document is authoritative for track A; this plan
   only schedules around it. Done = its own definition of done, including the
-  C7 GO/RESIZE/NO-GO branch.
+  C7 GO/RESIZE/NO-GO branch. **C7 resolved GO on 2026-07-30** — waves 8–11 run
+  as written, unresized; no branch of this plan's schedule changes.
 - **Track B — confirmed defects.** Four tickets: D-REPLAY (baseline-blind
   quorum recovery, `24-REPLAY-01`), D-COMBINE (wave-coalescing scalar combine,
   `24-OP-COMBINE-01`/`CTL-GF-01`), D-UNION (union-scoped observed remove, the

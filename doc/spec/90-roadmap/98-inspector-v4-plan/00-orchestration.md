@@ -228,7 +228,7 @@ convention; adding that for a one-shot measurement is a permanent tax).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| V1C-BENCH | Measure the whole-copy cost; GO / RESIZE / NO-GO on the V1c chain | sonnet | fresh | ticket/v1c-bench | opus | not-started |
+| V1C-BENCH | Measure the whole-copy cost; GO / RESIZE / NO-GO on the V1c chain | sonnet | fresh | ticket/v1c-bench | opus | merged |
 
 **Checkpoint C7 — the gate, not a verification.** The evaluator judges the
 document against the ticket *and acts on its recommendation*:
@@ -244,6 +244,38 @@ document against the ticket *and acts on its recommendation*:
   C-replan-2 after wave 10. This is a real branch of the plan, not a
   formality: `20-wave-neutral-read-design.md` §4.3 argues the status quo is a
   defensible answer, and the measurement is what decides between them.
+
+**C7 resolved GO on 2026-07-30**, on the evidence in
+`30-bounded-read-measurement.md`. **Waves 8–11 proceed as written, unresized** —
+neither `V1C-CELLS`' nor `V1C-OPS`' cell list is narrowed. The load-bearing
+result is that document's §6, the E2-versus-E3 comparison the branch turns on:
+the live-traffic stall a concurrent read imposes on a cell's own service falls
+from 8.6–10.5 ms to ~1.2 ms at 10⁴ elements (~85–90%) and from 27.7–29.2 ms to
+~0.14 ms at 10⁵ (~99%), for a total-work premium of only 1.7–2.4×. That is the
+trade §3.2 predicted and could not quantify, and it is real and large at the
+sizes the design targets. The evaluator independently reproduced the
+foundational E1 magnitude (10⁵ `SetCell.snapshot()`: median 7.6 ms, p95 21.1 ms
+against the document's 5.8 / 23.3 ms) and verified every load-bearing code
+citation, including the priority-0 queue-jump mechanism (`ManagedHost.kt:1249`
+submitting above data's priority 20) that explains *why* the dip occurs.
+
+Three findings carried forward rather than resolved here:
+
+- **The 10³ result is inconclusive**, and the document says so. Paging neither
+  clearly helps nor hurts a cell that small. This is not a reason to narrow the
+  cell lists, because `BoundedStateful` is opt-in (§3.1): a family that never
+  grows past a few thousand elements simply does not implement it and pays
+  nothing.
+- **`V1C-KERNEL`'s cursor must resume in O(page), not O(n).** E3's counterfactual
+  used a `List<Int>` stand-in with an O(1) seek; a cursor that rescans the tag
+  map from the start on each page would turn the measured 1.7–2.4× premium into
+  O(n²) and invalidate the trade this checkpoint accepted. §3.4's key-ordered
+  cursor admits an O(page) resume — the implementation must actually take it.
+- **`MAX_CELLS = 50` / `BUDGET_MS = 2_000` are left unchanged**, as the ticket
+  required. §9 finds the implied 40 ms/cell budget lines up with the *tail* of a
+  single 10⁵ copy, which is defensible but undocumented, and names the untested
+  case: several large cells on one host, where E2 shows copies fully serialize.
+  A candidate for C-replan-2, not for this gate.
 
 ## Wave 8 — the kernel primitive · branches from `main` after C7
 
