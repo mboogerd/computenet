@@ -1,6 +1,6 @@
 # V1C-CELLS — six map- and set-backed data cells learn to page: bounded reads for `MapCell`, `KeyedSetCell`, `ListCell`, `WatermarkCell`, `InstanceSet` and `ShardCell`
 
-**Status**: Implemented — awaiting C9 verification
+**Status**: Implemented — merged
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 9 · **Branches:** `ticket/v1c-cells`

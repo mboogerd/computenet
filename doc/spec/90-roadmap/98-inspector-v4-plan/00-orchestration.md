@@ -339,7 +339,7 @@ addenda above).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| V1C-CELLS | `BoundedStateful` on the six map/set-backed data cells (incl. `ShardCell`'s composite) | opus | fork V1C-KERNEL | ticket/v1c-cells | opus | not-started |
+| V1C-CELLS | `BoundedStateful` on the six map/set-backed data cells (incl. `ShardCell`'s composite) | opus | fork V1C-KERNEL | ticket/v1c-cells | opus | **Implemented — merged** (`b8ec8a3`) |
 | V1C-OPS | `BoundedStateful` on the composite operator cells; cross-sub-state cursor ordering | opus | fresh + handoff | ticket/v1c-ops | opus | not-started |
 | V4-PEERID | `PeerId` reaches the registry; peer labels survive a reconnect | opus | fresh | ticket/v4-peerid | opus | not-started |
 
