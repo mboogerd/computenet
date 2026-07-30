@@ -300,6 +300,21 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * last's is a complete check of whether the fold gained any tag during the
      * walk, which is what [StatePage]'s stability contract asks of a caller.
      *
+     * **What that check does not catch, stated because it is this family's
+     * limit and not the paging design's.** An observed-remove mints no tag: it
+     * copies the add-tags it already holds into `dels` (effective-only removal,
+     * 21), so `currentFrontier` — a max over `adds ∪ dels` — is unchanged by
+     * it. A removal applied mid-walk to an element the walk has already paged
+     * therefore leaves the opening and closing stamps equal while the union
+     * still names that element present. Equal endpoint stamps are consequently
+     * *necessary but not sufficient* for "the union is a snapshot" here, and
+     * the same holds for the `since` escalation path, which filters the
+     * tombstone's re-used tags out along with the adds they cover. This is a
+     * pre-existing property of the family's tag algebra — the pull reply at
+     * [currentFrontier]'s other call site has always reported currency the same
+     * way — not something the bounded read introduced, and it is filed as
+     * research rather than papered over here.
+     *
      * **Ownership.** An element that is itself an `Owned`/`Leased` payload is
      * never copied into a page: it is replaced by an [ExclusiveEntry]
      * descriptor and counted in [StatePage.exclusivesElided]. Nothing is taken,

@@ -189,6 +189,35 @@ class BoundedStateReadTest {
         pages.last().caveats.shouldBeEmpty()
     }
 
+    /**
+     * C8: the honest limit of the stability check on *this* family, pinned so a
+     * later scenario cannot be written over it.
+     *
+     * [StatePage]'s across-page contract is "equal endpoint frontiers ⇒ the union
+     * is a snapshot", and the frontier detects tag *gains*. An OR-set's
+     * observed-remove mints no tag — it copies the add-tags it already holds into
+     * `dels` — so a remove-only mid-walk mutation is invisible to the check. That
+     * makes equal endpoints necessary but not sufficient here, which is what both
+     * KDocs now say and what `V1C-CONCORD` must not contradict.
+     */
+    @Test
+    fun `a remove-only mid-walk mutation leaves both endpoint frontiers equal, so the check is necessary not sufficient`() {
+        val cell = populated(30)
+
+        val pages = walk(cell, limit = 10, between = { pageNumber ->
+            // a key page 1 already returned, removed before page 2 is asked for
+            if (pageNumber == 1) cell.inlet.call.remove("k0000")
+        })
+
+        // the removal really happened
+        snapshotDels(cell).keys shouldContain "k0000"
+        // ... and minted no tag, so the check the caller is told to perform passes
+        pages.first().frontier shouldBe pages.last().frontier
+        // ... while the union still names the removed element present. Asserted as
+        // the documented limit, not as a promise the caller may rely on.
+        entriesOf(pages).single { it.element == "k0000" }.present.shouldBeTrue()
+    }
+
     @Test
     fun `a cursor whose key disappeared mid-walk resumes at the next key instead of restarting or throwing`() {
         val cell = populated(10)

@@ -183,10 +183,25 @@ data class StateRead(
  * A walk is a **sequence of per-page-consistent reads, not a snapshot**.
  *
  * - **If the frontier is unchanged from the first page to the last, the union
- *   of the pages is exactly a snapshot of that fold at that frontier.** This is
- *   a claim the caller *checks*, not one the kernel promises. A [TagFrontier]
- *   is monotone, so comparing the walk's opening and closing stamps is
- *   sufficient — both are exact (see [frontier]).
+ *   of the pages is exactly a snapshot of that fold at that frontier** — for a
+ *   family in which every state change mints or absorbs a tag. This is a claim
+ *   the caller *checks*, not one the kernel promises. A [TagFrontier] is
+ *   monotone, so comparing the walk's opening and closing stamps is sufficient
+ *   to detect any tag the fold *gained*, and both stamps are exact (see
+ *   [frontier]); no intermediate stamp can differ from two equal endpoints.
+ *
+ *   **The check detects tag gains, and only tag gains**, which is the whole of
+ *   what a [TagFrontier] measures. A family whose mutations do not all mint
+ *   tags therefore has a stability check that is *necessary but not
+ *   sufficient*, and must say so on its own `readBounded`. The known instance
+ *   is the OR-set: [civictech.cell.data.SetCell]'s observed-remove tombstones
+ *   an element by copying the add-tags it already holds into its del-map
+ *   (`21`, effective-only removal), minting nothing — so a mid-walk removal of
+ *   an element the walk has already paged leaves both endpoint stamps equal
+ *   while the union names that element present. A caller that must not be
+ *   wrong about removals cannot get that from the stamp alone; the `since`
+ *   escalation path below has the same limit, and closing it is a state-family
+ *   question filed as research, not a property this page can carry.
  * - **If it advanced, the union is a smeared read**: it contains every entry
  *   present for the whole walk, may contain entries added mid-walk, and may
  *   miss entries added or removed mid-walk after the walk had already passed
