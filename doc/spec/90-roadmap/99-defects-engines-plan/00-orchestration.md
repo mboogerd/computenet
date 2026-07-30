@@ -25,8 +25,10 @@ Three tracks to done:
   honestly, `CTL-GF-01` no longer a failing sentinel.
 - **Track C — engines E1/E2 entry.** Two spec tickets (E1-SPEC, E2-SPEC)
   making 96-plan §E1.1 and §E2.1 normative spec text, then a replan checkpoint
-  (R-ENG) that tickets the E1/E2 code spine against the merged spec. Done for
-  this plan = spec merged + R-ENG has appended the next tickets.
+  (R-ENG) that tickets the E1/E2 code spine against the merged spec. R-ENG ran
+  2026-07-30 and appended waves C1–C3 (E2-ALIGN; E1-CORE ∥ E2-GATE; E1-REPL ∥
+  E2-SUITE), so done for this plan = those waves merged through CC3.
+  E1.4–E1.6, E2.6, and E3+ stay with the 96-plan until a later replan.
 
 ## Sandbox / isolation
 
@@ -118,7 +120,8 @@ not given; do not stall waiting for a human.
 Track A (98-plan):  W7 ──C7──► W8 ──C8──► W9 ──C9──► W10 ──C10──► W11 ──C11──► C-replan-2
                      │gate                 ▲ hold until CB1 closed (rule 2)
 Track B:            B1 (D-REPLAY ∥ D-COMBINE ∥ D-UNION) ──CB1──► B2 (D-CONCORD) ──CB2──► B3 (D-C12) ──CB3
-Track C:            B1 (E1-SPEC) ──CB1──► B2 (E2-SPEC) ──CB2──► R-ENG (replan) ──► C-waves [intent only]
+Track C:            B1 (E1-SPEC) ──CB1──► B2 (E2-SPEC) ──CB2──► R-ENG ──► C1 ──CC1──► C2 ──CC2──► C3 ──CC3
+                                                                          ▲ C2 also holds for track A's C9 (rule 6)
 ```
 
 Track A wave 7 (`V1C-BENCH`, doc-producing) starts immediately, in parallel
@@ -205,19 +208,129 @@ Output: concrete tickets for the E1 spine (E1.2 → E1.3) and E2 spine
 around whatever track A still has in flight. E1.4–E1.6, E2.6, and E3+ stay
 with the 96-plan until a later replan.
 
-## Wave C1+ — engines code spine [intent only, not yet ticketed]
+**R-ENG ran 2026-07-30** against `main @ 6459c5b` (CB2 closed; track A waves
+7–8 merged, wave 9 — V1C-CELLS ∥ V1C-OPS ∥ V4-PEERID — dispatched and in
+flight). It re-entered the `create-implementation-plan` skill and read: the
+merged spec text (20/22 §The observation frontier and §Completeness over
+silent or stuck edges; 20/24 §Tagged maps and the
+`SemiJoinCell`/`CombineLatestCell` gating rows), 96-plan §E1.2–E1.3 and
+§E2.2–E2.5, the landed kernel seams (`AbsorbAck.kt`, `WaveFrontier.kt`,
+`GlitchFree.kt`, `CoalescingCombineCell.kt`, `Emit.kt`,
+`cell/observe/Observe.kt`), the wave-9 worktrees, and track B's merged
+defect fixes. Verified, per this section's own warning:
 
-E1: `TaggedMapDelta` + `OrMapCell` core, then replication (96 §E1.2–E1.3).
-E2: **the 96-plan overstates the remaining work** — ticket-writing found the
-absorb-ack helper (§E2.2; `kernel/.../cell/control/AbsorbAck.kt`, adopted
-across the operator suite, `OperatorAbsorbAckTest`) and the `WaveFrontier`
-extraction (§E2.3 first half; `kernel/.../cell/consistency/WaveFrontier.kt`,
-`GlitchFreeCell` delegates to it) both already landed via the composition run
-(CP-A3/CP-A4). What remains of E2 code: the aligned multi-view sink
-(`AlignedCompositeCell`/`observeAligned`, §E2.3 second half), frontier-gated
-emission (§E2.4), the balanced-transfer acceptance suite (§E2.5). R-ENG must
-re-verify this delta against the repo before writing tickets; the 96-plan
-sections remain the content source for what is genuinely left.
+- **E2.2 is landed and richer than 96 §E2.2 describes** — `cell.control
+  .absorbAck` (CP-A3) + `emitOrAbsorb` (`data/op/Emit.kt`), adopted across
+  eleven operators, `OperatorAbsorbAckTest` in place. The genuine residual
+  is the two value-equal-swallow cells: `CombineLatestCell` (the divergence
+  20/22 flags at `:219-221`) and `LookupJoinCell` (same `MapDiffPublisher`
+  shape, unflagged, equally bound by the MUST). Both go to E2-GATE.
+- **E2.3's first half is landed** — `cell.consistency.WaveFrontier` (CP-A4;
+  now also carrying E3.4 replica-fed gates, PN-7 interest scoping, PN-9
+  policy tiers, PN-10 observe-role exclusion), `GlitchFreeCell` delegating.
+  The sink half (`AlignedCompositeCell`/`observeAligned`) does not exist
+  anywhere; E2-ALIGN builds it. One path correction: the observe machinery
+  is `kernel/.../cell/observe/Observe.kt`, not `host/Observe.kt` — 96
+  §E2.3's `host/AlignedObserve.kt` is stale the same way; no track A wave
+  9–11 ticket claims the `cell/observe` package.
+- **E1 is genuinely greenfield** — no `OrMapCell`/`TaggedMapDelta`-shaped
+  file exists; `@Contract MapOps` exists for reuse (`MapCell.kt:14-19`), so
+  no `gen/` work; the additive payload-registration seam is
+  `cell/wire/WireCodec.kt:142`.
+- **D-COMBINE's `CoalescingCombineCell` is the load-bearing prior art** for
+  both E2-ALIGN and E2-GATE: its KDoc (`:69-95`) records why an installed
+  `WaveFrontier` cannot be composed by a coalescing operator and mirroring
+  the fold at cell scope is the available composition — both tickets are
+  written to mirror, never to modify `WaveFrontier`.
+
+Output: five tickets (below). E1.4–E1.6, E2.6, and E3+ stay with the 96-plan
+until a later replan, as specified.
+
+**Cross-track claim rules, appended by R-ENG** (extending rules 1–5 above):
+
+6. **No wave-C ticket claiming `cell/data/**` or `cell/data/op/**` (source
+   or test directories) dispatches while track A wave 9 is in flight** —
+   the rule-2 discipline extended to track C: `V1C-CELLS` owns
+   `kernel/src/test/.../cell/data/` and `V1C-OPS` owns `cell/data/op/**`
+   for the duration of wave 9. Wave C2 therefore branches from `main` after
+   track A's C9 closes. `cell/observe/**` and the `cell/consistency`/
+   `cell/replication` test directories are claimed by no track A wave 9–11
+   ticket, so wave C1 dispatches immediately. Rule 1 (`ManagedHost.kt`,
+   `SetCell.kt`) stays in force for every C ticket through track A wave 11;
+   `observeAligned` is an extension function precisely so no C ticket edits
+   `ManagedHost.kt`.
+7. **Spec-file seam inside track C**: E2-ALIGN owns 20/22 §The observation
+   frontier (its spec-ahead-of-code note); E2-GATE owns 20/22 §Completeness
+   over silent or stuck edges plus the 20/24 operator rows. Disjoint
+   sections of one file — if both branches are in flight, the later merger
+   rebases. No C ticket edits the 96-plan or 95-research-plan.
+
+## Wave C1 — the aligned observation sink · branches from `main @ 6459c5b`
+
+Runs alone, dispatched immediately — concurrent with track A waves 9–10 and
+wave B3, all file claims disjoint (rule 6).
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| E2-ALIGN | `AlignedCompositeCell` + `ManagedHost.observeAligned` — one composite snapshot per settled wave, per-name inlets, mirrored cross-inlet frontier fold (96 §E2.3 second half, `[22-OBS-01/02]`) | opus | fresh | ticket/e2-align | opus | Specified — not-started |
+
+**Checkpoint CC1 — verification.** Fresh opus evaluator. Its named tests plus
+`./gradlew :kernel:test` (including the pre-existing observe suite —
+`ObserveCellTest` — unmodified-green) and `./gradlew :concord:docLints` (the
+ticket trues one 20/22 paragraph). Audit: `WaveFrontier.kt`/`GlitchFree.kt`/
+`cell/port/**`/`cell/control/**` untouched; no `cell/data/**` edit of any
+kind (wave 9 is likely still in flight); `observeAll`/`CompositeSink`
+behavior unchanged. Merge on pass; repo gate `./gradlew test` before the
+wave closes. The evaluator carries E2-ALIGN's shipped builder surface into
+E2-SUITE's ticket file if it differs from the sketch (the C8 propagation
+pattern).
+
+## Wave C2 — OR-map core + operator gating · branches from `main` after track A C9
+
+Parallel: E1-CORE ∥ E2-GATE — `cell/data/{OrMapCell,delta/TaggedMapDelta}.kt`
++ `cell/wire/WireCodec.kt` + test `cell/data/OrMapCellTest.kt` vs three named
+`cell/data/op/` cells + `cell/data/op/` tests + the 20/22 §Completeness and
+20/24 spec rows: disjoint. Dispatch gate: track A C9 closed (rule 6); does
+NOT wait for CC1 (E2-GATE builds on the merged frontier substrate, not on
+E2-ALIGN).
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| E1-CORE | `TaggedMapDelta` + `OrMapCell` local core: dot-per-key observed-remove, LWW-by-dot-order, atomic re-put, catch-up, additive wire registration (96 §E1.2, `[24-TMAP-01..04]`) | opus | fresh | ticket/e1-core | opus | Specified — not-started |
+| E2-GATE | Absorb-ack residual closed (`CombineLatestCell`, `LookupJoinCell`) + opt-in `emitOnFrontier` on `SemiJoinCell`/`CombineLatestCell` (96 §E2.2 residual + §E2.4, `[24-OP-SEMIJOIN-04]`) | opus | fresh | ticket/e2-gate | opus | Specified — not-started |
+
+**Checkpoint CC2 — verification.** Fresh opus evaluator per ticket. E1-CORE:
+named tests + `./gradlew :kernel:test`; audit the wire registration is
+additive (no frame change) and no replication surface leaked in. E2-GATE:
+named tests + `./gradlew :kernel:test` +
+`./gradlew :concord:test -Pconcord.profiles=core` (the corpus binds these
+operators; `CTL-GF-01`/`CTL-GOLDEN-01` still report PASSED under their
+inverted expectations) + `./gradlew :concord:docLints`; audit ungated
+defaults byte-identical and any V1C-OPS `BoundedStateful` surface intact.
+Merge each on pass; repo gate before the wave closes. The E1-CORE evaluator
+carries the shipped cell surface into E1-REPL's ticket; the E2-GATE
+evaluator carries the `emitOnFrontier` constructor surface into E2-SUITE's.
+
+## Wave C3 — replication + the acceptance suite · branches from `main` after CC2 (and CC1)
+
+Parallel: E1-REPL ∥ E2-SUITE — `cell/data/OrMapCell.kt` + test
+`cell/replication/` vs test `cell/consistency/` only: disjoint. E1-REPL
+requires E1-CORE merged; E2-SUITE requires E2-ALIGN and E2-GATE merged.
+
+| Ticket | Nature | Model | Session | Branch | Evaluator | Status |
+|---|---|---|---|---|---|---|
+| E1-REPL | `OrMapCell` joins the mergeable class: `deltaInlet`/`applyRemote` echo-terminating gossip, C-10 re-origination, pull baseline, `ReBaseline` dead-source fencing (96 §E1.3) | opus | fresh | ticket/e1-repl | opus | Specified — not-started |
+| E2-SUITE | Balanced-transfer internal-consistency acceptance suite — invariant at every observed output; `observeAll` and ungated-outer-join failure controls (96 §E2.5, 20/22 §Acceptance benchmark) | opus | fresh | ticket/e2-suite | opus | Specified — not-started |
+
+**Checkpoint CC3 — verification.** Fresh opus evaluator per ticket. E1-REPL:
+named tests + `./gradlew :kernel:test`; audit `SetCell.kt`/
+`cell/replication/**` sources untouched, both divergence controls trip.
+E2-SUITE: the suite + `./gradlew :kernel:test`; the evaluator's sharpest
+check is honesty — both failure controls must trip, and a pinned finding
+against a merged mechanism is a *valid pass with a report*, while a softened
+invariant or replaced seed is a rejection ground. Merge on pass; repo gate
+`./gradlew test` before the wave closes. CC3 closing ends track C's code
+spine; C-final (below) closes the ledgers.
 
 **Checkpoint C-final — close the ledgers.** Trigger: last wave of all three
 tracks merged. Verify and update: DISPUTES.md (D-REPLAY/D-COMBINE/D-C12
