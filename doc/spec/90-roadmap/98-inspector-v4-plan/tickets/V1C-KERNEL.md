@@ -1,6 +1,6 @@
 # V1C-KERNEL — a bounded state read: the kernel learns to answer "the first 200 entries" instead of "all of it"
 
-**Status**: Specified — not-started
+**Status**: Implemented — awaiting C8 verification
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 8 · **Branches:** `ticket/v1c-kernel`

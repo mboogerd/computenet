@@ -1,8 +1,13 @@
 package civictech.cell.data
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
+import civictech.cell.Cursor
+import civictech.cell.ExclusiveEntry
 import civictech.cell.Propagate
-import civictech.cell.Stateful
+import civictech.cell.ReadCaveat
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.link.*
@@ -28,7 +33,10 @@ interface SetApi<E> {
 }
 
 class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
-    SetCellBase<E>(ref), Stateful, Replicable<SetDelta<E>>, DeliveryTracking {
+    // BoundedStateful extends Stateful (V1C-KERNEL): the drain/migration/
+    // promotion/durability seam this cell already had is untouched, and the
+    // paged read is added beside it.
+    SetCellBase<E>(ref), BoundedStateful, Replicable<SetDelta<E>>, DeliveryTracking {
     /**
      * Replica gossip intake (spec 42, M7.3): another replica's effective
      * deltas merge here; only *new* tag information re-emits (effective-only,
@@ -216,7 +224,189 @@ class SetCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         tagCounter = maps["counter"] as? Long ?: 0L
     }
 
+    // ---------------------------------------------------------------------
+    // Bounded read (V1C-KERNEL) — the reference [BoundedStateful]
+    // implementation the rest of the data-cell family copies. Purely additive:
+    // nothing above this line changed, and `snapshot()`/`restore()` behave
+    // exactly as they did, because drain, migration, promotion state transfer
+    // and durability checkpoints all depend on that seam being untouched.
+    // ---------------------------------------------------------------------
+
+    /** One element's OR-set state — a whole entry, never split across pages (V1C-KERNEL). */
+    data class SetStateEntry<E>(
+        val element: E,
+        val addTags: Set<Timestamp>,
+        val delTags: Set<Timestamp>,
+    ) : Serializable {
+        /** Is the element currently a member — at least one un-tombstoned add-tag? */
+        val present: Boolean get() = addTags.any { it !in delTags }
+    }
+
+    /**
+     * `SetCell`'s cursor token (V1C-KERNEL) — opaque to the kernel, and the
+     * encoding `V1C-CELLS`/`V1C-OPS` copy.
+     *
+     * **[order] is the walk's enumeration order, frozen at walk start.** The
+     * two tag maps are `LinkedHashMap`s, so their live iteration order is not
+     * stable — a remove-then-re-add moves a key to the tail (which could hand
+     * one key to a walk twice) and [restore] rebuilds both from a `HashMap`
+     * (which reorders wholesale). Freezing the sequence is how this cell
+     * discharges [BoundedStateful]'s "impose an order" obligation.
+     *
+     * **Key-based, and O(page) to resume.** [next] indexes a list of *keys*
+     * that no longer changes, not a position in live state: a removal earlier
+     * in the enumeration shifts nothing, and a key that disappears entirely
+     * (only [restore] can do that here — the OR-set's own `remove` tombstones
+     * rather than deletes) is simply skipped when the walk reaches it. Resuming
+     * costs one array index plus one map lookup per entry, so a walk's total
+     * work is O(n) rather than the O(n²) a rescan-from-the-start cursor would
+     * cost — the shape the C7 measurement gate ruled out, because the ~1.7–2.4×
+     * paging premium it accepted was measured against an O(1) seek.
+     *
+     * The price is one O(n) pass over the tag maps at walk start, which also
+     * computes [opening]; it copies key *references* only, never the tag sets,
+     * so it is a small fraction of what one `snapshot()` costs.
+     */
+    private class SetWalk<E>(
+        val order: List<E>,
+        val next: Int,
+        val opening: TagFrontier,
+    ) : Serializable
+
+    /** This cell carries a per-source-monotone tag clock, so `since` is honoured exactly. */
+    override val supportsSince: Boolean get() = true
+
+    /** Interest filtering is per element, the same predicate a scoped pull applies. */
+    override val supportsScope: Boolean get() = true
+
+    /**
+     * One page of this set's OR-set state (V1C-KERNEL).
+     *
+     * Per page: at most [StateRead.limit] keys are examined and at most
+     * [StateRead.limit] whole [SetStateEntry] entries are returned, so the work
+     * is O(limit) — never a rescan of the tag maps. Keys skipped by
+     * [StateRead.since] or [StateRead.scope] are consumed from the frozen order
+     * and never revisited, so a heavily filtered walk yields short (possibly
+     * empty) pages rather than long ones; only `next == null` ends a walk.
+     *
+     * **Frontier.** Exact on the first page (computed in the same pass that
+     * freezes the enumeration order) and exact on the last (recomputed as the
+     * walk closes). An intermediate page carries the opening frontier and says
+     * so with [ReadCaveat.STALE_FRONTIER]: recomputing it per page means
+     * rescanning every tag on every page — O(n²) over a walk, the exact cost
+     * this design exists to avoid — and maintaining it incrementally would put
+     * a secondary index on the fold path, which P2 forbids. Because a
+     * [TagFrontier] is monotone, comparing the first page's stamp with the
+     * last's is a complete check of whether the fold gained any tag during the
+     * walk, which is what [StatePage]'s stability contract asks of a caller.
+     *
+     * **Ownership.** An element that is itself an `Owned`/`Leased` payload is
+     * never copied into a page: it is replaced by an [ExclusiveEntry]
+     * descriptor and counted in [StatePage.exclusivesElided]. Nothing is taken,
+     * borrowed, released or unwrapped.
+     *
+     * [StatePage.attributes] carries `counter` — the tag-minting counter, which
+     * is cell-level state rather than an entry, and rides every page so that a
+     * caller joining a walk mid-way still sees it. With it, the union of a
+     * walk's pages is exactly [snapshot]'s content.
+     */
+    override fun readBounded(request: StateRead): StatePage {
+        val scope = request.scope
+        @Suppress("UNCHECKED_CAST")
+        val walk = (request.cursor?.token as? SetWalk<E>) ?: openWalk(scope)
+        val order = walk.order
+
+        val entries = ArrayList<Serializable>(minOf(request.limit, 64))
+        var elided = 0
+        var bytes = 0
+        var index = walk.next
+        val examineThrough = minOf(index + request.limit, order.size)
+        while (index < examineThrough) {
+            val element = order[index]
+            index++
+            val liveAdds = adds[element]
+            val liveDels = dels[element]
+            if (liveAdds == null && liveDels == null) continue // vanished since the walk opened
+            if (ExclusiveEntry.isExclusive(element)) {
+                // the element IS the exclusive value here, so there is no
+                // separate key to report — see ExclusiveEntry.key
+                entries += ExclusiveEntry.of(key = null, exclusive = element as Any)
+                elided++
+                bytes += EXCLUSIVE_ENTRY_BYTES
+            } else {
+                val addTags = tagsBeyond(liveAdds, request.since)
+                val delTags = tagsBeyond(liveDels, request.since)
+                if (addTags.isEmpty() && delTags.isEmpty()) continue // nothing beyond `since`
+                entries += SetStateEntry(element, addTags, delTags)
+                bytes += ENTRY_OVERHEAD_BYTES + TAG_BYTES * (addTags.size + delTags.size)
+            }
+            // advisory (StateRead.byteBudget): honoured only once the page
+            // already carries an entry, so a walk always makes progress
+            if (bytes >= request.byteBudget) break
+        }
+
+        val complete = index >= order.size
+        val opening = walk.next == 0
+        return StatePage(
+            entries = entries,
+            next = if (complete) null else Cursor(SetWalk(order, index, walk.opening)),
+            // exact at both ends of the walk; the opening stamp was computed in
+            // this same invocation when this is the first page
+            frontier = if (complete && !opening) currentFrontier(scope) else walk.opening,
+            exclusivesElided = elided,
+            attributes = mapOf("counter" to java.lang.Long.valueOf(tagCounter)),
+            caveats = if (complete || opening) emptySet() else setOf(ReadCaveat.STALE_FRONTIER),
+        )
+    }
+
+    /**
+     * The walk's one O(n) pass (V1C-KERNEL): freeze the enumeration order and
+     * compute the opening frontier together, so a walk pays for a full traversal
+     * of the tag maps twice (here and at close) rather than once per page.
+     *
+     * `dels` may hold a key `adds` does not — a remote tombstone for an element
+     * whose add never arrived — so both maps contribute keys, deduplicated
+     * against `adds` rather than through a second hash set.
+     */
+    private fun openWalk(scope: civictech.cell.link.Interest?): SetWalk<E> {
+        val admit: (E) -> Boolean =
+            if (scope == null || scope is civictech.cell.link.Interest.Total) { _ -> true }
+            else { e -> scope.admits(e) }
+        val order = ArrayList<E>(adds.size + dels.size)
+        val frontier = HashMap<UUID, Long>()
+        for ((element, tags) in adds) {
+            if (!admit(element)) continue
+            order += element
+            for (tag in tags) frontier.merge(tag.sourceId, tag.counter, ::maxOf)
+        }
+        for ((element, tags) in dels) {
+            if (!admit(element)) continue
+            if (!adds.containsKey(element)) order += element
+            for (tag in tags) frontier.merge(tag.sourceId, tag.counter, ::maxOf)
+        }
+        return SetWalk(order, 0, TagFrontier(frontier))
+    }
+
+    /**
+     * A page-owned copy of the tags [since] has not yet observed (V1C-KERNEL) —
+     * a copy, never an alias of the fold's own mutable set, so a page can never
+     * be mutated under its reader.
+     */
+    private fun tagsBeyond(tags: Set<Timestamp>?, since: TagFrontier?): Set<Timestamp> = when {
+        tags.isNullOrEmpty() -> emptySet()
+        since == null -> HashSet(tags)
+        else -> tags.filterTo(HashSet()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+    }
+
     companion object {
         fun <E> create(): SetApi<E> = SetCell()
+
+        // Crude, deliberately: StateRead.byteBudget is advisory and
+        // cell-estimated, and an estimate a cell cannot make it is free to
+        // ignore. These are rough JVM object sizes for one entry and one
+        // Timestamp, not an encoder's measurement.
+        private const val ENTRY_OVERHEAD_BYTES = 64
+        private const val TAG_BYTES = 48
+        private const val EXCLUSIVE_ENTRY_BYTES = 64
     }
 }

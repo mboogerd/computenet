@@ -6,10 +6,14 @@ import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.cell.protocol.*
 import civictech.cell.BlockingCell
+import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
+import civictech.cell.Provenance
 import civictech.cell.ReBaselineEmitting
+import civictech.cell.StateRead
+import civictech.cell.StateReadResult
 import civictech.cell.Stateful
 import civictech.cell.SuspendingCell
 import java.io.ByteArrayInputStream
@@ -203,8 +207,17 @@ open class ManagedHost(
      */
     val isDrained: Boolean get() = state == State.DRAINED
 
-    /** Snapshots captured by the last drain (spec 33 step 3; starts G-25). */
-    private val snapshots = mutableMapOf<CellRef, Serializable>()
+    /**
+     * Snapshots captured by the last drain (spec 33 step 3; starts G-25).
+     *
+     * Concurrent for T04 finding 4's reason, applied to the one drain map an
+     * outside reader now consults: every writer is the scheduler thread
+     * (`beginDrain`'s phase 2, `migrate`'s continuation), but [readState]'s
+     * checkpoint arm (V1C-KERNEL) reads it from an observer's own thread after
+     * observing the `@Volatile` [state] as `DRAINED` — and a plain HashMap read
+     * racing `migrate`'s `snapshots.clear()` can spin or false-negate.
+     */
+    private val snapshots = ConcurrentHashMap<CellRef, Serializable>()
 
     /** Supervision (G-26): per-cell failure policies, spawn-time checkpoints, and suspended-cell parking. */
     private val policies = mutableMapOf<CellRef, SupervisionPolicy>()
@@ -1259,6 +1272,184 @@ open class ManagedHost(
         } catch (_: IllegalStateException) {
             // terminated scheduler (T04 finding 5): a dead host has no state to read
             future.also { it.complete(null) }
+        }
+    }
+
+    /**
+     * Host-routed **bounded** state read (V1C-KERNEL, closing MRB-157) — the
+     * paged sibling of [snapshotOf], and the seam an instrument can afford to
+     * point at a big cell.
+     *
+     * [snapshotOf] already has every property a read-only observer wants except
+     * a bound, a consistency stamp and an answer for a cell that is not hot.
+     * This adds all three, and changes nothing about the first: everything
+     * [snapshotOf]'s KDoc says about threading, cancellation, wave-neutrality
+     * and never completing exceptionally is true here **per page**.
+     *
+     * **One page = one scheduler task.** A 10⁵-row read becomes ~500 short
+     * tasks interleaved with the cell's own work instead of one task that owns
+     * its thread for the whole copy. Measured
+     * (`doc/spec/90-roadmap/98-inspector-v4-plan/30-bounded-read-measurement.md`):
+     * a concurrent whole-state copy stalls a 10⁵-element cell's live traffic
+     * for ~28 ms because a priority-0 submit jumps ahead of every queued
+     * data-priority task and then holds the thread; paging removes ~85–99% of
+     * that stall for a ~1.7–2.4× total-work premium. Pages are therefore never
+     * batched inside one task, and a walk is driven one round trip at a time by
+     * its caller.
+     *
+     * **Wave-neutral, like [snapshotOf] and for the same reason: it is not a
+     * message.** It never enters `FanOutlet.call`/`at`, so no wave counter
+     * moves and `waveState()` is unchanged; it fires no tap, so no delivered
+     * watermark advances; it is never offered to a `WaveFrontier`, so it arms
+     * no join and joins no completeness set; it reaches no inlet, so it cannot
+     * advance an `Effectful` processed frontier; it installs no link, so no
+     * `PullOnOpen` fires and no attention is raised (P6). This is exactly what
+     * a `StateRequest` pull *cannot* offer an instrument — not because a pull
+     * perturbs the wave plane in any way that matters, but because a reply is
+     * delivered only to a `consumers`/`taps` entry, so a read-only observer
+     * would have to install topology first.
+     *
+     * **The answer for a cell that is not hot, decided rather than guessed:**
+     *
+     * - **Suspended** ([isSuspended]): answered **from the live cell**, with
+     *   [Provenance.LIVE_SUSPENDED]. Only the cell's data intake is parked; its
+     *   fold is quiescent by construction, which makes it the most stable thing
+     *   in the graph to read. This read is submitted at priority 0 and is not
+     *   itself parked.
+     * - **Drained host** ([isDrained]): answered from the checkpoint blob this
+     *   host already holds, with [Provenance.CHECKPOINT], **without scheduling
+     *   anything on any cell thread**. That blob is a whole [Stateful.snapshot]
+     *   value, not a page, and nothing in the kernel can slice an opaque
+     *   `Serializable` without reflection — so it is offered as
+     *   [StateReadResult.Unbounded] under [StateRead.allowWholeCopy] and
+     *   refused with [StateReadResult.Reason.CHECKPOINT_NOT_BOUNDED] otherwise.
+     *   No frontier rides it: none is recoverable from the blob, and inventing
+     *   one would be worse than omitting it.
+     * - **Held for a migration flip, or published on another host**:
+     *   [StateReadResult.Reason.MIGRATING]. The authoritative instance is not
+     *   this host's.
+     * - **Unhosted, not [Stateful], terminated scheduler**: the named
+     *   [StateReadResult.Reason] arms — the cases [snapshotOf] can only report
+     *   as a null completion.
+     *
+     * **Never a silent whole copy.** A cell that is [Stateful] but not
+     * [BoundedStateful] is refused with
+     * [StateReadResult.Reason.NOT_BOUNDED] unless the caller passed
+     * [StateRead.allowWholeCopy]. The whole point of the primitive is that a
+     * caller learns what a read costs *before* paying for it — which is what
+     * the inspector's search notice currently has to reconstruct afterwards.
+     *
+     * **A bound is never silently widened.** [StateRead.since] and
+     * [StateRead.scope] are refused up front — on the caller's thread, before
+     * anything is submitted — for a cell that does not declare
+     * [BoundedStateful.supportsSince] / [BoundedStateful.supportsScope].
+     *
+     * **This is not a back door around a pull refusal.** It is not a
+     * `StateRequest`, installs no link and fires no `PullOnOpen`, so a
+     * `PullOnOpen(requireServing = true)` handshake refusal is untouched by it;
+     * equally, a cell that does not serve pulls may still be read here, exactly
+     * as [snapshotOf] already reads one.
+     *
+     * Callable from any thread, against any scheduler including
+     * [SimulationController] — on a simulated host each page lands on a later
+     * `step()`/`runToIdle()`, which is the correct and testable behaviour.
+     * Cancellation is honoured per page: a caller that abandons a walk at its
+     * own deadline leaves at most one queued task, which checks the future
+     * before entering the cell.
+     */
+    fun readState(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult> {
+        fun answered(result: StateReadResult): CompletableFuture<StateReadResult> =
+            CompletableFuture<StateReadResult>().also { it.complete(result) }
+
+        // Ordered so the honest refusals are decided on the caller's thread and
+        // cost nothing on any cell thread. The migration arm comes first: a held
+        // ref may still be present in [cells], and reading it there would be a
+        // stale answer wearing a fresh timestamp.
+        if (registry?.isHeld(ref) == true) return answered(unavailable(StateReadResult.Reason.MIGRATING))
+        val cell = cells[ref]
+        if (cell == null) {
+            // Not here. If this host's registry places the ref at all, it is
+            // another host's — the completed-`migrate` case (the ref left
+            // [cells] and the target republished it) is indistinguishable from
+            // "never local", and both have the same honest answer: not readable
+            // here, and no local object may be invented.
+            val elsewhere = registry?.location(ref) != null
+            return answered(
+                unavailable(
+                    if (elsewhere) StateReadResult.Reason.MIGRATING else StateReadResult.Reason.NOT_HOSTED
+                )
+            )
+        }
+        if (cell !is Stateful) return answered(unavailable(StateReadResult.Reason.NOT_STATEFUL))
+
+        // Drained: the blob already exists, so no cell thread is at risk and
+        // none is used. The volatile [state] read gives happens-before on the
+        // drain's writes to [snapshots].
+        if (state == State.DRAINED) {
+            val blob = snapshots[ref] ?: return answered(unavailable(StateReadResult.Reason.READ_FAILED))
+            return answered(
+                if (request.allowWholeCopy) StateReadResult.Unbounded(blob, Provenance.CHECKPOINT)
+                else unavailable(StateReadResult.Reason.CHECKPOINT_NOT_BOUNDED)
+            )
+        }
+
+        if (cell !is BoundedStateful) {
+            if (!request.allowWholeCopy) return answered(unavailable(StateReadResult.Reason.NOT_BOUNDED))
+            return submitRead {
+                val snapshot = runCatching { cell.snapshot() }.getOrNull()
+                if (snapshot == null) unavailable(StateReadResult.Reason.READ_FAILED)
+                else StateReadResult.Unbounded(snapshot, liveProvenance(ref))
+            }
+        }
+
+        // Refused before the submit, so a caller learns a bound cannot be
+        // honoured without paying for a scheduler round trip — and never
+        // receives state widened past the bound it asked for.
+        if (request.since != null && !cell.supportsSince) {
+            return answered(unavailable(StateReadResult.Reason.SINCE_UNSUPPORTED))
+        }
+        if (request.scope != null && request.scope !is Interest.Total && !cell.supportsScope) {
+            return answered(unavailable(StateReadResult.Reason.SCOPE_UNSUPPORTED))
+        }
+
+        return submitRead {
+            runCatching { cell.readBounded(request) }
+                .fold(
+                    onSuccess = { page ->
+                        StateReadResult.Page(
+                            // Provenance is the host's to state, not the cell's:
+                            // only the host knows the cell is parked.
+                            if (page.provenance == Provenance.LIVE) page.copy(provenance = liveProvenance(ref))
+                            else page
+                        )
+                    },
+                    onFailure = { unavailable(StateReadResult.Reason.READ_FAILED) },
+                )
+        }
+    }
+
+    private fun unavailable(reason: StateReadResult.Reason): StateReadResult =
+        StateReadResult.Unavailable(reason)
+
+    /** [Provenance.LIVE_SUSPENDED] iff [ref]'s data intake is parked right now (V1C-KERNEL). */
+    private fun liveProvenance(ref: CellRef): Provenance =
+        if (isSuspended(ref)) Provenance.LIVE_SUSPENDED else Provenance.LIVE
+
+    /**
+     * The [snapshotOf] submit block, once (V1C-KERNEL): one page = one
+     * scheduler task at priority 0, the cancellation check before the cell is
+     * entered (an abandoned read costs a dequeue, not a page), and a terminated
+     * scheduler answered rather than thrown.
+     */
+    private fun submitRead(produce: () -> StateReadResult): CompletableFuture<StateReadResult> {
+        val future = CompletableFuture<StateReadResult>()
+        return try {
+            scheduler.submit(0) {
+                if (!future.isCancelled) future.complete(produce())
+            }
+            future
+        } catch (_: IllegalStateException) {
+            future.also { it.complete(unavailable(StateReadResult.Reason.SCHEDULER_TERMINATED)) }
         }
     }
 
