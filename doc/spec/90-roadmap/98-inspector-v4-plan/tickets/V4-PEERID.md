@@ -1,6 +1,6 @@
 # V4-PEERID — a peer's chosen name reaches the registry, so its hull keeps one identity across a reconnect
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 9 · **Branches:** `ticket/v4-peerid`

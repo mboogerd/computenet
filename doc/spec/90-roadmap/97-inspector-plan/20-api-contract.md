@@ -53,8 +53,21 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                    // no local descriptor (color/manifests/ports all absent, typeFqn
                                    // "<unknown>") and answers CellState "unavailable" / observe 409 (M5)
   "net": "local",                 // network host / peer id. Local cells: the launcher's --net-name
-                                   // (default "local", so M0-M4 output is unchanged). Remote cells:
-                                   // a "peer-<id>" label, NOT stable across a peer reconnect (M5)
+                                   // (default "local", so M0-M4 output is unchanged). Remote cells,
+                                   // since V4-PEERID: the announcing peer's OWN --net-name when that
+                                   // peer named itself, and that value IS stable across a peer
+                                   // reconnect — the peer re-asserts it in its re-hello. A peer that
+                                   // announces anonymously still gets M5's locally derived "peer-<id>"
+                                   // label, which is NOT stable across a reconnect (a reconnect mints
+                                   // a new bridge egress). A peer name may collide with the local
+                                   // --net-name, in which case that peer renders inside the local
+                                   // hull, as claimed and not disambiguated; `host: null` above stays
+                                   // the discriminator. Either label is transport-vouched, never
+                                   // authenticated (spec 43): it says "the same connection identity
+                                   // as before", not "the same principal", and a peer that reaches
+                                   // the socket can claim any name. A client may group by it and rely
+                                   // on its continuity; it must not present it as verified, trusted
+                                   // or authenticated, nor use it as an authorization input.
   "lifecycle": "HOT" | "SUSPENDED", // SUSPENDED covers both a suspended cell and any cell on a drained
                                    // host (M5) — the vocabulary does not distinguish them; a component's
                                    // GraphList.lifecycle "cold" requires every member cell SUSPENDED
