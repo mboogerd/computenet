@@ -176,7 +176,7 @@ None.
 - Coverage gap: requirement '15-RULE-03' (10-programming-model/15-lifecycle.md) has no covering scenario
 - Coverage gap: requirement '21-CYCLE-03' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '21-PULL-02' (90-roadmap/98-inspector-v4-plan/20-wave-neutral-read-design.md) has no covering scenario
-- Coverage gap: requirement '21-PULL-03' (90-roadmap/98-inspector-v4-plan/20-wave-neutral-read-design.md) has no covering scenario
+- Coverage gap: requirement '21-PULL-03' (90-roadmap/98-inspector-v4-plan/00-orchestration.md) has no covering scenario
 - Coverage gap: requirement '21-REBASE-01' (20-dataflow-semantics/21-propagation.md) has no covering scenario
 - Coverage gap: requirement '22-GF-03' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '22-OBS-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
