@@ -33,7 +33,9 @@ exemption — the rule binds it."* The G-40 residual paragraph repeats it
 (`:246-248`). R-ENG verified the mechanism (2026-07-30):
 `CombineLatestCell.emitChanges` is
 `publisher.publish(touched, ::recompute)?.let { outlet.call.propagate(it) }`
-(`CombineLatestCell.kt:79-81`) — when the value-equal diff is empty,
+(`CombineLatestCell.kt:75-77` as of `main @ 6459c5b`; V1C-OPS will have
+shifted the line — the quoted expression is the anchor) — when the
+value-equal diff is empty,
 `publish` returns null and nothing rides the outlet, no ack. **The same shape
 exists, unflagged, in `LookupJoinCell`** (`LookupJoinCell.kt:117`, same
 `MapDiffPublisher` fold) — the MUST is ubiquitous and binds it identically;

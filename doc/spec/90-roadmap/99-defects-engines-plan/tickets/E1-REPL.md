@@ -82,6 +82,19 @@ dot level. The decided design, not open for redesign:
   `applyReBaseline` implements for elements (`TagState.kt:148-187`; adopter
   shape `UnionSetCell.kt:96-100`). A superseded source's dot must never
   resurrect a key.
+- **One spec truing, exact and minimal.** §Tagged maps opens "**Design
+  decided, unbuilt** (closes G-23 for keyed structures; 96 §E1) — this
+  section is the normative content 96 §E1.2 (`OrMapCell` core) and §E1.3
+  (replication) build against" (`24-data-cells.md:236-239`). With this
+  ticket merged both named items are built, so that header sentence is
+  stale. Rewrite it to record the landed state — §E1.2 and §E1.3 shipped,
+  `OrMapCell` and `TaggedMapDelta` in `civictech.cell.data`; §E1.4–E1.6
+  (embedded mergeable values, `TaggedMapView`/`UntagCell`, demo adoption)
+  remain with the 96-plan, and the `MapDelta`-untouched additive framing
+  stands. **That
+  sentence only** — no other hunk in the file, and nothing in §Operator
+  library (E2-GATE's 20/24 claim, merged a wave earlier; the two sections
+  are disjoint).
 
 **Latitude** (yours to decide): whether `TaggedMapDelta` implements
 `civictech.cell.link.Scoped` (keyed `within` by `K`, the `SetDelta` pattern
@@ -153,6 +166,8 @@ friendlier one. Bounded waits and existing simulation controls only.
 - **New** (optional latitude): a dot-shaped dead-source fence helper beside
   the cell or in `cell/data/delta/`.
 - **New**: `kernel/src/test/kotlin/civictech/cell/replication/OrMapConvergenceTest.kt`
+- **Modified**: `doc/spec/20-dataflow-semantics/24-data-cells.md` — the
+  §Tagged maps "Design decided, unbuilt" header sentence (`:236-239`) only.
 - This ticket's `**Status**:` line.
 
 Nothing else. No generated/build output in the diff.
@@ -190,7 +205,8 @@ Nothing else. No generated/build output in the diff.
 Do not modify: `kernel/.../data/SetCell.kt`, `kernel/.../host/ManagedHost.kt`,
 `cell/replication/**` sources, `cell/data/op/**`, `cell/observe/**`,
 `cell/consistency/**`, `concord/**`, `gen/**`, `wire/**`, `demo/**`,
-`doc/spec/**`, any plan document other than this ticket's `**Status**:` line.
+`doc/spec/**` other than the single §Tagged maps header sentence named above,
+any plan document other than this ticket's `**Status**:` line.
 
 ## Acceptance criteria
 
@@ -210,6 +226,9 @@ Do not modify: `kernel/.../data/SetCell.kt`, `kernel/.../host/ManagedHost.kt`,
       and the untagged fold, each on at least one seed.
 - [ ] The `Scoped` decision is explicit: implemented and exercised, or the
       Total-only caveat is in the KDoc and the report.
+- [ ] §Tagged maps no longer says "Design decided, unbuilt"; it records
+      §E1.2/§E1.3 as landed and §E1.4–E1.6 as still with the 96-plan. No
+      other spec hunk. `./gradlew :concord:docLints` clean.
 - [ ] `./gradlew :kernel:test` green.
 - [ ] `git status` shows only the claimed files.
 
@@ -219,6 +238,7 @@ Do not modify: `kernel/.../data/SetCell.kt`, `kernel/.../host/ManagedHost.kt`,
 ./gradlew :kernel:test --tests 'civictech.cell.replication.OrMapConvergenceTest'
 ./gradlew :kernel:test --tests 'civictech.cell.data.OrMapCellTest'
 ./gradlew :kernel:test
+./gradlew :concord:docLints
 git status --porcelain     # only the claimed files
 ```
 

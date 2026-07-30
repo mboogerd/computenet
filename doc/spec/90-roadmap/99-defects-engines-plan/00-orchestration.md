@@ -253,22 +253,55 @@ until a later replan, as specified.
    the rule-2 discipline extended to track C: `V1C-CELLS` owns
    `kernel/src/test/.../cell/data/` and `V1C-OPS` owns `cell/data/op/**`
    for the duration of wave 9. Wave C2 therefore branches from `main` after
-   track A's C9 closes. `cell/observe/**` and the `cell/consistency`/
-   `cell/replication` test directories are claimed by no track A wave 9–11
-   ticket, so wave C1 dispatches immediately. Rule 1 (`ManagedHost.kt`,
-   `SetCell.kt`) stays in force for every C ticket through track A wave 11;
-   `observeAligned` is an extension function precisely so no C ticket edits
-   `ManagedHost.kt`.
-7. **Spec-file seam inside track C**: E2-ALIGN owns 20/22 §The observation
-   frontier (its spec-ahead-of-code note); E2-GATE owns 20/22 §Completeness
-   over silent or stuck edges plus the 20/24 operator rows. Disjoint
-   sections of one file — if both branches are in flight, the later merger
-   rebases. No C ticket edits the 96-plan or 95-research-plan.
+   track A's C9 closes. **`cell/observe/**`, source and test, is claimed by
+   no track A wave 9–11 ticket** — that, on its own, is what licenses wave C1
+   to dispatch immediately. Two adjacent directories are *not* as clean, and
+   the C-wave schedule already clears both: the `cell/replication` **test**
+   directory **is** claimed by `V1C-CELLS` (wave 9 — its
+   `InstanceSetBoundedReadTest.kt`, beside the `InstanceSet.kt` source it
+   also owns), and E1-REPL adds a test there, but E1-REPL is wave C3, after
+   C9; the `cell/consistency` test directory is claimed by no track A
+   ticket, though `GlitchFreeBridgedDiamondTest.kt` in it must stay green
+   and unmodified (`V4-PEERID`'s acceptance), which E2-SUITE honors by
+   adding a new file rather than editing one. `cell/wire/WireCodec.kt`
+   (E1-CORE's one registration line) is likewise unclaimed by track A —
+   `V4-PEERID` owns `cell/wire/Peering.kt`, and both `V4-PEERID` and
+   `V4-PILOT` carry explicit no-wire-change acceptance criteria. Rule 1
+   (`ManagedHost.kt`, `SetCell.kt`) stays in force for every C ticket
+   through track A wave 11; `observeAligned` is an extension function
+   precisely so no C ticket edits `ManagedHost.kt`.
+7. **Spec-file seam, by section — and it is cross-track, not just inside
+   track C.** Two spec files are claimed by more than one live ticket. No
+   two claims overlap *within* a file, so none of this forces
+   serialization; the rule is that each ticket edits only its named section
+   and the later merger rebases.
+
+   | File | Ticket (track, wave) | Section claimed |
+   |---|---|---|
+   | `20/22-consistency.md` | E2-ALIGN (C, C1) | §The observation frontier — the spec-ahead-of-code note, `:298-301` |
+   | | E2-GATE (C, C2) | §Completeness over silent or stuck edges + the G-40 residual, `:214-248` |
+   | | D-C12 (B, B3) | the C-12 prose site, `:95-125` |
+   | `20/24-data-cells.md` | E2-GATE (C, C2) | §Operator library — the `SemiJoinCell`/`CombineLatestCell` rows, `:184-215` |
+   | | E1-REPL (C, C3) | §Tagged maps — the "Design decided, unbuilt" header sentence only, `:236-239` |
+   | | D-C12 (B, B3) | §Tag continuity / the tag-algebra rules, `:431-510` |
+   | | `V1C-CONCORD` (A, W11) | additive `[24-BOUND-01]` requirement text |
+
+   Note this corrects rule 4's claim that "no track A ticket edits
+   `doc/spec/**` outside the 98 folder": `V1C-CONCORD` (wave 11) does, in
+   both `21-propagation.md` and `24-data-cells.md`, additively. Its
+   requirement-text additions are disjoint from every C-wave section above,
+   and wave 11 is the last track A wave, but a C-wave worker finding an
+   unexpected `24-data-cells.md` conflict should rebase rather than treat
+   it as a contradiction. No C ticket edits the 96-plan or 95-research-plan,
+   and no C ticket touches `concord/**` (rule 3 is unaffected).
 
 ## Wave C1 — the aligned observation sink · branches from `main @ 6459c5b`
 
 Runs alone, dispatched immediately — concurrent with track A waves 9–10 and
-wave B3, all file claims disjoint (rule 6).
+wave B3. Its kernel claim (`cell/observe/**`, source and test) is claimed by
+no other live ticket in any track (rule 6). Its one shared file is
+`22-consistency.md`, which D-C12 (wave B3) also claims — different sections,
+`:298-301` vs `:95-125`, so the later merger rebases (rule 7).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
