@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
@@ -56,7 +59,9 @@ class LookupJoinCell<K, V, J, D, R>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val fk: (K) -> J,
     private val combine: (K, V, D?) -> R?,
-) : LookupJoinCellBase<K, V, J, D, R>(ref), Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : LookupJoinCellBase<K, V, J, D, R>(ref), Stateful, BoundedStateful {
     private val facts = mutableMapOf<K, V>()
     private val dims = mutableMapOf<J, D>()
     private val byDim = mutableMapOf<J, MutableSet<K>>() // reverse index J -> facts referencing it
@@ -132,4 +137,35 @@ class LookupJoinCell<K, V, J, D, R>(
         facts.keys.forEach { k -> recompute(k)?.let { rebuilt[k] = it } }
         publisher.reset(rebuilt)
     }
+
+    /**
+     * One page of this lookup join's two inputs (V1C-OPS).
+     *
+     * | ordinal | sub-state | key | value |
+     * |---|---|---|---|
+     * | 0 | `"facts"` | `K` | `V` |
+     * | 1 | `"dims"` | `J` | `D` |
+     *
+     * Same order as [snapshot]'s `arrayListOf(facts, dims)`. The two key spaces
+     * are **different types** here, which is precisely why one cursor has to
+     * order *across* them rather than within one: the cursor is lexicographic
+     * `(subStateOrdinal, key)` over the two frozen key sequences, so a resume
+     * that exhausts `"facts"` continues at the head of `"dims"`
+     * ([OperatorPaging], Decision B). It is also why a page is only meaningful
+     * with the label: a `K` and a `J` can be the same runtime value.
+     *
+     * **Neither the reverse index nor the enriched output is paged.** `byDim`
+     * and `publisher` are rebuilt from the restored inputs by [restore] and are
+     * not in [snapshot], so Decision E keeps them out: a bounded read of a
+     * `LookupJoinCell` shows the **fact and dimension inputs**, not the enriched
+     * output map.
+     *
+     * [StatePage.frontier] is null — `MapDelta` is untagged (G-23) — so the
+     * across-page stability check and the `since` escalation path are
+     * unavailable and [supportsSince] stays `false`. No `[24-OP-*]` requirement
+     * id covers this cell; the contract preserved is its own KDoc, and this
+     * method only reads.
+     */
+    override fun readBounded(request: StateRead): StatePage =
+        pageOver(request, listOf(mapSubState("facts", facts), mapSubState("dims", dims)))
 }

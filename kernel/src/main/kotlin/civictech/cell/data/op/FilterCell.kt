@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
@@ -27,7 +30,9 @@ interface FilterSetApi<E> {
 class FilterCell<E>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val predicate: (E) -> Boolean,
-) : FilterSetCellBase<E>(ref), Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : FilterSetCellBase<E>(ref), Stateful, BoundedStateful {
     private val op = TaggedSetOperator<E>()
 
     init {
@@ -50,4 +55,12 @@ class FilterCell<E>(
     override fun snapshot(): Serializable = op.snapshot()
 
     override fun restore(state: Serializable) = op.restore(state)
+
+    /**
+     * One page of the passing live tags (V1C-OPS): the single `"live"`
+     * sub-state, exactly [snapshot]'s content, via the shared
+     * [TaggedSetOperator.page]. `[24-OP-FILTER-01]` is untouched — this method
+     * only reads, applies no [predicate], and emits nothing.
+     */
+    override fun readBounded(request: StateRead): StatePage = op.page(request)
 }

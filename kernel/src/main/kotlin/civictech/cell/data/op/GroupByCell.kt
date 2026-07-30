@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
@@ -39,7 +42,9 @@ class GroupByCell<E, K, A, ACC : Serializable>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val keyFn: (E) -> K,
     private val aggregator: Aggregator<E, A, ACC>,
-) : GroupByCellBase<E, K, A>(ref), Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : GroupByCellBase<E, K, A>(ref), Stateful, BoundedStateful {
     private val state = TagState<E>()
 
     private class Group<ACC>(var count: Int, var acc: ACC)
@@ -122,6 +127,62 @@ class GroupByCell<E, K, A, ACC : Serializable>(
             groups[k] = Group(g[0] as Int, g[1] as ACC)
         }
     }
+
+    /**
+     * One page of this aggregation's two sub-states (V1C-OPS).
+     *
+     * | ordinal | sub-state | key | entry |
+     * |---|---|---|---|
+     * | 0 | `"input"` | `E` | [TaggedEntry] — the live element and its tags |
+     * | 1 | `"groups"` | `K` | [GroupEntry] — the group's `count` and `accumulator` |
+     *
+     * Same order as [snapshot]'s `arrayListOf(state.snapshot(), groups)`. The two
+     * key spaces are **different types** (`E` and `K = keyFn(E)`), so a cursor
+     * has to order across them: it is lexicographic `(subStateOrdinal, key)`
+     * over the two frozen key sequences, and a resume that exhausts `"input"`
+     * continues at the head of `"groups"` ([OperatorPaging], Decision B).
+     *
+     * **Decision G — an unbounded accumulator rides whole.** For the
+     * non-invertible aggregator family (`minOf`/`maxOf`/`topK`/`collectToSet`,
+     * `[24-OP-GROUPBY-04]`) the accumulator *is* the group's full support
+     * multiset — required, not incidental — so one [GroupEntry] can be
+     * arbitrarily large. It is emitted whole and [StateRead.byteBudget], which
+     * is *advisory* and which this cell estimates with a constant (measuring an
+     * arbitrary `ACC` would mean serializing it on the cell's own thread), is
+     * simply exceeded. The alternatives both lose: splitting contradicts
+     * [StatePage]'s "entries are whole", and a size-describing descriptor would
+     * put the walk's union at odds with [snapshot]'s content (Decision E) for
+     * the one field a restore actually needs. [StateRead.limit] remains a hard
+     * cap, so an oversized entry costs one page, not an unbounded one.
+     *
+     * `TagState.deadSources` is deliberately **not** paged: it is live fold
+     * state that [snapshot] itself omits and [restore] does not rebuild, and
+     * Decision E fixes the walk's domain at exactly [snapshot]'s.
+     *
+     * [StatePage.frontier] is the max per-source counter over the input tag
+     * state, exact on the first and last page of a walk (see [OperatorPaging]
+     * for why an intermediate page carries the opening stamp with
+     * [civictech.cell.ReadCaveat.STALE_FRONTIER] instead). Its equality across
+     * a walk is **necessary but not sufficient** for "the union is a snapshot":
+     * this `TagState` is non-retaining, so a mid-walk membership retraction
+     * deletes tags rather than minting one and is invisible to the check.
+     * [supportsSince] stays `false` accordingly.
+     *
+     * `[24-OP-GROUPBY-01]`/`-02`/`-03`/`-06` and `[24-AGG-01]` are untouched:
+     * this method only reads, and emits nothing.
+     */
+    override fun readBounded(request: StateRead): StatePage = pageOver(
+        request,
+        listOf(
+            tagSubState("input", state),
+            SubState("groups", { ArrayList<Any?>(groups.keys) }) { key ->
+                @Suppress("UNCHECKED_CAST")
+                val k = key as K
+                groups[k]?.let { groupEntry("groups", k, it.count, it.acc) }
+            },
+        ),
+        frontier = { state.contributeTo(FrontierBuilder()).build() },
+    )
 
     companion object {
         /** Fold-to-scalar: one global group under the constant key `"global"`. */

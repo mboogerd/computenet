@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
@@ -45,7 +48,9 @@ interface CombineLatestApi<K, V, W, R> {
 class CombineLatestCell<K, V, W, R>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val combine: (K, V?, W?) -> R?,
-) : CombineLatestCellBase<K, V, W, R>(ref), Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : CombineLatestCellBase<K, V, W, R>(ref), Stateful, BoundedStateful {
     private val leftMap = mutableMapOf<K, V>()
     private val rightMap = mutableMapOf<K, W>()
     private val publisher = MapDiffPublisher<K, R>() // last-published R per key (the combined map)
@@ -88,4 +93,31 @@ class CombineLatestCell<K, V, W, R>(
         (leftMap.keys + rightMap.keys).forEach { k -> recompute(k)?.let { rebuilt[k] = it } }
         publisher.reset(rebuilt)
     }
+
+    /**
+     * One page of this combine's two input sides (V1C-OPS).
+     *
+     * | ordinal | sub-state | key | value |
+     * |---|---|---|---|
+     * | 0 | `"left"` | `K` | `V` |
+     * | 1 | `"right"` | `K` | `W` |
+     *
+     * Same order as [snapshot]'s `arrayListOf(leftMap, rightMap)`; the two share
+     * key type `K` and overlap, so a key held on both sides is *two* labelled
+     * entries (Decision A), and the cursor is lexicographic
+     * `(subStateOrdinal, key)` ([OperatorPaging]).
+     *
+     * The **combined output map** is not paged: `publisher` is rebuilt from the
+     * restored inputs by [restore] and is not in [snapshot], so Decision E keeps
+     * it out. A bounded read of a `CombineLatestCell` shows the two inputs, not
+     * `combine`'s results.
+     *
+     * [StatePage.frontier] is null — `MapDelta` is untagged (G-23) — so the
+     * across-page stability check and the `since` escalation path are
+     * unavailable and [supportsSince] stays `false`. No `[24-OP-*]` requirement
+     * id covers this cell; the contract preserved is its own KDoc, and this
+     * method only reads.
+     */
+    override fun readBounded(request: StateRead): StatePage =
+        pageOver(request, listOf(mapSubState("left", leftMap), mapSubState("right", rightMap)))
 }
