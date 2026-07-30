@@ -152,13 +152,31 @@ D-CONCORD is the only concord writer in flight (rule 3).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| D-CONCORD | Bind the coalescing combine in the driver; positive glitch-free assertion on `24-OP-COMBINE-01`; retire `CTL-GF-01` as failing sentinel; author `24-REPLAY-01.yaml`; resolve both DISPUTES entries | opus | fresh | ticket/d-concord | opus | Specified — not-started |
+| D-CONCORD | Bind the coalescing combine in the driver; positive glitch-free assertion on `24-OP-COMBINE-01`; retire `CTL-GF-01` as failing sentinel; author `24-REPLAY-01.yaml`; resolve both DISPUTES entries | opus | fresh | ticket/d-concord | opus | Implemented — merged |
 | E2-SPEC | 96 §E2.1 becomes normative spec text (§The observation frontier, absorb-ack rule) | sonnet | fresh | ticket/e2-spec | opus | Implemented — merged |
 
 **Checkpoint CB2 — verification.** D-CONCORD: `./gradlew :concord:check` green,
 zero dangling `covers:` ids, zero orphan scenarios, `doc/spec/CONCORDANCE.md`
 regenerated not hand-edited, DISPUTES.md entries updated per its own ledger
 rules. E2-SPEC: as E1-SPEC. Merge on pass; repo gate before close.
+
+**CB2 closed (PASS).** Both tickets merged. D-CONCORD: `:concord:check` and
+`:concord:docLints` green, 0 fatal findings (zero dangling `covers:`, zero
+orphan scenarios), `:concord:test -Pconcord.profiles=core,dist,dur` green on
+every run of the sweep, `CONCORDANCE.md` regenerated fresh post-merge (the
+textual auto-merge against E2-SPEC/V1C-KERNEL was discarded).
+
+*On the Track B "Done" bar — `CTL-GF-01` is no longer a failing sentinel.* Be
+precise about which "failing" applies: it is retired as a **gap sentinel** (it
+no longer stands guard over an unclosed kernel capability — nothing in the repo
+now describes the wave-coalescing scalar combine as missing), which is what the
+Track B Done clause names, and that bar is **met**. It remains, by design, a
+**deliberately failing `kind: control`**: it asks for the plain non-wave-aligned
+`combine-latest` and asserts wave-aligned semantics of it, so it must fail its
+own check for `CorpusRunner` to report it PASSED under P7. The wrongness moved
+from the lineage (a real gap) into the expectation (a mismatched assertion),
+joining `CTL-GOLDEN-01`'s register. Its graph, script and checks are byte-identical
+to before; only header/title/narrative changed, so no new flake risk was introduced.
 
 ## Wave B3 — RESTART/ReBaseline reconciliation · branches from `main` after CB2
 
