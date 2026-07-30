@@ -192,7 +192,9 @@ semantics only — neither is a convergent merge under concurrent writers
     (absence-based emission is non-monotone; some sealing is unavoidable,
     and per-wave sealing over `cell.consistency.WaveFrontier` is the
     cheapest ComputeNet has). See 20/22 §The observation frontier for the
-    guarantee this gate serves.
+    guarantee this gate serves. *(Spec-ahead-of-code: `emitOnFrontier` is
+    specified here before its implementation — 96 §E2.4. Today every
+    `SemiJoinCell` runs the ungated default.)*
   - `CombineLatestCell` — incremental keyed **outer** combine over two map
     streams (the outer sibling of `JoinCell`); a key present on only one
     side still emits, computed as `combine(k, v, null)` / `combine(k, null,
@@ -207,7 +209,10 @@ semantics only — neither is a convergent merge under concurrent writers
     later, remediated only by 22's wrapper; gated (`emitOnFrontier`,
     mirroring `SemiJoinCell` above), the null-extension emits only once the
     wave has settled, so a same-wave retraction never reaches the outlet.
-    See 20/22 §The observation frontier.
+    See 20/22 §The observation frontier. *(Spec-ahead-of-code, as for
+    `SemiJoinCell` above — 96 §E2.4. Note also that `CombineLatestCell` does
+    not yet absorb-ack a wave it silently swallows, the one open divergence
+    from 20/22 §Completeness over silent or stuck edges.)*
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
     tagged set stream, input tags passing through. Sound because tag algebra
     is per-(element, tag): colliding outputs **union** their preimages' tag

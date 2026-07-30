@@ -1,6 +1,6 @@
 # 22 — Consistency: Context, Glitch-Freedom, Topology Versioning
 
-> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), while in-process `Progress` absorb-acks are implemented (`cell.control.absorbAck`, CP-A3) and the bridged `Progress` crossing plus the handshake-routed bridged open remain decided design (CP-A2), unimplemented
+> **Status**: Specified; context machinery and the opt-in glitch-freedom wrapper implemented (static frontier); the catch-up-baseline rule below is implemented (W2.2); the source-epoch, cycle-head, edge-marker, and watermark rules below are decided design (93), unimplemented; the bridged frontier below is location-transparent — `EdgeOpen`/`EdgeClose` cross the wire today (W3.2), and `Progress` absorb-acks are implemented both in-process (`cell.control.absorbAck`, CP-A3) and across a bridge, over the handshake-routed bridged open (CP-A2)
 > **Sources**: ADR — Glitch Freedom, ADR — Task Connectivity (§2, MessageContext), 93 (feature-interaction resolutions I-1/4/5/11/13/14/18/23/24)
 > **Implementation**: `cell.MessageContext`/`Timestamp`/`CurrentContext`, `cell.proxy.Invocation.context`, stamping in `cell.port.FanOutlet`, `cell.consistency.GlitchFreeCell`
 
@@ -172,7 +172,7 @@ with a control run proving the harness produces glitches without the wrapper.
 Upstream frontier traversal awaits multiplex ports (G-13) — its traversal
 model is decided, see plan item 4; unwaved traffic passes through.)*
 
-### Completeness over silent or stuck edges (decided in 93 I-18; in-process implemented CP-A3/CP-A4, bridged crossing unimplemented CP-A2)
+### Completeness over silent or stuck edges (decided in 93 I-18; implemented — in-process CP-A3/CP-A4, bridged CP-A2)
 
 [22-LIVE-01] IF an independent source feeding a multi-source join is silent for
 a wave, THEN the join SHALL NOT block updates from other sources from becoming
@@ -205,7 +205,7 @@ absorb-ack, riding the exact wave it would otherwise have silently swallowed
 absorbing arm from real data arrivals, and a mid-pipeline filter/join/
 antijoin that drops the final wave strands the join forever (the G-40
 family). `cell.control.absorbAck` is the shared helper (an extension on
-`FanOutlet`, in-process, CP-A3): it reads the wave off the current
+`FanOutlet`, CP-A3): it reads the wave off the current
 invocation's context, skips baseline and spontaneous emissions — already
 excluded from every completeness set above — and fans the ack over the
 outlet's real links only, so a topology-blind subscriber pays nothing. The
@@ -216,28 +216,36 @@ swallowed wave. Adopted across the operator suite — `FilterCell`,
 `FlatMapSetCell`, `UnionSetCell`, `QuorumSetCell`, `CountCell`, and
 `CoalescingCombineCell`, all under `civictech.cell.data.op` — call it at the
 end of their waved handler exactly when the wave produced no outlet
-emission. The consumer is the per-inlet watermark fold this subsection
+emission. *(One absorbing operator does not yet satisfy this MUST:
+`cell.data.op.CombineLatestCell` drops an effective-only-silent wave without
+an ack. A known divergence, not an exemption — the rule binds it.)* The
+consumer is the per-inlet watermark fold this subsection
 describes, landed as `cell.consistency.WaveFrontier` (CP-A4, §The
 observation frontier below): its `Progress` handler folds the ack into the
 same per-edge, per-source watermark map a real delta advances, so an
 absorbing arm is retired by whatever it next produces — a delta, an ack, or
-a later wave — never left silently stuck. This in-process leg is
-implemented end-to-end; the bridged (across-the-wire) leg is not — see
-§Bridged frontier below (CP-A2).
+a later wave — never left silently stuck. The rule holds identically
+in-process and bridged: CP-A2 routed the bridge install through the shared
+`handshake()`, and the absorb-ack rides the same `topology-order` frame path
+as `EdgeOpen`/`EdgeClose`, so an absorbing **remote** arm settles a far-host
+wave exactly as a local one does. *(§Bridged frontier below still labels the
+`Progress` crossing and the handshake-routed bridged open unimplemented —
+a stale label against this landed code, not a live residual.)*
 
-⚠ GAP (G-40): *(residual narrowed by CP-A3/CP-A4 — the core mechanism is
+⚠ GAP (G-40): *(residual narrowed by CP-A2/CP-A3/CP-A4 — the core mechanism is
 landed; see §Completeness over silent or stuck edges above)*. Landed:
-per-source per-edge watermarks advanced by real deltas, by the in-process
-`Progress` absorb-ack rule above, or by later waves (monotone close); typed
+per-source per-edge watermarks advanced by real deltas, by the `Progress`
+absorb-ack rule above (in-process CP-A3, bridged CP-A2), or by later waves
+(monotone close); typed
 `Stall(reason, recoverable)` markers with per-edge WAIT | DEGRADE | RE-SCOPE
 policies keyed on recoverability — both folded by
 `cell.consistency.WaveFrontier`. Open: pin the DEGRADE correctness contract
 (how downstream distinguishes a degraded emission from a genuine one),
 calibrate the backstop deadline against frontier depth, and build the
 generative completeness harness proving the mechanism under randomized
-absorb/suspend/restart/dead-letter schedules (93 I-18). The bridged
-(across-the-wire) leg of the absorb-ack itself is a separate, still-open
-residual — CP-A2, §Bridged frontier below.
+absorb/suspend/restart/dead-letter schedules (93 I-18); and bring
+`cell.data.op.CombineLatestCell` — the one absorbing operator still missing
+its ack — under the rule.
 
 ## The observation frontier
 
