@@ -1,6 +1,6 @@
 # D-COMBINE — a wave-coalescing scalar combine: one delta per completed wave, so no torn intermediate sum is ever observable
 
-**Status**: Specified — not-started
+**Status**: Specified — in-progress
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5,
 fresh session
 **Wave:** B1 · **Branches:** ticket/d-combine
