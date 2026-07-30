@@ -1,6 +1,6 @@
 # D-REPLAY — quorum fan-ins install replayed baseline frames as recovered arm state instead of silently dropping them
 
-**Status**: Implemented — on branch `ticket/d-replay`, awaiting merge.
+**Status**: Implemented — merged
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5,
 fresh session
 **Wave:** B1 · **Branches:** ticket/d-replay
