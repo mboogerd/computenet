@@ -5,6 +5,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.link.LinkResult
+import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
@@ -23,7 +24,9 @@ import org.junit.jupiter.api.Test
  * `:wire` reproduces over a socket), with the inspector watching side A:
  *
  * - A's own cells report the launcher's network host; B's announced cells
- *   report the peer connection's derived label and no process host;
+ *   report no process host, and for their network host either B's own
+ *   `--net-name` (when B named its `Peering.Side` — V4-PEERID) or, for an
+ *   anonymous peer, the peer connection's locally derived label;
  * - B's own links arrive as edges, and leave when the peering is severed;
  * - a disconnect retracts B's cells (`unpublishRemotes` notifies `onUnpublish`
  *   since T21, so the retraction rides the removal event), and healing brings
@@ -59,6 +62,19 @@ class InspectorNetTest {
 
     private fun peer(): Peering.Loopback =
         Peering.loopback(Peering.Side(registryA, bridgeA), Peering.Side(registryB, bridgeB))
+
+    /**
+     * V4-PEERID — the same peering, with both sides named as the two-JVM demo
+     * names them (`--net-name`). A named `Peering.Side` puts its [PeerId] in
+     * the transport hello, the receiving `RegistryMirrorCell` records it on
+     * every mirrored location, and `Peers.netOf` prefers it over the derived
+     * label.
+     */
+    private fun namedPeer(bName: String = "jvm-b"): Peering.Loopback =
+        Peering.loopback(
+            Peering.Side(registryA, bridgeA, peer = PeerId("jvm-a")),
+            Peering.Side(registryB, bridgeB, peer = PeerId(bName)),
+        )
 
     private fun serve(names: Map<CellRef, String> = emptyMap()): InspectorServer =
         InspectorServer(
@@ -134,6 +150,84 @@ class InspectorNetTest {
         remote.color shouldBe null
         remote.ports shouldBe emptyList()
         remote.lifecycle shouldBe "HOT"
+    }
+
+    @Test
+    fun `a NAMED peer's cells report the peer's own network host, not a derived label`() {
+        val mine = SetCell<String>()
+        hostA.managementInlet.call.spawn(mine)
+        val theirs = SetCell<String>()
+        hostB.managementInlet.call.spawn(theirs)
+
+        val inspector = serve()
+        namedPeer()
+        inspector.awaitNode(theirs.ref)
+
+        val snapshot = inspector.snapshot()
+        snapshot.nodes.single { it.ref == encode(mine.ref) }.net shouldBe "jvm-a"
+
+        val remote = snapshot.nodes.single { it.ref == encode(theirs.ref) }
+        // V4-PEERID: B's own --net-name, in the same register as localNet — the
+        // whole point of the two-inspector demo, where A's canvas should show
+        // B's cells under `jvm-b` rather than a locally minted `peer-<id>`
+        remote.net shouldBe "jvm-b"
+        // everything else a mirrored location does NOT know is unchanged: a
+        // name is not a descriptor and not a process host
+        remote.host shouldBe null
+        remote.typeFqn shouldBe "<unknown>"
+        remote.ports shouldBe emptyList()
+    }
+
+    @Test
+    fun `a named peer keeps its network host across a disconnect and heal`() {
+        val theirs = SetCell<String>()
+        hostB.managementInlet.call.spawn(theirs)
+
+        val inspector = serve()
+        val loopback = namedPeer()
+        inspector.awaitNode(theirs.ref)
+        inspector.snapshot().nodes.single { it.ref == encode(theirs.ref) }.net shouldBe "jvm-b"
+
+        // the in-process analogue of a reconnect. It is the weaker half of the
+        // proof on purpose: a loopback re-announces through the SAME bridge
+        // egress, so even the derived label would survive it. The half that
+        // only a socket can show — a listener building a fresh Session, hence a
+        // fresh egress, hence a new derived label — is `:wire`'s
+        // `WsPeerIdentityTest` and `TwoJvmInspectorTest`'s reconnect case.
+        loopback.partition()
+        inspector.snapshot().nodes.map { it.ref } shouldNotContain encode(theirs.ref)
+
+        loopback.heal()
+        inspector.awaitNode(theirs.ref)
+        inspector.snapshot().nodes.single { it.ref == encode(theirs.ref) }.net shouldBe "jvm-b"
+    }
+
+    @Test
+    fun `a peer that names itself the local net renders inside the local hull, as claimed`() {
+        val mine = SetCell<String>()
+        hostA.managementInlet.call.spawn(mine)
+        val theirs = SetCell<String>()
+        hostB.managementInlet.call.spawn(theirs)
+
+        val inspector = serve()
+        namedPeer(bName = "jvm-a") // == this inspector's own netName
+        inspector.awaitNode(theirs.ref)
+
+        val snapshot = inspector.snapshot()
+        // the decided collision behavior (see Peers.netOf): reported as
+        // claimed, not disambiguated. `PeerId` is transport-vouched, never
+        // authenticated, so there is no better source for a name than the
+        // peer's own claim — and rewriting it here would invent one.
+        snapshot.nodes.single { it.ref == encode(theirs.ref) }.net shouldBe "jvm-a"
+        snapshot.nodes.single { it.ref == encode(mine.ref) }.net shouldBe "jvm-a"
+        // the two are still distinguishable where it matters: only the local
+        // one has a process host, and only the local one has a descriptor
+        snapshot.nodes.single { it.ref == encode(theirs.ref) }.host shouldBe null
+        snapshot.nodes.single { it.ref == encode(mine.ref) }.host shouldBe "a-host"
+        // ... and the component index still separates them, so the canvas does
+        // not fuse two unrelated graphs
+        snapshot.nodes.single { it.ref == encode(mine.ref) }.graph shouldNotBe
+            snapshot.nodes.single { it.ref == encode(theirs.ref) }.graph
     }
 
     @Test

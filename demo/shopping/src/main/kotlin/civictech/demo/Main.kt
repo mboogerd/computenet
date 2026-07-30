@@ -12,6 +12,7 @@ import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.PeerId
 import civictech.cell.observe.View
 import civictech.cell.host.link
 import civictech.cell.observe.observe
@@ -38,7 +39,22 @@ import civictech.cell.data.op.IntersectSetCell
 // incremental browser client is M6+ material); the *peer* transport is the
 // real M5 wire — WebSocket frames between symmetric JVMs.
 
-class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
+/**
+ * [netName] is this JVM's network-host name (`--net-name`). It is both what
+ * [startInspector] labels local cells with and — since V4-PEERID — the
+ * [PeerId] this JVM puts in its transport hello, so the *peer's* inspector can
+ * group this JVM's cells under `jvm-a`/`jvm-b` and keep that grouping across a
+ * reconnect. Null (the flag absent) means an **anonymous** peer: no name in
+ * the hello, the peer keeps deriving a `peer-<id>` label, and the inspector
+ * keeps reporting the contract's `"local"` for this JVM. Naming every unnamed
+ * peer `"local"` instead would make two anonymous peers indistinguishable.
+ */
+class DemoApp(
+    port: Int = 8080,
+    private val wire: Wire? = null,
+    journalDir: java.io.File? = null,
+    private val netName: String? = null,
+) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
     sealed interface Wire {
         data class Listen(val wsPort: Int) : Wire
@@ -150,7 +166,10 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         }
 
         if (wire != null) {
-            val side = Peering.Side(registry, bridgeHost!!)
+            // V4-PEERID: name this side, so the peer's inspector labels our
+            // cells with our own --net-name and keeps that label across a
+            // reconnect. Unset --net-name ⇒ anonymous, exactly as before.
+            val side = Peering.Side(registry, bridgeHost!!, peer = netName?.let { PeerId(it) })
             when (wire) {
                 is Wire.Listen -> WsTransport.listen(wire.wsPort, side)
                 is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
@@ -271,9 +290,11 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
      * beyond the single-process case is:
      *
      * - **both sides.** The peer's announced cells appear with its network
-     *   host and no process host; this JVM's cells report [netName]
-     *   (`--net-name`, e.g. `jvm-a`), so the canvas nests one dashed net hull
-     *   per JVM around the solid process hulls inside them.
+     *   host and no process host — since V4-PEERID that is the peer's *own*
+     *   `--net-name` (`jvm-b` as seen from `jvm-a`), stable across a peer
+     *   restart, rather than a locally derived `peer-<id>`; this JVM's cells
+     *   report [netName] (`--net-name`, e.g. `jvm-a`), so the canvas nests one
+     *   dashed net hull per JVM around the solid process hulls inside them.
      * - **the cross-boundary stream, as an edge.** The symmetric view chain
      *   (`itemsUnion.outlet.streamTo(routedDelta(peerItemsRef))`) is a real
      *   subscription that no kernel index records — `ManagedHost.connect`,
@@ -290,7 +311,7 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
      */
     fun startInspector(
         inspectPort: Int = civictech.inspect.InspectorServer.DEFAULT_PORT,
-        netName: String = "local",
+        netName: String = this.netName ?: "local",
     ): civictech.inspect.InspectorServer {
         val peerItems = unionRef("items", peerRole)
         val peerVotes = unionRef("votes", peerRole)
@@ -344,7 +365,7 @@ fun main(args: Array<String>) {
         ?: args.value("--peer")?.let { DemoApp.Wire.Dial(it) }
     val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
 
-    val app = DemoApp(port, wire, journalDir).start()
+    val app = DemoApp(port, wire, journalDir, netName).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
     when (wire) {
         is DemoApp.Wire.Listen -> println("  awaiting a peer on ws://localhost:${wire.wsPort}")

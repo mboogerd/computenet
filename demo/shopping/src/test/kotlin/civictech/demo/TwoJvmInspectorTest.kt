@@ -7,7 +7,6 @@ import civictech.testkit.JvmPeer
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
-import io.kotest.matchers.string.shouldStartWith
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
@@ -65,20 +64,77 @@ class TwoJvmInspectorTest {
 
             val mirrored = snapshot.nodes.filter { it.host == null }
             mirrored.isEmpty() shouldBe false
-            // Correction to the naive framing: a peer's own --net-name is
-            // never transmitted over the wire (Peers.kt) — `Peers.netOf`
-            // derives the label locally, on the observing side, from the
-            // bridge egress cell the mirrored ref routes through. So B's
-            // mirrored cells do NOT carry "jvm-b"; they carry A's derived
-            // "peer-<...>" label (Peers.PREFIX), exactly what
-            // InspectorNetTest.kt pins for the in-process loopback stand-in.
+            // V4-PEERID: B's own --net-name DOES now cross the wire — as the
+            // `PeerId` in B's transport hello, which B's announcements' mirror
+            // records on every location it installs (`Peers.netOf` prefers it
+            // over the derived label). So A shows B's cells under "jvm-b",
+            // which is what makes two side-by-side inspectors legible.
+            //
+            // This corrects the previous framing here, which said a peer's
+            // name was never transmitted and pinned A's locally derived
+            // "peer-<...>" label. That label is still what an *anonymous* peer
+            // gets — `InspectorNetTest` keeps pinning it for a peering whose
+            // sides are unnamed.
             mirrored.forEach { node: Node ->
-                node.net shouldStartWith "peer-"
+                node.net shouldBe "jvm-b"
                 node.net shouldNotBe "jvm-a"
             }
         } finally {
-            peerA.destroy()
-            peerB.destroy()
+            JvmPeer.destroy(peerA, peerB)
+        }
+    }
+
+    /**
+     * V4-PEERID's acceptance case, over two real JVMs: the listener (A) stays
+     * up while the dialer (B) is killed and relaunched. A's listener builds a
+     * brand-new `WsTransport.Session` for the returning B — hence a new
+     * `BridgeEgressCell`, hence a new derived label — so before this ticket B's
+     * hull was renamed by exactly this sequence (observed live:
+     * `peer-0ae324f9` → `peer-804f5917`). B re-asserts the same `--net-name` in
+     * its re-hello, so the name is what survives.
+     */
+    @Test
+    fun `peer A keeps B's network host across B being killed and relaunched`() {
+        val httpA = JvmPeer.freePort()
+        val httpB = JvmPeer.freePort()
+        val ws = JvmPeer.freePort()
+        val inspectA = JvmPeer.freePort()
+        val inspectB = JvmPeer.freePort()
+
+        val peerA = JvmPeer.launch(
+            "civictech.demo.MainKt", "$httpA", "--listen", "$ws",
+            "--inspect-port", "$inspectA", "--net-name", "jvm-a",
+        )
+        val bArgs = arrayOf(
+            "$httpB", "--peer", "ws://localhost:$ws",
+            "--inspect-port", "$inspectB", "--net-name", "jvm-b",
+        )
+        var peerB = JvmPeer.launch("civictech.demo.MainKt", *bArgs)
+        try {
+            fun mirroredOnA(): List<Node> =
+                runCatching { topology(inspectA).nodes.filter { it.host == null } }.getOrDefault(emptyList())
+
+            awaitUntil("peer A adopted B's cells") { mirroredOnA().isNotEmpty() }
+            mirroredOnA().forEach { it.net shouldBe "jvm-b" }
+
+            // B dies; A's listener session closes and unpublishes everything it
+            // learned through that socket
+            JvmPeer.destroy(peerB)
+            awaitUntil("peer A retracted B's cells") { mirroredOnA().isEmpty() }
+
+            // B returns, dials the same listener, and re-announces the same
+            // refs through a *different* listener-side egress
+            peerB = JvmPeer.launch("civictech.demo.MainKt", *bArgs)
+            awaitUntil("peer A re-adopted B's cells") { mirroredOnA().isNotEmpty() }
+
+            val afterReconnect = mirroredOnA()
+            afterReconnect.isEmpty() shouldBe false
+            afterReconnect.forEach { node: Node ->
+                // the assertion the whole ticket exists for
+                node.net shouldBe "jvm-b"
+            }
+        } finally {
+            JvmPeer.destroy(peerA, peerB)
         }
     }
 }
