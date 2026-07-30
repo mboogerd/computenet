@@ -48,6 +48,10 @@ interface QuorumSetApi<E> {
  * (effective-only, spec 21). Because the threshold reads `n`, a link
  * opening/closing re-evaluates the quorum even for elements whose own count did
  * not move (e.g. an empty source joining tightens an intersection).
+ *
+ * A delivery flagged [civictech.cell.MessageContext.baseline] is a recovery,
+ * not a live wave, and is admitted regardless of [threshold] — see [onInlet]
+ * (`[24-REPLAY-01]`).
  */
 class QuorumSetCell<E>(
     ref: CellRef = CellRef(UUID.randomUUID()),
@@ -79,10 +83,36 @@ class QuorumSetCell<E>(
     }
 
     override fun onInlet(value: SetDelta<E>) {
-        evaluate(lanes.fold(CurrentContext.get(), value))
+        val ctx = CurrentContext.get()
+        val effective = lanes.foldEffective(ctx, value)
+        // PN-2 / `[24-REPLAY-01]` (spec 20/24 §Durable replay of a mid-graph
+        // data cell): a journaled upstream's replayed frames re-enter flagged
+        // MessageContext.baseline. That is a *recovery*, not a live wave — the
+        // sibling arms are volatile and will never replay the same state, so
+        // evaluating a replayed delta against the live threshold would leave
+        // recovered arm state at lane-count 1 forever and silently drop it.
+        // The SET-fan-in analogue of WaveFrontier.offer()'s baseline branch:
+        // what the baseline ADDS to its lane is installed as authoritative
+        // recovered arm state, bypassing the threshold. What it removes stays
+        // on the live rule (the recovered arm no longer asserts it, so only a
+        // live quorum can keep it advertised).
+        val recovered = if (ctx?.baseline != null) effective.adds.keys else emptySet()
+        evaluate(effective.adds.keys + effective.dels.keys, recovered)
     }
 
-    private fun evaluate(candidates: Collection<E>) {
+    /**
+     * [recovered] holds the elements this evaluation must admit regardless of
+     * [threshold] — a replayed baseline's installs (see [onInlet]); empty on
+     * every live path, which therefore behaves exactly as before. Installed
+     * elements are NOT remembered: the next live delta touching one, or an
+     * `EdgeOpen`/`EdgeClose` shifting `n`, re-evaluates it under the ordinary
+     * threshold, so the view converges back to live semantics after recovery.
+     * Nothing is dropped silently — a baseline either enters/leaves the view
+     * here or funnels through [emitOrAbsorb] below (whose absorb-ack half is a
+     * documented no-op for a baseline: it holds no wave position, so no
+     * downstream completeness set is waiting on it).
+     */
+    private fun evaluate(candidates: Collection<E>, recovered: Set<E> = emptySet()) {
         if (candidates.isEmpty()) return
         val target = threshold(lanes.liveSources)
         val adds = mutableMapOf<E, Set<Timestamp>>()
@@ -91,7 +121,7 @@ class QuorumSetCell<E>(
             val count = lanes.count(element)
             // an absent element (count 0) is never in the quorum, even if the
             // threshold is non-positive (near-miss with a single source).
-            val meets = count >= 1 && count >= target
+            val meets = count >= 1 && (element in recovered || count >= target)
             if (meets) {
                 ledger.enter(element) { lanes.tags(element) }?.let { adds[element] = it }
             } else {
