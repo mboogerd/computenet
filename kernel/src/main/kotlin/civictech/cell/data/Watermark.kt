@@ -1,10 +1,13 @@
 package civictech.cell.data
 
+import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.Cursor
 import civictech.cell.Propagate
-import civictech.cell.Stateful
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.cell.data.delta.WatermarkDelta
@@ -53,7 +56,7 @@ import java.util.*
  * a fifth `Mutable*` field here (the deferred design; no ticket owns it yet).
  */
 class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
-    Cell, Stateful, Replicable<WatermarkDelta> {
+    Cell, BoundedStateful, Replicable<WatermarkDelta> {
 
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<WatermarkDelta>>())
     override val deltaInlet = registerPort("deltaInlet", FanInlet.create<Propagate<WatermarkDelta>>())
@@ -205,6 +208,121 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
             val ts = CurrentContext.get()?.timestamp ?: return@Propagate
             CurrentContext.with(null) { advance(ts.sourceId, ts.counter) }
         }, PortRef.generate()))
+    }
+
+    // ---------------------------------------------------------------------
+    // Bounded read (V1C-CELLS). Purely additive, and inert by construction: it
+    // enumerates the four backing structures directly and calls none of
+    // [advance], [close], [suspend], [resume], [announceMember] or
+    // `applyRemote`. It also avoids [rows]/[closed]/[suspended]/[members],
+    // whose copies are the whole-state allocation this primitive exists to
+    // remove. Nothing is emitted on [outlet] and [CurrentContext] is never
+    // entered, so no delivery tap fires and no lattice row moves.
+    // ---------------------------------------------------------------------
+
+    /** Which of this cell's four independent lattices an entry came from (V1C-CELLS). */
+    enum class WatermarkLane { ROWS, CLOSED, SUSPENDED, MEMBERS }
+
+    /**
+     * One `(replica, source, thru)` delivered-counter cell (V1C-CELLS) — **not**
+     * a whole replica row. A row is itself unbounded in the number of sources,
+     * so making the row the entry would reintroduce exactly the unbounded copy
+     * this primitive exists to remove.
+     */
+    data class WatermarkRowEntry(val replica: UUID, val source: UUID, val thru: Long) : Serializable
+
+    /** One slot in the [WatermarkLane.CLOSED], [WatermarkLane.SUSPENDED] or [WatermarkLane.MEMBERS] lane (V1C-CELLS). */
+    data class WatermarkSlotEntry(val lane: WatermarkLane, val slot: UUID, val epoch: Long?) : Serializable
+
+    /** The cursor's key: a lane discriminator plus the key within it (V1C-CELLS). */
+    private data class LaneKey(val lane: WatermarkLane, val slot: UUID, val source: UUID?) : Serializable
+
+    /**
+     * One page across this cell's four lattices (V1C-CELLS).
+     *
+     * - **One entry** is one [WatermarkRowEntry] — a `(replica, source, thru)`
+     *   triple — for the `rows` lane, and one [WatermarkSlotEntry] for each of
+     *   the other three.
+     * - **The cursor** names `(lane, slot, source?)`, frozen into a walk order
+     *   at walk start ([KeyWalk] of [LaneKey]) and indexed in O(1). A cursor
+     *   that did not name its lane could not resume across a lane boundary,
+     *   which is the "order across sub-states as well as within them" question
+     *   this cell is the concrete instance of.
+     * - **The order** is the lanes in [snapshot]'s own order — `rows`,
+     *   `closed`, `suspended`, `members` — and, within each, the natural order
+     *   of the [UUID] keys (`rows` by `(replica, source)`). Every key here is
+     *   `Comparable`, so there is no excuse for an insertion-ordered walk; and
+     *   sorting is what makes a [restore]d instance — which refills all four
+     *   from `HashMap`/`HashSet` — walk identically to the one that checkpointed.
+     * - **`frontier` is null**, and deliberately so. The lattice's contents
+     *   *look* like a frontier and are not one: `rows` is a delivered-watermark
+     *   lattice over `(replica, source)`, a different key space from this fold's
+     *   tag frontier — the per-outlet-epoch lane and the per-origin lane are
+     *   explicitly distinct (spec 42, `Replication`'s delivered-watermark
+     *   seam). Reporting it as a [civictech.cell.TagFrontier] would be a
+     *   category error with a type that happens to fit. Null, not a guess —
+     *   with the usual consequence that [StatePage]'s across-page stability
+     *   check is neither promised nor verifiable here and the `since`
+     *   escalation path is unavailable. `supportsSince`/`supportsScope` stay
+     *   false, so either bound is refused rather than silently widened.
+     *
+     * No entry here can be an exclusive payload — every value is a [UUID] or a
+     * [Long] — so nothing is ever elided.
+     */
+    override fun readBounded(request: StateRead): StatePage {
+        @Suppress("UNCHECKED_CAST")
+        val walk = (request.cursor?.token as? KeyWalk<LaneKey>) ?: KeyWalk(frozenOrder(), 0)
+        val order = walk.order
+
+        val entries = ArrayList<Serializable>(minOf(request.limit, 64))
+        var bytes = 0
+        var index = walk.next
+        val examineThrough = minOf(index + request.limit, order.size)
+        while (index < examineThrough) {
+            val key = order[index]
+            index++
+            val entry: Serializable? = when (key.lane) {
+                WatermarkLane.ROWS ->
+                    rows[key.slot]?.get(key.source)?.let { WatermarkRowEntry(key.slot, key.source!!, it) }
+
+                WatermarkLane.CLOSED ->
+                    if (key.slot in closed) WatermarkSlotEntry(WatermarkLane.CLOSED, key.slot, null) else null
+
+                WatermarkLane.SUSPENDED ->
+                    suspendEpoch[key.slot]?.let { WatermarkSlotEntry(WatermarkLane.SUSPENDED, key.slot, it) }
+
+                WatermarkLane.MEMBERS ->
+                    if (key.slot in members) WatermarkSlotEntry(WatermarkLane.MEMBERS, key.slot, null) else null
+            }
+            if (entry == null) continue // gone since the walk opened
+            entries += entry
+            bytes += PageBudget.ENTRY_OVERHEAD_BYTES
+            if (PageBudget.exhausted(bytes, request.byteBudget)) break
+        }
+
+        val complete = index >= order.size
+        return StatePage(
+            entries = entries,
+            next = if (complete) null else Cursor(KeyWalk(order, index)),
+        )
+    }
+
+    /**
+     * The walk's one O(n log n) pass (V1C-CELLS): flatten the four lanes into a
+     * single sorted key sequence once, never per page. Lanes are concatenated in
+     * [snapshot]'s order so the walk's shape is the same thing a checkpoint is.
+     */
+    private fun frozenOrder(): List<LaneKey> {
+        val order = ArrayList<LaneKey>(rows.values.sumOf { it.size } + closed.size + suspendEpoch.size + members.size)
+        rows.keys.sorted().forEach { replica ->
+            rows.getValue(replica).keys.sorted().forEach { source ->
+                order += LaneKey(WatermarkLane.ROWS, replica, source)
+            }
+        }
+        closed.sorted().forEach { order += LaneKey(WatermarkLane.CLOSED, it, null) }
+        suspendEpoch.keys.sorted().forEach { order += LaneKey(WatermarkLane.SUSPENDED, it, null) }
+        members.sorted().forEach { order += LaneKey(WatermarkLane.MEMBERS, it, null) }
+        return order
     }
 
     override fun snapshot(): Serializable =

@@ -1,8 +1,13 @@
 package civictech.cell.data
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
+import civictech.cell.Cursor
+import civictech.cell.ExclusiveEntry
 import civictech.cell.Propagate
-import civictech.cell.Stateful
+import civictech.cell.StatePage
+import civictech.cell.StateRead
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.link.*
 import civictech.cell.port.*
@@ -51,7 +56,7 @@ interface KeyedSetApi<K, E> {
  * case). A re-put retracts only the element's tag under *this* key.
  */
 class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
-    KeyedSetCellBase<K, E>(ref), Stateful {
+    KeyedSetCellBase<K, E>(ref), BoundedStateful {
     /** The element under a key and the single add-tag this cell minted for it. */
     private class Entry<E>(val element: E, val tag: Timestamp)
 
@@ -131,6 +136,115 @@ class KeyedSetCell<K, E>(ref: CellRef = CellRef(UUID.randomUUID())) :
         }
         tagCounter = maps["counter"] as? Long ?: 0L
     }
+
+    // ---------------------------------------------------------------------
+    // Bounded read (V1C-CELLS). Purely additive: `snapshot()`/`restore()` and
+    // every fold path above are untouched.
+    // ---------------------------------------------------------------------
+
+    /**
+     * One key's current binding — a whole entry, never split across pages
+     * (V1C-CELLS). The [tag] is the single add-tag this cell minted for
+     * [element] under [key]; an entry is therefore small and fixed-size.
+     */
+    data class KeyedSetStateEntry<K, E>(val key: K, val element: E, val tag: Timestamp) : Serializable
+
+    /**
+     * This cell mints per-source-monotone tags from a derived [tagSource], so a
+     * real [TagFrontier] exists and `since` is honoured exactly (V1C-CELLS).
+     */
+    override val supportsSince: Boolean get() = true
+
+    // supportsScope stays false (the safe default), deliberately. This cell has
+    // two domains — it is keyed by K and *emits* a SetDelta over E — and an
+    // Interest reaching it from a consumer of its outlet is defined over E, not
+    // over K. Applying it to K would answer a neighbouring question with the
+    // caller's own predicate, which is exactly the silent widening the refuse-
+    // by-default rule exists to prevent. ManagedHost.readState refuses instead.
+
+    /**
+     * One page of this cell's key -> `(element, tag)` table (V1C-CELLS).
+     *
+     * - **One entry** is one [KeyedSetStateEntry] — `(key, element, tag)`.
+     * - **The cursor** names a position in a frozen list of keys ([KeyWalk]),
+     *   so it survives mutation of `current` and resumes in O(1).
+     * - **The order** is [EntryOrder]'s deterministic total order over `K`,
+     *   imposed rather than inherited: `current` is a `LinkedHashMap` whose
+     *   insertion order a [remove][KeyedSetOps.remove]-then-[put][KeyedSetOps.put]
+     *   moves to the tail, and which [restore] discards when it refills from the
+     *   `HashMap` [snapshot] wrote.
+     * - **`frontier` is real, exact, and O(1)** — unlike the OR-set family's,
+     *   which costs an O(n) rescan and is therefore stamped exactly only at a
+     *   walk's two ends. Every tag this cell has ever minted comes from the one
+     *   derived [tagSource] with a counter of `1..tagCounter`, so
+     *   `TagFrontier(tagSource -> tagCounter)` *is* the fold's frontier, on
+     *   every page, with no caveat.
+     *
+     *   **What the resulting stability check does and does not catch.** Every
+     *   [put][KeyedSetOps.put] that changes anything mints a tag and raises the
+     *   counter, so the check sees it. A [remove][KeyedSetOps.remove] mints
+     *   nothing — it drops the key and re-uses the tag it already held for the
+     *   retraction delta — so a removal applied mid-walk to a key the walk has
+     *   already paged leaves the endpoint stamps equal while the union still
+     *   names that key bound. Equal endpoint stamps are consequently
+     *   *necessary but not sufficient* here, exactly as [StatePage] documents
+     *   for the OR-set family and for the same reason: a [TagFrontier] measures
+     *   tag gains and only tag gains.
+     *
+     * [StatePage.attributes] carries `counter` — the tag-minting counter, which
+     * is genuinely state (a restored instance must not re-mint tags the network
+     * already saw) but is not a per-entry row. It rides **every** page, so a
+     * caller joining a walk mid-way still sees it, and with it the union of a
+     * walk's pages is exactly [snapshot]'s content.
+     *
+     * An element that is an `Owned`/`Leased` payload is never copied into a
+     * page: it becomes an [ExclusiveEntry] descriptor keyed by its `K` and is
+     * counted in [StatePage.exclusivesElided].
+     */
+    override fun readBounded(request: StateRead): StatePage {
+        @Suppress("UNCHECKED_CAST")
+        val walk = (request.cursor?.token as? KeyWalk<K>) ?: KeyWalk(EntryOrder.freeze(current.keys) { true }, 0)
+        val order = walk.order
+        val since = request.since?.perSource?.get(tagSource) ?: -1L
+
+        val entries = ArrayList<Serializable>(minOf(request.limit, 64))
+        var elided = 0
+        var bytes = 0
+        var index = walk.next
+        val examineThrough = minOf(index + request.limit, order.size)
+        while (index < examineThrough) {
+            val key = order[index]
+            index++
+            val entry = current[key] ?: continue // removed since the walk opened
+            if (entry.tag.counter <= since) continue // nothing beyond `since` for this key
+            if (ExclusiveEntry.isExclusive(entry.element)) {
+                entries += ExclusiveEntry.of(key = key as? Serializable, exclusive = entry.element as Any)
+                elided++
+            } else {
+                entries += KeyedSetStateEntry(key, entry.element, entry.tag)
+            }
+            bytes += PageBudget.ENTRY_OVERHEAD_BYTES + PageBudget.TAG_BYTES
+            if (PageBudget.exhausted(bytes, request.byteBudget)) break
+        }
+
+        val complete = index >= order.size
+        return StatePage(
+            entries = entries,
+            next = if (complete) null else Cursor(KeyWalk(order, index)),
+            frontier = currentFrontier(),
+            exclusivesElided = elided,
+            attributes = mapOf("counter" to java.lang.Long.valueOf(tagCounter)),
+        )
+    }
+
+    /**
+     * The fold's tag frontier (V1C-CELLS), in O(1): one source, and its highest
+     * minted counter is [tagCounter] by construction. Empty — not
+     * `tagSource -> 0` — before the first mint, so "no tag observed" is not
+     * reported as "counter 0 observed".
+     */
+    private fun currentFrontier(): TagFrontier =
+        if (tagCounter == 0L) TagFrontier(emptyMap()) else TagFrontier(mapOf(tagSource to tagCounter))
 
     companion object {
         fun <K, E> create(): KeyedSetApi<K, E> = KeyedSetCell()
