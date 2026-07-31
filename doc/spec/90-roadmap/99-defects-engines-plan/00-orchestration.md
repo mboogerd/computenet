@@ -305,7 +305,7 @@ no other live ticket in any track (rule 6). Its one shared file is
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| E2-ALIGN | `AlignedCompositeCell` + `ManagedHost.observeAligned` — one composite snapshot per settled wave, per-name inlets, mirrored cross-inlet frontier fold (96 §E2.3 second half, `[22-OBS-01/02]`) | opus | fresh | ticket/e2-align | opus | Specified — not-started |
+| E2-ALIGN | `AlignedCompositeCell` + `ManagedHost.observeAligned` — one composite snapshot per settled wave, per-name inlets, mirrored cross-inlet frontier fold (96 §E2.3 second half, `[22-OBS-01/02]`) | opus | fresh | ticket/e2-align | opus | Implemented — merged |
 
 **Checkpoint CC1 — verification.** Fresh opus evaluator. Its named tests plus
 `./gradlew :kernel:test` (including the pre-existing observe suite —
@@ -317,6 +317,33 @@ behavior unchanged. Merge on pass; repo gate `./gradlew test` before the
 wave closes. The evaluator carries E2-ALIGN's shipped builder surface into
 E2-SUITE's ticket file if it differs from the sketch (the C8 propagation
 pattern).
+
+**CC1 closed 2026-07-31 — E2-ALIGN merged (`dea1e58`).** Verified beyond the
+named gates: the `ready() = true` mutation fails 4 of 8 tests including the
+invariant (so the aligned path itself is under test, not only the control);
+the `observeAll` control was re-instrumented and trips on **50 of 50** seeds;
+`ArchitectureRatchetTest`'s two added baseline edges (`observe -> control`,
+`observe -> protocol`) are real, forced by any cell that folds completeness,
+already carried identically by `consistency` and `data`, and cyclic with
+nothing (no package imports `observe`). Two evaluator repairs landed on the
+branch, documentation only (`b97b40f`). Two facts propagated to wave C3's
+E2-SUITE ticket: the shipped builder surface, and the reroute-harness
+landmine below.
+
+**Harness landmine for E2-GATE and E2-SUITE (measured at CC1).** `Progress`
+absorb-acks are delivered *synchronously on the sender's thread*
+(`ProtocolSupport`'s own recorded residual) while a test-rerouted arm's data
+is queued. Rerouting an **absorbing** arm while a sibling arm stays fused
+therefore breaks spec-31 per-link FIFO *between the two planes on one edge* —
+the ack for wave `t+1` overtakes that edge's still-queued wave-`t` delta and
+the monotone-`max` watermark releases wave `t` without it. Measured: 50/50
+seeds publish mixed composites. Rerouting **both** arms is safe (one host
+queue keeps them in relative order), and so is rerouting only a
+non-absorbing arm. This is a property of the reroute device, not of any
+frontier fold — a real in-process edge is fused and a bridged one carries
+both planes through the same `InvocationSink` — and it bites `WaveFrontier`
+and `CoalescingCombineCell` identically. Do not read such a failure as a
+defect in the cell under test.
 
 ## Wave C2 — OR-map core + operator gating · branches from `main` after track A C9
 

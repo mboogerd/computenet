@@ -24,11 +24,36 @@ This is 96 §E2.5 (`doc/spec/90-roadmap/96-incremental-engines-plan.md:
 247-257`), test-only. Both mechanisms it certifies are merged by the time
 this ticket dispatches:
 
-- **E2-ALIGN** (wave C1): `observeAligned` /
+- **E2-ALIGN** (wave C1, **merged `dea1e58`**): `observeAligned` /
   `AlignedCompositeCell` in `civictech.cell.observe` — the wave-aligned
-  multi-view sink satisfying `[22-OBS-01]`/`[22-OBS-02]`. Its exact builder
-  surface is in E2-ALIGN's completion report; read the merged
+  multi-view sink satisfying `[22-OBS-01]`/`[22-OBS-02]`. Read the merged
   `kernel/src/main/kotlin/civictech/cell/observe/AlignedObserve.kt` first.
+  **Shipped surface** (carried here by the CC1 evaluator):
+  - `ManagedHost.observeAligned { … }` (and the
+    `Use<HostManagementApi>` form) → `AlignedCompositeCell`, an
+    `ObservationSink<Map<String, Any?>>` with `current()`, `onChange`,
+    `inline reified get<T>(name)`, `close()`, `inlets: Map<String,
+    FanInlet<Propagate<Any>>>`, and two diagnostics —
+    `bufferedWaves: Int`, `unmatchedDeltas: Long`. The port name **is** the
+    view name.
+  - Builder registrars, mirroring `ObserveAllBuilder` exactly:
+    `set/map/count(name, source: CellRef, outletName = "outlet")` plus five
+    typed `TypedRef` overloads (`SetApi`, `QuorumSetApi`, `FilterSetApi`,
+    `MapApi`, `GroupByApi<E, K, Long>`).
+  - **Two guarantee boundaries the suite must design around** (both recorded
+    in the class KDoc and in `22-consistency.md:298-…`): catch-up traffic and
+    mid-stream edge floors mean a sink attached *while the graph is already
+    writing* can transiently expose arms seeded at different points — attach
+    the sink before the generator starts, or the "invariant at every observed
+    output" clause will trip on the attach transient rather than on a real
+    defect. And it is the WAIT shape: two views over *independent* roots hold
+    each other's waves (G-13 phantom expected edge), so every observed view in
+    one aligned composite must share the pipeline's source.
+  - **Do not reroute an absorbing arm alone** through the host queue in the
+    suite's harness — see the CC1 harness-landmine note in
+    `../00-orchestration.md` (wave C1). It reorders the `Progress` lane ahead
+    of that same edge's data and produces failures that belong to the reroute
+    device, not to the sink or the operators.
 - **E2-GATE** (wave C2): the opt-in `emitOnFrontier` mode on `SemiJoinCell`
   and `CombineLatestCell` (`[24-OP-SEMIJOIN-04]`, the `CombineLatestCell`
   gating clause, `doc/spec/20-dataflow-semantics/24-data-cells.md:184-215`),
