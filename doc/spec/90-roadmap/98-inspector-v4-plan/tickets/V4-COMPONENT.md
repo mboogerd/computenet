@@ -82,7 +82,7 @@ leaves the defect reachable:
 The harm is not cosmetic. `Node.graph` is stamped from `componentOf`
 (`inspect/src/main/kotlin/civictech/inspect/InspectorModel.kt:336`) and
 `GET /api/inspect/topology?graph=<id>` filters on it
-(`InspectorServer.kt:555`), so the id is the navigator's *partition key*. Two
+(`InspectorServer.kt:428-433`), so the id is the navigator's *partition key*. Two
 unconnected cells sharing one are not two rows in a list — they are one
 undividable selection.
 
@@ -118,7 +118,7 @@ Note the design consequences, and document them rather than hiding them:
   buy the local side one less id change across a peer disconnect, at the price
   of a card whose id silently claims to be "the" graph for that uuid. Honesty
   wins here; the id is already documented as unstable across merge and split
-  (`Graphs.kt:37-45`), and a peer arriving or leaving is a genuine split.
+  (`Graphs.kt:26-32`), and a peer arriving or leaving is a genuine split.
 - **Separator `:`**, matching `Node.ref`'s own `"<uuid>:<instanceId>"`
   encoding (`inspect/.../Dto.kt:33`), so the two read alike. Do **not** use
   `#` — graph ids travel in the `?graph=` query of `GET /topology`, and `#`
@@ -226,8 +226,9 @@ Nothing else. No generated/build output in the diff.
 - `inspect/src/main/kotlin/civictech/inspect/InspectorModel.kt:218-270` —
   `components()`, `nameGraph`/`nameOf`'s min-uuid tie-break (which must keep
   working per component), and `publishGraphChanges`' full-membership compare.
-- `inspect/src/main/kotlin/civictech/inspect/InspectorServer.kt:449`, `:555` —
-  the two consumers: `GET /graphs` and the `?graph=` topology filter.
+- `inspect/src/main/kotlin/civictech/inspect/InspectorServer.kt:449`,
+  `:428-433`, `:555` — the three consumers: `GET /graphs`, the `?graph=`
+  topology filter, and the wake endpoint's `components()` lookup by id.
 - `doc/spec/90-roadmap/97-inspector-plan/20-api-contract.md:70-80`, `:320-335`
   — `Node.graph` and `GraphSummary` as the contract states them today. You
   propose wording; you do not edit.

@@ -923,7 +923,7 @@ C10 question correctly and in the right register.
 `components()` loses its answer by bucketing on the id string; two disjoint
 components whose minimum members share a logical uuid silently union. The harm
 is not cosmetic, because `Node.graph` is the navigator's partition key
-(`InspectorModel.kt:336`, `InspectorServer.kt:555`) — two unconnected cells
+(`InspectorModel.kt:336`, `InspectorServer.kt:428-433`) — two unconnected cells
 sharing one are not two rows in a list but one undividable selection.
 
 The decided fix is **collision-conditional instance qualification**: a
