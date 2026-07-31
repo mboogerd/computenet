@@ -88,6 +88,128 @@ snapshot.edges.push({
   fused: null,
 });
 
+// --- V1C-FE: paged/provenance/unavailable state simulation --------------
+// The real V1C-BE server does not exist in this worktree; this is the only
+// way to exercise the paged view, the three `provenance` values, elided
+// exclusives, and each `unreadable` reason by hand ahead of it merging
+// (V1C-FE ticket Solution direction §5). Five synthetic nodes, spliced into
+// the served snapshot only (never `fixtures/topology.json`), one dedicated
+// small graph so they are easy to find and click.
+const BIG_ROWS = Array.from({ length: 7 }, (_, i) => `row-${i + 1}`);
+const PAGE_SIZE = 3;
+
+/** `null` return = an unknown/expired cursor (410). */
+function bigCellPage(cursorParam, limitParam) {
+  if (cursorParam === null) return { rows: BIG_ROWS.slice(0, PAGE_SIZE), start: 0, limit: PAGE_SIZE };
+  const start = Number(cursorParam.replace(/^p-/, ''));
+  if (!Number.isInteger(start) || start < 0 || start >= BIG_ROWS.length) return null;
+  const limit = Math.min(Math.max(Number(limitParam) || PAGE_SIZE, 1), 1000);
+  return { rows: BIG_ROWS.slice(start, start + limit), start, limit };
+}
+
+const V1C_NODES = [
+  { ref: 'bbbbbbbb-0000-0000-0000-00000000b16c:0', name: 'bigLedger (paged demo)' },
+  { ref: 'cccccccc-0000-0000-0000-0000000c4ec4:0', name: 'checkpointedLedger (drained demo)' },
+  { ref: 'dddddddd-0000-0000-0000-000000005d0e:0', name: 'suspendedLedger (parked demo)' },
+  { ref: 'eeeeeeee-0000-0000-0000-00000000e1e5:0', name: 'excludedLedger (exclusivesElided demo)' },
+  { ref: 'ffffffff-0000-0000-0000-00000000f01d:0', name: 'migratingLedger (unavailable demo)' },
+].map((n) => ({
+  ...n,
+  typeFqn: 'civictech.cell.data.SetCell',
+  color: 'PURE',
+  manifests: [],
+  ports: [{ name: 'deltaInlet', dir: 'IN', contractFqn: 'civictech.cell.Propagate' }],
+  host: 'v1c-demo-host',
+  net: 'local',
+  lifecycle: 'HOT',
+  generation: 0,
+  graph: null,
+}));
+const V1C_GRAPH = `g-${minUuid(V1C_NODES)}`;
+for (const n of V1C_NODES) n.graph = V1C_GRAPH;
+snapshot.nodes.push(...V1C_NODES);
+
+const [BIG_REF, CHECKPOINT_REF, SUSPENDED_REF, ELIDED_REF, MIGRATING_REF] = V1C_NODES.map((n) => n.ref);
+
+function v1cStateFor(ref, cursorParam, limitParam) {
+  if (ref === BIG_REF) {
+    const paged = bigCellPage(cursorParam, limitParam);
+    if (!paged) return { status: 410, body: { error: 'unknown or expired cursor' } };
+    const next = paged.start + paged.rows.length;
+    return {
+      status: 200,
+      body: {
+        ref,
+        frontier: null,
+        kind: 'page',
+        value: { $table: { columns: ['row'], rows: paged.rows.map((r) => [r]) } },
+        staleMs: 0,
+        provenance: 'live',
+        page: {
+          cursor: next < BIG_ROWS.length ? `p-${next}` : null,
+          limit: paged.limit,
+          entries: paged.rows.length,
+          exclusivesElided: 0,
+          walkStable: true,
+        },
+        unreadable: null,
+      },
+    };
+  }
+  if (ref === CHECKPOINT_REF) {
+    return {
+      status: 200,
+      body: {
+        ref,
+        frontier: null,
+        kind: 'snapshot',
+        value: { $table: { columns: ['row'], rows: [['as-of-drain-1'], ['as-of-drain-2']] } },
+        staleMs: 0,
+        provenance: 'checkpoint',
+        page: null,
+        unreadable: null,
+      },
+    };
+  }
+  if (ref === SUSPENDED_REF) {
+    return {
+      status: 200,
+      body: {
+        ref,
+        frontier: null,
+        kind: 'snapshot',
+        value: { $table: { columns: ['row'], rows: [['parked-but-readable']] } },
+        staleMs: 0,
+        provenance: 'liveSuspended',
+        page: null,
+        unreadable: null,
+      },
+    };
+  }
+  if (ref === ELIDED_REF) {
+    return {
+      status: 200,
+      body: {
+        ref,
+        frontier: null,
+        kind: 'page',
+        value: { $table: { columns: ['row'], rows: [['visible-1']] } },
+        staleMs: 0,
+        provenance: 'live',
+        page: { cursor: null, limit: 1, entries: 1, exclusivesElided: 2, walkStable: true },
+        unreadable: null,
+      },
+    };
+  }
+  if (ref === MIGRATING_REF) {
+    return {
+      status: 200,
+      body: { ref, frontier: null, kind: 'unavailable', value: null, staleMs: 0, unreadable: 'migrating' },
+    };
+  }
+  return null;
+}
+
 function graphIdsInSnapshot() {
   return [...new Set(snapshot.nodes.map((n) => n.graph).filter(Boolean))];
 }
@@ -559,10 +681,25 @@ const server = createServer((req, res) => {
       return;
     }
     if (sub === 'state' && req.method === 'GET') {
+      const v1c = v1cStateFor(ref, url.searchParams.get('cursor'), url.searchParams.get('limit'));
+      if (v1c) {
+        sendJson(res, v1c.status, v1c.body);
+        return;
+      }
       sendJson(res, 200, stateFor(ref));
       return;
     }
     if (sub === 'observe' && req.method === 'POST') {
+      // V1C-FE demo cells have no fold to observe — that absence is exactly
+      // why the real server would answer them `kind: 'page'`/`'snapshot'`
+      // rather than `'view'`. Answering 409 here (the real "refused" case,
+      // `20-api-contract.md:25`) keeps the mock's generic `state.summary`
+      // simulation from firing for them and stomping the paged walk with an
+      // unrelated refetch every tick.
+      if (v1cStateFor(ref, null, null)) {
+        res.writeHead(409).end();
+        return;
+      }
       startObserving(ref);
       res.writeHead(204).end();
       return;

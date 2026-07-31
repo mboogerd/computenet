@@ -4,13 +4,40 @@ import type { GraphSummary, SearchCost } from '../api/types';
  *  cold screen all wear the same tag. */
 export const COLD_TAG = '❄';
 
-/** What the cold screen says instead of state and flow. It says *unavailable*,
- *  never a stale preview: reading a parked cone's last known value and
- *  presenting it as its state would be the one dishonesty this screen exists
- *  to avoid (M5-COLD ticket Exclusions — "the cold screen says 'unavailable',
- *  not a fake preview"; the real capability, cold reads from a checkpoint or
- *  journal, is a tracked kernel gap, Linear MRB-157). */
-export const COLD_NOTICE = 'cold — parked; state/flow unavailable without waking';
+/** What the cold-screen banner says about a parked graph, now that `V1C-BE`
+ *  closed the "cold reads from a checkpoint or journal" kernel gap
+ *  (`V1C-KERNEL` Decision 7, Linear MRB-157) this constant used to cite as
+ *  the reason state/flow were BOTH unavailable while cold. That reason is
+ *  gone for state — a selection inside a cold graph now issues one plain
+ *  `GET .../state` (never a `POST observe`) and renders it labelled with its
+ *  provenance, exactly like a hot cell's read (`util/statePresentation.ts`'s
+ *  `provenanceLabel`). It is NOT gone for flow: no messages flow in a parked
+ *  cone, and there is nothing honest to show — see {@link COLD_FLOW_NOTICE}.
+ *
+ *  The no-fake-preview discipline (M5-COLD ticket Exclusions — "the cold
+ *  screen says 'unavailable', not a fake preview") still holds in its
+ *  original form: this notice must never claim the value it goes on to show
+ *  is CURRENT. A truthful "checkpoint"/"suspended" label is not a stale
+ *  preview dressed up as live — it says exactly what it is, which is the
+ *  opposite of the dishonesty the exclusion forbids. `test/cold.test.ts`
+ *  asserts this distinction survives, not the literal old sentence. */
+export const COLD_BANNER_NOTICE =
+  'cold — parked. Selecting a cell reads its state, labelled with where it came from (its own parked fold, or a drain checkpoint); flow does not run in a parked cone.';
+
+/** The `State` subsection's cold-specific line — shown ABOVE the real,
+ *  fetched value (unlike the old fallback, which replaced the whole
+ *  section). See {@link COLD_BANNER_NOTICE}'s doc comment for why this no
+ *  longer says "unavailable": V1C-BE makes a parked cell's state readable,
+ *  and this line exists to say that plainly, not to hide it. */
+export const COLD_STATE_NOTICE = 'cold — this cell is parked. Its state below was read without waking it.';
+
+/** The `Flow` subsection's cold-specific line — flow is the half of the old
+ *  combined notice that is still true without qualification: nothing flows
+ *  through a parked cone, so there is nothing honest to render in the
+ *  per-port rate table (V1C-FE ticket Solution direction §3: "`FlowSection`
+ *  has no cold gate at all today — while cold it renders a port table of
+ *  em-dashes", which read as "no traffic" rather than "cannot be measured"). */
+export const COLD_FLOW_NOTICE = 'cold — no messages flow in a parked cone. Nothing to show.';
 
 /** The confirmation the wake button asks for, verbatim from the ticket. Waking
  *  is the only act in the whole inspector that changes the graph it inspects
@@ -34,16 +61,29 @@ export function coldGraphCount(graphs: readonly GraphSummary[]): number {
   return graphs.filter((g) => g.lifecycle === 'cold').length;
 }
 
-/** The inline hint under a data-search result when the search skipped parked
+/** The inline hint under a data-search result when the search skipped some
  *  cells (M5-COLD ticket Implement §3). Null when nothing was skipped, so the
  *  hint only ever appears when there is something to act on.
  *
  *  Wording note: `SearchCost.coldSkipped` counts *cells*, not graphs (see
  *  20-api-contract.md §SearchResult and the server's `DataSearch`), so this
  *  says cells and points at the graphs — claiming "N cold graphs skipped" from
- *  a cell count would be a number the UI made up. */
+ *  a cell count would be a number the UI made up.
+ *
+ *  V1C-BE/V1C-FE correction — **why this no longer says "wake to include"**:
+ *  `V1C-BE` narrows `coldSkipped`'s meaning to "held for a migration flip
+ *  only" (it also makes suspended/drained cells directly searchable, so they
+ *  stop being counted here at all). Waking does nothing for a held cell
+ *  (`Cold.kt`'s "never the inspector" — the migration's own release ends the
+ *  hold, not a wake button). But a browser cannot tell whether it is talking
+ *  to a pre- or post-`V1C-BE` server, and on an OLDER server `coldSkipped`
+ *  still counts parked (suspended/drained) cells too, for which waking WOULD
+ *  help. So this hint is worded to be true under both readings: it states the
+ *  fact (cells were skipped, for a parked-or-held reason) and drops the
+ *  remedy claim rather than naming one ("wake to include") that is a dead end
+ *  under the narrowed, post-merge meaning. */
 export function formatColdSkipHint(cost: SearchCost | null): string | null {
   if (!cost || cost.coldSkipped <= 0) return null;
   const cells = `${cost.coldSkipped} cold ${cost.coldSkipped === 1 ? 'cell' : 'cells'}`;
-  return `${cells} skipped — wake their graph to include`;
+  return `${cells} skipped — parked or held cells are not searched`;
 }

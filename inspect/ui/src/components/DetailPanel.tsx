@@ -1,9 +1,19 @@
 import { For, Show, createMemo, type JSX } from 'solid-js';
-import type { DeadLetterEntry, Frontier, ParkedEntry, RestartEntry, Value, WaveHealthEntry, WaveHealthKind } from '../api/types';
+import type { CellState, DeadLetterEntry, Frontier, ParkedEntry, RestartEntry, Value, WaveHealthEntry, WaveHealthKind } from '../api/types';
 import { capitalize, colorGlyph, manifestBadge, shortType } from '../util/badges';
 import { portFlowRows, type PortFlowRow } from '../util/flow';
 import { buildSupervisionTimeline, type SupervisionStep } from '../util/supervision';
-import { COLD_NOTICE } from '../nav/cold';
+import {
+  exclusivesElidedLabel,
+  isStaleProvenance,
+  pageCounterText,
+  provenanceLabel,
+  unavailableMessage,
+  walkStableNote,
+  WALK_RESTARTED_NOTE,
+  WALK_STUCK_NOTE,
+} from '../util/statePresentation';
+import { COLD_FLOW_NOTICE, COLD_STATE_NOTICE } from '../nav/cold';
 import { currentGraphCold } from '../solid/cold';
 import {
   cellDetail,
@@ -13,9 +23,11 @@ import {
   detailError,
   detailLoading,
   isPinned,
+  loadNextStatePage,
   pin,
   stateError,
   stateLoading,
+  stateWalk,
   unpin,
 } from '../solid/detail';
 import { errorStore, errorVersion } from '../solid/errors';
@@ -214,73 +226,175 @@ function formatFrontier(f: Frontier | null | undefined): string {
 }
 
 function StateSection() {
-  const frontierLabel = createMemo(() => formatFrontier(cellState()?.frontier));
+  // V1C-FE: `cellState()` is only ever refreshed by the BASE fetch (page 1,
+  // or a plain "view"/"snapshot" read) — a subsequent `loadNextStatePage()`
+  // (another page, or a 410's silent restart) updates only `stateWalk()`, not
+  // `cellState()`. So the section's meta (kind/provenance/frontier/staleMs)
+  // must read from whichever is actually the latest response for the current
+  // selection, or a restarted walk's new page 1 would render under the OLD
+  // page 1's now-stale `kind`/`provenance`. Falls back to `cellState()`
+  // itself whenever the walk's own ref has not (yet) caught up to it (a
+  // fresh selection, mid-render, before its `seed()` call lands) — see this
+  // function's module doc for why that moment is safe rather than an
+  // inconsistent flash.
+  const displayState = createMemo<CellState | null>(() => {
+    const base = cellState();
+    if (!base) return null;
+    const walk = stateWalk();
+    return walk.ref === base.ref && walk.latest ? walk.latest : base;
+  });
+
+  const frontierLabel = createMemo(() => formatFrontier(displayState()?.frontier));
 
   // V1A-FE ticket Implement §2: holds the previously rendered value across
   // renders (plain closure variables — this setup function runs once per
   // component mount, exactly like the `frontierLabel` memo above), reset
   // whenever the selection changes so a freshly selected cell's first paint
   // never flashes against a different cell's last value.
+  //
+  // V1C-FE ticket Solution direction §1 ("a page append is not a change"):
+  // `kind === 'page'` always gets the empty flash. Appending a page to an
+  // accumulated walk would otherwise flash the whole appended page as
+  // "added" — those entries were always part of the cell's state, this
+  // client had simply not fetched them yet.
   let prevRef: string | null = null;
   let prevValue: Value | undefined;
   const flash = createMemo<RowFlash>(() => {
     const ref = selection();
-    const value = cellState()?.value;
+    const st = displayState();
     if (ref !== prevRef) {
       prevRef = ref;
       prevValue = undefined;
     }
+    if (st?.kind === 'page') return { added: new Set<string>(), changed: new Set<string>() };
+    const value = st?.value;
     const result = value === undefined ? { added: new Set<string>(), changed: new Set<string>() } : diffRows(prevValue, value);
     prevValue = value;
     return result;
   });
 
+  // V1C-FE: for `kind === 'page'` render the WALK's accumulated value (the
+  // union of every page fetched so far) rather than the latest response's own
+  // `value`, which is only ever the most recently landed page on its own.
+  const renderedValue = createMemo<Value | undefined>(() => {
+    const s = displayState();
+    if (s?.kind !== 'page') return s?.value;
+    const walk = stateWalk();
+    return walk.ref === s.ref && walk.value !== null ? walk.value : s.value;
+  });
+
   return (
     <Section title="State">
-      {/* M5-COLD: inside a cold graph nothing was fetched — no observe, no
-          `GET state` — so this says why, rather than rendering a failure for
-          a request that was deliberately never made (ticket Implement §2:
-          "selection shows descriptor only"). M5-NET: a remote cell's state is
-          likewise never requested — not locally hosted, nothing to read. */}
-      <Show
-        when={!currentGraphCold()}
-        fallback={<p class="detail-section__status detail-section__status--cold">{COLD_NOTICE}</p>}
-      >
+      {/* M5-NET: a remote cell's state is never requested — not locally
+          hosted, nothing to read. */}
       <Show when={!remoteSelected()} fallback={<p class="detail-section__status">{REMOTE_NOTICE}</p>}>
       <Show when={!stateLoading()} fallback={<p class="detail-section__status">Loading…</p>}>
         <Show
-          when={cellState()}
+          when={displayState()}
           fallback={<p class="detail-section__status detail-section__status--error">{describeError(stateError())}</p>}
         >
           {(s) => (
             <>
+              {/* V1C-FE ticket Solution direction §3: a cold selection now
+                  reads real state (V1C-BE makes a parked cell's read cost
+                  nothing causal), so this is an informational line ABOVE the
+                  value rather than a replacement for the whole section. */}
+              <Show when={currentGraphCold()}>
+                <p class="detail-section__status detail-section__status--cold">{COLD_STATE_NOTICE}</p>
+              </Show>
               <div class="state-meta">
                 <span class="state-meta__frontier mono" title="frontier stamp (source · counter)">
                   {frontierLabel()}
                 </span>
-                <span class="state-meta__stale">{s().staleMs}ms stale</span>
+                {/* V1C-FE ticket Solution direction §2: the contract pins
+                    staleMs to 0 for "page"/"snapshot", so rendering it there
+                    would print "0ms stale" over a checkpoint written an hour
+                    ago. Only "view" has a real freshness claim to make. */}
+                <Show when={s().kind === 'view'}>
+                  <span class="state-meta__stale">{s().staleMs}ms stale</span>
+                </Show>
                 <span class="state-meta__kind">{s().kind}</span>
               </div>
+              {/* V1C-FE ticket Solution direction §2: provenance — never
+                  rendered for `null` (a "view", or "unavailable"; §0: "never
+                  default provenance to 'live'"). `checkpoint` gets the stale
+                  register; `live`/`liveSuspended` do not. */}
+              <Show when={provenanceLabel(s().provenance)}>
+                {(label) => (
+                  <p
+                    class="state-provenance"
+                    classList={{ 'state-provenance--stale': isStaleProvenance(s().provenance) }}
+                  >
+                    {label()}
+                  </p>
+                )}
+              </Show>
               <Show
                 when={s().kind !== 'unavailable'}
-                fallback={<p class="detail-section__status">State unavailable for this cell.</p>}
+                fallback={<p class="detail-section__status">{unavailableMessage(s().unreadable)}</p>}
               >
-                <ValueView value={s().value} flash={flash()} />
+                <ValueView value={renderedValue() ?? s().value} flash={flash()} />
+                <Show when={s().kind === 'page'}>
+                  <StatePageControls state={s()} />
+                </Show>
               </Show>
             </>
           )}
         </Show>
       </Show>
-      {/* V1A-FE ticket Implement §3: the onChange log — gated on the same
-          cold/remote guards as the value above (a cold or remote selection is
-          not observed, so it has no log), but NOT on `stateLoading()`/
-          `cellState()` — the log reflects the observation's history, not the
-          latest fetch's own loading state. */}
-      <ChangeLogPanel />
+      {/* V1A-FE ticket Implement §3: the onChange log — a cold or remote
+          selection is never observed, so it has no log. NOT gated on
+          `stateLoading()`/`cellState()` — the log reflects the observation's
+          history, not the latest fetch's own loading state. */}
+      <Show when={!currentGraphCold()}>
+        <ChangeLogPanel />
       </Show>
       </Show>
       <p class="detail-section__footnote">per-cell consistent — cross-panel alignment not guaranteed</p>
     </Section>
+  );
+}
+
+/** V1C-FE ticket Solution direction §1/§2: everything the page WALK itself
+ *  contributes below the rendered value — the elided-exclusives count, the
+ *  `walkStable` note, the shape-mismatch note, the 410-restart/stuck notes,
+ *  and the page counter + "Load next page" control. Gated on `kind ===
+ *  'page'` by the caller; `isCurrent` is a belt-and-suspenders guard against
+ *  rendering a walk snapshot left over from a just-superseded selection (the
+ *  two signals update together in practice — see `solid/detail.ts`'s
+ *  `onState` — but nothing here should silently trust that). */
+function StatePageControls(props: { state: CellState }) {
+  const walk = createMemo(() => stateWalk());
+  const isCurrent = createMemo(() => walk().ref === props.state.ref);
+
+  return (
+    <Show when={isCurrent()}>
+      <div class="state-page">
+        <Show when={walk().exclusivesElidedTotal > 0}>
+          <p class="state-page__exclusives">{exclusivesElidedLabel(walk().exclusivesElidedTotal)}</p>
+        </Show>
+        <Show when={walkStableNote(walk().walkStable)}>
+          {(note) => <p class="state-page__smeared">{note()}</p>}
+        </Show>
+        <Show when={!walk().merged}>
+          <p class="state-page__mismatch">Pages did not share a shape — rendered separately, not merged.</p>
+        </Show>
+        <Show when={walk().restarted}>
+          <p class="state-page__restarted">{WALK_RESTARTED_NOTE}</p>
+        </Show>
+        <Show when={walk().stuck}>
+          <p class="state-page__stuck">{WALK_STUCK_NOTE}</p>
+        </Show>
+        <div class="state-page__footer">
+          <span class="state-page__counter">{pageCounterText(walk().entriesTotal, walk().cursor !== null)}</span>
+          <Show when={walk().cursor !== null}>
+            <button type="button" class="state-page__more" disabled={walk().loading} onClick={() => loadNextStatePage()}>
+              {walk().loading ? 'Loading…' : 'Load next page'}
+            </button>
+          </Show>
+        </div>
+      </div>
+    </Show>
   );
 }
 
@@ -335,6 +449,13 @@ function FlowSection() {
   return (
     <Section title="Flow">
       <Show when={!remoteSelected()} fallback={<p class="detail-section__status">{REMOTE_NOTICE}</p>}>
+      {/* V1C-FE ticket Solution direction §3: no messages flow in a parked
+          cone, so a cold selection says so rather than rendering a port
+          table of em-dashes that reads as "no traffic" instead of "cannot be
+          measured". State's cold gate came off this wave (V1C-BE makes a
+          parked read cheap); flow's did not — nothing to gate off from, it
+          is genuinely unavailable. */}
+      <Show when={!currentGraphCold()} fallback={<p class="detail-section__status detail-section__status--cold">{COLD_FLOW_NOTICE}</p>}>
       <Show when={!detailLoading()} fallback={<p class="detail-section__status">Loading…</p>}>
         <Show when={rows().length} fallback={<p class="detail-section__status">This cell has no ports.</p>}>
           <table class="flow-table">
@@ -364,6 +485,7 @@ function FlowSection() {
             </tbody>
           </table>
         </Show>
+      </Show>
       </Show>
       </Show>
       <p class="detail-section__footnote">1 Hz aggregate — not per-message; per-cell consistent, cross-panel alignment not guaranteed</p>

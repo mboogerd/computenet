@@ -3,6 +3,7 @@ import { createStore, unwrap } from 'solid-js/store';
 import type { CellDetail, CellState, Ref, StateSummaryPayload } from '../api/types';
 import { ChangeLog } from '../sync/changeLog';
 import { DetailController, defaultDetailTransport } from '../sync/detailClient';
+import { StateWalk, type StateWalkSnapshot } from '../sync/statePages';
 import { currentGraphCold } from './cold';
 import { selection } from './selection';
 
@@ -13,6 +14,20 @@ const [detailLoading, setDetailLoading] = createSignal(false);
 const [cellState, setCellState] = createSignal<CellState | null>(null);
 const [stateError, setStateError] = createSignal<unknown>(null);
 const [stateLoading, setStateLoading] = createSignal(false);
+
+/** V1C-FE ticket Solution direction §1: the paged-state walk for whichever
+ *  cell is currently selected. Seeded from every fresh `cellState()` (see
+ *  `onState` below) and abandoned whenever the selection changes — never
+ *  fetches on its own; `loadNextStatePage()` is the only trigger. */
+const stateWalkImpl = new StateWalk(defaultDetailTransport, (snapshot) => setStateWalk(snapshot));
+const [stateWalk, setStateWalk] = createSignal<StateWalkSnapshot>(stateWalkImpl.snapshot());
+
+/** The "Load next page" action — one explicit page, never automatic
+ *  (20-wave-neutral-read-design.md §4.2). A no-op while nothing is walkable;
+ *  `StateWalk.loadNext` itself also guards this, so callers do not need to. */
+export function loadNextStatePage(): void {
+  void stateWalkImpl.loadNext();
+}
 
 /** Latest `state.summary` per ref, for the canvas "State" toggle's per-cell
  *  chip (10-target-v3.md: "cardinality · frontier wave · staleness"). V1B-FE
@@ -52,6 +67,7 @@ export {
   stateError,
   stateLoading,
   stateSummaries,
+  stateWalk,
 };
 
 /** `pinned() ∪ {selection()}` — everything currently tracked for
@@ -108,6 +124,11 @@ const controller = new DetailController(defaultDetailTransport, {
     setStateLoading(false);
     setCellState(state ?? null);
     setStateError(error ?? null);
+    // V1C-FE: every fresh base state is a NEW walk (a refetched page 1 is not
+    // a continuation of the previous one — see `StateWalk.seed`'s doc
+    // comment). A fetch error/undefined state leaves nothing to walk.
+    if (state) stateWalkImpl.seed(ref, state);
+    else stateWalkImpl.abandon();
   },
   onPinsChanged: (nextPinned, nextSnapshotOnly) => {
     setPinned(new Set(nextPinned));
@@ -145,6 +166,10 @@ export function initDetail(): void {
     setCellState(null);
     setDetailError(null);
     setStateError(null);
+    // V1C-FE: abandon whatever walk was in progress for the OLD selection —
+    // clears its accumulator, drops its cursor, and (via the epoch bump)
+    // discards any `loadNext()` response for it that lands after this point.
+    stateWalkImpl.abandon();
 
     if (ref) {
       setDetailLoading(true);

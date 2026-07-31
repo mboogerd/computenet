@@ -121,15 +121,34 @@ export function setStateFixture(ref: Ref, value: unknown): void {
   stateByRef.set(ref, value);
 }
 
-function jsonResponse(body: unknown): Response {
+/** V1C-FE ticket "The DOM harness needs two extensions": a query-aware
+ *  (`?cursor=`/`?limit=`), status-aware, optionally-deferred responder for
+ *  `GET /cell/{ref}/state` — needed for a multi-page walk (successive pages
+ *  differ only by `?cursor=`, which the plain {@link setStateFixture}
+ *  override cannot express), a 410 stale-cursor response, and an abandoned
+ *  walk (a responder returning an unresolved promise the test settles by
+ *  hand, the same pattern `test/detailClient.test.ts` uses for its own
+ *  mock-transport deferrals). Takes priority over {@link setStateFixture}
+ *  when both are set for the same ref. Cleared by {@link resetAppState}. */
+export type StateResponder = (
+  params: URLSearchParams,
+) => { status?: number; body: unknown } | Promise<{ status?: number; body: unknown }>;
+
+const stateResponderByRef = new Map<Ref, StateResponder>();
+
+export function setStateResponder(ref: Ref, responder: StateResponder): void {
+  stateResponderByRef.set(ref, responder);
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
   // A plain object satisfying the subset of the `Response` interface this
   // app's code actually reads (`.ok`, `.status`, `.json()`, `.url` only in
   // an error-message string) — not a real `Response`/`Headers` construction,
   // which jsdom does not provide and this harness has no need to imitate in
   // full.
   return {
-    ok: true,
-    status: 200,
+    ok: status >= 200 && status < 300,
+    status,
     url: '',
     json: async () => body,
   } as Response;
@@ -149,6 +168,11 @@ function installFetch(): void {
     const stateMatch = pathname.match(/^\/api\/inspect\/cell\/([^/]+)\/state$/);
     if (stateMatch) {
       const ref = decodeURIComponent(stateMatch[1]);
+      const responder = stateResponderByRef.get(ref);
+      if (responder) {
+        const { status, body } = await responder(searchParams);
+        return jsonResponse(body, status ?? 200);
+      }
       return jsonResponse(stateByRef.get(ref) ?? cellStateTableFixture);
     }
 
@@ -255,6 +279,7 @@ export function resetAppState(): void {
   setShowErrors(false);
   setShowState(false);
   stateByRef.clear();
+  stateResponderByRef.clear();
 }
 
 afterEach(() => cleanup());

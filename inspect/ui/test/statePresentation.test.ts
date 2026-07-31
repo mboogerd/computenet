@@ -1,0 +1,94 @@
+import { describe, expect, it } from 'vitest';
+import { REMOTE_NOTICE } from '../src/util/placement';
+import {
+  exclusivesElidedLabel,
+  isStaleProvenance,
+  pageCounterText,
+  provenanceLabel,
+  unavailableMessage,
+  walkStableNote,
+} from '../src/util/statePresentation';
+
+describe('provenanceLabel', () => {
+  it('renders nothing for null/undefined — never defaulted to "live"', () => {
+    expect(provenanceLabel(null)).toBeNull();
+    expect(provenanceLabel(undefined)).toBeNull();
+  });
+
+  it('renders each known value distinctly', () => {
+    expect(provenanceLabel('live')).toBe('live');
+    expect(provenanceLabel('liveSuspended')).toMatch(/suspended/i);
+    expect(provenanceLabel('liveSuspended')).not.toMatch(/warning|degraded|caution/i);
+    expect(provenanceLabel('checkpoint')).toMatch(/checkpoint/i);
+    expect(provenanceLabel('checkpoint')).toMatch(/not as of now|drain/i);
+  });
+
+  it('renders an unrecognized future value verbatim rather than crashing or going blank', () => {
+    // @ts-expect-error — deliberately an out-of-union string, the forward-tolerance case
+    expect(provenanceLabel('futureValue')).toBe('futureValue');
+  });
+});
+
+describe('isStaleProvenance', () => {
+  it('is true only for checkpoint', () => {
+    expect(isStaleProvenance('checkpoint')).toBe(true);
+    expect(isStaleProvenance('live')).toBe(false);
+    expect(isStaleProvenance('liveSuspended')).toBe(false);
+    expect(isStaleProvenance(null)).toBe(false);
+  });
+});
+
+describe('unavailableMessage', () => {
+  it('keeps the pre-V1C-BE sentence verbatim when reason is null/undefined', () => {
+    expect(unavailableMessage(null)).toBe('State unavailable for this cell.');
+    expect(unavailableMessage(undefined)).toBe('State unavailable for this cell.');
+  });
+
+  it('gives each known reason its own sentence', () => {
+    expect(unavailableMessage('migrating')).toMatch(/migrat|repartition/i);
+    expect(unavailableMessage('remote')).toBe(REMOTE_NOTICE);
+    expect(unavailableMessage('notStateful')).toMatch(/no readable state/i);
+    expect(unavailableMessage('unanswered')).toMatch(/retry/i);
+    expect(unavailableMessage('unknown')).toMatch(/does not recognize/i);
+  });
+
+  it('renders a future reason string truthfully rather than crashing or going blank', () => {
+    expect(unavailableMessage('somethingNewV5')).toContain('somethingNewV5');
+  });
+});
+
+describe('exclusivesElidedLabel', () => {
+  it('is an ownership fact, never truncation phrasing', () => {
+    const label = exclusivesElidedLabel(3);
+    expect(label).toContain('3 entries hold exclusive values');
+    expect(label).not.toMatch(/showing \d+ of \d+/);
+    expect(label).not.toMatch(/load more/i);
+  });
+
+  it('pluralizes for one', () => {
+    expect(exclusivesElidedLabel(1)).toContain('1 entry holds exclusive values');
+  });
+});
+
+describe('walkStableNote', () => {
+  it('renders nothing for true or null — null is not a false', () => {
+    expect(walkStableNote(true)).toBeNull();
+    expect(walkStableNote(null)).toBeNull();
+  });
+
+  it('renders a smeared-read note only for false', () => {
+    expect(walkStableNote(false)).toMatch(/smeared/i);
+  });
+});
+
+describe('pageCounterText', () => {
+  it('never invents a total — states only pages/entries fetched', () => {
+    expect(pageCounterText(200, true)).toBe('200 entries loaded — more available');
+    expect(pageCounterText(200, false)).toBe('200 entries — complete');
+    expect(pageCounterText(200, true)).not.toMatch(/showing \d+ of \d+/);
+  });
+
+  it('pluralizes for a single entry', () => {
+    expect(pageCounterText(1, false)).toBe('1 entry — complete');
+  });
+});
