@@ -1,13 +1,20 @@
 package civictech.cell.data
 
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
 import civictech.cell.Propagate
+import civictech.cell.ReBaselineNotice
 import civictech.cell.Stateful
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.data.delta.TaggedMapDelta
+import civictech.cell.link.Interest
 import civictech.cell.link.catchUpOnLinked
+import civictech.cell.link.pullServe
+import civictech.cell.port.FanInlet
 import civictech.cell.port.Subscribe
 import civictech.cell.port.Use
+import civictech.cell.port.registerPort
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
@@ -70,19 +77,33 @@ interface OrMapApi<K, V> {
  * never a value-level predicate. An operator deriving from [value] inherits
  * this caveat and must not assume a wall-clock or arrival-order resolution.
  *
- * **Single-instance until E1-REPL (96 §E1.3).** This cell deliberately has no
- * replication surface: no `Replicable`, no `deltaInlet`, no `applyRemote`, no
- * pull/`StateRequest` handler, no re-origination, no `ReBaseline` fencing.
- * The state layout below (`puts`/`dels`/`dotCounter`) is what E1-REPL's
- * `applyRemote` will merge remote dots into; the dot source is already
- * replay-stable so that seam needs no change here. Until then, the only
- * writer of these dots is this instance's own [MapOps] inlet, and convergence
- * is exercised by merging its delta stream in any order.
+ * **Replicated (96 §E1.3, E1-REPL).** The cell is [Replicable]: peer replicas'
+ * deltas merge on [deltaInlet] and only *new dot information* re-emits, so
+ * gossip echoes terminate on any mesh topology; the re-emission is a fresh
+ * **origination** under this replica's own outlet epoch (the C-10 rule, spec
+ * 20/22 Rule S4) while the dots themselves travel verbatim (`[24-TAG-01]`:
+ * tags are data, never re-minted for received state). A [pullServe] baseline
+ * answers `StateRequest` with since-filtered state-as-delta — tombstones
+ * included — to the requester alone, and a `ReBaseline` supersession fences
+ * the named dot sources as dead lanes (`[24-TAG-02]`), so a superseded
+ * source's dots can never resurrect a key. `SetCell` is the element-shaped
+ * sibling of every one of those seams; this is the dot-shaped form.
  *
  * Embedded mergeable values (96 §E1.4), `TaggedMapView`/`UntagCell` adapters
- * (§E1.5) and multi-value reads are likewise not here.
+ * (§E1.5), multi-value reads, and delivered-watermark tracking
+ * ([civictech.cell.data.delta.DeliveryTracking], E3.3) are not here.
  */
-class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : OrMapCellBase<K, V>(ref), Stateful {
+class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
+    OrMapCellBase<K, V>(ref), Stateful, Replicable<TaggedMapDelta<K, V>> {
+
+    /**
+     * Replica gossip intake (spec 40/42 §Design as implemented, 96 §E1.3):
+     * another replica's effective deltas merge here, and only *new* dot
+     * information re-emits (effective-only, 21), so an echo dies at the first
+     * replica that already holds every dot it carries.
+     */
+    override val deltaInlet =
+        registerPort("deltaInlet", FanInlet.create<Propagate<TaggedMapDelta<K, V>>>())
 
     // One causal namespace for the whole map (decided point 1) — dots are NOT
     // partitioned per key, because a per-key context re-admits stale values on
@@ -105,6 +126,25 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : OrMapCellBase
     private val dotSource: UUID =
         UUID.nameUUIDFromBytes("or-map-tags:${ref.id}:${ref.instanceId}".toByteArray())
     private var dotCounter = 0L
+
+    /**
+     * Fenced dot sources (spec 20/24 §Tag continuity, `[24-TAG-02]`, 93 I-22
+     * R5c): every source a processed `ReBaseline` superseded. A put-dot stamped
+     * by a dead source is refused from then on — that is a stale pre-restart
+     * delta arriving late over a longer mesh path, and admitting it would
+     * resurrect a key the re-baseline retracted.
+     *
+     * The dot-shaped sibling of
+     * [civictech.cell.data.delta.TagState]'s `deadSources`, deliberately kept
+     * *here* rather than extracted: `TagState` is a live-tags-only ledger whose
+     * retraction is a deletion, while this cell — like [SetCell] — keeps both
+     * halves of the OR structure, so its retraction is a *tombstone*. The two
+     * fences share the rule, not the fold.
+     *
+     * ponytail: unbounded, exactly as `TagState`'s is — epoch-hygiene
+     * reclamation stays research-gated (G-42).
+     */
+    private val deadSources = mutableSetOf<UUID>()
 
     /** The dots at [key] no tombstone covers. */
     private fun liveDots(key: K): Map<Timestamp, V> {
@@ -167,12 +207,213 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : OrMapCellBase
         }
     }
 
+    // ---------------------------------------------------------------------
+    // replication (96 §E1.3): gossip merge, re-origination, pull baseline,
+    // dead-source fencing. The dot-shaped form of SetCell's element-shaped
+    // seams — read that cell beside this one; the shapes differ where a dot
+    // carries a value and a tag does not.
+    // ---------------------------------------------------------------------
+
+    /**
+     * The *new dot information* in [delta] — what this fold has never held —
+     * or `null` when it carries none. This is the echo terminator: a delta
+     * that has already been absorbed (an echo returning around the mesh, a
+     * duplicate arriving over a second path of a diamond, an anti-entropy
+     * catch-up replay) reduces to nothing and re-emits nothing.
+     *
+     * `SetCell.applyRemote`'s `tags - (adds[e] ?: emptySet())` is a set
+     * difference; the put half here is the *map*-shaped analogue — a
+     * `filterKeys` over `Map<Timestamp, V>` that keeps each new dot's value —
+     * because a put-dot is not merely present, it names a value. The del half
+     * is the set difference verbatim, `dels` being `Set<Timestamp>` on both
+     * cells.
+     *
+     * [fenced] `false` is the `ReBaseline` re-assertion path only (see
+     * [applyReBaseline] step (b)): a re-baseline legitimately re-asserts dots
+     * from the very sources it supersedes.
+     */
+    private fun novelty(delta: TaggedMapDelta<K, V>, fenced: Boolean = true): TaggedMapDelta<K, V>? {
+        val freshPuts = LinkedHashMap<K, Map<Timestamp, V>>()
+        delta.puts.forEach { (key, dots) ->
+            val known = puts[key]
+            val fresh = dots.filterKeys { dot ->
+                (!fenced || dot.sourceId !in deadSources) && known?.containsKey(dot) != true
+            }
+            if (fresh.isNotEmpty()) freshPuts[key] = fresh
+        }
+        // Tombstones are never fenced by source: a del entry is stamped by the
+        // source that minted the *put* it covers, not by the remover, so a
+        // source filter here would discard the very tombstones that keep a dead
+        // source's own dots dead. A tombstone can only reduce liveness, so
+        // admitting one is always safe — the same asymmetry `TagState` has
+        // (`apply` fences the add pass; `foldDels` folds unconditionally).
+        val freshDels = LinkedHashMap<K, Set<Timestamp>>()
+        delta.dels.forEach { (key, dots) ->
+            val known = dels[key]
+            val fresh = dots.filterTo(LinkedHashSet()) { known?.contains(it) != true }
+            if (fresh.isNotEmpty()) freshDels[key] = fresh
+        }
+        if (freshPuts.isEmpty() && freshDels.isEmpty()) return null
+        return TaggedMapDelta(freshPuts, freshDels)
+    }
+
+    /**
+     * Fold already-computed [novel] dots into the live maps.
+     *
+     * **Copy-on-insert, never alias.** Every dot is *inserted into* this cell's
+     * own mutable map; a remote delta's map is never adopted wholesale
+     * ([TaggedMapDelta.merge]'s empty-side fast path returns its operand by
+     * reference, and a remote delta may be retained by its sender or by another
+     * consumer, so an adopted map would be mutated under them by this cell's
+     * next local put). The same discipline [state] observes on the way out.
+     */
+    private fun absorb(novel: TaggedMapDelta<K, V>) {
+        novel.puts.forEach { (key, dots) -> puts.getOrPut(key) { LinkedHashMap() }.putAll(dots) }
+        novel.dels.forEach { (key, dots) -> dels.getOrPut(key) { LinkedHashSet() } += dots }
+    }
+
+    /**
+     * Merge a peer replica's delta and re-emit exactly the novelty (spec 40/42;
+     * 96 §E1.3).
+     *
+     * The re-emission is an [civictech.cell.port.FanOutlet.originate] — a fresh
+     * wave under *this* replica's outlet epoch (the C-10 rule / 93 I-14 Rule
+     * S4), not a forwarding of the sender's wave — while the dots inside it are
+     * byte-identical to the ones that arrived (`[24-TAG-01]`: relayed state
+     * preserves its tags). Convergence rides the dots; the waves stay local.
+     */
+    private fun applyRemote(delta: TaggedMapDelta<K, V>) {
+        // read before originating: `originate` clears the current context, so
+        // the notice must be taken off the arriving wave first.
+        val notice = CurrentContext.get()?.reBaseline
+        val effective =
+            if (notice != null) applyReBaseline(delta, notice)
+            else novelty(delta)?.also { absorb(it) }
+        if (effective == null) return // echo terminates here
+        outlet.originate { propagate(effective) }
+    }
+
+    /**
+     * The convergent-consumer half of a RESTART re-baseline, dot-shaped (spec
+     * 20/24 §Tag continuity `[24-TAG-02]`, 93 I-22 R5; the element-shaped
+     * original is [civictech.cell.data.delta.TagState.applyReBaseline]):
+     *
+     * - **(a) retract** every live dot from a superseded source that this
+     *   baseline does not re-assert. `TagState` drops such a tag from its live
+     *   ledger; this cell keeps both halves of the OR structure, so the drop is
+     *   a **tombstone** — recorded in [dels], and therefore durable against the
+     *   re-arrival of the same dot over any other path.
+     * - **(b) merge** the re-asserted and fresh dots by ordinary dot union,
+     *   *not* through the dead-source fence — the re-assertion legitimately
+     *   carries dots from the very sources (c) is about to fence.
+     * - **(c) fence** the superseded sources: every later ordinary delta
+     *   stamped by one of them is refused by [novelty].
+     *
+     * `supersede = false` (pull-merge) retracts nothing and fences nothing —
+     * forward idempotent merge only, exactly as `TagState` treats it.
+     *
+     * **The notice is not forwarded.** The re-emission is an ordinary
+     * originated delta whose retraction is expressed as tombstones, which is
+     * strictly the safer translation: this replica re-emits only *novelty*, so
+     * a peer applying `supersede = true` against that partial state would drop
+     * every un-reasserted dot of the superseded source — including dots this
+     * replica had no reason to mention. Tombstones converge without needing the
+     * mode.
+     */
+    private fun applyReBaseline(
+        delta: TaggedMapDelta<K, V>,
+        notice: ReBaselineNotice,
+    ): TaggedMapDelta<K, V>? {
+        if (!notice.supersede) return novelty(delta)?.also { absorb(it) }
+
+        // (a) retract — tombstone, don't delete
+        val retracted = LinkedHashMap<K, Set<Timestamp>>()
+        puts.keys.toList().forEach { key ->
+            val reasserted = delta.puts[key]?.keys ?: emptySet<Timestamp>()
+            val doomed = liveDots(key).keys.filterTo(LinkedHashSet()) {
+                it.sourceId in notice.supersedes && it !in reasserted
+            }
+            if (doomed.isNotEmpty()) {
+                dels.getOrPut(key) { LinkedHashSet() } += doomed
+                retracted[key] = doomed
+            }
+        }
+        // (b) union-merge the re-asserted/fresh state, past the fence
+        val novel = novelty(delta, fenced = false)?.also { absorb(it) }
+        // (c) fence the superseded sources
+        deadSources += notice.supersedes
+
+        if (novel == null && retracted.isEmpty()) return null
+        val delsOut = LinkedHashMap<K, Set<Timestamp>>()
+        novel?.dels?.forEach { (key, dots) -> delsOut[key] = dots }
+        retracted.forEach { (key, dots) ->
+            delsOut.merge(key, dots) { a, b -> LinkedHashSet(a).also { it += b } }
+        }
+        return TaggedMapDelta(novel?.puts ?: emptyMap(), delsOut)
+    }
+
+    /**
+     * Highest dot counter observed per dot source over `puts ∪ dels`,
+     * restricted to the keys [scope] admits (spec 20/21 §Pull, 93 I-24) — the
+     * currency a baseline reply reports. Tombstoned dots count, exactly as
+     * `SetCell.currentFrontier` folds `adds ∪ dels`: a pull that skipped them
+     * would let an incremental requester's `since` step past a tombstone it
+     * never received. `null`/[Interest.Total] scope iterates every key.
+     */
+    private fun currentFrontier(scope: Interest? = null): TagFrontier {
+        val admit: (K) -> Boolean =
+            if (scope == null || scope is Interest.Total) { _ -> true } else { key -> scope.admits(key) }
+        val frontier = mutableMapOf<UUID, Long>()
+        fun fold(dot: Timestamp) = frontier.merge(dot.sourceId, dot.counter, ::maxOf)
+        puts.forEach { (key, dots) -> if (admit(key)) dots.keys.forEach(::fold) }
+        dels.forEach { (key, dots) -> if (admit(key)) dots.forEach(::fold) }
+        return TagFrontier(frontier)
+    }
+
+    /**
+     * Restrict a reply map to the keys [scope] admits (PN-3c) — the per-key
+     * interest filter a partial-interest pull applies. The same map, unchanged,
+     * for `null`/[Interest.Total] scope, so a scope-absent reply is verbatim.
+     */
+    private fun <T> scopedTo(source: Map<K, T>, scope: Interest?): Map<K, T> =
+        if (scope == null || scope is Interest.Total) source else source.filterKeys { scope.admits(it) }
+
+    /** Only the put-dots a [since] frontier has not observed; a copy, never an alias, when [since] is null. */
+    private fun putsSince(since: TagFrontier?): Map<K, Map<Timestamp, V>> =
+        puts.mapValues { (_, dots) ->
+            if (since == null) LinkedHashMap(dots)
+            else dots.filterKeys { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+        }.filterValues { it.isNotEmpty() }
+
+    /** Only the tombstoned dots a [since] frontier has not observed; a copy when [since] is null. */
+    private fun delsSince(since: TagFrontier?): Map<K, Set<Timestamp>> =
+        dels.mapValues { (_, dots) ->
+            if (since == null) LinkedHashSet(dots)
+            else dots.filterTo(LinkedHashSet()) { (since.perSource[it.sourceId] ?: -1L) < it.counter }
+        }.filterValues { it.isNotEmpty() }
+
     init {
-        // late-join catch-up (G-22): full dot state as one delta-from-empty,
-        // tombstones included, to just the new subscriber — idempotent merge
-        // ([24-TMAP-01]) makes replays harmless, and shipping the tombstones is
-        // what stops a late joiner resurrecting a removed key.
+        deltaInlet.serve(object : Propagate<TaggedMapDelta<K, V>> {
+            override fun propagate(value: TaggedMapDelta<K, V>) = applyRemote(value)
+        })
+        // late-join catch-up (G-22) — and replica initial sync / anti-entropy
+        // (M7.4): full dot state as one delta-from-empty, tombstones included,
+        // to just the new subscriber — idempotent merge ([24-TMAP-01]) makes
+        // replays harmless, and shipping the tombstones is what stops a late
+        // joiner resurrecting a removed key.
         outlet.catchUpOnLinked { if (puts.isEmpty() && dels.isEmpty()) null else state() }
+        // on-demand pull (spec 20/21 §Pull, decided in 93 I-16/I-24): a
+        // single-wave state-as-delta reply, since-filtered, stamped as a
+        // catch-up baseline (MessageContext.baseline) and delivered only to the
+        // requester — never broadcast, never admitted to wave completeness.
+        outlet.pullServe { request ->
+            val putsOut = scopedTo(putsSince(request.since), request.scope)
+            val delsOut = scopedTo(delsSince(request.since), request.scope)
+            if (putsOut.isEmpty() && delsOut.isEmpty()) return@pullServe
+            baselineTo(request.replyTo, currentFrontier(request.scope)) {
+                propagate(TaggedMapDelta(putsOut, delsOut))
+            }
+        }
     }
 
     // snapshot/restore (G-25 seam): keys and values must be Serializable. The
@@ -180,12 +421,19 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : OrMapCellBase
     // not re-mint a spent dot, or a post-restore put could collide with a dot
     // the network still remembers (and a tombstone for the old one would then
     // cover the new value).
+    //
+    // The dead-source fence rides along (additive "dead" key, absent in an
+    // E1-CORE-era snapshot and read defensively): `Replication.rebind` carries a
+    // replica's state across a promotion swap through exactly this seam, and a
+    // candidate that woke without the fence would re-admit a superseded
+    // source's straggler dots the incumbent had already refused.
     override fun snapshot(): Serializable =
         HashMap(
             mapOf(
                 "puts" to HashMap(puts.mapValues { LinkedHashMap(it.value) }),
                 "dels" to HashMap(dels.mapValues { LinkedHashSet(it.value) }),
                 "counter" to dotCounter,
+                "dead" to LinkedHashSet(deadSources),
             )
         )
 
@@ -194,11 +442,13 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) : OrMapCellBase
         val maps = state as Map<String, Any>
         puts.clear()
         dels.clear()
+        deadSources.clear()
         (maps.getValue("puts") as Map<K, Map<Timestamp, V>>)
             .forEach { (key, dots) -> puts[key] = LinkedHashMap(dots) }
         (maps.getValue("dels") as Map<K, Set<Timestamp>>)
             .forEach { (key, dots) -> dels[key] = LinkedHashSet(dots) }
         dotCounter = maps["counter"] as? Long ?: 0L
+        (maps["dead"] as? Set<UUID>)?.let { deadSources += it }
     }
 
     companion object {
