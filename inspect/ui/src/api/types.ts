@@ -84,8 +84,18 @@ export type StateKind = 'view' | 'snapshot' | 'page' | 'unavailable';
 export type StateProvenance = 'live' | 'liveSuspended' | 'checkpoint';
 
 /** V1C-BE: present iff `kind === 'unavailable'` — WHICH nothing there is to
- *  report. */
-export type Unreadable = 'migrating' | 'remote' | 'notStateful' | 'unanswered' | 'unknown';
+ *  report. `terminated`/`readFailed` are not in the V1C-FE ticket's copy of
+ *  the contract block; they are in the SHIPPED one (`Dto.kt`'s
+ *  `CellState.TERMINATED`/`READ_FAILED`), added at C10 against the merged
+ *  backend rather than the draft. */
+export type Unreadable =
+  | 'migrating'
+  | 'remote'
+  | 'notStateful'
+  | 'unanswered'
+  | 'terminated'
+  | 'readFailed'
+  | 'unknown';
 
 /** V1C-BE: one bounded page of a walk over a cell's state — present iff
  *  `kind === 'page'`. See `CellState.page`'s field-level comments for the
@@ -117,6 +127,30 @@ export interface StatePage {
    *  removal or include a mid-walk addition); `null` — the cell reports no
    *  tag frontier, so neither claim can be checked — render it as neither. */
   walkStable: boolean | null;
+  /** The kernel's own declared weakenings for this page, forwarded rather
+   *  than inferred and accumulated across the walk server-side, so a client
+   *  joining at page 4 still learns that this walk's cursor is positional.
+   *  `'staleFrontier'` (this page carries the walk's OPENING frontier, which
+   *  is why its `walkStable` is `null`) and `'positionalCursor'` (no element
+   *  identity to key a cursor by, so "every surviving entry appears" and "no
+   *  entry twice" both weaken to best-effort) are the two the shipped server
+   *  mints; the list is open, so render an unrecognized one rather than
+   *  dropping it. Absent on an older server — treat as `[]`, never required.
+   *
+   *  NOT in the V1C-FE ticket's copy of the contract block: added at C10
+   *  against the SHIPPED `StatePageView.caveats`. */
+  caveats?: readonly string[];
+  /** Cell-level state that is not a per-entry row and rides EVERY page —
+   *  `SetCell`'s tag `counter`, `ShardCell`'s `interest`/`assignedEpoch`,
+   *  `OperatorPaging`'s `mintCounter`/`lanes`. Each value is an ordinary
+   *  contract `Value`. The server surfaces these rather than dropping them
+   *  precisely so a client reading page 4 of a shard walk can tell whether
+   *  the walk straddled a repartition — so this client renders them.
+   *
+   *  NOT in the V1C-FE ticket's copy of the contract block: added at C10
+   *  against the SHIPPED `StatePageView.attributes`. `{}` when there are
+   *  none; absent on an older server. */
+  attributes?: { readonly [key: string]: Value };
 }
 
 /** `GET /cell/{ref}/state`. `provenance`/`page`/`unreadable` are V1C-BE

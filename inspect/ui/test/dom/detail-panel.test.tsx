@@ -283,6 +283,65 @@ describe('DetailPanel — paged state (V1C-FE)', () => {
     expect(label?.textContent).not.toMatch(/load more/i);
   });
 
+  /** C10 — the shape a real `SetCell` page actually has, taken from the
+   *  merged backend rather than from this ticket's prose: the kernel pages
+   *  `SetStateEntry(element, addTags, delTags)` records, so the encoder
+   *  renders **stored tag algebra**, not membership — three columns, tag
+   *  sets as nested `$table`s, and a tombstoned element present as an
+   *  ordinary row (its del-tag covers its add-tag). The same cell under an
+   *  open observation renders as a flat member list instead; that divergence
+   *  is the C10 ruling ("the inspector forwards the kernel's page entries
+   *  rather than re-interpreting them into OR-set membership").
+   *
+   *  What this asserts is that the panel renders the server's own columns
+   *  verbatim and claims nothing about membership — no member list, no
+   *  "removed" row silently presented as present, and a counter that counts
+   *  ENTRIES (what `page.entries` counts) rather than members. */
+  it('renders a page of stored tag algebra as-is — three columns, nested tag sets, tombstoned rows present', async () => {
+    const tag = (source: string, counter: number) => ({
+      $table: { columns: ['source', 'counter'], rows: [[source, counter]] },
+    });
+    const tagAlgebraPage: CellState = {
+      ref: MATCHES_REF,
+      frontier: null,
+      kind: 'page',
+      value: {
+        $table: {
+          columns: ['element', 'addTags', 'delTags'],
+          rows: [
+            ['Kotlin', tag('a3f2', 1), []],
+            // present-then-removed: still an entry, still paged, and the
+            // del-tag column is the only thing that says so
+            ['COBOL', tag('a3f2', 2), tag('a3f2', 2)],
+          ],
+        },
+      },
+      staleMs: 0,
+      provenance: 'live',
+      page: { cursor: null, limit: 200, entries: 2, exclusivesElided: 0, walkStable: true, attributes: { counter: 2 } },
+      unreadable: null,
+    };
+    setStateFixture(MATCHES_REF, tagAlgebraPage);
+    const { container } = render(() => <DetailPanel />);
+    setSelection(MATCHES_REF);
+
+    await waitFor(() => expect(container.textContent).toContain('COBOL'));
+
+    // the server's own columns, verbatim — no membership column invented,
+    // none dropped
+    const headers = [...container.querySelectorAll('.value-view__table th')].map((th) => th.textContent);
+    expect(headers.slice(0, 3)).toEqual(['element', 'addTags', 'delTags']);
+    // the nested tag sets render as nested tables rather than "[object Object]"
+    expect(container.querySelectorAll('.value-view__table').length).toBeGreaterThan(1);
+    expect(container.textContent).not.toContain('[object Object]');
+    // the removed element is visible AS an entry, and nothing says "member"
+    expect(container.textContent).toContain('Kotlin');
+    expect(container.textContent).toMatch(/2 entries — complete/);
+    expect(container.textContent).not.toMatch(/member/i);
+    // cell-level attributes that ride every page are surfaced, not dropped
+    expect(container.querySelector('.state-page__attributes')?.textContent).toContain('counter');
+  });
+
   it('row-flash is suppressed for kind: "page" — an appended page never renders as "added rows"', async () => {
     setStateResponder(PAGE_REF, (params) =>
       params.get('cursor') === 'p-7f3a1' ? { body: page2 } : { body: cellStatePage },

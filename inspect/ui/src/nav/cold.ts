@@ -28,8 +28,15 @@ export const COLD_BANNER_NOTICE =
  *  fetched value (unlike the old fallback, which replaced the whole
  *  section). See {@link COLD_BANNER_NOTICE}'s doc comment for why this no
  *  longer says "unavailable": V1C-BE makes a parked cell's state readable,
- *  and this line exists to say that plainly, not to hide it. */
-export const COLD_STATE_NOTICE = 'cold — this cell is parked. Its state below was read without waking it.';
+ *  and this line exists to say that plainly, not to hide it.
+ *
+ *  C10 wording correction: it says reading does not wake, not that a value
+ *  WAS read — the line renders above the State subsection whatever landed
+ *  there, and a parked cell can still answer `unavailable` (held for a
+ *  migration flip, not `Stateful`, a dead host). "Its state below was read"
+ *  over "State unavailable for this cell." would be the panel contradicting
+ *  itself two lines apart. */
+export const COLD_STATE_NOTICE = 'cold — this cell is parked. Reading its state here does not wake it.';
 
 /** The `Flow` subsection's cold-specific line — flow is the half of the old
  *  combined notice that is still true without qualification: nothing flows
@@ -81,9 +88,18 @@ export function coldGraphCount(graphs: readonly GraphSummary[]): number {
  *  help. So this hint is worded to be true under both readings: it states the
  *  fact (cells were skipped, for a parked-or-held reason) and drops the
  *  remedy claim rather than naming one ("wake to include") that is a dead end
- *  under the narrowed, post-merge meaning. */
+ *  under the narrowed, post-merge meaning.
+ *
+ *  C10 correction: it must not name the *category* either. The shipped
+ *  `DataSearch` counts held-for-migration cells ONLY and searches suspended
+ *  and drained cells normally, so "parked ... cells are not searched" — the
+ *  first attempt at this wording — is false against the merged backend, in
+ *  the same direction the old "wake their graph" claim was. What is true
+ *  under both server generations is the fact the count itself carries:
+ *  these cells' state could not be read, so they are missing from the
+ *  result. That, and nothing more. */
 export function formatColdSkipHint(cost: SearchCost | null): string | null {
   if (!cost || cost.coldSkipped <= 0) return null;
   const cells = `${cost.coldSkipped} cold ${cost.coldSkipped === 1 ? 'cell' : 'cells'}`;
-  return `${cells} skipped — parked or held cells are not searched`;
+  return `${cells} skipped — their state could not be read for this search`;
 }

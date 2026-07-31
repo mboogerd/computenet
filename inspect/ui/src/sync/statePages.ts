@@ -41,6 +41,17 @@ export interface StateWalkSnapshot {
   /** The latest page's own `walkStable` verdict — already a running
    *  server-verified answer, not something this client re-derives. */
   walkStable: boolean | null;
+  /** The union of every page's `page.caveats`, in first-seen order (C10).
+   *  The server already accumulates them, but a walk whose first page was
+   *  served before a caveat applied would otherwise lose it on a later
+   *  page's narrower list — a union can only ever be the honest direction
+   *  for a declared weakening. */
+  caveats: readonly string[];
+  /** The LATEST page's `page.attributes` — cell-level state that rides every
+   *  page (C10). Not accumulated: these are per-read values (`SetCell`'s tag
+   *  counter, `ShardCell`'s assigned epoch), so the newest reading is the
+   *  only honest one to show. `{}` when the server sent none. */
+  attributes: { readonly [key: string]: Value };
   /** The cursor to send for the next page; `null` = walk complete (or not
    *  yet started). Gate every "load next page" affordance on this being
    *  non-null AND `latest.kind === 'page'` — never on cell size, never on a
@@ -66,6 +77,8 @@ const EMPTY_SNAPSHOT: StateWalkSnapshot = {
   entriesTotal: 0,
   exclusivesElidedTotal: 0,
   walkStable: null,
+  caveats: [],
+  attributes: {},
   cursor: null,
   loading: false,
   restarted: false,
@@ -102,6 +115,16 @@ export function mergePages(pages: readonly Value[]): { value: Value; merged: boo
   }
 
   return { value: [...pages], merged: false };
+}
+
+/** First-seen-order union of a walk's declared caveats (C10) — see
+ *  {@link StateWalkSnapshot.caveats} for why a union rather than the latest
+ *  page's list. Pure, and exported for its own unit test. */
+export function unionCaveats(sofar: readonly string[], next: readonly string[] | undefined): readonly string[] {
+  if (!next || next.length === 0) return sofar;
+  const merged = [...sofar];
+  for (const c of next) if (!merged.includes(c)) merged.push(c);
+  return merged;
 }
 
 function sameColumns(a: TableShape | undefined, b: TableShape | undefined): boolean {
@@ -150,6 +173,8 @@ export class StateWalk {
         entriesTotal: state.page.entries,
         exclusivesElidedTotal: state.page.exclusivesElided,
         walkStable: state.page.walkStable,
+        caveats: state.page.caveats ?? [],
+        attributes: state.page.attributes ?? {},
         cursor: state.page.cursor,
         loading: false,
         restarted: false,
@@ -243,6 +268,8 @@ export class StateWalk {
         entriesTotal: (restarted ? 0 : this.state.entriesTotal) + state.page.entries,
         exclusivesElidedTotal: (restarted ? 0 : this.state.exclusivesElidedTotal) + state.page.exclusivesElided,
         walkStable: state.page.walkStable,
+        caveats: unionCaveats(restarted ? [] : this.state.caveats, state.page.caveats),
+        attributes: state.page.attributes ?? {},
         cursor: state.page.cursor,
         loading: false,
         restarted,

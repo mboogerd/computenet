@@ -95,8 +95,30 @@ snapshot.edges.push({
 // (V1C-FE ticket Solution direction §5). Five synthetic nodes, spliced into
 // the served snapshot only (never `fixtures/topology.json`), one dedicated
 // small graph so they are easy to find and click.
-const BIG_ROWS = Array.from({ length: 7 }, (_, i) => `row-${i + 1}`);
+//
+// C10 correction: the big cell's page value is the shape the MERGED backend
+// actually serves for a `SetCell` — the kernel pages
+// `SetStateEntry(element, addTags, delTags)` records, so the encoder renders
+// stored **tag algebra**, not membership: three columns, tag sets as nested
+// `$table`s, and a tombstoned element present as an ordinary row (its
+// del-tag covers its add-tag). Every third element here is tombstoned so a
+// manual pass sees that case. The same cell under an open observation would
+// render as a flat member list instead; the inspector forwards the kernel's
+// page entries rather than re-interpreting them.
+const BIG_ROWS = Array.from({ length: 7 }, (_, i) => `element-${i + 1}`);
 const PAGE_SIZE = 3;
+
+/** One OR-set tag, as the encoder renders a collection of same-shaped records. */
+function tagSet(...tags) {
+  if (tags.length === 0) return [];
+  return { $table: { columns: ['source', 'counter'], rows: tags.map((t) => ['a3f2c1d0', t]) } };
+}
+
+/** `SetStateEntry(element, addTags, delTags)` — tombstoned on every third. */
+function setEntryRow(element, index) {
+  const tombstoned = (index + 1) % 3 === 0;
+  return [element, tagSet(index + 1), tombstoned ? tagSet(index + 1) : tagSet()];
+}
 
 /** `null` return = an unknown/expired cursor (410). */
 function bigCellPage(cursorParam, limitParam) {
@@ -136,21 +158,35 @@ function v1cStateFor(ref, cursorParam, limitParam) {
     const paged = bigCellPage(cursorParam, limitParam);
     if (!paged) return { status: 410, body: { error: 'unknown or expired cursor' } };
     const next = paged.start + paged.rows.length;
+    const last = next >= BIG_ROWS.length;
     return {
       status: 200,
       body: {
         ref,
         frontier: null,
         kind: 'page',
-        value: { $table: { columns: ['row'], rows: paged.rows.map((r) => [r]) } },
+        value: {
+          $table: {
+            columns: ['element', 'addTags', 'delTags'],
+            rows: paged.rows.map((r, i) => setEntryRow(r, paged.start + i)),
+          },
+        },
         staleMs: 0,
         provenance: 'live',
         page: {
-          cursor: next < BIG_ROWS.length ? `p-${next}` : null,
+          cursor: last ? null : `p-${next}`,
           limit: paged.limit,
           entries: paged.rows.length,
           exclusivesElided: 0,
-          walkStable: true,
+          // C10: the shipped server answers `true` on page 1, `null` on every
+          // INTERMEDIATE page (which carries only the walk's opening frontier,
+          // and says so via the `staleFrontier` caveat), and a real verdict
+          // only when the walk closes.
+          walkStable: paged.start === 0 || last ? true : null,
+          caveats: paged.start === 0 || last ? [] : ['staleFrontier'],
+          // C10: cell-level state that rides every page — a `SetCell`'s tag
+          // counter.
+          attributes: { counter: BIG_ROWS.length },
         },
         unreadable: null,
       },

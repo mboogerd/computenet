@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { REMOTE_NOTICE } from '../src/util/placement';
 import {
+  caveatNote,
   exclusivesElidedLabel,
   isStaleProvenance,
   pageCounterText,
@@ -52,6 +53,18 @@ describe('unavailableMessage', () => {
     expect(unavailableMessage('unknown')).toMatch(/does not recognize/i);
   });
 
+  /** C10: the two reasons the SHIPPED backend mints that the draft contract
+   *  this ticket was written against did not list. Without their own entries
+   *  they fell through to the raw-reason fallback — truthful, but saying
+   *  nothing about either, and in particular not saying that neither is
+   *  worth retrying the way `unanswered` is. */
+  it('covers the two shipped reasons the draft contract omitted', () => {
+    expect(unavailableMessage('terminated')).toMatch(/terminated|dead host/i);
+    expect(unavailableMessage('terminated')).not.toContain('reason: terminated');
+    expect(unavailableMessage('readFailed')).toMatch(/broken cell|threw/i);
+    expect(unavailableMessage('readFailed')).not.toContain('reason: readFailed');
+  });
+
   it('renders a future reason string truthfully rather than crashing or going blank', () => {
     expect(unavailableMessage('somethingNewV5')).toContain('somethingNewV5');
   });
@@ -78,6 +91,25 @@ describe('walkStableNote', () => {
 
   it('renders a smeared-read note only for false', () => {
     expect(walkStableNote(false)).toMatch(/smeared/i);
+  });
+});
+
+/** C10: `page.caveats` is a SHIPPED field the draft contract omitted, so
+ *  these render decisions were made against `Dto.kt`'s `StatePageView`, not
+ *  against the ticket's prose. */
+describe('caveatNote', () => {
+  it('renders nothing for staleFrontier — walkStable: null already says it, once', () => {
+    expect(caveatNote('staleFrontier')).toBeNull();
+  });
+
+  it('renders positionalCursor as a coverage weakening, so "complete" is not read as exact', () => {
+    const note = caveatNote('positionalCursor')!;
+    expect(note).toMatch(/positional/i);
+    expect(note).toMatch(/skipped|twice|best-effort/i);
+  });
+
+  it('renders an unrecognized future caveat rather than dropping it', () => {
+    expect(caveatNote('someFutureWeakening')).toContain('someFutureWeakening');
   });
 });
 

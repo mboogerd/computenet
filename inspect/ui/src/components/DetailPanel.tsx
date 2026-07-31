@@ -4,6 +4,7 @@ import { capitalize, colorGlyph, manifestBadge, shortType } from '../util/badges
 import { portFlowRows, type PortFlowRow } from '../util/flow';
 import { buildSupervisionTimeline, type SupervisionStep } from '../util/supervision';
 import {
+  caveatNote,
   exclusivesElidedLabel,
   isStaleProvenance,
   pageCounterText,
@@ -376,6 +377,16 @@ function StatePageControls(props: { state: CellState }) {
         <Show when={walkStableNote(walk().walkStable)}>
           {(note) => <p class="state-page__smeared">{note()}</p>}
         </Show>
+        {/* C10: `page.caveats` — the kernel's own declared weakenings for
+            this walk, forwarded rather than inferred. Not in the draft
+            contract this ticket was written against; dropping them would
+            have let the counter's "N entries — complete" stand unqualified
+            over a positional walk that may have skipped an entry. See
+            `caveatNote` for why `staleFrontier` deliberately renders
+            nothing. */}
+        <For each={walk().caveats}>
+          {(c) => <Show when={caveatNote(c)}>{(note) => <p class="state-page__caveat">{note()}</p>}</Show>}
+        </For>
         <Show when={!walk().merged}>
           <p class="state-page__mismatch">Pages did not share a shape — rendered separately, not merged.</p>
         </Show>
@@ -384,6 +395,26 @@ function StatePageControls(props: { state: CellState }) {
         </Show>
         <Show when={walk().stuck}>
           <p class="state-page__stuck">{WALK_STUCK_NOTE}</p>
+        </Show>
+        {/* C10: `page.attributes` — cell-level state that is not a per-entry
+            row and rides every page (a set's tag counter, a shard's assigned
+            epoch). The server surfaces these deliberately, so that a client
+            reading page 4 of a shard walk can tell whether the walk straddled
+            a repartition; rendering them is the whole point of that. Latest
+            page's values, never accumulated. */}
+        <Show when={Object.keys(walk().attributes).length > 0}>
+          <dl class="state-page__attributes">
+            <For each={Object.keys(walk().attributes)}>
+              {(k) => (
+                <>
+                  <dt class="mono">{k}</dt>
+                  <dd>
+                    <ValueView value={walk().attributes[k]} />
+                  </dd>
+                </>
+              )}
+            </For>
+          </dl>
         </Show>
         <div class="state-page__footer">
           <span class="state-page__counter">{pageCounterText(walk().entriesTotal, walk().cursor !== null)}</span>

@@ -58,12 +58,20 @@ describe('formatColdSkipHint', () => {
    *  server, and on an OLDER server `coldSkipped` still counts parked cells
    *  too, for which waking WOULD help. So the hint states the fact and drops
    *  the remedy claim rather than naming one ("wake to include") that is a
-   *  dead end under the narrowed meaning. */
-  it('states the fact without promising a remedy that may not work for every skipped cell', () => {
+   *  dead end under the narrowed meaning.
+   *
+   *  C10: and it must not name the skipped cells' *category* either. The
+   *  shipped `DataSearch` counts held-for-migration cells only and searches
+   *  suspended/drained cells normally, so "parked cells are not searched"
+   *  would be false against the merged backend exactly the way "wake their
+   *  graph" was. Only the fact the count itself carries is true under both
+   *  server generations. */
+  it('states the fact without promising a remedy, and without naming a category the count may not be about', () => {
     expect(formatColdSkipHint({ cellsQueried: 18, coldSkipped: 2 })).toBe(
-      '2 cold cells skipped — parked or held cells are not searched',
+      '2 cold cells skipped — their state could not be read for this search',
     );
     expect(formatColdSkipHint({ cellsQueried: 18, coldSkipped: 2 })).not.toMatch(/wake/i);
+    expect(formatColdSkipHint({ cellsQueried: 18, coldSkipped: 2 })).not.toMatch(/parked|held|suspended|drained/i);
   });
 
   /** `SearchCost.coldSkipped` counts cells (contract + server `DataSearch`),
@@ -71,7 +79,7 @@ describe('formatColdSkipHint', () => {
    *  invented. */
   it('says cells, singular when one — the field counts cells, not graphs', () => {
     expect(formatColdSkipHint({ cellsQueried: 0, coldSkipped: 1 })).toBe(
-      '1 cold cell skipped — parked or held cells are not searched',
+      '1 cold cell skipped — their state could not be read for this search',
     );
   });
 });

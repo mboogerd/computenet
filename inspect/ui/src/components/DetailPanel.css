@@ -228,7 +228,8 @@
 .state-page__exclusives,
 .state-page__mismatch,
 .state-page__restarted,
-.state-page__stuck {
+.state-page__stuck,
+.state-page__caveat {
   margin: 0 0 0.3rem;
   color: var(--text-secondary);
 }
@@ -244,6 +245,25 @@
 .state-page__smeared {
   margin: 0 0 0.3rem;
   color: var(--wave-health);
+}
+
+/* C10: the page's cell-level attributes (a set's tag counter, a shard's
+   assigned epoch) — plain data, in the calm register the descriptor grid
+   uses, never a diagnostic. */
+.state-page__attributes {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0 0 0.3rem;
+  color: var(--text-secondary);
+}
+
+.state-page__attributes dt {
+  color: var(--text-muted);
+}
+
+.state-page__attributes dd {
+  margin: 0;
 }
 
 .state-page__footer {

@@ -6,7 +6,14 @@ import { DEFAULT_PAGE_LIMIT, StateWalk, mergePages } from '../src/sync/statePage
 function page(
   ref: string,
   entries: readonly string[],
-  opts: { cursor?: string | null; walkStable?: boolean | null; exclusivesElided?: number; limit?: number } = {},
+  opts: {
+    cursor?: string | null;
+    walkStable?: boolean | null;
+    exclusivesElided?: number;
+    limit?: number;
+    caveats?: readonly string[];
+    attributes?: Record<string, unknown>;
+  } = {},
 ): CellState {
   return {
     ref,
@@ -20,7 +27,12 @@ function page(
       limit: opts.limit ?? entries.length,
       entries: entries.length,
       exclusivesElided: opts.exclusivesElided ?? 0,
-      walkStable: opts.walkStable ?? true,
+      // `?? true` would fold an explicit `null` (the shipped backend's
+      // intermediate-page verdict) into `true` — the one value this helper
+      // must be able to express verbatim (C10).
+      walkStable: 'walkStable' in opts ? (opts.walkStable ?? null) : true,
+      ...(opts.caveats ? { caveats: opts.caveats } : {}),
+      ...(opts.attributes ? { attributes: opts.attributes as Record<string, never> } : {}),
     },
     unreadable: null,
   };
@@ -198,5 +210,66 @@ describe('StateWalk', () => {
   it('notifies onChange on every state transition', () => {
     walk.seed('a', page('a', ['Kotlin'], { cursor: 'p-1' }));
     expect(onChange).toHaveBeenCalledWith(walk.snapshot());
+  });
+
+  /** C10 — asserted against the SHIPPED backend rather than the draft
+   *  contract block this ticket was written against: `walkStable` is `true`
+   *  on page 1, **`null` on every intermediate page** (the page carries only
+   *  the walk's opening frontier, so no verdict exists yet) and a real
+   *  verdict only when the walk closes. `InspectorPagedStateTest`'s "a walk
+   *  over a quiescent fold closes stable" pins exactly that sequence. */
+  it('carries an intermediate page’s null walkStable as null — not as a false', async () => {
+    walk.seed('a', page('a', ['Kotlin', 'Rust'], { cursor: 'p-1', walkStable: true }));
+    fetchStatePage.mockResolvedValueOnce({
+      status: 'ok',
+      state: page('a', ['Go', 'Scala'], { cursor: 'p-2', walkStable: null, caveats: ['staleFrontier'] }),
+    });
+    await walk.loadNext();
+    expect(walk.snapshot().walkStable).toBeNull();
+
+    fetchStatePage.mockResolvedValueOnce({
+      status: 'ok',
+      state: page('a', ['Zig'], { cursor: null, walkStable: true }),
+    });
+    await walk.loadNext();
+    expect(walk.snapshot().walkStable).toBe(true);
+  });
+
+  /** C10 — `page.caveats`/`page.attributes` are shipped fields the draft
+   *  omitted entirely. Caveats union across the walk (a weakening declared
+   *  once holds for the union of pages it covered); attributes are the
+   *  latest page's, since they are a per-read reading of cell-level state. */
+  it('unions caveats across the walk and keeps the latest page’s attributes', async () => {
+    walk.seed(
+      'a',
+      page('a', ['Kotlin'], { cursor: 'p-1', caveats: ['positionalCursor'], attributes: { counter: 7 } }),
+    );
+    expect(walk.snapshot().caveats).toEqual(['positionalCursor']);
+    expect(walk.snapshot().attributes).toEqual({ counter: 7 });
+
+    fetchStatePage.mockResolvedValueOnce({
+      status: 'ok',
+      state: page('a', ['Rust'], {
+        cursor: null,
+        caveats: ['staleFrontier', 'positionalCursor'],
+        attributes: { counter: 9 },
+      }),
+    });
+    await walk.loadNext();
+
+    expect(walk.snapshot().caveats).toEqual(['positionalCursor', 'staleFrontier']);
+    expect(walk.snapshot().attributes).toEqual({ counter: 9 });
+  });
+
+  it('an older server that omits caveats/attributes entirely walks unchanged', async () => {
+    walk.seed('a', page('a', ['Kotlin'], { cursor: 'p-1' }));
+    expect(walk.snapshot().caveats).toEqual([]);
+    expect(walk.snapshot().attributes).toEqual({});
+
+    fetchStatePage.mockResolvedValueOnce({ status: 'ok', state: page('a', ['Rust'], { cursor: null }) });
+    await walk.loadNext();
+
+    expect(walk.snapshot().caveats).toEqual([]);
+    expect(walk.snapshot().attributes).toEqual({});
   });
 });

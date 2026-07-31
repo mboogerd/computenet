@@ -48,6 +48,12 @@ const UNREADABLE_MESSAGES: Partial<Record<Unreadable, string>> = {
   remote: REMOTE_NOTICE,
   notStateful: 'This cell holds no readable state.',
   unanswered: 'The read did not land in time — nothing was read. Worth retrying.',
+  // C10: shipped by V1C-BE (`Dto.kt`'s TERMINATED/READ_FAILED) but absent
+  // from the draft contract block this ticket was written against — without
+  // these two they would have fallen through to the raw-reason fallback
+  // below, which is truthful but says nothing useful about either.
+  terminated: 'This cell’s host has terminated — a dead host has no state to read. Retrying will not help.',
+  readFailed: 'The cell’s own state read threw — a broken cell, not a broken read. Its errors below may say why.',
   unknown: 'The server reports a reason this client build does not recognize.',
 };
 
@@ -84,6 +90,36 @@ export function exclusivesElidedLabel(count: number): string {
 export function walkStableNote(stable: boolean | null): string | null {
   if (stable !== false) return null;
   return 'Smeared read — this cell changed while paging. Every entry present for the whole walk is included; an entry added mid-walk may appear, one removed mid-walk after being passed over may be missing. Never torn, never duplicated.';
+}
+
+/** `page.caveats` — the kernel's own declared weakenings for a walk, added at
+ *  C10 against the SHIPPED contract (the draft this ticket was written
+ *  against had no such field, so the walk would otherwise have dropped them
+ *  silently).
+ *
+ *  `staleFrontier` renders NOTHING on purpose: it is the mechanism behind
+ *  `walkStable: null` on an intermediate page, and `walkStableNote` already
+ *  renders that as "neither claim" — a second note saying the same thing in
+ *  other words would read as a defect where there is none.
+ *
+ *  `positionalCursor` does render: it weakens the two properties a walk
+ *  otherwise guarantees whole ("every surviving entry appears", "no entry
+ *  twice"), which is exactly the kind of thing the page counter's
+ *  "N entries — complete" must not be read against silently.
+ *
+ *  Forward tolerant, like every other lookup here: an unrecognized future
+ *  caveat renders its raw name rather than being dropped, because a
+ *  weakening this client cannot describe is still a weakening the user
+ *  should know the server declared. */
+export function caveatNote(caveat: string): string | null {
+  switch (caveat) {
+    case 'staleFrontier':
+      return null;
+    case 'positionalCursor':
+      return 'Positional cursor — this cell has no element identity to key a walk by, so an entry that shifted position while paging may be skipped or seen twice. Coverage is best-effort, not exact.';
+    default:
+      return `The server declared a caveat on this walk this client does not recognize: ${caveat}.`;
+  }
 }
 
 /** The page-walk counter — states only what the response supports (V1C-FE
