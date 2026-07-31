@@ -66,7 +66,7 @@ data class TaggedMapDelta<K, V>(
     val puts: Map<K, Map<Timestamp, V>> = emptyMap(),
     /** Tombstoned observed-remove dots: `key -> the dots a remove covered`. */
     val dels: Map<K, Set<Timestamp>> = emptyMap(),
-) : Serializable, MergeablePayload {
+) : Serializable, MergeablePayload, civictech.cell.link.Scoped<TaggedMapDelta<K, V>> {
 
     /**
      * `[24-TMAP-01]` — pointwise dot union. Commutative and associative
@@ -101,6 +101,32 @@ data class TaggedMapDelta<K, V>(
 
     /** Every key this delta carries information about, live or tombstoned. */
     fun keys(): Set<K> = LinkedHashSet<K>(puts.keys).also { it += dels.keys }
+
+    /**
+     * Restrict this delta to the keys [interest] admits (spec 40/42
+     * §Interest-scoped instance sets) — the per-emission filter the gossip
+     * linker applies before a delta rides a link to a partial-interest target,
+     * and the same filter a scoped `StateRequest` reply applies. [keyOf]
+     * projects a delta key to the key the interest is scoped over (identity in
+     * a replica mesh, the group key for a partitioned shard).
+     *
+     * Implementing this (E1-REPL) is what makes an [civictech.cell.data.OrMapCell]
+     * mesh legal at *partial* interest: `sliceTo` refuses — drops and counts — a
+     * non-`Scoped` delta offered to a non-[civictech.cell.link.Interest.Total]
+     * link rather than shipping it whole (see [civictech.cell.data.Replicable]'s
+     * T05-finding-6 caveat). The map's key space is the interest's key space,
+     * so this is [SetDelta.within] with the element replaced by the key; a dot
+     * is never split away from its key.
+     */
+    override fun within(
+        interest: civictech.cell.link.Interest,
+        keyOf: (Any?) -> Any?,
+    ): TaggedMapDelta<K, V>? {
+        if (interest is civictech.cell.link.Interest.Total) return this
+        val p = puts.filterKeys { interest.admits(keyOf(it)) }
+        val d = dels.filterKeys { interest.admits(keyOf(it)) }
+        return if (p.isEmpty() && d.isEmpty()) null else TaggedMapDelta(p, d)
+    }
 
     companion object {
         /**

@@ -242,9 +242,12 @@ semantics only — neither is a convergent merge under concurrent writers
 
 ## Tagged maps
 
-**Design decided, unbuilt** (closes G-23 for keyed structures; 96 §E1) —
-this section is the normative content 96 §E1.2 (`OrMapCell` core) and §E1.3
-(replication) build against. It is an **additive new delta type**:
+**Built** (closes G-23 for keyed structures; 96 §E1) — 96 §E1.2 (`OrMapCell`
+core) and §E1.3 (replication: echo-terminating gossip, pull baseline,
+re-origination, dead-source fencing) have shipped against this section as
+`OrMapCell`/`TaggedMapDelta` in `civictech.cell.data`, while §E1.4–E1.6
+(embedded mergeable values, `TaggedMapView`/`UntagCell`, demo adoption) remain
+with the 96-plan. It is an **additive new delta type**:
 `MapDelta` and its single-writer cells (`MapCell`, `JoinCell`, `GroupByCell`)
 are untouched, and `KeyedSetCell` is untouched — this resolves backlog
 `06-or-map-tagged-map-delta.md`'s open choice in favor of addition over
