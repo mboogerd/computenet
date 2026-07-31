@@ -188,7 +188,7 @@ wave 11 is in flight — rule 3).
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| D-C12 | Reconcile conflict C-12: land the decided RESTART re-baseline surface (catalog `ReBaselineEmitting` source + driver verb + `21-REBASE-01.yaml`), or produce the honest reconciliation report if the kernel contradicts the decided design | opus | fresh | ticket/d-c12 | fable | Specified — not-started |
+| D-C12 | Reconcile conflict C-12: land the decided RESTART re-baseline surface (catalog `ReBaselineEmitting` source + driver verb + `21-REBASE-01.yaml`), or produce the honest reconciliation report if the kernel contradicts the decided design | opus | fresh | ticket/d-c12 | fable | Implemented — merged (Arm A: adjudication found the kernel mechanism real; conformance surface built, dispute reclassified `driver-surface-gap`+`spec-stale`, zero `kernel/**` edits) |
 
 **Checkpoint CB3 — verification.** `./gradlew :concord:check` +
 `./gradlew :kernel:test` green; if the ticket took its report arm instead of
