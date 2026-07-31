@@ -2,6 +2,7 @@ package civictech.cell.data
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.PendingReBaseline
 import civictech.cell.Propagate
 import civictech.cell.ReBaselineNotice
 import civictech.cell.Stateful
@@ -281,6 +282,15 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * S4), not a forwarding of the sender's wave — while the dots inside it are
      * byte-identical to the ones that arrived (`[24-TAG-01]`: relayed state
      * preserves its tags). Convergence rides the dots; the waves stay local.
+     *
+     * **[PendingReBaseline] is cleared around the re-emission**, and that is
+     * load-bearing rather than defensive. [civictech.cell.port.FanOutlet.originate]
+     * clears [CurrentContext] only; the fresh context the emission then mints
+     * reads `PendingReBaseline.get()` (`FanOutlet`'s `call`), which is still set
+     * whenever the *sender's* `reBaseline { … }` frame is on this thread's stack
+     * — i.e. on every synchronous outlet-to-`deltaInlet` hop. Without this the
+     * notice would ride the re-emission after all, which is exactly the
+     * translation [applyReBaseline] documents this cell as NOT making.
      */
     private fun applyRemote(delta: TaggedMapDelta<K, V>) {
         // read before originating: `originate` clears the current context, so
@@ -290,7 +300,7 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
             if (notice != null) applyReBaseline(delta, notice)
             else novelty(delta)?.also { absorb(it) }
         if (effective == null) return // echo terminates here
-        outlet.originate { propagate(effective) }
+        PendingReBaseline.with(null) { outlet.originate { propagate(effective) } }
     }
 
     /**
@@ -312,13 +322,30 @@ class OrMapCell<K, V>(ref: CellRef = CellRef(UUID.randomUUID())) :
      * `supersede = false` (pull-merge) retracts nothing and fences nothing —
      * forward idempotent merge only, exactly as `TagState` treats it.
      *
-     * **The notice is not forwarded.** The re-emission is an ordinary
-     * originated delta whose retraction is expressed as tombstones, which is
-     * strictly the safer translation: this replica re-emits only *novelty*, so
-     * a peer applying `supersede = true` against that partial state would drop
-     * every un-reasserted dot of the superseded source — including dots this
-     * replica had no reason to mention. Tombstones converge without needing the
-     * mode.
+     * **The notice is not forwarded** (enforced in [applyRemote], which clears
+     * [PendingReBaseline] around the re-emission — see its doc for why
+     * `originate` alone does not). The re-emission is an ordinary originated
+     * delta whose retraction is expressed as tombstones, which is the safer
+     * translation: this replica re-emits only *novelty*, so a peer applying
+     * `supersede = true` against that partial state would drop every
+     * un-reasserted dot of the superseded source — including dots this replica
+     * had no reason to mention. Tombstones converge without needing the mode.
+     *
+     * **The residual that choice leaves, stated rather than papered over.** The
+     * fence is therefore *replica-local*: it binds only the replicas that
+     * actually processed a notice. A dot of a superseded source held by a peer
+     * that never saw one stays live there and can never reach a fenced replica
+     * ([novelty] refuses it), so those two replicas do not re-converge on that
+     * key. Forwarding the mode would close that hole and open the over-retraction
+     * one above — the element-shaped family makes the opposite trade
+     * ([civictech.cell.data.delta.TagState] via `UnionSetCell`, whose reactive
+     * `outlet.call.propagate` forwards the notice transparently) and carries the
+     * over-retraction instead. Neither hole is reachable through the shipped
+     * wiring today: nothing emits a `TaggedMapDelta` re-baseline, and a replica
+     * RESTART deliberately keeps its ref-derived [dotSource] rather than
+     * superseding it, so no mesh source is ever fenced. Closing it properly needs
+     * the notice to reach every replica as data (a fenced-source lattice on the
+     * gossip mesh), which is 96 §E1 follow-on work, not this seam.
      */
     private fun applyReBaseline(
         delta: TaggedMapDelta<K, V>,

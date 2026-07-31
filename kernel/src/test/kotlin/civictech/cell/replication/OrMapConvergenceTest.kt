@@ -498,6 +498,13 @@ class OrMapConvergenceTest {
         replica.value("milk") shouldBe null
         // …as a TOMBSTONE, re-emitted so peers converge without seeing the notice
         emitted.last().delta.dels.getValue("milk") shouldBe setOf(Timestamp(dead, 1))
+        // and the notice genuinely does NOT ride along. This is the synchronous
+        // outlet→deltaInlet hop, where the sender's `reBaseline { … }` frame is
+        // still on the stack: `originate` clears CurrentContext but a freshly
+        // minted context reads PendingReBaseline, so without applyRemote's
+        // explicit clear the re-emission would carry `supersede = true` over a
+        // novelty-only delta — the translation applyReBaseline exists to avoid.
+        emitted.last().ctx!!.reBaseline.shouldBeNull()
 
         // (c) a straggler carrying the dead source's dots — the one already
         // absorbed and a later one never seen — resurrects nothing, and is
