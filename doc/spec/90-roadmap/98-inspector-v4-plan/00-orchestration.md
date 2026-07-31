@@ -340,7 +340,7 @@ addenda above).
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | V1C-CELLS | `BoundedStateful` on the six map/set-backed data cells (incl. `ShardCell`'s composite) | opus | fork V1C-KERNEL | ticket/v1c-cells | opus | **Implemented — merged** (`b8ec8a3`) |
-| V1C-OPS | `BoundedStateful` on the composite operator cells; cross-sub-state cursor ordering | opus | fresh + handoff | ticket/v1c-ops | opus | not-started |
+| V1C-OPS | `BoundedStateful` on the composite operator cells; cross-sub-state cursor ordering | opus | fresh + handoff | ticket/v1c-ops | opus | **Implemented — merged** (`00789c4`) |
 | V4-PEERID | `PeerId` reaches the registry; peer labels survive a reconnect | opus | fresh | ticket/v4-peerid | opus | **Implemented — merged** (`6d5cf98`) |
 
 `V1C-CELLS` forks `V1C-KERNEL` because it copies the `SetCell` pattern almost
@@ -361,6 +361,38 @@ name has arrived, so the peer must be late-bound; the ticket predicts the edit
 and owes a happens-before argument for it. Conversely, a diff that touches
 `ManagedHost`'s `PORT_API` branch gets the same P2 audit C8 applies, or is
 rejected — that is the per-message path and the ticket forbids it.
+
+**C9 closed.** All three tickets merged (`b8ec8a3`, `6d5cf98`, `00789c4`).
+`./gradlew :demo:exchange:test --rerun-tasks` green with both cell tickets on
+`main` (the combined check this checkpoint owes), plus repo-wide `./gradlew
+test` and `:concord:check`/`:concord:docLints`; `V4-PEERID`'s live two-JVM
+reconnect run was confirmed by its own evaluator.
+
+Two residuals the C9 evaluators recorded, both for a later wave, neither
+blocking:
+
+1. **Two intra-key orderings now coexist.** `V1C-CELLS` imposed
+   `civictech.cell.data.EntryOrder`, a *value-derived* total order that
+   survives a `snapshot()`/`restore()` round trip. `V1C-OPS` was told by its
+   own Decision C to adopt `V1C-KERNEL`'s mechanism verbatim, and did:
+   `cell/data/op/**` freezes the backing map's *encounter* order. Both are
+   correct within a walk — a frozen sequence lives inside the cursor, so no
+   walk is affected by a restore — but two instances of an operator cell
+   holding identical content enumerate differently, which `EntryOrder` exists
+   to prevent. Unifying is a one-line change per `freeze` in
+   `OperatorPaging.kt` and a rewrite of the order-asserting tests; it belongs
+   to whoever needs page-order comparability across instances (scatter-gather,
+   replica diffing), not to `V1C-BE`.
+2. **`TagFrontier` is not monotone for the operator family.**
+   `BoundedRead.kt`'s `StatePage`/`ReadCaveat.STALE_FRONTIER` KDoc reasons from
+   "a `TagFrontier` is monotone". `V1C-OPS` established that no cell in
+   `cell/data/op/**` is such a family — every `TagState` there is
+   non-retaining and both `JoinLedger` implementations' `exit` *removes* the
+   advertised tag — so a mid-walk removal mints nothing and can *lower* the
+   stamp. Each affected `readBounded` says so and a kernel test pins it, but
+   the kernel-level KDoc still generalizes. `V1C-CONCORD` must not write a
+   stability scenario that assumes monotonicity, and a later ticket owning
+   `BoundedRead.kt` should soften that sentence.
 
 ## Wave 10 — the consumers and the pilot · branches from `main` after C9
 
