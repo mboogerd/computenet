@@ -370,8 +370,11 @@ a row from, and it did not. Full bodies in
 
 ### 6. Node-count legibility
 
-**30 nodes / 21 edges per side in replicate mode; 26 / 20 with the mode off.**
-Four added nodes per side, two of which are watermark companions that carry
+**30 nodes / 21 edges per side in replicate mode; 24 / 16 with the mode off**
+(the same measurement as the table under "Six extra nodes per side" above, and
+re-measured independently at C10 on a fresh mode-off/mode-on control pair — 24/16
+vs 30/21, 9 graph cards vs 10, the named `shopping` card 16 cells vs 20).
+Six added nodes per side, two of which are watermark companions that carry
 **zero edges** — they are unattached boxes on the canvas whose only relationship
 to anything is the ghost graph card from finding 3. They are not comprehensible
 to a human looking at the canvas: nothing on screen says what a
