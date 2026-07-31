@@ -181,7 +181,11 @@ internal class PagedState(
             rendered = ValueEncoder.renderedOf(value, page.entries.size)
         }
 
-        val opening = resumed?.opening ?: page.frontier
+        // page 1 *is* the opening stamp; every later page inherits it from the
+        // table. Explicitly, not `?:` — a resumed walk whose opening frontier is
+        // null (a family with no tag frontier) must stay null rather than
+        // silently adopt this page's stamp as an opening it never had.
+        val opening = if (resumed != null) resumed.opening else page.frontier
         val smearedSoFar = resumed?.smeared == true
         val stable = verdict(opening, page, smearedSoFar)
         val caveats = resumed?.caveats.orEmpty() + page.caveats.map(::caveatOf)
