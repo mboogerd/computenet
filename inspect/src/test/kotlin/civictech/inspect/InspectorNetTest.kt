@@ -354,6 +354,12 @@ class InspectorNetTest {
         // empty-looking value
         val state = json.decodeFromString<CellState>(probe.state("${InspectorServer.CELL_PATH}/$ref/state"))
         state.kind shouldBe CellState.UNAVAILABLE
+        // V1C-BE: unchanged behaviour, newly *explained*. A wave-neutral read is
+        // not an emission and so passes through no disclosure filter; it does
+        // not cross a bridge (see DataSearch's exclusions).
+        state.unreadable shouldBe CellState.REMOTE
+        state.page shouldBe null
+        state.provenance shouldBe null
 
         // and observing it is refused rather than silently promising summaries
         probe.postForm("", "${InspectorServer.CELL_PATH}/$ref/observe").statusCode() shouldBe 409
