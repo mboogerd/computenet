@@ -1,6 +1,6 @@
 # E2-GATE — close the absorb-ack residual and add opt-in frontier-gated emission to the non-monotone operators
 
-**Status**: Specified — not-started
+**Status**: Implemented — awaiting CC2
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5,
 fresh session
 **Wave:** C2 · **Branches:** ticket/e2-gate

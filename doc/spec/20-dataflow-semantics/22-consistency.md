@@ -213,13 +213,11 @@ per-cell call site is the uniform emit-or-absorb-ack shape (`emitOrAbsorb` in
 `civictech.cell.data.op`): propagate a non-empty delta, or absorb-ack the
 swallowed wave. Adopted across the operator suite — `FilterCell`,
 `SemiJoinCell`, `IntersectSetCell`, `JoinCell`, `JoinSetCell`, `GroupByCell`,
-`FlatMapSetCell`, `UnionSetCell`, `QuorumSetCell`, `CountCell`, and
-`CoalescingCombineCell`, all under `civictech.cell.data.op` — call it at the
+`FlatMapSetCell`, `UnionSetCell`, `QuorumSetCell`, `CountCell`,
+`CoalescingCombineCell`, `CombineLatestCell`, and `LookupJoinCell`, all under
+`civictech.cell.data.op` — call it at the
 end of their waved handler exactly when the wave produced no outlet
-emission. *(One absorbing operator does not yet satisfy this MUST:
-`cell.data.op.CombineLatestCell` drops an effective-only-silent wave without
-an ack. A known divergence, not an exemption — the rule binds it.)* The
-consumer is the per-inlet watermark fold this subsection
+emission. The consumer is the per-inlet watermark fold this subsection
 describes, landed as `cell.consistency.WaveFrontier` (CP-A4, §The
 observation frontier below): its `Progress` handler folds the ack into the
 same per-edge, per-source watermark map a real delta advances, so an
@@ -243,9 +241,7 @@ policies keyed on recoverability — both folded by
 (how downstream distinguishes a degraded emission from a genuine one),
 calibrate the backstop deadline against frontier depth, and build the
 generative completeness harness proving the mechanism under randomized
-absorb/suspend/restart/dead-letter schedules (93 I-18); and bring
-`cell.data.op.CombineLatestCell` — the one absorbing operator still missing
-its ack — under the rule.
+absorb/suspend/restart/dead-letter schedules (93 I-18).
 
 ## The observation frontier
 
