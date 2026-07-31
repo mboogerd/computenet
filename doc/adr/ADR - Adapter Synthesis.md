@@ -1,10 +1,12 @@
 # ADR — Adapter Synthesis: an `Adapt` arm for nature reconciliation (FU-4, phase 1)
 
-**Status**: PROPOSED — awaiting review. Phase-1 deliverable only: design + spike.
-No production code changes. Analysis pinned to `main` @ `4cfbb83`.
+**Status**: ACCEPTED (2026-07-31) — NO-GO ratified: refuse-only linking stands;
+revisit when ≥3 real hand-written wavers accumulate in real graphs (§e).
+Phase-1 deliverable only: design + spike. No production code changes.
+Analysis pinned to `main` @ `4cfbb83`.
 
 **Spike**: `kernel/src/test/kotlin/civictech/cell/port/AdaptWaveParticipationSpikeTest.kt`
-(green; throwaway — delete or promote on the go/no-go decision).
+(green; retained as executable documentation of the phase-2 shape).
 
 ## Question
 
