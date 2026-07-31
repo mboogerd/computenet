@@ -94,7 +94,11 @@ import java.util.UUID
  *   both legs out of one [MapDelta], so its own view is trivially balanced under
  *   any sink and the suite would have no teeth. Splitting the aggregate across
  *   the diamond's two arms makes "the running total is zero" a genuinely
- *   *cross-view* claim — one only a wave-aligned composite can keep.
+ *   *cross-view* claim — one only a wave-aligned composite can keep. Measured
+ *   at CC3: with one unsplit group-by, the point-consistent `observeAll` sink
+ *   violates the zero-total invariant on **0 of 50** seeds (0 of ~7000
+ *   composites), against 50 of 50 for the split form — control 1 would not trip
+ *   at all under the naive design.
  *   (`CoalescingCombineCell`, the ticket's scalar-grand-total candidate, is not
  *   used: the per-account pair of aggregates is strictly stronger — it localizes
  *   an imbalance to an account instead of only summing it away.)
@@ -118,10 +122,10 @@ import java.util.UUID
  * cross-host pick decides how far the debit branch runs ahead of the credit
  * branch, so both gated operators and the sink must hold, order and release a
  * seed-varied buffer. Everything downstream is fused. Measured 2026-07-31 over
- * seeds 0..49 × 50 waves: the sink holds up to **20** waves at once (mean 3.4
- * sampled after every transfer), and so do both gated operators — the depth is
- * real, not a one-wave hiccup, and `current()` is nonetheless balanced at every
- * one of those samples.
+ * seeds 0..49 × 50 waves (2500 samples, one after every transfer): the sink
+ * holds up to **21** waves at once, mean 3.35, and so do both gated operators —
+ * the depth is real, not a one-wave hiccup, and `current()` is nonetheless
+ * balanced at every one of those 2500 samples.
  *
  * This shape is chosen to sidestep the CC1 landmine rather than to tiptoe around
  * it: `Progress` (the CP-A3 absorb-ack) is delivered **synchronously on the
@@ -154,9 +158,9 @@ import java.util.UUID
  * composition limit, so this suite states it executably rather than in prose —
  * `control - the ungated inner join`, below, swaps the gated semijoin for a
  * `JoinSetCell` and measures it: **50 of 50** seeds publish composites that
- * correspond to *no* completed-transfer prefix, roughly two composites per wave
- * instead of one. The gated `SemiJoinCell` is therefore a load-bearing choice in
- * pipeline (a), not a stylistic one.
+ * correspond to *no* completed-transfer prefix — exactly two composites per wave
+ * instead of one, the first of each pair torn. The gated `SemiJoinCell` is
+ * therefore a load-bearing choice in pipeline (a), not a stylistic one.
  *
  * ### The invariant, checked at EVERY observed output
  *
@@ -181,8 +185,13 @@ import java.util.UUID
  *  - **`observeAll`** (control 1, the ticket's point-consistent composite) — the
  *    [civictech.cell.observe.CompositeSink] over the *same* graph violates the
  *    zero-total invariant. Measured 2026-07-31 over seeds 0..49 × 50 waves:
- *    **50 of 50** seeds, and **7931 of 9817** published composites — the F-5
- *    flash, made arithmetic.
+ *    **50 of 50** seeds — the F-5 flash, made arithmetic. Roughly five in six of
+ *    the ~9840 published composites are unbalanced (8127/9841, 8179/9838,
+ *    8255/9838 on three consecutive runs); the *seed* count is deterministic but
+ *    the *composite* count deliberately is not, because `CompositeSink`
+ *    republishes per outlet change and the recorder observes it through the
+ *    sink's own listener-dispatch thread. Only the 50-of-50 figure is a claim
+ *    this file would stand behind twice.
  *  - **the ungated outer join** (control 2, 96 §E2.5's second control) —
  *    `CombineLatestCell(emitOnFrontier = false)` emits a null-extended row and
  *    retracts it inside the same wave. Measured: **50 of 50** seeds. This
@@ -195,7 +204,8 @@ import java.util.UUID
  *    above) — swapping the gated semijoin for a `JoinSetCell` makes the aligned
  *    composite publish snapshots that are the recompute over *no* prefix of
  *    completed transfers. Measured: **50 of 50** seeds; seed 0 publishes 101
- *    composites for 50 waves, 100 of which match no prefix.
+ *    composites for 50 waves (the catch-up plus two per wave), 50 of which — one
+ *    per wave — match no prefix.
  */
 class InternalConsistencyTest {
 
@@ -563,7 +573,9 @@ class InternalConsistencyTest {
         }
         // if this never trips the harness is too weak to certify anything —
         // tune the interleaving as GlitchFreeDiamondTest does.
-        // Measured 2026-07-31: 50 of these 50 seeds violate the invariant.
+        // Measured 2026-07-31 (re-measured at CC3): 50 of these 50 seeds violate
+        // the invariant, on every run. The per-composite violation count varies
+        // run to run — see the class KDoc — so only the seed count is asserted.
         (violated > 0).shouldBeTrue()
     }
 
@@ -630,8 +642,10 @@ class InternalConsistencyTest {
             val prefixes = prefixesOf(transfers).toSet()
             if (run.composites.any { it !in prefixes }) torn++
         }
-        // Measured 2026-07-31: 50 of these 50 seeds tear — seed 0 publishes 101
-        // composites for 50 waves, 100 of which correspond to no prefix.
+        // Measured 2026-07-31 (re-measured at CC3, stable across runs): 50 of
+        // these 50 seeds tear — seed 0 publishes 101 composites for 50 waves
+        // (the catch-up plus two per wave), 50 of which — the first of each
+        // pair, released before the join's row lands — correspond to no prefix.
         (torn > 0).shouldBeTrue()
     }
 

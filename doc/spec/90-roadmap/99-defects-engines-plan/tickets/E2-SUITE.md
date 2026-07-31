@@ -1,6 +1,6 @@
 # E2-SUITE — the balanced-transfer internal-consistency acceptance suite
 
-**Status**: Specified — in-progress
+**Status**: Implemented — merged
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5,
 fresh session
 **Wave:** C3 · **Branches:** ticket/e2-suite
