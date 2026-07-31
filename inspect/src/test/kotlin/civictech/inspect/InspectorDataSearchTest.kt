@@ -1,7 +1,11 @@
 package civictech.inspect
 
+import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Cursor
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -17,6 +21,7 @@ import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.longs.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -194,15 +199,20 @@ class InspectorDataSearchTest {
     }
 
     /**
-     * The encoder's own row budget is the other way a search can be partial: a
-     * cell with more rows than `ValueEncoder.MAX_ROWS` is only *read* that far,
+     * The bounded page is the other way a search can be partial: a cell with
+     * more entries than [DataSearch.SEARCH_PAGE_LIMIT] is only *read* that far,
      * so a record past the cut is genuinely unfindable and the result has to
      * say so rather than report a confident "no match".
+     *
+     * **V1C-BE rewrote the sentence, not the fact.** M5's clause said "read only
+     * to the first 200 *rows*", which described a *rendering* limit while
+     * implying a *read* limit — the cell had in truth paid for all of it. Now
+     * there is a real read limit, and the clause names entries.
      */
     @Test
-    fun `a cell read past the encoder's row budget reports a partial read`() {
+    fun `a cell read past the bounded page's entry limit reports a partial read`() {
         spawn(refA)
-        seedRecords(refA, *(0 until ValueEncoder.MAX_ROWS + 20).map { "row-$it" }.toTypedArray())
+        seedRecords(refA, *(0 until DataSearch.SEARCH_PAGE_LIMIT + 20).map { "row-$it" }.toTypedArray())
         started()
 
         val result = search("row-1")
@@ -211,7 +221,7 @@ class InspectorDataSearchTest {
         val notice = result.hits.last()
         notice.graph shouldBe DataSearch.NOTICE_GRAPH
         notice.label shouldBe "Partial results"
-        notice.detail shouldContain "read only to the first ${ValueEncoder.MAX_ROWS} rows"
+        notice.detail shouldContain "read only their first ${DataSearch.SEARCH_PAGE_LIMIT} entries"
     }
 
     /**
@@ -245,26 +255,102 @@ class InspectorDataSearchTest {
         notice.detail shouldContain "did not answer in time"
     }
 
+    // ----------------------------------------------------- what a read costs
+
+    /**
+     * V1C-BE: **one bounded page per candidate cell**, asserted by instrumenting
+     * the cell's own `readBounded` rather than by timing anything. A search that
+     * walked a big cell page by page would have re-created the whole copy and
+     * added scheduler overhead to it; the win is that the copy is bounded, not
+     * that coverage grew.
+     */
+    @Test
+    fun `a search reads exactly one bounded page per cell, at the search page limit`() {
+        val counting = CountingBoundedCell(CellRef(UUID.randomUUID()), entries = 5_000)
+        host.managementInlet.call.spawn(counting)
+        started()
+        // `spawn` checkpoints every Stateful cell on the management band, so the
+        // baseline is what the search must not add to
+        val snapshotsBefore = counting.snapshots.get()
+
+        val result = search("entry-3")
+
+        result.cost!!.cellsQueried shouldBe 1
+        counting.reads.get() shouldBe DataSearch.SEARCH_PAGES_PER_CELL.toLong()
+        counting.lastLimit.get() shouldBe DataSearch.SEARCH_PAGE_LIMIT
+        // and the cell was never asked for a whole copy behind the page
+        counting.snapshots.get() shouldBe snapshotsBefore
+        // the notice says what the bound cost, in entries rather than rows
+        result.hits.last().detail shouldContain
+            "read only their first ${DataSearch.SEARCH_PAGE_LIMIT} entries"
+    }
+
+    /**
+     * A cell with no bounded read is still searched — `allowWholeCopy` keeps it
+     * from regressing to "unreadable" — but the whole copy it costs is reported.
+     * A cost note, not a partiality one: the coverage was complete.
+     */
+    @Test
+    fun `a cell with no bounded read is searched whole, and the notice says what that cost`() {
+        host.managementInlet.call.spawn(civictech.cell.data.CounterCell(ref = refA))
+        started()
+
+        val result = search("0")
+
+        result.cost!!.cellsQueried shouldBe 1
+        val notice = result.hits.last()
+        notice.graph shouldBe DataSearch.NOTICE_GRAPH
+        notice.label shouldBe "Search scope"
+        notice.detail shouldContain "cost a whole-state copy — no bounded read"
+    }
+
+    /**
+     * The *render* budget is a second, different gap from the read bound, and
+     * V1C-BE keeps reporting it as its own clause: an entry whose value the
+     * encoder abbreviated is content that was read but never matched against.
+     */
+    @Test
+    fun `a value the render budget abbreviated is reported as content never matched`() {
+        spawn(refA)
+        seedRecords(refA, ArrayList((0 until 5_000).map { "wide-element-$it" }))
+        started()
+
+        val result = search("wide-element-0")
+
+        result.cost!!.cellsQueried shouldBe 1
+        val notice = result.hits.last()
+        notice.graph shouldBe DataSearch.NOTICE_GRAPH
+        notice.label shouldBe "Partial results"
+        notice.detail shouldContain "matched only against the part of their state the render budget fitted"
+    }
+
     // --------------------------------------------------- leaving it alone
 
+    /**
+     * The inverse of the M5-COLD test this replaces (V1C-BE). "A suspended cell
+     * is skipped, counted as cold, and never read" is now **wrong by design**: a
+     * suspended cell's fold is quiescent by construction, so `readState` answers
+     * it from the live cell with `Provenance.LIVE_SUSPENDED` and nothing is
+     * woken. The leak check is the M5 one verbatim, and one assertion is added
+     * to it: reading a suspended cell must leave it suspended.
+     */
     @Test
-    fun `a suspended cell is skipped, counted as cold, and never read`() {
+    fun `a suspended cell is read, found, and still suspended afterwards`() {
         spawn(refA)
         seed(refA, "alice")
-        val serving = started()
+        val serving = started(names = mapOf(refA to "people"))
         host.managementInlet.call.suspend(refA)
         awaitUntil("refA suspended") { host.isSuspended(refA) }
 
         val result = search("alice")
 
-        result.cost shouldBe SearchCost(cellsQueried = 0, coldSkipped = 1)
-        // M5-COLD: the lone suspended cell is a component of one, so that whole
-        // component is cold — and a search that skipped a graph says so rather
-        // than reporting a bare "not found"
-        result.hits.single().graph shouldBe DataSearch.NOTICE_GRAPH
-        result.hits.single().detail shouldContain "1 cold graph skipped — wake to include"
+        result.cost shouldBe SearchCost(cellsQueried = 1, coldSkipped = 0)
+        // the hit is real, and there is no notice at all: nothing was skipped
+        result.hits.single().ref shouldBe InspectorServer.encodeRef(refA)
+        // the read resumed nothing
+        host.isSuspended(refA) shouldBe true
         // M1-EVAL's leak check: searching created no ObserveCell sink, so it
-        // raised no attention on the cone it declined to read
+        // raised no attention on the cone it read
         serving.observedRefs.shouldBeEmpty()
         registry.localRefs() shouldContainExactly setOf(refA)
     }
@@ -311,7 +397,13 @@ class InspectorDataSearchTest {
         result.cost shouldBe SearchCost(cellsQueried = 1, coldSkipped = 0)
     }
 
-    /** A held ref (mid-migration) is parking its traffic by design — do not add to it. */
+    /**
+     * A held ref (mid-migration) is parking its traffic by design — do not add
+     * to it. **The one skip V1C-BE left**: `SearchCost.coldSkipped` now counts
+     * held cells and nothing else, and the notice says so *without* offering
+     * "wake to include", which for a held ref would advertise a remedy that does
+     * nothing (see [Heat]).
+     */
     @Test
     fun `a held cell is skipped and counted cold`() {
         spawn(refA)
@@ -321,8 +413,13 @@ class InspectorDataSearchTest {
 
         val result = search("alice")
 
-        result.hits.shouldBeEmpty()
+        // no cell hit: only the inert closing notice
+        result.hits.none { it.ref != null } shouldBe true
         result.cost shouldBe SearchCost(cellsQueried = 0, coldSkipped = 1)
+        val notice = result.hits.single()
+        notice.graph shouldBe DataSearch.NOTICE_GRAPH
+        notice.detail shouldContain "1 cell held mid-migration"
+        notice.detail shouldNotContain "wake to include"
 
         registry.release(refA)
     }
@@ -391,6 +488,35 @@ class InspectorDataSearchTest {
      * every [Stateful] cell on the management band, and a cell that stalled
      * there would never finish spawning at all.
      */
+    /**
+     * A `BoundedStateful` cell that records what was asked of it (V1C-BE) — the
+     * instrumentation behind "one bounded page per cell", which must not be
+     * inferred from how long a search took.
+     */
+    class CountingBoundedCell(override val ref: CellRef, private val entries: Int) : Cell, BoundedStateful {
+        val reads = java.util.concurrent.atomic.AtomicLong()
+        val snapshots = java.util.concurrent.atomic.AtomicLong()
+        val lastLimit = java.util.concurrent.atomic.AtomicInteger()
+
+        override fun readBounded(request: StateRead): StatePage {
+            reads.incrementAndGet()
+            lastLimit.set(request.limit)
+            val from = (request.cursor?.token as? Int) ?: 0
+            val to = minOf(from + request.limit, entries)
+            return StatePage(
+                entries = (from until to).map { "entry-$it" },
+                next = if (to >= entries) null else Cursor(to),
+            )
+        }
+
+        override fun snapshot(): Serializable {
+            snapshots.incrementAndGet()
+            return ArrayList((0 until entries).map { "entry-$it" })
+        }
+
+        override fun restore(state: Serializable) = Unit
+    }
+
     class SlowCell(override val ref: CellRef) : Cell, Stateful {
         private val calls = java.util.concurrent.atomic.AtomicInteger()
 

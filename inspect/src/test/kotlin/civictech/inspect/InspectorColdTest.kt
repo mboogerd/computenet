@@ -7,6 +7,7 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.link.LinkResult
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
+import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -39,8 +40,13 @@ import java.util.concurrent.LinkedBlockingQueue
  *    raises no attention, and its structure stays servable;
  * 3. the **wake** — `POST /graph/{id}/wake` resumes through the kernel's own
  *    seams, and the transition is announced as `lifecycle` events;
- * 4. **search integration** — a cold component is skipped whole and its cells
- *    counted in `SearchCost.coldSkipped`.
+ * 4. **search integration** — which V1C-BE inverted: a cold component is now
+ *    *read*, cell by cell, because `ManagedHost.readState` answers a suspended
+ *    cell from its own quiescent fold and a drained host from the checkpoint
+ *    blob it already holds, neither of which wakes anything. Points 1–3 are
+ *    unchanged: coldness, its card and its wake button are about what the user
+ *    may *end*, not about what the inspector may *read* (see [Heat.isReadable]
+ *    versus [Heat.isCold]).
  *
  * Cell uuids are fixed so "lexicographically-min member" — the component id
  * heuristic — is a fact the assertions can state rather than recompute.
@@ -350,9 +356,17 @@ class InspectorColdTest {
 
     // ----------------------------------------------------- search integration
 
-    /** Ticket Implement §3: a cold component is skipped whole, and counted. */
+    /**
+     * **V1C-BE inverted M5-COLD's §3.** A cold component used to be skipped
+     * whole and counted, because a suspended cell could not be read at all.
+     * `ManagedHost.readState` (V1C-KERNEL Decision 7) reads a suspended cell
+     * from its own quiescent fold, without resuming it and without raising
+     * attention, so skipping it would now be refusing an answer the kernel has.
+     * The card stays cold and the wake button stays — [Heat.isCold] did not
+     * move — but the search reads it.
+     */
     @Test
-    fun `a data search skips a cold component and counts its cells`() {
+    fun `a data search reads a cold component instead of skipping it`() {
         val (a, b) = pair(host, A, B)
         pair(host, C, D)
         started()
@@ -360,22 +374,36 @@ class InspectorColdTest {
 
         val result = search("anything")
 
-        result.cost!!.coldSkipped shouldBe 2
-        // the hot component's two cells were still read
-        result.cost!!.cellsQueried shouldBe 2
-        result.hits.single().graph shouldBe DataSearch.NOTICE_GRAPH
-        result.hits.single().detail shouldContain "1 cold graph skipped — wake to include"
+        result.cost shouldBe SearchCost(cellsQueried = 4, coldSkipped = 0)
+        // nothing was skipped, so there is nothing for a notice to say
+        result.hits.shouldBeEmpty()
+        // and the component is still cold, and still parked
+        graphs().graphs.single { it.id == "g-$A" }.lifecycle shouldBe "cold"
+        host.isSuspended(a) shouldBe true
+        host.isSuspended(b) shouldBe true
     }
 
+    /**
+     * The drained half of the same inversion: a drained host answers from the
+     * checkpoint blob it already retains, with **no cell-thread task at all**.
+     * The result is complete but stale by construction, which the notice reports
+     * as staleness rather than as partiality.
+     */
     @Test
-    fun `a data search counts a drained host's cells as cold too`() {
+    fun `a data search reads a drained host's cells from its checkpoint`() {
         pair(other, A, B)
         started()
         drain(other)
 
         val result = search("anything")
 
-        result.cost shouldBe SearchCost(cellsQueried = 0, coldSkipped = 2)
+        result.cost shouldBe SearchCost(cellsQueried = 2, coldSkipped = 0)
+        val notice = result.hits.single()
+        notice.graph shouldBe DataSearch.NOTICE_GRAPH
+        // a staleness note, not a partiality one
+        notice.label shouldBe "Search scope"
+        notice.detail shouldContain "read from a drained host's checkpoint"
+        other.isDrained shouldBe true
     }
 
     // -------------------------------------------------------------- fixtures
