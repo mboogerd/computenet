@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, tag-epoch continuity, and restart supersession design decided, unbuilt)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`))
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.leftJoin`/`rightJoin`/`fullJoin` (outer joins)
 
@@ -632,16 +632,26 @@ layer G-62 — both cited from those gaps, neither owed by this section.
 ## Tag continuity across epochs, restart, and swap
 
 Three tag-algebra rules govern replication, RESTART, and instance swap.
-They are decided design (93 I-14, I-22, I-27), unimplemented.
+They are decided design (93 I-14, I-22, I-27); `[24-TAG-02]` is implemented
+(W2.1), `[24-TAG-01]` and `[24-TAG-03]` are not.
 
-⚠ EARS-GAP: this "unimplemented" claim appears stale — the kernel already
-contains `ReBaselineEmitting`, `TagState`'s use of it, and
-`RestartReBaselineTest`, and CONCORD-PLAN §3 lists `15-RESTART-01`
-("restart with re-baseline; downstream equals batch despite the restart")
-as core-profile corpus, implying re-baseline convergence is meant to be
-testable now. The `[24-TAG-*]` ids below are minted on that basis; a spec
-editor with fuller context should confirm or retract them, and reconcile
-this line and the chapter status header accordingly.
+*(The ⚠ EARS-GAP that used to stand here asked a spec editor with fuller
+context to confirm or retract the `[24-TAG-*]` ids, on the suspicion that the
+blanket "unimplemented" was stale. **Answered (D-C12): the suspicion was
+right, for `[24-TAG-02]`.** The kernel's RESTART supervision path mints a fresh
+per-epoch `sourceId` per outlet, restores, and emits the `ReBaseline`
+supersession notice; `TagState.applyReBaseline` is the consumer half this
+section states, drop-then-merge-then-fence, exactly as written. So the ids are
+**confirmed, not retracted** — `[24-TAG-02]` is boundary-checkable today, and
+its drop-and-merge half is exercised by the `21-REBASE-01` scenario (21). It
+remains a *coverage-gap* row in the concordance rather than a covered one: no
+scenario yet drives the dead-lane half (a late delta stamped with a superseded
+`sourceId`, which a script has no verb to inject), so nothing claims to cover
+the whole rule. Kernel `RestartReBaselineTest` exercises that half internally.
+`[24-TAG-01]`'s verbatim-tag-travel rule and
+`[24-TAG-03]`'s non-idempotent-swap rule are still decided-but-unimplemented:
+the landed shadow-promotion fallback remains silent (see the third bullet), and
+that is what the per-rule notes below now say instead of one blanket line.)*
 
 - **Tags are data, never re-minted for received state** (decided in 93 I-14
   Rule S3). A genuinely new local add mints its tag under the cell's
@@ -680,10 +690,19 @@ this line and the chapter status header accordingly.
   source-scoped, so the retraction removes only the reverted producer's
   lost contribution — healthy peers' tags survive — and the rule composes
   with multi-writer merge; `supersede = false` (pull-merge) retracts
-  nothing, forward idempotent merge only. Landed RESTART (30/31 rule 5:
-  restore the spawn-time checkpoint, same sourceId with a rolled-back
-  counter, no downstream reconciliation) is exactly the bare rollback this
-  rule forbids (⚠ CONFLICT C-12, recorded in 30/31 and 22).
+  nothing, forward idempotent merge only. *(Implemented, W2.1; C-12 resolved
+  in D-C12. The host's RESTART branch mints the fresh epochs and emits the
+  supersession; `TagState.applyReBaseline` is (a)/(b)/(c) above — drop the
+  un-reasserted tags of the superseded sources, union-merge the re-asserted
+  state, then fence those sources as dead lanes — and `UnionSetCell` routes an
+  inbound re-baseline through it rather than through the ordinary fold. The
+  "bare rollback" reading recorded here was of the M3.5 prose in 30/31 rule 5,
+  not of the code. The drop-and-merge half is exercised by the `21-REBASE-01`
+  scenario (21); the dead-lane half has no scenario verb yet, so this id stays a
+  coverage-gap row. The `supersede = false`
+  arm is specified and honoured by the fold but never selected by the landed
+  host, which always restarts push-authoritative — a G-43 residual, not part of
+  this rule.)*
 - **Swap handoff tiers are typed by merge class** (decided in 93 I-27). An
   instance swap's catch-up-fallback tier (discard the incumbent's snapshot,
   fresh source id, downstream re-baselines) is sound only for cells whose

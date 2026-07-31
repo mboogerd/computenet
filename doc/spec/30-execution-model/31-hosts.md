@@ -1,6 +1,6 @@
 # 31 — Hosts
 
-> **Status**: Partial (single-host machinery implemented and consolidated; error protocol minimal, hierarchy/colors open; recovery precedence and RESTART redefinition decided in 93, unimplemented)
+> **Status**: Partial (single-host machinery implemented and consolidated; error protocol minimal, hierarchy/colors open; the RESTART redefinition's fresh-epoch + `ReBaseline` core implemented (W2.1), its checkpoint-tier and direction residuals open under G-43; recovery precedence decided in 93, unimplemented)
 > **Sources**: ADR — Computelet Kernel (Runner), ADR — Computelet Mobility, ADR 2
 > **Implementation**: `cell.host.ManagedHost` + `cell.host.HostScheduler` (`VirtualThreadScheduler` 🔵 / `CoroutineScheduler` 🟣 / `SimulationController`, which issues either color), `cell.host.Host` interface
 
@@ -166,9 +166,10 @@ checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
    `Stateful.snapshot`) and re-enters by frontier re-discovery +
    re-catch-up; the unflushed buffered inputs were never observed
    downstream, so dropping them is safe.)*
-   *(Decided in 93 I-22 (R1–R4, R6–R9), redefining RESTART — the
-   restore-the-spawn-time-checkpoint text above stays as-implemented but is
-   no longer endorsed: RESTART MUST become restore-the-freshest-checkpoint
+   *(Decided in 93 I-22 (R1–R4, R6–R9), redefining RESTART — **and the
+   redefinition's core has landed (W2.1), so rule 5's parenthetical above is
+   the historical M3.5 shape, not the current one**: RESTART is
+   restore-the-freshest-checkpoint
    (durable → snapshot + journal tail; post-import → the imported baseline;
    replicated/derived → pull-merge from mesh/upstream; plain root → local
    checkpoint) + a host-held per-instance generation bump outside the
@@ -181,10 +182,23 @@ checkpoint for tightly-coupled subgraphs (never global, per P4) (93 I-7).
    re-delivered; a dead-lettered exclusive payload is frozen/serialized at
    capture (`Owned` → move-by-serialize, `Leased` → released) before it
    fans out; supervision binds the full `CellRef(id, instanceId)`.)*
-   ⚠ CONFLICT (C-12): landed RESTART restores the spawn-time checkpoint and
-   continues emitting under the same outlet sourceId/counter (tag/wave
-   aliasing possible), contradicting the decided fresh-epoch + `ReBaseline`
-   supersession rule (93 I-22, reconciled).
+   *(C-12 resolved, W2.1 + D-C12 — **what landed**: the invocation-failure
+   handler's RESTART branch bumps the host-held generation, deactivates, mints
+   a fresh epoch on every `FanOutlet` of the cell (collecting the superseded
+   `sourceId`s), reactivates, restores the checkpoint, and — for a cell
+   declaring the `ReBaselineEmitting` marker — calls
+   `reBaseline(supersedes, supersede = true)` before resuming, so the recovered
+   state re-enters downstream over the ordinary catch-up path and a convergent
+   consumer drops the un-reasserted tags and fences the dead lanes. The
+   fresh-epoch and supersession halves of I-22 are therefore no longer
+   aspirational, and rule 5's "restore the spawn-time `Stateful` checkpoint"
+   parenthetical above records the M3.5 shape for history, not today's
+   behaviour. Exercised by the `21-REBASE-01` scenario (21). **Two residuals of the
+   decision remain, both under G-43 below**: the restore still takes the local
+   supervision-time checkpoint rather than choosing among the freshest tiers
+   (I-22's own degenerate case; peer recovery is I-25, next), and the
+   direction is always the push-authoritative `supersede = true` rather than
+   per-cell. Epoch reclamation is G-42 (20/22).)*
    *(Decided in 93 I-25, RESTART of a replicated single-writer instance:
    recover state by peer catch-up — re-catch-up from the most-advanced
    reachable follower over the ordinary late-join path — with the

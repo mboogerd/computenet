@@ -128,9 +128,15 @@ in R1, see the "Resolved by R1" section above.)*
 **`kernel-gap` / `spec-gap` — capability absent from the kernel, or the decided
 design is unimplemented; deep, implementation-ticket work:**
 
-- `21-REBASE-01` / `15-RESTART-01` — no RESTART/re-baseline driver verb; the
-  landed RESTART mechanism contradicts the decided `ReBaseline` design
-  (conflict C-12). `kernel-gap` + `spec-gap`.
+*(empty — every entry filed under this category has been resolved.)*
+
+*(`21-REBASE-01` / `15-RESTART-01` — resolved in B3/D-C12, and **reclassified**:
+filed as `kernel-gap` + `spec-gap`, it turned out on adjudication to be a
+`driver-surface-gap` + `spec-stale`. The kernel implements the decided RESTART
+re-baseline on its real supervision path; what was missing was the conformance
+surface (a `restart` driver verb, a `rebaseline-source` catalog id, a scenario),
+and what was wrong was the "unimplemented" claim in the spec prose. Both closed;
+`21-REBASE-01.yaml` authored. See the "By scenario id" entry.)*
 
 *(`24-OP-COMBINE-01` / `CTL-GF-01` (scalar `combine-latest`) — resolved in
 B2/D-CONCORD: the wave-**coalescing scalar** combine now exists in the kernel
@@ -351,45 +357,89 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   `incremental-equals-batch` alongside `final-view` + `no-dead-letters`; passes
   the sweep. `BatchOracleTest` gained coverage of the new fold.
 
-### `21-REBASE-01` / `15-RESTART-01` — **`kernel-gap`** + **`spec-gap`**
+### `21-REBASE-01` / `15-RESTART-01` — **RESOLVED (D-C12, `driver-surface-gap` + `spec-stale`)**
 
 *(Filed independently by W3-1 (as `21-REBASE-01`) and W3-3 (as `15-RESTART-01`);
-same root cause, consolidated here.)*
+same root cause, consolidated here. Originally filed `kernel-gap` + `spec-gap`;
+adjudication reclassified it — see the verdict below.)*
 
 - **Requirement**: `21-REBASE-01` (WHEN a source re-baselines — RESTART or
   re-baseline — the framework SHALL reconcile downstream consumers so their
   folds converge to a value consistent with the restored state, equal to a
   delta-only twin).
-- **Gap (driver SPI)**: the twelve-verb driver SPI
-  (`createHost`/`spawn`/`connect`/`disconnect`/`apply`/`quiesce`/`readView`/
-  `observationLog`/`snapshot`/`restore`/`despawn`/`deadLetters`+`effectLog`) has
-  no `restart`/`rebaseline` verb. The only state verb, `restore(hostId, cellId,
-  blob)`, is implemented as a **raw** `Stateful.restore(state)` on the live cell
-  (confirmed against `SetCell.restore`): it swaps internal maps with no
-  propagate, no `ReBaseline` emission, and no downstream announcement — a
-  downstream view never learns the source was restored. `restore` is the right
-  primitive for despawn/migration scenarios (`15-SNAPSHOT-01`, `33-MIGRATE-01`,
-  `DUR-SNAPTAIL-01`), not for RESTART re-baseline.
-- **Gap (kernel/spec)**: no catalog source cell implements `ReBaselineEmitting`
-  (only the `UnionSetCell` *consumer* reacts to an incoming `ReBaseline`). The
-  kernel's actual RESTART re-baseline path is exercised only by a bespoke test
-  cell (`RestartReBaselineTest`'s `TaggedProducerCell`), not in the neutral
-  catalog, and the driver never calls
-  `ManagedHost.supervise(ref, SupervisionPolicy.RESTART)`. `21-propagation.md`
-  records the decided design (fresh per-epoch `sourceId`, `ReBaseline` notice,
-  catch-up reconciliation) as **unimplemented**; the landed RESTART behaviour is
-  the bare local rollback the decision forbids (conflict C-12, recorded at 30/31
-  and 20/22) — it would not honestly pass a scenario asserting the decided
-  semantics.
-- **No scenario authored** on either ticket. `15-SNAPSHOT-01` is the closest
-  honest coverage of "restore state across a lifecycle event" and is explicit
-  that it does not exercise RESTART's sourceId/tag-epoch semantics.
-- **Resolves**: land the decided RESTART re-baseline mechanism (93 I-22) — a
-  catalog source implementing `ReBaselineEmitting` plus a supervision-RESTART
-  trigger — then add a `restart`/`rebaseline` driver verb (or a `RestoreStep`
-  mode). Then author `21-REBASE-01.yaml`: a rebased source reconciling
-  mid-stream vs a delta-only twin, `{type: views-converge, views:
-  [<rebased-view>, <twin-view>]}`.
+- **Verdict (D-C12, adjudicated against the live kernel)**: the **kernel-gap
+  half of this entry was wrong**, and had been for some time. Its sentence "the
+  landed RESTART behaviour is the bare local rollback the decision forbids
+  (conflict C-12)" transcribed the spec prose rather than the code. The live
+  supervision path implements the decided design's whole C-12 core, and does so
+  on the *real* path (`ManagedHost`'s invocation-failure handler,
+  `SupervisionPolicy.RESTART` branch): host-held generation bump, per-outlet
+  `FanOutlet.mintFreshEpoch()` collecting the superseded source ids, checkpoint
+  restore, then `ReBaselineEmitting.reBaseline(supersedes, supersede = true)`
+  over the ordinary catch-up path, with `TagState.applyReBaseline` dropping
+  un-reasserted tags from the superseded sources and fencing them as dead lanes.
+  Nothing about that is bare, local, or silent. What was genuinely missing was
+  the **conformance surface** — a driver verb, a catalog source, and a scenario
+  — which is a driver-surface gap, and the `unimplemented` claim in the spec
+  prose, which was stale. Both are what D-C12 closed. (The *residuals* of the
+  decided design remain open and unaffected: the freshest-checkpoint tiers and
+  the pull-merge direction under G-43/93 I-25, epoch reclamation under G-42.)
+- **Gap as filed (driver SPI) — real, and closed**: the driver SPI had no
+  `restart` verb, and its only state verb, `restore(hostId, cellId, blob)`, is a
+  **raw** `Stateful.restore(state)` on the live cell: it swaps internal maps
+  with no propagate, no `ReBaseline` emission, and no downstream announcement.
+  That reading was and is correct — `restore` is the right primitive for
+  despawn/migration scenarios (`15-SNAPSHOT-01`, `33-MIGRATE-01`,
+  `DUR-SNAPTAIL-01`) and the wrong one for a restart, and the two must stay
+  distinct rather than one growing a mode.
+- **Gap as filed (catalog) — real, and closed**: no catalog *source* implemented
+  `ReBaselineEmitting`; only the `union` consumer (`UnionSetCell`) reacted to an
+  incoming `ReBaseline`, so the property had a receiving half and no emitting
+  one. The reason `set-source` could not stand in was sharper than the entry
+  said: `SetCell`'s tag source is deliberately **replay-stable**, so it cannot
+  exhibit the epoch succession half of the requirement at all.
+- **How resolved (D-C12)**:
+  - a `restart(cellId)` verb on the driver SPI, stated in spec vocabulary
+    (recover from the freshest checkpoint; succeed the emission epochs;
+    re-announce over the catch-up path) and explicitly distinguished from
+    `restore`; a `{type: restart, on: c}` step verb; one new catalog id,
+    `rebaseline-source` → `ReBaselineSourceCell` (a `Stateful`,
+    `ReBaselineEmitting` tagged source built from public kernel seams, the
+    catalog twin of `RestartReBaselineTest`'s `TaggedProducerCell`). No kernel
+    source was modified.
+  - the kernel binding drives the **real** supervision path: it supervises the
+    cell `RESTART` through the public host-management API and then delivers a
+    failing invocation through a `HostedCellProxy`, so `ManagedHost`'s own
+    RESTART branch is what runs. (The proxy matters: the driver's `route` path
+    invokes a served handler inside the router's own scheduler task, where a
+    throw is caught by the host's generic task guard and never attributed to
+    the target cell — so it would never be supervised. A restart induced that
+    way would have silently been no restart at all.)
+  - `21-REBASE-01.yaml` authored: a `rebaseline-source → union → set-view`
+    pipeline restarted mid-stream against an identical delta-only twin, with
+    `{type: views-converge, views: [v, x]}` plus a `final-view` golden so the
+    convergence cannot be satisfied by two empty folds. It passes every run of
+    the sweep. Three separate probes (suppressing the `ReBaseline`
+    announcement; making the `restart` verb inert; giving the source a
+    replay-stable tag source) each fail it on 20 of 20 runs with exactly the
+    C-12 symptom — the pre-restart adds surviving downstream.
+  - **`no-dead-letters` is deliberately absent**, with a header comment saying
+    why: a restart is a failure event and spec 30/31 rule 5 requires it to be
+    reported under every supervision policy, so the one dead letter is the
+    specification working. Asserting zero would assert the opposite of the
+    spec; "exactly one" is not in the check vocabulary and growing it for this
+    would be an unasked-for schema change.
+- **Spec prose corrected** (the `spec-stale` half): the ⚠ CONFLICT C-12 blocks
+  at `21-propagation.md`, `22-consistency.md`, `31-hosts.md` and
+  `24-data-cells.md`, the "decided … unimplemented" lines, and the C-12 row of
+  `91-gap-analysis.md` now record the adjudicated state; the ⚠ EARS-GAP
+  self-doubt at `24-data-cells.md` (§Tag continuity — "this 'unimplemented'
+  claim appears stale … a spec editor with fuller context should confirm or
+  retract") is answered rather than left dangling.
+- `15-SNAPSHOT-01` keeps its scope unchanged: it covers "restore state across a
+  lifecycle event" and is still explicit that it does not exercise a restart's
+  sourceId/tag-epoch semantics. That is now a division of labour between two
+  scenarios rather than a gap.
 
 ---
 

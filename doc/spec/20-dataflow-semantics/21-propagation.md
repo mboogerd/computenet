@@ -1,6 +1,6 @@
 # 21 — Propagation: Push/Pull, Incremental/Complete
 
-> **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up, on-demand pull, and the catch-up baseline implemented; RESTART re-baseline and the cycle-head model decided in 93, unimplemented)
+> **Status**: Partial (push+incremental specified and demonstrated; late-join catch-up, on-demand pull, the catch-up baseline, and the RESTART re-baseline core implemented — the re-baseline's checkpoint-tier and direction residuals stay open under G-42/G-43; the cycle-head model decided in 93, unimplemented)
 > **Sources**: ADR 1 (§1, §2, §4), ADR — Cellular Software Development Process (incremental dataflow layer); 93 resolutions I-5, I-6, I-16, I-22, I-24, I-28
 > **Implementation**: push+deltas in `civictech.cell.data` (SetCell → UnionSetCell chains); catch-up via `LinkSupport.onLinked`; on-demand pull via `StateRequestProtocol`/`FanOutlet.baselineTo` (`civictech.cell.port`), catch-up baseline via `MessageContext.baseline`/`TagFrontier` and `GlitchFreeCell`'s baseline branch (W2.2)
 
@@ -226,8 +226,8 @@ rather than covered by a scenario that would read as covered while asserting
 only the trivial instance. The at-rest half of the property is separately
 carried, and covered, by requirement 24-BOUND-02 (24).
 
-**RESTART re-baselines over this same path** (decided in 93 I-22,
-unimplemented). RESTART is *restore + re-baseline*, never a bare local
+**RESTART re-baselines over this same path** (decided in 93 I-22; the core
+implemented, W2.1 — see below). RESTART is *restore + re-baseline*, never a bare local
 rollback: the host restores the **freshest** available checkpoint (durable
 recovery, imported baseline, pull-merge from mesh/upstream, or the local
 `Stateful` checkpoint — spawn-time state only in the degenerate
@@ -245,11 +245,23 @@ idempotent catch-up via `requestState`/mesh anti-entropy, no retraction).
 SHALL reconcile downstream consumers so their folds converge to a value
 consistent with the restored state (equal to a delta-only twin). This
 re-establishes deterministic application and effective-only emission downstream
-after a producer reverts. The landed RESTART (30/31 rule 5,
-M3.5) is exactly the bare local rollback the decision forbids — spawn-time
-checkpoint, same `sourceId` with a rolled-back counter (tag/wave aliasing
-possible), no downstream reconciliation (conflict C-12, recorded at 30/31
-and 20/22).
+after a producer reverts.
+
+*(Conflict C-12 resolved, W2.1 + D-C12 — the core landed, the residuals stayed
+where they were. The supervision path is the one described above, not the bare
+rollback the M3.5 text used to describe: a RESTART bumps a host-held generation,
+mints a fresh per-epoch `sourceId` on every outlet and collects the superseded
+ids, restores the checkpoint, then re-baselines over this catch-up path with
+`supersede = true`, and a convergent consumer drops the un-reasserted tags of
+the superseded sources and fences them as dead lanes. Post-restart tags and
+waves therefore alias nothing pre-crash, and downstream is reconciled rather
+than left divergent. `[21-REBASE-01]` is covered by
+`concord/corpus/21-propagation/21-REBASE-01.yaml`. **Still open, as the
+residuals they always were**: R3's freshest-checkpoint *tiers* — the landed
+restore takes the local supervision-time checkpoint, which I-22 itself names the
+degenerate non-durable case (93 I-25, G-43); R4's pull-merge direction, the
+landed call always passing `supersede = true` (G-43); and epoch/generation
+reclamation (G-42).)*
 
 ## Fusion and the critical path
 

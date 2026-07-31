@@ -98,6 +98,39 @@ interface Driver {
     /** Re-materialize [cellId] on [hostId] from a [blob]. */
     fun restore(hostId: HostId, cellId: CellId, blob: Blob)
 
+    /**
+     * Restart [cellId]: recover it from its **freshest available checkpoint**
+     * and reconcile its downstream consumers with the recovered state (spec 21
+     * §RESTART re-baselines, `[21-REBASE-01]`; spec 30/31 rule 5; spec 20/24
+     * §Tag continuity).
+     *
+     * A restart is *restore + re-baseline*, never a bare local rollback. Three
+     * things are required of it, all boundary-observable:
+     *
+     * 1. the cell's state reverts to the recovered checkpoint;
+     * 2. its outlets **succeed their emission epochs** — a post-restart wave
+     *    position or merge tag never aliases a pre-restart one (spec 20/22
+     *    §Source identity);
+     * 3. the recovered state is re-announced downstream over the ordinary
+     *    catch-up path, carrying the superseded epochs, so a convergent
+     *    consumer drops what the restart did not re-assert and rejects later
+     *    deltas from the superseded epochs.
+     *
+     * This is not [restore]. [restore] re-materializes a cell from a blob a
+     * scenario captured with [snapshot] — a state-plane operation with no
+     * downstream announcement, which is exactly right for despawn/migration and
+     * exactly wrong here. A restart names no blob: which checkpoint is
+     * "freshest" is the implementation's (durable tail, imported baseline,
+     * peer catch-up, or the local one), and only the reconciliation is asserted.
+     *
+     * How the restart is *induced* is likewise the implementation's: this verb
+     * asks for the recovery, not for a particular way of failing. A driver that
+     * cannot restart the named cell must fail loudly rather than quietly
+     * perform a plain [restore] — an unannounced rollback is precisely the
+     * behaviour this verb exists to distinguish itself from.
+     */
+    fun restart(cellId: CellId)
+
     /** Gracefully retire [cellId], unlinking it. */
     fun despawn(cellId: CellId)
 

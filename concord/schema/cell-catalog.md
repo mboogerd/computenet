@@ -18,6 +18,7 @@ no ops (they react to their inlets).
 | `list-source` | `append`, `insert`, `remove` | An ordered list; emits positional list deltas. |
 | `counter-source` | `increment`, `decrement` | A single integer counter; emits counter deltas. |
 | `pn-counter` | `increment`, `decrement` | A replicated increment/decrement counter that converges across replicas. Observed through a `value-view`. |
+| `rebaseline-source` | `add` | An add-only tagged set source whose merge tags are minted under its **current emission epoch**, so a recovery that succeeds that epoch is observable downstream. The restartable source (`restart` step, `21-REBASE-01`); pair it with a `union` — the convergent consumer that folds an inbound re-baseline through its tag algebra. See note 2. |
 | `keyed-set` | `put`, `remove` | A **keyed upsert** to a set (kernel `KeyedSetCell`): `put(key, element)` sets the element under a key (last-writer-wins per key), `remove(key)` drops it; the output is the flat set of currently-held elements, observed through a `set-view`. (W3-0 refinement — this is NOT an add/remove-by-value partitioned set; see note 6.) |
 
 `counter-source`/`pn-counter`: `increment`/`decrement` take an optional `value:` amount
@@ -106,7 +107,12 @@ required nature onto its inlet — CP-F2/F3, W4-A followup); `exclusive-source`/
 kind:tumbling`→a bare `GroupByCell` whose `keyFn` composes `Windows.tumbling`;
 `window kind:sliding`→`WindowSlidingCell` (a real `FlatMapSetCell` over
 `Windows.sliding` linked into a real `GroupByCell`, packaged as one `Cell` — the
-same two-cell composition kernel `WindowingTest` exercises directly).
+same two-cell composition kernel `WindowingTest` exercises directly);
+`rebaseline-source`→`ReBaselineSourceCell` (a `Stateful`, `ReBaselineEmitting`
+tagged source over the kernel's public `FanOutlet.originate`/`waveState`/
+`reBaseline` seams — the catalog twin of kernel `RestartReBaselineTest`'s
+`TaggedProducerCell`; the recovery itself is run by `ManagedHost`'s own
+supervision path, see note 2).
 
 The `join` family binds over **set streams of pairs `[k, v]`** (matching the batch
 oracle), not the kernel's map-stream `JoinCell`/`LookupJoinCell` — those are keyed
@@ -136,6 +142,21 @@ set sources.
 
    `combine-latest` with any `fn` other than `sum` throws
    `UnsupportedCatalogBinding`.
+
+2. **`rebaseline-source` exists because `set-source` cannot witness a restart**
+   (D-C12). A restart's observable content is twofold: the recovered state, and
+   the **succession of the source's emission epoch** that keeps post-recovery
+   tags from aliasing pre-recovery ones (spec 20/22 §Source identity; spec 20/24
+   §Tag continuity). `set-source`'s tag source is deliberately *replay-stable* —
+   it mints tags under a fixed identity so a replay reproduces them — so a
+   re-baseline naming its superseded epochs would name nothing its own tags
+   carry, and the retraction the requirement asks for could not be observed.
+   `rebaseline-source` is the source of the other kind: tags minted under the
+   outlet's current epoch, state re-announced on recovery. Both kinds are
+   legitimate and the catalog now carries one of each. The convergent-consumer
+   half of the property is the existing `union` id, which folds an inbound
+   re-baseline through its tag algebra rather than as an ordinary delta; a plain
+   view behind the source alone would see the announcement but not act on it.
 
    *Resolved (D-CONCORD, wave B2): this entry used to read "No wave-aligned scalar
    `combine-latest`" — the one remaining glitch-free `kernel-gap`. The kernel
