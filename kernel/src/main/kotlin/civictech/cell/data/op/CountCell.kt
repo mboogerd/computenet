@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
@@ -35,7 +38,10 @@ interface CountSetApi<E> {
  * `GlitchFreeCell` downstream would otherwise stall forever on a
  * membership-neutral final wave. Behavior change: this operator now acks.
  */
-class CountCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) : CountSetCellBase<E>(ref), Stateful {
+class CountCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) :
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+    CountSetCellBase<E>(ref), Stateful, BoundedStateful {
     private val op = TaggedSetOperator<E>()
 
     init {
@@ -57,6 +63,19 @@ class CountCell<E>(ref: CellRef = CellRef(UUID.randomUUID())) : CountSetCellBase
     override fun snapshot(): Serializable = op.snapshot()
 
     override fun restore(state: Serializable) = op.restore(state)
+
+    /**
+     * One page of the counted live tags (V1C-OPS): the single `"live"`
+     * sub-state, exactly [snapshot]'s content, via the shared
+     * [TaggedSetOperator.page].
+     *
+     * This cell is **not** scalar, despite its `CounterDelta` output: its state
+     * is the whole element → tag-set map, exactly as large as [FilterCell]'s, so
+     * it is paged rather than answered in one. The count itself is not paged —
+     * it is `op.state.size`, derived, and not in [snapshot] (Decision E).
+     * `[24-OP-COUNT-01]` is untouched: this method only reads.
+     */
+    override fun readBounded(request: StateRead): StatePage = op.page(request)
 
     companion object {
         fun <E> create(): CountSetApi<E> = CountCell()

@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.Serve
@@ -40,7 +43,9 @@ class SemiJoinCell<A, B, K>(
     private val leftKey: (A) -> K,
     private val rightKey: (B) -> K,
     private val negated: Boolean = false,
-) : SemiJoinCellBase<A, B>(ref), Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : SemiJoinCellBase<A, B>(ref), Stateful, BoundedStateful {
     private val join = KeyedBinarySetJoin<A, B, K>()
     private val ledger: JoinLedger<A> = MintedLedger(ref, "semijoin")
 
@@ -105,6 +110,51 @@ class SemiJoinCell<A, B, K>(
         ledger.restore(m)
         join.rebuildIndexes(leftKey, rightKey)
     }
+
+    /**
+     * One page of this semijoin's three sub-states (V1C-OPS) — structurally
+     * [JoinSetCell]'s, with an `A`-keyed ledger instead of a pair-keyed one.
+     *
+     * | ordinal | sub-state | key | entry |
+     * |---|---|---|---|
+     * | 0 | `"left"` | `A` | [TaggedEntry] — the left rows' live tags |
+     * | 1 | `"right"` | `B` | [TaggedEntry] — the right rows' live tags |
+     * | 2 | `"ledger"` | `A` | [TaggedEntry] — the advertised row's minted tag |
+     *
+     * Same order as [snapshot]'s `arrayListOf(leftState, rightState, ledger)`.
+     * `"left"` and `"ledger"` share key type `A` and overlap in content — an
+     * advertised row is live on the left — so the `(subState, key)` identity is
+     * load-bearing here exactly as in [IntersectSetCell]: one row is two
+     * entries, carrying the input tags and the minted output tag respectively.
+     *
+     * [StatePage.attributes] carries [OperatorPaging.MINT_COUNTER] on **every**
+     * page (Decision D) — see [JoinSetCell.readBounded] for the full argument;
+     * the ledger is the same `MintedLedger`.
+     *
+     * The key indexes are derived and not in [snapshot], so they are not paged
+     * (Decision E). [StatePage.frontier] covers all three sub-states, exact at
+     * both ends of a walk, and its equality is **necessary but not sufficient**
+     * for stability — non-retaining tag states, and a `MintedLedger.exit` that
+     * removes rather than tombstones. [supportsSince] stays `false`.
+     *
+     * `[24-OP-SEMIJOIN-01]` is untouched: this method only reads.
+     */
+    override fun readBounded(request: StateRead): StatePage = pageOver(
+        request,
+        listOf(
+            tagSubState("left", join.leftState),
+            tagSubState("right", join.rightState),
+            ledgerSubState("ledger", ledger),
+        ),
+        frontier = {
+            val builder = FrontierBuilder()
+            join.leftState.contributeTo(builder)
+            join.rightState.contributeTo(builder)
+            ledger.contributeTo(builder)
+            builder.build()
+        },
+        attributes = { ledger.readerAttributes() },
+    )
 }
 
 /** Set difference `A ⊖ B` (SQL EXCEPT DISTINCT): antijoin on identity keys. */

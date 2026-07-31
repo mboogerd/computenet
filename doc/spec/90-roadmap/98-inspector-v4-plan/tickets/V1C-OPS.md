@@ -1,6 +1,6 @@
 # V1C-OPS — a cursor that must order across sub-states: bounded reads for the composite operator cells
 
-**Status**: Specified — not-started
+**Status**: Implemented — awaiting merge
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 9 · **Branches:** `ticket/v1c-ops`

@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.port.Serve
@@ -33,7 +36,9 @@ interface FlatMapSetApi<A, B> {
 class FlatMapSetCell<A, B>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val f: (A) -> Iterable<B>,
-) : FlatMapSetCellBase<A, B>(ref), Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : FlatMapSetCellBase<A, B>(ref), Stateful, BoundedStateful {
     private val op = TaggedSetOperator<A>()
 
     // fold-with-union: colliding outputs merge tag sets — a mapKeys-style
@@ -63,6 +68,20 @@ class FlatMapSetCell<A, B>(
     override fun snapshot(): Serializable = op.snapshot()
 
     override fun restore(state: Serializable) = op.restore(state)
+
+    /**
+     * One page of the **input** live tags (V1C-OPS): the single `"live"`
+     * sub-state, exactly [snapshot]'s content, via the shared
+     * [TaggedSetOperator.page].
+     *
+     * The mapped output is deliberately absent: this cell keeps no copy of it —
+     * `remap` recomputes it from the input state on demand — so it is not in
+     * [snapshot] and Decision E keeps it out of the walk. A bounded read of a
+     * `FlatMapSetCell` shows the preimages, not `f`'s outputs.
+     * `[24-OP-FLATMAP-01]` is untouched: this method only reads and never
+     * applies [f].
+     */
+    override fun readBounded(request: StateRead): StatePage = op.page(request)
 }
 
 /** Element-wise map as the one-output flatMap. */
