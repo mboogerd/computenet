@@ -1,0 +1,31 @@
+# Concord corpus scenario (V1C-CONCORD). Canonical schema shape — see concord/schema/scenario.md.
+# The bounded state read is wave-neutral: an instrument may read a cell without
+# becoming a participant in its dataflow. Contrast 21-PULL-01 (a *link*, which
+# does bring a subscriber current — and is an emission).
+id: 21-PULL-02
+title: A bounded state read answers without emitting and without advancing the wave plane
+covers: [21-PULL-02]
+profile: core
+kind: example
+narrative:
+  given: a set source at quiescence with a view already linked to it, both settled on the source's accepted ops
+  when: an instrument walks the source's state to completion under a limit small enough to force several pages
+  then: the source's wave plane has not advanced and no cell observed anything further — the read delivered nothing, and the view still holds exactly what the ops put there
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: v, type: set-view}
+  links:
+    - {from: s, to: v}
+script:
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: beta}
+  - {type: apply, on: s, op: add, value: gamma}
+  - {type: apply, on: s, op: remove, value: alpha}
+  - {type: quiesce}
+  - {type: read-state, on: s, limit: 2}
+  - {type: quiesce}
+checks:
+  - {type: wave-plane-unchanged, cell: s}
+  - {type: final-view, view: v, equals: [beta, gamma]}
+  - {type: no-dead-letters}

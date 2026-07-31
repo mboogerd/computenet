@@ -669,3 +669,68 @@ the fix, not a weakened scenario with an omitted assertion.
 HTTP/SSE surface independent of `:inspect`), or the inspector subsystem
 becomes product surface rather than an internal debugging tool — either would
 make an honest scenario authorable against these five semantics.
+
+---
+
+## V1C-CONCORD (the bounded state read): `21-PULL-03` filed, not covered
+
+The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
+`pages-equal-view` checks) covered three of the four requirements it landed:
+`21-PULL-02` by `21-PULL-02.yaml`, `24-BOUND-01` by `24-BOUND-01.yaml`, and
+`24-BOUND-02` by `24-BOUND-02.yaml`'s limit sweep. The fourth is filed here.
+
+### `21-PULL-03` (cross-page stability) — **`cell-catalog-gap` + `script-model-gap`**
+
+- **Requirement** (`doc/spec/20-dataflow-semantics/21-propagation.md` §Pull):
+  *WHEN a bounded read over a state family in which every state change mints or
+  absorbs a tag is walked to completion and every page carries an equal frontier
+  stamp, the union of its pages SHALL equal that cell's state at that frontier.*
+- **Scenario it would have carried**: `21-PULL-03.yaml`, in
+  `concord/corpus/21-propagation/` — a settled source, a mutation accepted while
+  a walk is in flight, then the assertion that equal opening and closing stamps
+  imply the union is exactly the snapshot at that frontier.
+- **Why it cannot be checked honestly — two independent reasons.**
+  1. **No qualifying state family exists in the cell catalog.** The family
+     qualification in the requirement is load-bearing, not decoration: comparing
+     a walk's opening and closing stamps detects *tag gains, and only tag gains*.
+     Every tag-frontier-carrying family in the standard library is an
+     observed-remove set, whose retraction copies the add-tags it already holds
+     into its del-map and mints nothing — so a mid-walk retraction of an element
+     the walk has already paged leaves both stamps equal while the union still
+     names that element present. For those families equal stamps are *necessary
+     but not sufficient*, and the shipped primitive says so on its own read
+     (`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt`, `StatePage`'s
+     stability contract). A scenario over `set-source` therefore could not make
+     the requirement's antecedent true; it would read as covered while asserting
+     something the requirement does not claim. The derived (operator) families
+     are further away, not closer: their frontier is not even monotone, so a
+     retraction can *lower* the stamp.
+  2. **The script model cannot interleave a mutation with a walk.** A
+     `read-state` step is a *whole walk* by construction (the harness loops the
+     driver until the cursor terminates), and steps on one cell apply in file
+     order, so there is no way to order an `apply` against a page boundary. Even
+     for a qualifying family, the only instance a scenario could build is the
+     quiescent one — where the antecedent is trivially satisfied and the
+     consequent is exactly what `24-BOUND-02` already asserts, at every limit.
+- **What was NOT done instead** (this is the point of the filing): no
+  `21-PULL-03.yaml` was authored over `set-source` at quiescence. Such a
+  scenario would pass, and would appear as `covered` in `CONCORDANCE.md`, while
+  asserting only the requirement's trivial instance and nothing about the
+  mid-walk case the requirement exists for. The requirement text was likewise
+  not softened to drop its family qualification — that qualification is what
+  makes it true.
+- **What is not lost.** The property is pinned implementation-side by
+  `V1C-KERNEL`'s own kernel tests (`BoundedReadWaveNeutralityTest` and the
+  bounded-read suite around it). What this filing forgoes is the
+  *cross-implementation* obligation: a second, non-kernel binding would not be
+  held to it by the corpus.
+- **Resolves**: either (a) a state family whose retraction mints or absorbs a
+  tag (the research item the shipped `StatePage` contract names — an OR-set
+  variant whose observed-remove moves the frontier), bound as a catalog cell,
+  **and** (b) a way for a scenario to order an operation against a page boundary
+  — e.g. a paged form of the step (`{type: read-page, on: s, limit: N, as: w}`
+  plus a `resume` step) that the current whole-walk form deliberately does not
+  provide. (a) alone would still leave only the quiescent instance reachable.
+  With both, author `21-PULL-03.yaml`: walk, mutate mid-walk, resume to
+  completion, and assert stamps-equal ⟹ union-equals-snapshot over a family for
+  which that implication actually holds.

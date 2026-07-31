@@ -1,6 +1,8 @@
 package civictech.concord.check
 
 import civictech.concord.driver.Driver
+import civictech.concord.driver.ReadPage
+import civictech.concord.driver.WavePlane
 import civictech.concord.oracle.BatchOracle
 import civictech.concord.oracle.Functions
 import civictech.concord.oracle.OracleUnsupported
@@ -15,7 +17,9 @@ import civictech.concord.schema.NoDeadLetters
 import civictech.concord.schema.ObservationsAllSatisfy
 import civictech.concord.schema.ObservationsMonotone
 import civictech.concord.schema.ObservationsWholeWaves
+import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
+import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.ViewsConverge
 import civictech.concord.value.Value
@@ -46,6 +50,8 @@ object Checks {
         is ReplicasConverge -> replicasConverge(check, ctx)
         is NoDeadLetters -> noDeadLetters(ctx)
         is EffectCount -> effectCount(check, ctx)
+        is WavePlaneUnchanged -> wavePlaneUnchanged(check, ctx)
+        is PagesEqualView -> pagesEqualView(check, ctx)
     }
 
     /** At quiescence, `readView(view)` equals the golden value. */
@@ -273,6 +279,118 @@ object Checks {
         return CheckResult.Passed
     }
 
+    /**
+     * A bounded read perturbed nothing (spec 21 `[21-PULL-02]`): across every
+     * recorded walk on the named cell, that cell's wave plane is identical
+     * before and after.
+     *
+     * Fails — rather than passes — when the scenario recorded no walk on that
+     * cell at all, or when a recorded walk produced no page. Both are "the
+     * check had nothing to look at", which must never read as "the property
+     * held": the whole hazard of this check is that it is trivially satisfiable
+     * by not reading anything.
+     */
+    fun wavePlaneUnchanged(check: WavePlaneUnchanged, ctx: CheckContext): CheckResult {
+        val walks = ctx.reads.filter { it.cell == check.cell }
+        if (walks.isEmpty()) {
+            return CheckResult.Failed(
+                "wave-plane-unchanged(${check.cell}): the scenario performed no bounded read on " +
+                    "'${check.cell}' — nothing was observed, so nothing is asserted (add a read-state step)",
+            )
+        }
+        walks.forEachIndexed { i, walk ->
+            if (walk.pages.isEmpty()) {
+                return CheckResult.Failed("wave-plane-unchanged(${check.cell}): walk #$i returned no page at all")
+            }
+            if (walk.waveBefore != walk.waveAfter) {
+                return CheckResult.Failed(
+                    "wave-plane-unchanged(${check.cell}): walk #$i (limit ${walk.limit}) advanced the wave plane " +
+                        "from ${walk.waveBefore.positions} to ${walk.waveAfter.positions} — the read emitted",
+                )
+            }
+        }
+        return CheckResult.Passed
+    }
+
+    /**
+     * Every recorded walk on the named cell is complete, non-duplicating and
+     * faithful (spec 24 `[24-BOUND-01]`/`[24-BOUND-02]`): each page carried a
+     * frontier stamp, all the stamps of one walk were equal, no entry key
+     * appeared twice in one walk, and the union of the walk's live entries
+     * equals the named view's fold.
+     *
+     * A walk whose stamps differ is a *smeared* read: `[21-PULL-03]`'s
+     * antecedent is false, so the union is claimed to equal nothing, and
+     * reporting that as a failure is the honest outcome — passing instead would
+     * be passing on a false antecedent.
+     */
+    fun pagesEqualView(check: PagesEqualView, ctx: CheckContext): CheckResult {
+        val walks = ctx.reads.filter { it.cell == check.cell }
+        if (walks.isEmpty()) {
+            return CheckResult.Failed(
+                "pages-equal-view(${check.cell} → ${check.view}): the scenario performed no bounded read on " +
+                    "'${check.cell}' — nothing was observed, so nothing is asserted (add a read-state step)",
+            )
+        }
+        val expected = ctx.driver.readView(check.view)
+        val viewType = viewType(ctx.scenario, check.view)
+        walks.forEachIndexed { i, walk ->
+            val where = "pages-equal-view(${check.cell} → ${check.view}) walk #$i (limit ${walk.limit})"
+            if (walk.pages.isEmpty()) return CheckResult.Failed("$where: the walk returned no page at all")
+            walk.pages.forEachIndexed { p, page ->
+                if (page.frontier == null) {
+                    return CheckResult.Failed("$where: page #$p carries no frontier stamp")
+                }
+            }
+            val stamps = walk.pages.mapNotNull { it.frontier }.distinct()
+            if (stamps.size != 1) {
+                return CheckResult.Failed(
+                    "$where: the walk's frontier stamps are not all equal ($stamps) — the union is a smeared " +
+                        "read and equality with a fold is not claimed for it",
+                )
+            }
+            val seen = LinkedHashSet<String>()
+            walk.pages.forEachIndexed { p, page ->
+                page.entries.forEach { entry ->
+                    if (!seen.add(Values.render(entry.key))) {
+                        return CheckResult.Failed(
+                            "$where: entry key '${Values.render(entry.key)}' is returned twice in one walk " +
+                                "(seen again on page #$p)",
+                        )
+                    }
+                }
+            }
+            val union = unionOf(walk)
+            if (!Values.equalForView(expected, union, viewType)) {
+                return CheckResult.Failed(
+                    "$where: the union of ${walk.pages.size} page(s) is ${Values.render(union)} but " +
+                        "'${check.view}' holds ${Values.render(expected)}",
+                )
+            }
+        }
+        return CheckResult.Passed
+    }
+
+    /**
+     * The union of a walk's **live** entries in the neutral value model. A
+     * convergent family pages entries its own algebra has retracted (a
+     * tombstoned set element is a real entry with a real tag set), so an entry
+     * that does not contribute to current state is dropped here rather than
+     * compared against a fold that never held it.
+     *
+     * Shape follows the entries: key-only entries fold to a set (a list, which
+     * `set-view` comparison canonicalizes order-insensitively), keyed entries to
+     * a map.
+     */
+    private fun unionOf(walk: ReadWalk): Value {
+        val live = walk.pages.flatMap { it.entries }.filter { it.present }
+        return if (live.any { it.value != null }) {
+            Value.MapVal(live.associate { Values.render(it.key) to (it.value ?: Value.NullVal) })
+        } else {
+            Value.ListVal(Values.sortedList(live.map { it.key }))
+        }
+    }
+
     // --- helpers ------------------------------------------------------------
 
     /** The catalog type of a cell (used to pick order-sensitive vs order-insensitive comparison). */
@@ -286,14 +404,60 @@ object Checks {
 
 /**
  * Everything a check evaluator reads for one run of the sweep: the [driver]
- * (already advanced past the run's script and quiesced) and the [scenario] (for
+ * (already advanced past the run's script and quiesced), the [scenario] (for
  * the batch oracle, which folds catalog semantics over the script's accepted-op
- * multiset). W1-B may widen this — it is the check layer's own type.
+ * multiset), and the [reads] the run's script produced. W1-B may widen this —
+ * it is the check layer's own type.
+ *
+ * [reads] is the one thing here that is *not* re-derivable from the driver at
+ * check time, and that is exactly why it lives on this interface (V1C-CONCORD).
+ * A bounded read is an event with a before and an after — the pages it returned,
+ * and the wave plane on either side of it — and by the time checks run, the
+ * "before" is gone. Recording it belongs to the step that performed it; asking
+ * the *driver* SPI to remember its own past reads would put harness bookkeeping
+ * into the per-implementation surface, where a second binding would have to
+ * reimplement it identically for no conformance reason.
  */
 interface CheckContext {
     val driver: Driver
     val scenario: Scenario
+
+    /** The bounded-read walks this run's `read-state` steps performed, in script order. */
+    val reads: List<ReadWalk> get() = emptyList()
 }
+
+/**
+ * One `read-state` step's whole walk, as observed by the harness
+ * (V1C-CONCORD): every page the driver returned, plus the read cell's wave
+ * plane immediately before and immediately after the walk.
+ *
+ * The before/after pair is captured by the runner rather than by a check
+ * because only the runner is present at the moment of the read; a check that
+ * asked the driver afterwards could only ever see the "after".
+ *
+ * **Why the wave plane and not an observation stream.** "Nothing was delivered"
+ * looks like the more direct observation, and it is not available honestly: an
+ * observation stream is materialized off the host's own execution context, so
+ * its length immediately after a read is a statement about notifier timing, not
+ * about the graph. The wave plane is read synchronously and is exactly what the
+ * model makes load-bearing — every delivery carries a fresh per-source wave
+ * position minted by the emitting outlet (spec 20/22), so a plane that did not
+ * move is a delivery that did not happen. A scenario that also wants the
+ * settled end state pinned adds a `final-view`.
+ *
+ * @property cell the cell that was read (a scenario-local id).
+ * @property limit the per-page entry cap the step requested.
+ * @property pages the walk's pages, in order; the last one has no resume token.
+ * @property waveBefore / @property waveAfter the read cell's wave plane on
+ *   either side of the whole walk.
+ */
+data class ReadWalk(
+    val cell: String,
+    val limit: Int,
+    val pages: List<ReadPage>,
+    val waveBefore: WavePlane,
+    val waveAfter: WavePlane,
+)
 
 /** The outcome of evaluating one [Check] on one run. */
 sealed interface CheckResult {

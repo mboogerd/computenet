@@ -106,6 +106,52 @@ semantics only — neither is a convergent merge under concurrent writers
   state-as-delta-from-empty to that subscriber, and SHALL preserve that
   state across drain/migrate via `Stateful` (Event-driven). On-demand pull
   without relinking remains with G-18/G-13 (21).
+- ~~Reading a large cell's state without copying it~~ **Resolved
+  (V1C-KERNEL)**: a data cell additionally serves an instrument's **bounded
+  read** of its own state — whole entries, at most a requested number of them
+  per page, resumed by a cell-minted opaque cursor, and stamped with the fold's
+  tag frontier — emitting nothing and moving no wave position (21 §Pull,
+  [21-PULL-02]). The seam is additive and opt-in beside `Stateful`, because four
+  subsystems depend on `snapshot()` being a whole restorable value (drain,
+  migration, promotion state transfer, durability checkpoints); a family that
+  does not implement it is refused with a stated reason, never answered with a
+  silent whole copy.
+  `[24-BOUND-01]` WHEN a data cell serves a bounded read, each page SHALL
+  contain whole entries, no entry SHALL be returned twice within one walk, and
+  every page SHALL carry the cell's tag frontier (Event-driven).
+  `[24-BOUND-02]` WHEN a data cell's bounded read is walked to completion and
+  the cell accepts no operation for the duration of that walk, the union of the
+  walk's pages SHALL equal the cell's whole state, whatever page limit the walk
+  used (Event-driven).
+  Three obligations sit under those and belong to the cell, not to the kernel.
+  **A total enumeration order is imposed, not inherited** — the family's backing
+  maps are insertion-ordered, so a remove-then-re-add moves a key to the tail and
+  could hand one key to a walk twice, and a restored instance enumerates
+  differently again; freezing the key sequence at walk start is how the
+  reference implementation discharges it. **A cursor is key-based, not
+  index-based** — an index into live state is invalidated by any removal earlier
+  in the enumeration, a key survives every mutation but its own; a positional
+  cursor is a documented exception for a family with no element identity (the
+  list form), and the weaker guarantee it then carries is declared on the page
+  rather than buried in the cell. **Resume costs O(page), not O(state)** — a
+  cursor that rescans from the start turns a paged walk into O(n²) and forfeits
+  the reason for paging.
+  How *exact* a page's frontier stamp is, is bounded rather than absolute: the
+  first and last page of a walk carry it exactly, and an intermediate page may
+  carry the walk's most recent exactly-determined frontier instead, declaring on
+  the page that it did. Recomputing it per page is O(n) per page and O(n²) per
+  walk — the cost the bounded read exists to avoid — and maintaining it
+  incrementally would put a secondary index on the fold path (P2). Because a tag
+  frontier is monotone, the walk's two exact endpoint stamps are what
+  [21-PULL-03]'s stability check reads, and the intermediate stamps cost it
+  nothing.
+  **An exclusive value is never paged.** An entry whose value is `Owned` or
+  `Leased` is replaced by a presence descriptor — key, wrapper type name,
+  disposition — and counted; a page is a copy, and copying an exclusive payload
+  is the prohibition itself (23). Nothing is taken, borrowed, released or
+  unwrapped to build the descriptor, and the count is an honest signal rather
+  than a silent gap. This makes a bounded read's ownership contract deliberately
+  stronger than `snapshot()`'s, which still serializes whatever the fold holds.
 - ~~Operator library~~ **Implemented (M4.3, extended to the full relational
   suite in M11)** — each an ordinary cell with declared incremental
   semantics, all late-join capable and `Stateful`. Correspondence to the
