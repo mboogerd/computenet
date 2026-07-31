@@ -192,9 +192,15 @@ semantics only — neither is a convergent merge under concurrent writers
     (absence-based emission is non-monotone; some sealing is unavoidable,
     and per-wave sealing over `cell.consistency.WaveFrontier` is the
     cheapest ComputeNet has). See 20/22 §The observation frontier for the
-    guarantee this gate serves. *(Spec-ahead-of-code: `emitOnFrontier` is
-    specified here before its implementation — 96 §E2.4. Today every
-    `SemiJoinCell` runs the ungated default.)*
+    guarantee this gate serves. *(Implemented — `SemiJoinCell(…,
+    emitOnFrontier = true)`: the wave's input deltas across both inlets are
+    buffered by a `WaveFrontier`-shaped fold mirrored at cell scope
+    (`cell.data.op.WaveGate` — the frontier itself is untouched, for
+    `CoalescingCombineCell`'s structural reason), applied together at
+    completeness, and reconciled once on membership before any tag is
+    minted. The gate inherits the static-link-set frontier's phantom
+    expected edge (G-13): it is for a shared-source diamond, not for two
+    independent roots.)*
   - `CombineLatestCell` — incremental keyed **outer** combine over two map
     streams (the outer sibling of `JoinCell`); a key present on only one
     side still emits, computed as `combine(k, v, null)` / `combine(k, null,
@@ -208,11 +214,14 @@ semantics only — neither is a convergent merge under concurrent writers
     default), a null-extension may ride the outlet and be retracted moments
     later, remediated only by 22's wrapper; gated (`emitOnFrontier`,
     mirroring `SemiJoinCell` above), the null-extension emits only once the
-    wave has settled, so a same-wave retraction never reaches the outlet.
-    See 20/22 §The observation frontier. *(Spec-ahead-of-code, as for
-    `SemiJoinCell` above — 96 §E2.4. Note also that `CombineLatestCell` does
-    not yet absorb-ack a wave it silently swallows, the one open divergence
-    from 20/22 §Completeness over silent or stuck edges.)*
+    wave has settled, so a same-wave retraction never reaches the outlet —
+    a genuinely one-sided key still null-extends at completeness, so outer
+    semantics are unchanged and only the timing gates.
+    See 20/22 §The observation frontier. *(Implemented, as for
+    `SemiJoinCell` above — 96 §E2.4, same mirrored fold and same
+    phantom-expected-edge caveat. This cell now also absorb-acks a wave it
+    silently swallows, closing the last divergence from 20/22 §Completeness
+    over silent or stuck edges.)*
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
     tagged set stream, input tags passing through. Sound because tag algebra
     is per-(element, tag): colliding outputs **union** their preimages' tag
