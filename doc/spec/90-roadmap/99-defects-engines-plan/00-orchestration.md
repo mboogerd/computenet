@@ -379,7 +379,7 @@ requires E1-CORE merged; E2-SUITE requires E2-ALIGN and E2-GATE merged.
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| E1-REPL | `OrMapCell` joins the mergeable class: `deltaInlet`/`applyRemote` echo-terminating gossip, C-10 re-origination, pull baseline, `ReBaseline` dead-source fencing (96 §E1.3) | opus | fresh | ticket/e1-repl | opus | Specified — not-started |
+| E1-REPL | `OrMapCell` joins the mergeable class: `deltaInlet`/`applyRemote` echo-terminating gossip, C-10 re-origination, pull baseline, `ReBaseline` dead-source fencing (96 §E1.3) | opus | fresh | ticket/e1-repl | opus | Implemented — merged |
 | E2-SUITE | Balanced-transfer internal-consistency acceptance suite — invariant at every observed output; `observeAll` and ungated-outer-join failure controls (96 §E2.5, 20/22 §Acceptance benchmark) | opus | fresh | ticket/e2-suite | opus | Specified — not-started |
 
 **Checkpoint CC3 — verification.** Fresh opus evaluator per ticket. E1-REPL:
