@@ -1,6 +1,6 @@
 # V1C-BE — the inspector stops copying whole cells: a paged state endpoint, a bounded data search, and cold cells that answer instead of lying
 
-**Status**: Implemented — awaiting merge
+**Status**: Implemented — merged
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 10 · **Branches:** `ticket/v1c-be`
