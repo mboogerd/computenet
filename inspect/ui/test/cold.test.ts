@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphSummary } from '../src/api/types';
-import { COLD_NOTICE, COLD_TAG, coldGraphCount, formatColdSkipHint, isGraphCold } from '../src/nav/cold';
+import { COLD_BANNER_NOTICE, COLD_STATE_NOTICE, COLD_TAG, coldGraphCount, formatColdSkipHint, isGraphCold } from '../src/nav/cold';
 
 function graph(id: string, lifecycle: 'hot' | 'cold'): GraphSummary {
   return {
@@ -51,10 +51,27 @@ describe('formatColdSkipHint', () => {
     expect(formatColdSkipHint({ cellsQueried: 18, coldSkipped: 0 })).toBeNull();
   });
 
-  it('names the remedy, not just the fact', () => {
+  /** V1C-BE narrows `coldSkipped` to "held for a migration flip only" (and
+   *  makes suspended/drained cells directly searchable, so they stop being
+   *  counted here at all) — waking does nothing for a held cell. But a
+   *  browser cannot tell whether it is talking to a pre- or post-V1C-BE
+   *  server, and on an OLDER server `coldSkipped` still counts parked cells
+   *  too, for which waking WOULD help. So the hint states the fact and drops
+   *  the remedy claim rather than naming one ("wake to include") that is a
+   *  dead end under the narrowed meaning.
+   *
+   *  C10: and it must not name the skipped cells' *category* either. The
+   *  shipped `DataSearch` counts held-for-migration cells only and searches
+   *  suspended/drained cells normally, so "parked cells are not searched"
+   *  would be false against the merged backend exactly the way "wake their
+   *  graph" was. Only the fact the count itself carries is true under both
+   *  server generations. */
+  it('states the fact without promising a remedy, and without naming a category the count may not be about', () => {
     expect(formatColdSkipHint({ cellsQueried: 18, coldSkipped: 2 })).toBe(
-      '2 cold cells skipped — wake their graph to include',
+      '2 cold cells skipped — their state could not be read for this search',
     );
+    expect(formatColdSkipHint({ cellsQueried: 18, coldSkipped: 2 })).not.toMatch(/wake/i);
+    expect(formatColdSkipHint({ cellsQueried: 18, coldSkipped: 2 })).not.toMatch(/parked|held|suspended|drained/i);
   });
 
   /** `SearchCost.coldSkipped` counts cells (contract + server `DataSearch`),
@@ -62,15 +79,26 @@ describe('formatColdSkipHint', () => {
    *  invented. */
   it('says cells, singular when one — the field counts cells, not graphs', () => {
     expect(formatColdSkipHint({ cellsQueried: 0, coldSkipped: 1 })).toBe(
-      '1 cold cell skipped — wake their graph to include',
+      '1 cold cell skipped — their state could not be read for this search',
     );
   });
 });
 
 describe('cold copy', () => {
-  it('says state is unavailable, never previewing it (ticket Exclusions: no fake preview)', () => {
-    expect(COLD_NOTICE).toContain('unavailable without waking');
-    expect(COLD_NOTICE).not.toMatch(/checkpoint|last known|cached/i);
+  /** M5-COLD's no-fake-preview intent, restated for V1C-FE: a truthful
+   *  "checkpoint"/"suspended" label naming where the value came from is not a
+   *  stale preview dressed up as current — that distinction is drawn at the
+   *  value itself (`util/statePresentation.ts`'s `provenanceLabel`). What
+   *  would still be dishonest, and what these assertions still catch, is the
+   *  notice claiming the parked read IS current/live/up to date. */
+  it('the banner says the graph is parked and does not claim its state is current', () => {
+    expect(COLD_BANNER_NOTICE).toMatch(/parked/i);
+    expect(COLD_BANNER_NOTICE).not.toMatch(/current|up to date|as of now|live value/i);
+  });
+
+  it('the state-line notice says the same — parked, not a claim of currency', () => {
+    expect(COLD_STATE_NOTICE).toMatch(/parked/i);
+    expect(COLD_STATE_NOTICE).not.toMatch(/current|up to date|as of now|live value/i);
   });
 
   it('has a single ❄ tag every cold surface shares', () => {

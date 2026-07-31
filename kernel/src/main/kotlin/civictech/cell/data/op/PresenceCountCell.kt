@@ -1,10 +1,13 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.Timestamp
 import civictech.cell.protocol.EdgeClose
@@ -87,10 +90,27 @@ internal class PresenceLanes<E> {
      * unattributable delivery (no matching lane) folds nowhere and touches
      * nothing, mirroring GlitchFreeCell's drop of a delta with no open edge.
      */
-    fun fold(ctx: MessageContext?, delta: SetDelta<E>): Set<E> {
-        val lane = laneFor(ctx) ?: return emptySet()
-        val effective = lane.apply(delta)
-        return effective.adds.keys + effective.dels.keys
+    fun fold(ctx: MessageContext?, delta: SetDelta<E>): Set<E> =
+        foldEffective(ctx, delta).let { it.adds.keys + it.dels.keys }
+
+    /**
+     * [fold]'s underlying *effective* per-lane delta, adds and dels still
+     * apart. A consumer that must tell "this lane now asserts these" from
+     * "this lane stopped asserting these" reads this instead of the merged
+     * frontier — [QuorumSetCell]'s baseline disposition (`[24-REPLAY-01]`,
+     * spec 20/24 §Durable replay of a mid-graph data cell) installs exactly
+     * the elements a replayed frame *added* to its lane, and evaluates the
+     * ones it *removed* under the ordinary live threshold.
+     *
+     * The lane fold itself is disposition-blind: a replayed frame carries
+     * [MessageContext.baseline] on the wave plane only, and lands in its lane
+     * by [MessageContext.sourcePort] exactly as a live delta does (PN-1's
+     * replay-stable port derivation makes a rebuilt lane match), merging on
+     * the state plane as an ordinary tag-set union.
+     */
+    fun foldEffective(ctx: MessageContext?, delta: SetDelta<E>): SetDelta<E> {
+        val lane = laneFor(ctx) ?: return SetDelta()
+        return lane.apply(delta)
     }
 
     private fun laneFor(ctx: MessageContext?): TagState<E>? {
@@ -101,6 +121,38 @@ internal class PresenceLanes<E> {
         }
         return linkId?.let { lanes[it] }
     }
+
+    // ----------------------------------------------------- bounded read
+    // V1C-OPS: the read accessors a paged walk of the lane sub-state needs.
+    // `snapshot()` copies every lane's whole tag map, which is exactly what a
+    // bounded read exists not to do, so the walk reaches the lanes one key at a
+    // time instead. [elements]/[tags] cannot serve: they flatten *across*
+    // lanes, and the lane boundary is the thing Decision F must preserve.
+
+    /** Open lanes in lane order — the nested cursor's outer component (V1C-OPS). */
+    val laneIds: Set<UUID> get() = lanes.keys
+
+    /** The elements [lane] currently asserts; empty for a lane that has closed (V1C-OPS). */
+    fun laneElements(lane: UUID): Set<E> = lanes[lane]?.elements ?: emptySet()
+
+    /** Does [lane] still assert [element]? (V1C-OPS) */
+    fun laneHolds(lane: UUID, element: E): Boolean = lanes[lane]?.contains(element) == true
+
+    /** [lane]'s own tags for [element] — not the cross-lane union [tags] returns (V1C-OPS). */
+    fun laneTags(lane: UUID, element: E): Set<Timestamp> = lanes[lane]?.tags(element) ?: emptySet()
+
+    /** Fold every lane's live tags into [builder] (V1C-OPS). */
+    fun contributeTo(builder: FrontierBuilder): FrontierBuilder =
+        builder.apply { lanes.values.forEach { it.contributeTo(this) } }
+
+    /**
+     * The lane frontier as a [civictech.cell.StatePage.attributes] rider
+     * (V1C-OPS, Decision D): an open lane asserting nothing is still in
+     * [snapshot] and still counts towards a threshold's `n`, but has no entry to
+     * ride on, so the lane ids are cell-level state.
+     */
+    fun readerAttributes(): Map<String, Serializable> =
+        mapOf(OperatorPaging.LANES to ArrayList(laneIds))
 
     fun snapshot(): Serializable = HashMap(lanes.mapValues { it.value.snapshot() })
 
@@ -135,9 +187,18 @@ interface PresenceCountApi<E> {
  * The stored [counts] is a redundant last-emitted cache kept in lock-step with
  * [lanes]; it is *rebuilt from the lanes* on [restore], so snapshot/restore
  * round-trips per-link state alone and the count map falls out of it.
+ *
+ * Unlike [QuorumSetCell] this cell needs no baseline disposition
+ * (`[24-REPLAY-01]`): it has no threshold to bypass, so once a replayed frame's
+ * delta lands in its lane, [recompute] emits the count that is true of the
+ * recovered world — nothing is withheld and nothing is dropped. Verified by
+ * `DurableQuorumReplayTest`, which recovers identical counts with and without
+ * the `MessageContext.baseline` stamp.
  */
 class PresenceCountCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID())) :
-    PresenceCountApi<E>, Cell, Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+    PresenceCountApi<E>, Cell, Stateful, BoundedStateful {
     override val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
     override val outlet = registerPort("outlet", FanOutlet.create<Propagate<MapDelta<E, Int>>>())
 
@@ -190,6 +251,39 @@ class PresenceCountCell<E>(override val ref: CellRef = CellRef(UUID.randomUUID()
         counts.clear()
         lanes.elements().forEach { counts[it] = lanes.count(it) }
     }
+
+    /**
+     * One page of this cell's per-lane membership (V1C-OPS).
+     *
+     * | ordinal | sub-state | key | entry |
+     * |---|---|---|---|
+     * | 0 | `"lanes"` | `(laneId: UUID, E)` | [TaggedEntry] with [TaggedEntry.lane] set |
+     *
+     * A **single** sub-state — [snapshot] is `lanes.snapshot()` verbatim — but a
+     * *nested* one, so the cursor is `(0, laneId, element)` and behaves exactly
+     * as [QuorumSetCell.readBounded] describes: a resume lands back inside a
+     * lane and continues to the next lane rather than restarting. The open lane
+     * ids ride every page as [OperatorPaging.LANES] (Decision D), which is what
+     * makes an empty lane visible at all.
+     *
+     * The **count map is not paged**: `counts` is a redundant last-emitted cache
+     * that [restore] rebuilds from the lanes, and it is not in [snapshot]
+     * (Decision E). A bounded read of a `PresenceCountCell` shows *which lane
+     * asserts what*, from which the counts follow.
+     *
+     * [StatePage.frontier] is the max per-source counter over every lane's tags,
+     * exact at both ends of a walk; its equality is necessary but not sufficient
+     * for stability (lane tag states do not retain tombstones), and
+     * [supportsSince] stays `false`. No `[24-OP-*]` requirement id covers this
+     * cell; the contract preserved is its own KDoc, and this method only reads —
+     * it recomputes nothing and emits nothing.
+     */
+    override fun readBounded(request: StateRead): StatePage = pageOver(
+        request,
+        listOf(laneSubState("lanes", lanes)),
+        frontier = { lanes.contributeTo(FrontierBuilder()).build() },
+        attributes = { lanes.readerAttributes() },
+    )
 
     companion object {
         fun <E> create(): PresenceCountApi<E> = PresenceCountCell()

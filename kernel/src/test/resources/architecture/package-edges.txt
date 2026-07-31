@@ -43,6 +43,41 @@
 # not cycle-free in the transitive sense — data -> link -> nature ->
 # consistency already closed a loop back — but per G-63 every non-leaf package
 # is in one SCC regardless, so no reachability changes here.)
+#
+# V1C-KERNEL: cell -> link ADDED -- BoundedRead.kt (the bounded state read's
+# types) lives at civictech.cell, beside Stateful.kt, because it is a *cell
+# capability* rather than an app-facing view, and StateRead reuses
+# civictech.cell.link.Interest verbatim as its `scope` bound. Reuse is the
+# decided design (98-inspector-v4-plan/20-wave-neutral-read-design.md 3.5:
+# `since` and `scope` "stay exactly where they are ... and are reused verbatim
+# in StateRead"); forking a second interest algebra for reads would be a far
+# larger change than the edge. No cycle appears that is not already there:
+# link -> cell already exists, so cell <-> link closes a 2-cycle exactly the
+# way cell <-> port already does, and G-63's single SCC is unchanged. The
+# zero-edge alternative, if this ever needs revisiting, is moving Interest
+# itself down to civictech.cell -- it imports nothing but java.io.Serializable
+# -- which is a deliberate relocation for a ticket that owns link/, not this one.
+#
+# E2-ALIGN: observe -> control and observe -> protocol ADDED --
+# observe/AlignedObserve.kt (the wave-aligned multi-view sink, spec 20/22
+# [22-OBS-02]) folds the wave-completeness condition at cell scope, which is
+# exactly the frontier machinery those two packages own: it registers a
+# Protocols.Progress handler and reads civictech.cell.control.Progress
+# (the CP-A3 absorb-ack that retires an absorbing arm), and it tracks
+# EdgeOpen/EdgeClose through civictech.cell.protocol's ProtocolSupport /
+# Protocols. Both edges are unavoidable for ANY cell that computes
+# completeness -- consistency/WaveFrontier.kt and data/op/CoalescingCombineCell.kt
+# carry the identical pair (consistency -> control, consistency -> protocol;
+# data -> control, data -> protocol are all already baselined) -- and the
+# ticket forbids modifying cell.consistency, so mirroring the fold in observe/
+# is the decided route (D-COMBINE precedent). No new cycle: nothing under
+# civictech.cell.control or .protocol imports civictech.cell.observe (verified
+# by grep, and observe has no inbound baseline edge at all), so observe stays a
+# sink package and both additions are one-way. The zero-edge alternative would
+# be composing an installed WaveFrontier per inlet, which cannot express one
+# frontier spanning several inlets -- the structural reason CoalescingCombineCell
+# records in its own KDoc.
+cell -> link
 cell -> port
 consistency -> cell
 consistency -> control
@@ -100,11 +135,13 @@ nature -> consistency
 nature -> data
 nature -> partition
 observe -> cell
+observe -> control
 observe -> data
 observe -> graph
 observe -> host
 observe -> link
 observe -> port
+observe -> protocol
 partition -> cell
 partition -> control
 partition -> data

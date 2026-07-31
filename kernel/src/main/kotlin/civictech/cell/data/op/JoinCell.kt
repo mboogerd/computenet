@@ -1,7 +1,10 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
@@ -26,7 +29,11 @@ interface JoinApi<K, V, W> {
  * limit (G-23): untagged, so concurrent same-key puts resolve by arrival
  * order — single-writer-per-key or single-stream inputs converge.
  */
-class JoinCell<K, V, W>(ref: CellRef = CellRef(UUID.randomUUID())) : JoinCellBase<K, V, W>(ref), Stateful {
+class JoinCell<K, V, W>(ref: CellRef = CellRef(UUID.randomUUID())) :
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, which is
+    // untouched.
+    JoinCellBase<K, V, W>(ref), Stateful, BoundedStateful {
     private val leftMap = mutableMapOf<K, V>()
     private val rightMap = mutableMapOf<K, W>()
 
@@ -82,4 +89,36 @@ class JoinCell<K, V, W>(ref: CellRef = CellRef(UUID.randomUUID())) : JoinCellBas
         leftMap.clear(); leftMap.putAll(l as Map<K, V>)
         rightMap.clear(); rightMap.putAll(r as Map<K, W>)
     }
+
+    /**
+     * One page of this join's two input indexes (V1C-OPS).
+     *
+     * | ordinal | sub-state | key | value |
+     * |---|---|---|---|
+     * | 0 | `"left"` | `K` | `V` |
+     * | 1 | `"right"` | `K` | `W` |
+     *
+     * Same order as [snapshot]'s `arrayListOf(leftMap, rightMap)`. **The two
+     * share key type `K` and overlap in content** — a joined key is in both —
+     * which is exactly why an entry is `(subState, key)` and not `key`
+     * (Decision A): a key held on both sides is *two* entries, one per side,
+     * never one collapsed entry and never one key returned twice. The cursor is
+     * lexicographic `(subStateOrdinal, key)` over the two frozen key sequences
+     * ([OperatorPaging]).
+     *
+     * The **joined output** is not paged: it is derived (`joined()`
+     * recomputes it from the two inputs on demand) and is not in [snapshot], so
+     * Decision E keeps it out. A bounded read of a `JoinCell` shows the two
+     * input sides, not the pairs.
+     *
+     * [StatePage.frontier] is null: `MapDelta` is untagged (G-23), so this cell
+     * holds no tags to build a frontier from. That makes `StatePage`'s
+     * across-page stability check and the `since` escalation path unavailable
+     * here, and [supportsSince] stays `false` — the request is refused on the
+     * caller's thread rather than answered wider than asked.
+     *
+     * `[24-OP-JOIN-01]` is untouched: this method only reads.
+     */
+    override fun readBounded(request: StateRead): StatePage =
+        pageOver(request, listOf(mapSubState("left", leftMap), mapSubState("right", rightMap)))
 }

@@ -40,17 +40,62 @@ interface RegistryAnnounce {
  * Receives a peer's announcements and mirrors them into the local registry as
  * [LocationRegistry.Remote] locations routed through [toPeer] — after which
  * local senders reach the remote ref transparently (parked traffic replays).
+ *
+ * One mirror per peer connection, so it is the right place to hold *whose*
+ * announcements these are ([peer], V4-PEERID): the announcement path already
+ * carries the peer's identity as a stamp on every decoded invocation
+ * (`BridgeIngressCell`), but a served [RegistryAnnounce] method cannot see it,
+ * and reading an ambient on the per-message path is what P2 forbids. Holding
+ * it on the connection's own cell costs one volatile read per *announcement*
+ * — publish/unpublish/link/unlink — and nothing at all on the data path.
  */
 class RegistryMirrorCell(
     private val registry: LocationRegistry,
     private val toPeer: InvocationSink,
+    initialPeer: PeerId? = null,
     override val ref: CellRef = CellRef(UUID.randomUUID()),
 ) : Cell {
+
+    /**
+     * The peer whose announcements this mirror serves; null = anonymous
+     * (V4-PEERID). Recorded on every [LocationRegistry.Remote] this mirror
+     * installs, so the peer's hull keeps one identity across a reconnect that
+     * mints a new bridge egress.
+     *
+     * **Assignable after construction, and why that is safe.** [Peering.loopback]
+     * knows both names up front and passes `initialPeer`. A socket transport
+     * cannot: `WsTransport.Session` spawns its mirror in its own constructor,
+     * because the hello it must send carries [ref] — and the *remote* name only
+     * arrives in the peer's hello, later. The late bind is nonetheless ordered
+     * before every announcement this mirror will ever serve:
+     *
+     * 1. our hello (carrying [ref]) is sent from `onOpen`;
+     * 2. the peer cannot address this mirror before it receives that hello, so
+     *    its `announceTo` cannot run earlier;
+     * 3. the peer's own hello is sent from *its* `onOpen`, i.e. before it
+     *    processes ours, and a WebSocket preserves per-connection message
+     *    order — so our `onText` (which does the bind) runs before any
+     *    announcement frame from that peer;
+     * 4. independently, `WsTransport.Session.onFrame` drops every binary frame
+     *    that arrives before the hello installed an ingress.
+     *
+     * So assigning this before the transport's `Peering.announceTo` call
+     * happens-before every announcement served here.
+     *
+     * `@Volatile` because the writer is the transport's IO thread and the
+     * reader is the bridge host's scheduler thread. Re-assignable, not
+     * set-once: a client keeps one `Session` — hence one mirror — across
+     * reconnects and re-runs the hello, so the same name is written again;
+     * writing the same name is a no-op in effect.
+     */
+    @Volatile
+    var peer: PeerId? = initialPeer
+
     val inlet = registerPort("inlet", FanInlet.create<RegistryAnnounce>())
 
     init {
         inlet.serve(object : RegistryAnnounce {
-            override fun published(ref: CellRef) = registry.publish(ref, toPeer)
+            override fun published(ref: CellRef) = registry.publish(ref, toPeer, peer)
             override fun linked(link: civictech.cell.host.TopologyLink) = registry.mirrorLink(link)
             override fun unlinked(id: UUID) = registry.mirrorUnlink(id)
             override fun unpublished(ref: CellRef) = registry.mirrorUnpublish(ref)
@@ -109,8 +154,11 @@ object Peering {
     fun loopback(a: Side, b: Side): Loopback {
         val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(b, fromPeer = a.peer), PortRef.generate())) }
         val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(a, fromPeer = b.peer), PortRef.generate())) }
-        val mirrorOnB = spawnMirror(b, toPeer = bToA)
-        val mirrorOnA = spawnMirror(a, toPeer = aToB)
+        // V4-PEERID: the mirror on B serves A's announcements, so its peer is
+        // A's name (and symmetrically). Both names are known here, so the
+        // loopback path is a pure constructor value — it never uses the setter.
+        val mirrorOnB = spawnMirror(b, toPeer = bToA, peer = a.peer).ref
+        val mirrorOnA = spawnMirror(a, toPeer = aToB, peer = b.peer).ref
         announceTo(a, peerMirror = mirrorOnB, via = aToB)
         announceTo(b, peerMirror = mirrorOnA, via = bToA)
         return Loopback(a, b, aToB, bToA, mirrorOnA, mirrorOnB)
@@ -124,11 +172,22 @@ object Peering {
                 as FrameInletProxy).inlet.call
     }
 
-    /** Spawn the mirror that turns the peer's announcements into Remote locations routed via [toPeer]. */
-    fun spawnMirror(side: Side, toPeer: InvocationSink): CellRef {
-        val mirror = RegistryMirrorCell(side.registry, toPeer)
+    /**
+     * Spawn the mirror that turns the peer's announcements into Remote
+     * locations routed via [toPeer]. [peer] names the peer whose announcements
+     * it will serve, when the caller already knows it (V4-PEERID); omitting it
+     * spawns an anonymous mirror, the pre-V4-PEERID shape.
+     *
+     * Returns the cell rather than its [CellRef] — the richer handle a
+     * transport needs, because a socket session must spawn its mirror before
+     * the peer's hello has named it and then late-bind
+     * [RegistryMirrorCell.peer] (see that property's happens-before argument).
+     * Callers that only wanted the ref read `.ref`.
+     */
+    fun spawnMirror(side: Side, toPeer: InvocationSink, peer: PeerId? = null): RegistryMirrorCell {
+        val mirror = RegistryMirrorCell(side.registry, toPeer, peer)
         side.bridgeHost.managementInlet.call.spawn(mirror)
-        return mirror.ref
+        return mirror
     }
 
     /**

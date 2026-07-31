@@ -201,6 +201,88 @@
   border: 1px solid var(--hairline);
 }
 
+/* V1C-FE ticket Solution direction §2: where a "page"/"snapshot" read's bytes
+   came from. `live`/`liveSuspended` share the calm, positive register
+   (`--status-live`) — a suspended cell's read is the most stable read in the
+   graph, not a degraded one, so it must not look like a warning.
+   `checkpoint` is stale by construction and gets its own register
+   (`--status-pending`) to say so at the value itself — still not the
+   error/alarm red `.dead-letter-card` uses, since nothing failed. */
+.state-provenance {
+  margin: 0 0 0.4rem;
+  font-size: 0.76rem;
+  color: var(--status-live);
+}
+
+.state-provenance--stale {
+  color: var(--status-pending);
+}
+
+/* V1C-FE ticket Solution direction §1: the page walk's own notes and footer
+   control, below the accumulated value. */
+.state-page {
+  margin-top: 0.5rem;
+  font-size: 0.76rem;
+}
+
+.state-page__exclusives,
+.state-page__mismatch,
+.state-page__restarted,
+.state-page__stuck,
+.state-page__caveat {
+  margin: 0 0 0.3rem;
+  color: var(--text-secondary);
+}
+
+/* An ownership FACT (V1C-FE ticket: "not an error and not a truncation"),
+   deliberately not the error/truncated registers. */
+.state-page__exclusives {
+  font-style: italic;
+}
+
+/* A smeared-read note gets the wave-health "worth a look" register — an
+   accurate diagnostic, not a defect claim. */
+.state-page__smeared {
+  margin: 0 0 0.3rem;
+  color: var(--wave-health);
+}
+
+/* C10: the page's cell-level attributes (a set's tag counter, a shard's
+   assigned epoch) — plain data, in the calm register the descriptor grid
+   uses, never a diagnostic. */
+.state-page__attributes {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0 0 0.3rem;
+  color: var(--text-secondary);
+}
+
+.state-page__attributes dt {
+  color: var(--text-muted);
+}
+
+.state-page__attributes dd {
+  margin: 0;
+}
+
+.state-page__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.state-page__counter {
+  color: var(--text-muted);
+}
+
+.state-page__more {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.6rem;
+}
+
 /* V1A-FE ticket Implement §3: the onChange log, below the value in the State
    subsection — one entry per settled effective change (the v1 mock-up's
    third column), newest first. */

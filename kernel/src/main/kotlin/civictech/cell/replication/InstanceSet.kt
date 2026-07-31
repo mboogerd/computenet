@@ -1,9 +1,13 @@
 package civictech.cell.replication
 
+import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellRef
-import civictech.cell.Stateful
+import civictech.cell.Cursor
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
+import civictech.cell.data.KeyWalk
 import civictech.cell.data.Replicable
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -79,7 +83,7 @@ data class AssignmentDelta(val entries: Map<CellRef, Assignment>) : Serializable
 class InstanceSet(
     override val ref: CellRef,
     private val merge: (current: Assignment?, incoming: Assignment) -> Assignment = ::epochMaxUnion,
-) : Cell, Stateful, Replicable<AssignmentDelta> {
+) : Cell, BoundedStateful, Replicable<AssignmentDelta> {
 
     private val table = mutableMapOf<CellRef, Assignment>()
 
@@ -149,6 +153,73 @@ class InstanceSet(
         table[ref] = merged
         return true
     }
+
+    // ---------------------------------------------------------------------
+    // Bounded read (V1C-CELLS). Purely additive, and deliberately inert: it
+    // reads `table` directly and calls none of [assign], [applyOne],
+    // [onGossip], [entries], [overlapCount] or [isDisjoint] — the last two are
+    // O(instances^2) and are not state, so a bounded read that ran one to
+    // answer "the first 200 entries" would have missed the point.
+    // ---------------------------------------------------------------------
+
+    /** One instance's assignment — a whole entry, never split across pages (V1C-CELLS). */
+    data class InstanceAssignmentEntry(val ref: CellRef, val assignment: Assignment) : Serializable
+
+    /**
+     * One page of the assignment table (V1C-CELLS).
+     *
+     * - **One entry** is one [InstanceAssignmentEntry] — a `(CellRef,
+     *   Assignment)` pair. An [Assignment] is `(interest, epoch)`: small,
+     *   whole, and never worth splitting.
+     * - **The cursor** names a position in a frozen list of [CellRef]s
+     *   ([KeyWalk]), so it survives a concurrent gossip merge into `table` and
+     *   resumes in O(1).
+     * - **The order** is by `(id, instanceId)` — a genuine total order over
+     *   [CellRef], imposed rather than inherited. `table` is a `LinkedHashMap`,
+     *   so its own order is insertion order, and [restore] refills it from the
+     *   `HashMap` [snapshot] wrote; sorting makes two instances holding the same
+     *   table walk it identically.
+     * - **`frontier` is null.** The `epoch` on an [Assignment] is a *routing*
+     *   epoch, not a tag counter, and there is no per-source tag lane in this
+     *   cell — reporting the epoch as a [civictech.cell.TagFrontier] would be a
+     *   category error with a type that happens to fit. Consequently
+     *   [StatePage]'s across-page stability check is neither promised nor
+     *   verifiable here, and the `since`-based escalation path is unavailable;
+     *   `supportsSince`/`supportsScope` stay false, so
+     *   [civictech.cell.host.ManagedHost.readState] refuses either bound rather
+     *   than letting this cell answer wider than it was asked.
+     *
+     * No entry here can be an exclusive payload — a [CellRef] and an
+     * [Assignment] are both plain value state — so nothing is ever elided.
+     */
+    override fun readBounded(request: StateRead): StatePage {
+        @Suppress("UNCHECKED_CAST")
+        val walk = (request.cursor?.token as? KeyWalk<CellRef>) ?: KeyWalk(frozenOrder(), 0)
+        val order = walk.order
+
+        val entries = ArrayList<Serializable>(minOf(request.limit, 64))
+        var bytes = 0
+        var index = walk.next
+        val examineThrough = minOf(index + request.limit, order.size)
+        while (index < examineThrough) {
+            val ref = order[index]
+            index++
+            val assignment = table[ref] ?: continue // gone since the walk opened
+            entries += InstanceAssignmentEntry(ref, assignment)
+            bytes += civictech.cell.data.PageBudget.ENTRY_OVERHEAD_BYTES
+            if (civictech.cell.data.PageBudget.exhausted(bytes, request.byteBudget)) break
+        }
+
+        val complete = index >= order.size
+        return StatePage(
+            entries = entries,
+            next = if (complete) null else Cursor(KeyWalk(order, index)),
+        )
+    }
+
+    /** The walk's one O(n log n) pass (V1C-CELLS): impose the ref order once, never per page. */
+    private fun frozenOrder(): List<CellRef> =
+        table.keys.sortedWith(compareBy({ it.id }, { it.instanceId }))
 
     override fun snapshot(): Serializable = HashMap(table)
 

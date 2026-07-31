@@ -41,6 +41,34 @@ interface JoinLedger<X> {
 
     fun snapshot(): Serializable
     fun restore(saved: Serializable)
+
+    // ------------------------------------------------------- bounded read
+    // V1C-OPS: the three read accessors a paged walk of a ledger sub-state
+    // needs. A ledger pages *through its owning cell* (the cell declares the
+    // sub-state ordinals, and a second paging interface in this package would
+    // invite two orderings for one walk), so this grows read accessors rather
+    // than a `readBounded`. [entries] cannot serve: both implementations build
+    // a fresh map on every call, so a per-page use of it would be O(n) per page
+    // and O(n²) per walk — the shape `BoundedStateful` rules out.
+
+    /**
+     * Live view of the advertised keys (V1C-OPS) — no copy, unlike [entries],
+     * so a walk can freeze the key order at O(n) *references* at walk start.
+     */
+    val advertisedKeys: Set<X>
+
+    /** The tags advertised for [x], or null if [x] is not advertised (V1C-OPS). O(1). */
+    fun tagsOf(x: X): Set<Timestamp>?
+
+    /**
+     * Cell-level scalar state of this ledger that is part of its [snapshot] but
+     * is not an entry, keyed for [civictech.cell.StatePage.attributes]
+     * (V1C-OPS, Decision D). Empty for a ledger that holds none.
+     *
+     * Evaluated **twice per walk** (opening page and closing page), never per
+     * page: an implementation is free to pay an O(n) copy here.
+     */
+    fun readerAttributes(): Map<String, Serializable> = emptyMap()
 }
 
 /** Mints a fresh [Timestamp] per entry via [MintedTags] — [JoinSetCell]/[SemiJoinCell]'s ledger. */
@@ -57,6 +85,26 @@ class MintedLedger<X>(ref: CellRef, name: String) : JoinLedger<X> {
 
     override fun snapshot(): Serializable = minted.snapshot()
     override fun restore(saved: Serializable) = minted.restore(saved)
+
+    /** [MintedTags.entries] is the live advertisement map itself, so this copies nothing. */
+    override val advertisedKeys: Set<X> get() = minted.entries.keys
+
+    override fun tagsOf(x: X): Set<Timestamp>? = minted.entries[x]?.let { setOf(it) }
+
+    /**
+     * The mint counter (V1C-OPS, Decision D): `MintedTags.snapshot()` is
+     * `[advertised, counter]` and the counter is genuinely state — a restored
+     * instance must not re-mint a spent tag ([MintedTags]) — so a walk whose
+     * union is to equal `snapshot()`'s content has to carry it, and on *every*
+     * page, since a caller may join a walk at page 4 or abandon it at page 1.
+     *
+     * Read out of [snapshot] because [MintedTags] exposes the counter nowhere
+     * else and `civictech.cell.data.delta` is outside V1C-OPS's file claim; the
+     * cost is one shallow map copy, twice per walk, inside passes that are
+     * already O(n). A one-line accessor on [MintedTags] would remove it.
+     */
+    override fun readerAttributes(): Map<String, Serializable> =
+        mapOf(OperatorPaging.MINT_COUNTER to (minted.snapshot() as List<*>)[1] as Serializable)
 }
 
 /** Advertises the caller-supplied tag set on entry, verbatim — [IntersectSetCell]'s ledger. */
@@ -82,4 +130,13 @@ class AdvertisedLedger<X> : JoinLedger<X> {
         advertised.clear()
         advertised.putAll(saved as Map<X, Set<Timestamp>>)
     }
+
+    /** The advertisement map's own key set, so this copies nothing (V1C-OPS). */
+    override val advertisedKeys: Set<X> get() = advertised.keys
+
+    override fun tagsOf(x: X): Set<Timestamp>? = advertised[x]
+
+    // readerAttributes(): none. `snapshot()` is a bare map — this ledger
+    // advertises the caller's observed input tags and mints nothing, so it has
+    // no scalar to carry (V1C-OPS, Decision D; contrast MintedLedger).
 }

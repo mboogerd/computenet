@@ -1,8 +1,11 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -47,7 +50,9 @@ class MergeableGroupByCell<E, K, A : Serializable>(
     private val keyOf: (E) -> K,
     private val accumulate: (E) -> A,
     private val merge: (A, A) -> A,
-) : Cell, Stateful, Replicable<MapDelta<K, A>> {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : Cell, Stateful, BoundedStateful, Replicable<MapDelta<K, A>> {
 
     val inlet = registerPort("inlet", FanInlet.create<Propagate<SetDelta<E>>>())
 
@@ -103,4 +108,36 @@ class MergeableGroupByCell<E, K, A : Serializable>(
         groups.clear()
         groups.putAll(state as Map<K, A>)
     }
+
+    /**
+     * One page of this cell's aggregates (V1C-OPS).
+     *
+     * | ordinal | sub-state | key | value |
+     * |---|---|---|---|
+     * | 0 | `"groups"` | `K` | `A` (the merged accumulator) |
+     *
+     * A **single** sub-state — [snapshot] is a bare `HashMap(groups)` — so the
+     * cross-sub-state ordering is degenerate here and the cursor reduces to
+     * `(0, key)` over one frozen key sequence. It is still built on the same
+     * skeleton ([OperatorPaging]) so that the enumeration order is imposed
+     * rather than inherited from a `LinkedHashMap`: a key removed by a peer's
+     * `MapDelta.removals` and re-merged mid-walk must not be returned twice.
+     *
+     * **Decision G — an unbounded accumulator rides whole.** `A` is an
+     * app-supplied `Serializable` and a set-union `merge` makes it exactly as
+     * large as the group's support. The entry is emitted whole and
+     * [StateRead.byteBudget] — which is *advisory*, and which this cell
+     * estimates with a constant because measuring an arbitrary `A` would mean
+     * serializing it on the cell's own thread — is simply exceeded. Splitting is
+     * not an option ([StatePage] promises whole entries) and eliding would put
+     * the walk's union at odds with [snapshot]'s content (Decision E).
+     * [StateRead.limit] is still a hard cap.
+     *
+     * [StatePage.frontier] is null: aggregates are untagged, so the across-page
+     * stability check and the `since` escalation path are unavailable and
+     * [supportsSince] stays `false`. `[24-SCOPED-01]` and this cell's own
+     * merge/idempotence contract are untouched — this method only reads.
+     */
+    override fun readBounded(request: StateRead): StatePage =
+        pageOver(request, listOf(mapSubState("groups", groups)))
 }

@@ -11,6 +11,11 @@
 # coalesce. That is a genuine kernel gap (no wave-**coalescing** scalar
 # combine exists) — not fakeable, so it stays reported (see DISPUTES.md,
 # residual scalar case).
+# SUPERSEDED (B2): that kernel gap is closed — `CoalescingCombineCell` (D-COMBINE)
+# is a wave-coalescing scalar combine, bound behind `glitch-free: true`, and
+# `24-OP-COMBINE-02` asserts the scalar case positively. The R2-A finding above is
+# kept as the record of why THIS scenario is modeled over SET semantics; it is no
+# longer a statement about a missing kernel capability.
 #
 # The SET case is different: `quorum-set` (`QuorumSetCell`) is a *real* kernel
 # glitch-free fan-in — its own `evaluate()` only calls `propagate()` once an

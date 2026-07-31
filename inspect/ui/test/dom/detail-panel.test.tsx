@@ -1,10 +1,16 @@
 /** @vitest-environment jsdom */
-import { render, waitFor } from '@solidjs/testing-library';
+import { fireEvent, render, waitFor } from '@solidjs/testing-library';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { CellState } from '../../src/api/types';
 import DetailPanel from '../../src/components/DetailPanel';
 import { setSelection } from '../../src/solid/selection';
 import cellStateUnavailable from '../../fixtures/cell-state-unavailable.json';
-import { CAND_SKILLS_REF, MATCHES_REF, resetAppState, setStateFixture, startApp } from './harness';
+import cellStatePage from '../../fixtures/cell-state-page.json';
+import cellStatePageCheckpoint from '../../fixtures/cell-state-page-checkpoint.json';
+import { CAND_SKILLS_REF, MATCHES_REF, resetAppState, setStateFixture, setStateResponder, startApp } from './harness';
+
+const PAGE_REF = cellStatePage.ref;
+const CHECKPOINT_REF = cellStatePageCheckpoint.ref;
 
 /** DetailPanel.tsx: all four stacked sections (10-target-v3.md "Selecting a
  *  node shows all of its properties"), plus the three empty states — no
@@ -66,5 +72,288 @@ describe('DetailPanel', () => {
     await waitFor(() => {
       expect(getByText('State unavailable for this cell.')).toBeTruthy();
     });
+  });
+
+  it('a "migrating" unreadable reason renders its own sentence, not the generic one', async () => {
+    const migrating: CellState = { ...(cellStateUnavailable as CellState), unreadable: 'migrating' };
+    setStateFixture(MATCHES_REF, migrating);
+    const { container } = render(() => <DetailPanel />);
+    setSelection(MATCHES_REF);
+
+    await waitFor(() => {
+      expect(container.textContent).toMatch(/repartition flip/i);
+    });
+    expect(container.textContent).not.toContain('State unavailable for this cell.');
+  });
+});
+
+/** V1C-FE ticket — the paged state view, provenance/elision rendering, and
+ *  the cold selection now reading real state. `fixtures/cell-state-page.json`
+ *  / `cell-state-page-checkpoint.json` are the two checked-in fixtures this
+ *  ticket adds (shared with `V1C-BE`'s `FixtureContractTest` decoder map, per
+ *  the wave's cross-ticket coupling); every other shape below is an inline
+ *  sample, per `00-orchestration.md` §"Standing rules" (a third fixture would
+ *  be a cross-ticket change neither branch may make unilaterally). */
+describe('DetailPanel — paged state (V1C-FE)', () => {
+  beforeAll(startApp);
+  beforeEach(resetAppState);
+
+  const page2: CellState = {
+    ref: PAGE_REF,
+    frontier: null,
+    kind: 'page',
+    value: { $table: { columns: ['skill'], rows: [['Go'], ['Scala']] } },
+    staleMs: 0,
+    provenance: 'live',
+    page: { cursor: null, limit: 3, entries: 2, exclusivesElided: 0, walkStable: true },
+    unreadable: null,
+  };
+
+  it('walks a big cell page by page, accumulating entries into one rendered value', async () => {
+    setStateResponder(PAGE_REF, (params) =>
+      params.get('cursor') === 'p-7f3a1' ? { body: page2 } : { body: cellStatePage },
+    );
+
+    const { container, getByText, queryByText } = render(() => <DetailPanel />);
+    setSelection(PAGE_REF);
+
+    await waitFor(() => expect(container.textContent).toContain('Rust'));
+    expect(container.textContent).toContain('3 entries loaded — more available');
+    expect(queryByText('Scala')).toBeNull();
+
+    fireEvent.click(getByText('Load next page'));
+
+    await waitFor(() => expect(container.textContent).toContain('Scala'));
+    expect(container.textContent).toContain('Kotlin'); // page 1's entries are still there — accumulated, not replaced
+    expect(container.textContent).toContain('5 entries — complete');
+    expect(container.querySelector('.state-page__more')).toBeNull(); // walk complete — no more affordance
+  });
+
+  it('fetches exactly one page per click — no automatic multi-page fetching', async () => {
+    let calls = 0;
+    setStateResponder(PAGE_REF, (params) => {
+      if (params.get('cursor') === 'p-7f3a1') {
+        calls += 1;
+        return { body: page2 };
+      }
+      return { body: cellStatePage };
+    });
+
+    const { getByText } = render(() => <DetailPanel />);
+    setSelection(PAGE_REF);
+    await waitFor(() => expect(getByText('Load next page')).toBeTruthy());
+
+    fireEvent.click(getByText('Load next page'));
+    await waitFor(() => expect(calls).toBe(1));
+
+    // give any (incorrect) background/auto-advance behavior a chance to fire
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(calls).toBe(1);
+  });
+
+  it('abandoning a walk mid-flight (selecting another cell) discards the in-flight page response', async () => {
+    let resolvePending: ((outcome: { body: unknown }) => void) | undefined;
+    setStateResponder(PAGE_REF, (params) => {
+      if (params.get('cursor') === 'p-7f3a1') {
+        return new Promise((resolve) => {
+          resolvePending = resolve;
+        });
+      }
+      return { body: cellStatePage };
+    });
+
+    const { container, getByText } = render(() => <DetailPanel />);
+    setSelection(PAGE_REF);
+    await waitFor(() => expect(getByText('Load next page')).toBeTruthy());
+
+    fireEvent.click(getByText('Load next page'));
+    await waitFor(() => expect(resolvePending).toBeDefined());
+
+    setSelection(CAND_SKILLS_REF);
+    await waitFor(() => expect(container.textContent).toContain('Kotlin'));
+
+    resolvePending!({ body: page2 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // the abandoned walk's second page must never surface once a different
+    // cell is selected
+    expect(container.textContent).not.toContain('Scala');
+  });
+
+  it('a 410 stale cursor restarts the walk from page 1, silently — no error, and stops looping on a second 410', async () => {
+    const restarted: CellState = {
+      ...(cellStatePage as unknown as CellState),
+      page: { ...(cellStatePage as unknown as CellState).page!, cursor: null },
+    };
+    let staleServed = false;
+    let noCursorCalls = 0;
+    setStateResponder(PAGE_REF, (params) => {
+      const cursor = params.get('cursor');
+      if (cursor === null) {
+        // 1st call: the initial selection fetch (page 1, cursor: 'p-7f3a1').
+        // 2nd call: the automatic 410 restart's OWN page-1 re-fetch, this
+        // time landing complete (cursor: null).
+        noCursorCalls += 1;
+        return { body: noCursorCalls === 1 ? cellStatePage : restarted };
+      }
+      if (cursor === 'p-7f3a1' && !staleServed) {
+        staleServed = true;
+        return { status: 410, body: { error: 'unknown cursor' } };
+      }
+      return { body: restarted };
+    });
+
+    const { container, getByText } = render(() => <DetailPanel />);
+    setSelection(PAGE_REF);
+    await waitFor(() => expect(getByText('Load next page')).toBeTruthy());
+
+    fireEvent.click(getByText('Load next page'));
+
+    await waitFor(() => expect(container.textContent).toContain('the walk restarted from the first page'));
+    expect(container.querySelector('.detail-section__status--error')).toBeNull(); // no error surfaced
+    expect(container.querySelector('.state-page__more')).toBeNull(); // the restarted walk is complete (cursor: null)
+  });
+
+  it('renders "live" provenance as a quiet marker', async () => {
+    setStateFixture(PAGE_REF, cellStatePage);
+    const { container } = render(() => <DetailPanel />);
+    setSelection(PAGE_REF);
+
+    await waitFor(() => expect(container.textContent).toContain('Kotlin'));
+    const label = container.querySelector('.state-provenance');
+    expect(label?.textContent).toBe('live');
+    expect(label?.classList.contains('state-provenance--stale')).toBe(false);
+  });
+
+  it('renders "checkpoint" provenance labelled as stale, at the value', async () => {
+    setStateFixture(CHECKPOINT_REF, cellStatePageCheckpoint);
+    const { container } = render(() => <DetailPanel />);
+    setSelection(CHECKPOINT_REF);
+
+    await waitFor(() => expect(container.textContent).toContain('Kotlin'));
+    const label = container.querySelector('.state-provenance');
+    expect(label?.textContent).toMatch(/checkpoint/i);
+    expect(label?.textContent).toMatch(/not as of now/i);
+    expect(label?.classList.contains('state-provenance--stale')).toBe(true);
+    // "snapshot"/"page" pins staleMs to 0 — must not be rendered as freshness
+    expect(container.textContent).not.toMatch(/0ms stale/);
+  });
+
+  it('renders "liveSuspended" provenance neutrally — visually distinct from "checkpoint", never a warning', async () => {
+    const suspended: CellState = {
+      ref: MATCHES_REF,
+      frontier: null,
+      kind: 'snapshot',
+      value: { $table: { columns: ['skill'], rows: [['Kotlin']] } },
+      staleMs: 0,
+      provenance: 'liveSuspended',
+      page: null,
+      unreadable: null,
+    };
+    setStateFixture(MATCHES_REF, suspended);
+    const { container } = render(() => <DetailPanel />);
+    setSelection(MATCHES_REF);
+
+    await waitFor(() => expect(container.textContent).toContain('Kotlin'));
+    const label = container.querySelector('.state-provenance');
+    expect(label?.textContent).toMatch(/suspended/i);
+    expect(label?.textContent).not.toMatch(/warning|degraded|caution/i);
+    expect(label?.classList.contains('state-provenance--stale')).toBe(false);
+  });
+
+  it('renders a nonzero exclusivesElided as an ownership fact, never conflated with truncation', async () => {
+    const withExclusive: CellState = {
+      ref: MATCHES_REF,
+      frontier: null,
+      kind: 'page',
+      value: { $table: { columns: ['skill'], rows: [['Kotlin']] } },
+      staleMs: 0,
+      provenance: 'live',
+      page: { cursor: null, limit: 1, entries: 1, exclusivesElided: 2, walkStable: true },
+      unreadable: null,
+    };
+    setStateFixture(MATCHES_REF, withExclusive);
+    const { container } = render(() => <DetailPanel />);
+    setSelection(MATCHES_REF);
+
+    await waitFor(() => expect(container.textContent).toContain('Kotlin'));
+    const label = container.querySelector('.state-page__exclusives');
+    expect(label?.textContent).toContain('2 entries hold exclusive values');
+    expect(label?.textContent).not.toMatch(/showing \d+ of \d+/);
+    expect(label?.textContent).not.toMatch(/load more/i);
+  });
+
+  /** C10 — the shape a real `SetCell` page actually has, taken from the
+   *  merged backend rather than from this ticket's prose: the kernel pages
+   *  `SetStateEntry(element, addTags, delTags)` records, so the encoder
+   *  renders **stored tag algebra**, not membership — three columns, tag
+   *  sets as nested `$table`s, and a tombstoned element present as an
+   *  ordinary row (its del-tag covers its add-tag). The same cell under an
+   *  open observation renders as a flat member list instead; that divergence
+   *  is the C10 ruling ("the inspector forwards the kernel's page entries
+   *  rather than re-interpreting them into OR-set membership").
+   *
+   *  What this asserts is that the panel renders the server's own columns
+   *  verbatim and claims nothing about membership — no member list, no
+   *  "removed" row silently presented as present, and a counter that counts
+   *  ENTRIES (what `page.entries` counts) rather than members. */
+  it('renders a page of stored tag algebra as-is — three columns, nested tag sets, tombstoned rows present', async () => {
+    const tag = (source: string, counter: number) => ({
+      $table: { columns: ['source', 'counter'], rows: [[source, counter]] },
+    });
+    const tagAlgebraPage: CellState = {
+      ref: MATCHES_REF,
+      frontier: null,
+      kind: 'page',
+      value: {
+        $table: {
+          columns: ['element', 'addTags', 'delTags'],
+          rows: [
+            ['Kotlin', tag('a3f2', 1), []],
+            // present-then-removed: still an entry, still paged, and the
+            // del-tag column is the only thing that says so
+            ['COBOL', tag('a3f2', 2), tag('a3f2', 2)],
+          ],
+        },
+      },
+      staleMs: 0,
+      provenance: 'live',
+      page: { cursor: null, limit: 200, entries: 2, exclusivesElided: 0, walkStable: true, attributes: { counter: 2 } },
+      unreadable: null,
+    };
+    setStateFixture(MATCHES_REF, tagAlgebraPage);
+    const { container } = render(() => <DetailPanel />);
+    setSelection(MATCHES_REF);
+
+    await waitFor(() => expect(container.textContent).toContain('COBOL'));
+
+    // the server's own columns, verbatim — no membership column invented,
+    // none dropped
+    const headers = [...container.querySelectorAll('.value-view__table th')].map((th) => th.textContent);
+    expect(headers.slice(0, 3)).toEqual(['element', 'addTags', 'delTags']);
+    // the nested tag sets render as nested tables rather than "[object Object]"
+    expect(container.querySelectorAll('.value-view__table').length).toBeGreaterThan(1);
+    expect(container.textContent).not.toContain('[object Object]');
+    // the removed element is visible AS an entry, and nothing says "member"
+    expect(container.textContent).toContain('Kotlin');
+    expect(container.textContent).toMatch(/2 entries — complete/);
+    expect(container.textContent).not.toMatch(/member/i);
+    // cell-level attributes that ride every page are surfaced, not dropped
+    expect(container.querySelector('.state-page__attributes')?.textContent).toContain('counter');
+  });
+
+  it('row-flash is suppressed for kind: "page" — an appended page never renders as "added rows"', async () => {
+    setStateResponder(PAGE_REF, (params) =>
+      params.get('cursor') === 'p-7f3a1' ? { body: page2 } : { body: cellStatePage },
+    );
+
+    const { container, getByText } = render(() => <DetailPanel />);
+    setSelection(PAGE_REF);
+    await waitFor(() => expect(container.textContent).toContain('Rust'));
+
+    fireEvent.click(getByText('Load next page'));
+    await waitFor(() => expect(container.textContent).toContain('Scala'));
+
+    expect(container.querySelectorAll('[data-flash]').length).toBe(0);
   });
 });

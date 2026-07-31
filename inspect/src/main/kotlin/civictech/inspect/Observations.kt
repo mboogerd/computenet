@@ -2,6 +2,8 @@ package civictech.inspect
 
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.StateRead
+import civictech.cell.StateReadResult
 import civictech.cell.Timestamp
 import civictech.cell.data.KeyedSetApi
 import civictech.cell.data.MapApi
@@ -30,6 +32,7 @@ import civictech.cell.partition.ShardCell
 import civictech.nature.ContractRegistry
 import civictech.nature.PortDirection
 import java.io.Serializable
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -95,6 +98,13 @@ internal data class StateSummary(
  * [CellState.UNAVAILABLE]. A cell with no local host, a non-`Stateful` cell,
  * or a read that misses the deadline all still resolve to null here, which
  * this class turns into "no fallback" exactly as before.
+ *
+ * **V1C-BE update — no longer the first seam tried.** [BoundedReadSource] below
+ * answers `GET /cell/{ref}/state` first, and this remains the fallback for a
+ * ref that has no local host at all and for a caller that installed
+ * [BoundedReadSource.Unavailable]. Nothing about this interface changed: a
+ * bounded read is opt-in *beside* a whole copy, exactly as `BoundedStateful` is
+ * opt-in beside `Stateful`.
  */
 fun interface SnapshotSource {
     /** [ref]'s snapshot, captured on its host's execution context, or null. */
@@ -103,6 +113,43 @@ fun interface SnapshotSource {
     companion object {
         /** The shipped default: no host-routed snapshot exists yet (see the interface doc). */
         val Unavailable = SnapshotSource { null }
+    }
+}
+
+/**
+ * V1C-BE — the **bounded** state read's seam: `ManagedHost.readState`'s half of
+ * `GET /cell/{ref}/state`, and a sibling of [SnapshotSource] rather than a
+ * widening of it.
+ *
+ * Opt-in-beside, for the same reason `BoundedStateful` sits beside `Stateful`:
+ * [SnapshotSource] is public API with installed stand-ins in three existing
+ * tests, and widening it would make a paged read a precondition for standing in
+ * for a whole copy. A caller that installs [Unavailable] here gets exactly the
+ * shipped M5/V0 behaviour back — which is how the whole-copy labelling path
+ * stays testable now that the data-cell family is `BoundedStateful`.
+ *
+ * **The future, not the value.** Unlike [SnapshotSource] this seam hands back
+ * `ManagedHost.readState`'s own `CompletableFuture` and lets the caller own the
+ * deadline (the ticket's sketch returned a resolved `StateReadResult?`). That is
+ * a deliberate deviation with one concrete reason: a resolved value cannot
+ * distinguish "this seam has nothing to say" from "the read missed its bound",
+ * and the two have different answers — the first falls through to
+ * [Observations.snapshotReading], the second must **not**, because falling
+ * through would spend a second deadline on the same request. With the future
+ * here, `null` means only "no local host for this ref" and the single
+ * `InspectorServer.SNAPSHOT_WAIT_MS` deadline is applied in exactly one place.
+ */
+fun interface BoundedReadSource {
+    /**
+     * [ref]'s next page for [request], to be captured on its host's execution
+     * context; null when this seam did not answer at all (no local host, or a
+     * caller that installed [Unavailable]).
+     */
+    fun readState(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult>?
+
+    companion object {
+        /** No bounded read: every `GET state` falls through to [SnapshotSource]. */
+        val Unavailable = BoundedReadSource { _, _ -> null }
     }
 }
 

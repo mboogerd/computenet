@@ -65,6 +65,7 @@ class DemoSurfaceAllowlistTest {
             "consistency",
             "control",
             "durability",
+            "replication", // see doc/architecture-decisions.md "Guardrails › Amended" — V4-PILOT, demo/shopping only
         )
 
         val inspectCellPrefixes = setOf(

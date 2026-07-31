@@ -1,6 +1,6 @@
 import { Show } from 'solid-js';
 import Canvas from './Canvas';
-import { COLD_NOTICE, COLD_TAG, WAKE_CONFIRMATION } from '../nav/cold';
+import { COLD_BANNER_NOTICE, COLD_TAG, WAKE_CONFIRMATION } from '../nav/cold';
 import { askToWake, cancelWake, confirmingWake, wakeError, wakeGraph, waking } from '../solid/cold';
 import './ColdScreen.css';
 
@@ -14,13 +14,20 @@ import './ColdScreen.css';
  *     metadata, so drawing it costs the parked graph nothing (M5-COLD
  *     Implement §1: "structure of a cold graph remains servable"). Selecting a
  *     node still works and still opens the detail panel — on the descriptor
- *     only, because `solid/detail.ts` withholds the observe subscription while
- *     the graph is cold.
- *  2. **No preview of state.** The mockup's "read checkpoint" half needs cold
- *     reads from a checkpoint or journal, which the kernel does not have
- *     (Linear MRB-157). So the notice says *unavailable*; it does not show a
- *     last-known value dressed up as current, which would be worse than
- *     showing nothing.
+ *     *and*, as of `V1C-FE`, a plain state read; never an observe
+ *     subscription while the graph is cold (`solid/detail.ts`).
+ *  2. **State is now read, never a fake preview.** `V1C-KERNEL` Decision 7 /
+ *     `V1C-BE` closed the "cold reads from a checkpoint or journal" gap this
+ *     comment used to cite (Linear MRB-157): a suspended cell reads live from
+ *     its own quiescent fold, and a drained host answers from the checkpoint
+ *     it already retains from its drain — neither wakes anything or raises
+ *     attention. The detail panel renders that value labelled with its
+ *     `provenance` (`util/statePresentation.ts`), so the distinction this
+ *     screen exists to protect — a truthful "this is a checkpoint" label
+ *     versus a last-known value dressed up as current — is drawn at the value
+ *     itself, not by withholding the read entirely. Flow is the one thing
+ *     still genuinely unavailable while cold: no messages flow in a parked
+ *     cone (`COLD_FLOW_NOTICE`).
  *  3. **Waking is confirmed, never implicit.** The button opens a dialog that
  *     names the consequence before anything is sent. */
 export default function ColdScreen() {
@@ -31,10 +38,10 @@ export default function ColdScreen() {
           {COLD_TAG}
         </span>
         <div class="cold-banner__text">
-          <p class="cold-banner__notice">{COLD_NOTICE}</p>
+          <p class="cold-banner__notice">{COLD_BANNER_NOTICE}</p>
           <p class="cold-banner__sub">
-            Structure is registry metadata and costs this graph nothing to draw. Selecting a cell shows its descriptor
-            only.
+            Structure is registry metadata and costs this graph nothing to draw. Selecting a cell shows its
+            descriptor and a plain, labelled read of its state — never a subscription.
           </p>
           <Show when={wakeError()}>
             <p class="cold-banner__error">Wake failed — the graph is still parked.</p>

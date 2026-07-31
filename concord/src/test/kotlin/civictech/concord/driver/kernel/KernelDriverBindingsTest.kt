@@ -17,6 +17,7 @@ import civictech.concord.schema.Step
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import org.junit.jupiter.api.assertThrows
 import kotlin.test.Test
 
 /**
@@ -298,6 +299,50 @@ class KernelDriverBindingsTest {
         // the view retains what it had at unlink; the post-unlink add never arrives.
         d.readView("v") shouldBe list(s("before"))
         d.deadLetters() shouldBe emptyList()
+    }
+
+    // ---- restart / re-baseline (21-REBASE-01, D-C12) -----------------------
+
+    @Test fun `restart reverts a rebaseline-source and retracts its un-reasserted adds downstream`() {
+        val d = KernelDriver(0L)
+        d.spawn("", "s", "rebaseline-source", emptyMap())
+        d.spawn("", "u", "union", emptyMap())
+        d.spawn("", "v", "set-view", emptyMap())
+        d.connect("s", "u")
+        d.connect("u", "v")
+        d.apply("s", "add", s("alpha"))
+        d.apply("s", "add", s("beta"))
+        d.quiesce(BUDGET)
+        d.readView("v") shouldBe list(s("alpha"), s("beta"))
+
+        val epochBefore = d.wavePlane("s")
+        d.restart("s")
+        d.quiesce(BUDGET)
+
+        // the un-reasserted pre-restart adds are retracted downstream, not merely
+        // dropped at the source — the whole point of `[21-REBASE-01]`
+        d.readView("v") shouldBe list()
+        // and the outlet succeeded its emission epoch: no post-restart position
+        // can alias a pre-restart one (spec 20/22 §Source identity)
+        (d.wavePlane("s").positions.keys intersect epochBefore.positions.keys) shouldBe emptySet()
+
+        // post-restart traffic folds under the fresh epoch
+        d.apply("s", "add", s("gamma"))
+        d.quiesce(BUDGET)
+        d.readView("v") shouldBe list(s("gamma"))
+
+        // the restart trigger is dead-lettered by design (30/31 rule 5 — every
+        // policy dead-letters), which is exactly why 21-REBASE-01 omits the
+        // `no-dead-letters` check rather than weakening it.
+        d.deadLetters().size shouldBe 1
+    }
+
+    @Test fun `restarting a catalog cell with no restart binding fails loudly`() {
+        val d = KernelDriver(0L)
+        d.spawn("", "a", "set-source", emptyMap())
+        // `set-source`'s tag source is replay-stable, so it cannot witness epoch
+        // succession; the binding refuses rather than performing a bare restore.
+        assertThrows<UnsupportedCatalogBinding> { d.restart("a") }
     }
 
     @Test fun `snapshot and restore round-trip a source's state`() {

@@ -1,6 +1,6 @@
 # V1C-FE — the detail panel walks a big cell page by page, says where its bytes came from, and the cold screen stops promising nothing
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged (`09e869e`)
 **Model:** `claude-sonnet-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 10 · **Branches:** `ticket/v1c-fe`

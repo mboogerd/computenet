@@ -178,6 +178,10 @@ tested" line can be deleted.
 
 ## FU-4 — Adapter synthesis: an `Adapt` arm for nature reconciliation — P2 · High · `link`+`gen` — **EXPLORATORY / COLLABORATIVE**
 
+**CLOSED (2026-07-31)**: phase-1 ADR (`doc/adr/ADR - Adapter Synthesis.md`)
+reviewed and its NO-GO accepted — refuse-only linking stands; revisit at ≥3
+real hand-written wavers. Spike retained. No phase 2.
+
 **Context**: FRESH · **After**: — · **This ticket is a design exploration, not a
 prescriptive build.** It should produce a design proposal (and a spike) for review
 *before* committing to an implementation. Bring questions back; do not silently
@@ -279,6 +283,14 @@ above; each ticket is self-contained.
 
 ## FU-5 — `PULL_SERVICE` axis: a pull-needing inlet onto a non-serving producer must refuse, not silently starve — P2 · Low/Medium · `link`+`repl`
 
+**CLOSED (2026-07-31)**: shipped deviation ratified — the requirement stamp is
+opt-in (`PullOnOpen(requireServing = true)`; default `false` preserves today's
+behavior) because the ticket's unconditional form reds `GlitchFreeCell`'s
+tolerated non-serving ALIGN producers. Call-site audit at ratification:
+`GlitchFree.kt:81` is the only production `PullOnOpen` installer and must stay
+tolerant — no site needs `requireServing = true` today; the flag awaits its
+first genuinely pull-dependent consumer.
+
 **Origin**: ADR 1 features 1 (push/pull) + 3 (stateful recovery).
 **Context**: FRESH · **After**: — · **Files**: `gen/.../wire/ContractDescriptor.kt`
 (`NatureAxis`, new `PullService` level enum, `NatureVector.defaultOf`),
@@ -366,6 +378,10 @@ multi-producer inlet behavior byte-identical (existing fan-in tests unchanged).
 ---
 
 ## FU-7 — Delta↔snapshot type adapters: the registry's likely first real tenant — P2 · Medium · `link`+`gen` — **EXPLORATORY / COLLABORATIVE**
+
+**APPROVED TO RUN (2026-07-31)**: phase-1 exploration greenlit as specified
+below — demand sweep first, auto-no-go on zero demand, ADR addendum + spike
+only, stop before any production code.
 
 **Origin**: ADR 1 feature 4 (incremental vs complete propagation).
 **Context**: FRESH · **After**: reads `doc/adr/ADR - Adapter Synthesis.md` (FU-4

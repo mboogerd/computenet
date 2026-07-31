@@ -13,6 +13,8 @@ import civictech.cell.data.delta.WatermarkDelta
 import civictech.cell.data.delta.ListDelta
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.delta.SetDelta
+import civictech.cell.data.delta.TaggedMapDelta
+import civictech.cell.data.delta.TaggedMapDeltaSerializer
 import civictech.cell.replication.Stamped
 import civictech.cell.port.PortRef
 import civictech.cell.protocol.ProtocolId
@@ -142,6 +144,15 @@ object WireCodec {
                 subclass(SetDelta::class, SetDelta.serializer(polyAny) as KSerializer<SetDelta<*>>)
                 @Suppress("UNCHECKED_CAST")
                 subclass(MapDelta::class, MapDelta.serializer(polyAny, polyAny) as KSerializer<MapDelta<*, *>>)
+                // tagged map / OR-map dots (spec 20/24 §Tagged maps, E1.2): an
+                // ADDITIVE payload registered beside SetDelta — new @SerialName,
+                // no frame-type change, every existing encoding untouched. Its
+                // serializer groups dots by sourceId (decided point 4).
+                @Suppress("UNCHECKED_CAST")
+                subclass(
+                    TaggedMapDelta::class,
+                    TaggedMapDeltaSerializer(polyAny, polyAny) as KSerializer<TaggedMapDelta<*, *>>,
+                )
                 @Suppress("UNCHECKED_CAST")
                 subclass(ListDelta::class, ListDelta.serializer(polyAny) as KSerializer<ListDelta<*>>)
                 // PartitionedCell shard route (spec 20/24 §Partitioned state, CP-D3): epoch + delta

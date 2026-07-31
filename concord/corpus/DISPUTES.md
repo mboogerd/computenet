@@ -13,7 +13,9 @@ scenario id and tagged with a category. W3-4 took the cheap
 `driver-wiring-gap` / `driver-bug` items: the `intersect` port bug and the
 single-writer wiring resolved cleanly (scenarios authored & passing); the
 glitch-free *wiring* landed too, but its stream-invariant checks turned out to
-need a deeper kernel capability (a wave-coalescing operator) and remain filed.
+need a deeper kernel capability (a wave-coalescing operator) and stayed filed
+until wave B2 — the set-shaped half was resolved in R2 over `quorum-set`, and
+the scalar half in B2/D-CONCORD once `CoalescingCombineCell` landed (D-COMBINE).
 
 ## Resolved by W3-4 (driver-wiring gaps)
 
@@ -108,11 +110,13 @@ by-scenario entries below are now marked **RESOLVED (R2)**.
 **`schema-gap` — a descriptor surface the frozen W0 schema does not expose;
 needs a between-waves schema-change ticket:**
 
-- `24-OP-COMBINE-01` (+ the `CTL-GF-01` control) — the **scalar** `combine-latest`
-  (`ScalarSumCombineCell`) cannot be glitch-free-observed: it emits a torn
-  per-arm delta before any wrapper coalesces it, and no wave-coalescing scalar
-  combine exists in the kernel. This is the one genuine remaining glitch-free
-  gap; also `kernel-gap` — see entry.
+*(empty — every entry filed under this category has been resolved.)*
+
+*(`24-OP-COMBINE-01` (+ the `CTL-GF-01` control) — resolved in B2/D-CONCORD: the
+wave-coalescing scalar combine landed in the kernel (D-COMBINE) and binds inside
+the **existing** `combine-latest` id and `glitch-free` param, so this never
+needed a schema change after all; `24-OP-COMBINE-02` now asserts scalar
+glitch-freedom positively. See the "By scenario id" entry.)*
 
 *(`24-OP-WINDOW-01` / `24-OP-WINDOW-02` — resolved in R2 (window = key-derivation
 group-by over `Windows`); `22-WAVE-FANIN-01` — resolved in R2 (set-shaped
@@ -124,16 +128,24 @@ in R1, see the "Resolved by R1" section above.)*
 **`kernel-gap` / `spec-gap` — capability absent from the kernel, or the decided
 design is unimplemented; deep, implementation-ticket work:**
 
-- `21-REBASE-01` / `15-RESTART-01` — no RESTART/re-baseline driver verb; the
-  landed RESTART mechanism contradicts the decided `ReBaseline` design
-  (conflict C-12). `kernel-gap` + `spec-gap`.
-- `24-OP-COMBINE-01` / `CTL-GF-01` (scalar `combine-latest`) — no wave-**coalescing
-  scalar** combine in the kernel. `ScalarSumCombineCell` emits a `CounterDelta`
-  per input arm; the two arms of one source wave arrive as distinct waves and
-  `GlitchFreeCell` replays per-invocation, so a scalar observer still folds the
-  torn intermediate sum (verified: `CTL-GF-01`'s `even` fails on event #1 as
-  asserted). A version-buffered combine that emits once per completed wave is
-  absent. This is the one genuine remaining glitch-free `kernel-gap` — see entry.
+*(empty — every entry filed under this category has been resolved.)*
+
+*(`21-REBASE-01` / `15-RESTART-01` — resolved in B3/D-C12, and **reclassified**:
+filed as `kernel-gap` + `spec-gap`, it turned out on adjudication to be a
+`driver-surface-gap` + `spec-stale`. The kernel implements the decided RESTART
+re-baseline on its real supervision path; what was missing was the conformance
+surface (a `restart` driver verb, a `rebaseline-source` catalog id, a scenario),
+and what was wrong was the "unimplemented" claim in the spec prose. Both closed;
+`21-REBASE-01.yaml` authored. See the "By scenario id" entry.)*
+
+*(`24-OP-COMBINE-01` / `CTL-GF-01` (scalar `combine-latest`) — resolved in
+B2/D-CONCORD: the wave-**coalescing scalar** combine now exists in the kernel
+(`CoalescingCombineCell`, D-COMBINE — version-buffered, one delta per completed
+wave), the driver binds it behind `glitch-free: true`, and `24-OP-COMBINE-02`
+asserts glitch-freedom positively over a fork-join diamond. `24-REPLAY-01` —
+resolved in B2/D-CONCORD: `QuorumSetCell` now installs a replayed baseline as
+recovered arm state (D-REPLAY), and the dur scenario is authored. There is no
+remaining glitch-free `kernel-gap`. See the "By scenario id" entries.)*
 
 *(`24-OP-WINDOW-01` / `24-OP-WINDOW-02` — resolved in R2: on investigation this
 was a schema/driver-binding gap, not a kernel one (`Windows.tumbling`/`sliding`
@@ -210,25 +222,62 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   the glitch-free set joins. It is re-filed precisely as the scalar-combine
   residual entry below (`24-OP-COMBINE-01` / `CTL-GF-01`).
 
-### `24-OP-COMBINE-01` / `CTL-GF-01` — scalar `combine-latest` **`kernel-gap`** (remaining glitch-free residual)
+### `24-OP-COMBINE-01` / `CTL-GF-01` — **RESOLVED (B2 / D-CONCORD, `kernel-gap`; kernel fix by D-COMBINE)**
 
-- **Requirement**: `22-GF-01` / `22-GF-02` (glitch-freedom) for the **scalar**
-  combine shape specifically.
-- **Gap**: a genuinely wave-aligned / wave-**coalescing scalar** combine
-  (version-buffered, emitting one delta per completed wave) does not exist in the
-  kernel (cell-catalog.md "the two honest gaps", gap 1). The only scalar
-  `combine-latest` binding is `ScalarSumCombineCell`, which emits a `CounterDelta`
-  per input arm; the two arms of one source wave arrive as distinct waves and
-  `GlitchFreeCell` replays per-invocation, so an observer folds the torn
-  intermediate sum before any wrapper coalesces it. The set case is NOT affected
-  (`quorum-set` coalesces at the operator — see the two entries above); this is
-  now the *only* remaining glitch-free kernel-gap.
-- **Filed as control**: `CTL-GF-01.yaml` (one counter source forked through two
-  identity arms into a scalar summing `combine-latest`) asserts
-  `observations-all-satisfy(v, even)` and **FAILS-as-asserted** on the sweep —
-  the sentinel that keeps this gap honest and visible. Restore a positive scalar
-  glitch-free assertion on `24-OP-COMBINE-01` once a wave-coalescing scalar
-  combine lands in the kernel.
+- **Requirement**: `22-GF-01` (glitch-freedom) for the **scalar** combine shape
+  specifically.
+- **Gap (as filed)**: a genuinely wave-aligned / wave-**coalescing scalar**
+  combine (version-buffered, emitting one delta per completed wave) did not exist
+  in the kernel. The only scalar `combine-latest` binding was
+  `ScalarSumCombineCell`, which emits a `CounterDelta` per input arm; the two arms
+  of one source wave arrived as distinct waves and `GlitchFreeCell` replays
+  per-invocation, so an observer folded the torn intermediate sum before any
+  wrapper could coalesce it. `CTL-GF-01.yaml` asserted the true invariant
+  (`observations-all-satisfy(v, even)`) against that binding and
+  **FAILED-as-asserted** — the sentinel that kept the gap visible. The entry's
+  Resolves clause: *"Restore a positive scalar glitch-free assertion on
+  `24-OP-COMBINE-01` once a wave-coalescing scalar combine lands in the kernel."*
+- **How resolved (kernel, D-COMBINE)**: it landed —
+  `civictech.cell.data.op.CoalescingCombineCell`, a version-buffered scalar
+  combine over a single unrestricted `CounterDelta` fan-in. It buffers each wave's
+  per-arm contributions and emits their **net** as one delta once the wave's
+  expected-edge set is complete (the `WaveFrontier` completeness condition folded
+  internally), absorb-acking a completed wave whose net is zero. Note it does
+  **not** carry the PN-12 `GlitchFree` structural marker — a conscious ratchet
+  decision (marking `.data` operators would mint a `data -> consistency` package
+  cycle), the same precedent `QuorumSetCell` set — so the corpus asserts its
+  observed behavior, never a manifest flag.
+- **How resolved (driver, D-CONCORD)**: bound inside the **existing**
+  `combine-latest` catalog id and the **existing** `glitch-free` descriptor param
+  (no new id, no new field, no schema edit): `KernelCatalog.build` binds
+  `fn: sum` + `glitch-free: true` → `CoalescingCombineCell`, and plain `fn: sum` →
+  the retained `ScalarSumCombineCell`. Two consequences the driver reads off the
+  new `Built.waveAligned` flag: the redundant downstream `GlitchFreeCell` wrapper
+  is *not* spawned for a cell that coalesces at the operator, and `inletName`
+  collapses both neutral arms onto the coalescing cell's single `inlet` (each
+  still its own link, hence its own expected edge). The plain form is retained
+  deliberately, not by inertia: the wave-aligned form is a *fork-join* operator
+  whose completeness set is its open inlinks, so it aligns arms of one source,
+  whereas `24-OP-COMBINE-01`'s shape is two genuinely **independent** inlets.
+- **What the corpus now asserts**: `24-OP-COMBINE-01` keeps the independent-inlet
+  case (`final-view`, `covers: [21-PROP-01]`) with its header rewritten — the
+  omission it used to document no longer exists — and names its companion. The
+  positive assertion lives in the new **`24-OP-COMBINE-02`** (`covers: [22-GF-01]`):
+  a genuine fork-join diamond (one `counter-source` → two `map fn: identity` arms →
+  `combine-latest fn: sum, glitch-free: true` → `value-view`), asserting
+  `observations-all-satisfy(v, even)` + `final-view: 100` + `no-dead-letters` on
+  every run of the sweep. Verified non-vacuous: the observation log carries one
+  even value per completed wave (event #1 is already the coalesced `2`, on all 20
+  runs), not a single settled value.
+- **What became of `CTL-GF-01`**: it is no longer a **gap** sentinel — nothing in
+  the repo now describes the wave-coalescing scalar combine as missing. It is
+  retained as an ordinary `kind: control` in `CTL-GOLDEN-01`'s register (the
+  wrongness in the *expectation*, not in the lineage): the graph asks for the
+  plain, documented non-wave-aligned form and then asserts wave-aligned semantics
+  of it, which still fails as asserted. Its header and narrative were rewritten to
+  say exactly that, and to point at `24-OP-COMBINE-02` for the aligned form. It
+  therefore pins something real going forward: that the two bound forms are
+  observably different, and that the harness catches the difference.
 
 ### `12-NEGOTIATE-01` — **RESOLVED (R1, `schema-gap`)**
 
@@ -308,45 +357,89 @@ no longer needed to observe them. See the "Resolved by R2" section.)*
   `incremental-equals-batch` alongside `final-view` + `no-dead-letters`; passes
   the sweep. `BatchOracleTest` gained coverage of the new fold.
 
-### `21-REBASE-01` / `15-RESTART-01` — **`kernel-gap`** + **`spec-gap`**
+### `21-REBASE-01` / `15-RESTART-01` — **RESOLVED (D-C12, `driver-surface-gap` + `spec-stale`)**
 
 *(Filed independently by W3-1 (as `21-REBASE-01`) and W3-3 (as `15-RESTART-01`);
-same root cause, consolidated here.)*
+same root cause, consolidated here. Originally filed `kernel-gap` + `spec-gap`;
+adjudication reclassified it — see the verdict below.)*
 
 - **Requirement**: `21-REBASE-01` (WHEN a source re-baselines — RESTART or
   re-baseline — the framework SHALL reconcile downstream consumers so their
   folds converge to a value consistent with the restored state, equal to a
   delta-only twin).
-- **Gap (driver SPI)**: the twelve-verb driver SPI
-  (`createHost`/`spawn`/`connect`/`disconnect`/`apply`/`quiesce`/`readView`/
-  `observationLog`/`snapshot`/`restore`/`despawn`/`deadLetters`+`effectLog`) has
-  no `restart`/`rebaseline` verb. The only state verb, `restore(hostId, cellId,
-  blob)`, is implemented as a **raw** `Stateful.restore(state)` on the live cell
-  (confirmed against `SetCell.restore`): it swaps internal maps with no
-  propagate, no `ReBaseline` emission, and no downstream announcement — a
-  downstream view never learns the source was restored. `restore` is the right
-  primitive for despawn/migration scenarios (`15-SNAPSHOT-01`, `33-MIGRATE-01`,
-  `DUR-SNAPTAIL-01`), not for RESTART re-baseline.
-- **Gap (kernel/spec)**: no catalog source cell implements `ReBaselineEmitting`
-  (only the `UnionSetCell` *consumer* reacts to an incoming `ReBaseline`). The
-  kernel's actual RESTART re-baseline path is exercised only by a bespoke test
-  cell (`RestartReBaselineTest`'s `TaggedProducerCell`), not in the neutral
-  catalog, and the driver never calls
-  `ManagedHost.supervise(ref, SupervisionPolicy.RESTART)`. `21-propagation.md`
-  records the decided design (fresh per-epoch `sourceId`, `ReBaseline` notice,
-  catch-up reconciliation) as **unimplemented**; the landed RESTART behaviour is
-  the bare local rollback the decision forbids (conflict C-12, recorded at 30/31
-  and 20/22) — it would not honestly pass a scenario asserting the decided
-  semantics.
-- **No scenario authored** on either ticket. `15-SNAPSHOT-01` is the closest
-  honest coverage of "restore state across a lifecycle event" and is explicit
-  that it does not exercise RESTART's sourceId/tag-epoch semantics.
-- **Resolves**: land the decided RESTART re-baseline mechanism (93 I-22) — a
-  catalog source implementing `ReBaselineEmitting` plus a supervision-RESTART
-  trigger — then add a `restart`/`rebaseline` driver verb (or a `RestoreStep`
-  mode). Then author `21-REBASE-01.yaml`: a rebased source reconciling
-  mid-stream vs a delta-only twin, `{type: views-converge, views:
-  [<rebased-view>, <twin-view>]}`.
+- **Verdict (D-C12, adjudicated against the live kernel)**: the **kernel-gap
+  half of this entry was wrong**, and had been for some time. Its sentence "the
+  landed RESTART behaviour is the bare local rollback the decision forbids
+  (conflict C-12)" transcribed the spec prose rather than the code. The live
+  supervision path implements the decided design's whole C-12 core, and does so
+  on the *real* path (`ManagedHost`'s invocation-failure handler,
+  `SupervisionPolicy.RESTART` branch): host-held generation bump, per-outlet
+  `FanOutlet.mintFreshEpoch()` collecting the superseded source ids, checkpoint
+  restore, then `ReBaselineEmitting.reBaseline(supersedes, supersede = true)`
+  over the ordinary catch-up path, with `TagState.applyReBaseline` dropping
+  un-reasserted tags from the superseded sources and fencing them as dead lanes.
+  Nothing about that is bare, local, or silent. What was genuinely missing was
+  the **conformance surface** — a driver verb, a catalog source, and a scenario
+  — which is a driver-surface gap, and the `unimplemented` claim in the spec
+  prose, which was stale. Both are what D-C12 closed. (The *residuals* of the
+  decided design remain open and unaffected: the freshest-checkpoint tiers and
+  the pull-merge direction under G-43/93 I-25, epoch reclamation under G-42.)
+- **Gap as filed (driver SPI) — real, and closed**: the driver SPI had no
+  `restart` verb, and its only state verb, `restore(hostId, cellId, blob)`, is a
+  **raw** `Stateful.restore(state)` on the live cell: it swaps internal maps
+  with no propagate, no `ReBaseline` emission, and no downstream announcement.
+  That reading was and is correct — `restore` is the right primitive for
+  despawn/migration scenarios (`15-SNAPSHOT-01`, `33-MIGRATE-01`,
+  `DUR-SNAPTAIL-01`) and the wrong one for a restart, and the two must stay
+  distinct rather than one growing a mode.
+- **Gap as filed (catalog) — real, and closed**: no catalog *source* implemented
+  `ReBaselineEmitting`; only the `union` consumer (`UnionSetCell`) reacted to an
+  incoming `ReBaseline`, so the property had a receiving half and no emitting
+  one. The reason `set-source` could not stand in was sharper than the entry
+  said: `SetCell`'s tag source is deliberately **replay-stable**, so it cannot
+  exhibit the epoch succession half of the requirement at all.
+- **How resolved (D-C12)**:
+  - a `restart(cellId)` verb on the driver SPI, stated in spec vocabulary
+    (recover from the freshest checkpoint; succeed the emission epochs;
+    re-announce over the catch-up path) and explicitly distinguished from
+    `restore`; a `{type: restart, on: c}` step verb; one new catalog id,
+    `rebaseline-source` → `ReBaselineSourceCell` (a `Stateful`,
+    `ReBaselineEmitting` tagged source built from public kernel seams, the
+    catalog twin of `RestartReBaselineTest`'s `TaggedProducerCell`). No kernel
+    source was modified.
+  - the kernel binding drives the **real** supervision path: it supervises the
+    cell `RESTART` through the public host-management API and then delivers a
+    failing invocation through a `HostedCellProxy`, so `ManagedHost`'s own
+    RESTART branch is what runs. (The proxy matters: the driver's `route` path
+    invokes a served handler inside the router's own scheduler task, where a
+    throw is caught by the host's generic task guard and never attributed to
+    the target cell — so it would never be supervised. A restart induced that
+    way would have silently been no restart at all.)
+  - `21-REBASE-01.yaml` authored: a `rebaseline-source → union → set-view`
+    pipeline restarted mid-stream against an identical delta-only twin, with
+    `{type: views-converge, views: [v, x]}` plus a `final-view` golden so the
+    convergence cannot be satisfied by two empty folds. It passes every run of
+    the sweep. Three separate probes (suppressing the `ReBaseline`
+    announcement; making the `restart` verb inert; giving the source a
+    replay-stable tag source) each fail it on 20 of 20 runs with exactly the
+    C-12 symptom — the pre-restart adds surviving downstream.
+  - **`no-dead-letters` is deliberately absent**, with a header comment saying
+    why: a restart is a failure event and spec 30/31 rule 5 requires it to be
+    reported under every supervision policy, so the one dead letter is the
+    specification working. Asserting zero would assert the opposite of the
+    spec; "exactly one" is not in the check vocabulary and growing it for this
+    would be an unasked-for schema change.
+- **Spec prose corrected** (the `spec-stale` half): the ⚠ CONFLICT C-12 blocks
+  at `21-propagation.md`, `22-consistency.md`, `31-hosts.md` and
+  `24-data-cells.md`, the "decided … unimplemented" lines, and the C-12 row of
+  `91-gap-analysis.md` now record the adjudicated state; the ⚠ EARS-GAP
+  self-doubt at `24-data-cells.md` (§Tag continuity — "this 'unimplemented'
+  claim appears stale … a spec editor with fuller context should confirm or
+  retract") is answered rather than left dangling.
+- `15-SNAPSHOT-01` keeps its scope unchanged: it covers "restore state across a
+  lifecycle event" and is still explicit that it does not exercise a restart's
+  sourceId/tag-epoch semantics. That is now a division of labour between two
+  scenarios rather than a gap.
 
 ---
 
@@ -448,28 +541,68 @@ re-applied) *and* state-rebuilt-by-replay.
   tags, so its recovered membership equals the twin's with no double-count — but
   it is not asserted head-on (a directed add/remove/replay control belongs in a
   kernel unit test; the OR-set tag plane is not boundary-observable per P1).
-- `24-REPLAY-01` (a journaled mid-graph cell's replayed frames flagged
-  `MessageContext.baseline` so a downstream **glitch-free join** installs them as
-  arm state) — **`kernel-gap`, empirically confirmed by R3** (not authored; the
-  R2 "UNBLOCKED" note above was optimistic and is superseded). The PN-2 baseline
-  path works for the *generic* glitch-free join — `HostDurability.recoverFrom`
-  stamps replayed mid-graph frames `MessageContext.baseline` and
-  `WaveFrontier.offer()` releases a baseline delivery immediately, bypassing
-  wave-completeness (proven by the kernel's own `DurableGlitchFreeReplayTest`,
-  100 seeds). **But `QuorumSetCell`/`PresenceLanes` never consult
-  `MessageContext.baseline`** (grep: zero references) — they are a lane-counting
-  fan-in, an architecturally different mechanism from `WaveFrontier`'s
-  wave-buffer-and-release, and PN-2 patched only the latter. Verified with a
-  throwaway kernel test: one journaled arm + one volatile arm into a `quorum-set`
-  (k=2); pre-crash view `[e1,e2]`; post-`recoverFrom` the replayed frames stick
-  at lane-count 1 (< threshold 2) forever and the view is **empty** — recovered
-  state is silently dropped, not installed as baseline arm state. k=1 would pass
-  trivially regardless of baseline handling (uninformative), so the honest test
-  genuinely tears/loses data. **Resolves**: `PresenceLanes.fold` /
-  `QuorumSetCell.evaluate` must consult `CurrentContext.get()?.baseline` and, when
-  set, install the delta as authoritative recovered arm state bypassing the
-  live-threshold — the SET-fan-in analogue of `WaveFrontier.offer()`'s baseline
-  branch. Not a driver-wiring gap (no `KernelDriverDur.kt` change would fix it).
+- `24-REPLAY-01` — **RESOLVED (B2 / D-CONCORD, `kernel-gap`; kernel fix by
+  D-REPLAY)**. *As filed (R3, empirically confirmed):* the PN-2 baseline path
+  worked for the *generic* glitch-free join — `HostDurability.recoverFrom` stamps
+  replayed frames as `MessageContext.baseline` and `WaveFrontier.offer()` releases
+  a baseline delivery immediately, bypassing wave-completeness
+  (`DurableGlitchFreeReplayTest`, 100 seeds) — **but `QuorumSetCell`/
+  `PresenceLanes` never consulted `MessageContext.baseline`** (grep: zero
+  references). They are a lane-counting fan-in, an architecturally different
+  mechanism, and PN-2 patched only the former: one journaled arm + one volatile
+  arm into a `quorum-set` (k=2) recovered to an **empty** view, the replayed
+  frames stuck at lane-count 1 < 2 forever.
+  - **How resolved (kernel, D-REPLAY)**: `QuorumSetCell.onInlet` now reads
+    `CurrentContext.get()?.baseline`; when set (a PN-2 replay) the elements the
+    replayed frame *added* to its lane are passed to `evaluate` as `recovered` and
+    admitted regardless of `threshold(liveSources)` — the SET-fan-in analogue of
+    `WaveFrontier.offer()`'s baseline branch. What a baseline *removes* stays on
+    the live rule. Installed elements are **not** remembered: the next live delta
+    touching one, or an `EdgeOpen`/`EdgeClose` shifting `n`, re-evaluates it under
+    the ordinary threshold. `PresenceCountCell` needed **no** change and got none
+    — it has no threshold to bypass, and `DurableQuorumReplayTest` proves its
+    recovered counts identical with and without the stamp.
+  - **How resolved (driver, D-CONCORD)**: `KernelDriverDur` gained a `quorum-set`
+    arm in `build()` (volatile, never journaled — it is the *consumer* of a
+    journaled arm's baseline; constructed under the recorded `CellRef` because the
+    dur driver rebuilds every cell under its own ref, which `KernelCatalog.build`'s
+    random ref would break) and a `linkEdge()` wiring path. **One modeling
+    deviation, recorded here rather than glossed**: an edge incident to a
+    lane-counting fan-in is installed through the kernel's own link admission
+    (`ManagedHost.connect`), not the intake subscription every other durable link
+    uses. A lane opens on the `EdgeOpen` a link handshake announces, and a
+    `subscribe(Use.fixed(…))` is not a link — wired that way the quorum would open
+    no lane, attribute nothing, and silently fold *nothing*. Nothing is bypassed:
+    the intake funnel's two guarantees (WAL tee, `Effectful` frontier) are about
+    the **destination**, and a `quorum-set` is neither journaled nor `Effectful`;
+    the journaled endpoint is the arm **source**, whose accepted ops still ride the
+    intake through `apply`. This mirrors `DurableQuorumReplayTest`, where the
+    root→journaled-relay edge goes through the host queue while both fan-in arms
+    are ordinary links.
+  - **Filed scenario**: `concord/corpus/24-data-cells/24-REPLAY-01.yaml`
+    (`profile: dur`, `covers: [24-REPLAY-01]`): one `journal-set-source` arm + one
+    volatile `set-source` arm into a `quorum-set k: 2` on the reserved host `dur`,
+    read through a `set-view`, with the `journal` controller as the crash handle;
+    `final-view: [e1, e2, e3]` + `no-dead-letters`; passes every run of the sweep
+    under `-Pconcord.profiles=core,dur` and the default set. The informative
+    threshold is kept — no downgrade to `k: 1`, which would pass regardless of
+    baseline handling. Verified non-vacuous: with the arm made volatile the same
+    scenario reads `[e3]` on all 20 runs.
+  - **The limitation the scenario encodes rather than papers over**: the baseline
+    install is *arm* state and the quorum itself is volatile — it holds no record
+    of its own pre-crash view, so the replayed arm's state is the only recovery
+    information it has. Where the two arms had **diverged** before the crash (an
+    element the durable arm asserted alone, below quorum), the recovered view
+    **over-approximates**, installing that element too, until a live delta
+    re-touches it. That is the decided behavior of this entry's own Resolves
+    clause, not a defect: baseline-installed elements are not pinned. So the
+    scenario does not assert exact pre-crash equality over a divergent state. It
+    keeps the arms in **agreement** on the elements whose recovery it asserts
+    (`e1`, `e2` — for those, recovered == pre-crash exactly), and carries one
+    deliberately divergent element (`e4`) whose over-approximation converges back
+    out under a live re-evaluation, which the final golden pins. Both halves are
+    empirically confirmed: dropping the re-touch step makes the view read
+    `[e1,e2,e3,e4]` on all 20 runs.
 - `FileJournal` segmentation/rotation and **cross-host** recovery-frontier drift
   are single-in-process-host out of scope here (the driver runs the durable
   subgraph on one reserved host; cross-host is W4-A `dist` territory).
@@ -481,13 +614,21 @@ lives on the reserved host id `dur`; a `journal`-typed controller pseudo-cell is
 the crash handle (`despawn` of it = crash + `recoverFrom` in one step); a
 `snapshot` of a journaled cell lowers to `host.checkpoint`. Catalog additions
 (driver-only, `KernelDriverDur.kt`): `journal-set-source`, `journal-set-view`,
-`effect-sink`, `journal`. Durable links are wired **through the host intake** (a
+`effect-sink`, `journal`. B2/D-CONCORD added one more driver-only type binding, `quorum-set`
+(volatile). Durable links are wired **through the host intake** (a
 `HostedCellProxy` subscribed to the source outlet), never a raw
 `managementInlet.connect`: the kernel journals + enforces the `Effectful`
 frontier only at `enqueueHostedInvocation`, and a raw port `linkTo` bypasses that
 funnel entirely (a silent no-journal path — caught only because instrumentation
-showed a zero-length WAL). Reserved-host caveat for the merge: `host: dur` is a
-`dur`-profile convention; a `dist` scenario (W4-A) must not name a host `dur`.
+showed a zero-length WAL). **One documented exception** (B2/D-CONCORD, see the
+`24-REPLAY-01` entry): an edge incident to a **lane-counting fan-in**
+(`quorum-set`/`PresenceLanes`) is installed through the kernel's own link
+admission instead, because such a cell opens its per-source lane on the
+`EdgeOpen` a link handshake announces and a subscription announces none — and
+because the funnel's two guarantees are about the destination, which on that edge
+is neither journaled nor `Effectful`. Reserved-host caveat for the merge:
+`host: dur` is a `dur`-profile convention; a `dist` scenario (W4-A) must not name
+a host `dur`.
 
 ## Structural gap: 13 normative chapters carry no requirement ids at all (T02-D)
 
@@ -578,3 +719,68 @@ the fix, not a weakened scenario with an omitted assertion.
 HTTP/SSE surface independent of `:inspect`), or the inspector subsystem
 becomes product surface rather than an internal debugging tool — either would
 make an honest scenario authorable against these five semantics.
+
+---
+
+## V1C-CONCORD (the bounded state read): `21-PULL-03` filed, not covered
+
+The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
+`pages-equal-view` checks) covered three of the four requirements it landed:
+`21-PULL-02` by `21-PULL-02.yaml`, `24-BOUND-01` by `24-BOUND-01.yaml`, and
+`24-BOUND-02` by `24-BOUND-02.yaml`'s limit sweep. The fourth is filed here.
+
+### `21-PULL-03` (cross-page stability) — **`cell-catalog-gap` + `script-model-gap`**
+
+- **Requirement** (`doc/spec/20-dataflow-semantics/21-propagation.md` §Pull):
+  *WHEN a bounded read over a state family in which every state change mints or
+  absorbs a tag is walked to completion and every page carries an equal frontier
+  stamp, the union of its pages SHALL equal that cell's state at that frontier.*
+- **Scenario it would have carried**: `21-PULL-03.yaml`, in
+  `concord/corpus/21-propagation/` — a settled source, a mutation accepted while
+  a walk is in flight, then the assertion that equal opening and closing stamps
+  imply the union is exactly the snapshot at that frontier.
+- **Why it cannot be checked honestly — two independent reasons.**
+  1. **No qualifying state family exists in the cell catalog.** The family
+     qualification in the requirement is load-bearing, not decoration: comparing
+     a walk's opening and closing stamps detects *tag gains, and only tag gains*.
+     Every tag-frontier-carrying family in the standard library is an
+     observed-remove set, whose retraction copies the add-tags it already holds
+     into its del-map and mints nothing — so a mid-walk retraction of an element
+     the walk has already paged leaves both stamps equal while the union still
+     names that element present. For those families equal stamps are *necessary
+     but not sufficient*, and the shipped primitive says so on its own read
+     (`kernel/src/main/kotlin/civictech/cell/BoundedRead.kt`, `StatePage`'s
+     stability contract). A scenario over `set-source` therefore could not make
+     the requirement's antecedent true; it would read as covered while asserting
+     something the requirement does not claim. The derived (operator) families
+     are further away, not closer: their frontier is not even monotone, so a
+     retraction can *lower* the stamp.
+  2. **The script model cannot interleave a mutation with a walk.** A
+     `read-state` step is a *whole walk* by construction (the harness loops the
+     driver until the cursor terminates), and steps on one cell apply in file
+     order, so there is no way to order an `apply` against a page boundary. Even
+     for a qualifying family, the only instance a scenario could build is the
+     quiescent one — where the antecedent is trivially satisfied and the
+     consequent is exactly what `24-BOUND-02` already asserts, at every limit.
+- **What was NOT done instead** (this is the point of the filing): no
+  `21-PULL-03.yaml` was authored over `set-source` at quiescence. Such a
+  scenario would pass, and would appear as `covered` in `CONCORDANCE.md`, while
+  asserting only the requirement's trivial instance and nothing about the
+  mid-walk case the requirement exists for. The requirement text was likewise
+  not softened to drop its family qualification — that qualification is what
+  makes it true.
+- **What is not lost.** The property is pinned implementation-side by
+  `V1C-KERNEL`'s own kernel tests (`BoundedReadWaveNeutralityTest` and the
+  bounded-read suite around it). What this filing forgoes is the
+  *cross-implementation* obligation: a second, non-kernel binding would not be
+  held to it by the corpus.
+- **Resolves**: either (a) a state family whose retraction mints or absorbs a
+  tag (the research item the shipped `StatePage` contract names — an OR-set
+  variant whose observed-remove moves the frontier), bound as a catalog cell,
+  **and** (b) a way for a scenario to order an operation against a page boundary
+  — e.g. a paged form of the step (`{type: read-page, on: s, limit: N, as: w}`
+  plus a `resume` step) that the current whole-walk form deliberately does not
+  provide. (a) alone would still leave only the quiescent instance reachable.
+  With both, author `21-PULL-03.yaml`: walk, mutate mid-walk, resume to
+  completion, and assert stamps-equal ⟹ union-equals-snapshot over a family for
+  which that implication actually holds.

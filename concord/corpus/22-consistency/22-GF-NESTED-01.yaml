@@ -7,6 +7,11 @@
 # NAMED cell's own single outlet, and `ScalarSumCombineCell` already emits a
 # torn per-arm `CounterDelta` before any wrapper sees it. Genuine kernel gap
 # (no wave-coalescing scalar combine); not fakeable, stays reported.
+# SUPERSEDED (B2): that kernel gap is closed — `CoalescingCombineCell` (D-COMBINE)
+# is a wave-coalescing scalar combine, bound behind `glitch-free: true`, and
+# `24-OP-COMBINE-02` asserts the scalar case positively. The R2-A finding above
+# is kept as the record of why THIS scenario is modeled over SET semantics; it is
+# no longer a statement about a missing kernel capability.
 #
 # Re-modeled as a SET double diamond over `quorum-set` (`QuorumSetCell`), the
 # same real kernel glitch-free fan-in `22-WAVE-FANIN-01`/`22-GF-DIAMOND-01`

@@ -90,12 +90,38 @@ internal enum class Heat {
     val isCold: Boolean get() = this == SUSPENDED || this == DRAINED
 
     /**
-     * May a content search read this cell's state right now? Only [HOT]: every
-     * other value is a cell that would either refuse the read or answer a torn
-     * or stale one, and reading it would also be exactly the touching the cold
-     * screen promises not to do.
+     * May a content search read this cell's state right now?
+     *
+     * **V1C-BE widened this from [HOT] alone.** The old reason — every other
+     * value "would either refuse the read or answer a torn or stale one" — is
+     * now false for two of the four, because `ManagedHost.readState`
+     * (V1C-KERNEL Decision 7) *decided* those cases instead of leaving the
+     * instrument to guess:
+     *
+     * - [SUSPENDED] is answered **from the live cell**, with
+     *   `Provenance.LIVE_SUSPENDED`. Only the cell's data intake is parked
+     *   (`ManagedHost.isSuspended`); the read is submitted at priority 0 on a
+     *   host scheduler that is still running, and a suspended fold is quiescent
+     *   by construction — the *most* stable thing in the graph to read, not a
+     *   degraded one. Reading it resumes nothing and raises no attention.
+     * - [DRAINED] is answered from the checkpoint blob the host already holds
+     *   from its drain, with `Provenance.CHECKPOINT` and **no cell-thread task
+     *   at all**. State as of the drain, labelled as such on the wire.
+     * - [HELD] is still not readable, and the old reason still holds for it in
+     *   full: the authoritative instance is the migration target's, and a stale
+     *   local read would be a lie with a timestamp on it. The kernel answers
+     *   `Reason.MIGRATING` rather than a value.
+     * - [UNHOSTED] has nothing local to read; a wave-neutral read crosses no
+     *   bridge (see [DataSearch]).
+     *
+     * [isCold] deliberately does **not** move with this. Cold still means
+     * "parked, and the inspector may offer to end it" — it drives the cold
+     * screen and the wake button, and waking is still the only causal act in the
+     * inspector. This is the divergence the class doc above anticipated when it
+     * said `isReadable` and `isCold` are two different questions; V1C-BE is
+     * where that sentence became true rather than aspirational.
      */
-    val isReadable: Boolean get() = this == HOT
+    val isReadable: Boolean get() = this == HOT || this == SUSPENDED || this == DRAINED
 
     companion object {
         /**

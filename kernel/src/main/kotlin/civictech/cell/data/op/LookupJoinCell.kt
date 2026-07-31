@@ -1,13 +1,17 @@
 package civictech.cell.data.op
 
+import civictech.cell.BoundedStateful
 import civictech.cell.CellRef
 import civictech.cell.Propagate
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.Stateful
 import civictech.cell.port.Serve
 import civictech.cell.port.Subscribe
 import civictech.gen.wire.CellBase
 import java.io.Serializable
 import java.util.*
+import civictech.cell.control.absorbAck
 import civictech.cell.data.delta.MapDelta
 import civictech.cell.data.view.MapDiffPublisher
 
@@ -43,7 +47,14 @@ interface LookupJoinApi<K, V, J, D, R> {
  * [MapDiffPublisher] (RS-5.4: adopted here since it was a byte-for-byte copy of
  * that helper's `publish`/`catchUpDelta`) — the catch-up DELIVERY mechanism
  * stays the original per-link `onLinked` unicast, only its delta content now
- * comes from the publisher.
+ * comes from the publisher. A wave whose recompute leaves **every** touched
+ * fact unchanged — the commonest case being a dimension delta that no live fact
+ * references, or one whose new value `combine` ignores — emits nothing at all
+ * and therefore **absorb-acks** it (`cell.control.absorbAck`, CP-A3, via
+ * [emitOrAbsorb]) so a downstream glitch-free join's per-source watermark still
+ * advances past the wave this cell silently swallowed (spec 20/22 §Completeness
+ * over silent or stuck edges; the second, unflagged half of 96 §E2.2's
+ * value-equal-swallow residual, closed).
  *
  * Single writer of its output stream, like [GroupByCell] / [CombineLatestCell]:
  * the enriched map is a deterministic function of the two convergent inputs, so
@@ -56,7 +67,9 @@ class LookupJoinCell<K, V, J, D, R>(
     ref: CellRef = CellRef(UUID.randomUUID()),
     private val fk: (K) -> J,
     private val combine: (K, V, D?) -> R?,
-) : LookupJoinCellBase<K, V, J, D, R>(ref), Stateful {
+    // BoundedStateful extends Stateful (V1C-KERNEL/V1C-OPS): the paged read is
+    // added beside the drain/migration/promotion/durability seam, untouched.
+) : LookupJoinCellBase<K, V, J, D, R>(ref), Stateful, BoundedStateful {
     private val facts = mutableMapOf<K, V>()
     private val dims = mutableMapOf<J, D>()
     private val byDim = mutableMapOf<J, MutableSet<K>>() // reverse index J -> facts referencing it
@@ -113,8 +126,23 @@ class LookupJoinCell<K, V, J, D, R>(
         return combine(k, v, dims[fk(k)])
     }
 
+    /**
+     * Effective-only emit, or absorb-ack the wave this cell swallowed (CP-A3,
+     * spec 20/22 §Completeness over silent or stuck edges): a value-equal
+     * recompute — or an empty `touched` set, the dimension delta that no live
+     * fact references — leaves the publisher with nothing to emit, and without
+     * the ack a downstream glitch-free join could only settle this arm from a
+     * *later* real change. [civictech.cell.control.absorbAck] itself skips
+     * baseline and spontaneous (context-free) emissions, so the per-link
+     * `onLinked` catch-up unicast above needs no special-casing.
+     */
     private fun emitChanges(touched: Set<K>) {
-        publisher.publish(touched, ::recompute)?.let { outlet.call.propagate(it) }
+        val delta = publisher.publish(touched, ::recompute)
+        emitOrAbsorb(
+            delta == null,
+            emit = { outlet.call.propagate(delta!!) },
+            absorbAck = { outlet.absorbAck() },
+        )
     }
 
     override fun snapshot(): Serializable = arrayListOf(HashMap(facts), HashMap(dims))
@@ -132,4 +160,35 @@ class LookupJoinCell<K, V, J, D, R>(
         facts.keys.forEach { k -> recompute(k)?.let { rebuilt[k] = it } }
         publisher.reset(rebuilt)
     }
+
+    /**
+     * One page of this lookup join's two inputs (V1C-OPS).
+     *
+     * | ordinal | sub-state | key | value |
+     * |---|---|---|---|
+     * | 0 | `"facts"` | `K` | `V` |
+     * | 1 | `"dims"` | `J` | `D` |
+     *
+     * Same order as [snapshot]'s `arrayListOf(facts, dims)`. The two key spaces
+     * are **different types** here, which is precisely why one cursor has to
+     * order *across* them rather than within one: the cursor is lexicographic
+     * `(subStateOrdinal, key)` over the two frozen key sequences, so a resume
+     * that exhausts `"facts"` continues at the head of `"dims"`
+     * ([OperatorPaging], Decision B). It is also why a page is only meaningful
+     * with the label: a `K` and a `J` can be the same runtime value.
+     *
+     * **Neither the reverse index nor the enriched output is paged.** `byDim`
+     * and `publisher` are rebuilt from the restored inputs by [restore] and are
+     * not in [snapshot], so Decision E keeps them out: a bounded read of a
+     * `LookupJoinCell` shows the **fact and dimension inputs**, not the enriched
+     * output map.
+     *
+     * [StatePage.frontier] is null — `MapDelta` is untagged (G-23) — so the
+     * across-page stability check and the `since` escalation path are
+     * unavailable and [supportsSince] stays `false`. No `[24-OP-*]` requirement
+     * id covers this cell; the contract preserved is its own KDoc, and this
+     * method only reads.
+     */
+    override fun readBounded(request: StateRead): StatePage =
+        pageOver(request, listOf(mapSubState("facts", facts), mapSubState("dims", dims)))
 }

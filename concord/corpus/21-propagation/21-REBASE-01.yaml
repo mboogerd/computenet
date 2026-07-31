@@ -1,0 +1,62 @@
+# Concord corpus scenario (D-C12). Canonical schema shape — see concord/schema/scenario.md.
+#
+# No `no-dead-letters` check, deliberately. A restart is a failure event, and
+# spec 30/31 rule 5 requires the failure to be reported observably under EVERY
+# supervision policy ("observability is not a policy"), so the one invocation
+# that triggers this restart is reported as a dead letter BY DESIGN. Asserting
+# zero dead letters here would assert the opposite of what the specification
+# requires; asserting "exactly one" is not in the check vocabulary, and growing
+# the vocabulary to say it would be a schema change this scenario does not need.
+# The reconciliation itself is what `21-REBASE-01` is about, and it is asserted
+# positively below — `views-converge` (against the delta-only twin) plus a
+# `final-view` golden so the convergence cannot be satisfied by two empty folds.
+id: 21-REBASE-01
+title: A restarted source reconciles its downstream fold with a delta-only twin
+covers: [21-REBASE-01]
+profile: core
+kind: example
+narrative:
+  given: >-
+    two identical pipelines — a tagged source into a convergent merge into a set view —
+    where the first source has already contributed adds that reached its view, and the
+    second (the twin) has contributed nothing
+  when: >-
+    the first source is restarted mid-stream, reverting to a checkpoint that holds none of
+    those adds, and both sources then add the same two elements
+  then: >-
+    the restarted source's view converges to the twin's — the un-reasserted pre-restart
+    adds are retracted downstream rather than surviving as a divergence, so the fold that
+    lived through the restart is indistinguishable from one that only ever saw the
+    effective deltas
+graph:
+  cells:
+    - {id: s, type: rebaseline-source}
+    - {id: u, type: union}
+    - {id: v, type: set-view}
+    - {id: t, type: rebaseline-source}
+    - {id: w, type: union}
+    - {id: x, type: set-view}
+  links:
+    - {from: s, to: u}
+    - {from: u, to: v}
+    - {from: t, to: w}
+    - {from: w, to: x}
+script:
+  # pre-restart traffic, delivered and folded downstream
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: beta}
+  - {type: quiesce}
+  # restart mid-stream: s recovers a checkpoint holding neither add, succeeds its
+  # emission epoch, and re-baselines the recovered state over the catch-up path
+  - {type: restart, on: s}
+  - {type: quiesce}
+  # post-restart traffic on both arms — the twin's only traffic, so its fold is the
+  # delta-only reference the restarted arm must converge to
+  - {type: apply, on: s, op: add, value: gamma}
+  - {type: apply, on: s, op: add, value: delta}
+  - {type: apply, on: t, op: add, value: gamma}
+  - {type: apply, on: t, op: add, value: delta}
+  - {type: quiesce}
+checks:
+  - {type: views-converge, views: [v, x]}
+  - {type: final-view, view: v, equals: [delta, gamma]}

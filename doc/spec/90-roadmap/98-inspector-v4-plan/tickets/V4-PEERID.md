@@ -1,6 +1,6 @@
 # V4-PEERID — a peer's chosen name reaches the registry, so its hull keeps one identity across a reconnect
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 9 · **Branches:** `ticket/v4-peerid`
@@ -298,7 +298,7 @@ discover:
   not plumbing. Not this ticket.
 - **Authentication.** See above: this ticket makes an existing claim *visible*,
   not *trustworthy*.
-- **`concord/**`** (binding constraint 7), `kernel/.../host/BoundedRead.kt`,
+- **`concord/**`** (binding constraint 7), `kernel/.../cell/BoundedRead.kt`,
   `ManagedHost.readState`, and everything the V1C chain owns:
   `cell/data/{MapCell,KeyedSetCell,ListCell,Watermark}.kt`,
   `cell/replication/InstanceSet.kt`, `cell/partition/ShardCell.kt` (V1C-CELLS,

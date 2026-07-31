@@ -1,6 +1,6 @@
 # V1C-BE — the inspector stops copying whole cells: a paged state endpoint, a bounded data search, and cold cells that answer instead of lying
 
-**Status**: Specified — not-started
+**Status**: Implemented — merged
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 10 · **Branches:** `ticket/v1c-be`
@@ -30,26 +30,100 @@ before you:
 - **`V1C-CELLS`** and **`V1C-OPS`** (wave 9) implemented `BoundedStateful`
   across the data-cell and operator families.
 
-The sketch `V1C-KERNEL` was written against, restated here so you know what to
-look for (**verify each against the merged code before you use it**):
+The **shipped** interface, transcribed from `kernel/src/main/kotlin/civictech/cell/BoundedRead.kt`
+at merge `4f633d2` by the C8 checkpoint. This replaces the sketch this ticket
+was originally written against; the four differences that change your work are
+called out under "What C8 corrected" below. Read `BoundedRead.kt`'s KDoc in
+full anyway — the contract sentences you put on the wire are written there.
 
 ```kotlin
-interface BoundedStateful : Stateful { fun readBounded(request: StateRead): StatePage }
+interface BoundedStateful : Stateful {
+    fun readBounded(request: StateRead): StatePage        // bare page; the result arms are the host's
+    val supportsSince: Boolean get() = false              // constant for the cell's lifetime
+    val supportsScope: Boolean get() = false
+}
 
 data class StateRead(
     val cursor: Cursor? = null, val limit: Int = 200, val byteBudget: Int = 50_000,
     val scope: Interest? = null, val since: TagFrontier? = null, val allowWholeCopy: Boolean = false,
 )
 data class StatePage(
-    val entries: List<Serializable>, val next: Cursor?, val frontier: TagFrontier?,
-    val provenance: Provenance, val exclusivesElided: Int,
+    val entries: List<Serializable>,                      // may contain ExclusiveEntry descriptors
+    val next: Cursor? = null,
+    val frontier: TagFrontier? = null,
+    val provenance: Provenance = Provenance.LIVE,
+    val exclusivesElided: Int = 0,
+    val attributes: Map<String, Serializable> = emptyMap(),
+    val caveats: Set<ReadCaveat> = emptySet(),
 )
 @JvmInline value class Cursor(val token: Serializable)
 enum class Provenance { LIVE, LIVE_SUSPENDED, CHECKPOINT }
-// StateReadResult = Page(StatePage) | Unbounded(Serializable) | Unavailable(Reason)
+enum class ReadCaveat { STALE_FRONTIER, POSITIONAL_CURSOR }
+data class ExclusiveEntry(
+    val key: Serializable?, val typeName: String, val identity: Int, val disposition: Disposition,
+) : Serializable { enum class Disposition { HELD, DISCHARGED, UNKNOWN } }
+
+sealed interface StateReadResult {
+    data class Page(val page: StatePage) : StateReadResult
+    data class Unbounded(val state: Serializable, val provenance: Provenance = Provenance.LIVE) : StateReadResult
+    data class Unavailable(val reason: Reason) : StateReadResult
+    enum class Reason {
+        NOT_HOSTED, NOT_STATEFUL, NOT_BOUNDED, CHECKPOINT_NOT_BOUNDED, MIGRATING,
+        SINCE_UNSUPPORTED, SCOPE_UNSUPPORTED, SCHEDULER_TERMINATED, READ_FAILED,
+    }
+}
 
 fun ManagedHost.readState(ref: CellRef, request: StateRead): CompletableFuture<StateReadResult>
 ```
+
+### What C8 corrected in this ticket
+
+Four shipped facts differ from the sketch above the way this ticket was
+originally written, and one of them changes a semantic you were told to put on
+the wire. Treat these as ticket text, not as background.
+
+1. **`walkStable` cannot be computed by comparing every page against page 1.**
+   The shipped `SetCell` stamps `frontier` **exactly on the first and last page
+   of a walk only**; an intermediate page carries the *opening* frontier and
+   declares `ReadCaveat.STALE_FRONTIER`. A per-page equality test would
+   therefore report `true` on every intermediate page of a walk whose fold had
+   already moved, and only flip to `false` on the closing page — the opposite of
+   an honest verdict. **Compute `walkStable` as: `null` while any page so far
+   carried `STALE_FRONTIER` and the walk has not closed; `true` when the closing
+   page's frontier equals page 1's; `false` when it does not.** A `TagFrontier`
+   is monotone, so equal endpoints prove every intermediate stamp equal too —
+   the verdict is complete, it is just not available before the walk closes. Say
+   so in the field's own wire comment, and do not weaken the `false` case: an
+   advanced frontier is still the documented smear.
+2. **`walkStable: true` is necessary, not sufficient, for the OR-set family.**
+   `StatePage`'s KDoc now says the check detects tag *gains* and only tag gains.
+   An OR-set observed-remove mints no tag, so a mid-walk removal of an
+   already-paged element leaves both endpoint stamps equal while the union still
+   names that element present. Your wire comment for `true` must not promise
+   more than the kernel does — "no tag was gained during this walk", not "this
+   is certainly a snapshot".
+3. **`StatePage.attributes` exists**, and carries cell-level state that is not a
+   per-entry row and rides *every* page — `SetCell`'s tag `counter`, and (from
+   `V1C-CELLS`) `ShardCell`'s `interest`/`assignedEpoch`. Decide and state
+   whether `page` surfaces it or drops it; dropping it silently is not an
+   option, because a client reading page 4 of a shard walk would then be unable
+   to tell whether the walk straddled a repartition.
+4. **`Reason` has nine arms, not the four this ticket assumed.** Your
+   `unreadable` vocabulary must map `SCHEDULER_TERMINATED` and `READ_FAILED`
+   explicitly rather than letting them fall through to `"unknown"` — both are
+   real, reachable answers about a live local host, which is exactly what
+   `"unknown"` was reserved *not* to mean. `NOT_BOUNDED`,
+   `CHECKPOINT_NOT_BOUNDED`, `SINCE_UNSUPPORTED` and `SCOPE_UNSUPPORTED` are
+   unreachable for you as long as you pass `allowWholeCopy = true` and neither
+   `since` nor `scope`; say that in the report rather than mapping them blind.
+
+Two smaller confirmations, so you do not have to derive them: Decision 7's
+drained arm shipped as **`Unbounded(blob, Provenance.CHECKPOINT)`** under
+`allowWholeCopy` (so a drained cell answers `kind: "snapshot"`, never
+`kind: "page"`, and the acceptance criterion at the end of this ticket resolves
+to the `"snapshot"` branch); and **`provenance` is minted by the host, not the
+cell** — `readState` overwrites a cell's `LIVE` with `LIVE_SUSPENDED` when the
+ref is parked, and the cell never sees `CHECKPOINT` at all.
 
 `readState` is modelled line-for-line on `ManagedHost.snapshotOf`
 (`kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt:1201-1263`,
@@ -368,23 +442,63 @@ evolution only (unknown fields ignored by the client)").
                                    // and never a copy of the payload (spec 23 §Ownership; V1C-KERNEL
                                    // Decision 3), so > 0 means this page is deliberately incomplete in a way
                                    // no further page will ever fill in. Render it: it is a fact about the
-                                   // data, not a diagnostic about the read.
-    "walkStable": true | false | null
+                                   // data, not a diagnostic about the read. A descriptor encodes as an
+                                   // ordinary record — {key, typeName, identity, disposition}, where
+                                   // typeName is "civictech.cell.Owned"/"civictech.cell.Leased" and
+                                   // disposition is "HELD" | "DISCHARGED" | "UNKNOWN". Never a payload.
+    "walkStable": true | false | null,
                                    // The ONLY consistency claim a paged read makes, and it is VERIFIED
-                                   // server-side rather than promised (V1C-KERNEL Decision 5):
-                                   //   true  — every page of this walk so far carried the same tag frontier,
-                                   //           so the union of the pages fetched so far is exactly a snapshot
-                                   //           of that fold. Always true on page 1.
-                                   //   false — the fold changed mid-walk. The union is a SMEARED read: it
-                                   //           contains every entry present for the whole walk, may contain
-                                   //           entries added mid-walk, and may miss entries removed mid-walk
-                                   //           after being passed over. It is never torn at entry granularity
-                                   //           and never returns an entry twice.
-                                   //   null  — the cell reports no tag frontier, so neither claim can be
-                                   //           checked. Render it as neither; it is not a "false".
+                                   // server-side rather than promised (V1C-KERNEL Decision 5): the walk's
+                                   // CLOSING tag frontier compared against its OPENING one.
+                                   //   false — PROOF the fold changed mid-walk, and the strongest thing this
+                                   //           field ever says. The union is a SMEARED read: it contains
+                                   //           every entry present for the whole walk, may contain entries
+                                   //           added mid-walk, and may miss entries removed mid-walk after
+                                   //           being passed over. It is never torn at entry granularity and
+                                   //           never returns an entry twice. Latches: once a walk is known to
+                                   //           have smeared, no later page un-knows it.
+                                   //   true  — the closing stamp equalled the opening one. NECESSARY, NOT
+                                   //           SUFFICIENT for "the union is a snapshot", and how far short it
+                                   //           falls depends on the cell family. A TagFrontier measures tag
+                                   //           GAINS and only tag gains, so an observed-remove (which mints
+                                   //           no tag) is invisible to it everywhere; and in the
+                                   //           NON-RETAINING families — every cell under
+                                   //           civictech.cell.data.op, plus ShardCell — the stamp can also
+                                   //           FALL, so a mid-walk gain can be masked by a mid-walk loss and
+                                   //           equality excludes nothing at all. Render "true" as "not
+                                   //           observed to change", NEVER as "this is a snapshot". True on
+                                   //           page 1, which compares the opening stamp with itself.
+                                   //   null  — not determined. Either the walk has not closed and this page
+                                   //           carries only the opening stamp (see "caveats":
+                                   //           "staleFrontier"), or the cell reports no tag frontier at all
+                                   //           (MapCell, ListCell, Watermark, InstanceSet). Render it as
+                                   //           neither; it is not a "false".
+    "caveats": ["staleFrontier"],  // the KERNEL's own declared weakenings for this walk (StatePage.caveats),
+                                   // forwarded rather than inferred and accumulated across the walk, so a
+                                   // client joining at page 4 still learns them. Two values today:
+                                   //   "staleFrontier"    — this page carries the walk's opening frontier
+                                   //                        rather than the fold's frontier now; the first
+                                   //                        and last page of a walk always carry an exact
+                                   //                        one. This is why "walkStable" is null in between.
+                                   //   "positionalCursor" — the cursor is positional, not key-based (the
+                                   //                        documented exception for a family with no element
+                                   //                        identity — ListCell). "No entry twice in one
+                                   //                        walk" and "every surviving entry appears" both
+                                   //                        weaken to best-effort for this walk.
+                                   // Unknown values must be ignored, not rejected.
+    "attributes": { "counter": 412 }
+                                   // cell-level state that is not a per-entry row and rides EVERY page —
+                                   // SetCell's/KeyedSetCell's tag "counter", ShardCell's "interest" and
+                                   // "assignedEpoch", the operator family's "mintCounter" and "lanes". Each
+                                   // value is an encoded contract Value, exactly like "value". Surfaced
+                                   // rather than dropped because a client reading page 4 of a shard walk
+                                   // would otherwise be unable to tell whether the walk straddled a
+                                   // repartition. `{}` when the cell has none. Keys are per-family; a client
+                                   // renders what it recognises and ignores the rest.
   } | null,
 
-  "unreadable": "migrating" | "remote" | "notStateful" | "unanswered" | "unknown" | null
+  "unreadable": "migrating" | "remote" | "notStateful" | "unanswered" | "terminated" | "readFailed"
+              | "unknown" | null
                                    // present iff kind == "unavailable" — WHY there is nothing to report.
                                    //   "migrating"   — held for a repartition flip, or already migrated. The
                                    //                   authoritative instance is another host's; a stale
@@ -396,10 +510,48 @@ evolution only (unknown fields ignored by the client)").
                                    //   "notStateful" — the cell holds no readable state at all.
                                    //   "unanswered"  — the read did not land inside the server's bounded
                                    //                   wait. Nothing was read; a retry may succeed.
+                                   //   "terminated"  — the host's scheduler is gone. A dead host has no state
+                                   //                   to read, and a retry will not help.
+                                   //   "readFailed"  — the cell's own readBounded()/snapshot() threw. A broken
+                                   //                   cell, not a broken read.
                                    //   "unknown"     — a kernel Unavailable reason this server build does not
                                    //                   map. Forward-compatibility, never a guess.
+                                   // "terminated" and "readFailed" are mapped explicitly rather than folded
+                                   // into "unknown" (C8 correction 4): both are real, reachable answers about
+                                   // a live local host, which is exactly what "unknown" is reserved NOT to
+                                   // mean. A client that does not recognise a value renders it as a plain
+                                   // "unavailable" rather than failing.
 }
 ```
+
+**What a page's `value` actually contains** — `V1C-FE` needs this, and it is not
+what a `kind: "snapshot"` value contains for the same cell. A page's `value` is
+the encoding of the **kernel's own page entries**, not of the interpreted state
+`ValueEncoder.normalize` produces for a whole snapshot. For the OR-set family
+that means a `$table` whose columns are `element | addTags | delTags` (a
+`SetCell.SetStateEntry`), where an element is a member iff it holds an add-tag
+with no matching del-tag; for the composite operator family it means
+`subState | element | tags | lane` and friends (`civictech.cell.data.op`'s
+`TaggedEntry`/`KeyedEntry`/`GroupEntry`, always carrying the sub-state label);
+for `MapCell` it is `key | value`. The encoder's existing `$table` / `$opaque` /
+`$truncated` shapes are unchanged, so `ValueView` needs no new shape — but a
+paged big-cell view is showing **stored** state where the snapshot view showed
+**interpreted** state, and the two do not render identically. See the completion
+report: interpreting page entries inspector-side was deliberately not done, and
+is flagged for the replan rather than papered over in `normalize`.
+
+**Deviations from this block's first draft**, all additive, all listed here
+because `V1C-FE` coded against the draft in parallel:
+
+1. `page.caveats` and `page.attributes` are **new fields**. A client that ignores
+   them decodes unchanged.
+2. `page.walkStable`'s `true` arm was **weakened**: the draft said the union "is
+   exactly a snapshot of that fold", which the kernel does not promise (C8
+   correction 2, and `V1C-OPS` found a strictly weaker position again for the
+   operator family). No shape change; a client must not *render* `true` as
+   "snapshot".
+3. `unreadable` gained `"terminated"` and `"readFailed"` (C8 correction 4). A
+   client that does not recognise them renders a plain `unavailable`.
 
 **Endpoint row to propose** (`20-api-contract.md` §Endpoints, the
 `GET /api/inspect/cell/{ref}/state` row):

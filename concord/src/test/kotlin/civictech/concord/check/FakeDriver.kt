@@ -9,6 +9,9 @@ import civictech.concord.driver.HostId
 import civictech.concord.driver.LinkRef
 import civictech.concord.driver.LinkResult
 import civictech.concord.driver.QuiesceReport
+import civictech.concord.driver.ReadCursor
+import civictech.concord.driver.ReadPage
+import civictech.concord.driver.WavePlane
 import civictech.concord.schema.Scenario
 import civictech.concord.value.Value
 
@@ -33,12 +36,30 @@ class FakeDriver(
     override fun readView(cellId: CellId): Value =
         views[cellId] ?: error("FakeDriver: no view fixture for '$cellId'")
     override fun observationLog(cellId: CellId): List<Value> = observations[cellId].orEmpty()
+    // A bounded read is an *event* the runner performs and records into
+    // CheckContext.reads; a check never calls these back. The fixtures the two
+    // read-side checks consume are ReadWalk values handed to FakeContext
+    // directly, so these stay inert (and loud, so a check that started calling
+    // them would be caught rather than silently fed an empty page).
+    override fun readState(cellId: CellId, cursor: ReadCursor?, limit: Int): ReadPage =
+        error("FakeDriver: read-state is performed by the runner, not by a check")
+    override fun wavePlane(cellId: CellId): WavePlane =
+        error("FakeDriver: the wave plane is sampled by the runner around a read, not by a check")
     override fun snapshot(cellId: CellId): Blob = ByteArray(0)
     override fun restore(hostId: HostId, cellId: CellId, blob: Blob) {}
+    override fun restart(cellId: CellId) {}
     override fun despawn(cellId: CellId) {}
     override fun deadLetters(): List<DeadLetter> = deadLetters
     override fun effectLog(cellId: CellId): List<Effect> = effects[cellId].orEmpty()
 }
 
-/** Trivial [CheckContext] pairing a [FakeDriver] with the [Scenario] under test. */
-class FakeContext(override val driver: Driver, override val scenario: Scenario) : CheckContext
+/**
+ * Trivial [CheckContext] pairing a [FakeDriver] with the [Scenario] under test,
+ * plus any [ReadWalk] fixtures the read-side checks consume (default: none, so
+ * every pre-V1C-CONCORD test is unaffected).
+ */
+class FakeContext(
+    override val driver: Driver,
+    override val scenario: Scenario,
+    override val reads: List<ReadWalk> = emptyList(),
+) : CheckContext

@@ -21,7 +21,7 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 | `GET /api/inspect/topology` | M0 | `TopologySnapshot` |
 | `GET /api/inspect/events` | M0 | SSE stream of `Event` |
 | `GET /api/inspect/cell/{ref}` | M1 | `CellDetail` |
-| `GET /api/inspect/cell/{ref}/state` | M1 | `CellState` |
+| `GET /api/inspect/cell/{ref}/state?cursor=&limit=` | M1, V1C-BE | `CellState`. `cursor` (opaque, from a previous response's `page.cursor`) and `limit` (1..1000, clamped, default 200) walk a cell's state one bounded page at a time instead of copying it whole. Both are ignored for a cell with an open observation, which keeps answering `kind: "view"` from its already-materialized fold. A malformed `limit` is 400; an unknown, expired, already-consumed or wrong-cell `cursor` is 410 — drop it and restart the walk |
 | `POST /api/inspect/cell/{ref}/observe` | M1 | 204; starts state summaries for this cell. 409 if the cell has no built-in fold to observe (no delta outlet, or an outlet kind with no `View`) — a client that ignores the 409 still behaves correctly, since `GET .../state` reports `kind: "unavailable"` for that cell |
 | `DELETE /api/inspect/cell/{ref}/observe` | M1 | 204; stops them |
 | `GET /api/inspect/errors` | M2 | `ErrorSnapshot` |
@@ -53,8 +53,21 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                    // no local descriptor (color/manifests/ports all absent, typeFqn
                                    // "<unknown>") and answers CellState "unavailable" / observe 409 (M5)
   "net": "local",                 // network host / peer id. Local cells: the launcher's --net-name
-                                   // (default "local", so M0-M4 output is unchanged). Remote cells:
-                                   // a "peer-<id>" label, NOT stable across a peer reconnect (M5)
+                                   // (default "local", so M0-M4 output is unchanged). Remote cells,
+                                   // since V4-PEERID: the announcing peer's OWN --net-name when that
+                                   // peer named itself, and that value IS stable across a peer
+                                   // reconnect — the peer re-asserts it in its re-hello. A peer that
+                                   // announces anonymously still gets M5's locally derived "peer-<id>"
+                                   // label, which is NOT stable across a reconnect (a reconnect mints
+                                   // a new bridge egress). A peer name may collide with the local
+                                   // --net-name, in which case that peer renders inside the local
+                                   // hull, as claimed and not disambiguated; `host: null` above stays
+                                   // the discriminator. Either label is transport-vouched, never
+                                   // authenticated (spec 43): it says "the same connection identity
+                                   // as before", not "the same principal", and a peer that reaches
+                                   // the socket can claim any name. A client may group by it and rely
+                                   // on its continuity; it must not present it as verified, trusted
+                                   // or authenticated, nor use it as an authorization input.
   "lifecycle": "HOT" | "SUSPENDED", // SUSPENDED covers both a suspended cell and any cell on a drained
                                    // host (M5) — the vocabulary does not distinguish them; a component's
                                    // GraphList.lifecycle "cold" requires every member cell SUSPENDED
@@ -89,14 +102,153 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
   "links": { "inbound": 2, "outbound": 3, "taps": 1 }
 }
 
-// CellState (M1)
+// CellState (M1, V1C-BE)
 {
   "ref": "uuid:0",
   "frontier": { "source": "a3f2…", "counter": 412 } | null,
-  "kind": "view" | "snapshot" | "unavailable",
-  "value": /* Value (below) */,
-  "staleMs": 120
+                                   // UNCHANGED, and deliberately still null for "page"/"snapshot": this is a
+                                   // WAVE position, and only an observation's fold has one. A bounded read's
+                                   // currency is a TagFrontier — a different clock, never a wave position —
+                                   // so stamping a paged read with a wave would be exactly the lie this field
+                                   // exists to prevent. What a paged read offers instead is "page.walkStable".
+  "kind": "view" | "snapshot" | "page" | "unavailable",
+                                   // "view"        — M1, unchanged: an open observation's materialized fold.
+                                   // "snapshot"    — M1, unchanged in MEANING: one whole copy of the cell's
+                                   //                 state. Now also the answer for a cell that does not
+                                   //                 implement the kernel's BoundedStateful, and for a drained
+                                   //                 host's checkpoint blob — so it is not a legacy value.
+                                   // "page"        — V1C-BE: one bounded page of a walk. Carries "page".
+                                   // "unavailable" — M1, unchanged: nothing honest to report. Now carries
+                                   //                 "unreadable", which says WHICH nothing.
+  "value": /* Value (below) — but see "What a page's value contains" after this block */,
+  "staleMs": 120,                  // UNCHANGED: ms since the reported value last effectively changed, which
+                                   // only a "view" can know. 0 for "page"/"snapshot" — a read is as fresh as
+                                   // the instant it was taken, a different claim, not a better number.
+
+  "provenance": "live" | "liveSuspended" | "checkpoint" | null,
+                                   // WHERE THE BYTES CAME FROM. Non-null exactly when "kind" is "page" or
+                                   // "snapshot"; null for "view" (a fold in the inspector's own heap is
+                                   // neither a live cell read nor a checkpoint) and for "unavailable".
+                                   //   "live"          — read from the running cell on its own execution context.
+                                   //   "liveSuspended" — read from a SUSPENDED cell's own fold. Quiescent by
+                                   //                     construction, so this is the most stable read in the
+                                   //                     graph, not a degraded one. Reading it resumed nothing,
+                                   //                     woke nothing and raised no attention.
+                                   //   "checkpoint"    — read from the blob a DRAINED host already retains from
+                                   //                     its drain. State as of the drain, not as of now, and no
+                                   //                     cell thread was scheduled to produce it. The one
+                                   //                     provenance that is stale by construction; clients MUST
+                                   //                     label it.
+
+  "page": {                        // present iff kind == "page"; null otherwise — a whole "snapshot" has no page
+                                   // contract, and its absence is how a client knows no bounded read was available
+    "cursor": "p-7f3a…" | null,    // OPAQUE. Echo it back verbatim as ?cursor= to fetch the next page; null means
+                                   // the walk is complete. Never parse it, never construct one, never reuse one:
+                                   // each response mints a fresh cursor and RETIRES the one that produced it, so a
+                                   // re-sent cursor is a visible 410 rather than an invisible skipped page. A
+                                   // stale, unknown, expired (60 s TTL) or wrong-cell cursor answers 410 — a client
+                                   // that gets one drops it and restarts the walk from page 1.
+    "limit": 200,                  // the limit actually applied; the server clamps ?limit= to 1..1000, so this is
+                                   // how a client learns its request was reduced.
+    "entries": 200,                // entries in THIS page, as the cell counted them before encoding — what the
+                                   // cursor advanced past, and exactly the number of top-level rows "value"
+                                   // renders. The server never serves a page whose entries the encoder's byte
+                                   // budget cut; it re-reads a smaller page instead. So a "$truncated" marker
+                                   // inside "value" means one VALUE was abbreviated, never that entries went
+                                   // missing. "page.cursor" is the one and only signal that more state exists.
+    "exclusivesElided": 0,         // entries whose value is an Owned/Leased payload. The kernel pages a presence
+                                   // descriptor and never a copy of the payload (spec 23 §Ownership), so > 0 means
+                                   // this page is deliberately incomplete in a way no further page will ever fill
+                                   // in. Render it: a fact about the data, not a diagnostic about the read. A
+                                   // descriptor encodes as an ordinary record — {key, typeName, identity,
+                                   // disposition} — where typeName is "civictech.cell.Owned"/"civictech.cell.Leased"
+                                   // and disposition is "HELD" | "DISCHARGED" | "UNKNOWN". Never a payload.
+    "walkStable": true | false | null,
+                                   // The ONLY consistency claim a paged read makes, VERIFIED server-side rather
+                                   // than promised: the walk's CLOSING tag frontier compared against its OPENING one.
+                                   //   false — PROOF the fold changed mid-walk, and the strongest thing this field
+                                   //           ever says. The union is a SMEARED read: it contains every entry
+                                   //           present for the whole walk, may contain entries added mid-walk, and
+                                   //           may miss entries removed mid-walk after being passed over. Never
+                                   //           torn at entry granularity, never returns an entry twice. LATCHES.
+                                   //   true  — the closing stamp equalled the opening one. NECESSARY, NOT
+                                   //           SUFFICIENT for "the union is a snapshot". A TagFrontier measures tag
+                                   //           GAINS and only tag gains, so an observed-remove (which mints no tag)
+                                   //           is invisible to it everywhere; and in the NON-RETAINING families —
+                                   //           every cell under civictech.cell.data.op, plus ShardCell — the stamp
+                                   //           can also FALL, so a mid-walk gain can be masked by a mid-walk loss
+                                   //           and equality excludes nothing at all. Render "true" as "not observed
+                                   //           to change", NEVER as "this is a snapshot". True on page 1, which
+                                   //           compares the opening stamp with itself.
+                                   //   null  — NOT DETERMINED, and this is the value an INTERMEDIATE page of a
+                                   //           multi-page walk carries: such a page holds only the opening stamp
+                                   //           (see caveats "staleFrontier"), so the verdict is not available until
+                                   //           the walk closes. Also null when the cell reports no tag frontier at
+                                   //           all (MapCell, ListCell, Watermark, InstanceSet). Render it as
+                                   //           neither; it is not a "false".
+    "caveats": ["staleFrontier"],  // the KERNEL's own declared weakenings, forwarded rather than inferred and
+                                   // ACCUMULATED across the walk, so a client joining at page 4 still learns them.
+                                   //   "staleFrontier"    — this page carries the walk's opening frontier rather
+                                   //                        than the fold's frontier now; the first and last page of
+                                   //                        a walk always carry an exact one. This is why
+                                   //                        "walkStable" is null in between.
+                                   //   "positionalCursor" — the cursor is positional, not key-based (the documented
+                                   //                        exception for a family with no element identity —
+                                   //                        ListCell). "No entry twice in one walk" and "every
+                                   //                        surviving entry appears" both weaken to best-effort.
+                                   // Unknown values must be ignored, not rejected.
+    "attributes": { "counter": 412 }
+                                   // cell-level state that is not a per-entry row and rides EVERY page — SetCell's
+                                   // and KeyedSetCell's tag "counter", ShardCell's "interest"/"assignedEpoch", the
+                                   // operator family's "mintCounter"/"lanes". Each value is an encoded Value, like
+                                   // "value". Surfaced rather than dropped because a client reading page 4 of a
+                                   // shard walk would otherwise be unable to tell whether the walk straddled a
+                                   // repartition. `{}` when the cell has none. Keys are per-family; a client renders
+                                   // what it recognises and ignores the rest.
+  } | null,
+
+  "unreadable": "migrating" | "remote" | "notStateful" | "unanswered" | "terminated" | "readFailed"
+              | "unknown" | null
+                                   // present iff kind == "unavailable" — WHY there is nothing to report.
+                                   //   "migrating"   — held for a repartition flip, or already migrated. The
+                                   //                   authoritative instance is another host's; a stale local read
+                                   //                   would be a lie with a timestamp on it.
+                                   //   "remote"      — no local host. A wave-neutral read is not an emission and so
+                                   //                   passes through no disclosure filter; it does not cross a
+                                   //                   bridge. Unchanged from M5, and deliberate.
+                                   //   "notStateful" — the cell holds no readable state at all.
+                                   //   "unanswered"  — the read did not land inside the server's bounded wait.
+                                   //                   Nothing was read; a retry may succeed.
+                                   //   "terminated"  — the host's scheduler is gone. A dead host has no state to
+                                   //                   read, and a retry will not help.
+                                   //   "readFailed"  — the cell's own readBounded()/snapshot() threw. A broken
+                                   //                   cell, not a broken read.
+                                   //   "unknown"     — a kernel reason this server build does not map.
+                                   //                   Forward-compatibility, never a guess.
+                                   // A client that does not recognise a value renders a plain "unavailable" rather
+                                   // than failing.
 }
+// All four V1C-BE additions are ADDITIVE and DEFAULTED, so an M1–V3 client decoding this shape is
+// unaffected and a client coded against this shape decodes an older server's response unchanged.
+
+// What a page's "value" contains — RULED AT C10, and NOT what a "snapshot" value contains for the
+// same cell. A page's "value" is the encoding of the KERNEL'S OWN PAGE ENTRIES, forwarded verbatim;
+// it is NOT the interpreted state ValueEncoder.normalize produces for a whole snapshot. For the
+// OR-set family that is a $table with columns element | addTags | delTags, where each tag set is
+// itself a nested $table of sourceId | counter — and where an element is a member IFF it holds an
+// add-tag with no matching del-tag. The client must apply that rule itself: there is no membership
+// column, and TOMBSTONED ELEMENTS APPEAR AS ROWS. For the composite operator family the columns are
+// subState | element | tags | lane and friends, always carrying the sub-state label; for MapCell,
+// key | value.
+//   WHY, since it is strictly less readable than the snapshot form: interpreting page entries into
+//   membership would DROP the tombstoned rows, so the rendered rows would be fewer than
+//   "page.entries" — the cursor would have advanced past entries that appear nowhere in the
+//   response, which is precisely the silent loss "page.entries == rendered rows" exists to forbid,
+//   and a page of only-tombstones would render as an empty table with a non-null cursor. Doing it
+//   correctly instead needs a per-family interpreter across every paged cell family, which is its
+//   own scope; it is filed for the replan, not papered over in normalize. Consequence to expect: a
+//   paged big-cell view shows STORED state where the snapshot view of the same cell showed
+//   INTERPRETED state, and the two do not render identically.
 
 // Value — generic JSON-ish encoding of cell state (M1-BE defines the encoder;
 // inspired by concord's neutral Value model, but independent of :concord)
@@ -110,6 +262,19 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 //   (as a sibling of "$table" on a table, or as the appended last element on a plain array).
 // A tombstoned element (e.g. a removed OR-set member) is excluded from encoded
 // state entirely, never emitted as a marked row — there is no tombstone row shape.
+// SCOPED BY V1C-BE: that sentence is about the INTERPRETED forms — "view" and
+// "snapshot", where ValueEncoder.normalize folds the kernel's tag algebra to the
+// membership it encodes. It does NOT hold for kind: "page", which forwards the
+// cell's own page entries verbatim and therefore DOES carry a tombstoned element
+// as an ordinary row (element | addTags | delTags, member iff an add-tag has no
+// matching del-tag). See "What a page's value contains" under CellState.
+// $truncated AND A CURSOR ARE DIFFERENT FACTS (V1C-BE). On a "page" response the
+// marker only ever means ONE VALUE WAS ABBREVIATED — never that entries went
+// missing: the server encodes a page under an unbounded row allowance and, if the
+// BYTE budget cut whole entries, re-reads the page at the smaller limit rather
+// than serving it short, so "page.entries" always equals the top-level rows
+// rendered. "page.cursor != null" is the one and only signal that more state
+// exists. The 200-row bound above still applies verbatim to "view"/"snapshot".
 
 // ErrorSnapshot (M2, V3-BE)
 {
@@ -199,10 +364,31 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                                             // (including zero hits or a blank query),
                                                             // null for "name"/"problems". coldSkipped
                                                             // counts skipped CELLS, not graphs (M5)
+                                                            // NARROWED BY V1C-BE: coldSkipped now counts
+                                                            // cells HELD FOR A MIGRATION FLIP AND NOTHING
+                                                            // ELSE. A suspended cell and a cell on a drained
+                                                            // host are no longer skipped — the kernel reads
+                                                            // the first from its own quiescent fold and the
+                                                            // second from the checkpoint blob its host
+                                                            // already holds, neither of which wakes anything
+                                                            // — so both are searched and counted in
+                                                            // cellsQueried. CONSEQUENCE FOR CLIENTS: the
+                                                            // remedy wording "wake their graph to include"
+                                                            // is now WRONG for every cell this counts.
+                                                            // Waking a held ref does nothing (and would at
+                                                            // best interrupt the flip); the honest remedy is
+                                                            // none — it is not the inspector's to end.
 }
 // A "data" mode hit whose "graph" is "" (empty, not null) is a closing NOTICE, not a navigable
 // result — it names what the search did not fully cover (the 50-cell cap, the 2s deadline, a
 // cell read only to its first 200 rows, cold components skipped). Render it inert. (M5)
+// V1C-BE re-cut the notice's clauses: a cell read to its bounded page reports "read only their
+// first 200 ENTRIES" (a real read limit, where M5's "200 rows" described a rendering limit while
+// implying a read one); a cell with no bounded read reports the whole-state copy it cost; a cell
+// answered from a drained host's checkpoint reports that its state is as of the drain; and the
+// held-cell clause offers no remedy. Only the cap, the deadline, an unanswered read, a refused
+// read, a partial page and a render-budget cut make a result PARTIAL — a whole copy and a
+// checkpoint read are complete coverage, reported as cost and as staleness respectively.
 // The inspector's own observation-sink cells (ObserveCell instruments it spawns on selection)
 // never appear anywhere in this API — not as a Node, an Edge, a component member, or a search
 // hit. An instrument is not a subject. (M5)

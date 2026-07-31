@@ -1,0 +1,34 @@
+# Concord corpus scenario (V1C-CONCORD). Canonical schema shape — see concord/schema/scenario.md.
+# The per-page obligations of a data cell's bounded read. The limit is small
+# enough that the walk spans several pages including a tombstoned entry, so a
+# page-boundary defect (a dropped entry, a repeated one, an unstamped page) has
+# somewhere to show.
+id: 24-BOUND-01
+title: A data cell's bounded read pages whole entries, once each, every page stamped
+covers: [24-BOUND-01]
+profile: core
+kind: example
+narrative:
+  given: a set source holding five distinct elements, one of them since retracted, with a view linked to it
+  when: an instrument walks the source's state to completion two entries at a time
+  then: every page carries a frontier stamp, all the stamps agree, no element is handed to the walk twice, and the walk's live entries are exactly the view's members
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: v, type: set-view}
+  links:
+    - {from: s, to: v}
+script:
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: beta}
+  - {type: apply, on: s, op: add, value: gamma}
+  - {type: apply, on: s, op: add, value: delta}
+  - {type: apply, on: s, op: add, value: epsilon}
+  - {type: apply, on: s, op: remove, value: alpha}
+  - {type: quiesce}
+  - {type: read-state, on: s, limit: 2}
+  - {type: quiesce}
+checks:
+  - {type: pages-equal-view, cell: s, view: v}
+  - {type: final-view, view: v, equals: [beta, delta, epsilon, gamma]}
+  - {type: no-dead-letters}

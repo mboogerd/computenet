@@ -71,6 +71,19 @@ class FixtureContractTest {
      * V2-BE report so the repo gate is run after both land rather than against
      * either in isolation.
      *
+     * `cell-state-page.json` / `cell-state-page-checkpoint.json` are V1c's pair,
+     * authored by `V1C-FE` and mapped here by `V1C-BE` on the same arrangement
+     * `activity.json` established: the first is a live paged read carrying a
+     * cursor, the second a drained host's checkpoint read, and both are
+     * [CellState] — every `cell-state-*.json` decodes as that type regardless of
+     * the value shape its name describes. Because the mapping is asserted to
+     * *equal* the directory's contents, these two entries are green only once
+     * both branches have merged; that is intended, and noted in the V1C-BE
+     * report so the repo gate is run after both land rather than against either
+     * in isolation. V1C-BE's additive `CellState.provenance` / `.page` /
+     * `.unreadable` fields all carry defaults, so every existing
+     * `cell-state-*.json` strict-decodes both before and after.
+     *
      * `error-event-wave-health.json` / `error-event-wave-health-cleared.json`
      * are V3's pair, authored by V3-FE and mapped here by V3-BE on the same
      * arrangement: both are the SSE envelope ([Event]) carrying a
@@ -93,6 +106,8 @@ class FixtureContractTest {
         "cell-state-opaque.json" to { s: String -> strict.decodeFromString<CellState>(s) },
         "cell-state-truncated.json" to { s: String -> strict.decodeFromString<CellState>(s) },
         "cell-state-unavailable.json" to { s: String -> strict.decodeFromString<CellState>(s) },
+        "cell-state-page.json" to { s: String -> strict.decodeFromString<CellState>(s) },
+        "cell-state-page-checkpoint.json" to { s: String -> strict.decodeFromString<CellState>(s) },
         "errors.json" to { s: String -> strict.decodeFromString<ErrorSnapshot>(s) },
         "error-event-dead-letter.json" to { s: String -> strict.decodeFromString<Event>(s) },
         "error-event-parked.json" to { s: String -> strict.decodeFromString<Event>(s) },

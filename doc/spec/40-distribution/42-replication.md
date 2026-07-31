@@ -66,6 +66,10 @@ Replicating a cell = running an instance of the same **logical cell**
   family (tag union) and `PnCounterCell` (per-source cumulative totals,
   pointwise-max merge). Plain `CounterCell` stays single-instance — raw
   addition double-counts echoes — remaining valid for derived per-peer views.
+  A third member is decided, unbuilt: the tagged map (`TaggedMapDelta`,
+  20/24 §Tagged maps) joins the class — merge is pointwise dot union,
+  idempotent for the same reason `SetDelta`'s is — once its cell (96
+  §E1.2-E1.3) lands.
 - **Tombstones**: multi-path delivery means a removed tag can arrive late by
   another route; `SetCell` therefore keeps del-tags (full OR-set). Tag sets
   grow monotonically; compaction is future work alongside durability (G-25).

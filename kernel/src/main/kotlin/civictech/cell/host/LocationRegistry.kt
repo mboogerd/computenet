@@ -2,6 +2,7 @@ package civictech.cell.host
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.link.PeerId
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.InvocationSink
 import civictech.cell.control.ParkQueue
@@ -27,7 +28,24 @@ class LocationRegistry {
 
     sealed interface Location
     data class Local(val host: ManagedHost) : Location
-    data class Remote(val sink: InvocationSink) : Location
+
+    /**
+     * A ref a peer announced, reachable through [sink] (in practice a bridge
+     * egress, spec 41).
+     *
+     * [peer] is the announcing connection's transport identity (V4-PEERID) —
+     * the name the peer put in its transport hello, captured by the
+     * `RegistryMirrorCell` that served the announcement. Null when the peer is
+     * anonymous, which is every peering that never names a `Peering.Side`, so
+     * omitting it is exactly the pre-V4-PEERID shape.
+     *
+     * It exists because [sink] is per-*connection*, not per-peer: a reconnect
+     * builds a new bridge egress, so anything identifying a peer by its sink
+     * renames it on every reconnect. [peer] is the peer's own claim and
+     * survives. It is **transport-vouched, not authenticated** ([PeerId]) —
+     * a stable label, never a verified principal.
+     */
+    data class Remote(val sink: InvocationSink, val peer: PeerId? = null) : Location
 
     private val locations = ConcurrentHashMap<CellRef, Location>()
     private val parked = ConcurrentHashMap<CellRef, ParkQueue<HostedPortInvocation>>()
@@ -367,9 +385,19 @@ class LocationRegistry {
         onPublish.forEach { notify(it, ref) }
     }
 
-    /** Make [ref] remote, reachable through [sink] (a bridge egress, spec 41). */
-    fun publish(ref: CellRef, sink: InvocationSink) {
-        install(ref, Remote(sink))
+    /**
+     * Make [ref] remote, reachable through [sink] (a bridge egress, spec 41).
+     *
+     * [peer] is the announcing connection's transport identity, when the
+     * caller has it (the peering path does — the mirror cell that serves an
+     * announcement is per-connection, so it knows whose announcement this is;
+     * V4-PEERID). Omitting it publishes an anonymous remote location — exactly
+     * what every caller got before this parameter existed, and what an unnamed
+     * `Peering.Side` still gets. It is recorded, never consulted by routing:
+     * [deliver] resolves through [Remote.sink] alone, as before.
+     */
+    fun publish(ref: CellRef, sink: InvocationSink, peer: PeerId? = null) {
+        install(ref, Remote(sink, peer))
         onPublish.forEach { notify(it, ref) }
     }
 

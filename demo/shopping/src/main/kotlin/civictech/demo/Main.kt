@@ -12,11 +12,13 @@ import civictech.cell.graph.lookup
 import civictech.cell.host.KeyedCells
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.PeerId
 import civictech.cell.observe.View
 import civictech.cell.host.link
 import civictech.cell.observe.observe
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
+import civictech.cell.replication.Replication
 import civictech.cell.wire.Peering
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
@@ -29,6 +31,8 @@ import java.net.URLDecoder
 import java.util.*
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.op.FilterCell
+import civictech.cell.data.op.ObservedRemoveOps
+import civictech.cell.data.op.UnionSetApi
 import civictech.cell.data.op.UnionSetCell
 import civictech.cell.data.op.IntersectSetCell
 
@@ -36,7 +40,32 @@ import civictech.cell.data.op.IntersectSetCell
 // incremental browser client is M6+ material); the *peer* transport is the
 // real M5 wire — WebSocket frames between symmetric JVMs.
 
-class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
+/**
+ * [netName] is this JVM's network-host name (`--net-name`). It is both what
+ * [startInspector] labels local cells with and — since V4-PEERID — the
+ * [PeerId] this JVM puts in its transport hello, so the *peer's* inspector can
+ * group this JVM's cells under `jvm-a`/`jvm-b` and keep that grouping across a
+ * reconnect. Null (the flag absent) means an **anonymous** peer: no name in
+ * the hello, the peer keeps deriving a `peer-<id>` label, and the inspector
+ * keeps reporting the contract's `"local"` for this JVM. Naming every unnamed
+ * peer `"local"` instead would make two anonymous peers indistinguishable.
+ *
+ * [replicate] is V4-PILOT's `--replicate` mode, **off by default**. It adds one
+ * genuine same-logical-id replica per JVM ([SHARED_ID], role-derived
+ * `instanceId`) wired through [Replication], so the two JVMs gossip a single
+ * logical cell across the real socket — a *different* distribution model from
+ * the role-distinct union counterparts above (`unionRef(name, role)` mints two
+ * different logical ids and chains them; a replica is one logical id in two
+ * places). With the flag absent nothing here is constructed and this app is
+ * byte-identical to what it was before the mode existed.
+ */
+class DemoApp(
+    port: Int = 8080,
+    private val wire: Wire? = null,
+    journalDir: java.io.File? = null,
+    private val netName: String? = null,
+    replicate: Boolean = false,
+) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
     sealed interface Wire {
         data class Listen(val wsPort: Int) : Wire
@@ -71,8 +100,36 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     private var wanted: Set<String> = emptySet()
     private var voteCount: Long = 0
 
+    /** `--replicate` only: this JVM's fold of the one shared logical cell. */
+    private var shared: Set<String> = emptySet()
+
     private val itemsUnion = UnionSetCell<String>(ref = unionRef("items", myRole))
     private val votesUnion = UnionSetCell<String>(ref = unionRef("votes", myRole))
+
+    /**
+     * V4-PILOT — the replica mesh linker, held for the process lifetime.
+     *
+     * A field, and constructed *here* rather than inside [init], because
+     * `Replication`'s constructor installs the registry `onPublish`/`onUnpublish`
+     * hooks the whole mesh is driven by (`Replication.kt:142-158`): property
+     * initializers run before the `init` block, and the `init` block is where
+     * peering is established — so every peer announcement this JVM will ever
+     * see arrives after the hooks are in place.
+     */
+    private val replication: Replication? = if (replicate) Replication(registry) else null
+
+    /**
+     * V4-PILOT — this JVM's instance of the one shared logical cell.
+     *
+     * Same [SHARED_ID] on both sides, `instanceId` derived from the peering
+     * role ([sharedInstance]) so no discovery protocol and no extra flag is
+     * needed — the same trick [startInspector] already uses to address the
+     * peer's union counterparts. `sameLogical` holds between the two; the refs
+     * differ. Spawning is [Replication.replicate]'s job (`Replication.kt:204`),
+     * so this is deliberately *not* also `manage.spawn`ed.
+     */
+    private val sharedCell: SetCell<String>? =
+        if (replicate) SetCell<String>(CellRef(SHARED_ID, sharedInstance(myRole))) else null
 
     // Per-user writers: one durable, dynamically-keyed family (M10.4). Compound
     // keys "$user:items"/"$user:votes" pack both writers into a single family so
@@ -107,6 +164,9 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     private var inspector: civictech.inspect.InspectorServer? = null
 
     val boundPort: Int get() = shell.boundPort
+
+    /** V4-PILOT: this JVM's replica instance id, or null with `--replicate` off. */
+    val sharedInstanceId: Long? get() = sharedCell?.ref?.instanceId
 
     init {
         manage.spawn(itemsUnion)
@@ -147,8 +207,32 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             synchronized(state) { wanted = it; voteCount = it.size.toLong() }; broadcast()
         }
 
+        // V4-PILOT (`--replicate`): the shared replica, wired BEFORE peering so
+        // Replication's registry hooks are already installed when the peer's
+        // first announcement lands. `replicate` spawns the cell itself, then
+        // links it to every already-known replica of SHARED_ID and mints the
+        // delivered-watermark companion that rides the same mesh — so this one
+        // call adds *two* cells to this JVM, and the peer's two show up as
+        // mirrored refs once it announces.
+        //
+        // The `manage.link` into the items union is a real ManagedHost.connect,
+        // so it lands in the topology index and the replica belongs to the
+        // "shopping" component rather than floating as a singleton. Its visible
+        // consequence — shared items appear in the items list — is the point:
+        // it is what makes the pilot narratable in the UI.
+        if (replication != null && sharedCell != null) {
+            replication.replicate(sharedCell, host)
+            manage.link(sharedCell.outlet, itemsUnion.inlet)
+            host.observe(sharedCell.ref, View.set<String>()) {
+                synchronized(state) { shared = it }; broadcast()
+            }
+        }
+
         if (wire != null) {
-            val side = Peering.Side(registry, bridgeHost!!)
+            // V4-PEERID: name this side, so the peer's inspector labels our
+            // cells with our own --net-name and keeps that label across a
+            // reconnect. Unset --net-name ⇒ anonymous, exactly as before.
+            val side = Peering.Side(registry, bridgeHost!!, peer = netName?.let { PeerId(it) })
             when (wire) {
                 is Wire.Listen -> WsTransport.listen(wire.wsPort, side)
                 is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
@@ -199,6 +283,26 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             }
         }
 
+    /**
+     * The shared list's union-scoped remove (D-UNION), reached the same way
+     * the per-user writers are: a routed proxy, so the invocation is
+     * write-ahead journaled and replays deterministically after `kill -9`.
+     * Lazy because [itemsUnion] is spawned in [init].
+     */
+    private val itemsRemoveOps: ObservedRemoveOps<String> by lazy {
+        host.lookup(TypedRef<UnionSetApi<String>>(itemsUnion.ref))!!.removeInlet.call
+    }
+
+    /**
+     * V4-PILOT — the shared replica's write path, reached the same routed way
+     * every other write is ([writerFor]'s idiom): a hosted lookup, never the
+     * cell object directly, so the invocation is routed and journaled like the
+     * rest. Null (and `action=share` therefore a 400) when the mode is off.
+     */
+    private val sharedOps: SetOps<String>? by lazy {
+        sharedCell?.let { host.lookup(TypedRef<SetApi<String>>(it.ref))!!.inlet.call }
+    }
+
     private fun routedDelta(ref: CellRef): Propagate<SetDelta<String>> =
         RoutedPropagate(ref, "inlet", registry::deliver)
 
@@ -215,14 +319,30 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         val (itemOps, voteOps) = writerFor(user)
         when (params["action"]) {
             "add" -> itemOps.add(item)
-            // ponytail: remove is writer-local — it tombstones only this user's
-            // own add-tags, so an item added by another user survives until that
-            // user removes it too. This keeps the per-user writer identity that
-            // makes journal replay deterministic (M10.4). Upgrade path for
-            // shared removal: tombstone the element's currently-observed union
-            // tags across writers, not just the caller's.
-            "remove" -> itemOps.remove(item)
+            // The two removal intents this demo used to conflate (D-UNION):
+            //
+            // "remove"  — remove *the item*: a union-scoped observed remove
+            //   over the shared list. It tombstones every add-tag the merged
+            //   view currently holds for the item, whichever user minted it,
+            //   so one click retracts the item for everyone — the behavior the
+            //   UI has always offered. Only tags this JVM has already observed
+            //   are covered; a concurrent add at the peer survives by add-wins
+            //   (spec 24 [24-SET-03]), which is the intended boundary.
+            // "remove-mine" — retract *my* contribution: the writer-local op,
+            //   which tombstones only this user's own add-tags and leaves
+            //   another user's add of the same item standing.
+            //
+            // Both are routed (hence journaled) invocations, so replay stays
+            // deterministic and the per-user writer identity M10.4 depends on
+            // is untouched — the union-scoped del is minted at the union, not
+            // by borrowing another user's writer.
+            "remove" -> itemsRemoveOps.removeObserved(item)
+            "remove-mine" -> itemOps.remove(item)
             "vote" -> voteOps.add(item)
+            // V4-PILOT: a write onto the replicated cell. With `--replicate`
+            // absent [sharedOps] is null and this is a 400, the same answer the
+            // `else` branch gives — the action does not exist unless the mode does.
+            "share" -> (sharedOps ?: return exchange.respond(400, "unknown action")).add(item)
             else -> return exchange.respond(400, "unknown action")
         }
         exchange.respond(200, "ok")
@@ -237,7 +357,11 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     private fun stateJson(): String = synchronized(state) {
         fun arr(values: Set<String>) =
             values.sorted().joinToString(",", "[", "]") { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" }
-        """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount}"""
+        // V4-PILOT: the `"shared"` field exists ONLY in replicate mode, so the
+        // default payload is byte-identical to what every existing test and the
+        // browser page already parse.
+        val sharedField = if (sharedCell == null) "" else ""","shared":${arr(shared)}"""
+        """{"items":${arr(items)},"votes":${arr(votes)},"produce":${arr(produce)},"wanted":${arr(wanted)},"voteCount":$voteCount$sharedField}"""
     }
 
     /**
@@ -247,9 +371,11 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
      * beyond the single-process case is:
      *
      * - **both sides.** The peer's announced cells appear with its network
-     *   host and no process host; this JVM's cells report [netName]
-     *   (`--net-name`, e.g. `jvm-a`), so the canvas nests one dashed net hull
-     *   per JVM around the solid process hulls inside them.
+     *   host and no process host — since V4-PEERID that is the peer's *own*
+     *   `--net-name` (`jvm-b` as seen from `jvm-a`), stable across a peer
+     *   restart, rather than a locally derived `peer-<id>`; this JVM's cells
+     *   report [netName] (`--net-name`, e.g. `jvm-a`), so the canvas nests one
+     *   dashed net hull per JVM around the solid process hulls inside them.
      * - **the cross-boundary stream, as an edge.** The symmetric view chain
      *   (`itemsUnion.outlet.streamTo(routedDelta(peerItemsRef))`) is a real
      *   subscription that no kernel index records — `ManagedHost.connect`,
@@ -266,10 +392,11 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
      */
     fun startInspector(
         inspectPort: Int = civictech.inspect.InspectorServer.DEFAULT_PORT,
-        netName: String = "local",
+        netName: String = this.netName ?: "local",
     ): civictech.inspect.InspectorServer {
         val peerItems = unionRef("items", peerRole)
         val peerVotes = unionRef("votes", peerRole)
+        val peerShared = CellRef(SHARED_ID, sharedInstance(peerRole))
         val names = buildMap {
             put(itemsUnion.ref, "items")
             put(votesUnion.ref, "votes")
@@ -278,6 +405,18 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
             if (wire != null) {
                 put(peerItems, "items@$peerRole")
                 put(peerVotes, "votes@$peerRole")
+            }
+            // V4-PILOT: four names in replicate mode — the local data replica
+            // and its watermark companion, plus the peer's mirrored two. The
+            // peer's refs are deterministic (one shared logical id, role-derived
+            // instance ids), so they can be named before the peer ever connects.
+            sharedCell?.let { local ->
+                put(local.ref, "shared")
+                put(sharedWatermarkRef(local.ref.instanceId), "shared-watermark")
+                if (wire != null) {
+                    put(peerShared, "shared@$peerRole")
+                    put(sharedWatermarkRef(peerShared.instanceId), "shared-watermark@$peerRole")
+                }
             }
         }
         val hosts = buildMap {
@@ -294,6 +433,12 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
         if (wire != null) {
             started.declareLink(itemsUnion.ref, "outlet", peerItems, "inlet")
             started.declareLink(votesUnion.ref, "outlet", peerVotes, "inlet")
+            // V4-PILOT: the gossip subscription is `local.outlet.streamTo(sink)`
+            // (`Replication.kt:442`), not a `ManagedHost.connect`, so no
+            // TopologyLink records it and the inspector could never infer the
+            // mesh. Same reported-never-inferred annotation as the union chain
+            // above.
+            sharedCell?.let { started.declareLink(it.ref, "outlet", peerShared, "deltaInlet") }
         }
         return started.also { inspector = it }
     }
@@ -303,6 +448,39 @@ class DemoApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java
     fun stop() {
         inspector?.stop()
         shell.stop()
+    }
+
+    companion object {
+        /**
+         * V4-PILOT — the one deterministic logical id both JVMs mint their
+         * replica under. Derived exactly the way [unionRef] derives its refs;
+         * the *sameness* is the whole point of the pilot, since a shared
+         * logical id across a real socket is what has never been driven here.
+         */
+        val SHARED_ID: UUID = UUID.nameUUIDFromBytes("demo-replica:shared".toByteArray())
+
+        /**
+         * The replica instance id for a peering role: the listener (and a solo
+         * process) take 0, the dialer takes 1. Role-derived, so each side can
+         * name the peer's replica ref with no discovery protocol and no extra
+         * flag — and so the two instance ids are distinct, which the replication
+         * contract requires.
+         */
+        fun sharedInstance(role: String): Long = if (role == "dialer") 1L else 0L
+
+        /**
+         * The delivered-watermark companion's ref for the shared replica at
+         * [instanceId].
+         *
+         * **Recomputed, not called**: `Replication.watermarkRef` is `internal`
+         * to `:kernel`, so this demo cannot reach it. The derivation is copied
+         * verbatim from `Replication.kt:98-99`
+         * (`nameUUIDFromBytes("watermark:{logicalId}")`, sharing the data
+         * replica's `instanceId`). A silent divergence here would mislabel a
+         * node on the canvas rather than fail, which is why it is stated.
+         */
+        fun sharedWatermarkRef(instanceId: Long): CellRef =
+            CellRef(UUID.nameUUIDFromBytes("watermark:$SHARED_ID".toByteArray()), instanceId)
     }
 }
 
@@ -319,13 +497,23 @@ fun main(args: Array<String>) {
     val wire = args.value("--listen")?.let { DemoApp.Wire.Listen(it.toInt()) }
         ?: args.value("--peer")?.let { DemoApp.Wire.Dial(it) }
     val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
+    // V4-PILOT: a BARE boolean flag, so it is presence-tested rather than read
+    // through `args.value`, and — unlike every `--flag value` pair above — it
+    // needs NO stripPairs entry: `demoPort` skips any token starting with `--`
+    // (DemoShell.kt:128-130), so it can never be mistaken for the demo's port.
+    val replicate = "--replicate" in args
 
-    val app = DemoApp(port, wire, journalDir).start()
+    val app = DemoApp(port, wire, journalDir, netName, replicate).start()
     println("computenet demo: http://localhost:${app.boundPort} — open two tabs to collaborate")
     when (wire) {
         is DemoApp.Wire.Listen -> println("  awaiting a peer on ws://localhost:${wire.wsPort}")
         is DemoApp.Wire.Dial -> println("  peered with ${wire.uri}")
         null -> println("  single-process mode; add --listen <wsPort> or --peer <ws-uri> to span two JVMs")
+    }
+    if (replicate) {
+        println("  replicate mode: shared logical cell ${DemoApp.SHARED_ID}, this JVM's instance ${app.sharedInstanceId}")
+        // a lone replica is a legal replica — the mesh simply has one member
+        if (wire == null) println("  (no --listen/--peer: the replica mesh has no peer to gossip with)")
     }
     inspectPort?.let { p ->
         val inspector = app.startInspector(p, netName ?: "local")
@@ -390,7 +578,9 @@ new EventSource('/events').onmessage = e => {
       li.textContent = item;
       if (s.votes.includes(item)) { li.classList.add('voted'); li.textContent += ' ★'; }
       if (actions) {
-        for (const [label, action] of [['vote','vote'],['remove','remove']]) {
+        // "remove" is union-scoped — it retracts the item for everyone;
+        // "remove mine" retracts only this user's own add (D-UNION).
+        for (const [label, action] of [['vote','vote'],['remove','remove'],['remove mine','remove-mine']]) {
           const b = document.createElement('button');
           b.textContent = label; b.onclick = () => op(action, item);
           li.appendChild(b);

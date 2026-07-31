@@ -1,6 +1,6 @@
 # 24 — Standard Data Cells, Merge Semantics, Partitioning
 
-> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, tag-epoch continuity, and restart supersession design decided, unbuilt)
+> **Status**: Partial (set family tagged and convergent; counters implemented incl. replicable PN form; relational operator suite + grouped aggregation + windowing-as-grouping done (M11); map/list with documented limits; tagged-map (OR-map) convergence class design decided, unbuilt (96 §E1); partitioning unified as the disjoint-interest setting of the 40/42 instance-set mesh, and tag-epoch continuity design decided, unbuilt; restart supersession built (W2.1, `[24-TAG-02]`))
 > **Sources**: ADR 1 (§3, §5, §14), ADR — Cellular Software Development Process (incremental dataflow layer; LASP/Differential Dataflow inspirations)
 > **Implementation**: `civictech.cell.data`: `SetCell`, `UnionSetCell`, `CounterCell`, `PnCounterCell`, `MapCell`, `ListCell`, `Propagate`; M11 suite: `FlatMapSetCell`, `SemiJoinCell`, `JoinSetCell`, `GroupByCell`, `Aggregator(s)`, `Windows`, `MintedTags`; `civictech.cell.graph.leftJoin`/`rightJoin`/`fullJoin` (outer joins)
 
@@ -86,8 +86,11 @@ Elements of the pattern:
 by a 200-seed interleaving test with a control run proving arrival-order
 application diverges. `MapDelta`/`ListDelta` instead carry **documented
 convergence limits** — arrival-order key puts and index-addressed edits are
-single-stream semantics; stable multi-writer forms wait for replication
-pressure (42). `[24-OP-MAP-01]` `[24-OP-LIST-01]` `MapDelta`'s arrival-order
+single-stream semantics. The keyed multi-writer form is no longer an open
+wait: the convergent design is decided — see §Tagged maps below, an
+additive `TaggedMapDelta` beside `MapDelta`, which stays single-stream; the
+positionally-indexed list form still waits for replication pressure (42).
+`[24-OP-MAP-01]` `[24-OP-LIST-01]` `MapDelta`'s arrival-order
 key puts and `ListDelta`'s index-addressed edits SHALL remain single-stream
 semantics only — neither is a convergent merge under concurrent writers
 (Ubiquitous).)*
@@ -103,6 +106,52 @@ semantics only — neither is a convergent merge under concurrent writers
   state-as-delta-from-empty to that subscriber, and SHALL preserve that
   state across drain/migrate via `Stateful` (Event-driven). On-demand pull
   without relinking remains with G-18/G-13 (21).
+- ~~Reading a large cell's state without copying it~~ **Resolved
+  (V1C-KERNEL)**: a data cell additionally serves an instrument's **bounded
+  read** of its own state — whole entries, at most a requested number of them
+  per page, resumed by a cell-minted opaque cursor, and stamped with the fold's
+  tag frontier — emitting nothing and moving no wave position (21 §Pull,
+  [21-PULL-02]). The seam is additive and opt-in beside `Stateful`, because four
+  subsystems depend on `snapshot()` being a whole restorable value (drain,
+  migration, promotion state transfer, durability checkpoints); a family that
+  does not implement it is refused with a stated reason, never answered with a
+  silent whole copy.
+  `[24-BOUND-01]` WHEN a data cell serves a bounded read, each page SHALL
+  contain whole entries, no entry SHALL be returned twice within one walk, and
+  every page SHALL carry the cell's tag frontier (Event-driven).
+  `[24-BOUND-02]` WHEN a data cell's bounded read is walked to completion and
+  the cell accepts no operation for the duration of that walk, the union of the
+  walk's pages SHALL equal the cell's whole state, whatever page limit the walk
+  used (Event-driven).
+  Three obligations sit under those and belong to the cell, not to the kernel.
+  **A total enumeration order is imposed, not inherited** — the family's backing
+  maps are insertion-ordered, so a remove-then-re-add moves a key to the tail and
+  could hand one key to a walk twice, and a restored instance enumerates
+  differently again; freezing the key sequence at walk start is how the
+  reference implementation discharges it. **A cursor is key-based, not
+  index-based** — an index into live state is invalidated by any removal earlier
+  in the enumeration, a key survives every mutation but its own; a positional
+  cursor is a documented exception for a family with no element identity (the
+  list form), and the weaker guarantee it then carries is declared on the page
+  rather than buried in the cell. **Resume costs O(page), not O(state)** — a
+  cursor that rescans from the start turns a paged walk into O(n²) and forfeits
+  the reason for paging.
+  How *exact* a page's frontier stamp is, is bounded rather than absolute: the
+  first and last page of a walk carry it exactly, and an intermediate page may
+  carry the walk's most recent exactly-determined frontier instead, declaring on
+  the page that it did. Recomputing it per page is O(n) per page and O(n²) per
+  walk — the cost the bounded read exists to avoid — and maintaining it
+  incrementally would put a secondary index on the fold path (P2). Because a tag
+  frontier is monotone, the walk's two exact endpoint stamps are what
+  [21-PULL-03]'s stability check reads, and the intermediate stamps cost it
+  nothing.
+  **An exclusive value is never paged.** An entry whose value is `Owned` or
+  `Leased` is replaced by a presence descriptor — key, wrapper type name,
+  disposition — and counted; a page is a copy, and copying an exclusive payload
+  is the prohibition itself (23). Nothing is taken, borrowed, released or
+  unwrapped to build the descriptor, and the count is an honest signal rather
+  than a silent gap. This makes a bounded read's ownership contract deliberately
+  stronger than `snapshot()`'s, which still serializes whatever the fold holds.
 - ~~Operator library~~ **Implemented (M4.3, extended to the full relational
   suite in M11)** — each an ordinary cell with declared incremental
   semantics, all late-join capable and `Stateful`. Correspondence to the
@@ -173,6 +222,52 @@ semantics only — neither is a convergent merge under concurrent writers
     memberships (duplicates converge on membership, not tags); the operator
     is not glitch-free on its own (State-driven). Set semantics only — bag
     semantics (EXCEPT ALL) would need a weighted family (see below).
+    Antijoin membership flips are **absence assertions**: emitting or
+    retracting a row because the *other* side does or doesn't hold a
+    matching key needs knowing non-membership, which is non-monotone in the
+    CALM sense — confluent, coordination-free composition is available only
+    to monotone operators (`03-lasp-crdt-lattice.md` §5); antijoin needs
+    sealing. [24-OP-SEMIJOIN-04] WHERE `emitOnFrontier` gating is enabled, a
+    `SemiJoinCell` antijoin's output SHALL emit only at wave completeness,
+    coalesced to the wave's net minted enter/exit set, such that a
+    transient enter-then-exit within one wave is never observed on the
+    outlet (Optional feature). The gate is opt-in; the default stays
+    ungated, so a transient flicker within one wave may still reach the
+    outlet, remediated only by 22's glitch-free wrapper rather than by a
+    smarter convergent cell — research rejects a convergent fix here
+    (absence-based emission is non-monotone; some sealing is unavoidable,
+    and per-wave sealing over `cell.consistency.WaveFrontier` is the
+    cheapest ComputeNet has). See 20/22 §The observation frontier for the
+    guarantee this gate serves. *(Implemented — `SemiJoinCell(…,
+    emitOnFrontier = true)`: the wave's input deltas across both inlets are
+    buffered by a `WaveFrontier`-shaped fold mirrored at cell scope
+    (`cell.data.op.WaveGate` — the frontier itself is untouched, for
+    `CoalescingCombineCell`'s structural reason), applied together at
+    completeness, and reconciled once on membership before any tag is
+    minted. The gate inherits the static-link-set frontier's phantom
+    expected edge (G-13): it is for a shared-source diamond, not for two
+    independent roots.)*
+  - `CombineLatestCell` — incremental keyed **outer** combine over two map
+    streams (the outer sibling of `JoinCell`); a key present on only one
+    side still emits, computed as `combine(k, v, null)` / `combine(k, null,
+    w)`. A null-extension is an **absence assertion** exactly like
+    antijoin's — it asserts the other side holds no value for `k` at this
+    frontier (CALM, `03-lasp-crdt-lattice.md` §5) — and is the
+    internal-consistency essay's exact outer-join failure mode: a
+    null-extended row can be emitted and then retracted within one wave as
+    the other side's real value arrives
+    (`04-cross-cutting-watermarks-consistency.md` §3). Ungated (the
+    default), a null-extension may ride the outlet and be retracted moments
+    later, remediated only by 22's wrapper; gated (`emitOnFrontier`,
+    mirroring `SemiJoinCell` above), the null-extension emits only once the
+    wave has settled, so a same-wave retraction never reaches the outlet —
+    a genuinely one-sided key still null-extends at completeness, so outer
+    semantics are unchanged and only the timing gates.
+    See 20/22 §The observation frontier. *(Implemented, as for
+    `SemiJoinCell` above — 96 §E2.4, same mirrored fold and same
+    phantom-expected-edge caveat. This cell now also absorb-acks a wave it
+    silently swallows, closing the last divergence from 20/22 §Completeness
+    over silent or stuck edges.)*
   - `FlatMapSetCell` / `mapSet` (M11.1) — element-wise flatMap/map over a
     tagged set stream, input tags passing through. Sound because tag algebra
     is per-(element, tag): colliding outputs **union** their preimages' tag
@@ -190,6 +285,112 @@ semantics only — neither is a convergent merge under concurrent writers
   Verified: a seeded writers→union→filter→count pipeline equals a batch
   recompute over final writer state on every seed (the prototype invariant
   for the generative harness, 52).
+
+## Tagged maps
+
+**Built** (closes G-23 for keyed structures; 96 §E1) — 96 §E1.2 (`OrMapCell`
+core) and §E1.3 (replication: echo-terminating gossip, pull baseline,
+re-origination, dead-source fencing) have shipped against this section as
+`OrMapCell`/`TaggedMapDelta` in `civictech.cell.data`, while §E1.4–E1.6
+(embedded mergeable values, `TaggedMapView`/`UntagCell`, demo adoption) remain
+with the 96-plan. It is an **additive new delta type**:
+`MapDelta` and its single-writer cells (`MapCell`, `JoinCell`, `GroupByCell`)
+are untouched, and `KeyedSetCell` is untouched — this resolves backlog
+`06-or-map-tagged-map-delta.md`'s open choice in favor of addition over
+replacement.
+
+A tagged map generalizes the observed-remove idiom above from *elements* to
+*per-key values*: the Riak-map / delta-ORMap design, adapted to
+ComputeNet's existing tag machinery
+(`doc/research/incremental-engines/03-lasp-crdt-lattice.md` §4;
+`05-gap-mapping.md` §Gap 2). `KeyedSetCell` already does per-key
+observed-remove with atomic retract+add, and `Timestamp(sourceId, counter)`
+tags are already dot-shaped, so this section reads as `SetDelta`'s idiom
+lifted one level, from a live/tombstoned tag per element to a live/
+tombstoned **dot** per key:
+
+```kotlin
+interface MapOps<K, V> { fun put(key: K, value: V); fun remove(key: K) }
+data class TaggedMapDelta<K, V>(              // per-key dots (G-23)
+    val puts: Map<K, Map<Timestamp, V>>,      // live dots carrying values
+    val dels: Map<K, Set<Timestamp>>,         // tombstoned observed-remove dots
+) : Serializable {
+    fun merge(other: TaggedMapDelta<K, V>): TaggedMapDelta<K, V>  // pointwise dot union
+}
+```
+
+Each put mints a unique `Timestamp` dot carrying that put's value; a key's
+live dots are its `puts[key]` entries not covered by `dels[key]`. All dots
+for the whole map share **one causal namespace** — there is no per-key
+context (decided point 1 below).
+
+**The four laws** (verbatim from 96 §E1.1):
+
+- **Merge** is pointwise dot union, idempotent because a dot's value is
+  immutable. `[24-TMAP-01]` `TaggedMapDelta` merge (pointwise dot union)
+  SHALL be commutative, associative, and idempotent, such that a key's
+  presence and value converge to the same result regardless of delivery
+  order (Ubiquitous).
+- **Presence** is add-wins: a key is live iff it has any live (not
+  tombstoned) dot. `[24-TMAP-02]` A key SHALL be present iff it has at
+  least one live dot — add-wins (Ubiquitous).
+- **Value** is Last-Writer-Wins **by dot order** `(counter, sourceId)` —
+  never wall clock. `[24-TMAP-03]` A key's exposed value SHALL be the value
+  of its live dot with the greatest `(counter, sourceId)` order, and MUST
+  NOT be selected by wall-clock time (Ubiquitous).
+- **`remove(k)` is reset-remove**: it tombstones every dot the remover
+  observed live at `k`; a concurrent put's dot, not observed by that
+  remove, survives the merge as `k`'s remaining live value.
+  `[24-TMAP-04]` A `remove(k)` SHALL tombstone every dot observed live at
+  `k` at the time of the remove, such that a concurrent put's dot — not
+  observed by that remove — survives the merge (reset-remove,
+  Ubiquitous).
+
+**Decided points** (96 §E1.1, each traced to its research citation):
+
+1. **One shared causal namespace for the whole map**, never per-key —
+   per-key contexts re-admit stale values on key re-creation
+   (`03-lasp-crdt-lattice.md` §4; `05-gap-mapping.md` §Gap 2).
+2. **Tombstoned dels subsume deferred context ops.** The tagged map follows
+   `SetCell`'s tombstoned idiom (dels stored as covered dots, not a
+   context-only causal record), so Riak's deferred-operations list is
+   unnecessary here: a remove's dots arriving before their put simply sit
+   in `dels` and cover the put on arrival, exactly as `SetCell`'s
+   `applyRemote` already behaves for elements
+   (`kernel/src/main/kotlin/civictech/cell/data/SetCell.kt:107-116`).
+3. **Embedded values are restricted to the idempotent-mergeable class**
+   (`MergeablePayload`) — Riak's embedded-counter anomaly (a non-idempotent
+   embedded CRDT cannot get full reset-remove without a dot per increment)
+   is the documented counterexample (`03-lasp-crdt-lattice.md` §4). Research
+   `05-gap-mapping.md` §Gap 2 phrases the same restriction as "the
+   `Replicable` class"; `MergeablePayload` is the decided wording carried
+   here (96 §E1.1) — `Replicable` is the wire-replication contract a cell
+   implements, `MergeablePayload` is the payload-level merge capability an
+   embedded value must have.
+4. **Dot-metadata bloat is a codec-layer concern from day one** — Riak
+   names actor-metadata repetition "a serious issue" for size
+   (`03-lasp-crdt-lattice.md` §4); deduping (e.g. grouping dots by
+   `sourceId`) is a wire-encoding responsibility, not part of this delta
+   type's merge semantics.
+5. **The Lasp determinism caveat is normative for downstream adopters**
+   (`03-lasp-crdt-lattice.md` §1, "Determinism caveat"): state convergence
+   (SEC) alone does not make value-keyed derivation deterministic — whether
+   a concurrent remove cancels a concurrent put can depend on the merge
+   schedule for an operator that reads a *value*, not just presence.
+   Tag-precise removes — a remove carries exactly the dots it observed,
+   never a value-level predicate — are what keep value-keyed derivation
+   deterministic here; an operator deriving from `value(k)` inherits this
+   caveat and must not assume a wall-clock or arrival-order resolution.
+
+**Excluded from this milestone.** The tombstone-free (context-only) wire
+form — `dels` shipped as causal context alone, with no tombstone payload —
+is deliberately not part of `TaggedMapDelta`. It needs the causal-merging
+condition (`03-lasp-crdt-lattice.md` §2: join `Δⱼ^{a,b}` into `Xᵢ` only if
+`Xᵢ ⊒ Xⱼᵃ`), whose delivered-watermark prerequisite lands with E3; tracked
+as [95 §R10](../90-roadmap/95-research-plan.md). Multi-value exposure
+mechanics, the `MapOps` contract surface, catch-up/snapshot mechanics, and
+replication wiring (gossip, baseline, re-origination) are 96 §E1.2/§E1.3
+code-path material — named here, not specified here.
 
 ## Grouped aggregation (M11.3)
 
@@ -431,16 +632,26 @@ layer G-62 — both cited from those gaps, neither owed by this section.
 ## Tag continuity across epochs, restart, and swap
 
 Three tag-algebra rules govern replication, RESTART, and instance swap.
-They are decided design (93 I-14, I-22, I-27), unimplemented.
+They are decided design (93 I-14, I-22, I-27); `[24-TAG-02]` is implemented
+(W2.1), `[24-TAG-01]` and `[24-TAG-03]` are not.
 
-⚠ EARS-GAP: this "unimplemented" claim appears stale — the kernel already
-contains `ReBaselineEmitting`, `TagState`'s use of it, and
-`RestartReBaselineTest`, and CONCORD-PLAN §3 lists `15-RESTART-01`
-("restart with re-baseline; downstream equals batch despite the restart")
-as core-profile corpus, implying re-baseline convergence is meant to be
-testable now. The `[24-TAG-*]` ids below are minted on that basis; a spec
-editor with fuller context should confirm or retract them, and reconcile
-this line and the chapter status header accordingly.
+*(The ⚠ EARS-GAP that used to stand here asked a spec editor with fuller
+context to confirm or retract the `[24-TAG-*]` ids, on the suspicion that the
+blanket "unimplemented" was stale. **Answered (D-C12): the suspicion was
+right, for `[24-TAG-02]`.** The kernel's RESTART supervision path mints a fresh
+per-epoch `sourceId` per outlet, restores, and emits the `ReBaseline`
+supersession notice; `TagState.applyReBaseline` is the consumer half this
+section states, drop-then-merge-then-fence, exactly as written. So the ids are
+**confirmed, not retracted** — `[24-TAG-02]` is boundary-checkable today, and
+its drop-and-merge half is exercised by the `21-REBASE-01` scenario (21). It
+remains a *coverage-gap* row in the concordance rather than a covered one: no
+scenario yet drives the dead-lane half (a late delta stamped with a superseded
+`sourceId`, which a script has no verb to inject), so nothing claims to cover
+the whole rule. Kernel `RestartReBaselineTest` exercises that half internally.
+`[24-TAG-01]`'s verbatim-tag-travel rule and
+`[24-TAG-03]`'s non-idempotent-swap rule are still decided-but-unimplemented:
+the landed shadow-promotion fallback remains silent (see the third bullet), and
+that is what the per-rule notes below now say instead of one blanket line.)*
 
 - **Tags are data, never re-minted for received state** (decided in 93 I-14
   Rule S3). A genuinely new local add mints its tag under the cell's
@@ -479,10 +690,19 @@ this line and the chapter status header accordingly.
   source-scoped, so the retraction removes only the reverted producer's
   lost contribution — healthy peers' tags survive — and the rule composes
   with multi-writer merge; `supersede = false` (pull-merge) retracts
-  nothing, forward idempotent merge only. Landed RESTART (30/31 rule 5:
-  restore the spawn-time checkpoint, same sourceId with a rolled-back
-  counter, no downstream reconciliation) is exactly the bare rollback this
-  rule forbids (⚠ CONFLICT C-12, recorded in 30/31 and 22).
+  nothing, forward idempotent merge only. *(Implemented, W2.1; C-12 resolved
+  in D-C12. The host's RESTART branch mints the fresh epochs and emits the
+  supersession; `TagState.applyReBaseline` is (a)/(b)/(c) above — drop the
+  un-reasserted tags of the superseded sources, union-merge the re-asserted
+  state, then fence those sources as dead lanes — and `UnionSetCell` routes an
+  inbound re-baseline through it rather than through the ordinary fold. The
+  "bare rollback" reading recorded here was of the M3.5 prose in 30/31 rule 5,
+  not of the code. The drop-and-merge half is exercised by the `21-REBASE-01`
+  scenario (21); the dead-lane half has no scenario verb yet, so this id stays a
+  coverage-gap row. The `supersede = false`
+  arm is specified and honoured by the fold but never selected by the landed
+  host, which always restarts push-authoritative — a G-43 residual, not part of
+  this rule.)*
 - **Swap handoff tiers are typed by merge class** (decided in 93 I-27). An
   instance swap's catch-up-fallback tier (discard the incumbent's snapshot,
   fresh source id, downstream re-baselines) is sound only for cells whose

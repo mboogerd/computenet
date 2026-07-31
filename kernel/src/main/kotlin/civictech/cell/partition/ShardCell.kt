@@ -1,12 +1,21 @@
 package civictech.cell.partition
 
+import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Cursor
+import civictech.cell.ExclusiveEntry
 import civictech.cell.Propagate
-import civictech.cell.Stateful
+import civictech.cell.ReadCaveat
+import civictech.cell.StatePage
+import civictech.cell.StateRead
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
+import civictech.cell.data.EntryOrder
+import civictech.cell.data.KeyWalk
+import civictech.cell.data.PageBudget
 import civictech.cell.data.Replicable
+import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TagState
 import civictech.cell.port.FanInlet
@@ -46,7 +55,7 @@ class ShardCell<E>(
     private val keyFn: (E) -> Any?,
     initialInterest: Interest,
     private val epochAware: Boolean = true,
-) : Cell, Stateful, Replicable<SetDelta<E>>, Partitioned {
+) : Cell, BoundedStateful, Replicable<SetDelta<E>>, Partitioned {
 
     private val state = TagState<E>()
 
@@ -176,6 +185,124 @@ class ShardCell<E>(
             state.tags(e).forEach { t -> frontier.merge(t.sourceId, t.counter, ::maxOf) }
         }
         return TagFrontier(frontier)
+    }
+
+    // ---------------------------------------------------------------------
+    // Bounded read (V1C-CELLS). Purely additive, and inert with respect to
+    // repartitioning: it reads `state`, `interestField` and `assignedEpochField`
+    // and writes none of them. It never calls [assign], `emit`, `onRouted`,
+    // `onGossip`, `outlet.baselineTo`, `outlet.call` or `outlet.originate`, and
+    // it is not an invocation — it arrives through neither [routeInlet] nor
+    // [assignInlet] and never touches the WAL. `[24-SHARD-03]`'s rebuildFrom
+    // reads the same two fields this read reads, and sees them unchanged;
+    // `[24-SHARD-04]`'s recovery interest is neither shed nor re-admitted here.
+    // ---------------------------------------------------------------------
+
+    /**
+     * One page of this shard's key range (V1C-CELLS).
+     *
+     * - **One entry** is one `(element, tags)` pair out of the shard's
+     *   [civictech.cell.data.delta.TagState] — the same
+     *   [SetCell.SetStateEntry] shape `SetCell` pages and `asDelta()` produces,
+     *   reused deliberately so a consumer renders both set-shaped families
+     *   identically. `del` tags are always empty here: this shard's tag state
+     *   does not retain tombstones.
+     * - **The cursor** names a position in a frozen list of *elements*
+     *   ([KeyWalk]); it resumes in O(1) and survives any merge into the live
+     *   ledger.
+     * - **The order** is [EntryOrder]'s deterministic total order over `E`,
+     *   imposed rather than inherited. The ledger is a `LinkedHashMap` whose
+     *   insertion order ordinary set churn destroys — a fold that kills an
+     *   element's last tag removes it, and a later re-add re-inserts it at the
+     *   tail — and which `restore` discards when it refills from a `HashMap`.
+     * - **`frontier` is real**: [currentFrontier], the same "highest tag counter
+     *   per source over the scope-admitted keys" this shard's pull reply already
+     *   reports. It is exact on the first page of a walk and on the last, and an
+     *   intermediate page carries the opening stamp with
+     *   [ReadCaveat.STALE_FRONTIER] — recomputing it per page is an O(n) rescan
+     *   per page, the O(n²)-per-walk shape the bounded read exists to avoid, and
+     *   maintaining it incrementally would put a secondary index on the fold
+     *   path, which P2 forbids. This is `SetCell`'s discipline verbatim, for the
+     *   same reason. Note the same limit applies: a [TagFrontier] measures tag
+     *   *gains*, so a mid-walk shed (which retracts tags rather than minting
+     *   them) can leave the endpoint stamps equal — equal endpoints are
+     *   necessary but not sufficient here too.
+     *
+     * **[StatePage.attributes] carries `interest` and `assignedEpoch`, on every
+     * page, and that is load-bearing rather than convenient.** A shard's
+     * recoverable state is the triple `(TagState, interest, assignedEpoch)`
+     * (`[24-SHARD-01]`), and [assign] can run *between* two pages of a walk: it
+     * sheds every element the new interest no longer admits, then swaps the
+     * interest and raises the epoch. A consumer holding page 1's interest and
+     * page 7's entries would attribute entries to the wrong key range at the
+     * wrong routing epoch — a partition-membership claim that was never true.
+     * Carrying the pair on every page makes that error unrepresentable: a
+     * consumer either sees a constant pair across the walk and may attribute, or
+     * sees it change and knows the walk straddled a repartition.
+     *
+     * An element that is an `Owned`/`Leased` payload is never copied into a
+     * page: it becomes an [ExclusiveEntry] descriptor and is counted in
+     * [StatePage.exclusivesElided].
+     */
+    override fun readBounded(request: StateRead): StatePage {
+        val scope = request.scope
+        @Suppress("UNCHECKED_CAST")
+        val walk = (request.cursor?.token as? KeyWalk<E>) ?: openWalk(scope)
+        val order = walk.order
+        val opening = walk.opening as TagFrontier
+
+        val entries = ArrayList<Serializable>(minOf(request.limit, 64))
+        var elided = 0
+        var bytes = 0
+        var index = walk.next
+        val examineThrough = minOf(index + request.limit, order.size)
+        while (index < examineThrough) {
+            val element = order[index]
+            index++
+            if (element !in state) continue // shed or retracted since the walk opened
+            if (ExclusiveEntry.isExclusive(element)) {
+                entries += ExclusiveEntry.of(key = null, exclusive = element as Any)
+                elided++
+                bytes += PageBudget.ENTRY_OVERHEAD_BYTES
+                if (PageBudget.exhausted(bytes, request.byteBudget)) break
+                continue
+            }
+            val tags = state.tags(element).filterTo(HashSet()) {
+                request.since == null || (request.since!!.perSource[it.sourceId] ?: -1L) < it.counter
+            }
+            if (tags.isEmpty()) continue // nothing beyond `since` for this element
+            entries += SetCell.SetStateEntry(element, tags, emptySet())
+            bytes += PageBudget.ENTRY_OVERHEAD_BYTES + PageBudget.TAG_BYTES * tags.size
+            if (PageBudget.exhausted(bytes, request.byteBudget)) break
+        }
+
+        val complete = index >= order.size
+        val isFirstPage = walk.next == 0
+        return StatePage(
+            entries = entries,
+            next = if (complete) null else Cursor(KeyWalk(order, index, opening)),
+            frontier = if (complete && !isFirstPage) currentFrontier(scope) else opening,
+            exclusivesElided = elided,
+            attributes = mapOf(
+                "interest" to interestField,
+                "assignedEpoch" to java.lang.Long.valueOf(assignedEpochField),
+            ),
+            caveats = if (complete || isFirstPage) emptySet() else setOf(ReadCaveat.STALE_FRONTIER),
+        )
+    }
+
+    /** This shard scopes by [keyFn], exactly as its pull reply does, and carries a real tag clock. */
+    override val supportsScope: Boolean get() = true
+    override val supportsSince: Boolean get() = true
+
+    /**
+     * The walk's one O(n log n) pass (V1C-CELLS): impose the element order and
+     * compute the opening frontier once, never per page.
+     */
+    private fun openWalk(scope: Interest?): KeyWalk<E> {
+        val admit: (E) -> Boolean =
+            if (scope == null || scope is Interest.Total) { _ -> true } else { e -> scope.admits(keyFn(e)) }
+        return KeyWalk(EntryOrder.freeze(state.elements, admit), 0, currentFrontier(scope))
     }
 
     // snapshot/restore (PN-4): a shard's recoverable state is its tag state AND

@@ -18,6 +18,7 @@ import civictech.cell.observe.observe
 import civictech.cell.port.streamTo
 import civictech.cell.host.RoutedPropagate
 import civictech.cell.link.Interest
+import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
 import civictech.demo.shell.DemoShell
 import civictech.demo.shell.demoPort
@@ -55,7 +56,21 @@ private fun encodeOrder(region: String, id: String, amount: Long): String =
 private fun regionOf(order: String): String = order.substringBefore(SEP)
 private fun amountOf(order: String): Long = order.substringAfterLast(SEP).toLong()
 
-class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: java.io.File? = null) {
+/**
+ * [netName] (`--net-name`) is this peer's transport identity, matching
+ * `:demo:shopping`'s flag of the same name (V4-PEERID): it becomes the [PeerId]
+ * in this JVM's hello, so the counterpart's registry records *which peer*
+ * announced a ref rather than only which (per-connection, reconnect-fresh)
+ * bridge egress it arrived through. This demo has no inspector, so nothing
+ * renders it; it exists so the composition probe exercises a named peering.
+ * Absent ⇒ anonymous, byte-identical to the pre-V4-PEERID hello.
+ */
+class ExchangeApp(
+    port: Int = 8080,
+    private val wire: Wire? = null,
+    journalDir: java.io.File? = null,
+    private val netName: String? = null,
+) {
     /** Peer mode (M5.7): symmetric peers — one listens, the other dials. */
     sealed interface Wire {
         data class Listen(val wsPort: Int) : Wire
@@ -189,7 +204,7 @@ class ExchangeApp(port: Int = 8080, private val wire: Wire? = null, journalDir: 
 
         if (wire != null) {
             val bridgeHost = ManagedHost(registry = registry)
-            val side = Peering.Side(registry, bridgeHost)
+            val side = Peering.Side(registry, bridgeHost, peer = netName?.let { PeerId(it) })
             when (wire) {
                 is Wire.Listen -> WsTransport.listen(wire.wsPort, side)
                 is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
@@ -278,8 +293,13 @@ fun main(args: Array<String>) {
     val wire = args.value("--listen")?.let { ExchangeApp.Wire.Listen(it.toInt()) }
         ?: args.value("--peer")?.let { ExchangeApp.Wire.Dial(it) }
     val journalDir = args.value("--journal")?.let { java.io.File(it).apply { mkdirs() } }
+    // V4-PEERID: same flag name and same "absent ⇒ anonymous" rule as
+    // :demo:shopping. Not stripped before [demoPort] — this demo has always
+    // read its port from the first non-`--` argument and documents it first,
+    // exactly as it already does with `--journal`'s value.
+    val netName = args.value("--net-name")?.trim()?.takeUnless { it.isEmpty() }
 
-    val app = ExchangeApp(port, wire, journalDir).start()
+    val app = ExchangeApp(port, wire, journalDir, netName).start()
     println("computenet exchange: http://localhost:${app.boundPort} — region→sum board across two JVM peers")
     when (wire) {
         is ExchangeApp.Wire.Listen -> println("  awaiting a peer on ws://localhost:${wire.wsPort}")

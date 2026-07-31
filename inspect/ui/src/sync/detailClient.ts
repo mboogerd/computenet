@@ -9,6 +9,17 @@ import { indicatesChange } from './summaryChange';
 export interface DetailTransport {
   fetchDetail(ref: Ref): Promise<CellDetail>;
   fetchState(ref: Ref): Promise<CellState>;
+  /** V1C-FE — `GET /cell/{ref}/state?cursor=&limit=` (V1C-BE ticket Part 1):
+   *  one bounded page of a big cell's state, never welded to an observation.
+   *  `cursor` is echoed verbatim from a previous response's `page.cursor` —
+   *  never parsed, never constructed, never reused across refs; omitted for
+   *  a fresh walk. A stale/unknown/expired/wrong-cell cursor answers HTTP
+   *  410, resolved as `{ status: 'staleCursor' }` rather than thrown — the
+   *  walk's own signal to drop the cursor and restart from page 1, in the
+   *  register `ObserveOutcome` already established for the 409 case below.
+   *  Any other non-ok status still throws: this client only ever sends a
+   *  constant `limit`, so a 400 means a client bug, not a normal outcome. */
+  fetchStatePage(ref: Ref, opts?: { cursor?: string; limit?: number }): Promise<PageOutcome>;
   /** `POST /cell/{ref}/observe` — starts `state.summary` events for `ref`,
    *  unless the target has no built-in fold to observe, in which case the
    *  server answers 409 (20-api-contract.md:25) and this resolves
@@ -27,6 +38,13 @@ export interface DetailTransport {
  *  can distinguish "the server declined this subscription" from "the
  *  request itself failed" (network error, 5xx, etc.), which still throws. */
 export type ObserveOutcome = 'started' | 'refused';
+
+/** V1C-FE ticket Solution direction §1. `'staleCursor'` is the HTTP 410 case
+ *  (V1C-BE ticket Part 1: "an unknown, expired, already-consumed or
+ *  wrong-cell cursor answers 410") — carried as a resolved value, mirroring
+ *  {@link ObserveOutcome}'s `'refused'`, so `sync/statePages.ts`'s walk can
+ *  restart from page 1 without treating it as a transport failure. */
+export type PageOutcome = { status: 'ok'; state: CellState } | { status: 'staleCursor' };
 
 function baseUrl(): string {
   return '/api/inspect';
@@ -50,6 +68,15 @@ async function expectJson<T>(res: Response): Promise<T> {
 export const defaultDetailTransport: DetailTransport = {
   fetchDetail: (ref) => fetch(`${baseUrl()}/cell/${ref}`).then((r) => expectJson<CellDetail>(r)),
   fetchState: (ref) => fetch(`${baseUrl()}/cell/${ref}/state`).then((r) => expectJson<CellState>(r)),
+  fetchStatePage: async (ref, opts = {}) => {
+    const params = new URLSearchParams();
+    if (opts.cursor !== undefined) params.set('cursor', opts.cursor);
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+    const qs = params.toString();
+    const res = await fetch(`${baseUrl()}/cell/${ref}/state${qs ? `?${qs}` : ''}`);
+    if (res.status === 410) return { status: 'staleCursor' };
+    return { status: 'ok', state: await expectJson<CellState>(res) };
+  },
   observeStart: (ref) =>
     fetch(`${baseUrl()}/cell/${ref}/observe`, { method: 'POST' }).then((res): ObserveOutcome => {
       if (res.status === 409) return 'refused';
@@ -148,13 +175,17 @@ export class DetailController {
   /**
    * Select `ref`.
    *
-   * `mode: 'descriptor'` is M5-COLD's gate: inside a cold graph, selecting a
-   * node fetches its descriptor and **nothing else** — no `POST observe`, no
-   * `GET state`. That is not an optimization, it is the whole point of the cold
-   * screen: subscribing raises attention and can un-park a cone
-   * (10-target-v3.md §Constraints 2), so a graph the UI has just told the user
-   * is parked must not be woken by the act of looking at it. Waking is the
-   * explicit button, never a side effect of selection.
+   * `mode: 'descriptor'` is M5-COLD's gate, narrowed by V1C-FE: inside a cold
+   * graph, selecting a node fetches its descriptor **and one plain state
+   * read** — never a `POST observe`. Subscribing raises attention and can
+   * un-park a cone (10-target-v3.md §Constraints 2), so a graph the UI has
+   * just told the user is parked must not be woken by the act of looking at
+   * it — waking stays the explicit button, never a side effect of selection.
+   * But a *read* is not a subscription: `V1C-BE` guarantees a suspended
+   * cell's read resumes nothing and a drained host's read schedules no cell
+   * thread at all, so there is no longer a reason to withhold `GET state`
+   * while cold (V1C-FE ticket Solution direction §3) — only the observation
+   * (`POST`/`DELETE observe`) stays withheld.
    *
    * V1B-FE ticket Solution direction §1: releasing the previous selection's
    * observation is conditional — skipped if the previous ref is still
@@ -182,6 +213,10 @@ export class DetailController {
     const epoch = this.bumpEpoch(ref);
     void this.loadDetail(ref, epoch);
     if (this.descriptorOnly) {
+      // V1C-FE: cold selection now reads state too — a plain GET, never an
+      // observation. `loadState` is the same helper the live path below
+      // uses; it issues no observe call on its own.
+      void this.loadState(ref, epoch);
       this.notifyPinsChanged();
       return;
     }

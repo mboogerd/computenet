@@ -73,11 +73,13 @@ class InspectorObserveTest {
 
         // 1. browsing: reading detail and state raises nothing at all — no
         // subscription is created (server.observedRefs stays empty). V0-BE:
-        // SetCell is Stateful, so the wired snapshot fallback now answers its
-        // raw state here instead of CellState.UNAVAILABLE; that fallback read
-        // is host-routed and one-shot, not an observation.
+        // SetCell is Stateful, so the wired fallback now answers its raw state
+        // here instead of CellState.UNAVAILABLE; that fallback read is
+        // host-routed and one-shot, not an observation. V1C-BE: SetCell is
+        // `BoundedStateful` too, so the answer is one bounded *page* rather than
+        // a whole copy — still one host-routed read, still no subscription.
         probe.get("${InspectorServer.CELL_PATH}/${InspectorServer.encodeRef(cell.ref)}").statusCode() shouldBe 200
-        state(cell.ref).kind shouldBe CellState.SNAPSHOT
+        state(cell.ref).kind shouldBe CellState.PAGE
         registry.localRefs() shouldBe setOf(cell.ref)
         server.observedRefs shouldBe emptySet()
 
@@ -99,9 +101,10 @@ class InspectorObserveTest {
         awaitUntil("observe sink $sinkRef despawned") { sinkRef !in registry.localRefs() }
         registry.swapSet(sinkRef) shouldBe emptySet()
         registry.locate(sinkRef) shouldBe null
-        // released, not gone: the wired snapshot fallback still answers this
-        // Stateful cell's state, exactly as it did before it was ever observed
-        state(cell.ref).kind shouldBe CellState.SNAPSHOT
+        // released, not gone: the wired fallback still answers this cell's
+        // state, exactly as it did before it was ever observed (V1C-BE: as a
+        // bounded page, since SetCell is `BoundedStateful`)
+        state(cell.ref).kind shouldBe CellState.PAGE
     }
 
     @Test
@@ -355,6 +358,13 @@ class InspectorObserveTest {
     fun `a wired snapshot source answers for a cell with no observation`() {
         val cell = set()
         add(cell, "ada")
+        // V1C-BE: SetCell is `BoundedStateful` since wave 9, so the bounded seam
+        // would answer this cell first. Disabling it is what keeps this test the
+        // coverage it has always been — the whole-copy labelling and encoding
+        // path, `kind: "snapshot"` — rather than quietly becoming a second paged
+        // test. `BoundedReadSource.Unavailable` is exactly the "no bounded read
+        // wired" case the seam declares for it.
+        server.reads = BoundedReadSource.Unavailable
         // stands in for the kernel accessor M1 does not have (see SnapshotSource):
         // what matters here is that the reader encodes and labels it correctly
         server.snapshots = SnapshotSource { ref -> if (ref == cell.ref) cell.snapshot() else null }

@@ -3,7 +3,10 @@ package civictech.concord.runner
 import civictech.concord.check.CheckContext
 import civictech.concord.check.CheckResult
 import civictech.concord.check.Checks
+import civictech.concord.check.ReadWalk
 import civictech.concord.driver.Driver
+import civictech.concord.driver.ReadCursor
+import civictech.concord.driver.ReadPage
 import civictech.concord.driver.kernel.KernelDriver
 import civictech.concord.generator.ScenarioGenerator
 import civictech.concord.schema.ApplyStep
@@ -15,10 +18,11 @@ import civictech.concord.schema.Expect
 import civictech.concord.schema.Kind
 import civictech.concord.schema.Profile
 import civictech.concord.schema.QuiesceStep
+import civictech.concord.schema.ReadStateStep
+import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.SnapshotStep
-import civictech.concord.schema.Step
 import civictech.concord.schema.WindowKind
 import civictech.concord.schema.WindowSpec
 import civictech.concord.value.Value
@@ -54,12 +58,23 @@ class CorpusRunner {
         const val DEFAULT_RUNS = 20
         /** Default generative instance count when a `generator:` block omits `instances:`. */
         const val DEFAULT_GEN_INSTANCES = 40
+        /** Wedge guard: pages one `read-state` walk may return before it is declared non-terminating. */
+        const val MAX_READ_PAGES = 100_000
         /** Where the runner's working directory sees the corpus (Gradle sets cwd = module dir). */
         val CORPUS = File("corpus")
     }
 
-    /** A [CheckContext] pairing one run's already-quiesced [driver] with its [scenario]. */
-    private class RunContext(override val driver: Driver, override val scenario: Scenario) : CheckContext
+    /**
+     * A [CheckContext] pairing one run's already-quiesced [driver] with its
+     * [scenario] and the bounded-read walks that run's script performed
+     * (V1C-CONCORD — a read is an event with a before and an after, and by
+     * check time the "before" only survives if the runner recorded it).
+     */
+    private class RunContext(
+        override val driver: Driver,
+        override val scenario: Scenario,
+        override val reads: List<ReadWalk>,
+    ) : CheckContext
 
     @TestFactory
     fun `every corpus scenario runs against the kernel driver`(): List<DynamicTest> {
@@ -105,9 +120,9 @@ class CorpusRunner {
         for (run in 0 until runs) {
             val driver = KernelDriver(run.toLong())
             buildGraph(driver, scenario)
-            runScript(driver, scenario.script)
+            val reads = runScript(driver, scenario)
             driver.quiesce(QUIESCE_BUDGET)
-            val ctx = RunContext(driver, scenario)
+            val ctx = RunContext(driver, scenario, reads)
             val failures = scenario.checks.mapNotNull { check ->
                 when (val r = Checks.evaluate(check, ctx)) {
                     CheckResult.Passed -> null
@@ -160,9 +175,9 @@ class CorpusRunner {
             val concrete = ScenarioGenerator.generate(scenario, i)
             val driver = KernelDriver(i.toLong())
             buildGraph(driver, concrete)
-            runScript(driver, concrete.script)
+            val reads = runScript(driver, concrete)
             driver.quiesce(QUIESCE_BUDGET)
-            val ctx = RunContext(driver, concrete)
+            val ctx = RunContext(driver, concrete, reads)
             val failures = concrete.checks.mapNotNull { check ->
                 when (val r = Checks.evaluate(check, ctx)) {
                     CheckResult.Passed -> null
@@ -191,9 +206,15 @@ class CorpusRunner {
         }
     }
 
-    private fun runScript(driver: Driver, script: List<Step>) {
-        script.forEach { step ->
+    /**
+     * Replay one run's script, returning the bounded-read walks it performed
+     * (V1C-CONCORD). Every other step is side-effecting only.
+     */
+    private fun runScript(driver: Driver, scenario: Scenario): List<ReadWalk> {
+        val reads = mutableListOf<ReadWalk>()
+        scenario.script.forEach { step ->
             when (step) {
+                is ReadStateStep -> reads += walk(driver, step)
                 is ApplyStep -> repeat(step.times ?: 1) { driver.apply(step.on, step.op, step.value) }
                 is QuiesceStep -> driver.quiesce(step.budget ?: QUIESCE_BUDGET)
                 is ConnectStep -> {
@@ -208,9 +229,44 @@ class CorpusRunner {
                 }
                 is SnapshotStep -> snapshots[step.alias] = driver.snapshot(step.on)
                 is RestoreStep -> driver.restore(step.host ?: "", step.on, snapshots.getValue(step.from))
+                is RestartStep -> driver.restart(step.on)
                 is DespawnStep -> driver.despawn(step.on)
             }
         }
+        return reads
+    }
+
+    /**
+     * Perform one `read-state` step: walk [step]'s cell to completion (the
+     * driver owns the cursor; the scenario never names one), sampling the read
+     * cell's wave plane immediately before and immediately after the whole walk.
+     *
+     * The samples are taken here rather than inside a check because only this
+     * point in the run is *before* the read. The page cap is a wedge guard: a
+     * cursor that never terminates is a driver defect, and it must surface as a
+     * loud failure rather than as a hung sweep.
+     */
+    private fun walk(driver: Driver, step: ReadStateStep): ReadWalk {
+        val waveBefore = driver.wavePlane(step.on)
+        val pages = mutableListOf<ReadPage>()
+        var cursor: ReadCursor? = null
+        do {
+            val page = driver.readState(step.on, cursor, step.limit)
+            pages += page
+            cursor = page.next
+            assertTrue(pages.size <= MAX_READ_PAGES) {
+                "read-state on '${step.on}' (limit ${step.limit}) produced more than $MAX_READ_PAGES pages " +
+                    "without terminating — the cursor never reported a complete walk"
+            }
+        } while (cursor != null)
+
+        return ReadWalk(
+            cell = step.on,
+            limit = step.limit,
+            pages = pages,
+            waveBefore = waveBefore,
+            waveAfter = driver.wavePlane(step.on),
+        )
     }
 
     private val snapshots = LinkedHashMap<String, ByteArray>()
