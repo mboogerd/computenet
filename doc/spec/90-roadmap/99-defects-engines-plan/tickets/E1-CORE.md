@@ -1,6 +1,6 @@
 # E1-CORE — `TaggedMapDelta` + `OrMapCell`: the convergent keyed structure, local core
 
-**Status**: Implemented — awaiting review
+**Status**: Implemented — merged
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5,
 fresh session
 **Wave:** C2 · **Branches:** ticket/e1-core
