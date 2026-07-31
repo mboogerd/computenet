@@ -1,6 +1,6 @@
 # V1C-CONCORD — the bounded read becomes conformance surface: three EARS requirements, one deliberate concord schema change, three scenarios — authored in that order, stopping if a stage's premise fails
 
-**Status**: Implemented — awaiting merge. All three stages ran. Stage 1 landed
+**Status**: Implemented — merged (`5d3c444`, C11). All three stages ran. Stage 1 landed
 four ids, not three: `[21-PULL-02]` and `[21-PULL-03]` in `21-propagation.md`
 §Pull, `[24-BOUND-01]` **and a minted `[24-BOUND-02]`** in `24-data-cells.md`
 (the drafted `[24-BOUND-01]` conflated a per-page obligation with a whole-walk

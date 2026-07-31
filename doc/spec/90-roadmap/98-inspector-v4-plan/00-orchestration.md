@@ -554,13 +554,83 @@ Runs alone. Skipped entirely if C7 returned NO-GO.
 
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
-| V1C-CONCORD | Spec requirement text → concord schema change → three scenarios | opus | fresh | ticket/v1c-concord | opus | not-started |
+| V1C-CONCORD | Spec requirement text → concord schema change → three scenarios | opus | fresh | ticket/v1c-concord | opus | **Implemented — merged** (`5d3c444`) |
 
 **Checkpoint C11 — verification.** `./gradlew :concord:check` green with zero
 dangling `covers:` ids and zero orphan scenarios; `doc/spec/CONCORDANCE.md`
 regenerated and not hand-edited; `:concord:docLints` clean. A requirement that
 could not be checked honestly must appear in `concord/corpus/DISPUTES.md` — a
 scenario weakened until it passes is a rejection, not a deviation.
+
+**C11 closed — and with it wave 11, the last track A checkpoint before
+C-replan-2.** `V1C-CONCORD` merged (`5d3c444`). Gates run by the evaluator on
+the ticket branch and re-run on `main` after the merge: `:concord:test
+-Pconcord.profiles=core,dist,dur --rerun-tasks` green (60 corpus scenarios, 0
+failures, `NeutralityGateTest` green); `:concord:check` green with 0 fatal
+findings and 53 coverage-gap notes (down from 56); `:concord:concordance`
+regenerated to a **zero diff** against the committed file, both on the branch
+and again on `main` after the wave-C3 siblings (`E1-REPL`, `E2-SUITE`) had
+landed in `24-data-cells.md`; `:concord:docLints` clean; repo-wide `./gradlew
+test` green.
+
+Four rulings this checkpoint records.
+
+1. **Stage 1 landed four ids, not three, and two of the drafted wordings were
+   wrong against the shipped kernel.** `[24-BOUND-01]`'s drafted "the cell's tag
+   frontier **at page time**" is false for an intermediate page — `SetCell`
+   carries the walk's *opening* frontier there and declares
+   `ReadCaveat.STALE_FRONTIER`, because an exact per-page frontier is the O(n²)
+   shape C7 ruled out. The phrase was dropped from the requirement and the
+   exactness bound moved to adjacent non-id prose; the drafted requirement's
+   conflation of a per-page obligation with a whole-walk one was split into
+   `[24-BOUND-01]` (per page) and a minted `[24-BOUND-02]` (per walk, at any
+   limit). Verified against `BoundedRead.kt` and `SetCell.readBounded`'s own
+   KDoc.
+2. **`[21-PULL-03]` gained a family qualification, and it is load-bearing rather
+   than a hedge.** `StatePage`'s shipped KDoc says the stability check "detects
+   tag gains, and only tag gains", and an OR-set observed-remove mints nothing —
+   so the *unqualified* drafted requirement is simply false for every
+   tag-frontier family in the catalog. The correction is the C8 and C9 rulings
+   ("`V1C-CONCORD` must not write a `[21-PULL-03]`-style stability scenario over
+   a removal"; "must not write a stability scenario that assumes monotonicity")
+   being honoured in the requirement text rather than only in the corpus.
+3. **The honesty gate was met, and this is the C-replan-2 input the checkpoint
+   below asks for.** `wave-plane-unchanged` is stateable
+   implementation-neutrally: `concord/schema/scenario.md` states the observation
+   as "for every wave source visible at that cell, the position
+   `(source, counter)` that source's wave sequence has advanced to there",
+   anchored on `22-consistency.md`'s decided *"wave ids are per-source monotonic
+   counters … minted by the emitting outlet"*. No kernel type is named, source
+   handles are opaque, and only the **equality of two readings** is asserted. The
+   rejected alternative (checking a downstream view's stream length) is recorded
+   in `scenario.md` with its reason: a view's stream is materialized off the
+   producing cell's execution context, so it states notifier timing rather than
+   graph state.
+4. **`[21-PULL-03]` is filed in `DISPUTES.md`, not covered — the correct
+   outcome, not a shortfall.** No `21-PULL-03.yaml` was authored. Two
+   independent reasons, both verified: no catalog family satisfies the
+   requirement's antecedent (every tag-frontier family is an observed-remove
+   set; the operator families are further away still — their frontier is not
+   even monotone, per the C9 residual), and a `read-state` step is a whole walk
+   by construction, so the script model cannot order a mutation against a page
+   boundary. The evaluator reproduced both of the worker's non-vacuity probes
+   against the driver binding: dropping the last entry of each page fails
+   `24-BOUND-01`/`24-BOUND-02` on 20 of 20 runs while `21-PULL-02` still passes;
+   a membership-neutral re-emission driven to completion before paging fails
+   `21-PULL-02`/`24-BOUND-02` on 20 of 20 runs with the wave-plane diagnostic
+   while `24-BOUND-01` — which carries no `wave-plane-unchanged` check — passes,
+   confirming empirically that `final-view`, `pages-equal-view` and
+   `no-dead-letters` are all blind to an idempotent emission.
+
+One change beyond the ticket's letter, accepted: `scenario.md`'s check table
+gained a row for `observations-whole-waves`, which had been added to the sealed
+`Check` hierarchy after the vocabulary was frozen and never documented. It is a
+one-row completeness fix to a closed-vocabulary table the same edit was already
+extending, and it touches nothing else.
+
+**D-C12 (track B, wave B3) is unblocked** by this merge — cross-track rule 3
+sequenced the shared `concord/` write authority as D-CONCORD → `V1C-CONCORD` →
+D-C12, and the last of those three is now clear.
 
 **Checkpoint C-replan-2.** Trigger: wave 11 merged (or wave 10, under a C7
 NO-GO). Fresh `claude-opus-5` session, `create-implementation-plan` again.
