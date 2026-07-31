@@ -40,11 +40,25 @@ import java.util.Random
  * only delivery is queued), so it lags the synchronously-fused `filtered` arm by
  * a seed-varied number of waves — the sink must hold, order, and release a deep
  * buffer rather than publishing whatever arrived last. The `filtered` arm is
- * deliberately left fused: its absorb-acks travel the protocol lane, which is
- * synchronous on the sender's thread, so queueing *its* data while its acks stay
- * direct would reorder metadata ahead of data on one edge — an artifact of the
- * reroute harness (a real in-process edge is fused, a bridged one carries both
- * in frame order), not a property of the sink under test.
+ * deliberately left fused, and the reason is a harness constraint worth stating
+ * precisely (CC1, measured — it is a landmine for any later suite that reuses
+ * this reroute):
+ *
+ * The absorb-ack travels the `Protocols.Progress` lane, which `ProtocolSupport`
+ * delivers **synchronously on the sender's thread** (its own KDoc records this
+ * as the residual), while a rerouted arm's *data* is queued. Rerouting an
+ * **absorbing** arm while a sibling arm stays fused therefore breaks per-edge
+ * data/metadata FIFO — spec 31's per-link FIFO, the assumption this fold and
+ * `WaveFrontier` alike rest on: the ack for wave `t+1` overtakes that same
+ * edge's still-queued wave-`t` delta, the monotone-`max` watermark jumps past
+ * `t`, and wave `t` releases without it. Measured at CC1: rerouting *only* the
+ * `filtered` arm makes 50/50 seeds publish mixed composites; rerouting **both**
+ * arms is safe (one host queue keeps the arms in relative order), and the shape
+ * used here — the non-absorbing arm queued, the absorbing arm fused — is safe.
+ * It is an artifact of the reroute device, not of the sink: a real in-process
+ * edge is fused (both planes synchronous) and a bridged one carries both planes
+ * through the same `InvocationSink` (`WireEdgeLink.protocolBridge`), so neither
+ * can reorder them.
  */
 class AlignedObserveTest {
 
