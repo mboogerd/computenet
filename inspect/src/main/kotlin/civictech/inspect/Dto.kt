@@ -169,27 +169,236 @@ data class LinkCounts(
     val taps: Int,
 )
 
-/** `GET /api/inspect/cell/{ref}/state`. */
+/**
+ * `GET /api/inspect/cell/{ref}/state`.
+ *
+ * V1C-BE added [provenance], [page] and [unreadable], all additive and all
+ * defaulted, so an M1–V3 client decoding this shape is unaffected and a client
+ * coded against this shape decodes an older server's response unchanged
+ * (`10-design-notes.md` binding constraint 8).
+ */
 @Serializable
 data class CellState(
     val ref: String,
+    /**
+     * A **wave** position, and deliberately still null for [PAGE]/[SNAPSHOT]:
+     * only an observation's materialized fold has one ([StampedView]). A bounded
+     * read's currency is a `TagFrontier` — a different clock, never a wave
+     * position (`MessageContext.kt:58-72`, spec 20/21 §Pull, 93 I-24) — so
+     * stamping a paged read with a wave would be exactly the lie this field
+     * exists to prevent. What a paged read offers instead is
+     * [StatePageView.walkStable].
+     */
     val frontier: WaveStamp? = null,
-    /** [VIEW], [SNAPSHOT] or [UNAVAILABLE]. */
+    /** [VIEW], [SNAPSHOT], [PAGE] or [UNAVAILABLE]. */
     val kind: String,
     /** The contract's `Value` — see [ValueEncoder]. `null` when [kind] is [UNAVAILABLE]. */
     val value: JsonElement = JsonNull,
     /** Milliseconds since the reported value last effectively changed. */
     val staleMs: Long = 0,
+    /**
+     * V1C-BE — **where the bytes came from**: [LIVE], [LIVE_SUSPENDED] or
+     * [CHECKPOINT], straight off the kernel's `Provenance`
+     * (`ManagedHost.readState` mints it; the cell never sees [CHECKPOINT]).
+     *
+     * Non-null exactly when [kind] is [PAGE] or [SNAPSHOT]. Null for [VIEW] — a
+     * fold materialized in the inspector's own heap is neither a live cell read
+     * nor a checkpoint, and claiming [LIVE] would blur the one distinction this
+     * field exists to make — and null for [UNAVAILABLE].
+     */
+    val provenance: String? = null,
+    /** V1C-BE — present iff [kind] is [PAGE]; null otherwise. See [StatePageView]. */
+    val page: StatePageView? = null,
+    /**
+     * V1C-BE — present iff [kind] is [UNAVAILABLE]: **which** nothing this is.
+     * One of [MIGRATING], [REMOTE], [NOT_STATEFUL], [UNANSWERED], [TERMINATED],
+     * [READ_FAILED] or [UNKNOWN].
+     */
+    val unreadable: String? = null,
 ) {
     companion object {
         /** Read from a live observation's materialized fold — torn-read-free. */
         const val VIEW = "view"
 
-        /** Read from a host-routed `Stateful.snapshot()`. */
+        /**
+         * One whole copy of the cell's state. Unchanged in meaning since M1;
+         * now also the answer for a cell that does not implement the kernel's
+         * `BoundedStateful`, which is why it is not a legacy value.
+         */
         const val SNAPSHOT = "snapshot"
 
-        /** No observation and no snapshot source — nothing honest to report. */
+        /** V1C-BE — one bounded page of a walk. Carries [page]. */
+        const val PAGE = "page"
+
+        /** Nothing honest to report; [unreadable] says which nothing. */
         const val UNAVAILABLE = "unavailable"
+
+        // ---------------------------------------------------------- provenance
+
+        /** Read from the running cell on its own execution context. */
+        const val LIVE = "live"
+
+        /**
+         * Read from a SUSPENDED cell's own fold. Quiescent by construction, so
+         * this is the *most* stable read in the graph, not a degraded one.
+         * Reading it resumed nothing, woke nothing and raised no attention.
+         */
+        const val LIVE_SUSPENDED = "liveSuspended"
+
+        /**
+         * Read from the blob a DRAINED host already retains from its drain
+         * (`ManagedHost.beginDrain`). State as of the drain, not as of now, and
+         * no cell thread was scheduled to produce it. The one provenance that is
+         * stale by construction; clients must label it.
+         */
+        const val CHECKPOINT = "checkpoint"
+
+        // ---------------------------------------------------------- unreadable
+
+        /**
+         * Held for a repartition flip, or already migrated. The authoritative
+         * instance is another host's; a stale local read would be a lie with a
+         * timestamp on it.
+         */
+        const val MIGRATING = "migrating"
+
+        /**
+         * No local host (`Node.host == null`). A wave-neutral read is not an
+         * emission and so passes through no disclosure filter; it does not cross
+         * a bridge. Unchanged from M5, and deliberate.
+         */
+        const val REMOTE = "remote"
+
+        /** The cell holds no readable state at all. */
+        const val NOT_STATEFUL = "notStateful"
+
+        /**
+         * The read did not land inside the server's bounded wait. Nothing was
+         * read; a retry may succeed.
+         */
+        const val UNANSWERED = "unanswered"
+
+        /** The host's scheduler is terminated — a dead host has no state to read. */
+        const val TERMINATED = "terminated"
+
+        /** The cell's own `readBounded`/`snapshot` threw. A broken cell, not a broken read. */
+        const val READ_FAILED = "readFailed"
+
+        /**
+         * A kernel `StateReadResult.Reason` this server build does not map.
+         * Forward-compatibility, never a guess.
+         */
+        const val UNKNOWN = "unknown"
+    }
+}
+
+/**
+ * `CellState.page` (V1C-BE) — one bounded page of a walk over a cell's state,
+ * served by `GET /api/inspect/cell/{ref}/state?cursor=&limit=`.
+ *
+ * Present exactly when `CellState.kind` is [CellState.PAGE]. A whole
+ * [CellState.SNAPSHOT] has no page contract — that is the older unbounded seam,
+ * and its absence is how a client knows no bounded read was available.
+ */
+@Serializable
+data class StatePageView(
+    /**
+     * **Opaque.** Echo it back verbatim as `?cursor=` to fetch the next page;
+     * null means the walk is complete. Never parse one, never construct one,
+     * never reuse one: each response mints a fresh cursor and retires the one
+     * that produced it. A stale, unknown, expired or wrong-cell cursor answers
+     * **410** — drop it and restart the walk from page 1.
+     *
+     * Server-minted id into a bounded table, never an encoding of the kernel's
+     * own `Cursor`: no client-supplied bytes are ever deserialized (see
+     * [CursorTable]).
+     */
+    val cursor: String? = null,
+    /**
+     * The limit actually applied. The server clamps `?limit=` to
+     * `1..InspectorServer.PAGE_LIMIT_MAX`, so this is how a client learns its
+     * request was reduced.
+     */
+    val limit: Int,
+    /**
+     * Entries in **this** page, as the cell counted them before encoding — what
+     * the cursor advanced past.
+     *
+     * `value` renders every one of them that the contract's state interpretation
+     * keeps: the server never serves a page whose entries the encoder's byte
+     * budget cut, it re-reads a smaller page instead. So a `$truncated` marker
+     * inside `value` means one *value* was abbreviated, never that entries went
+     * missing; [cursor] is the one and only signal that more state exists.
+     */
+    val entries: Int,
+    /**
+     * Entries on this page whose value is an `Owned`/`Leased` payload. The
+     * kernel pages a presence descriptor (key, declared type, disposition) for
+     * those and never a copy of the payload (spec 23 §Ownership; V1C-KERNEL
+     * Decision 3), so `> 0` means this page is deliberately incomplete in a way
+     * no further page will ever fill in. Render it: it is a fact about the data,
+     * not a diagnostic about the read.
+     */
+    val exclusivesElided: Int = 0,
+    /**
+     * The only consistency claim a paged read makes, and it is **verified**
+     * server-side rather than promised (V1C-KERNEL Decision 5): the walk's
+     * closing tag frontier compared against its opening one.
+     *
+     * - `false` — **proof** the fold changed mid-walk. The union is a SMEARED
+     *   read: it contains every entry present for the whole walk, may contain
+     *   entries added mid-walk, and may miss entries removed mid-walk after
+     *   being passed over. It is never torn at entry granularity and never
+     *   returns an entry twice.
+     * - `true` — the closing stamp equalled the opening one. **Necessary, not
+     *   sufficient**, for "the union is a snapshot", and how far short it falls
+     *   depends on the cell family: a `TagFrontier` measures tag *gains* only,
+     *   so an OR-set observed-remove (which mints no tag) is invisible to it in
+     *   every family; and in the non-retaining families — every cell under
+     *   `civictech.cell.data.op` and `ShardCell` — the stamp can also *fall*, so
+     *   a mid-walk gain can be masked by a mid-walk loss and equality excludes
+     *   nothing at all. Render `true` as "not observed to change", never as
+     *   "this is a snapshot".
+     * - `null` — not determined: the walk has not closed and this page carries
+     *   only the opening stamp ([STALE_FRONTIER]), or the cell reports no tag
+     *   frontier at all. Render it as neither; it is not a `false`.
+     */
+    val walkStable: Boolean? = null,
+    /**
+     * The kernel's own declared weakenings for this page ([STALE_FRONTIER],
+     * [POSITIONAL_CURSOR]) — `StatePage.caveats`, forwarded rather than
+     * inferred, and accumulated across the walk so a client joining at page 4
+     * still learns that this walk's cursor is positional.
+     */
+    val caveats: List<String> = emptyList(),
+    /**
+     * Cell-level state that is not a per-entry row and rides *every* page —
+     * `SetCell`'s tag `counter`, `ShardCell`'s `interest`/`assignedEpoch`,
+     * `OperatorPaging`'s `mintCounter`/`lanes`. Each value is encoded as a
+     * contract `Value`, like [CellState.value].
+     *
+     * Surfaced rather than dropped, deliberately: a client reading page 4 of a
+     * shard walk would otherwise be unable to tell whether the walk straddled a
+     * repartition.
+     */
+    val attributes: JsonObject = JsonObject(emptyMap()),
+) {
+    companion object {
+        /**
+         * `ReadCaveat.STALE_FRONTIER` — this page carries the walk's opening
+         * frontier, not the fold's frontier at this page's production. The first
+         * and last page of a walk always carry an exact one.
+         */
+        const val STALE_FRONTIER = "staleFrontier"
+
+        /**
+         * `ReadCaveat.POSITIONAL_CURSOR` — the cursor is positional, not
+         * key-based (the documented exception for a family with no element
+         * identity, `ListCell`). A removal earlier in the sequence can shift or
+         * skip an entry, so "no entry twice in one walk" and "every surviving
+         * entry appears" both weaken to best-effort.
+         */
+        const val POSITIONAL_CURSOR = "positionalCursor"
     }
 }
 

@@ -1,6 +1,9 @@
 package civictech.inspect
 
 import civictech.cell.CellRef
+import civictech.cell.Provenance
+import civictech.cell.StateRead
+import civictech.cell.StateReadResult
 import civictech.cell.host.LocationRegistry
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -60,34 +63,52 @@ import java.util.concurrent.TimeUnit
  *   P6 argument above was always the real one — but the discarded reason must
  *   not be cited by new work as a design constraint.
  *
- * `ManagedHost.snapshotOf` moves none of that: it runs the cell's own
- * `Stateful.snapshot()` on the cell's own execution context, links nothing,
+ * `ManagedHost.readState` moves none of that: it runs the cell's own
+ * `BoundedStateful.readBounded` (or, for a cell that has none,
+ * `Stateful.snapshot()`) on the cell's own execution context, links nothing,
  * emits nothing, subscribes to nothing and raises no attention. A cell the
  * client already has an open observation on is read from that fold instead —
  * free, and already consistent.
  *
- * What it is *not* is cheap: `snapshot()` copies a cell's whole state on that
- * cell's thread. That cost is the reason data mode is submit-triggered rather
- * than per-keystroke, why the fan-out is capped, and why the cost is surfaced.
+ * ### What it costs, since V1C-BE
+ *
+ * **One bounded page per candidate cell** ([SEARCH_PAGE_LIMIT] entries,
+ * [SEARCH_PAGES_PER_CELL] page), not a whole-state copy. That is the whole
+ * change to this class's cost model, and it is deliberately *not* a coverage
+ * increase: a search that walked a 10⁵-row cell page by page would have
+ * re-created the whole copy and added scheduler overhead to it. The win is that
+ * the copy is now bounded — a big cell costs its own thread O(200) instead of
+ * O(n) — not that the search reads further.
+ *
+ * A cell that implements no bounded read still costs a whole copy (the kernel's
+ * `Unbounded` arm, taken under `allowWholeCopy`), which is complete coverage at
+ * the old price; the notice reports that as a *cost*, not as partiality. A cell
+ * on a drained host answers from the checkpoint blob its host already holds —
+ * complete, but as of the drain, which the notice reports as *staleness*.
  *
  * ### Which cells are candidates
  *
- * Locally hosted, not held mid-migration, not suspended, not on a drained host,
- * and readable — an open observation, or a `Stateful` the host answers for.
- * Everything else is skipped and counted:
+ * Locally hosted, not held mid-migration, and readable — an open observation, or
+ * a cell the host answers a bounded read for. Everything else is skipped and
+ * counted:
  *
- * - **not hot** ([Heat.isReadable] false: suspended, on a drained host, or held
- *   for a migration flip) → [SearchCost.coldSkipped]. M5-COLD widened this from
- *   M5-SEARCH's per-cell predicate to the whole-component one its ticket asks
- *   for: a component the navigator lists as cold is skipped *as a component*,
- *   without a per-cell registry walk, and every one of its candidate cells is
- *   counted. The per-cell test still runs for the rest, so a lone parked cell
- *   inside an otherwise-running graph is skipped and counted too.
+ * - **held for a repartition flip** ([Heat.HELD]) → [SearchCost.coldSkipped].
+ *   **V1C-BE narrowed this to held cells alone.** M5-COLD skipped whole cold
+ *   components without a per-cell walk, because a suspended or drained cell
+ *   could not be read at all; V1C-KERNEL's Decision 7 made both readable
+ *   *without waking anything* — a suspended cell's read runs on the host
+ *   scheduler that is still running (`ManagedHost.isSuspended` parks only the
+ *   cell's data intake) and a drained host's read is served from a blob with no
+ *   cell-thread task at all — so skipping them would now be refusing to answer a
+ *   question the kernel can answer. A held ref stays skipped for the reason it
+ *   always was: the authoritative instance is the migration target's.
  * - **not locally hosted** (a mirrored/announced ref — M5-NET) → counted and
  *   reported in the closing notice. Cross-JVM search is out of scope.
  *
  * Nothing here mutates: this class holds no state between requests, so two
- * concurrent searches simply each pay their own bounded fan-out.
+ * concurrent searches simply each pay their own bounded fan-out. It mints no
+ * cursor either — one page per cell, never resumed, so nothing outlives the
+ * request (contrast [CursorTable], which the paged endpoint owns).
  */
 internal class DataSearch(
     private val registry: LocationRegistry,
@@ -118,117 +139,238 @@ internal class DataSearch(
 
         val deadline = clock() + budgetMs
         val hits = ArrayList<SearchHit>()
-        var queried = 0
-        var coldSkipped = 0
-        var remoteSkipped = 0
-        var truncatedReads = 0
-        var unanswered = 0
-        var capReached = false
-        var budgetSpent = false
-        var coldGraphs = 0
+        val cost = Tally()
 
         val ours = instruments()
         components@ for (component in components()) {
-            // M5-COLD ticket Implement §3: a cold component is skipped whole,
-            // and its candidate cells are what `coldSkipped` counts. Reading
-            // even one of them would be exactly the touching the cold screen
-            // promises not to do — and the cheapest correct thing is also the
-            // most honest one.
-            if (component.lifecycle == GraphSummary.COLD) {
-                coldGraphs += 1
-                coldSkipped += component.nodes.count { node ->
-                    InspectorServer.decodeRef(node.ref)?.let { it !in ours } ?: false
-                }
-                continue
-            }
+            // V1C-BE removed M5-COLD's whole-component skip: a cold component is
+            // now readable cell by cell, and reading it neither wakes it nor
+            // raises attention (see this class's doc). The per-cell predicate
+            // below governs everything.
             for (node in component.nodes) {
                 val ref = InspectorServer.decodeRef(node.ref) ?: continue
                 if (ref in ours) continue
                 when (candidacy(ref)) {
-                    Candidacy.COLD -> {
-                        coldSkipped += 1
+                    Candidacy.HELD -> {
+                        cost.heldSkipped += 1
                         continue
                     }
 
                     Candidacy.REMOTE -> {
-                        remoteSkipped += 1
+                        cost.remoteSkipped += 1
                         continue
                     }
 
-                    Candidacy.HOT -> Unit
+                    Candidacy.READABLE -> Unit
                 }
-                if (queried >= maxCells) {
-                    capReached = true
+                if (cost.queried >= maxCells) {
+                    cost.capReached = true
                     break@components
                 }
                 val remaining = deadline - clock()
                 if (remaining <= 0) {
-                    budgetSpent = true
+                    cost.budgetSpent = true
                     break@components
                 }
 
-                val read = read(ref, remaining)
-                if (read is Read.Unanswered) {
-                    unanswered += 1
-                    continue
-                }
-                if (read !is Read.State) continue
-                queried += 1
-                val encoded = ValueEncoder.encode(read.value)
-                if (isTruncated(encoded)) truncatedReads += 1
-                matchIn(encoded, needle)?.let { match ->
-                    hits += SearchHit(
-                        graph = component.id,
-                        ref = node.ref,
-                        label = match.label,
-                        detail = detailOf(component, node, match.records),
-                    )
+                when (val read = read(ref, remaining)) {
+                    is Read.Unanswered -> cost.unanswered += 1
+                    is Read.Refused -> cost.unreadable += 1
+                    is Read.None -> Unit
+                    is Read.State -> {
+                        cost.queried += 1
+                        if (read.partial) cost.partialPages += 1
+                        if (read.wholeCopy) cost.wholeCopies += 1
+                        if (read.checkpoint) cost.checkpointReads += 1
+                        // A page is encoded under an unbounded *row* allowance
+                        // (V1C-BE): its row bound is already the read's own
+                        // limit, and re-imposing `MAX_ROWS` on top would let the
+                        // encoder's shared budget — which counts an entry's
+                        // nested values as rows too — silently drop entries the
+                        // cell was paid to produce, matching a search against
+                        // half a page it thinks it read whole. The byte budget
+                        // still applies, and whatever it cuts is reported.
+                        val encoded =
+                            if (read.paged) {
+                                ValueEncoder.encode(read.value, ValueEncoder.PAGE_ROWS_UNBOUNDED, ValueEncoder.MAX_BYTES)
+                            } else {
+                                ValueEncoder.encode(read.value)
+                            }
+                        // whatever the render budget cut — a whole copy past
+                        // `MAX_ROWS`, or one abbreviated value inside a page —
+                        // is content this search never matched against
+                        if (isTruncated(encoded)) cost.truncatedReads += 1
+                        matchIn(encoded, needle)?.let { match ->
+                            hits += SearchHit(
+                                graph = component.id,
+                                ref = node.ref,
+                                label = match.label,
+                                detail = detailOf(component, node, match.records),
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        notice(capReached, budgetSpent, truncatedReads, unanswered, remoteSkipped, coldGraphs)?.let { hits += it }
-        return SearchResult(SearchResult.DATA, hits, SearchCost(cellsQueried = queried, coldSkipped = coldSkipped))
+        notice(cost)?.let { hits += it }
+        return SearchResult(
+            SearchResult.DATA,
+            hits,
+            SearchCost(cellsQueried = cost.queried, coldSkipped = cost.heldSkipped),
+        )
+    }
+
+    /**
+     * What one search spent, in one place (V1C-BE) — the fan-out grew enough
+     * outcomes that threading them as eight locals through [notice] stopped
+     * being readable.
+     */
+    private class Tally {
+        /** Cells whose state this search actually read — [SearchCost.cellsQueried]. */
+        var queried = 0
+
+        /**
+         * Candidates skipped as held for a repartition flip —
+         * [SearchCost.coldSkipped], whose meaning V1C-BE narrowed to exactly
+         * this (see the class doc).
+         */
+        var heldSkipped = 0
+
+        /** Peer-announced refs: nothing local to read. */
+        var remoteSkipped = 0
+
+        /** Cells whose page had a `next` — read only to their first [SEARCH_PAGE_LIMIT] entries. */
+        var partialPages = 0
+
+        /** Cells with no bounded read: a whole-state copy, complete but expensive. */
+        var wholeCopies = 0
+
+        /** Cells answered from a drained host's checkpoint: complete, but as of the drain. */
+        var checkpointReads = 0
+
+        /** Whole copies the encoder's own row budget cut — a genuine coverage gap. */
+        var truncatedReads = 0
+
+        /** Reads abandoned at the deadline. */
+        var unanswered = 0
+
+        /** Reads the kernel refused with a decided reason (migrating, dead scheduler, a throwing cell). */
+        var unreadable = 0
+
+        var capReached = false
+        var budgetSpent = false
     }
 
     /** Why a candidate was (or was not) queried — the whole skip vocabulary in one place. */
-    private enum class Candidacy { HOT, COLD, REMOTE }
+    private enum class Candidacy { READABLE, HELD, REMOTE }
 
     private fun candidacy(ref: CellRef): Candidacy = when (val heat = Heat.of(registry, ref)) {
         Heat.UNHOSTED -> Candidacy.REMOTE
-        else -> if (heat.isReadable) Candidacy.HOT else Candidacy.COLD
+        // V1C-BE: `isReadable` is now HOT/SUSPENDED/DRAINED, so this leaves
+        // exactly HELD — see [Heat.isReadable]
+        else -> if (heat.isReadable) Candidacy.READABLE else Candidacy.HELD
     }
 
     /** The outcome of one candidate read — "nothing to read" and "did not answer" are not the same. */
     private sealed interface Read {
-        /** State this search can match against. */
-        data class State(val value: Any?) : Read
+        /**
+         * State this search can match against, plus what reading it cost and how
+         * far it reached.
+         *
+         * @property paged the value is a `StatePage`'s entry list rather than a
+         *   whole state, which changes how it is encoded (see the call site).
+         * @property partial the page had a `next`: this cell was read only to
+         *   its first [SEARCH_PAGE_LIMIT] entries, so a record past that is
+         *   genuinely unfindable and the result must say so.
+         * @property wholeCopy the cell implements no bounded read, so the kernel
+         *   answered `Unbounded` under `allowWholeCopy` — complete coverage at
+         *   the old price. A cost note, never a partiality one.
+         * @property checkpoint answered from a drained host's retained blob:
+         *   state as of the drain. A staleness note, never a partiality one.
+         */
+        data class State(
+            val value: Any?,
+            val paged: Boolean = false,
+            val partial: Boolean = false,
+            val wholeCopy: Boolean = false,
+            val checkpoint: Boolean = false,
+        ) : Read
 
-        /** The cell holds no readable state (not `Stateful`, or nothing to snapshot). Costs nothing. */
+        /** The cell holds no readable state (not `Stateful`, not hosted here). Costs nothing. */
         data object None : Read
 
         /** The read did not land inside the deadline — the search is partial because of it. */
         data object Unanswered : Read
+
+        /**
+         * The kernel decided it would not answer, and said why. Distinct from
+         * [None]: "there is nothing to read" and "there is something and you may
+         * not read it right now" are different facts about coverage.
+         */
+        data class Refused(val reason: StateReadResult.Reason) : Read
     }
 
     /**
-     * One cell's state. An open observation answers for free; otherwise the
-     * host is asked for a routed `Stateful.snapshot()`, abandoned if it does
-     * not land inside [withinMs] — a slow or wedged cell costs this search its
-     * remaining budget, never the whole request, and never the graph.
+     * One cell's state — since V1C-BE, **one bounded page** of it.
+     *
+     * An open observation answers for free; otherwise the host is asked for one
+     * page through `ManagedHost.readState`, abandoned if it does not land inside
+     * [withinMs] — a slow or wedged cell costs this search its remaining budget,
+     * never the whole request, and never the graph. The deadline discipline is
+     * M5's verbatim: the `isDone` short-circuit for a read that never reached a
+     * cell thread, a bounded `get`, and `cancel(false)` on the miss so an
+     * abandoned read costs the host a dequeue rather than a page.
+     *
+     * `allowWholeCopy = true` so a cell the V1c cell tickets did not cover keeps
+     * being searched at all, rather than regressing to "unreadable"; the flag is
+     * what makes that a *reported* cost instead of a silent one.
      */
     private fun read(ref: CellRef, withinMs: Long): Read {
         observed(ref)?.let { return Read.State(it.value) }
         val host = registry.locate(ref) ?: return Read.None
-        val pending = host.snapshotOf(ref)
-        // completed inline for a non-Stateful cell: no host task was ever
-        // submitted, so this is a cheap skip rather than an abandoned read
-        if (pending.isDone) return pending.getNow(null)?.let { Read.State(it) } ?: Read.None
+        val request = StateRead(limit = SEARCH_PAGE_LIMIT, allowWholeCopy = true)
+        val pending = host.readState(ref, request)
+        // completed inline for every refusal the kernel decides on the caller's
+        // thread: no host task was ever submitted, so this is a cheap skip
+        // rather than an abandoned read
+        if (pending.isDone) return classify(pending.getNow(null))
         return runCatching { pending.get(withinMs, TimeUnit.MILLISECONDS) }
             .fold(
-                onSuccess = { state -> state?.let { Read.State(it) } ?: Read.None },
+                onSuccess = { result -> classify(result) },
                 onFailure = { pending.cancel(false); Read.Unanswered },
             )
+    }
+
+    /**
+     * One `StateReadResult` as this search's outcome vocabulary.
+     *
+     * `NOT_HOSTED` and `NOT_STATEFUL` are [Read.None], not [Read.Refused]: they
+     * are the ordinary "this cell holds nothing a search could match" of every
+     * non-`Stateful` cell in a graph, and reporting them as coverage failures
+     * would make the notice fire on almost every query. Everything else the
+     * kernel decided is a real gap and is counted.
+     */
+    private fun classify(result: StateReadResult?): Read = when (result) {
+        null -> Read.None
+
+        is StateReadResult.Page -> Read.State(
+            value = result.page.entries,
+            paged = true,
+            partial = result.page.next != null,
+            checkpoint = result.page.provenance == Provenance.CHECKPOINT,
+        )
+
+        is StateReadResult.Unbounded -> Read.State(
+            value = result.state,
+            wholeCopy = true,
+            checkpoint = result.provenance == Provenance.CHECKPOINT,
+        )
+
+        is StateReadResult.Unavailable -> when (result.reason) {
+            StateReadResult.Reason.NOT_HOSTED, StateReadResult.Reason.NOT_STATEFUL -> Read.None
+            else -> Read.Refused(result.reason)
+        }
     }
 
     /** A cell's hit line: the matching value, and where it lives. */
@@ -318,30 +460,57 @@ internal class DataSearch(
      * (`g-<uuid>`), so the sentinel cannot collide with a real hit, and the
      * client renders it as an inert notice rather than a navigable row.
      */
-    private fun notice(
-        cap: Boolean,
-        budget: Boolean,
-        truncatedReads: Int,
-        unanswered: Int,
-        remoteSkipped: Int,
-        coldGraphs: Int,
-    ): SearchHit? {
+    private fun notice(cost: Tally): SearchHit? {
         val reasons = buildList {
-            if (cap) add("stopped at the $maxCells-cell cap")
-            if (budget) add("stopped at the ${budgetMs}ms budget")
-            if (unanswered > 0) add("$unanswered ${cells(unanswered)} did not answer in time")
-            if (truncatedReads > 0) {
-                add("$truncatedReads ${cells(truncatedReads)} read only to the first ${ValueEncoder.MAX_ROWS} rows")
+            if (cost.capReached) add("stopped at the $maxCells-cell cap")
+            if (cost.budgetSpent) add("stopped at the ${budgetMs}ms budget")
+            if (cost.unanswered > 0) add("${cost.unanswered} ${cells(cost.unanswered)} did not answer in time")
+            if (cost.unreadable > 0) add("${cost.unreadable} ${cells(cost.unreadable)} refused the read")
+            // V1C-BE: this replaces M5's "read only to the first 200 rows",
+            // which described a *rendering* limit while implying a *read* one.
+            // Now there is a real read limit, and the honest sentence names
+            // entries.
+            if (cost.partialPages > 0) {
+                add("${cost.partialPages} ${cells(cost.partialPages)} read only their first $SEARCH_PAGE_LIMIT entries")
             }
-            if (remoteSkipped > 0) add("$remoteSkipped remote ${cells(remoteSkipped)} skipped")
-            // M5-COLD: the one skip a user can do something about, so it names
-            // the remedy rather than only the fact
-            if (coldGraphs > 0) {
-                add("$coldGraphs cold ${if (coldGraphs == 1) "graph" else "graphs"} skipped — wake to include")
+            // and this one survives, generalized: whatever the *render* budget
+            // cut — a whole copy past `ValueEncoder.MAX_ROWS`, or one
+            // abbreviated value inside a page — is content that was read but
+            // never matched against, which is a different gap from the read
+            // bound above and is reported as its own
+            if (cost.truncatedReads > 0) {
+                add(
+                    "${cost.truncatedReads} ${cells(cost.truncatedReads)} matched only against the part of " +
+                        "their state the render budget fitted",
+                )
+            }
+            // V1C-BE — a cost note, not a partiality one: this cell was read
+            // whole, which is complete coverage at the price the bounded read
+            // exists to avoid
+            if (cost.wholeCopies > 0) {
+                add("${cost.wholeCopies} ${cells(cost.wholeCopies)} cost a whole-state copy — no bounded read")
+            }
+            // V1C-BE — a staleness note, not a partiality one; the same
+            // discipline `provenance: "checkpoint"` applies on the detail panel
+            if (cost.checkpointReads > 0) {
+                add(
+                    "${cost.checkpointReads} ${cells(cost.checkpointReads)} read from a drained host's " +
+                        "checkpoint — state as of the drain",
+                )
+            }
+            if (cost.remoteSkipped > 0) add("${cost.remoteSkipped} remote ${cells(cost.remoteSkipped)} skipped")
+            // V1C-BE: M5-COLD's "cold graphs skipped — wake to include" is gone.
+            // A suspended or drained cell is now read (see the class doc), so
+            // the only skip left is the one waking cannot help — and offering
+            // "wake to include" for a held ref would advertise a remedy that
+            // does nothing, or worse, corrupts the flip it would interrupt.
+            if (cost.heldSkipped > 0) {
+                add("${cost.heldSkipped} ${cells(cost.heldSkipped)} held mid-migration — not the inspector's to end")
             }
         }
         if (reasons.isEmpty()) return null
-        val partial = cap || budget || unanswered > 0 || truncatedReads > 0
+        val partial = cost.capReached || cost.budgetSpent || cost.unanswered > 0 ||
+            cost.unreadable > 0 || cost.truncatedReads > 0 || cost.partialPages > 0
         return SearchHit(
             graph = NOTICE_GRAPH,
             ref = null,
@@ -353,10 +522,50 @@ internal class DataSearch(
     private fun cells(n: Int): String = if (n == 1) "cell" else "cells"
 
     internal companion object {
-        /** Ticket: "max 50 cells queried". */
+        /**
+         * How many entries one candidate cell is read for (V1C-BE) — one page,
+         * matching `ValueEncoder.MAX_ROWS` and `StateRead`'s own default.
+         *
+         * Protects the graph from the cost this whole vertical exists to remove:
+         * before this, every candidate paid a whole-state copy on its own
+         * thread, so a 10⁵-row cell's own live traffic stalled for ~28 ms per
+         * search (`30-bounded-read-measurement.md` §4) for a search that would
+         * only ever look at 200 rows of it.
+         */
+        const val SEARCH_PAGE_LIMIT = 200
+
+        /**
+         * Pages read per candidate cell (V1C-BE). **One, and deliberately not a
+         * walk.** A search that walked a 10⁵-row cell page by page would have
+         * re-created the whole copy and added scheduler overhead to it; the win
+         * here is that the copy is bounded, not that coverage grew. Named rather
+         * than inlined so a later ticket that decides otherwise changes one
+         * constant and its justification together.
+         */
+        const val SEARCH_PAGES_PER_CELL = 1
+
+        /**
+         * Cells queried per search. **Unchanged by V1C-BE**, on the measurement
+         * rather than on the ticket citation it used to carry:
+         * `30-bounded-read-measurement.md` §9 finds "a 40 ms-per-cell budget
+         * (`BUDGET_MS / MAX_CELLS` = 2,000 ms / 50) lines up almost exactly with
+         * the *tail*, not the median, of a single 10⁵-element copy" and
+         * explicitly recommends "neither constant is changed by this ticket".
+         * The per-cell cost is now bounded by [SEARCH_PAGE_LIMIT] rather than by
+         * the cell's size, which only widens that headroom; the cap still
+         * protects the fan-out itself.
+         */
         const val MAX_CELLS = 50
 
-        /** Ticket: "2 s budget". */
+        /**
+         * The whole fan-out's deadline. **Unchanged by V1C-BE**, for the reason
+         * above — and with the gap §9 names left open rather than papered over:
+         * "for `MAX_CELLS` whole copies queued back-to-back on the **same** host
+         * (E2 shows they fully serialize — one virtual thread per host, §4),
+         * this document has no data". Bounding each read to one page makes that
+         * scenario cheaper, not measured; re-deriving these two constants needs
+         * a measurement that does not exist yet.
+         */
         const val BUDGET_MS = 2_000L
 
         /**

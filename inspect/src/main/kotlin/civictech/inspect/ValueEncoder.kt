@@ -55,6 +55,14 @@ object ValueEncoder {
     /** Contract §Value: "… / 50 KB per response". */
     const val MAX_BYTES = 50_000
 
+    /**
+     * V1C-BE — the row allowance a *page* encode passes to
+     * [encode]`(state, maxRows, maxBytes)`: none. See that overload's doc for
+     * why the read's `limit` is the page's row bound and re-imposing a second
+     * one here would cut entries the cursor already advanced past.
+     */
+    const val PAGE_ROWS_UNBOUNDED = Int.MAX_VALUE
+
     /** Reserved key: the tabular form of a set/map-like state. */
     const val TABLE = "\$table"
 
@@ -70,6 +78,46 @@ object ValueEncoder {
      * enlarged by burying rows one table deeper.
      */
     fun encode(state: Any?): JsonElement = value(state, Budget())
+
+    /**
+     * V1C-BE — encode [state] under an **explicit** allowance instead of
+     * [MAX_ROWS]/[MAX_BYTES]. Purely additive: [encode] above and both constants
+     * behave exactly as before for every existing caller.
+     *
+     * The paged state read passes [PAGE_ROWS_UNBOUNDED] for [maxRows] on
+     * purpose. A page's row bound is the *read's* own `limit` — that is the
+     * entire point of the bounded read, and re-applying a second row bound here
+     * would silently swallow entries the cursor has already advanced past. The
+     * budget is shared across nesting levels (so a response cannot be enlarged
+     * by burying rows one table deeper), which means a nested collection inside
+     * one entry consumes rows too; leaving rows unbounded is therefore what
+     * makes "every entry the kernel returned was rendered" achievable. The work
+     * stays bounded because [maxBytes] still is: the shared budget stops
+     * admitting rows the moment it is spent.
+     */
+    fun encode(state: Any?, maxRows: Int, maxBytes: Int = MAX_BYTES): JsonElement =
+        value(state, Budget(maxRows, maxBytes))
+
+    /**
+     * V1C-BE — how many of [total] top-level entries [encoded] actually rendered.
+     *
+     * Read off the encoder's own **top-level** truncation marker rather than by
+     * counting rows, so it means the same thing for both shapes [encode]
+     * produces for "many things" (`$table` + a `$truncated` sibling, or a plain
+     * array with `$truncated` as its last element). A `$truncated` nested deeper
+     * — one wide record abbreviated — is deliberately not counted: that marker
+     * says *this value was abbreviated*, never *this walk is incomplete*.
+     */
+    fun renderedOf(encoded: JsonElement, total: Int): Int {
+        val marker = when (encoded) {
+            is JsonObject -> encoded[TRUNCATED] as? JsonObject
+            is JsonArray -> (encoded.lastOrNull() as? JsonObject)?.takeIf { TRUNCATED in it && it.size == 1 }
+                ?.get(TRUNCATED) as? JsonObject
+
+            else -> null
+        }
+        return (marker?.get("shown") as? JsonPrimitive)?.content?.toIntOrNull() ?: total
+    }
 
     /**
      * A one-line description of *how much* state this is — the

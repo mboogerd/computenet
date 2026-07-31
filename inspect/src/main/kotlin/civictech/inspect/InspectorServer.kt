@@ -68,6 +68,17 @@ import java.util.concurrent.TimeUnit
  * error feeds have nothing to read for them and say so (`GET state` →
  * `unavailable`, `POST observe` → 409).
  *
+ * V1C adds the **bounded** state read (see [PagedState]):
+ *
+ * - `GET /api/inspect/cell/{ref}/state?cursor=&limit=` walks a cell one page at
+ *   a time off `ManagedHost.readState` instead of copying it whole, and says
+ *   where the bytes came from (`provenance`), how much of the walk to believe
+ *   (`page.walkStable`) and — when there is nothing to report — *which* nothing
+ *   it is (`unreadable`);
+ * - a **suspended** cell and a cell on a **drained** host stop being skipped:
+ *   both are readable without waking anything, which also narrows what
+ *   [DataSearch] declines to read to held refs alone (see [Heat.isReadable]).
+ *
  * V2 adds the activity feed (see [Activity]):
  *
  * - `GET /api/inspect/activity` — an [ActivitySnapshot], the bounded history of
@@ -160,6 +171,14 @@ class InspectorServer(
     private val broadcaster = SseBroadcaster()
 
     /**
+     * V1C-BE — the one registry, held rather than only captured, so
+     * [serveState] can tell "no local host for this ref" from "both read seams
+     * were disabled" when neither answered. Everything else reads it through
+     * the collaborators built below.
+     */
+    private val locations: LocationRegistry = registry
+
+    /**
      * (b) — [uiDist] resolved to a real, existing directory, or null when it
      * is not one (not yet built, wrong working directory, or a file rather
      * than a directory). `toRealPath()` both resolves symlinks and fails
@@ -234,6 +253,38 @@ class InspectorServer(
                 .getOrNull()
         }
     }
+
+    /**
+     * V1C-BE — the **bounded** read seam (see [BoundedReadSource]), wired by
+     * default to [ManagedHost.readState]: `registry.locate(ref)` is null for a
+     * cell with no local host (mirrored, remote, or unknown) and this resolves
+     * to null without ever reaching a host, which is exactly the
+     * "this seam did not answer" case [PagedState] falls through to [snapshots]
+     * on.
+     *
+     * The deadline is **not** applied here — [PagedState] owns it, so one
+     * request spends exactly one bounded wait and a miss is reported as
+     * `unreadable: "unanswered"` rather than degenerating into a second read
+     * against the older whole-copy seam.
+     *
+     * Internal and a `var` for the same reason [snapshots] is: a test standing
+     * in for a slow, absent or deliberately disabled kernel accessor installs
+     * its own after construction, and [PagedState] reads through this field
+     * rather than capturing today's value.
+     */
+    internal var reads: BoundedReadSource = BoundedReadSource { ref, request ->
+        registry.locate(ref)?.readState(ref, request)
+    }
+
+    /**
+     * V1C-BE — the paged `GET /cell/{ref}/state` (see [PagedState]), and the
+     * owner of the cursor table its `?cursor=` ids index.
+     */
+    private val pagedState = PagedState(
+        reads = { reads },
+        cursors = CursorTable(clock = { inspectorClock() }),
+        waitMs = SNAPSHOT_WAIT_MS,
+    )
 
     private val observations = Observations(
         registry = registry,
@@ -541,31 +592,70 @@ class InspectorServer(
     }
 
     /**
-     * A state read. An open observation answers from its materialized fold; a
-     * wired [SnapshotSource] answers from a host-routed snapshot; otherwise the
-     * contract's `unavailable` — the honest answer for a cell nobody subscribed
-     * to, since *reading* it here would mean either racing its fold from the
-     * HTTP thread or silently subscribing (P6).
+     * A state read, in four arms and one fixed order (V1C-BE).
+     *
+     * 1. An **open observation** answers from its already-materialized fold
+     *    (`kind: "view"`), exactly as M1 did. It is free, it is already
+     *    consistent, and it is never regressed: `?cursor=`/`?limit=` are
+     *    *ignored* for an observed cell and the response carries no `page`, so a
+     *    client's walk terminates on page 1 with whatever the encoder's 200-row
+     *    budget renders. `View` paging is out of scope (V1C-KERNEL Decision 9).
+     * 2. Otherwise the **bounded read** ([PagedState]) — `kind: "page"` for a
+     *    `BoundedStateful` cell, `kind: "snapshot"` for a `Stateful` one that is
+     *    not (byte-identical to what M5/V0 answered), and `kind: "unavailable"`
+     *    with an `unreadable` reason for every case the kernel *decided*.
+     * 3. When that seam did not answer at all — no local host, or a caller that
+     *    installed [BoundedReadSource.Unavailable] — the older [SnapshotSource]
+     *    remains the last fallback, so an app-supplied source still works.
+     * 4. And otherwise the contract's `unavailable`, now saying *which* nothing
+     *    it is.
      *
      * Also the "matching `GET state`" that renews the idle deadline.
      */
     private fun serveState(exchange: HttpExchange, ref: CellRef) {
         if (!model.knows(ref)) return exchange.respond(404, problem("unknown cell"), JSON)
         observations.touch(ref)
-        val reading = observations.reading(ref) ?: observations.snapshotReading(ref)
-        val state = if (reading == null) {
-            CellState(ref = encodeRef(ref), kind = CellState.UNAVAILABLE)
-        } else {
-            CellState(
-                ref = encodeRef(ref),
-                frontier = reading.frontier?.let { WaveStamp(it.sourceId.toString(), it.counter) },
-                kind = reading.kind,
-                value = ValueEncoder.encode(reading.value),
-                staleMs = reading.staleMs,
-            )
+        val encoded = encodeRef(ref)
+        observations.reading(ref)?.let { return exchange.respondState(stateOf(encoded, it)) }
+
+        when (val outcome = pagedState.read(ref, encoded, exchange.query())) {
+            is PagedState.Outcome.Answered -> exchange.respondState(outcome.state)
+            is PagedState.Outcome.BadRequest -> exchange.respond(400, problem(outcome.reason), JSON)
+            is PagedState.Outcome.Gone -> exchange.respond(410, problem(outcome.reason), JSON)
+            PagedState.Outcome.NoSource -> {
+                val reading = observations.snapshotReading(ref)
+                exchange.respondState(
+                    reading?.let { stateOf(encoded, it) }
+                        ?: CellState(
+                            ref = encoded,
+                            kind = CellState.UNAVAILABLE,
+                            // the bounded seam answers null exactly when this
+                            // registry places no local host for the ref
+                            unreadable = if (locations.locate(ref) == null) CellState.REMOTE else CellState.UNKNOWN,
+                        ),
+                )
+            }
         }
-        exchange.respond(200, inspectorJson.encodeToString(CellState.serializer(), state), JSON)
     }
+
+    /**
+     * The M1 body for a [StateReading] — an observation's fold (`"view"`) or the
+     * [SnapshotSource] fallback (`"snapshot"`). Unchanged field-for-field; V1C-BE
+     * only adds the `provenance` a whole copy of a live cell now carries, and
+     * leaves it null for a `"view"` (a fold materialized in the inspector's own
+     * heap is neither a live cell read nor a checkpoint).
+     */
+    private fun stateOf(encodedRef: String, reading: StateReading): CellState = CellState(
+        ref = encodedRef,
+        frontier = reading.frontier?.let { WaveStamp(it.sourceId.toString(), it.counter) },
+        kind = reading.kind,
+        value = ValueEncoder.encode(reading.value),
+        staleMs = reading.staleMs,
+        provenance = if (reading.kind == CellState.SNAPSHOT) CellState.LIVE else null,
+    )
+
+    private fun HttpExchange.respondState(state: CellState) =
+        respond(200, inspectorJson.encodeToString(CellState.serializer(), state), JSON)
 
     /**
      * Contract: `204; starts state summaries for this cell`. A cell the kernel
@@ -756,6 +846,10 @@ class InspectorServer(
         // V2 — and every kernel lifecycle listener with them: a stopped
         // inspector is off every host it was watching, not merely quiet
         activity.close()
+        // V1C-BE — the cursor table holds no cell, host or port, so this is
+        // hygiene rather than detachment: a stopped inspector must not keep
+        // resumable walks over a graph it is no longer serving
+        pagedState.close()
         // before the broadcaster: releasing a sink emits topology deltas, and a
         // still-attached client should see its own subscriptions retract
         observations.close()
@@ -879,8 +973,56 @@ class InspectorServer(
          * lands well inside it, short enough that a single slow or wedged
          * cell costs one HTTP response a barely-noticeable delay rather than
          * a perceptible stall.
+         *
+         * **V1C-BE — the same constant, not a second one, for the bounded read**
+         * ([PagedState]). A page is strictly cheaper than the whole copy this
+         * was sized for (`ManagedHost.readState` does O(limit) work per
+         * scheduler task where `snapshotOf` copies the whole fold), so a second
+         * constant would only be a second thing to keep in step. One request
+         * spends this wait once: an `Unavailable` is an answer, never a reason
+         * to spend it again on the older seam.
          */
         internal const val SNAPSHOT_WAIT_MS = 200L
+
+        /**
+         * V1C-BE — `?limit=` when the client did not say. Matches both
+         * [ValueEncoder.MAX_ROWS] and `StateRead`'s own default: it is what the
+         * detail panel renders, so asking a cell for more would buy a cost
+         * nobody sees.
+         */
+        internal const val PAGE_LIMIT_DEFAULT = 200
+
+        /**
+         * V1C-BE — the ceiling `?limit=` is clamped to. Protects the invariant
+         * the whole primitive rests on: **one page = one scheduler task**, so a
+         * page must stay small enough that the task interleaves with the cell's
+         * real work rather than owning its thread the way a whole copy does.
+         */
+        internal const val PAGE_LIMIT_MAX = 1_000
+
+        /**
+         * V1C-BE — how long an unclaimed `page.cursor` stays resumable. Protects
+         * the server from a UI that abandoned a walk: one minute, then the entry
+         * is gone and the client's next `?cursor=` is an honest 410 rather than
+         * an entry pinned indefinitely.
+         */
+        internal const val CURSOR_TTL_MS = 60_000L
+
+        /**
+         * V1C-BE — simultaneously live walks; the oldest is evicted past this.
+         * Protects the server from unbounded growth under many concurrent or
+         * abandoned walks, the same drop-oldest discipline [SseBroadcaster]
+         * applies to a slow client's queue (binding constraint 6).
+         */
+        internal const val CURSOR_MAX_OPEN = 256
+
+        /**
+         * V1C-BE — how many times a page whose entries the encoder's *byte*
+         * budget cut is re-read at a smaller limit. Bounds what that
+         * reconciliation costs: without a bound, a cell of pathologically wide
+         * entries could drive a re-read per attempt inside one HTTP response.
+         */
+        internal const val PAGE_RENDER_RETRIES = 1
 
         /** (b) — Vite's own default build output directory (`inspect/ui/package.json`). */
         internal fun defaultUiDist(): Path = Path.of("inspect", "ui", "dist")

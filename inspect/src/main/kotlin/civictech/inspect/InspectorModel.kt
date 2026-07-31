@@ -734,7 +734,11 @@ internal class InspectorModel(
             ports = descriptor?.ports?.map { NodePort(it.name, it.direction.name, it.contractFqn) } ?: emptyList(),
             host = host?.let { hostNames[it] ?: defaultHostName(it) },
             // M5: the JVM this ref lives on — [Peers.localNet] for a local
-            // publish, the announcing peer's derived label for a mirrored one
+            // publish. For a mirrored one, V4-PEERID made this the announcing
+            // peer's *own* name (its `--net-name`, re-asserted in every
+            // re-hello, so it survives a reconnect); only an anonymous peer
+            // still falls back to M5's per-connection derived label, which does
+            // not. See [Peers.netOf].
             net = peers.netOf(ref) ?: peers.localNet,
             // stamped on the way out by [stamped], like `graph`: whether a cell
             // is running is a property of its host *now*, not of the publish
