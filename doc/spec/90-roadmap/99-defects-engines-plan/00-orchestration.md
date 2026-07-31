@@ -357,7 +357,7 @@ E2-ALIGN).
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | E1-CORE | `TaggedMapDelta` + `OrMapCell` local core: dot-per-key observed-remove, LWW-by-dot-order, atomic re-put, catch-up, additive wire registration (96 §E1.2, `[24-TMAP-01..04]`) | opus | fresh | ticket/e1-core | opus | Implemented — merged |
-| E2-GATE | Absorb-ack residual closed (`CombineLatestCell`, `LookupJoinCell`) + opt-in `emitOnFrontier` on `SemiJoinCell`/`CombineLatestCell` (96 §E2.2 residual + §E2.4, `[24-OP-SEMIJOIN-04]`) | opus | fresh | ticket/e2-gate | opus | Specified — not-started |
+| E2-GATE | Absorb-ack residual closed (`CombineLatestCell`, `LookupJoinCell`) + opt-in `emitOnFrontier` on `SemiJoinCell`/`CombineLatestCell` (96 §E2.2 residual + §E2.4, `[24-OP-SEMIJOIN-04]`) | opus | fresh | ticket/e2-gate | opus | Implemented — merged |
 
 **Checkpoint CC2 — verification.** Fresh opus evaluator per ticket. E1-CORE:
 named tests + `./gradlew :kernel:test`; audit the wire registration is
