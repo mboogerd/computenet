@@ -32,6 +32,33 @@ two-way chain cycle-safe), and a peer that starts late catches up from the
 parked replay. The cell graph is identical to single-process mode — placement
 is the only difference.
 
+## One logical cell, two places (`--replicate`, V4-PILOT)
+
+The section above peers two JVMs with two *different* logical cells —
+`unionRef("items", "listener")` and `unionRef("items", "dialer")` are
+counterparts that stream into each other. `--replicate` adds the other
+distribution model beside it: **one** logical cell with an instance in each JVM,
+gossiping through `civictech.cell.replication.Replication` over the same socket.
+
+```
+./gradlew :demo:shopping:run --args="8080 --listen 9090 --replicate"              # instance 0
+./gradlew :demo:shopping:run --args="8081 --peer ws://localhost:9090 --replicate" # instance 1
+```
+
+Write onto the replica with `action=share` (`curl -X POST localhost:8080/op -d
+'user=alice&action=share&item=flour'`); the state JSON grows a `"shared"` array,
+and shared items also appear in the ordinary items list because the replica is
+linked into the visible `items` union on purpose. The mode is **off by default**
+and adds nothing — no cells, links, JSON fields or inspector annotations — when
+the flag is absent.
+
+`./scripts/demo-shopping-replica-pilot.sh` runs both peers with an inspector and
+an inspector UI each. The runbook, including what the inspector gets right and
+wrong about a replicated graph, is
+[doc/demo-shopping-replica-pilot.md](../../doc/demo-shopping-replica-pilot.md);
+the sibling non-replicated recipe is
+[doc/demo-shopping-inspector.md](../../doc/demo-shopping-inspector.md).
+
 The headless, seeded version of this session — late joiner, host migration,
 injected failure, invariants — runs in CI as `CollaborativeAppTest` (one
 process) and `DistributedCollaborativeAppTest` (split across two registries
