@@ -1,0 +1,15 @@
+{
+  "ref": "c9a41ef0-9a21-48c3-b9a9-647bac311c98:0",
+  "frontier": null,
+  "kind": "snapshot",
+  "value": {
+    "$table": {
+      "columns": ["skill"],
+      "rows": [["Kotlin"], ["TypeScript"]]
+    }
+  },
+  "staleMs": 0,
+  "provenance": "checkpoint",
+  "page": null,
+  "unreadable": null
+}

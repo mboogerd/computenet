@@ -168,7 +168,7 @@ describe('fixtures/graphs-cold.json', () => {
 describe('fixtures/search-data-cold.json', () => {
   it('reports a nonzero coldSkipped and the hint that offers to include it', () => {
     expect(searchDataCold.cost!.coldSkipped).toBe(2);
-    expect(formatColdSkipHint(searchDataCold.cost)).toBe('2 cold cells skipped — wake their graph to include');
+    expect(formatColdSkipHint(searchDataCold.cost)).toBe('2 cold cells skipped — their state could not be read for this search');
   });
 
   it('queried fewer cells than the all-hot capture, by exactly the skipped ones', () => {

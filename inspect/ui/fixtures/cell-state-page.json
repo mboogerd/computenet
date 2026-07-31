@@ -1,0 +1,21 @@
+{
+  "ref": "c9a41ef0-9a21-48c3-b9a9-647bac311c99:0",
+  "frontier": null,
+  "kind": "page",
+  "value": {
+    "$table": {
+      "columns": ["skill"],
+      "rows": [["Kotlin"], ["TypeScript"], ["Rust"]]
+    }
+  },
+  "staleMs": 0,
+  "provenance": "live",
+  "page": {
+    "cursor": "p-7f3a1",
+    "limit": 3,
+    "entries": 3,
+    "exclusivesElided": 0,
+    "walkStable": true
+  },
+  "unreadable": null
+}

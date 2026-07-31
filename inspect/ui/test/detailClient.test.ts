@@ -32,6 +32,7 @@ describe('DetailController', () => {
   let transport: {
     fetchDetail: ReturnType<typeof vi.fn>;
     fetchState: ReturnType<typeof vi.fn>;
+    fetchStatePage: ReturnType<typeof vi.fn>;
     observeStart: ReturnType<typeof vi.fn>;
     observeStop: ReturnType<typeof vi.fn>;
   };
@@ -44,6 +45,7 @@ describe('DetailController', () => {
     transport = {
       fetchDetail: vi.fn(async (ref: string) => detail(ref)),
       fetchState: vi.fn(async (ref: string) => state(ref)),
+      fetchStatePage: vi.fn(async (ref: string) => ({ status: 'ok' as const, state: state(ref) })),
       observeStart: vi.fn(async () => 'started' as const),
       observeStop: vi.fn(async () => undefined),
     };
@@ -168,6 +170,10 @@ describe('DetailController', () => {
     it('a descriptor-only (cold) selection still refetches nothing on any summary, changed or not', async () => {
       controller.select('a', 'descriptor');
       await flush();
+      // V1C-FE: `select(..., 'descriptor')` issues its own one-shot
+      // fetchState (the plain cold read) — clear that call so the assertion
+      // below tests only what `onSummary` itself triggers.
+      transport.fetchState.mockClear();
 
       controller.onSummary(summary('a', { staleMs: 0 }));
       controller.onSummary(summary('a', { staleMs: 0, cardinality: '9 rows' }));
@@ -255,16 +261,24 @@ describe('DetailController', () => {
    *  transport (ticket Tests: "FE: cold gating (no observe calls while cold —
    *  mock-transport assertion)"). Subscribing raises attention and can un-park
    *  a cone, so a graph the UI has just called parked must not be woken by
-   *  looking at it. */
+   *  looking at it.
+   *
+   *  V1C-FE ticket Solution direction §3 correction: a cold selection now
+   *  READS state too — `V1C-BE` guarantees a suspended cell's read resumes
+   *  nothing and a drained host's read schedules no cell thread at all, so
+   *  there is no longer a reason to withhold `GET state` while cold. Only the
+   *  *subscription* (`POST`/`DELETE observe`) stays withheld — the no-observe
+   *  half of this describe block's tests is otherwise unchanged. */
   describe('descriptor-only selection (cold graph)', () => {
-    it('fetches the descriptor and issues no observe POST and no state fetch', async () => {
+    it('fetches the descriptor AND state exactly once, but issues no observe POST', async () => {
       controller.select('a', 'descriptor');
       await flush();
 
       expect(transport.fetchDetail).toHaveBeenCalledWith('a');
       expect(transport.observeStart).not.toHaveBeenCalled();
-      expect(transport.fetchState).not.toHaveBeenCalled();
-      expect(onState).not.toHaveBeenCalled();
+      expect(transport.fetchState).toHaveBeenCalledTimes(1);
+      expect(transport.fetchState).toHaveBeenCalledWith('a');
+      expect(onState).toHaveBeenCalledWith('a', state('a'));
     });
 
     it('moving between cells inside a cold graph never subscribes to any of them', async () => {
@@ -282,6 +296,11 @@ describe('DetailController', () => {
     it('a state.summary for the selected ref does not pull its state in through the back door', async () => {
       controller.select('a', 'descriptor');
       await flush();
+      // V1C-FE: `select(..., 'descriptor')` now issues its OWN one-shot
+      // fetchState (the plain cold read) — clear that call so the assertion
+      // below tests what it always meant to test: that `onSummary` triggers
+      // no ADDITIONAL fetch, not that none ever happened.
+      transport.fetchState.mockClear();
 
       controller.onSummary(summary('a'));
       await flush();
