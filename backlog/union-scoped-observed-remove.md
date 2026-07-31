@@ -1,5 +1,13 @@
 # Union-scoped observed-remove ("remove what I can see")
 
+> **Status: IMPLEMENTED** — shape 1 (coordinating remove over the union),
+> `D-UNION`. `UnionSetCell.removeObserved(e)` via `ObservedRemoveOps`;
+> `TagState` gained an opt-in `retainTombstones` mode so the union fences
+> catch-up resurrection. `demo/shopping`'s `Main.kt` routes `"remove"` through
+> `removeObserved`, with per-writer `"remove-mine"` kept as a distinct action.
+> See `kernel/.../cell/data/op/UnionSetCell.kt`,
+> `kernel/.../cell/data/delta/TagState.kt`, `UnionObservedRemoveTest.kt`.
+
 ## Origin
 In `demo/shopping`, removal is applied to the caller's **own** per-user writer
 `SetCell` (`itemOps.remove(item)`). Observed behavior (verified live):

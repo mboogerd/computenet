@@ -58,6 +58,14 @@ under an existing key retracts the previous element) or `GroupByCell` over map s
 
 ## F-5 — Edge-of-graph view composition is not glitch-free
 
+> **Status: addressed** — `E2-ALIGN` (99-defects-engines-plan wave C1) shipped
+> exactly the proposed idiom: `Use<HostManagementApi>.observeAligned` +
+> `AlignedCompositeCell`, a named-inlet mirror of `WaveFrontier`'s completeness
+> fold that delivers one composite snapshot per settled wave across N named
+> views. See `kernel/.../cell/observe/AlignedObserve.kt`. Not yet adopted by
+> `:demo:skillmatch` itself — that adoption is a follow-up, not part of this
+> finding's gap.
+
 **Observation**: `:demo:skillmatch`'s UI folds four independent outlets (matches,
 match-counts, required-counts, gap) into one state snapshot. The views update
 asynchronously, so a snapshot can be momentarily inconsistent — the server test
