@@ -388,9 +388,13 @@ class ObserveAllBuilder internal constructor(private val mgmt: Use<HostManagemen
  * NOT wave-aligned. Each named outlet is folded by its own [ObserveCell] and
  * the composite assembles the latest per-outlet snapshot; a read may therefore
  * pair `common` at wave `t` with `filtered` at wave `t-1` mid-pipeline (the F-5
- * flash is possible here). The wave-aligned glitch-free composite behind
- * [civictech.cell.consistency.GlitchFreeCell] is deferred — see [observeAll].
- * Each *individual* per-outlet value is always internally consistent.
+ * flash is possible here). Each *individual* per-outlet value is always
+ * internally consistent. The wave-aligned alternative is shipped beside it:
+ * [AlignedCompositeCell], behind [observeAligned] (spec 20/22 §The observation
+ * frontier, `[22-OBS-01]`/`[22-OBS-02]`). This composite remains the right
+ * choice when an arm may stall and a stale-but-prompt read beats a delayed
+ * aligned one — the aligned sink is the WAIT shape and holds a wave until every
+ * contributing view has settled it.
  *
  * T08 finding 4: routes its own listener dispatch through the same
  * dedicated-executor mechanism as [ObserveCell] (its own `dispatcher`, not a
@@ -532,26 +536,24 @@ class CompositeSink internal constructor(
  * view.current()   // { common, filtered, byDay }
  * ```
  *
- * **Deferred: the glitch-free (wave-aligned) composite.** The spec's ideal is a
- * cross-outlet snapshot behind [civictech.cell.consistency.GlitchFreeCell] so
- * the app never sees `common ∋ s` while `filtered ∌ s` mid-wave. That is NOT
- * shipped here — this composite is point-consistent per outlet (see
- * [CompositeSink]). Two things block the clean composition and neither exists
- * yet:
- *   1. `GlitchFreeCell` replays raw `propagate(delta)` invocations to one
- *      outlet, erasing which *named* source each delta came from — two
- *      `set(...)` outlets both emit `SetDelta`, indistinguishable downstream —
- *      so routing folds by name needs per-name label-envelope machinery.
- *   2. Its frontier is a *static link set* (its own doc: "real upstream
- *      traversal needs multiplex ports (G-13)"). With an absorbing mid-pipeline
- *      edge — slotfinder's `FilterCell` drops slots and emits no `Progress`
- *      absorb-ack — a wave that never reaches the filtered edge leaves that
- *      edge's watermark behind, so the join can stall the last wave until the
- *      next write. Robust wave-alignment there needs the G-13 multiplex-port
- *      frontier that is not built.
- * Per the ticket's guidance (honest partial delivery over a fragile
- * wave-alignment), the composite ships point-consistent and the glitch-free
- * path is deferred to G-13.
+ * **This composite is point-consistent per outlet** (see [CompositeSink]): a
+ * read may pair `common` at wave `t` with `filtered` at wave `t-1` mid-wave.
+ * The wave-aligned composite is [observeAligned] / [AlignedCompositeCell] (spec
+ * 20/22 §The observation frontier, `[22-OBS-01]`/`[22-OBS-02]`; 96 §E2.3) —
+ * shipped, not deferred. It reaches alignment by *not* going through
+ * [civictech.cell.consistency.GlitchFreeCell]: one **named inlet per view**
+ * makes each delta's source view structural, dissolving the name erasure a
+ * single-outlet replay would impose (two `set(...)` outlets both emit
+ * `SetDelta`, indistinguishable once merged), and one completeness fold spans
+ * every inlet's edges.
+ *
+ * Both sinks ship. Prefer this one when an arm may stall and a stale-but-prompt
+ * read beats a delayed aligned one; prefer [observeAligned] when a mixed-wave
+ * read is a correctness problem. The frontier's static-link-set residual
+ * (G-13: no upstream traversal, so an arm that structurally never carries a
+ * source is a phantom expected edge for its waves) is documented on
+ * [AlignedCompositeCell] and is the reason this fallback is kept rather than
+ * retired.
  */
 fun ManagedHost.observeAll(block: ObserveAllBuilder.() -> Unit): CompositeSink {
     val builder = ObserveAllBuilder(managementInlet).apply(block)

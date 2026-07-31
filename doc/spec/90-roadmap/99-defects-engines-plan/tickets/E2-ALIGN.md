@@ -1,6 +1,6 @@
 # E2-ALIGN — the aligned multi-view sink: one composite snapshot per settled wave, never assembled from mixed waves
 
-**Status**: Specified — not-started
+**Status**: Implemented — awaiting merge
 **Model:** claude-opus-5 (effort xhigh) · **Escalate to:** claude-fable-5,
 fresh session
 **Wave:** C1 · **Branches:** ticket/e2-align

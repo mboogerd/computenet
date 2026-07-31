@@ -295,10 +295,25 @@ aligned sink fold each named view under its own accumulator and release one
 snapshot at completeness, instead of one shared accumulator that cannot tell
 its inputs apart.
 
-*(Spec-ahead-of-code: this is the specification for the future
-`observeAligned` sink — 96 §E2.3 — written before its implementation.
-`cell.observe.CompositeSink` is today's point-consistent fallback, already
-honestly documented as not wave-aligned; it does not yet satisfy this rule.)*
+*(Landed as `cell.observe.AlignedCompositeCell`, behind the
+`ManagedHost.observeAligned { … }` builder — 96 §E2.3, E2-ALIGN. One named
+inlet per contributing view carries the per-name clause structurally; one
+completeness fold spanning **every** inlet's edges — `WaveFrontier`'s
+condition mirrored at cell scope, the `CoalescingCombineCell` precedent —
+carries the assembly clause, publishing one composite per settled wave in
+per-source counter order. It is the WAIT shape: no `DEGRADE` frontier
+shrinking, no RE-SCOPE, no replica-fed settlement, and the static-link-set
+residual (G-13, above) still applies — an arm that structurally never carries a
+source is a phantom expected edge for its waves until an ack, a later wave, or
+an `EdgeClose` shrinks the condition. Two boundaries of the shipped guarantee,
+both inherited from `WaveFrontier.offer`: catch-up traffic (the `onLinked`
+state-as-delta, pull baselines) installs as arm state and is admitted to no
+completeness set, and an edge opened mid-stream floors below the waves already
+flushed — so a sink attached while the graph is already writing can transiently
+expose arms seeded at different points; from its first waved delta onward every
+published composite is aligned. `cell.observe.CompositeSink` remains the shipped
+point-consistent fallback — honestly documented as not wave-aligned, and the
+right choice when a stalled arm must not delay a read.)*
 
 **What this section already governs.** `cell.consistency.WaveFrontier` — the
 per-inlet wave-completeness fold extracted from `GlitchFreeCell` (CP-A4) — is
