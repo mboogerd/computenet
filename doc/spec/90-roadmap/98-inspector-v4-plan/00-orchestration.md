@@ -403,7 +403,7 @@ Parallel: V1C-BE ∥ V1C-FE ∥ V4-PILOT — `inspect/src` vs `inspect/ui` vs
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | V1C-BE | Paged state endpoint; `DataSearch` rewired; suspended and drained cells become readable | opus | fresh | ticket/v1c-be | opus | merged |
-| V1C-FE | Paged big-cell state view; browse-everything state chips; honest cold preview | sonnet | fresh | ticket/v1c-fe | opus | not-started |
+| V1C-FE | Paged big-cell state view; browse-everything state chips; honest cold preview | sonnet | fresh | ticket/v1c-fe | opus | **Implemented — merged** (`09e869e`) |
 | V4-PILOT | First same-logical-id replicated pilot over a real socket, two inspectors, findings | opus | fresh | ticket/v4-pilot | opus | **Implemented — merged** (`9dd03a8`) |
 
 `V4-PILOT` extends `demo/shopping` behind a bare `--replicate` flag defaulted
@@ -501,6 +501,52 @@ the demo's own `ObserveCell`, re-measured at C10 as 24/16 → 30/21 nodes/edges)
 and `Replication.watermarkRef` being `internal` to `:kernel` forces the demo to
 recompute the derivation, which the ticket mandated and the diff cites — a
 mislabelled node rather than a compile error if the two ever diverge.
+
+**`V1C-FE` merged at C10** (`09e869e`) — **wave 10 and checkpoint C10 are
+closed**, all three tickets in. The FE was written against `V1C-BE`'s *draft*
+contract block (the wave-2/5 cross-branch pattern), so the evaluation was
+item-by-item against what actually shipped. Four divergences were repaired in
+place on the branch before the merge (`fbfda42`), none of them design-level:
+
+- **`page.caveats` and `page.attributes` were being dropped.** Neither field
+  existed in the draft. `positionalCursor` weakens "every surviving entry
+  appears"/"no entry twice" to best-effort, which the counter's
+  "N entries — complete" must not stand over unqualified; `attributes` is the
+  cell-level state the server surfaces precisely so a client on page 4 can tell
+  whether a shard walk straddled a repartition. Both now render — caveats
+  unioned across the walk, attributes from the latest page; `staleFrontier`
+  renders nothing on purpose, since `walkStable: null` already says it once.
+- **`unreadable` gained `terminated`/`readFailed`.** They fell through to the
+  raw-reason fallback, which was truthful but said nothing about either — in
+  particular not that neither is worth retrying the way `unanswered` is.
+- **The `coldSkipped` seam this checkpoint singled out for a ruling.** The
+  branch's wording, "parked or held cells are not searched", was false against
+  the merged backend in the *same direction* the old "wake their graph" claim
+  was: shipped `DataSearch` counts held-for-migration cells only and searches
+  suspended and drained cells normally. **Ruling: the hint states only the fact
+  the count itself carries and names no category** — "N cold cells skipped —
+  their state could not be read for this search" — which is true under a pre-
+  and a post-`V1C-BE` server alike. A regression test pins the absence of both
+  a remedy and a category name.
+
+**The tag-algebra ruling held.** A paged `SetCell` renders stored tag algebra
+(`element | addTags | delTags`, tag sets as nested `$table`s, tombstoned
+elements present as ordinary rows) and the FE renders the server's own columns
+verbatim, claiming nothing about membership — verified against a live 260-entry
+cell on a merged backend, and pinned by a DOM test. The same cell under an open
+observation still renders as a flat member list; that divergence is the ruling,
+not a defect.
+
+Gates: `npm test` 43 files / 489 tests, `npm run typecheck`, `npm run build`,
+`FixtureContractTest` (both halves green now that the two fixtures and their
+decoder entries are on the same branch), and repo-wide `./gradlew test`. The
+live pass ran against a merged backend rather than the mock: a cold-graph
+selection issues **exactly one `GET .../state` and zero `POST`/`DELETE
+observe`** (asserted from the browser's own network log), renders
+`liveSuspended` calm rather than as a warning, and shows the cold state line
+and the cold flow line. The residual the ticket predicted holds: every
+*observable* cell still answers `kind: "view"`, so the walk affordance appears
+only where there is no fold to observe — the cold path, and the 409 path.
 
 ## Wave 11 — conformance · branches from `main` after C10
 
