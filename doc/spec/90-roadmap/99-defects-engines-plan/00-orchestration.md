@@ -380,7 +380,7 @@ requires E1-CORE merged; E2-SUITE requires E2-ALIGN and E2-GATE merged.
 | Ticket | Nature | Model | Session | Branch | Evaluator | Status |
 |---|---|---|---|---|---|---|
 | E1-REPL | `OrMapCell` joins the mergeable class: `deltaInlet`/`applyRemote` echo-terminating gossip, C-10 re-origination, pull baseline, `ReBaseline` dead-source fencing (96 §E1.3) | opus | fresh | ticket/e1-repl | opus | Implemented — merged |
-| E2-SUITE | Balanced-transfer internal-consistency acceptance suite — invariant at every observed output; `observeAll` and ungated-outer-join failure controls (96 §E2.5, 20/22 §Acceptance benchmark) | opus | fresh | ticket/e2-suite | opus | Specified — not-started |
+| E2-SUITE | Balanced-transfer internal-consistency acceptance suite — invariant at every observed output; `observeAll` and ungated-outer-join failure controls (96 §E2.5, 20/22 §Acceptance benchmark) | opus | fresh | ticket/e2-suite | opus | Implemented — merged |
 
 **Checkpoint CC3 — verification.** Fresh opus evaluator per ticket. E1-REPL:
 named tests + `./gradlew :kernel:test`; audit `SetCell.kt`/
@@ -391,6 +391,42 @@ against a merged mechanism is a *valid pass with a report*, while a softened
 invariant or replaced seed is a rejection ground. Merge on pass; repo gate
 `./gradlew test` before the wave closes. CC3 closing ends track C's code
 spine; C-final (below) closes the ledgers.
+
+**Residual carried out of CC3 (E2-SUITE finding 1) — an ungated binary
+operator cannot participate in a wave-aligned composite.** `JoinSetCell`
+reconciles per *inlet invocation*, so one wave of a shared-source diamond
+produces **two** signals on its outlet: the first arm's delta finds nothing
+to match on the opposite side, emits nothing, and `absorbAck`s the wave
+(CP-A3); the second arm's delta then emits the pair *under that same wave*.
+An edge declares a wave settled and afterwards emits on it — so every
+completeness fold that takes CP-A3 at its word (`AlignedCompositeCell`,
+`WaveGate`, `WaveFrontier`) releases the wave without that operator's row and
+installs the row afterwards as a straggler. Re-measured by the CC3 evaluator
+against merged `main`: **50 of 50** seeds, seed 0 publishing 101 composites
+for 50 waves — the catch-up plus two per wave — of which 50, one per wave,
+are the recompute over *no* completed-transfer prefix.
+
+This is **not a regression**: 96 §E2.4 deliberately scoped `emitOnFrontier`
+to `SemiJoinCell` and `CombineLatestCell`, and `JoinSetCell` never had it.
+E2-SUITE is test-only and correctly did not fix it; it states the limit
+executably as its third, asserted control (`control - the ungated inner join
+publishes composites matching no transfer prefix`) and uses the gated
+`SemiJoinCell` for pipeline (a) instead — a load-bearing cell choice, not a
+stylistic one, and recorded as such in the suite's KDoc.
+
+**Follow-up, unscheduled — an E2.4-shaped item.** Extend the opt-in
+`emitOnFrontier`/`WaveGate` treatment to the remaining ungated two-inlet
+operators: `JoinSetCell` first, then `IntersectSetCell`, `JoinCell` and
+`LookupJoinCell`. Each needs its own `[24-OP-…]` requirement row, the
+`WaveGate` phantom-expected-edge caveat repeated in its KDoc, an audit that
+the ungated default stays byte-identical, and its `BoundedStateful` paging
+surface left intact. Until that lands the shipped rule stands: **only
+`SemiJoinCell(emitOnFrontier = true)` and
+`CombineLatestCell(emitOnFrontier = true)` may feed a view of an
+`observeAligned` composite, or the inlet of another gated operator.** The
+suite's third control is the tripwire — it asserts the tearing still
+happens, so gating `JoinSetCell` will fail it and force this note to be
+re-trued rather than silently outlived.
 
 **Checkpoint C-final — close the ledgers.** Trigger: last wave of all three
 tracks merged. Verify and update: DISPUTES.md (D-REPLAY/D-COMBINE/D-C12
