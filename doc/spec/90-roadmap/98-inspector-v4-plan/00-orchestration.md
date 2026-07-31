@@ -404,7 +404,7 @@ Parallel: V1C-BE ∥ V1C-FE ∥ V4-PILOT — `inspect/src` vs `inspect/ui` vs
 |---|---|---|---|---|---|---|
 | V1C-BE | Paged state endpoint; `DataSearch` rewired; suspended and drained cells become readable | opus | fresh | ticket/v1c-be | opus | not-started |
 | V1C-FE | Paged big-cell state view; browse-everything state chips; honest cold preview | sonnet | fresh | ticket/v1c-fe | opus | not-started |
-| V4-PILOT | First same-logical-id replicated pilot over a real socket, two inspectors, findings | opus | fresh | ticket/v4-pilot | opus | not-started |
+| V4-PILOT | First same-logical-id replicated pilot over a real socket, two inspectors, findings | opus | fresh | ticket/v4-pilot | opus | **Implemented — merged** (`9dd03a8`) |
 
 `V4-PILOT` extends `demo/shopping` behind a bare `--replicate` flag defaulted
 off, rather than adding a demo module: every prerequisite the pilot needs —
@@ -431,6 +431,76 @@ groups by graph-id *string* while its sweep can yield two genuinely
 disconnected components, and `idOf` uses the *logical* uuid — so two replicas
 can share a graph id with no edge between them, which would read as a "yes" on
 MRB-156 for the wrong reason. The report must say which case holds.
+
+**`V4-PILOT` merged at C10** (`9dd03a8`); the other two wave-10 tickets are
+judged separately and C10 is not closed by this entry. The findings live in
+`doc/demo-shopping-replica-pilot.md` §"What we observed"; all eight are answered
+from observation and none of the four defects is patched, which is what this
+checkpoint required. The evaluator reproduced the pilot end to end — a fresh
+`TwoJvmReplicaPilotTest` run (two real JVMs, a real socket, an inspector each,
+both tests green), a live `scripts/demo-shopping-replica-pilot.sh` run driven
+through both UIs with bidirectional `action=share` convergence, and an
+independent mode-off/mode-on control pair.
+
+**Which case holds — both, in one payload.** Re-deriving `sweep()`'s exact
+algorithm over a freshly captured 30-node/21-edge `GET /topology` gives **11
+flood-fill components collapsing to 10 `components()` map entries**:
+
+- *Case (a), a real yes.* The data replica pair sits in **one** 20-member
+  component containing both `4f421498-…:0` and `4f421498-…:1`. The connector is
+  **not** the demo's `declareLink` — dropping the declared gossip edge from the
+  swept edge set leaves the same 20-member component. What joins the sides is
+  the peer's own `manage.link(shared.outlet → itemsUnion.inlet)`, a real
+  `ManagedHost.connect`, indexed and mirrored. The declared edge documents the
+  mesh; it does not form it.
+- *Case (b), a yes for the wrong reason.* The **watermark companion pair** is
+  two disconnected singletons — zero edges incident to either — merged into
+  `g-98ebe0fa-…` solely because `idOf` (`Graphs.kt:180`) keys on the logical
+  uuid. `GET /graphs` bills it as `{"cells":2,"hosts":1,"nets":2}`: a two-cell
+  graph spanning two nets, for two cells connected by nothing.
+
+Both sides return the same ten graph ids in the same order; the only field that
+differs is `hosts`, correctly, because a mirrored node has `host: null`.
+
+Four defects recorded, none patched, each sized for C-replan-2:
+**D1** `components()` merges disconnected same-logical-id replicas into one card
+(`Graphs.kt:124-132` + `:180`; `sweep()` itself is correct — the merge happens
+after it). **D2** the error lane's `parked` rows never fire for a partitioned
+replica mesh (`parked:0` at every capture while writes demonstrably parked);
+undiagnosed by design — it needs an `inspect/src/**` owner. **D3** the *named*
+graph's id changed on every peer connect and disconnect, and twice the deciding
+minimum uuid belonged to a randomly minted cell in the **other** JVM, so a
+deep-linked graph id does not survive a peer restart. **D4** (cosmetic, FE) the
+breadcrumb showed the previously-opened graph's name.
+
+**C-replan-2 input — the min-uuid heuristic's specific failure mode under
+replication.** `idOf` collapses vertex identity from `CellRef` down to
+`CellRef.id` at exactly the moment two instances of that id coexist. That
+collapse was deliberate and is documented (`Graphs.kt:34-36`) for the
+*replacement* case — a minimum member replaced by a later instance of itself
+must not flip the id — but coexistence was never considered, and under peering
+every replica coexists with its mirror. A correct answer to graph identity
+across a peer boundary needs three properties the heuristic cannot have: an id
+that is **not derived from its own membership** (D3 is the direct consequence of
+one that is); a **declared boundary identity** that survives merge, split and
+peer churn — this is what "membranes as naming boundary" would have to provide,
+and the pilot is evidence for it rather than against; and an explicit way to
+express **instance multiplicity**, so "one logical cell, two places" is a thing
+the payload states rather than a thing a client infers.
+
+Two contract observations flagged for `../97-inspector-plan/20-api-contract.md`,
+orchestrator-owned and deliberately not edited: `Node.ref`'s
+`"<uuid>:<instanceId>"` encoding is the *only* thing that makes two instances
+decidable from the payload, and the contract neither tells a client to parse it
+nor offers a grouping field; and `GraphSummary.id`'s documented instability does
+not say the id can be **peer-owned**, which D3 shows it can.
+
+Two residuals for whoever owns the pilot next, neither blocking: replicate mode
+adds **six** nodes per side, not the four the ticket predicted (the extra pair is
+the demo's own `ObserveCell`, re-measured at C10 as 24/16 → 30/21 nodes/edges);
+and `Replication.watermarkRef` being `internal` to `:kernel` forces the demo to
+recompute the derivation, which the ticket mandated and the diff cites — a
+mislabelled node rather than a compile error if the two ever diverge.
 
 ## Wave 11 — conformance · branches from `main` after C10
 
