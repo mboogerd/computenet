@@ -4,7 +4,9 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.Owned
+import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
+import civictech.cell.Timestamp
 import civictech.cell.data.Aggregator
 import civictech.cell.data.delta.CounterDelta
 import civictech.cell.data.delta.ListDelta
@@ -398,6 +400,111 @@ class SingleWriterObserveCell<D : Any, S>(
             view.restore(state)
             latest = view.current()
         }
+    }
+}
+
+/**
+ * The command port `apply(..., op: add, value:)` routes to on a
+ * [ReBaselineSourceCell], plus the failing invocation the driver's `restart`
+ * verb routes to induce a real supervision RESTART ([failInvocation]).
+ *
+ * [failInvocation] is deliberately **not** in the neutral op table
+ * (`KernelCatalog.op`): a scenario asks for a restart with the `restart` step,
+ * and *how* this binding induces one — the kernel's RESTART branch only runs
+ * off a failed invocation — is the driver's business, not the scenario's
+ * vocabulary (see [civictech.concord.driver.Driver.restart]).
+ */
+interface ReBaselineSourceOps {
+    fun add(element: Any?)
+    fun failInvocation()
+}
+
+/**
+ * The structural-navigation shape a [civictech.cell.host.HostedCellProxy] needs
+ * to send [ReBaselineSourceOps.failInvocation] *as the target cell's own
+ * invocation* — the dispatch path that puts it under that cell's supervision
+ * policy (see `KernelCatalog.restartTrigger`). Mirrors kernel
+ * `RestartReBaselineTest`'s `ProducerProxy`.
+ */
+interface ReBaselineSourceProxy {
+    val inlet: Use<ReBaselineSourceOps>
+}
+
+/**
+ * Binds the catalog `rebaseline-source` id (D-C12, resolving the
+ * `21-REBASE-01` driver-surface gap): a single-writer tagged set source whose
+ * merge tags are minted under its outlet's **current emission epoch**, and
+ * which re-announces its recovered state as a re-baseline when its host
+ * restarts it.
+ *
+ * Why not `set-source`. [civictech.cell.data.SetCell]'s tag source is
+ * deliberately **replay-stable** — it mints tags under a fixed identity so a
+ * journal replay reproduces the same tags — which is exactly the property that
+ * makes it unable to witness epoch succession. The re-baseline rules are about
+ * a source whose epoch *changes* across recovery (spec 20/22 §Source identity,
+ * 93 I-14 Rule S1), so the catalog needs a source of that second kind. This is
+ * the same distinction `RestartReBaselineTest`'s own `TaggedProducerCell`
+ * draws, and this cell is its catalog-side twin: tags minted as
+ * `Timestamp(outlet.waveState().sourceId, ++counter)` inside
+ * [FanOutlet.originate], a [Stateful] snapshot/restore over the tag map, and a
+ * [ReBaselineEmitting.reBaseline] that re-emits the restored state through
+ * [FanOutlet.reBaseline] — the ordinary catch-up path, flagged with the dead
+ * epochs' source ids.
+ *
+ * The kernel is **not** modified: [Stateful], [ReBaselineEmitting] and
+ * `FanOutlet.originate`/`waveState`/`reBaseline` are all public kernel API, and
+ * every step of the recovery — the epoch succession, the checkpoint restore,
+ * the [reBaseline] call itself — is performed by
+ * [civictech.cell.host.ManagedHost]'s own supervision path, not staged here.
+ * Downstream, the convergent-consumer half is the catalog `union`
+ * ([civictech.cell.data.op.UnionSetCell], which folds an inbound re-baseline
+ * through its tag algebra rather than as an ordinary delta).
+ */
+class ReBaselineSourceCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
+    Cell, Stateful, ReBaselineEmitting {
+
+    val outlet = registerPort("outlet", FanOutlet.create<Propagate<SetDelta<Any?>>>())
+    val inlet = registerPort("inlet", FanInlet.create<ReBaselineSourceOps>())
+
+    private val adds = mutableMapOf<Any?, MutableSet<Timestamp>>()
+    private var counter = 0L
+
+    init {
+        inlet.serve(object : ReBaselineSourceOps {
+            override fun add(element: Any?) {
+                // A local add is a fresh origination point: mint the tag under
+                // THIS outlet's current epoch, so a post-restart tag cannot
+                // alias a pre-restart one (spec 20/24 §Tag continuity).
+                outlet.originate {
+                    val tag = Timestamp(outlet.waveState().sourceId, ++counter)
+                    adds.getOrPut(element) { mutableSetOf() } += tag
+                    propagate(SetDelta(adds = mapOf(element to setOf(tag))))
+                }
+            }
+
+            override fun failInvocation(): Unit =
+                throw IllegalStateException("rebaseline-source: restart trigger (driver `restart` verb)")
+        })
+    }
+
+    override fun snapshot(): Serializable = HashMap(adds.mapValues { HashSet(it.value) })
+
+    @Suppress("UNCHECKED_CAST")
+    override fun restore(state: Serializable) {
+        adds.clear()
+        (state as Map<Any?, Set<Timestamp>>).forEach { (e, tags) -> adds[e] = tags.toMutableSet() }
+    }
+
+    /**
+     * The re-baseline the host invokes after recovering this cell: re-emit the
+     * restored state as an ordinary catch-up delta-from-empty, flagged with the
+     * superseded epochs. Emitted unconditionally — an *empty* restored state is
+     * the case that carries the whole retraction, so guarding on non-emptiness
+     * would silently drop exactly the reconciliation `[21-REBASE-01]` asks for.
+     */
+    override fun reBaseline(supersedes: Set<UUID>, supersede: Boolean) {
+        val delta = SetDelta(adds = adds.mapValues { it.value.toSet() })
+        outlet.reBaseline(supersedes, supersede) { propagate(delta) }
     }
 }
 

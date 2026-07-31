@@ -47,6 +47,7 @@ class FakeDriver(
         error("FakeDriver: the wave plane is sampled by the runner around a read, not by a check")
     override fun snapshot(cellId: CellId): Blob = ByteArray(0)
     override fun restore(hostId: HostId, cellId: CellId, blob: Blob) {}
+    override fun restart(cellId: CellId) {}
     override fun despawn(cellId: CellId) {}
     override fun deadLetters(): List<DeadLetter> = deadLetters
     override fun effectLog(cellId: CellId): List<Effect> = effects[cellId].orEmpty()

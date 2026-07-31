@@ -105,10 +105,13 @@ source ids.
   source ids — never silent; glitch-free consumers recompute their
   per-source completeness set on it.
 
-  ⚠ CONFLICT (C-12): landed RESTART restores the spawn-time checkpoint and
-  continues emitting under the same outlet sourceId/counter (aliasing),
-  contradicting the decided fresh-epoch + ReBaseline supersession rule
-  (93 I-22, reconciled).
+  *(C-12 resolved, W2.1 + D-C12: the landed RESTART announces its fresh epoch
+  exactly as this rule requires. `ManagedHost`'s supervision path mints a fresh
+  per-epoch `sourceId` on every outlet of the restarted cell, collects the
+  superseded ids, and emits the `ReBaseline` supersession notice naming them —
+  the same non-silent succession an instance swap owes. The earlier
+  same-sourceId reading was of the M3.5 prose, not of the code. Exercised by
+  the `21-REBASE-01` scenario (21). Reclamation of the superseded epochs stays G-42, below.)*
 
 ⚠ GAP (G-42): epoch source-ids and restart generations accrete unboundedly —
 OR-set/PN source columns, stale glitch-free partial-wave buffers, and

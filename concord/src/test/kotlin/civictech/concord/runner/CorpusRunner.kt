@@ -19,6 +19,7 @@ import civictech.concord.schema.Kind
 import civictech.concord.schema.Profile
 import civictech.concord.schema.QuiesceStep
 import civictech.concord.schema.ReadStateStep
+import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.SnapshotStep
@@ -228,6 +229,7 @@ class CorpusRunner {
                 }
                 is SnapshotStep -> snapshots[step.alias] = driver.snapshot(step.on)
                 is RestoreStep -> driver.restore(step.host ?: "", step.on, snapshots.getValue(step.from))
+                is RestartStep -> driver.restart(step.on)
                 is DespawnStep -> driver.despawn(step.on)
             }
         }

@@ -32,6 +32,12 @@ class ScenarioParseTest {
         "corpus/21-propagation/21-PULL-02.yaml",
         "corpus/24-data-cells/24-BOUND-01.yaml",
         "corpus/24-data-cells/24-BOUND-02.yaml",
+        // D-C12: the re-baseline scenario, carrying the schema's newest step
+        // verb. Same reason as above — a mistyped `restart` step would parse
+        // cleanly under the lenient parser and silently not restart anything,
+        // leaving a scenario that passes because both arms only ever saw the
+        // post-restart adds.
+        "corpus/21-propagation/21-REBASE-01.yaml",
     )
 
     @TestFactory
@@ -80,6 +86,17 @@ class ScenarioParseTest {
             s.script.filterIsInstance<ReadStateStep>().map { it.on }.toSet() shouldBe setOf("s")
             (s.checks.filterIsInstance<PagesEqualView>().single()).view shouldBe "v"
             (s.checks.filterIsInstance<WavePlaneUnchanged>().single()).cell shouldBe "s"
+        },
+        DynamicTest.dynamicTest("21-REBASE-01 carries a restart step between two quiesce barriers") {
+            // D-C12: the restart must land AFTER the pre-restart adds have settled
+            // and BEFORE the post-restart ones, or the scenario would not be
+            // exercising a mid-stream recovery at all.
+            val s = load("corpus/21-propagation/21-REBASE-01.yaml")
+            s.script.filterIsInstance<RestartStep>().single().on shouldBe "s"
+            val restartAt = s.script.indexOfFirst { it is RestartStep }
+            (s.script.subList(0, restartAt).last() is QuiesceStep) shouldBe true
+            (s.script[restartAt + 1] is QuiesceStep) shouldBe true
+            (s.checks.filterIsInstance<ViewsConverge>().single()).views shouldContainExactly listOf("v", "x")
         },
         DynamicTest.dynamicTest("CTL-GOLDEN-01 is a control") {
             val s = load("corpus/controls/CTL-GOLDEN-01.yaml")

@@ -1,6 +1,9 @@
 package civictech.concord.driver.kernel
 
 import civictech.cell.Cell
+import civictech.cell.CellRef
+import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.ManagedHost
 import civictech.cell.data.Aggregator
 import civictech.cell.data.op.CoalescingCombineCell
 import civictech.cell.data.op.CountCell
@@ -97,6 +100,12 @@ internal object KernelCatalog {
             "list-source" -> Built(ListCell<Any?>())
             "pn-counter" -> Built(PnCounterCell())
             "keyed-set" -> Built(KeyedSetCell<Any?, Any?>())
+            // `rebaseline-source` (D-C12): a tagged set source whose merge tags are
+            // minted under its outlet's CURRENT emission epoch, and which re-announces
+            // its recovered state on a RESTART (21-REBASE-01). `set-source`'s tag
+            // source is deliberately replay-stable, so it cannot witness epoch
+            // succession — see ReBaselineSourceCell.
+            "rebaseline-source" -> Built(ReBaselineSourceCell())
             // quorum-set is a fan-in OPERATOR over set streams (one link per source):
             // an element is emitted when its live-source count meets the threshold.
             // `k` fixes a k-of-n quorum; absent ⇒ all live sources (intersection).
@@ -368,11 +377,51 @@ internal object KernelCatalog {
                     "(append / insert[i,e] / set[i,e] / remove-at[i]); there is no remove-by-value (§5)",
             )
         }
+        "rebaseline-source" -> when (op) {
+            "add" -> OpCall("add", OBJECT, listOf(unwrap(value)))
+            else -> throw UnsupportedCatalogBinding(
+                "rebaseline-source op '$op' unbound — it is an add-only tagged source; a restart is " +
+                    "requested with the `restart` step verb, not with an op (see KernelDriver.restart)",
+            )
+        }
         "exclusive-source" -> when (op) {
             "push" -> OpCall("push", OBJECT, listOf(unwrap(value)))
             else -> throw UnsupportedCatalogBinding("exclusive-source op '$op' unbound")
         }
         else -> throw UnsupportedCatalogBinding("no op binding for '$op' on catalog type '$type'")
+    }
+
+    /**
+     * The invocation the driver's `restart` verb delivers to a cell of catalog
+     * [type] to induce a **real** supervision RESTART (D-C12).
+     *
+     * `ManagedHost` runs its RESTART branch — generation bump, per-outlet fresh
+     * epoch, checkpoint restore, `ReBaseline` — from exactly one place: the
+     * invocation-failure handler of a cell supervised `SupervisionPolicy.RESTART`.
+     * So the honest trigger is a *failing invocation*, the same poison pattern
+     * kernel `RestartReBaselineTest` uses; there is no synthetic rollback
+     * anywhere on this path.
+     *
+     * Delivered through a [HostedCellProxy], **not** through the host's routing
+     * inlet the way [op] payloads are: `route` resolves the target port and
+     * invokes its served handler inside the router's own scheduler task, so a
+     * throw there is caught by the host's generic task guard — dead-lettered,
+     * but never attributed to the target cell and therefore never supervised. A
+     * proxy send stages the invocation *as that cell's*, which is what puts it
+     * under the cell's own supervision policy.
+     *
+     * Kept here rather than in [op] because it is this binding's way of inducing
+     * a recovery, not a neutral op a scenario may name.
+     */
+    fun restartTrigger(type: String): (ManagedHost, CellRef) -> Unit = when (type) {
+        "rebaseline-source" -> { host, ref ->
+            (HostedCellProxy.create(ref, host, ReBaselineSourceProxy::class.java) as ReBaselineSourceProxy)
+                .inlet.call.failInvocation()
+        }
+        else -> throw UnsupportedCatalogBinding(
+            "catalog type '$type' has no restart trigger — only `rebaseline-source` is bound as a " +
+                "restartable source (D-C12); restarting any other catalog cell is unbound rather than faked",
+        )
     }
 
     /** A routable op: the served-handler method and its erased signature. */

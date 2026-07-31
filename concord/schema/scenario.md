@@ -150,6 +150,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | disconnect | `{type: disconnect, from: s, to: late, inlet?, outlet?, expect?}` | `disconnect(linkRef)` |
 | snapshot | `{type: snapshot, on: c, as: blob1}` | `snapshot(cell)` |
 | restore | `{type: restore, on: c, from: blob1, host?}` | `restore(host, cell, blob)` |
+| restart | `{type: restart, on: s}` | `restart(cell)` |
 | despawn | `{type: despawn, on: c}` | `despawn(cell)` |
 | read-state | `{type: read-state, on: s, limit: 2}` | `readState(cell, cursor, limit)`, looped to completion |
 
@@ -164,6 +165,42 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   consumes; `restore … host:` re-materializes on another host (migration/durability).
 - **`read-state … limit:`** is the per-page cap on **whole entries**; optional,
   default 200.
+
+#### `restart` (D-C12, spec 21 §RESTART re-baselines / spec 30/31 rule 5)
+
+A **restart** recovers a cell from its freshest available checkpoint and
+reconciles its downstream consumers with the recovered state. It is not
+`restore`: `restore` re-materializes a cell from a blob the scenario captured
+with `snapshot` — a state-plane operation with no downstream announcement, which
+is what a despawn/migration/durability scenario wants and exactly what a restart
+must not be.
+
+**What a conforming driver must do.** Three things, all boundary-observable:
+
+1. the cell's state reverts to the recovered checkpoint;
+2. the cell's outlets **succeed their emission epochs** — no post-restart wave
+   position or merge tag aliases a pre-restart one (spec 20/22 §Source identity);
+3. the recovered state is re-announced downstream over the ordinary catch-up
+   path, carrying the superseded epochs, so a convergent consumer drops what the
+   restart did not re-assert and rejects later deltas stamped by the superseded
+   epochs (spec 20/24 §Tag continuity).
+
+The scenario names no blob and no failure: **which** checkpoint is freshest
+(durable tail, imported baseline, peer catch-up, or the local one) and **how**
+the restart is induced are the implementation's, and neither is asserted. Only
+the reconciliation is — which is what `[21-REBASE-01]` states.
+
+**Restarts and `no-dead-letters`.** A restart is a failure event, and spec 30/31
+rule 5 requires the failure to be reported observably under every supervision
+policy ("observability is not a policy"). A scenario driving a restart therefore
+**cannot** also assert `no-dead-letters` — the report is required, not a defect.
+Say so in a header comment rather than dropping the check silently; the check
+vocabulary has no dead-letter *count*, and growing it for this would be a schema
+change no requirement asks for.
+
+The catalog source that witnesses a restart is `rebaseline-source`
+(`cell-catalog.md`), not `set-source`: a replay-stable tag source cannot exhibit
+epoch succession, which is half of what the requirement is about.
 
 #### `read-state` (V1C-CONCORD, spec 21 §Pull / spec 24 §Required next steps)
 
