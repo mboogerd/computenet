@@ -1,0 +1,46 @@
+# Concord corpus scenario (V1C-CONCORD). Canonical schema shape — see concord/schema/scenario.md.
+# The limit sweep. Five walks over one settled source of five entries, at the
+# limits where a page-count off-by-one shows: 1, 2 (n/2), 4 (n-1), 5 (n) and
+# 6 (n+1) — the last two being the boundary between "one page and a terminating
+# cursor" and "one page that already terminates". Every walk is checked, so the
+# scenario fails if any single limit mis-pages.
+#
+# Authored as `kind: example` rather than the design note's "generative variant"
+# (98-inspector-v4-plan/20-wave-neutral-read-design.md §6.3): `kind: generative`
+# here means no `graph:`, a `generator:` block, and a hardcoded set of four
+# property checks — there is no parameter-sweep facility and no way to inject a
+# custom check, so making this generative would mean growing the generator,
+# which is squarely inside this ticket's stop condition.
+id: 24-BOUND-02
+title: The union of a walk equals the cell's whole state at every page limit
+covers: [24-BOUND-02]
+profile: core
+kind: example
+narrative:
+  given: a set source settled on five distinct elements, one of them since retracted, with a view linked to it
+  when: an instrument walks that state to completion five times over, at limits 1, 2, 4, 5 and 6, with no operation applied for the duration of any walk
+  then: every walk's pages union to exactly the view's members, whatever the limit, and none of them moved the source's wave plane
+graph:
+  cells:
+    - {id: s, type: set-source, of: string}
+    - {id: v, type: set-view}
+  links:
+    - {from: s, to: v}
+script:
+  - {type: apply, on: s, op: add, value: alpha}
+  - {type: apply, on: s, op: add, value: beta}
+  - {type: apply, on: s, op: add, value: gamma}
+  - {type: apply, on: s, op: add, value: delta}
+  - {type: apply, on: s, op: add, value: epsilon}
+  - {type: apply, on: s, op: remove, value: alpha}
+  - {type: quiesce}
+  - {type: read-state, on: s, limit: 1}
+  - {type: read-state, on: s, limit: 2}
+  - {type: read-state, on: s, limit: 4}
+  - {type: read-state, on: s, limit: 5}
+  - {type: read-state, on: s, limit: 6}
+  - {type: quiesce}
+checks:
+  - {type: pages-equal-view, cell: s, view: v}
+  - {type: wave-plane-unchanged, cell: s}
+  - {type: no-dead-letters}

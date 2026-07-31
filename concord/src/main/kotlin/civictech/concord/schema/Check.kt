@@ -105,3 +105,57 @@ data class ObservationsWholeWaves(
     val view: String,
     val source: String,
 ) : Check
+
+/**
+ * **A bounded read perturbs nothing** (spec 21 §Pull, `[21-PULL-02]`): across
+ * every `read-state` walk this scenario performed on [cell], that cell's wave
+ * plane did not advance.
+ *
+ * No existing check can express this. Every one of them reads a *fold*
+ * (`readView`), an *observation stream*, the dead-letter list or the effect log
+ * — all of which answer "what is the state now", none of which answer "did
+ * anything move". `no-dead-letters` is the closest, and it only excludes the
+ * failure channel: a read that emitted a perfectly well-formed delta produces
+ * no dead letter at all. `final-view` is likewise blind to an emission that
+ * happened to be idempotent, which for a convergent set family is *every*
+ * re-emission of state the consumer already holds — precisely the emission a
+ * read must not make.
+ *
+ * The wave plane is the load-bearing observation rather than a downstream
+ * consumer's stream, because the model makes it so: every delivery carries a
+ * fresh per-source wave position minted by the emitting outlet (spec 20/22), so
+ * a plane that did not move is a delivery that did not happen — while a
+ * consumer's stream length is materialized off the producing cell's execution
+ * context and so states something about notifier timing rather than about the
+ * graph.
+ */
+@Serializable
+@SerialName("wave-plane-unchanged")
+data class WavePlaneUnchanged(val cell: String) : Check
+
+/**
+ * **A walk sees the whole cell, once** (spec 24 `[24-BOUND-01]`/`[24-BOUND-02]`):
+ * for every `read-state` walk this scenario performed on [cell] — every page
+ * carried a frontier stamp and all of them were equal; no entry key appeared on
+ * more than one page of one walk; and the union of the walk's live entries
+ * equals [view]'s fold.
+ *
+ * `incremental-equals-batch` and `final-view` compare a *view's* fold against an
+ * oracle or a golden; neither can see a page at all, so neither can tell a
+ * correct read from one that silently dropped, duplicated or truncated entries
+ * — a paged read that returned nothing would leave both of them perfectly
+ * green. The comparison is genuinely two-sided: [view]'s fold arrives by
+ * push-propagation over a link, the pages come from the source cell's own
+ * state, so agreement is not the same code answering twice.
+ *
+ * The equal-stamp requirement is [21-PULL-03]'s antecedent, asserted rather
+ * than assumed: a walk whose frontier moved is a *smeared* read for which the
+ * union is not claimed to equal anything, and this check reports that as a
+ * failure rather than passing on a vacuously false antecedent.
+ */
+@Serializable
+@SerialName("pages-equal-view")
+data class PagesEqualView(
+    val cell: String,
+    val view: String,
+) : Check

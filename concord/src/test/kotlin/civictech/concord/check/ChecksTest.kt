@@ -2,6 +2,10 @@ package civictech.concord.check
 
 import civictech.concord.driver.DeadLetter
 import civictech.concord.driver.Effect
+import civictech.concord.driver.ReadCursor
+import civictech.concord.driver.ReadEntry
+import civictech.concord.driver.ReadPage
+import civictech.concord.driver.WavePlane
 import civictech.concord.oracle.Fx.apply
 import civictech.concord.oracle.Fx.cell
 import civictech.concord.oracle.Fx.i
@@ -16,8 +20,10 @@ import civictech.concord.schema.LateJoinEqualsEarly
 import civictech.concord.schema.NoDeadLetters
 import civictech.concord.schema.ObservationsAllSatisfy
 import civictech.concord.schema.ObservationsMonotone
+import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.ViewsConverge
+import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
@@ -218,6 +224,124 @@ class ChecksTest {
         fail(Checks.effectCount(EffectCount(sink = "sink", key = "k1", exactly = 1), ctx))
     }
 
+    // --- wave-plane-unchanged / pages-equal-view (V1C-CONCORD) ---------------
+
+    private val boundedScenario = scenario(
+        cells = listOf(cell("s", "set-source"), cell("v", "set-view")),
+        links = listOf(link("s", "v")),
+        script = listOf(apply("s", "add", s("apple")), apply("s", "add", s("plum"))),
+    )
+
+    /** A page of key-only (set-shaped) entries, all live unless named in [retracted]. */
+    private fun page(
+        vararg keys: String,
+        next: ReadCursor? = null,
+        frontier: String? = "F0",
+        retracted: Set<String> = emptySet(),
+    ) = ReadPage(
+        entries = keys.map { ReadEntry(key = s(it), value = null, present = it !in retracted) },
+        next = next,
+        frontier = frontier,
+    )
+
+    private fun walk(
+        vararg pages: ReadPage,
+        cell: String = "s",
+        limit: Int = 2,
+        before: Map<String, Long> = mapOf("outlet#src" to 4L),
+        after: Map<String, Long> = mapOf("outlet#src" to 4L),
+    ) = ReadWalk(
+        cell = cell,
+        limit = limit,
+        pages = pages.toList(),
+        waveBefore = WavePlane(before),
+        waveAfter = WavePlane(after),
+    )
+
+    private fun boundedCtx(vararg reads: ReadWalk, view: Value = list(s("apple"), s("plum"))) =
+        FakeContext(FakeDriver(views = mapOf("v" to view)), boundedScenario, reads.toList())
+
+    @Test
+    fun `wave-plane-unchanged holds when a walk moved no wave position`() {
+        pass(Checks.wavePlaneUnchanged(WavePlaneUnchanged("s"), boundedCtx(walk(page("apple", next = "c1"), page("plum")))))
+    }
+
+    @Test
+    fun `wave-plane-unchanged fails when the read advanced a wave position`() {
+        val moved = walk(page("apple"), after = mapOf("outlet#src" to 5L))
+        fail(Checks.wavePlaneUnchanged(WavePlaneUnchanged("s"), boundedCtx(moved)))
+    }
+
+    @Test
+    fun `wave-plane-unchanged fails when the scenario performed no read at all`() {
+        // The vacuity guard: "nothing was observed" must never read as "the property held".
+        fail(Checks.wavePlaneUnchanged(WavePlaneUnchanged("s"), boundedCtx()))
+    }
+
+    @Test
+    fun `wave-plane-unchanged fails when a recorded walk returned no page`() {
+        fail(Checks.wavePlaneUnchanged(WavePlaneUnchanged("s"), boundedCtx(walk())))
+    }
+
+    @Test
+    fun `wave-plane-unchanged checks every recorded walk, not just the first`() {
+        val clean = walk(page("apple"))
+        val moved = walk(page("apple"), limit = 4, after = mapOf("outlet#src" to 5L))
+        fail(Checks.wavePlaneUnchanged(WavePlaneUnchanged("s"), boundedCtx(clean, moved)))
+    }
+
+    @Test
+    fun `pages-equal-view holds when the walk unions to the view`() {
+        val w = walk(page("apple", next = "c1"), page("plum"))
+        pass(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx(w)))
+    }
+
+    @Test
+    fun `pages-equal-view drops entries the cell's own algebra has retracted`() {
+        // A tombstoned set element is a real paged entry; the view never held it.
+        val w = walk(page("apple", "gone", next = "c1", retracted = setOf("gone")), page("plum"))
+        pass(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx(w)))
+    }
+
+    @Test
+    fun `pages-equal-view fails when the walk dropped an entry`() {
+        fail(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx(walk(page("apple")))))
+    }
+
+    @Test
+    fun `pages-equal-view fails when one entry is returned twice in one walk`() {
+        // The union would still equal the view — set union hides a duplicate — so
+        // duplicate detection has to be its own assertion over the page sequence.
+        val w = walk(page("apple", next = "c1"), page("apple", "plum"))
+        fail(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx(w)))
+    }
+
+    @Test
+    fun `pages-equal-view fails when a page carries no frontier stamp`() {
+        val w = walk(page("apple", next = "c1", frontier = null), page("plum"))
+        fail(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx(w)))
+    }
+
+    @Test
+    fun `pages-equal-view fails when the walk's frontier stamps disagree`() {
+        // 21-PULL-03's antecedent is false: the union is a smeared read, and the
+        // check reports that rather than passing on a vacuously false antecedent.
+        val w = walk(page("apple", next = "c1"), page("plum", frontier = "F1"))
+        fail(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx(w)))
+    }
+
+    @Test
+    fun `pages-equal-view fails when the scenario performed no read at all`() {
+        fail(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx()))
+    }
+
+    @Test
+    fun `pages-equal-view checks every recorded walk of a limit sweep`() {
+        val good = walk(page("apple", next = "c1"), page("plum"))
+        val short = walk(page("apple"), limit = 1)
+        fail(Checks.pagesEqualView(PagesEqualView("s", "v"), boundedCtx(good, short)))
+    }
+
     // --- dispatch -----------------------------------------------------------
 
     @Test
@@ -248,6 +372,8 @@ class ChecksTest {
             ReplicasConverge("none"),
             NoDeadLetters,
             EffectCount(sink = "s", exactly = 1),
+            WavePlaneUnchanged("s"),
+            PagesEqualView("s", "v"),
         )
         checks.forEach { c ->
             (Checks.evaluate(c, ctx) is CheckResult.NotImplemented) shouldBe false

@@ -151,6 +151,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | snapshot | `{type: snapshot, on: c, as: blob1}` | `snapshot(cell)` |
 | restore | `{type: restore, on: c, from: blob1, host?}` | `restore(host, cell, blob)` |
 | despawn | `{type: despawn, on: c}` | `despawn(cell)` |
+| read-state | `{type: read-state, on: s, limit: 2}` | `readState(cell, cursor, limit)`, looped to completion |
 
 - **`op`** is a neutral op verb the cell catalog defines (`add`, `remove`, `put`,
   `remove-key`, `increment`, `decrement`, …).
@@ -161,6 +162,30 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   `connected` (default) or `rejected` (§1.2 exemplar (d), 13-LINK-REJECT).
 - **`snapshot … as`** names a scenario-local blob handle a later `restore … from`
   consumes; `restore … host:` re-materializes on another host (migration/durability).
+- **`read-state … limit:`** is the per-page cap on **whole entries**; optional,
+  default 200.
+
+#### `read-state` (V1C-CONCORD, spec 21 §Pull / spec 24 §Required next steps)
+
+A **bounded state read** of a cell's own state — the read an instrument makes,
+as distinct from `snapshot` (an opaque blob captured for a later `restore`,
+which no check can inspect) and from `readView` (a *view* cell's settled fold,
+which exists only where the scenario linked one). It is answered without
+emitting, without linking and without moving the cell's wave plane, and it is
+bounded in size, so reading a large cell is affordable.
+
+**A step is a whole walk, not a page.** Cursor threading is the driver's, not
+the scenario's: the harness calls `readState` until the page it returns carries
+no resume token, and records the walk for the two read-side checks below. So a
+scenario cannot express a *partial* walk, an abandoned one, or one interleaved
+with an operation. That is deliberate — the script model has no way to order a
+mutation against a page boundary (steps on one cell apply in file order, and a
+walk is one step), so a scenario that appeared to test a mid-walk mutation would
+be asserting an interleaving it never produced.
+
+Sweeping `limit` across several `read-state` steps on one cell is how a scenario
+probes page-boundary behaviour; every recorded walk is checked, so one check
+entry covers the whole sweep (`24-BOUND-02`).
 
 ### Script semantics (normative, all drivers)
 
@@ -186,9 +211,64 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | replicas-converge | `{type: replicas-converge, logical: shared}` | all live replicas of the logical id hold equal folds (dist) |
 | no-dead-letters | `{type: no-dead-letters}` | zero dead letters across all hosts |
 | effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) |
+| observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
+| wave-plane-unchanged | `{type: wave-plane-unchanged, cell: s}` | every `read-state` walk on `s` left `s`'s wave plane exactly where it found it |
+| pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 
 Inline construction-time expectations use `expect:` on the `connect`/`disconnect`
 step, not a check entry.
+
+### What a conforming driver must observe (the two read-side checks)
+
+A check is only a conformance check if a **second, non-kernel** implementation
+could evaluate it from the specification alone. The two checks added with
+`read-state` (V1C-CONCORD) each require one observation beyond the existing
+verbs, and both are stated here in the spec's vocabulary, not any
+implementation's.
+
+**`wave-plane-unchanged`** requires the driver to report, for a named cell, the
+**wave plane that cell has reached**: for every wave source visible at that
+cell, the position `(source, counter)` that source's wave sequence has advanced
+to there. This is the model's own clock — spec 20/22 §Structural changes: "wave
+ids are per-source monotonic counters, minted by the emitting outlet" — and any
+implementation of this specification already maintains it, because it is what
+stamps a delivery and what decides wave completeness. The check asserts nothing
+about the *values*: source handles are opaque and the only assertion is that two
+readings, one immediately before a bounded read and one immediately after, are
+**equal**. Since every delivery carries a freshly minted position, a plane that
+did not move is a delivery that did not happen — which is what `[21-PULL-02]`
+asks. Nothing about scheduling, threading, frames or internal identifiers is
+observed, and a driver that reported a constant plane would fail the corpus
+rather than pass it, because the very same scenarios prove other requirements
+that a real emission must move it for.
+
+*Why not a downstream consumer's stream instead.* It looks more direct and it is
+not honest: a materialized view's stream is published off the producing cell's
+execution context, so its length immediately after a read states something about
+notifier timing, not about the graph. A scenario that also wants the settled end
+state pinned adds a `final-view`, which is a statement about state rather than
+about timing.
+
+**`pages-equal-view`** requires the driver to report each page of a bounded read
+as **whole entries in the neutral value model** — an entry's key, the value the
+state associates with it (absent where the key *is* the state, as in a set), and
+whether the entry contributes to the cell's current state — plus an opaque
+**frontier stamp** per page whose only asserted property is equality with
+another stamp from the same walk. A convergent state family pages entries its
+own algebra has retracted (a tombstoned set element is a real entry with a real
+tag set), which is why an entry says whether it is live rather than the driver
+silently filtering: the check compares a *walk* against a *fold*, and only the
+live entries were ever in the fold.
+
+The equal-stamp requirement is `[21-PULL-03]`'s antecedent, asserted rather than
+assumed. A walk whose stamps differ is a *smeared* read for which the union is
+claimed to equal nothing at all, so the check reports it as a failure instead of
+passing on a vacuously false antecedent.
+
+Both checks **fail** when the scenario recorded no `read-state` walk on the
+named cell, or when a recorded walk returned no page. "Nothing was observed"
+must never read as "the property held" — these are the two checks in the
+vocabulary that are trivially satisfiable by not doing anything.
 
 ## `generator` (kind: generative)
 

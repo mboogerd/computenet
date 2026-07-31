@@ -55,6 +55,43 @@ interface Driver {
     /** The ordered stream of values a view observed (glitch-freedom / monotonicity checks). */
     fun observationLog(cellId: CellId): List<Value>
 
+    /**
+     * Read **one bounded page** of [cellId]'s own state (spec 21 §Pull,
+     * `[21-PULL-02]`/`[21-PULL-03]`; spec 24 `[24-BOUND-01]`/`[24-BOUND-02]`) —
+     * resuming from [cursor] (`null` starts a fresh walk), returning at most
+     * [limit] **whole** entries.
+     *
+     * This is not [snapshot] and not [readView]. [snapshot] captures an opaque,
+     * restorable blob no check can inspect; [readView] reads a *view* cell's
+     * settled fold, which exists only where a scenario linked one. A bounded
+     * read is the instrument-facing read of a **state** cell: it is answered
+     * without emitting, without linking, and without advancing the reader's or
+     * the read cell's wave plane (see [wavePlane]), and it is bounded in size,
+     * so reading a large cell is affordable.
+     *
+     * The scenario language never threads a cursor: a `read-state` step is a
+     * *whole walk*, and the harness loops this verb until [ReadPage.next] is
+     * null. A driver that cannot serve a bounded read of the named cell must
+     * fail loudly rather than answer a whole copy — silently widening a bound
+     * is the one failure the primitive exists to prevent.
+     */
+    fun readState(cellId: CellId, cursor: ReadCursor?, limit: Int): ReadPage
+
+    /**
+     * The **wave plane** [cellId] has reached: for every wave source visible at
+     * that cell, the highest wave position that source has minted there (spec
+     * 20/22 §Structural changes — wave ids are per-source monotonic counters
+     * stamped by the emitting outlet).
+     *
+     * Only *equality of two readings* is ever asserted (`wave-plane-unchanged`);
+     * the source handles are opaque and their values are never a golden, so
+     * nothing about an implementation's identifiers, scheduling or frames leaks
+     * into a check. Any implementation of this model already keeps this
+     * bookkeeping — it is what stamps a delivery and what decides wave
+     * completeness — so reporting it is not a kernel-specific capability.
+     */
+    fun wavePlane(cellId: CellId): WavePlane
+
     /** Capture [cellId]'s state as an opaque blob. */
     fun snapshot(cellId: CellId): Blob
 
@@ -82,6 +119,66 @@ typealias LinkRef = String
 
 /** Opaque snapshot payload; only the same driver interprets it. */
 typealias Blob = ByteArray
+
+/**
+ * Opaque resume token minted by [Driver.readState]; only the same driver
+ * interprets one, exactly as with [Blob]. The harness threads it back verbatim
+ * and never inspects it — a scenario cannot name a cursor at all.
+ */
+typealias ReadCursor = Any
+
+/**
+ * One page of a bounded state read ([Driver.readState]).
+ *
+ * @property entries the page's whole entries, in the cell's own enumeration
+ *   order. Never a partial entry, and never the same entry twice within one
+ *   walk (spec 24 `[24-BOUND-01]`).
+ * @property next the resume token for the following page; `null` — and only
+ *   `null` — terminates a walk. A page may be short, or even empty, and still
+ *   carry a non-null [next].
+ * @property frontier the cell's tag frontier as a **stamp**: an opaque string
+ *   whose only asserted property is equality with another page's stamp from the
+ *   same walk. `null` for a state family that carries no tag frontier at all,
+ *   which is itself the signal that the stability check of `[21-PULL-03]` is
+ *   unavailable for that family.
+ * @property exclusivesElided how many entries were replaced by a presence
+ *   descriptor because their value is an exclusive payload that may not be
+ *   copied (spec 23). A non-zero count is an honest signal, never a silent gap.
+ */
+data class ReadPage(
+    val entries: List<ReadEntry>,
+    val next: ReadCursor? = null,
+    val frontier: String? = null,
+    val exclusivesElided: Int = 0,
+)
+
+/**
+ * One whole entry of a bounded read, in the neutral value model.
+ *
+ * @property key the entry's identity within the cell's state — the element of a
+ *   set, the key of a map. Duplicate detection across a walk is by this.
+ * @property value what the state associates with [key], or `null` when the key
+ *   *is* the state (a set has no separate value component).
+ * @property present whether this entry contributes to the cell's current state.
+ *   A convergent state family pages entries its own algebra has retracted — a
+ *   tombstoned set element is a real entry with a real tag set — so a walk's
+ *   union is only comparable with a fold once the retracted entries are dropped.
+ */
+data class ReadEntry(
+    val key: Value,
+    val value: Value? = null,
+    val present: Boolean = true,
+)
+
+/**
+ * The wave plane a cell has reached ([Driver.wavePlane]): opaque source handle →
+ * the highest wave position that source has minted at that cell.
+ *
+ * Compared only against another reading of the same cell's plane. Two readings
+ * that differ mean something was emitted between them; two equal readings mean
+ * nothing was.
+ */
+data class WavePlane(val positions: Map<String, Long>)
 
 /** The outcome of a [Driver.connect]/[Driver.disconnect] (§1.4 inline `expect:`). */
 sealed interface LinkResult {

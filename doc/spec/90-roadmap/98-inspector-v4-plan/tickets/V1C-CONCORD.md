@@ -1,6 +1,20 @@
 # V1C-CONCORD — the bounded read becomes conformance surface: three EARS requirements, one deliberate concord schema change, three scenarios — authored in that order, stopping if a stage's premise fails
 
-**Status**: Specified — not-started
+**Status**: Implemented — awaiting merge. All three stages ran. Stage 1 landed
+four ids, not three: `[21-PULL-02]` and `[21-PULL-03]` in `21-propagation.md`
+§Pull, `[24-BOUND-01]` **and a minted `[24-BOUND-02]`** in `24-data-cells.md`
+(the drafted `[24-BOUND-01]` conflated a per-page obligation with a whole-walk
+one, and the shipped `StatePage` contract distinguishes them). Stage 2 landed
+exactly one step verb (`read-state`), two checks (`wave-plane-unchanged`,
+`pages-equal-view`) and two driver verbs (`readState`, `wavePlane`); the honesty
+gate was **met** — `wave-plane-unchanged` is stated in the spec's own per-source
+wave-position vocabulary in `concord/schema/scenario.md`. Stage 3 authored three
+scenarios (`21-PULL-02`, `24-BOUND-01`, `24-BOUND-02`). **`[21-PULL-03]` is
+filed in `concord/corpus/DISPUTES.md`, not covered**: its family antecedent is
+unsatisfiable by any catalog cell (every tag-frontier family is an
+observed-remove set, whose retraction mints nothing), and the script model
+cannot interleave a mutation with a walk — so the only authorable scenario would
+have asserted the trivial instance while reading as `covered`.
 **Model:** `claude-opus-5` (effort xhigh) · **Escalate to:** `claude-opus-5`,
 fresh session; if that fails, stop and re-split the ticket.
 **Wave:** 11 · **Branches:** `ticket/v1c-concord`

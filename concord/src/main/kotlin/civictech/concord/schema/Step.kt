@@ -94,6 +94,33 @@ data class RestoreStep(
     val host: String? = null,
 ) : Step
 
+/**
+ * Walk cell [on]'s **bounded state read** to completion, at most [limit] whole
+ * entries per page (`readState(cellId, cursor, limit)` — spec 21 §Pull, spec 24
+ * §Required next steps). Added by V1C-CONCORD, the deliberate between-waves
+ * schema-change ticket the seam rule requires (`concord/schema/scenario.md`).
+ *
+ * **A step is a whole walk, not a page.** Cursor threading is the driver's
+ * concern, not the scenario's: the harness calls the driver until the page it
+ * returns has no resume token, and records the walk (its pages, and the cell's
+ * wave plane immediately before and after it) for the `wave-plane-unchanged`
+ * and `pages-equal-view` checks. A scenario therefore cannot express a
+ * *partial* walk, an abandoned one, or one interleaved with an operation —
+ * which is deliberate: the script model has no way to order a mutation against
+ * a page boundary, so pretending otherwise would be a scenario asserting an
+ * interleaving it did not produce.
+ *
+ * [limit] sweeps are how a scenario probes page-boundary behaviour: several
+ * `read-state` steps at different limits over one source, each walk checked
+ * (`24-BOUND-02`).
+ */
+@Serializable
+@SerialName("read-state")
+data class ReadStateStep(
+    val on: String,
+    val limit: Int = 200,
+) : Step
+
 /** Gracefully retire cell [on] (`despawn(cellId)`), unlinking it. */
 @Serializable
 @SerialName("despawn")
