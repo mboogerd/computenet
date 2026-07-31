@@ -129,6 +129,19 @@ say which part changed.
   trigger:** the day `ShardCell` gains a `@CellBase` Api marker interface (or
   B2's kernel-owned observe seam subsumes the fold table), drop `partition`
   from the set. Recorded in the test's class KDoc.
+- **G1 widened: `replication` added to `demoCellPrefixes`** (2026-07-31, human
+  approval via the 99-defects-engines-plan orchestrator). `V4-PILOT`
+  (`doc/spec/90-roadmap/98-inspector-v4-plan/tickets/V4-PILOT.md`) extends
+  `demo/shopping` behind a `--replicate` flag to drive the first same-logical-id
+  replicated pilot over a real socket; `demo/shopping/src/main/kotlin/civictech/demo/Main.kt`
+  imports `civictech.cell.replication.Replication` to wire the registry
+  `onPublish`/`onUnpublish` hooks the replica mesh is driven by. There is no
+  narrower seam: `Replication` is the public entry point for exactly this
+  capability, not an internal detail leaking through. Only `demo/shopping`
+  exercises the import today. **Shrink trigger:** none identified — a
+  `--replicate` pilot is expected to remain part of `demo/shopping` (per
+  V4-PILOT's own report) until a later ticket extracts it into its own module,
+  at which point the prefix moves with it rather than dropping.
 
 ### Remediation closed — 2026-07-28
 
