@@ -45,3 +45,9 @@ bin/
 
 # Headless plan orchestrator runtime state (logs, prompts, worktrees metadata)
 .codex-orchestrator/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
