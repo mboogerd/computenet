@@ -1,8 +1,49 @@
 name: CI
 
+# A PR branch push used to match BOTH triggers, so every commit on an open PR
+# started two full CI runs of the same SHA. That cost more than duplicated
+# minutes: branch protection saw two check runs per required name and required
+# every one of them to pass, so a single flaky failure in either run blocked the
+# merge, and with auto-merge armed the PR then parked silently. Running the
+# suites twice per commit also doubled the exposure to the genuinely flaky tests
+# in `:wire`, `:inspect` and `:demo:shopping` (computenet-0pd).
+#
+# It does NOT fix those tests. They fail in isolated re-runs with nothing else in
+# flight, and they fail on single-run branches, so the flakiness is intrinsic
+# rather than contention between the duplicate runs — each Actions job gets its
+# own ephemeral VM, so two runs never share a CPU or a bound port. Halving the
+# executions halves how often the flakes are hit; that is all (computenet-8ru).
+#
+# `push` is now restricted to `main`; PR validation runs from `pull_request`.
+# Required checks are unaffected — the same five jobs still run on every PR,
+# just once. Two corollaries worth knowing:
+#
+#   - A branch with no open PR now gets no CI, so a task branch is covered from
+#     the point its feature PR exists rather than from its first push.
+#   - The retained `main` lane is currently inert. Auto-merge squashes as
+#     `GITHUB_TOKEN`, and pushes authored by that token deliberately do not
+#     start new workflow runs, so no merge has triggered a `main` run since #2
+#     (the last one a human merged). The `push` trigger is kept because it is
+#     what *should* fire; making it actually fire is computenet-8z6.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# Supersede an in-flight run when a newer commit lands on the same ref. The
+# superseded run's checks stay attached to a SHA that is no longer the PR head,
+# so nothing branch protection reads is lost.
+#
+# `main` is deliberately exempt from cancellation. A post-merge run is the only
+# place a semantic conflict between two independently-green PRs can surface,
+# which is exactly what rapid auto-merges produce, and a cancelled run reports
+# `cancelled` — it fails quietly and notifies nobody. That lane is inert today
+# (see computenet-8z6), so this is defence in depth rather than a live guard: it
+# also covers the case of a human merging or pushing to `main` directly, which
+# does start a run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Fast lane: everything except the two-JVM/ProcessBuilder tests
