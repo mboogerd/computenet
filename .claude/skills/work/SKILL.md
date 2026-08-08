@@ -14,17 +14,12 @@ session's context balloons and starts drifting over a multi-hour run.
 
 ## 1. Identity
 
-Each machine must claim under a distinct actor, or the race checks can't
-tell two machines apart. Confirm from the environment:
+`BEADS_ACTOR` (falling back to `git config user.name`) must be **unique per
+machine** — it's how every race check tells two machines apart. If it can't
+be resolved, stop and ask; don't guess a machine identity.
 
-- `BEADS_ACTOR` (or `git config user.name`) — unique per machine.
-- `BEADS_EXCLUDE_OWNER_LABELS` — comma-separated `owner:<machine>` labels for
-  every *other* machine. Optional but recommended; without it this session
-  may claim an epic another machine already owns.
-
-If `BEADS_ACTOR` can't be resolved, stop and ask — don't guess a machine
-identity. Both are inherited by every subagent you dispatch; nothing to pass
-per-dispatch.
+It's read from the environment, so every subagent you dispatch inherits it.
+Nothing to pass per-dispatch.
 
 ## 2. Budget
 
@@ -61,12 +56,17 @@ highest-priority unclaimed one:
 ```bash
 # resume: already mine, still open
 bd list --type=epic --status=in_progress --assignee="$BEADS_ACTOR" --json
-# else start fresh: unclaimed, not owned by another machine
-bd ready --type=epic ${BEADS_EXCLUDE_OWNER_LABELS:+--exclude-label="$BEADS_EXCLUDE_OWNER_LABELS"} --claim --json
+# else start fresh: highest-priority unclaimed epic
+bd ready --type=epic --claim --json
 ```
 
-`bd ready` sorts by priority by default, so `--claim` takes the highest-priority
-one atomically. If the claim came from the second command, immediately follow
+`bd ready` sorts by priority by default, so `--claim` takes the
+highest-priority one atomically. Nothing extra is needed to stay off the
+other machine's epic: `bd ready` excludes `in_progress` items, and an epic
+another machine owns stays `in_progress` for as long as it owns it (the
+SessionEnd hook deliberately never releases epics).
+
+If the claim came from the second command, immediately follow
 [references/claim-sync.md](references/claim-sync.md)'s push-and-verify
 discipline (`bd dolt push`, then re-check on conflict) and apply the
 `owner:` label per [references/epic.md](references/epic.md) — an epic claim
@@ -77,8 +77,8 @@ now. Report that and stop.
 
 `theme` = that epic id. **It never changes for the rest of this session.**
 If its queue goes dry, the session ends — it does not go find another epic.
-That commitment is what keeps two concurrent sessions off each other's
-subtrees, and what the `owner:` label assumes.
+That commitment, plus the epic staying `in_progress` while claimed, is what
+keeps two concurrent sessions off each other's subtrees.
 
 ## 4. Ensure the epic is broken down
 
