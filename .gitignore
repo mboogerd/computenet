@@ -41,7 +41,7 @@ bin/
 ### Mac OS ###
 .DS_Store
 # Claude Code session worktrees
-.claude/
+.claude/worktrees/
 
 # Headless plan orchestrator runtime state (logs, prompts, worktrees metadata)
 .codex-orchestrator/
