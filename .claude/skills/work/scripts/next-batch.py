@@ -11,7 +11,12 @@ finish.
 
 Usage: next-batch.py <feature-id> [--actor NAME]
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
-              "skipped": [{id, reason}]}
+              "skipped": [{id, reason}], "verdict": str}
+
+`verdict` explains an *empty* batch, which the caller cannot infer from
+`batch`/`skipped` alone and must not guess: "all-closed" (feature is ready for
+review), "blocked" (tasks remain but none can run), "no-tasks" (the breakdown
+produced nothing). It is "ok" whenever the batch is non-empty.
 
 A task with no `files` claim can't be scheduled against anything, so it is only
 ever returned alone — safer than guessing a claim for it.
@@ -83,7 +88,23 @@ def main():
         taken |= files
         batch.append(_entry(task, resumed, sorted(files)))
 
-    print(json.dumps({"batch": batch, "skipped": skipped}, indent=2))
+    print(json.dumps({"batch": batch, "skipped": skipped,
+                      "verdict": _verdict(feature, batch)}, indent=2))
+
+
+def _verdict(feature, batch):
+    """Why the batch is empty. The caller routes on this, so never guess it."""
+    if batch:
+        return "ok"
+    # --all: closed tasks are hidden otherwise, which would read as "no tasks"
+    # for a finished feature and send it round the breakdown again.
+    children = [t for t in bd("list", "--parent", feature, "--all")
+                if t.get("issue_type") not in ("epic", "feature")]
+    if not children:
+        return "no-tasks"
+    if all(t.get("status") == "closed" for t in children):
+        return "all-closed"
+    return "blocked"
 
 
 def _entry(task, resumed, files):

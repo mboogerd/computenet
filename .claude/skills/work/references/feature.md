@@ -16,15 +16,28 @@ Read the feature (`bd show <id>`), its parent epic, and every spec section
 they cite — that text is the authority (AGENTS.md). Verify every file,
 module, and test you name actually exists before writing it into a task.
 
+**A task is a plan, not a request** — see the task section of
+[issue-quality.md](issue-quality.md). What you hand the implementer is what
+plan mode would hand you: the design already decided, only execution left. If
+you can't state the decided direction without inventing the design, do that
+design work now or park the question — don't pass the fork downstream.
+
+If the feature's own rules and examples don't meet
+[issue-quality.md](issue-quality.md), fix them first
+(`bd update <feature-id> --acceptance=… --design=…`). A rule with no example
+is ambiguity you are about to multiply across every task you cut from it.
+Task criteria **partition** the feature's rules; each rule should end up owned
+by exactly one task, and none left unowned.
+
 Size by **read-surface**: how much an agent must read and hold to be
 correct, not diff size. A fresh agent with no access to your context should
 be able to read the task and do the work — roughly an hour of it.
 
 ```bash
-bd create --type=task --parent=<feature-id> \
+bd create --type=task --parent=<feature-id> --validate \
   --title="<outcome as a change to the system, not an activity>" \
-  --description="<what the system does here today / the problem with path:line evidence / the decided direction, saying what's settled and what's left to judgment / how to verify>" \
-  --acceptance="<checkable statements>" \
+  --description="<current state with path:line evidence / the decided direction, saying what's settled and what's left to judgment / non-goals / the exact verification command>" \
+  --acceptance="<which of the feature's rules and examples this task makes true>" \
   --metadata '{"model":"<sonnet|opus>","files":"<comma-separated paths it will create or modify>"}'
 ```
 
@@ -76,8 +89,17 @@ or API-shape choice), park a question on the feature instead of guessing.
 ## Finish
 
 ```bash
+bd lint <task-ids...>
 bd dolt push
 ```
 
+Fix anything `bd lint` reports before pushing, and check that every feature
+rule is owned by some task.
+
 Comment the tasks created on the feature. Leave it `in_progress` — features
 close when their tasks do. Report the task ids.
+
+**Friction:** end your report with anything that made you slower or forced a
+guess — an unusable parent item, a command here that did not work, a case these
+instructions do not cover. Report it; do not file it. The orchestrator logs it
+centrally so recurrences are visible (SKILL.md step 7).

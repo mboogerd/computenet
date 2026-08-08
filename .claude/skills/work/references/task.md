@@ -65,3 +65,10 @@ than restarting. That's the whole reason the worktree is preserved.
 8. Report: the task id, the outcome, and the files you **actually** touched,
    not just the ones you claimed. Drift is how the orchestrator fixes
    scheduling for later batches.
+
+   Add a **friction** line for anything that made you slower or forced a
+   guess: an underspecified task, a wrong `files` claim, a command in these
+   instructions that didn't work, a step that didn't cover your case. Don't
+   file it yourself — the orchestrator logs it centrally so recurrences are
+   visible (SKILL.md step 7). Nothing to report is a fine answer; inventing
+   one is not.
