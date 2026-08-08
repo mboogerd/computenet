@@ -534,6 +534,64 @@ re-applied) *and* state-rebuilt-by-replay.
   then a journaled source could feed an effectful sink and re-emit without
   double-firing, and `DUR-REPLAY-01` could fold both concerns onto one subgraph.
 
+### The second boundary (`kernel-gap` / design ceiling, KFX-16, `24-DUR-05`) — the frame with no frontier position
+
+`[24-DUR-05]` is written unconditionally ("IF an invocation at an `Effectful`
+inlet is at or behind that inlet's processed-frontier … THEN it SHALL be
+suppressed"), but the frontier is keyed on `MessageContext.timestamp` — a
+`(sourceId, counter)` wave position. **A frame that carries no `MessageContext`
+has no position on that frontier at all**, so the antecedent can never be
+evaluated for it. `Invocation.context` is "null on management paths and
+spontaneous calls", and `HostedCellProxy` stamps `CurrentContext.get()`, so this
+is exactly the *externally-driven root* case: an `Effectful` cell driven directly
+by an outside caller (the shape a connector ingress produces). Consequence,
+asserted by construction in kernel `EffectfulInletGuardTest`: such a frame is
+journaled, is never deduped, never advances the frontier, and **its effect
+re-fires on `recoverFrom` replay**.
+
+The decision recorded for KFX (feature `computenet-yh6.1.3`) is to keep that
+behaviour as an explicit bounded limit rather than close it in the guard, for the
+same reason the G-59/C-9 ceiling above stands: the closure needs an ingress
+*identity* the kernel does not have, and minting one is wider than this guard.
+
+*Stamping* a synthetic wave position at ingress does close the replay double-fire,
+and — stated precisely, because the imprecise version of this is tempting — it
+does **not** need the minted id to be crash-stable to do so: the stamp rides the
+journaled frame, and the frontier advance is itself journaled
+(`FrontierRecord`/`CheckpointRecord`), so a replayed frame matches the restored
+frontier even for an id minted fresh per call. Verified by construction against
+this branch. What rules it out here is its cost, not its efficacy. (i) It
+fabricates wave identity on **every** externally-driven path — wire ingress
+included — so every external call becomes a wave to every downstream consumer,
+and PN-2's replay-baseline stamping, which today deliberately leaves root frames
+untouched to keep byte-for-byte behaviour for non-opting graphs
+(`HostDurability.baselined`), would begin applying to them. (ii) A *per-call*
+minted id makes the frontier grow without bound: one `(sourceId → counter)` entry
+per external call, each with its own journaled `FrontierRecord`, none of them
+ever collapsible. A bounded stamp therefore needs a per-host (or per-connector)
+source id with a monotonic counter that survives a crash — real ingress identity,
+which is exactly the **Resolves** below, and exactly the epic's risk-5 boundary.
+
+*Refusing to journal* an `Effectful`-bound frame with no timestamp would deny
+legitimate live traffic that works correctly today, trading a replay-time
+double-fire for a delivery-time denial.
+
+So this sits under the same "external-idempotency ceiling" 93 I-7 already states:
+un-suppressed replay is safe exactly for the replay-stable idempotent vocabulary,
+and an external effect driven by an unidentified external frame is outside it.
+
+Deliberately **no corpus scenario** accompanies this entry: a scenario asserting
+"the effect re-fires" would state a weaker rule than `[24-DUR-05]` as though it
+were the decided one. The kernel test carries the assertion; this ledger carries
+the honesty.
+
+- **Resolves**: a crash-stable ingress identity for externally-driven frames — a
+  durable per-host (or per-connector) source id plus a journaled monotonic
+  counter, stamped before the journal tee so replay carries the same position —
+  after which every frame reaching an `Effectful` inlet has a frontier position
+  and `[24-DUR-05]` holds unconditionally, as written. Filed as
+  `computenet-yh6.1.3.5`.
+
 ### Not covered (deferred, honestly out of reach at W4-B)
 
 - `24-DUR-04` (replay-stable identity, no resurrected removals) is exercised
