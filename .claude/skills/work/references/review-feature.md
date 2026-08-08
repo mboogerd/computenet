@@ -12,7 +12,7 @@ write this code: read what's there, not what you expect to be there.
 
 ```bash
 bd show <feature-id> --json          # acceptance criteria, description
-bd list --parent=<feature-id> --json # the tasks, and what each claimed
+bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
 ```
 
 Read the parent epic too, and any spec sections the feature cites — those
@@ -62,12 +62,17 @@ unowned seams:
 git -C <worktree> push
 gh pr ready <pr-url>
 bd comment <feature-id> "Review passed: <what you verified, what you repaired>. PR marked ready."
-bd close <feature-id>
+bd update <feature-id> --set-metadata review=passed
 bd dolt push
 ```
 
 Auto-merge and the required status checks take it from here. Don't wait for
-the merge — the orchestrator monitors that.
+the merge.
+
+**Do not `bd close` the feature.** Ready is not merged: a required check can
+still fail and leave the PR open forever. Closing here would let the epic
+close on top of it and abandon the branch. The orchestrator closes the
+feature once it has confirmed the PR actually merged.
 
 **Not good enough → stays draft.** Say concretely why, and leave the work
 recoverable rather than vague:

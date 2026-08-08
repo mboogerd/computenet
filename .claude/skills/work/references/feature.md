@@ -5,7 +5,7 @@ Break one feature into tasks, then stop. Plan it, don't implement it.
 ## Reconcile first
 
 ```bash
-bd list --parent=<id> --json
+bd list --parent=<id> --all --json
 ```
 
 Create only what's missing.
@@ -25,9 +25,12 @@ bd create --type=task --parent=<feature-id> \
   --title="<outcome as a change to the system, not an activity>" \
   --description="<what the system does here today / the problem with path:line evidence / the decided direction, saying what's settled and what's left to judgment / how to verify>" \
   --acceptance="<checkable statements>" \
-  --set-metadata model=<sonnet|opus> \
-  --set-metadata files="<comma-separated paths it will create or modify>"
+  --metadata '{"model":"<sonnet|opus>","files":"<comma-separated paths it will create or modify>"}'
 ```
+
+Note the flag: `bd create` takes **`--metadata`** with a JSON object.
+`--set-metadata key=value` exists only on `bd update` — passing it to
+`bd create` fails with `unknown flag` and creates nothing.
 
 Both metadata fields are load-bearing — a task missing either can't be
 scheduled and gets sent back.
