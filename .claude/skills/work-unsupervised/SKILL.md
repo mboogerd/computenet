@@ -4,82 +4,56 @@ description: Run the `work` skill in autonomous mode — no human is available, 
 disable-model-invocation: true
 ---
 
-You are running **unsupervised**. Read this whole file before doing anything, then run the `work` skill.
+You are running **unsupervised**. Read this file, then run the `work` skill and follow it.
+
+This file adds only the conditions the run happens under. Everything about *what* the
+work is and *how* to do it — the epic/feature/task flow, time budget, claiming, parking
+mechanics, branches and PRs, finalizing — lives in `work` and its references. Don't
+restate it here, and don't second-guess it.
 
 ## No human is available
 
 This session was started by a scheduled task, not by a person. Nobody is reading your
 output while it runs, and nobody will answer a question you ask.
 
-That has three consequences:
-
 - **Do not ask clarifying questions.** A question in your output is not a question — it
-  is a dropped task. Either decide, or park it (see below).
+  is a dropped task. Either decide it, or park it in Beads.
 - **Do not wait or block on anything.** No approvals, no confirmations, no "let me know
   if you'd like me to continue."
-- **Everything you want a human to see must be written somewhere durable** — a Beads
+- **Anything you want a human to see must be written somewhere durable** — a Beads
   comment, a commit message, a PR body. Your transcript is not durable.
 
-## Time budget: about five hours
+The one exception is `work`'s identity check: if `BEADS_ACTOR` cannot be resolved, still
+stop and end the run. Guessing a machine identity silently breaks the claim safety that
+keeps two machines off each other's work — a dead run is far cheaper than that.
 
-Run `date` when you start and note it. Check it periodically — you have no other sense of
-elapsed time.
+## Where the parking bar sits when nobody is listening
 
-Aim for roughly five hours of productive work, then stop. Around the four-and-a-half hour
-mark, stop picking up new work and spend the remainder landing what you have.
+`work`'s [ask-human.md](../work/references/ask-human.md) defines what parking is and how
+to do it. Follow it exactly — parking is a specific sequence, not just a comment.
 
-Two failure modes to avoid in equal measure:
+What changes unsupervised is only *how readily* you park. Supervised, asking is cheap.
+Here, a parked item waits until a human next looks, so both directions cost real time:
 
-- **Padding.** If the ready queue is genuinely empty or everything left is parked, stop
-  early and say so. Inventing work to fill the budget is worse than finishing at hour two.
-- **Stopping mid-flight.** Never end with a broken build, a half-applied refactor, or an
-  uncommitted working tree. Whatever state you leave behind is what a human finds.
+- **Park it** when the item is genuinely ambiguous *and* choosing wrong is expensive to
+  undo — spreads across many call sites, changes a public interface or wire format, or
+  commits to a semantic the spec doesn't actually settle.
+- **Decide it yourself** when it's an ordinary judgment call — naming, file layout, test
+  structure, which of two equivalent idioms. Record the assumption in the PR body or a
+  Beads comment and move on.
 
-Work lands on a branch with a PR. Never push directly to the main branch.
+The test: *if this choice turns out wrong, is it a five-minute fix or a five-hour one?*
+Five minutes, decide. Five hours, park.
 
-## Park what you cannot decide safely
+An agent that parks every small uncertainty makes no progress, which is the same as
+failing. An agent that guesses on the expensive ones costs more than the run was worth.
 
-The judgment call is two-sided, and getting it wrong in either direction wastes the run.
+## Ending the run
 
-**Park it** when the work item is genuinely ambiguous or underspecified *and* choosing
-wrong would be expensive: a decision that is costly to undo, risky, spreads across many
-call sites, changes a public interface or wire format, or commits to a semantic the spec
-does not actually settle.
+`work` finalizes properly on its own — follow its step 6 rather than inventing an
+ending. Two failure modes to hold yourself to, since nobody is watching for them:
 
-**Decide it yourself** when it is an ordinary judgment call — naming, file layout, test
-structure, which of two equivalent idioms to use, anything cheap to reverse later. Record
-the assumption in the PR body and move on. An agent that parks every small uncertainty
-makes no progress, which is the same as failing.
-
-When in doubt, ask: *if this choice turns out wrong, is it a five-minute fix or a
-five-hour one?* Five minutes, decide. Five hours, park.
-
-### How to park
-
-Attach the question to the issue it belongs to, then flag it:
-
-```bash
-bd comment <id> "Blocked on a decision I shouldn't make unsupervised.
-
-Question: <the specific thing that is unclear>
-Options considered: <the real alternatives, and the tradeoff between them>
-Why I'm not choosing: <what makes this costly, risky, or hard to reverse>
-What I'd do if forced: <your best guess, so the human has a default to accept>"
-
-bd tag <id> human
-```
-
-The `human` label is what surfaces it — a human picks these up with `bd human list` and
-answers with `bd human respond <id>`. A comment without the label is invisible.
-
-Be specific. "This is unclear" is useless three days later. Name the file, the requirement
-id, and the exact fork in the road.
-
-After parking, **move on to the next ready issue.** Parking is not stopping. Only end the
-run when the budget is spent or nothing unparked remains.
-
-## Now do the work
-
-Invoke the `work` skill and follow it, subject to everything above. If `work` and this
-file conflict, this file wins — it describes the conditions the run happens under, not
-what the work is.
+- **Padding.** If the queue is genuinely empty or everything left is parked, stop early
+  and say so. Inventing work to fill the budget is worse than finishing at hour two.
+- **Stopping mid-flight.** Whatever state you leave behind is what a human finds. Never
+  end on a broken build, a half-applied refactor, or an uncommitted working tree.
