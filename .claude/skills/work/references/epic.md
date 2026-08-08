@@ -7,18 +7,27 @@ fall through into implementing anything yourself.
 ## Ownership
 
 The epic is already claimed (assignee/`in_progress`) by the session that
-dispatched you. Make sure it carries this machine's owner label:
+dispatched you. That claim is what keeps other machines off it: `bd ready`
+excludes `in_progress` items, and the epic stays `in_progress` until it's
+done (the SessionEnd hook never releases epics). Do **not** stamp the epic
+with a session id — that claim must outlive this session
+([claim-sync.md](claim-sync.md) explains why).
+
+Also tag it, which every feature and task created under it inherits
+automatically:
 
 ```bash
 bd update <id> --add-label=owner:$BEADS_ACTOR
 ```
 
-Every feature and task created under it (`bd create --parent=<id>`) inherits
-that label automatically — no tagging needed downstream. A session's claim
-excludes other machines' `owner:` labels (see [claim-sync.md](claim-sync.md)),
-so nothing under this epic gets picked up elsewhere until it's done. Do
-**not** stamp the epic with a session id — that claim must outlive this
-session (claim-sync.md explains why).
+This label is **observability, not a gate** — nothing schedules off it. It
+exists so a human checking in on an unattended run can ask what a given
+machine is working on across the whole subtree, which `assignee` alone can't
+answer (assignee lands only on items actually claimed, and doesn't inherit):
+
+```bash
+bd list --label=owner:MacBoo
+```
 
 ## Reconcile before creating
 

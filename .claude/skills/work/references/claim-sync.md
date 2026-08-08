@@ -20,21 +20,10 @@ bd ready --parent=<theme-id> --claim --json
 ```
 
 If that returns empty, report back "nothing claimable" — do **not** fall
-through to the global claim. A dry theme means the session's epic is
+through to the unscoped claim. A dry theme means the session's epic is
 exhausted, and the orchestrator ends the session rather than switching
-epics. The global claim below is only for when you were given no theme at
+epics. The unscoped claim below is only for when you were given no theme at
 all (the first item of a session).
-
-If `BEADS_EXCLUDE_OWNER_LABELS` is set (comma-separated `owner:<machine>`
-labels — configure it per machine alongside `BEADS_ACTOR`, listing every
-*other* machine's label), exclude them so you never pick up work under an
-epic another machine already owns:
-
-```bash
-bd ready --exclude-label="$BEADS_EXCLUDE_OWNER_LABELS" --claim --json
-```
-
-Otherwise, or if that variable is unset:
 
 ```bash
 bd ready --claim --json
@@ -94,8 +83,8 @@ human noticing, not something to loop on indefinitely.
 Don't run `--set-metadata session=...` when the claimed item's type is
 `epic` or `feature`. A machine's `SessionEnd` hook automatically releases
 `in_progress` items it stamped with the terminating session's id — but epic
-and feature ownership (`in_progress` + the `owner:<machine>` label, see
-[epic.md](epic.md)) is meant to persist across every session until the whole
-epic/feature is done, not just this one. Stamping them would make the very
-next session-end silently un-claim the epic and reopen it to the other
-machine, defeating the whole point of epic-level exclusivity.
+and feature ownership is meant to persist across every session until the
+whole epic/feature is done, not just this one. Staying `in_progress` is
+precisely what keeps the other machine out (`bd ready` skips it), so
+stamping them would make the very next session-end un-claim the epic and
+reopen it to the other machine — defeating epic-level exclusivity entirely.
