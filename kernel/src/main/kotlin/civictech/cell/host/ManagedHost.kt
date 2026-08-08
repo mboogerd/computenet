@@ -363,6 +363,17 @@ open class ManagedHost(
     private val restartCount = AtomicLong()
 
     /**
+     * KFX-20: how many invocations the `Effectful` processed-frontier guard
+     * suppressed as already-acted (G-59, C-9). Each such suppression discharges
+     * the invocation's exclusive args explicitly ([Proxy.discharge]), so this
+     * counter is also the discharge count — the suppression path is the only
+     * caller. Counted because a suppression is a *drop*: spec 23 §Ownership and
+     * the AGENTS.md no-silent-drop invariant require that an `Owned`/`Leased`
+     * payload leaving the happy path be both discharged and observable.
+     */
+    private val effectfulSuppressionCount = AtomicLong()
+
+    /**
      * PN-12 — spawn-time consumption of the [civictech.nature.CellDescriptor.manifest]:
      * a `Manifest.DURABLE` cell placed on this host with a journal selector that
      * returns `null` for it is volatile — a previously *silent* durability gap
@@ -382,6 +393,7 @@ open class ManagedHost(
         deadLetters = deadLetters.deadLetterCount,
         parkedDrainedOnTeardown = parkedDrainedOnTeardownCount.get(),
         restarts = restartCount.get(),
+        effectfulSuppressionsDischarged = effectfulSuppressionCount.get(),
     )
 
     /**
@@ -787,11 +799,45 @@ open class ManagedHost(
                         // post-recovery live re-delivery) at/behind the last
                         // applied (sourceId, counter) is suppressed-emission —
                         // the sink already acted on it, so it does not act again.
+                        //
+                        // KFX-16 (a recorded limit, not an oversight): the check
+                        // applies only when the frame carries a wave context. An
+                        // externally-driven frame has none — `Invocation.context`
+                        // is "null on management paths and spontaneous calls" —
+                        // and therefore has no frontier position at all, so it
+                        // re-fires on replay. Stamping a synthetic position at
+                        // ingress WOULD close that (the stamp rides the journaled
+                        // frame and the frontier advance is journaled too, so even
+                        // a per-call id matches the restored frontier) — but it
+                        // fabricates wave identity on every externally-driven path
+                        // (wire ingress included), and a per-call id grows the
+                        // frontier without bound; a bounded stamp needs a
+                        // per-host/per-connector ingress identity with a monotonic
+                        // counter. Refusing to journal such a frame would deny
+                        // legitimate live traffic. Both are wider than this guard, so the
+                        // re-fire is kept as an explicit bounded limit under the
+                        // 93 I-7 external-idempotency ceiling — written down in
+                        // `concord/corpus/DISPUTES.md` against `[24-DUR-05]` and
+                        // asserted by `EffectfulInletGuardTest`.
                         val timestamp = hostedInvocation.invocation.context?.timestamp
                         if (cell is Effectful && timestamp != null &&
                             hostDurability.alreadyProcessed(cellRef, hostedInvocation.portName, timestamp)
                         ) {
-                            // suppressed: already-acted, dropped rather than re-acted
+                            // Suppressed: already-acted, dropped rather than re-acted.
+                            // KFX-20: a drop is not a licence to leak. The sink
+                            // never runs, so nothing downstream will ever consume
+                            // this invocation's exclusive payloads — discharge
+                            // them here (consume `Owned`, release `Leased`),
+                            // exactly as the ADMIT tier does for the invocation it
+                            // drops (`InletPolicy`), and count the suppression so
+                            // the drop is observable (G-46). Explicit
+                            // consume/release, NOT a re-route into the dead-letter
+                            // fan-out — spec 23 R8: a live exclusive must not
+                            // enter it. Origin-blind on purpose: replay traffic,
+                            // post-recovery live re-delivery, and a journaled
+                            // source's replayed emissions all arrive here.
+                            hostedInvocation.invocation.args.forEach(Proxy::discharge)
+                            effectfulSuppressionCount.incrementAndGet()
                         } else {
                             // suspend-aware: a 🟣 target's suspend fun may park this task (spec 32).
                             // T04 finding 7 (extended, T06 §C1a): re-install the
