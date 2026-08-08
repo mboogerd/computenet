@@ -89,8 +89,8 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-DUR-01 | DUR-REPLAY-01 | covered |
 | 24-DUR-02 | DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
 | 24-DUR-03 | DUR-SNAPTAIL-01 | covered |
-| 24-DUR-04 | — | gap |
-| 24-DUR-05 | DUR-REPLAY-01 | covered |
+| 24-DUR-04 | DUR-SRCID-01 | covered |
+| 24-DUR-05 | DUR-REPLAY-01, DUR-SRCID-01 | covered |
 | 24-OP-COUNT-01 | 24-GEN-01, 24-OP-COUNT-01 | covered |
 | 24-OP-COUNTER-01 | 24-OP-COUNTER-01 | covered |
 | 24-OP-FILTER-01 | 24-GEN-01, 24-OP-FILTER-01 | covered |
@@ -181,7 +181,6 @@ None.
 - Coverage gap: requirement '22-OBS-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '22-OBS-02' (20-dataflow-semantics/22-consistency.md) has no covering scenario
 - Coverage gap: requirement '22-REC-01' (20-dataflow-semantics/22-consistency.md) has no covering scenario
-- Coverage gap: requirement '24-DUR-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-03' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-04' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
 - Coverage gap: requirement '24-OP-GROUPBY-05' (20-dataflow-semantics/24-data-cells.md) has no covering scenario
