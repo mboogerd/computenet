@@ -48,10 +48,10 @@ constraints, and boundaries, naming entry points rather than every file; for
 `opus`, state the problem, the invariants that must survive, and what is
 explicitly not open for redesign.
 
-**`files`** — the file claim. Tasks run in parallel *in one shared worktree*
-only when their claims are disjoint, so an incomplete claim means two agents
-editing the same file at once. Claim generously: a file you might touch
-belongs in the list.
+**`files`** — the file claim. Tasks run in parallel, each on its own branch,
+only when their claims are disjoint. Two branches editing the same file
+merge into a conflict, so an incomplete claim costs a hand-resolved merge
+later. Claim generously: a file you might touch belongs in the list.
 
 ## Dependencies
 

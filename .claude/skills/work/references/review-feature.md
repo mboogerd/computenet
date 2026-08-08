@@ -39,12 +39,14 @@ A rejection forfeits everything already spent on the feature, so fix what you
 can rather than sending it back. Within the feature's stated scope, repair:
 missed criteria, broken seams, failing tests, gaps between tasks.
 
-Commit repairs by explicit pathspec, same discipline as the tasks
-([task.md](task.md)) — other agents may share this worktree:
+Commit repairs on the feature branch, in the feature worktree:
 
 ```bash
-git -C <worktree> commit -- <paths> -m "review: <what you fixed>"
+git -C <feature-worktree> commit -am "review: <what you fixed>"
 ```
+
+You reach this point only once every task has merged, so the feature
+worktree is yours alone — no other agent is committing here.
 
 Escalate instead of repairing when the approach is wrong at the design level,
 or when repair would rewrite most of the diff. Then apply the
