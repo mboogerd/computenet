@@ -21,15 +21,20 @@ bd dolt push
 ```
 
 All three flags do work. `assignee=human` + `blocked` takes the item out of
-the `SessionEnd` hook's release set (`assignee=<machine> AND in_progress`),
-so the question survives the session that asked it instead of being reopened
-and re-claimed by the next one. `blocked` also takes it out of `bd ready`.
+the startup stale-claim sweep (which reopens `assignee=<machine>` items left
+`in_progress`), so a question survives instead of being silently reopened
+and re-claimed by the next run. `blocked` also takes it out of `bd ready`.
 The `human` label is what surfaces it in `bd human list`, where it's
 answered with:
 
 ```bash
 bd human respond <id> -r "the answer"
 ```
+
+One side effect to know: `bd create` inherits the parent's labels, so any
+item created under a parked one picks up `human` and shows up in
+`bd human list` as a question nobody asked. Pass `--no-inherit-labels` when
+creating a child of a parked item.
 
 That comments the answer and closes the flag, but does **not** unblock the
 original item — a later session (or you) reopens it with

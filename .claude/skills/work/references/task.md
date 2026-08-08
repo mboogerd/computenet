@@ -38,15 +38,20 @@ than restarting. That's the whole reason the worktree is preserved.
 4. Verify per AGENTS.md's "Verification" section — narrowest relevant test
    first, then the affected module's suite. Don't report success on an
    untested claim.
-5. Commit on your branch. Your worktree has its own index, so ordinary
-   staging is safe here:
+5. Commit on your branch, then push it. Your worktree has its own index, so
+   ordinary staging is safe here:
    ```bash
    git -C <your-worktree> add <your paths>
    git -C <your-worktree> commit -m "<what changed and why>"
+   git -C <your-worktree> push -u origin <your-branch>
    ```
-   Don't merge into the feature branch, don't push it, don't touch its PR —
-   the orchestrator merges after review, and serializes it so concurrent
-   merges don't race.
+   Push even when the task is unfinished — an unpushed branch exists only on
+   this machine, so the work is invisible and gets redone if anything else
+   picks the task up.
+
+   Push **your own branch only**. Never merge into the feature branch, push
+   it, or touch its PR: the orchestrator merges after review and serializes
+   it so concurrent merges don't race.
 6. If implementation reveals genuine new follow-up work, create it as a
    beads item (`bd create --parent=<feature-id>`) with its own `model` and
    `files` metadata — don't fold unrelated scope into this task.

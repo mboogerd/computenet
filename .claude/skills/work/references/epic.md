@@ -2,18 +2,13 @@
 
 Break one epic into features, then stop. Don't implement anything yourself.
 
-The epic is already claimed by the session that dispatched you. Tag it —
-every feature and task created under it inherits the label, so a human can
-ask what one machine is working on (`bd list --label=owner:MacBoo`):
-
-```bash
-bd update <id> --add-label=owner:$BEADS_ACTOR
-```
+The epic is already claimed and already carries its `owner:` label — the
+orchestrator did both before dispatching you. Don't repeat either.
 
 ## Reconcile first
 
 ```bash
-bd list --parent=<id> --json
+bd list --parent=<id> --all --json
 ```
 
 A previous breakdown may have died part-way. Create only what's missing.
@@ -27,8 +22,17 @@ Propose features that together deliver the epic, each independently
 shippable or at least independently reviewable.
 
 ```bash
-bd create --type=feature --parent=<epic-id> --title=... --description=...
+bd create --type=feature --parent=<epic-id> \
+  --title="<outcome as a change to the system>" \
+  --description="<what the system does here today, why this work exists, which spec sections govern it>" \
+  --acceptance="<checkable statements that define 'this feature is delivered'>"
 ```
+
+`--acceptance` is not optional. A dedicated reviewer judges the finished
+feature against exactly these statements and decides on that basis whether
+its PR ships ([review-feature.md](review-feature.md)) — a feature without
+them gives that gate nothing to check. Write them at feature level: what
+must be true once the whole thing works, not what each task does.
 
 Give each feature enough context to be decomposed later *without this
 conversation*: what the system does there today, why the work exists, which

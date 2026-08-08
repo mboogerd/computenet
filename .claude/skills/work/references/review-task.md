@@ -34,6 +34,7 @@ edge. Commit on the task branch:
 
 ```bash
 git -C <task-worktree> commit -am "review: <what you fixed>"
+git -C <task-worktree> push
 ```
 
 Fail it only when the approach is wrong at the design level, or repair would

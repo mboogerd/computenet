@@ -10,18 +10,6 @@
         ],
         "matcher": ""
       }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "command": "scripts/beads-release-session-claims.sh 2>/dev/null || true",
-            "type": "command",
-            "timeout": 30
-          }
-        ],
-        "matcher": ""
-      }
     ]
   }
 }
