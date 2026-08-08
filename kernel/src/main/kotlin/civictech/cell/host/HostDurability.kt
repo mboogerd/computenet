@@ -7,6 +7,9 @@ import civictech.cell.Stateful
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.durability.Journal
+import civictech.cell.port.FanOutlet
+import civictech.cell.port.OutletWaveState
+import civictech.cell.port.PortRegistry
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.wire.WireCodec
 import java.io.ByteArrayInputStream
@@ -19,6 +22,7 @@ import java.util.UUID
 private const val RECORD_FRAME: Byte = 1
 private const val RECORD_CHECKPOINT: Byte = 2
 private const val RECORD_FRONTIER: Byte = 3
+private const val RECORD_OUTLET_WAVE: Byte = 4
 
 /**
  * T05 finding 4: [HostDurability.recoverFrom] failed on [recordIndex] of
@@ -37,6 +41,37 @@ class RecoveryIncomplete(val recordIndex: Int, val total: Int, cause: Throwable)
  */
 private data class FrontierRecord(val cellRef: CellRef, val portName: String, val timestamp: Timestamp) :
     Serializable
+
+/**
+ * Durable record of one [FanOutlet]'s **whole emission epoch** — `sourceId` *and* counter
+ * high-water — at checkpoint time (KFX-12; spec `[24-DUR-04]`, 93 I-14 Rule S1's
+ * preserved-epoch clause + §4's durable-counter optimization).
+ *
+ * The `sourceId` is carried rather than re-derived on restore, even though
+ * [OutletWaveState.durable]'s ref-derivation is what puts a journaled outlet on its epoch
+ * in the first place. In the ordinary case the two are the same value. They diverge
+ * whenever some *other* decided transition moved the outlet off its derived epoch before
+ * the checkpoint — RESTART supervision's `mintFreshEpoch` (`ManagedHost`, `[KFX-14]`), a
+ * fallback promotion swap, or a drain/migration/promotion `adoptWaveState` of a
+ * predecessor's lane (`[KFX-15]`) — and there re-deriving would pair the *derived* id with
+ * *another* epoch's counter, re-issuing `(sourceId, counter)` pairs the network already
+ * observed under the derived lane. Downstream that reads as already-acted, i.e. silent
+ * effect loss. Recording the epoch in force keeps Rule S1's "never reuse a pair" intact
+ * across every combination of an epoch transition and a later crash.
+ *
+ * A **separate additive record type** rather than a field on [CheckpointRecord] on
+ * purpose: a journal written before this change contains no `RECORD_OUTLET_WAVE`, so it
+ * replays byte-for-byte as it always did (absent-tolerant by construction), whereas
+ * widening [CheckpointRecord] would change its computed `serialVersionUID` and make every
+ * pre-existing checkpoint blob undecodable. Same shape as
+ * [FrontierRecord]/`RECORD_FRONTIER`.
+ */
+private data class OutletWaveRecord(
+    val cellRef: CellRef,
+    val portName: String,
+    val sourceId: UUID,
+    val highWater: Long,
+) : Serializable
 
 /** Checkpoint payload (M10.2, extended G-59): cell state plus the processed-frontier, atomically together. */
 private data class CheckpointRecord(
@@ -160,6 +195,7 @@ internal class HostDurability(
 
                             RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
                             RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
+                            RECORD_OUTLET_WAVE -> restoreOutletWave(record.copyOfRange(1, record.size))
                             else -> error("unknown journal record type ${record[0]}")
                         }
                     } catch (e: Exception) {
@@ -189,11 +225,39 @@ internal class HostDurability(
     fun journalFrame(hostedInvocation: HostedPortInvocation): ByteArray =
         byteArrayOf(RECORD_FRAME) + WireCodec.encode(hostedInvocation)
 
-    private fun journalFrontier(record: FrontierRecord): ByteArray {
+    private fun journalRecord(type: Byte, record: Serializable): ByteArray {
         val blob = ByteArrayOutputStream()
             .also { ObjectOutputStream(it).use { out -> out.writeObject(record) } }
             .toByteArray()
-        return byteArrayOf(RECORD_FRONTIER) + blob
+        return byteArrayOf(type) + blob
+    }
+
+    /**
+     * KFX-12 (spec `[24-DUR-04]`, 93 I-14 Rule S1 preserved-epoch clause): put every
+     * outlet of a **journaled** cell on its ref-derived emission epoch, at spawn, before
+     * `onActivate` can emit. Called by `ManagedHost`'s spawn.
+     *
+     * This is the live half of the decision recorded on [OutletWaveState.durable]. A
+     * recovered outlet's identity can only *be* the identity the network already observed
+     * if the pre-crash run was already emitting under it — deriving it only inside
+     * [recoverFrom] would restore an identity nothing downstream had ever recorded.
+     *
+     * Deliberately gated on `journalSelector(cellRef) != null`: durability is a hosting
+     * decision, not a cell concern (spec 30/31). A volatile cell has no journal to prove
+     * counter continuity from, so 93 I-14 Rule S1's fresh-epoch default is the correct —
+     * and unchanged — behaviour for it. Non-recovery epoch transitions (RESTART's
+     * `mintFreshEpoch`, replica/candidate spawn, a fallback promotion swap) are untouched
+     * here too (`[KFX-14]`).
+     */
+    fun installDurableEpochs(cellRef: CellRef, cell: Cell) {
+        if (journalSelector(cellRef) == null) return
+        forEachOutlet(cell) { _, outlet -> outlet.adoptWaveState(OutletWaveState.durable(outlet.ref)) }
+    }
+
+    /** The cell's registered [FanOutlet]s, by port name (PortRegistry is the ManagedHost precedent). */
+    private inline fun forEachOutlet(cell: Cell, action: (String, FanOutlet<*>) -> Unit) {
+        val registry = PortRegistry.of(cell)
+        registry.names().forEach { name -> (registry[name] as? FanOutlet<*>)?.let { action(name, it) } }
     }
 
     /**
@@ -216,6 +280,27 @@ internal class HostDurability(
             val frontier = processedFrontier
                 .filterKeys { journalSelector(it.first) === journal }
                 .mapValues { HashMap(it.value) as Map<UUID, Long> }
+            // KFX-12: each journaled outlet's emission epoch AT CHECKPOINT TIME, captured
+            // on the same management-band pass as the `Stateful` snapshot so the two
+            // describe the same instant. Recovery rewinds the outlet here and lets the
+            // journal tail deterministically re-derive the counters it already emitted —
+            // rewinding to the *crash-time* high-water instead would make every replayed
+            // re-emission carry a counter the sink's frontier has never seen, i.e. the
+            // double-fire this closes. Recorded unconditionally, epoch and all: an outlet
+            // sitting at high-water 0 is not necessarily where `installDurableEpochs` left
+            // it (RESTART's `mintFreshEpoch` rotates the epoch and zeroes the counter), and
+            // restoring the derived epoch over such a rotation re-issues counters the
+            // derived lane already spent — see [OutletWaveRecord].
+            val waves = ArrayList<ByteArray>()
+            cells.forEach { (cellRef, cell) ->
+                if (journalSelector(cellRef) === journal) forEachOutlet(cell) { name, outlet ->
+                    val wave = outlet.waveState()
+                    waves += journalRecord(
+                        RECORD_OUTLET_WAVE,
+                        OutletWaveRecord(cellRef, name, wave.sourceId, wave.highWater),
+                    )
+                }
+            }
             // PN-0b: reset() truncates the WAL down to this checkpoint blob. If
             // the journal serves cells (frames on disk) but the blob captures
             // NOTHING recoverable — no `Stateful` snapshot and no `Effectful`
@@ -230,7 +315,7 @@ internal class HostDurability(
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()
-            journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob))
+            journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves)
         }
     }
 
@@ -242,6 +327,25 @@ internal class HostDurability(
                 ?: deadLetter("checkpoint state for $cellRef but no Stateful cell — graph rebuilt differently?")
         }
         record.frontier.forEach { (key, sources) -> processedFrontier.getOrPut(key) { mutableMapOf() } += sources }
+    }
+
+    /**
+     * KFX-12: rewind one outlet to the epoch that was in force at checkpoint time — the
+     * recorded `sourceId` (the ref-derived one in the ordinary case, whatever else
+     * [installDurableEpochs] was later overridden by otherwise; see [OutletWaveRecord])
+     * plus the journaled counter high-water. Goes through the very same
+     * [FanOutlet.adoptWaveState] a drain/migration/promotion continuation uses
+     * (`[KFX-15]`): durable recovery is a preserved-epoch continuation, so it takes the
+     * preserved-epoch mechanism rather than a parallel one.
+     */
+    private fun restoreOutletWave(blob: ByteArray) {
+        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as OutletWaveRecord
+        val outlet = cellsView()[record.cellRef]?.let { PortRegistry.of(it)[record.portName] } as? FanOutlet<*>
+            ?: return deadLetter(
+                "checkpoint outlet wave state for ${record.cellRef}.${record.portName} but no such " +
+                    "FanOutlet — graph rebuilt differently?"
+            )
+        outlet.adoptWaveState(OutletWaveState(record.sourceId, record.highWater))
     }
 
     private fun restoreFrontier(blob: ByteArray) {
@@ -272,6 +376,6 @@ internal class HostDurability(
      */
     fun advanceAndJournalFrontier(cellRef: CellRef, portName: String, timestamp: Timestamp) {
         advanceFrontier(cellRef, portName, timestamp)
-        journalSelector(cellRef)?.append(journalFrontier(FrontierRecord(cellRef, portName, timestamp)))
+        journalSelector(cellRef)?.append(journalRecord(RECORD_FRONTIER, FrontierRecord(cellRef, portName, timestamp)))
     }
 }
