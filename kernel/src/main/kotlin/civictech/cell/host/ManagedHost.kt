@@ -1009,6 +1009,12 @@ open class ManagedHost(
                     civictech.nature.Manifest.DURABLE in descriptor.manifest &&
                     journalSelector(cell.ref) == null
                 ) volatileDurableSpawnCount.incrementAndGet()
+                // KFX-12 (spec [24-DUR-04], 93 I-14 Rule S1): a journaled cell's outlets
+                // emit under their ref-derived epoch, so a rebuilt instance re-mints the
+                // identity the network already observed instead of a fresh random one.
+                // Before onActivate — a cell may emit from it. Volatile cells keep the
+                // fresh-epoch default ([KFX-14]); see [civictech.cell.port.OutletWaveState.durable].
+                hostDurability.installDurableEpochs(cell.ref, cell)
                 cell.onActivate(ctx)
                 // spawn-time checkpoint: what a RESTART supervision restores (G-26)
                 if (cell is Stateful) checkpoints[cell.ref] = cell.snapshot()
