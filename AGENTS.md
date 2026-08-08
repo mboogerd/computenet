@@ -163,6 +163,32 @@ Before declaring completion:
 - Report exactly which tests ran and any remaining limitation that the ticket
   explicitly allows.
 
+## Branches, PRs, and auto-merge
+
+`main` is protected by a repository ruleset: changes land only through a pull
+request, required status checks must pass (`build-test-fast`,
+`build-test-serial`, `concord-full`, `ui-test`, `agora-ui-test`), history stays
+linear, and the branch cannot be force-pushed or deleted. A direct push to
+`main` is rejected — always branch.
+
+**Auto-merge is enabled, and a workflow arms it on every PR** (`.github/workflows/auto-merge.yml`,
+skipping drafts and forks). The practical consequence:
+
+- **A ready PR merges itself** as soon as the required checks pass. Nobody
+  clicks merge. Opening a PR non-draft, or running `gh pr ready`, is the
+  decision to ship.
+- **Keep work-in-progress in draft.** Draft is the only thing standing between
+  an unfinished branch and `main`.
+- **A push to an open ready PR can land within minutes.** Don't push a commit
+  you are not willing to have merged.
+- **Push everything before the checks go green.** Auto-merge will land the PR
+  the moment they do, even if you are mid-sequence pushing follow-up commits —
+  the squash captures only what was on the branch at that instant, and the rest
+  is stranded and needs its own PR. (Observed 2026-08-08.)
+
+The `auto-merge` job is `continue-on-error`, so a failure to arm auto-merge
+never blocks the PR; it just means the merge has to be triggered manually.
+
 ## Multi-agent run discipline
 
 When running as a plan worker, the host orchestrator owns Git lifecycle. Do not
