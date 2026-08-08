@@ -1,90 +1,48 @@
-# Claim, synced
+# Claiming safely
 
-Goal: never let two machines end up working the same item. Beads' Dolt sync
-is git-speed, not realtime, so "claim" is not safe until it's pushed and
-verified — a local `--claim` alone is not enough.
+You (the orchestrator) claim every item — epics, features, and tasks.
+Subagents are handed ids that are already claimed and never claim their own.
 
-```bash
-bd dolt pull
-```
-
-Pull first. Claiming against stale state is how two machines both see an item
-as open.
-
-If you were given a **preferred theme** (an epic/feature id — the session
-orchestrator that dispatched you passes this to keep the session on one
-epic), try that scope first:
+Beads' Dolt sync is git-speed, not realtime, so a local `--claim` proves
+nothing on its own. A claim is safe only once pushed and confirmed.
 
 ```bash
-bd ready --parent=<theme-id> --claim --json
+bd dolt pull                       # claiming against stale state is the bug
+bd ready <filters> --claim --json  # atomic locally; picks highest priority
 ```
 
-If that returns empty, report back "nothing claimable" — do **not** fall
-through to the unscoped claim. A dry theme means the session's epic is
-exhausted, and the orchestrator ends the session rather than switching
-epics. The unscoped claim below is only for when you were given no theme at
-all (the first item of a session).
-
-```bash
-bd ready --claim --json
-```
-
-`--claim` is atomic *locally*: it claims the single highest-priority ready
-item (assignee → you, status → in_progress) in the same call that reads it.
-Sort policy defaults to priority, which is what we want. If this returns an
-empty list, there is nothing claimable — stop, nothing else to try.
-
-Take the `id` from the result. **If it's a `task`, `bug`, or `chore`** (not
-`epic`/`feature` — see the note at the bottom), stamp it with this session's
-id before pushing, so a `SessionEnd` release later can tell "my claims from
-this run" apart from "my claims from an overlapping, still-running run" of
-the same actor:
+For a **task/bug/chore**, stamp it with this session before pushing:
 
 ```bash
 bd update <id> --set-metadata session=$CLAUDE_SESSION_ID
 ```
 
-Then push immediately — before any real work starts:
+Then push, before any work starts:
 
 ```bash
 bd dolt push
 ```
 
-### If the push succeeds
+**Push succeeded** → it's yours. Proceed.
 
-You have it. Confirmed. Move on to the reference for the item's type.
-
-### If the push fails (non-fast-forward / conflict)
-
-Someone else pushed in between — possibly a competing claim on the same item,
-including from an overlapping run of *your own* session if a previous slot on
-this machine overran into this one.
+**Push failed** (non-fast-forward) → someone pushed in between. That someone
+may be another machine, or an overlapping run of *your own* session if a
+previous slot overran into this one.
 
 ```bash
 bd dolt pull
-bd show <id> --json   # check .assignee, .status, and .metadata.session
+bd show <id> --json     # .assignee, .status, .metadata.session
 ```
 
-- If `assignee` is you, `status` is `in_progress`, **and** `metadata.session`
-  is `$CLAUDE_SESSION_ID`: you won the race after the merge. Proceed.
-- Otherwise — assignee is someone else, *or* it's you but the session id
-  doesn't match: you lost. Same actor with a different session id means an
-  overlapping run of yours got there first; treat it exactly like losing to
-  another machine. Do **not** retry-push or fight over it. Go back to
-  `bd ready --claim --json` for a different item (the lost one is no longer
-  "ready" so it won't be offered again).
+You won only if `assignee` is you **and** `metadata.session` is
+`$CLAUDE_SESSION_ID`. Anything else — including your own actor with a
+different session id — means you lost. Don't retry-push or fight over it;
+claim a different item. Give up after 3 rounds and report it.
 
-Retry this whole sequence up to 3 times. If you're still losing every race
-after 3 attempts, stop and report it — that's unusual enough to be worth a
-human noticing, not something to loop on indefinitely.
+## Never stamp an epic or feature
 
-### Epics and features don't get the session stamp
-
-Don't run `--set-metadata session=...` when the claimed item's type is
-`epic` or `feature`. A machine's `SessionEnd` hook automatically releases
-`in_progress` items it stamped with the terminating session's id — but epic
-and feature ownership is meant to persist across every session until the
-whole epic/feature is done, not just this one. Staying `in_progress` is
-precisely what keeps the other machine out (`bd ready` skips it), so
-stamping them would make the very next session-end un-claim the epic and
-reopen it to the other machine — defeating epic-level exclusivity entirely.
+The `SessionEnd` hook reopens `in_progress` items carrying the terminating
+session's id. That is exactly right for tasks and exactly wrong for epics and
+features: their claim must outlive the session, because staying `in_progress`
+is the only thing keeping the other machine out (`bd ready` skips
+`in_progress`). Stamp one and the next session-end hands your epic away.
