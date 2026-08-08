@@ -806,11 +806,15 @@ open class ManagedHost(
                         // is "null on management paths and spontaneous calls" —
                         // and therefore has no frontier position at all, so it
                         // re-fires on replay. Stamping a synthetic position at
-                        // ingress would fabricate wave identity on every
-                        // externally-driven path (wire ingress included) with no
-                        // crash-stable source id to mint it from; refusing to
-                        // journal such a frame would deny legitimate live
-                        // traffic. Both are wider than this guard, so the
+                        // ingress WOULD close that (the stamp rides the journaled
+                        // frame and the frontier advance is journaled too, so even
+                        // a per-call id matches the restored frontier) — but it
+                        // fabricates wave identity on every externally-driven path
+                        // (wire ingress included), and a per-call id grows the
+                        // frontier without bound; a bounded stamp needs a
+                        // per-host/per-connector ingress identity with a monotonic
+                        // counter. Refusing to journal such a frame would deny
+                        // legitimate live traffic. Both are wider than this guard, so the
                         // re-fire is kept as an explicit bounded limit under the
                         // 93 I-7 external-idempotency ceiling — written down in
                         // `concord/corpus/DISPUTES.md` against `[24-DUR-05]` and

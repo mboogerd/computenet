@@ -218,8 +218,11 @@ class EffectfulInletGuardTest {
      * never advanced either, which is why the guard never engages (0 suppressions).
      *
      * The limit is written down in `concord/corpus/DISPUTES.md` against
-     * `24-DUR-05`; closing it needs a crash-stable ingress identity, filed as
+     * `24-DUR-05`; closing it needs a bounded ingress identity, filed as
      * `computenet-yh6.1.3.5`. If that lands, this test inverts to `listOf(1)`.
+     *
+     * Its exact extent is pinned by the sibling test below: the limit is
+     * "carries no context", NOT "came from outside".
      */
     @Test
     fun `an externally driven effectful frame carries no frontier position and re-fires on replay (KFX-16 recorded limit)`() {
@@ -257,5 +260,60 @@ class EffectfulInletGuardTest {
         world shouldBe listOf(1, 1)
         // and the guard never engaged — there was nothing to compare against
         host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 0L
+    }
+
+    /**
+     * The boundary of the KFX-16 limit, added at task review because the
+     * recorded argument for keeping it turned on an untested claim.
+     *
+     * The *same* externally-driven shape, differing only in that the caller
+     * supplies a `MessageContext` — a per-call `sourceId` minted fresh, exactly
+     * what a naive "stamp at ingress" would produce — **is** deduped across the
+     * crash. The stamp rides the journaled frame and the frontier advance is
+     * journaled alongside it (`FrontierRecord`), so the restored frontier
+     * recognises the replayed frame even though nothing about the id was
+     * crash-stable.
+     *
+     * So the limit recorded in DISPUTES is precisely *"a frame with no frontier
+     * position"* and not *"a frame from outside"*, and stamping is ruled out by
+     * its cost (fabricated wave identity on every externally-driven path; a
+     * per-call id grows the frontier without bound) rather than by any inability
+     * to close the hole. If that reasoning is ever restated, this test is the
+     * thing that keeps it honest.
+     */
+    @Test
+    fun `the same external drive carrying a per-call minted context IS deduped across replay (KFX-16 limit boundary)`() {
+        val controller = SimulationController(seed = 5)
+        val journal = InMemoryJournal()
+        val world = mutableListOf<Int>()
+        val logicalId = UUID.randomUUID()
+
+        var host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        host.managementInlet.call.spawn(NotifierCell(CellRef(logicalId), world))
+        controller.runToIdle()
+
+        fun driveStamped(target: ManagedHost, value: Int) {
+            val sink = (HostedCellProxy.create(CellRef(logicalId), target, NotifierProxy::class.java)
+                    as NotifierProxy).inlet.call
+            // a wave position minted per call — nothing here survives a crash
+            CurrentContext.with(MessageContext(Timestamp(UUID.randomUUID(), 0L), PortRef.generate())) {
+                sink.provide(value)
+            }
+        }
+
+        driveStamped(host, 1)
+        controller.runToIdle()
+        world shouldBe listOf(1)
+
+        // CRASH: only the journal survives
+        host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
+        host.managementInlet.call.spawn(NotifierCell(CellRef(logicalId), world))
+        controller.runToIdle()
+        host.recoverFrom(journal)
+        controller.runToIdle()
+
+        // fired exactly once across the crash — [24-DUR-05] honoured
+        world shouldBe listOf(1)
+        host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 1L
     }
 }
