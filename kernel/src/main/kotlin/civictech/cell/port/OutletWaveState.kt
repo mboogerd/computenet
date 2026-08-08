@@ -72,7 +72,15 @@ data class OutletWaveState(val sourceId: UUID, val highWater: Long) {
          * host's checkpoint carries each outlet's high-water beside the
          * `Stateful` snapshot (`HostDurability`'s `RECORD_OUTLET_WAVE`), and
          * recovery rewinds the outlet to the *checkpoint's* high-water, not the
-         * crash-time one. That is the load-bearing detail. Replay is
+         * crash-time one. That is the load-bearing detail. (That record carries
+         * the epoch's `sourceId` beside the counter — not because the derivation
+         * is in doubt, it is the same value in the ordinary case, but because a
+         * transition this decision deliberately leaves alone may have rotated
+         * the outlet off its derived epoch before the checkpoint: RESTART's
+         * `mintFreshEpoch` (`[KFX-14]`) or a drain/migration/promotion adoption
+         * (`[KFX-15]`). Re-deriving over such a rotation would pair the derived
+         * id with another epoch's counter and re-issue pairs the derived lane
+         * already spent.) Replay is
          * deterministic re-execution from the checkpoint, so rewinding to the
          * checkpoint makes the replayed re-emissions carry *exactly* the
          * `(sourceId, counter)` pairs the pre-crash run emitted — "old ids for

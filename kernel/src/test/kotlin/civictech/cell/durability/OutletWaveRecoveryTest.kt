@@ -282,6 +282,64 @@ class OutletWaveRecoveryTest {
     }
 
     /**
+     * The restore point records the epoch **in force**, not the derived one
+     * (`[KFX-10]`/`[KFX-11]`, and `[KFX-14]`/`[KFX-15]` read from the recovery side).
+     *
+     * `installDurableEpochs` puts a journaled outlet on its ref-derived epoch, but other
+     * decided transitions move it off again *before* a checkpoint: RESTART supervision
+     * rotates every outlet with `mintFreshEpoch` (`ManagedHost`, 93 I-14 Rule S1's
+     * fresh-epoch list), and drain/migration/promotion adopt a predecessor's lane
+     * wholesale (`Evolution`, `[KFX-15]`). If recovery re-derived the `sourceId` instead of
+     * restoring the recorded one, it would pair the *derived* id with the *rotated* epoch's
+     * counter — re-issuing `(sourceId, counter)` pairs the derived lane already spent, which
+     * a downstream frontier reads as already-acted. That is not the double-fire this
+     * feature closes; it is the SILENT EFFECT LOSS the epic calls worse than the bug, so it
+     * is asserted head-on rather than left to the ordinary path's luck.
+     */
+    @Test
+    fun `an epoch rotated before the checkpoint is restored as-is, never re-derived over`() {
+        val controller = SimulationController(seed = 15)
+        val journal = InMemoryJournal()
+        val effects = mutableListOf<Int>()
+        val relayRef = CellRef(UUID.randomUUID())
+        val notifierRef = CellRef(UUID.randomUUID())
+
+        val before = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        (1..5).forEach { before.feed(it) }
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2, 3, 4, 5)
+        // the derived lane has now spent counters 1..5, and the sink's frontier says so
+        before.sourceId() shouldBe OutletWaveState.durable(before.relay.outlet.ref).sourceId
+
+        // exactly what RESTART supervision does to every outlet of a journaled cell —
+        // untouched by this task ([KFX-14]), and the reason the epoch must be recorded
+        val superseded = before.relay.outlet.mintFreshEpoch()
+        (superseded == OutletWaveState.durable(before.relay.outlet.ref).sourceId).shouldBeTrue()
+        val rotated = before.sourceId()
+        (6..8).forEach { before.feed(it) }
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2, 3, 4, 5, 6, 7, 8)
+
+        before.host.checkpoint(journal)
+
+        val after = World(controller, journal, relayRef, notifierRef, effects)
+        controller.runToIdle()
+        after.host.recoverFrom(journal)
+        controller.runToIdle()
+
+        // the rotated epoch is what the network last observed, so it is what comes back
+        after.sourceId() shouldBe rotated
+        after.highWater() shouldBe 3L
+        effects shouldBe listOf(1, 2, 3, 4, 5, 6, 7, 8)
+
+        // and live post-recovery traffic is delivered, not eaten as already-acted
+        after.feed(9)
+        controller.runToIdle()
+        effects shouldBe listOf(1, 2, 3, 4, 5, 6, 7, 8, 9)
+    }
+
+    /**
      * `[KFX-14]` guard, kept honest at the seam this task actually moved: the
      * ref-derived epoch is installed for **journaled** cells only. A volatile
      * host's cell keeps 93 I-14 Rule S1's fresh-epoch default, so two
