@@ -551,16 +551,22 @@ re-fires on `recoverFrom` replay**.
 
 The decision recorded for KFX (feature `computenet-yh6.1.3`) is to keep that
 behaviour as an explicit bounded limit rather than close it in the guard, for the
-same reason the G-59/C-9 ceiling above stands: the closure needs an ingress
-*identity* the kernel does not have, and minting one is wider than this guard.
+same reason the G-59/C-9 ceiling above stands: a *bounded* closure needs a real
+ingress *identity* the kernel does not have, and minting one is wider than this
+guard. Read the next two paragraphs together — the point is not that the hole
+cannot be closed, but that every way of closing it from inside this guard costs
+more than the limit does.
 
 *Stamping* a synthetic wave position at ingress does close the replay double-fire,
 and — stated precisely, because the imprecise version of this is tempting — it
 does **not** need the minted id to be crash-stable to do so: the stamp rides the
 journaled frame, and the frontier advance is itself journaled
 (`FrontierRecord`/`CheckpointRecord`), so a replayed frame matches the restored
-frontier even for an id minted fresh per call. Verified by construction against
-this branch. What rules it out here is its cost, not its efficacy. (i) It
+frontier even for an id minted fresh per call. Asserted, not assumed: kernel
+`EffectfulInletGuardTest`, *"the same external drive carrying a per-call minted
+context IS deduped across replay"* — which also fixes the extent of this entry's
+limit at *"a frame with no frontier position"*, not *"a frame from outside"*.
+What rules stamping out here is its cost, not its efficacy. (i) It
 fabricates wave identity on **every** externally-driven path — wire ingress
 included — so every external call becomes a wave to every downstream consumer,
 and PN-2's replay-baseline stamping, which today deliberately leaves root frames
