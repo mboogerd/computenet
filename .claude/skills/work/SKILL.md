@@ -60,6 +60,14 @@ sessions off each other's subtrees.
 Breakdown state is the tree itself — no children means it needs one. (That
 also makes a half-finished breakdown self-healing: it just runs again.)
 
+**Break down one level, one item, at a time.** This step produces features
+and stops. Features get decomposed into tasks only when one is actually
+picked up (5b), never in advance. Planning is deliberately staggered so each
+breakdown is written against state that has really landed rather than
+against assumptions about work that hasn't happened yet. Don't batch
+breakdowns to "get planning out of the way" — that trades the whole benefit
+for a little wall-clock.
+
 ```bash
 bd list --parent=<theme> --json
 ```
@@ -83,10 +91,17 @@ Report the feature ids created.`
 bd ready --parent=<theme> --json     # --parent matches all descendants
 ```
 
-Empty → go to **5e**.
+Empty → go to **5f**.
+
+Take the **first unblocked feature**, highest priority first. `bd ready`
+already excludes anything with an open blocker, so the first `feature` row
+it returns is the one to work.
 
 **A feature is the unit of integration**: its own worktree, branch, and
-draft PR. **A task is a commit** on that branch.
+draft PR, into which reviewed task branches are merged.
+
+**A task is its own worktree and branch**, cut from the feature branch,
+merged back once it passes review.
 
 **Work exactly one feature at a time** — the parallelism lives in its tasks.
 When a feature can't progress, move on to another rather than adding it
@@ -137,14 +152,28 @@ Report the task ids created.`
 Otherwise build a batch from its ready tasks, highest priority first:
 
 - Add a task only when its `metadata.files` claim is **disjoint** from every
-  task already in the batch. Overlap → leave it for a later round.
+  task already in the batch. Overlap → leave it for a later round; two
+  branches editing the same file merge into a conflict later.
 - No `files` metadata → can't be scheduled safely. Run it alone and comment
   that the claim was missing, so the breakdown gets fixed.
 
-Every task in a batch shares **one working tree**, so an overlap means two
-agents editing the same file simultaneously — not merely a merge conflict.
+Claim them all (claim-sync.md). Then, for each, give it a worktree of its
+own cut from the feature branch — or reuse the one it already has, so a
+resumed task keeps the context it built up:
 
-Claim them all (claim-sync.md), then dispatch in one message:
+```bash
+bd show <task-id> --json                # .metadata.worktree / .branch
+# resume:
+git worktree add <task-worktree> <task-branch> 2>/dev/null || true
+# or first time:
+git -C <feature-worktree> push -u origin <feature-branch>   # first task only
+git worktree add ../computenet-work/<task-id> -b task/<task-id> <feature-branch>
+bd update <task-id> \
+  --set-metadata worktree=../computenet-work/<task-id> \
+  --set-metadata branch=task/<task-id>
+```
+
+Dispatch the batch in one message:
 
 ```
 Agent({
@@ -152,21 +181,23 @@ Agent({
   model: <task's metadata.model — "sonnet" or "opus">,
   run_in_background: true,
   prompt: `You are implementing beads task ${id}, already claimed — do not
-claim another. Work in the existing worktree at ${worktree}, on branch
-${branch}. Do NOT create a worktree or branch of your own, and never touch
-the main checkout.
+claim another. Work ONLY in your own worktree at ${taskWorktree}, on branch
+${taskBranch}. Do not touch the main checkout, the feature worktree, or
+another task's worktree.
 Read it: bd show ${id} --json
 Then read .claude/skills/work/references/task.md and follow it.
-Other agents are working other tasks in this same worktree right now. Stay
-strictly inside your metadata.files claim and commit only your own paths.
+Stay inside your metadata.files claim — other tasks are running on sibling
+branches and will merge into the same feature branch.
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
+Your worktree is preserved, so a later session resumes you here rather than
+starting over.
 Report back: the task id, the outcome, and the files you actually touched.`
 })
 ```
 
-No `isolation: "worktree"` here — tasks of one feature deliberately share
-its worktree so their commits accumulate on one branch and one PR.
+Don't set `isolation: "worktree"` — you are creating and recording the
+worktree yourself, precisely so it survives the agent and can be resumed.
 
 **On batch completion** (wait for the whole batch; a staggered re-batch
 computes overlap against a moving set):
@@ -174,11 +205,51 @@ computes overlap against a moving set):
 - **Files touched outside a claim** → fix that task's `files` metadata
   before the next batch.
 - **A task parked a question** → that's one task, not the feature. Keep
-  batching the feature's other ready tasks; if none remain, move on (5e).
+  batching the feature's other ready tasks; if none remain, move on (5f).
   Never let one parked question stall an epic with runnable work.
-- **Otherwise** → budget check (step 2), then 5b again.
+- **A task reported done** → review and merge it (5c).
 
-### 5c. Draft PR, early
+### 5c. Review each task, then merge it
+
+Every completed task is reviewed on its own branch before it reaches the
+feature branch. Dispatch one reviewer per completed task, concurrently, at
+the task's own model or above — never the agent that wrote it:
+
+```
+Agent({
+  description: "Review task <id>",
+  model: <task's metadata.model>,
+  run_in_background: true,
+  prompt: `Read .claude/skills/work/references/review-task.md and follow it
+to review beads task ${id} against its own acceptance criteria.
+Worktree: ${taskWorktree}  ·  Branch: ${taskBranch}
+Repair what you can within the task's scope. Report pass or fail, what you
+repaired, and — on fail — exactly what is missing.`
+})
+```
+
+**Merge the passes yourself, one at a time.** Reviewers must not merge:
+concurrent merges into one feature branch race each other.
+
+```bash
+git -C <feature-worktree> merge --no-ff <task-branch> -m "Merge <task-id>"
+git -C <feature-worktree> push
+git worktree remove <task-worktree>          # merged; nothing left to resume
+bd close <task-id>
+bd dolt push
+```
+
+A merge conflict here means two claims overlapped that shouldn't have. Fix
+the `files` metadata of both tasks, resolve in the feature worktree, and say
+so — the scheduling data was wrong, not just the merge.
+
+A **failed** review keeps its worktree and branch; the reviewer's findings
+are on the beads item. Leave the task `in_progress` for a later batch to
+resume in that same worktree.
+
+Then: budget check (step 2), then 5b again.
+
+### 5d. Draft PR, early
 
 As soon as the first task has committed:
 
@@ -195,7 +266,7 @@ finds the branch instead of starting over. Push again after each batch.
 
 It stays **draft** until review passes — never mark it ready yourself.
 
-### 5d. Feature review
+### 5e. Feature review
 
 Every task closed does not mean the feature is done: per-task criteria all
 pass while the feature still has seams nobody owned, or criteria no task
@@ -206,7 +277,7 @@ Agent({
   description: "Review feature <id>",
   model: "opus",
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/review.md and follow it to
+  prompt: `Read .claude/skills/work/references/review-feature.md and follow it to
 review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
 Repair what you can within the feature's scope. You decide the outcome: mark
@@ -218,11 +289,11 @@ what's missing. Report which you chose and why.`
 The reviewer owns the ready/draft call and runs `gh pr ready` itself.
 
 - **Ready** → it closed the feature; auto-merge lands it. Don't wait unless
-  something depends on it (5e).
+  something depends on it (5f).
 - **Draft** → it filed tasks for the gap; those are ready work, go to 5b.
   Draft *without* tasks is a dead end — treat the feature as stuck, move on.
 
-### 5e. Next feature, or wait, or stop
+### 5f. Next feature, or wait, or stop
 
 Features branch from `origin/main`, so one only sees another's work once
 that one **merges**. If the next ready feature depends on a feature this
