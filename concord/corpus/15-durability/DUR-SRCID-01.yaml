@@ -1,0 +1,53 @@
+id: DUR-SRCID-01
+title: A journaled source feeding an effectful sink fires each delta exactly once across a crash
+covers: [24-DUR-04, 24-DUR-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED source feeding an Effectful sink — the
+    construction concord/corpus/DISPUTES.md's "W4-B durability" boundary note
+    once recorded as double-firing, because the replayed source's re-emission
+    used to carry a freshly-minted random outlet identity the sink's restored
+    processed-frontier could not match — plus a journal controller
+  when: >
+    two elements are added and the graph quiesces, the whole durable host
+    crashes and is rebuilt from its surviving journal (recoverFrom replays the
+    source's own frame tail, driving the rebuilt source to re-emit both
+    elements), then a third element is added post-recovery and the graph is
+    driven to quiescence again
+  then: >
+    each of the three logical deltas fired the sink's effect exactly once —
+    the pre-crash pair's replayed re-emission carried the identity the sink's
+    restored frontier already recorded (24-DUR-04's re-minted, ref-derived
+    outlet identity) and was suppressed as already-acted (24-DUR-05), while
+    the post-recovery third element still reached the sink live: the
+    recovered outlet's counter high-water continued from where it left off
+    rather than rewinding, so the frontier does not mistake fresh traffic for
+    already-acted traffic
+graph:
+  cells:
+    - {id: source, type: journal-set-source, host: dur}
+    - {id: sink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: apply, on: source, op: add, value: k2}
+  - {type: quiesce}
+  # CRASH + journal replay: discard every instance, rebuild with the same refs,
+  # recoverFrom the surviving journal — the source re-emits k1/k2, the sink's
+  # restored frontier recognizes the replayed identity and suppresses them
+  - {type: despawn, on: ctl}
+  # post-recovery live traffic: must still reach the sink exactly once (BS-21) —
+  # a naive "restore identity, forget the counter" fix would instead suppress
+  # this as already-acted, turning the double-fire into silent effect loss
+  - {type: apply, on: source, op: add, value: k3}
+  - {type: quiesce}
+checks:
+  # k1,k2 fired pre-crash and were NOT re-fired on replay (24-DUR-05 suppression);
+  # k3 fired post-recovery live — each of the three distinct elements exactly once
+  - {type: effect-count, sink: sink, exactly: 1}
+  - {type: no-dead-letters}
