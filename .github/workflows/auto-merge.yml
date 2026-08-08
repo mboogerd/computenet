@@ -19,7 +19,10 @@ jobs:
     steps:
       # Enabling auto-merge only queues the PR; GitHub still waits for the
       # required status checks and mergeability before it squashes.
+      # continue-on-error: this job just opts the PR into auto-merge as a
+      # convenience — it must never block or fail the PR itself.
       - name: Enable auto-merge
+        continue-on-error: true
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
