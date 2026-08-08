@@ -1,6 +1,6 @@
 ---
 name: work
-description: Run one unattended beads work session — claim an epic, break it into features and tasks via Fable subagents, and implement each feature in its own worktree, branch, and draft PR with its tasks running as parallel reviewed branches. Safe for two machines running it concurrently on a schedule. Use when a cron/routine starts a work slot, or the user says "/work", "work the queue", "pick up beads work".
+description: Runs one unattended beads work session end to end — claims an epic, breaks it into features and tasks via Fable subagents, and implements each feature in its own worktree, branch, and draft PR, with its tasks running as parallel reviewed branches. Claims are crash-safe and machine-scoped, so two machines can run this concurrently on a schedule without colliding or deadlocking. Use this skill whenever a cron job, scheduled task, or routine kicks off a work slot, or the user says "/work", "work the queue", "pick up the next beads task", "start working through the backlog", "keep the machines busy", or otherwise wants autonomous progress on beads-tracked work — even if they don't mention beads, epics, or this skill by name.
 ---
 
 # /work
@@ -16,6 +16,16 @@ context balloons and starts drifting.
 `in_progress`, `blocked`, and `deferred` items; `bd list` hides *closed*
 ones unless you pass `--all`. Every check below uses the one it means. Don't
 "simplify" them into each other.
+
+**Bundled scripts do the fiddly parts** — the ones where a wrong flag or a
+missed filter silently loses work. Prefer them to hand-rolling the
+equivalent:
+
+| Script | Does |
+|---|---|
+| `scripts/sweep-stale-claims.sh` | Reopens this machine's tasks abandoned by a dead run |
+| `scripts/next-batch.py` | Picks the next set of tasks that can safely run in parallel |
+| `scripts/ensure-worktree.sh` | Attaches a worktree on a branch, new or resumed, or fails loudly |
 
 ## 1. Identity
 
@@ -59,18 +69,11 @@ and `bd ready` hides those — they are invisible to every later session until
 something reopens them, and nothing else does:
 
 ```bash
-bd list --status=in_progress --assignee="$BEADS_ACTOR" --exclude-type=epic,feature --limit 0 --json
+.claude/skills/work/scripts/sweep-stale-claims.sh      # --dry-run to preview
 ```
 
-For each, compare `updated_at` to now. Older than **6h** — longer than any
-slot, so a live run's items are never touched — means abandoned:
-
-```bash
-bd update <id> --status=open
-```
-
-Report how many you released. The same item released repeatedly across
-sessions means work is failing, not merely crashing.
+Report what it released. The same item released repeatedly across sessions
+means work is failing, not merely crashing.
 
 Then take the epic. Resume this machine's own before starting anything new:
 
@@ -183,37 +186,30 @@ bd show <feature-id> --json             # .metadata.branch / .worktree / .pr
 ```
 
 **`metadata.branch` exists** → reuse it; that branch and draft PR hold real
-work. Never start over:
-
-```bash
-git worktree list --porcelain | grep -q "^worktree <worktree>$" \
-  || git worktree add <worktree> <branch>
-git -C <worktree> rev-parse --abbrev-ref HEAD    # must equal <branch>
-git -C <worktree> pull --ff-only
-```
-
-Don't paper over failures here with `|| true`. If the worktree can't be
-attached, or is on the wrong branch, stop and report — every task of this
-feature is about to be pointed at that path, and the first thing to notice a
-bad one would be the merge in 5c, long after the work was done.
-
-**Otherwise** record the metadata *first*, then create. A crash between the
-two otherwise leaves an unrecorded branch, and the retry builds a second
-branch and a second PR for the same feature:
+work, so never start over. **Otherwise** record the metadata *first* — a
+crash between recording and creating leaves an unrecorded branch, and the
+retry then builds a second branch and a second PR for the same feature:
 
 ```bash
 bd update <feature-id> \
   --set-metadata branch=feature/<feature-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<feature-id>
 bd dolt push
-git worktree add "$PWD/../computenet-worktrees/<feature-id>" -b feature/<feature-id> origin/main
-git -C "$PWD/../computenet-worktrees/<feature-id>" push -u origin feature/<feature-id>
 ```
 
-Use **absolute paths**, and the feature id as the branch name — no
-model-chosen slug. A relative path resolves differently inside a subagent's
-own worktree, and a fresh slug on retry is exactly what spawns a duplicate
-branch.
+Either way, attach the worktree the same way, then bring it up to date:
+
+```bash
+.claude/skills/work/scripts/ensure-worktree.sh \
+  "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
+git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
+git -C <worktree> push -u origin feature/<feature-id>
+```
+
+The script is idempotent and verifies the branch, so resume and first-run
+take the same path. Use the feature id as the branch name rather than a
+model-chosen slug: a fresh slug on retry is exactly what spawns a duplicate
+branch and a second PR.
 
 ### 5b. Break down, then batch tasks
 
@@ -236,28 +232,28 @@ Report the task ids created.`
 })
 ```
 
-Otherwise gather work, resumable ones first:
+Otherwise ask for the next batch:
 
 ```bash
-bd list --parent=<feature-id> --status=in_progress --assignee="$BEADS_ACTOR" --json
-bd ready --parent=<feature-id> --json
+.claude/skills/work/scripts/next-batch.py <feature-id>
 ```
 
-Build a batch, highest priority first:
+It returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped}`.
+The batch is the set that can safely run at once: resumable tasks first
+(`bd ready` can't see `in_progress` ones, so nothing else would ever pick
+them back up), then ready ones whose `files` claims don't overlap anything
+already in the batch — two branches editing one file merge into a conflict.
+A task with no claim comes back alone, since it can't be proven disjoint
+from anything; comment on it that the claim is missing so the breakdown gets
+fixed.
 
-- Add a task only when its `metadata.files` claim is **disjoint** from every
-  task already in the batch. Overlap → leave it for a later round; two
-  branches editing one file merge into a conflict.
-- No `files` metadata → dispatch it as the **only** task this round and
-  comment that the claim was missing, so the breakdown gets fixed. If the
-  batch already has members, leave it for the next round instead.
-
-**Both lists empty** → every task is closed, blocked, or parked:
+**Empty batch** → every task is closed, blocked, or parked:
 
 - All closed → **5e** (feature review).
-- Otherwise → add this feature to `parked` and go to **5f**; it cannot progress right now.
+- Otherwise → add this feature to `parked` and go to **5f**; it can't
+  progress right now.
 
-Claim each selected id and give it a worktree, metadata first:
+Claim each id in the batch, record its metadata, then attach its worktree:
 
 ```bash
 bd dolt pull                              # state may be hours old by now
@@ -266,26 +262,15 @@ bd update <task-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<task-id> \
   --set-metadata branch=task/<task-id>
 bd dolt push
+.claude/skills/work/scripts/ensure-worktree.sh \
+  "$PWD/../computenet-worktrees/<task-id>" task/<task-id> feature/<feature-id>
 ```
 
-Then get it a worktree. `git worktree add` refuses when the path is already
-a worktree, and `-b` refuses when the branch exists — so a resumed task
-fails **both** naive forms. Check first rather than chaining `||`:
-
-```bash
-git worktree list --porcelain | grep -q "^worktree $PWD/../computenet-worktrees/<task-id>$" \
-  && echo "already attached, nothing to do" \
-  || { git show-ref --quiet refs/heads/task/<task-id> \
-       && git worktree add "$PWD/../computenet-worktrees/<task-id>" task/<task-id> \
-       || git worktree add "$PWD/../computenet-worktrees/<task-id>" -b task/<task-id> feature/<feature-id>; }
-```
-
-Three cases: already attached (resumed within this session), branch exists
-but is detached (resumed from an earlier session), or neither (new task).
-Confirm the worktree exists and is on the right branch before dispatching —
-`git -C <worktree> rev-parse --abbrev-ref HEAD`. Never let a worktree
-failure pass silently: an agent handed a path that doesn't exist works
-somewhere unintended.
+`ensure-worktree.sh` handles all three states — already attached, branch
+exists but detached (a task resumed from an earlier session), or brand new —
+and fails loudly if it can't put the worktree on the requested branch. That
+matters: an agent handed a path that isn't there works somewhere
+unintended, and nothing would notice until the merge.
 
 Then dispatch the batch in one message:
 
