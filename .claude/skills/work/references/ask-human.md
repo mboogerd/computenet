@@ -20,28 +20,23 @@ bd comment <id> "QUESTION: <the actual question, with enough context that someon
 bd dolt push
 ```
 
-Reassigning matters mechanically, not just cosmetically: the `SessionEnd`
-hook releases claims by `assignee=<this machine> AND status=in_progress`.
-Handing the item to `human` and setting `blocked` takes it out of that set,
-so the question survives the session that asked it instead of being silently
-reopened and re-claimed by the next one.
-
-`status=blocked` also takes it out of `bd ready` for both machines — it
-won't be re-claimed while the question is open. The `human` label is what
-surfaces it: `bd human list` shows every open one, and the user (or whoever
-resolves it) answers with:
+All three flags do work. `assignee=human` + `blocked` takes the item out of
+the `SessionEnd` hook's release set (`assignee=<machine> AND in_progress`),
+so the question survives the session that asked it instead of being reopened
+and re-claimed by the next one. `blocked` also takes it out of `bd ready`.
+The `human` label is what surfaces it in `bd human list`, where it's
+answered with:
 
 ```bash
 bd human respond <id> -r "the answer"
 ```
 
-which comments the response and closes the human-flag bead. Note this does
-**not** automatically unblock the original item — check for a routine run to
-notice, or explicitly `bd update <id> --status=open` (or `--claim` again)
-once the question in the comment thread is answered.
+That comments the answer and closes the flag, but does **not** unblock the
+original item — a later session (or you) reopens it with
+`bd update <id> --status=open`.
 
-After parking, don't sit and wait for the answer. Report back that the item
-is blocked on a parked question and finish.
+After parking, don't wait for the answer. Report that the item is blocked
+and finish.
 
 **A parked question blocks one item, never the tree.** Park it on the
 narrowest item that's genuinely stuck — the task, not its feature; the

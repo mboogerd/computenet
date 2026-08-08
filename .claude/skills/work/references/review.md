@@ -1,16 +1,12 @@
 # Feature review
 
-Every task under this feature is closed and each was verified against its own
-acceptance criteria. That is not the same as the feature being done: tasks
-pass individually and still leave a feature that doesn't cohere, has seams
-nobody owned, or misses criteria that live at the feature level.
+Every task here is closed and each passed its own acceptance criteria. That
+is not the same as the feature being done — tasks pass individually and
+still leave seams nobody owned or criteria no task claimed.
 
-You judge the **feature's** acceptance criteria, and you decide whether its
-PR goes ready or stays draft. You are the last gate before this merges to
-`main`.
-
-You did not write this code — that's the point. Read what's there, not what
-you expected to be there.
+You judge the **feature's** criteria and decide whether its PR goes ready or
+stays draft. You are the last gate before this merges to `main`. You didn't
+write this code: read what's there, not what you expect to be there.
 
 ## 1. Establish the standard
 

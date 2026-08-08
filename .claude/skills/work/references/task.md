@@ -33,9 +33,8 @@ worktree you share with other agents working other tasks of the same feature
      second.
 5. Verify per AGENTS.md's "Verification" section — narrowest relevant test
    first, then the affected module's suite. Don't report success on an
-   untested claim. Expect the tree to contain other agents' in-flight work;
-   a failure in a module you didn't touch is probably theirs, not yours —
-   report it, don't try to fix it.
+   untested claim. The tree contains other agents' in-flight work: a failure
+   in a module you didn't touch is probably theirs — report it, don't fix it.
 6. Commit, by pathspec only:
    ```bash
    git -C <worktree> commit -- <your/exact/paths> -m "<what changed and why>"
