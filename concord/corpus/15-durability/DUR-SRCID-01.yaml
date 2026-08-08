@@ -47,7 +47,12 @@ script:
   - {type: apply, on: source, op: add, value: k3}
   - {type: quiesce}
 checks:
-  # k1,k2 fired pre-crash and were NOT re-fired on replay (24-DUR-05 suppression);
-  # k3 fired post-recovery live — each of the three distinct elements exactly once
+  # k1,k2 fired pre-crash and were NOT re-fired on replay (24-DUR-05 suppression)
   - {type: effect-count, sink: sink, exactly: 1}
+  # k3 fired post-recovery live. This has to name the key: the unkeyed form above
+  # asserts over the keys the sink PRODUCED, so an element suppressed to zero
+  # firings is absent from the grouping and passes vacuously — it can only see
+  # the double-fire direction, never the effect-LOSS direction this scenario's
+  # narrative also claims (BS-21's counter-continuation observable).
+  - {type: effect-count, sink: sink, key: k3, exactly: 1}
   - {type: no-dead-letters}

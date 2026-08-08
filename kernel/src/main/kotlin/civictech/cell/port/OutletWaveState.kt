@@ -56,31 +56,35 @@ data class OutletWaveState(val sourceId: UUID, val highWater: Long) {
          * **no** `ReBaseline` supersession notice. `[KFX-13]` is `WHERE`-gated
          * on the fresh-epoch arm and is therefore vacuous here.
          *
-         * ### Why derived rather than journaled
+         * ### Derived on the live path, journaled at the checkpoint
          *
-         * The `sourceId` is *derived from the outlet's ref*, not carried in a
-         * durable record — the literal reading of `[24-DUR-04]`, and the same
+         * The `sourceId` this function returns is *derived from the outlet's
+         * ref* — the literal reading of `[24-DUR-04]`, and the same
          * `UUID.nameUUIDFromBytes` derivation
          * [civictech.cell.port.PortRef.of], `SetCell.tagSource` and
-         * [civictech.cell.data.delta.MintedTags] already use. That closes the
-         * plane asymmetry the epic names: the tag plane satisfied
-         * `[24-DUR-04]`, the wave plane did not. It also covers the case a
-         * checkpoint cannot: a journal holding frames but *no* checkpoint yet
-         * still recovers the identity, because there is nothing to read.
+         * [civictech.cell.data.delta.MintedTags] already use. Installing it on
+         * the live path (below) closes the plane asymmetry the epic names: the
+         * tag plane satisfied `[24-DUR-04]`, the wave plane did not. Deriving
+         * rather than reading also covers the case a checkpoint cannot: a
+         * journal holding frames but *no* checkpoint yet still recovers the
+         * identity, because there is nothing to read.
          *
-         * The **counter** cannot be derived, so it *is* durable state: the
-         * host's checkpoint carries each outlet's high-water beside the
-         * `Stateful` snapshot (`HostDurability`'s `RECORD_OUTLET_WAVE`), and
-         * recovery rewinds the outlet to the *checkpoint's* high-water, not the
-         * crash-time one. That is the load-bearing detail. (That record carries
-         * the epoch's `sourceId` beside the counter — not because the derivation
-         * is in doubt, it is the same value in the ordinary case, but because a
+         * The derivation is not, however, the whole restore rule. The
+         * **counter** cannot be derived at all, and the epoch actually in force
+         * at checkpoint time need not be the derived one, so the host's
+         * checkpoint carries the outlet's *whole* epoch — `sourceId` **and**
+         * high-water — beside the `Stateful` snapshot (`HostDurability`'s
+         * `RECORD_OUTLET_WAVE`, written for every journaled outlet
+         * unconditionally), and recovery adopts it, rewinding the outlet to the
+         * *checkpoint's* high-water rather than the crash-time one. That is the
+         * load-bearing detail. (The recorded `sourceId` is the derived one in
+         * the ordinary case; it is carried rather than re-derived because a
          * transition this decision deliberately leaves alone may have rotated
          * the outlet off its derived epoch before the checkpoint: RESTART's
          * `mintFreshEpoch` (`[KFX-14]`) or a drain/migration/promotion adoption
          * (`[KFX-15]`). Re-deriving over such a rotation would pair the derived
          * id with another epoch's counter and re-issue pairs the derived lane
-         * already spent.) Replay is
+         * already spent — silent effect loss.) Replay is
          * deterministic re-execution from the checkpoint, so rewinding to the
          * checkpoint makes the replayed re-emissions carry *exactly* the
          * `(sourceId, counter)` pairs the pre-crash run emitted — "old ids for
