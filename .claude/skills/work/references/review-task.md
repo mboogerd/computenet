@@ -25,6 +25,12 @@ Check:
   changed behavior without a test asserting it hasn't finished.
 - **Scope.** Changes nothing asked for, debug leftovers, unrelated
   reformatting.
+- **The criteria themselves.** If they don't meet
+  [issue-quality.md](issue-quality.md) — uncheckable, or just the title again
+  — that's a breakdown defect. Where the parent feature makes the intent
+  clear, tighten them (`bd update <task-id> --acceptance=…`) and review
+  against the tightened version, saying so. Where it doesn't, you can't judge
+  this task: say that rather than passing it on vibes.
 
 ## 2. Repair, don't bounce
 
@@ -54,3 +60,8 @@ the branch and worktree in place; a later batch resumes the task there with
 its context intact.
 
 Either way, name every file touched outside the claim.
+
+**Friction:** end your report with anything that made you slower or forced a
+guess — an unusable parent item, a command here that did not work, a case these
+instructions do not cover. Report it; do not file it. The orchestrator logs it
+centrally so recurrences are visible (SKILL.md step 7).

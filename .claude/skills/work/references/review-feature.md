@@ -18,6 +18,12 @@ bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed 
 Read the parent epic too, and any spec sections the feature cites — those
 are the authority (AGENTS.md), above the feature's own prose.
 
+Judge the criteria as written. If they don't meet
+[issue-quality.md](issue-quality.md), tighten them against the epic and the
+cited spec before judging, and say in your report that you did — you are
+about to ship or hold a PR on them, so an uncheckable criterion is a decision
+you'd otherwise be making silently.
+
 ## 2. Read the actual diff
 
 ```bash
@@ -94,3 +100,8 @@ than half a feature parked on a branch.
 The feature id, ready-or-draft and why, what you repaired, and any tasks you
 created. If you left it draft, name the single thing that would most change
 the verdict.
+
+**Friction:** end your report with anything that made you slower or forced a
+guess — an unusable parent item, a command here that did not work, a case these
+instructions do not cover. Report it; do not file it. The orchestrator logs it
+centrally so recurrences are visible (SKILL.md step 7).

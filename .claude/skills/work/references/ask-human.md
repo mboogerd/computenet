@@ -1,14 +1,29 @@
 # Parking a question
 
-The bar (all four are "default to asking," not "default to guessing"):
+The bar is **ambiguous AND costly** — both halves, not either one:
 
 - **Ambiguous** — the spec/ticket genuinely supports more than one reading and you'd be picking, not deriving.
-- **Expensive** — meaningfully more tokens, time, or money than the item implied (e.g. the "task" turns out to need a rearchitecture).
-- **Risky** — could break something outside the item's own scope (data, other machines' in-flight work, prod-adjacent config).
-- **Hard to revert** — schema changes, published APIs, deleted data, anything you can't just re-edit away.
+- and at least one of:
+  - **Risky** — could break something outside the item's own scope (data, other machines' in-flight work, prod-adjacent config).
+  - **Hard to revert** — schema changes, published APIs, wire formats, deleted data, anything you can't just re-edit away.
+  - **Expensive to unpick** — the choice spreads across many call sites, so getting it wrong is a rewrite rather than an edit.
 
-Ordinary implementation judgment calls (variable names, which existing helper
-to reuse, test structure) are not this bar. Don't park those.
+The test: *if this turns out wrong, is it a five-minute fix or a five-hour
+one?* Five minutes, decide it and record the assumption. Five hours, park it.
+
+Two things that are **not** this bar:
+
+- **Ordinary judgment calls** — variable names, which existing helper to
+  reuse, file layout, test structure. Decide them.
+- **Big but clear.** Work that's simply larger than its item implied isn't a
+  question, it's a sizing error: split it into beads items
+  (`bd create --parent=…`, per [issue-quality.md](issue-quality.md)), say so
+  in a comment, and keep going. Parking it stalls work nobody is confused
+  about.
+
+Both directions cost real time — a parked item waits for a human, and a wrong
+expensive guess costs more than the run was worth. An agent that parks every
+small uncertainty makes no progress, which is the same as failing.
 
 ## How to park it
 
