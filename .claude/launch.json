@@ -1,0 +1,93 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agora-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/merlijn/Documents/local-projects/computenet/demo/agora/ui",
+        "run",
+        "dev"
+      ],
+      "port": 5173,
+      "autoPort": false
+    },
+    {
+      "name": "agora-backend",
+      "runtimeExecutable": "/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java",
+      "runtimeArgs": [
+        "-cp",
+        "/Users/merlijn/.cache/computenet-preview/agora/lib/*",
+        "civictech.agora.AgoraAppKt",
+        "8080"
+      ],
+      "port": 8080,
+      "autoPort": false
+    },
+    {
+      "name": "shopping",
+      "runtimeExecutable": "/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java",
+      "runtimeArgs": [
+        "-cp",
+        "/Users/merlijn/.cache/computenet-preview/shopping/lib/*",
+        "civictech.demo.MainKt",
+        "8090"
+      ],
+      "port": 8090,
+      "autoPort": false
+    },
+    {
+      "name": "slotfinder",
+      "runtimeExecutable": "/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java",
+      "runtimeArgs": [
+        "-cp",
+        "/Users/merlijn/.cache/computenet-preview/slotfinder/lib/*",
+        "civictech.demo.slotfinder.SlotFinderAppKt",
+        "8091"
+      ],
+      "port": 8091,
+      "autoPort": false
+    },
+    {
+      "name": "skillmatch",
+      "runtimeExecutable": "/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java",
+      "runtimeArgs": [
+        "-cp",
+        "/Users/merlijn/.cache/computenet-preview/skillmatch/lib/*",
+        "civictech.demo.skillmatch.SkillMatchAppKt",
+        "8092"
+      ],
+      "port": 8092,
+      "autoPort": false
+    },
+    {
+      "name": "backlog-triage",
+      "runtimeExecutable": "/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java",
+      "runtimeArgs": [
+        "-cp",
+        "/Users/merlijn/.cache/computenet-preview/backlog-triage/lib/*",
+        "civictech.demo.backlogtriage.TriageAppKt",
+        "8094",
+        "--seed",
+        "/Users/merlijn/.cache/computenet-preview/backlog-seed",
+        "--journal",
+        "/Users/merlijn/.cache/computenet-preview/backlog-triage-journal.jsonl"
+      ],
+      "port": 8094,
+      "autoPort": false
+    },
+    {
+      "name": "tiering",
+      "runtimeExecutable": "/Users/merlijn/Library/Java/JavaVirtualMachines/ms-21.0.11/Contents/Home/bin/java",
+      "runtimeArgs": [
+        "-cp",
+        "/Users/merlijn/.cache/computenet-preview/tiering/lib/*",
+        "civictech.demo.tiering.TieringAppKt",
+        "8093"
+      ],
+      "port": 8093,
+      "autoPort": false
+    }
+  ]
+}
