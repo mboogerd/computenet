@@ -61,7 +61,10 @@ import java.util.UUID
  * spawn), and its whole epoch — identity *and* counter high-water — is
  * journaled at checkpoint and adopted on recovery, rewound to the checkpoint's
  * high-water so a replayed tail reproduces exactly the `(sourceId, counter)`
- * pairs the pre-crash run emitted. Consequence: **a journaled source feeding an
+ * pairs the pre-crash run emitted. Before any checkpoint exists there is no
+ * epoch record to adopt and the derivation alone carries it: the rebuilt outlet
+ * starts on the same derived id at counter 0, and replaying the whole frame
+ * history walks it back through the very same pairs. Consequence: **a journaled source feeding an
  * effectful sink now fires each logical delta exactly once across a crash** —
  * the replayed re-emission carries the identity the sink's restored frontier
  * already recorded and is suppressed as already-acted, while post-recovery live
@@ -69,10 +72,12 @@ import java.util.UUID
  * mistaken for already-acted in turn. This driver's own `journal-set-source` →
  * `effect-sink` construction is exactly that shape, and it is the corpus's
  * headline coverage for it: `DUR-SRCID-01` (uncheckpointed) and `DUR-SRCID-02`
- * (checkpointed), both `covers: [24-DUR-04, 24-DUR-05]`. `DUR-REPLAY-01` still
- * keeps a volatile source and a journaled sink as two independent subgraphs;
- * that construction remains valid coverage, it is simply no longer the *only*
- * way to drive an `Effectful` sink exactly-once through this driver.
+ * (checkpointed), both `covers: [24-DUR-04, 24-DUR-05]`. `DUR-REPLAY-01`
+ * (`covers: [24-DUR-01, 24-DUR-02, 24-DUR-05]`) still feeds its journaled sink
+ * from a **volatile** source, in a subgraph held independent of its
+ * data-recovery subgraph; that construction remains valid coverage, it is
+ * simply no longer the *only* way to drive an `Effectful` sink exactly-once
+ * through this driver.
  *
  * One boundary this fix does not touch: a frame that reaches an `Effectful`
  * inlet with **no** `MessageContext` — the externally-driven-root shape, e.g. a
