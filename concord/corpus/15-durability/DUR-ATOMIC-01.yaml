@@ -62,10 +62,15 @@
 #     exactly the frames whose frontier advance the checkpoint carries, so nothing the
 #     checkpoint frontier would suppress is ever replayed, and every frame that IS
 #     replayed carries its own `RECORD_FRONTIER` record in the same tail. That half of
-#     checkpoint atomicity is not boundary-discriminable in this shape — it is
-#     asserted kernel-side by `EffectfulRecoveryTest.checkpoint compaction preserves
-#     the processed-frontier across recovery`. This scenario claims the two ids its
-#     perturbations actually move, and no more.
+#     checkpoint atomicity is not boundary-discriminable in this shape — and, re-checked
+#     under review, NOTHING currently discriminates it: the whole kernel
+#     `civictech.cell.durability.*` suite is green under that same perturbation,
+#     `EffectfulRecoveryTest.checkpoint compaction preserves the processed-frontier
+#     across recovery` included (it compacts and then replays a tail that carries its
+#     own frontier records, so it never needs the checkpoint's copy either). Filed as
+#     such in `concord/corpus/DISPUTES.md` — "The third boundary … the checkpoint's
+#     *frontier* half". This scenario claims the two ids its perturbations actually
+#     move, and no more.
 id: DUR-ATOMIC-01
 title: A co-checkpointed view and an effectful sink's frontier restore from the same point
 covers: [24-DUR-02, 24-DUR-05]
