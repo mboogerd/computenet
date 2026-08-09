@@ -87,7 +87,7 @@ Without ids (13) — structurally excluded from the table below; filed as a disp
 | 24-BOUND-02 | 24-BOUND-02 | covered |
 | 24-CATCHUP-01 | 24-GEN-01 | covered |
 | 24-DUR-01 | DUR-REPLAY-01 | covered |
-| 24-DUR-02 | DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
+| 24-DUR-02 | DUR-GF-01, DUR-REPLAY-01, DUR-SNAPTAIL-01 | covered |
 | 24-DUR-03 | DUR-SNAPTAIL-01 | covered |
 | 24-DUR-04 | DUR-SRCID-01, DUR-SRCID-02 | covered |
 | 24-DUR-05 | DUR-REPLAY-01, DUR-SRCID-01, DUR-SRCID-02 | covered |

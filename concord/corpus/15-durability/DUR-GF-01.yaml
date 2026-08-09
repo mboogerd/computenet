@@ -1,0 +1,131 @@
+# Concord corpus scenario (KFX BS-40 / `[KFX-18]`): the boundary-observable
+# COMPOSITION gate for a WAVE-ALIGNED (glitch-free) consumer sitting downstream of a
+# recovered source — its output still equals the batch recompute over everything it
+# accepted, with no torn wave, no double count and no stranded partial-wave buffer.
+#
+# WHAT THIS COVERS, AND WHAT IT DELIBERATELY DOES NOT. It covers `[24-DUR-02]`
+# (rebuild the graph, restore the checkpoint, replay the frame tail through the
+# ordinary decode path) — read the NON-VACUITY block below: with the journaled arm
+# made volatile the golden fails on every run, so the check genuinely reads recovered
+# arm state.
+#
+# It does **not** carry `[24-DUR-04]`, and the reason is recorded rather than
+# glossed. `[24-DUR-04]` is about a recovered instance re-minting *the identities the
+# network already observed*. A wave-aligned consumer looks like the construction that
+# would be sensitive to that, because it keys per-source wave completeness on emission
+# identity — but on the replay path it is not, and the kernel says so in two places.
+# `WaveFrontier.offer` takes its `ctx.baseline != null` branch and releases the
+# invocation BEFORE any edge/lane lookup, so a replayed cone is released without the
+# frontier ever consulting the source id; and `DurableGlitchFreeReplayTest`'s own
+# control (b) ("PN-1 derivation reverted but baseline on — recovery still green")
+# pins exactly that independence over 100 seeds. What carries the recovered cone here
+# is PN-2's baseline stamp, not replay-stable identity. `[24-DUR-04]` is asserted
+# head-on by `DUR-SRCID-01`/`-02` on the effect plane, where the restored
+# processed-frontier really does have to match the re-emitted identity; the
+# wave-aligned consumer plane of it is not boundary-discriminable, and that is filed
+# in `DISPUTES.md`.
+#
+# The kernel-side arm of the same claim is `DurableGlitchFreeReplayTest` (a WAIT
+# fork-join diamond, one journaled arm, 100 seeds, released sequence == batch
+# recompute); this scenario is its boundary-observable recovery-shape twin, not a
+# replacement — G-59's partial-wave-buffer question stays research-gated and this
+# scenario asserts NO REGRESSION, not that the buffer question is solved.
+#
+# NON-VACUITY (each perturbation was actually run, as `24-REPLAY-01` did):
+#   * make `jarm` a plain volatile `set-source` → the golden fails on 20 of 20 runs
+#     ("expected [g1,g2,g3,g4] but read [g4]"): the recovered view loses g1/g2/g3
+#     entirely. So the check reads recovered arm state, not merely post-recovery live
+#     traffic. This is the `[24-DUR-02]` discrimination.
+#   * drop `glitch-free: true` → still passes. The wave-alignment wrapper adds no
+#     discrimination of its own against the current kernel; it degrades to
+#     `24-REPLAY-01`'s plain fan-in. That is why the wrapper is asserted here as a
+#     *composition* gate — the wave-aligned consumer must not REGRESS the recovery
+#     outcome — and not as a positive glitch-freedom golden, which
+#     `22-WAVE-FANIN-01`/`24-OP-COMBINE-02` already carry on the core profile.
+#   * disable the kernel's replay-stable identity mechanism outright
+#     (`HostDurability.installDurableEpochs` and `restoreOutletWave` both neutered,
+#     i.e. a deliberate `[24-DUR-04]` violation) → this scenario still passes 20 of 20,
+#     while `DUR-SRCID-01`/`-02` fail 20 of 20 on a double-fired effect. That negative
+#     result is the evidence for the `covers:` line below carrying only `24-DUR-02`.
+#
+# The over-approximation `24-REPLAY-01` documents is unchanged here and is carried
+# deliberately (g9): the quorum is volatile and holds no record of its own pre-crash
+# view, so an element the durable arm asserted ALONE is baseline-installed on
+# recovery and only leaves once a live delta re-evaluates it under the ordinary
+# threshold. The golden pins that convergence rather than papering over it.
+id: DUR-GF-01
+title: A wave-aligned fan-in downstream of a recovered source still equals the batch recompute
+covers: [24-DUR-02]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED set source and a volatile set source, both
+    feeding one 2-of-2 lane-counting fan-in that has been asked for WAVE-ALIGNED
+    (glitch-free) semantics, observed through a set view, plus a journal controller.
+    Only the journaled arm's accepted ops reach the write-ahead log; the volatile
+    arm, the fan-in, its wave-alignment wrapper and the view are all re-minted empty
+    on a crash — so the wrapper's wave frontier comes back with no open wave at all.
+  when: >
+    both arms assert g1, g2 and g3 (each meeting the 2-of-2 quorum, so the view
+    holds them) while the durable arm alone additionally asserts g9 (below the
+    quorum, absent from the view), then the whole durable host crashes and is
+    rebuilt from its surviving journal (24-DUR-02: rebuild the graph, restore the
+    checkpoint, replay the frame tail through the ordinary decode path), after
+    which live traffic resumes on both arms
+  then: >
+    the wave-aligned consumer's output equals the batch recompute over everything it
+    accepted — the 2-of-2 intersection of the two arms' accepted ops — with no torn
+    wave, no double count and no stranded partial-wave buffer. The rebuilt frontier
+    came back with no open wave, and the replayed cone still did not tear it: PN-2
+    stamps the re-emission MessageContext.baseline, and a baseline is released
+    immediately and excluded from every wave-completeness set, instead of being held
+    as a lane whose sibling contribution the volatile arm can never supply
+graph:
+  cells:
+    # the journaled arm: its accepted ops tee to the WAL and replay after the crash
+    - {id: jarm, type: journal-set-source, host: dur}
+    # the volatile arm: dies with the crash, replays nothing, ever
+    - {id: varm, type: set-source, host: dur}
+    # the consumer under test: the lane-counting fan-in with WAVE-ALIGNED semantics
+    # requested — the driver routes its output through a kernel GlitchFreeCell
+    - {id: q, type: quorum-set, k: 2, glitch-free: true, host: dur}
+    - {id: v, type: set-view, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: jarm, to: q}
+    - {from: varm, to: q}
+    - {from: q, to: v}
+script:
+  # both arms agree on g1/g2/g3 — each reaches the 2-of-2 quorum and enters the view
+  - {type: apply, on: jarm, op: add, value: g1}
+  - {type: apply, on: varm, op: add, value: g1}
+  - {type: apply, on: jarm, op: add, value: g2}
+  - {type: apply, on: varm, op: add, value: g2}
+  - {type: apply, on: jarm, op: add, value: g3}
+  - {type: apply, on: varm, op: add, value: g3}
+  # the divergent element: asserted by the durable arm alone, so lane count 1 < 2
+  - {type: apply, on: jarm, op: add, value: g9}
+  - {type: quiesce}
+  # pre-crash view: [g1, g2, g3]
+  # CRASH + journal replay: discard every instance (the fan-in AND its wave-alignment
+  # wrapper included), rebuild with the same refs, recoverFrom the surviving journal.
+  # The replayed frames re-enter flagged as a baseline of the source lane the
+  # pre-crash graph already saw — the wave-continuity claim this scenario exists for.
+  - {type: despawn, on: ctl}
+  # live traffic resumes: a fresh element still needs a live 2-of-2 quorum, and it
+  # must reach the view exactly once (a re-opened second lane would strand it, a
+  # double-counted replay would show up as membership the batch recompute lacks)
+  - {type: apply, on: jarm, op: add, value: g4}
+  - {type: apply, on: varm, op: add, value: g4}
+  # ...and a live delta on the divergent element re-evaluates the documented
+  # over-approximation under the ordinary threshold (lane count 1 < 2), so it leaves
+  - {type: apply, on: jarm, op: add, value: g9}
+  - {type: quiesce}
+checks:
+  # the batch recompute over everything the consumer accepted: the 2-of-2
+  # intersection of jarm {g1,g2,g3,g9,g4} with varm {g1,g2,g3,g4} — g1..g3 recovered
+  # across the crash, g4 admitted live, g9 never quorate on either side of it
+  - {type: final-view, view: v, equals: [g1, g2, g3, g4]}
+  - {type: no-dead-letters}
