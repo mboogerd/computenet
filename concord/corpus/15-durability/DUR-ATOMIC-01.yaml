@@ -1,0 +1,150 @@
+# Concord corpus scenario (KFX BS-12 / `[KFX-06]`): the boundary-observable gate for
+# CHECKPOINT ATOMICITY — a co-checkpointed `Stateful` view and an `Effectful` sink's
+# processed-frontier come back from ONE point, because `HostDurability.checkpoint`
+# captures them on a single management-band pass and writes them as a single
+# `CheckpointRecord(state, frontier)` that `recoverFrom` restores as a unit.
+#
+# THE CONSTRUCTION, AND WHY EACH CHECK IS THE ONE THAT CATCHES ITS DIRECTION.
+# One journaled source fans out to a journaled view AND to an `Effectful` sink, all
+# three teeing to the same journal, so the `snapshot` step (which lowers to
+# `host.checkpoint(journal)`) captures every one of them at once: the source's and
+# the view's `Stateful` snapshots, the sink's processed-frontier, and each journaled
+# outlet's emission epoch. The WAL is then compacted down to that record, k3 is added
+# as the journal tail, and the host crashes.
+#
+#   * a state restored BEHIND the frontier point loses exactly the frames compaction
+#     removed from the WAL — k1/k2 are in no surviving frame, only in the checkpoint
+#     blob — so the view no longer holds the full fold. `final-view` catches that.
+#   * a frontier restored BEHIND the state point stops suppressing the replayed tail,
+#     so k3's re-emission re-drives the sink. The KEYED `effect-count` for k3 catches
+#     that (see the check comments: the unkeyed form is vacuous in the effect-LOSS
+#     direction, the discipline `DUR-SRCID-01`/`-02` established).
+#
+# The single-record atomicity is what makes both directions impossible at once: there
+# is no window in which one has been restored and the other has not.
+#
+# WHY `final-view` AND NOT `incremental-equals-batch`. The batch oracle models the
+# catalog's *volatile* type names only — `Values.VIEW_TYPES` is
+# {set-view, map-view, count-view, value-view, list-view} and `BatchOracle.sourceFold`
+# knows `set-source`, not `journal-set-source`/`journal-set-view` — so
+# `incremental-equals-batch` over a JOURNALED view fails with "oracle cannot model
+# this scenario" rather than reading recovered state. A journaled view is exactly what
+# BS-12 needs (a volatile view carries no checkpointed `Stateful` state to be torn
+# from the frontier), so the fold is pinned as the explicit `final-view` golden
+# `DUR-GF-01` uses. Teaching the oracle the `journal-` catalog names is a
+# concord-driver change, deliberately not made here.
+#
+# NON-VACUITY (every perturbation below was actually run against this scenario, as
+# `24-REPLAY-01` and `DUR-GF-01` did; results are the evidence for the `covers:` line):
+#   * `[24-DUR-02]`, snapshot half — neuter `HostDurability.restoreCheckpoint` so it
+#     stops calling `Stateful.restore` for the checkpointed cells → `final-view` fails
+#     on every run ("expected [k1,k2,k3,k4] but read [k3,k4]"): the compacted-away
+#     prefix is gone. So the golden genuinely reads checkpoint-restored state.
+#   * `[24-DUR-02]`, tail half — neuter the `RECORD_FRAME` branch of `recoverFrom` so
+#     the frame tail is not replayed through the decode path → 20 of 20 runs fail with
+#     "final-view(view): expected [k1,k2,k3,k4] but read [k1,k2,k4]; effect-count(sink,
+#     key=k4): expected 1 but observed 0". Both halves move, and the second is the more
+#     interesting one: the outlet is rewound to its checkpoint-time high-water, so with
+#     k3's frame never replayed the LIVE k4 re-issues the counter k3 already spent and
+#     the restored frontier eats it as already-acted — the silent-effect-loss direction
+#     the keyed check exists for. So the golden reads the replayed tail, not just the
+#     checkpoint.
+#   * `[24-DUR-05]` — make `HostDurability.alreadyProcessed` always return `false` (the
+#     processed-frontier stops suppressing) → 20 of 20 runs fail with
+#     "effect-count(sink, key=k3): expected 1 but observed 3": the replayed tail
+#     re-drives the sink (once through the source's re-emission, once through the sink's
+#     own replayed inbound frame). So the effect counts genuinely read the frontier's
+#     suppression decision.
+#   * NEGATIVE RESULT, recorded rather than glossed: dropping the *checkpoint's* half
+#     of the frontier (skip `record.frontier` in `restoreCheckpoint`, keep the
+#     `RECORD_FRONTIER` tail records) still passes — 20 of 20 here, and every other
+#     `dur` scenario stays green under it too. It has to: compaction removes
+#     exactly the frames whose frontier advance the checkpoint carries, so nothing the
+#     checkpoint frontier would suppress is ever replayed, and every frame that IS
+#     replayed carries its own `RECORD_FRONTIER` record in the same tail. That half of
+#     checkpoint atomicity is not boundary-discriminable in this shape — it is
+#     asserted kernel-side by `EffectfulRecoveryTest.checkpoint compaction preserves
+#     the processed-frontier across recovery`. This scenario claims the two ids its
+#     perturbations actually move, and no more.
+id: DUR-ATOMIC-01
+title: A co-checkpointed view and an effectful sink's frontier restore from the same point
+covers: [24-DUR-02, 24-DUR-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED source that fans out to both a JOURNALED
+    set view and an Effectful sink, plus a journal controller. All three cells tee
+    to the same write-ahead journal, so one checkpoint captures the view's Stateful
+    state and the sink's processed-frontier together, in a single record, on a
+    single management-band pass
+  when: >
+    two elements are added and the graph quiesces, the journaled cells are
+    checkpointed (Stateful snapshots plus processed-frontier, then WAL compaction
+    down to that one record), a third element is added as the journal tail, the
+    host crashes and is rebuilt from its surviving journal (24-DUR-02: rebuild the
+    graph, restore the checkpoint, replay the frame tail through the ordinary decode
+    path), then a fourth element is added post-recovery and the graph is driven to
+    quiescence again
+  then: >
+    the recovered view holds the whole fold — including the k1/k2 prefix that exists
+    nowhere but the checkpoint blob, compaction having removed its frames — AND the
+    sink fired each of the four logical deltas exactly once, the replayed tail being
+    suppressed at or behind the restored processed-frontier (24-DUR-05) rather than
+    re-driving the effect. State and frontier describe the same instant: neither a
+    view missing the compacted prefix (state behind the frontier point) nor a
+    re-fired tail (frontier behind the state point) is observable
+graph:
+  cells:
+    # the journaled source: its accepted ops tee to the WAL, and its outlet's emission
+    # epoch is captured by the same checkpoint (so the replayed tail reproduces the
+    # (sourceId, counter) the sink's restored frontier already recorded)
+    - {id: source, type: journal-set-source, host: dur}
+    # the co-checkpointed Stateful arm: recovers checkpoint + tail, never volatile
+    - {id: view, type: journal-set-view, host: dur}
+    # the co-checkpointed Effectful arm: contributes the processed-frontier half of
+    # the very same CheckpointRecord the view's snapshot rides in
+    - {id: sink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: view}
+    - {from: source, to: sink}
+script:
+  # checkpoint prefix: after compaction these two exist ONLY inside the checkpoint
+  # blob — no surviving frame replays them, so the view's fold depends on the
+  # Stateful snapshot half of the record and the sink's dedup on the frontier half
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: apply, on: source, op: add, value: k2}
+  - {type: quiesce}
+  # ONE checkpoint over the whole journal: source + view Stateful snapshots, the
+  # sink's processed-frontier, and each journaled outlet's emission epoch, captured
+  # together and written as a single record, then the WAL is compacted down to it
+  - {type: snapshot, on: source, as: ck}
+  # journal tail: replayed on recovery. Its re-emission must reach the view (which
+  # has no other record of it) and must NOT re-drive the sink (whose restored
+  # frontier already records it)
+  - {type: apply, on: source, op: add, value: k3}
+  - {type: quiesce}
+  # CRASH + checkpoint restore + tail replay
+  - {type: despawn, on: ctl}
+  # post-recovery live traffic: must reach both arms normally — a frontier restored
+  # AHEAD of the state point would eat this as already-acted (silent effect loss)
+  - {type: apply, on: source, op: add, value: k4}
+  - {type: quiesce}
+checks:
+  # the Stateful half of the checkpoint: k1/k2 come back from the snapshot (their
+  # frames were compacted away), k3 from the replayed tail, k4 from live traffic
+  - {type: final-view, view: view, equals: [k1, k2, k3, k4]}
+  # each element the sink DID act on, acted on exactly once — the double-fire
+  # direction (a replayed re-emission the restored frontier could not match)
+  - {type: effect-count, sink: sink, exactly: 1}
+  # the silent-effect-LOSS direction, which the unkeyed form above cannot see: it
+  # asserts over the keys the sink PRODUCED, so an element that fired zero times is
+  # simply absent from the grouping and passes vacuously. Naming the keys turns
+  # "absent" into "observed 0, expected 1". k3 is the journal tail — it must have
+  # fired pre-crash and must not re-fire on replay; k4 is the live post-recovery add
+  # a frontier restored ahead of its state point would eat.
+  - {type: effect-count, sink: sink, key: k3, exactly: 1}
+  - {type: effect-count, sink: sink, key: k4, exactly: 1}
+  - {type: no-dead-letters}
