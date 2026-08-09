@@ -62,11 +62,23 @@ class WsPeerIdentityTest {
         val side = Peering.Side(registry, bridgeHost, peer = name?.let { PeerId(it) })
     }
 
-    private fun await(what: String, timeoutMs: Long = 5_000, condition: () -> Boolean) {
+    // 30s and a 100ms poll, matching `testkit`'s canonical `awaitUntil` — see the longer
+    // argument on `WsReconnectSmokeTest.await`, which had the same defect.
+    //
+    // The deadline here is only ever reached when the test is failing, so a generous one is
+    // free on a healthy machine: every await below returns the instant its condition holds.
+    // At 5s this test timed out on `re-announced after reconnect` in CI (computenet-pvs) —
+    // waiting on a dialer that has to notice the listener died, reconnect, re-hello and
+    // re-announce, every step of which is scheduling-bound on a loaded 2-core runner.
+    //
+    // Note this is NOT the port-rebind race `relisten` guards against: `relisten` had already
+    // succeeded in the observed failures. Diagnosing it as a bind flake and hardening the
+    // rebind would have left the actual cause untouched.
+    private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
             if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
-            Thread.sleep(20)
+            Thread.sleep(100)
         }
     }
 
