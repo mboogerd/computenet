@@ -216,13 +216,16 @@ internal class KernelDriverDur(
      * torn down and rebuilt on every crash and every cell — wrapper included — must
      * come back under the ref the pre-crash graph used (PN-1 derived port identity).
      * And the wrapper is **volatile**: it is never added to [journaledRefs], so a
-     * crash re-mints it with an empty frontier. That is the case `[24-DUR-04]` makes
-     * survivable: the recovered upstream re-emits under its replay-stable identity
-     * and `recoverFrom` stamps the re-emission `MessageContext.baseline`, which the
-     * frontier excludes from every wave-completeness set and releases immediately —
-     * so an empty frontier is not a torn second lane it could never complete
-     * (kernel `DurableGlitchFreeReplayTest`, whose control stalls on every seed when
-     * that baseline stamp is removed).
+     * crash re-mints it with an empty frontier. What makes an empty frontier
+     * survivable is PN-2, not `[24-DUR-04]`: `recoverFrom` stamps the replayed
+     * re-emission `MessageContext.baseline`, and `WaveFrontier.offer` takes its
+     * baseline branch *before* any edge/lane lookup — releasing immediately and
+     * excluding the invocation from every wave-completeness set — so the replayed
+     * cone is never a torn second lane the frontier could not complete. The source's
+     * identity is not consulted on that path, which is why `DUR-GF-01` carries
+     * `24-DUR-02` and not `24-DUR-04` (kernel `DurableGlitchFreeReplayTest`: control
+     * (a) stalls on every seed when the baseline stamp is removed, while control (b)
+     * stays green with replay-stable identity reverted).
      *
      * Returns `null` for every cell that did not request wave alignment.
      */

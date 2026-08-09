@@ -1,27 +1,29 @@
-# Concord corpus scenario (KFX BS-40): the head-on `[24-DUR-04]` assertion for the
-# WAVE-ALIGNED consumer plane. `DUR-SRCID-01`/`-02` pin the same requirement on the
-# effect plane (a recovered source's re-emission lands at the identity the sink's
-# restored processed-frontier already recorded); this scenario pins the other thing
-# a replay-stable emission identity buys — that a glitch-free consumer downstream of
-# a recovered source still ends at the batch recompute.
+# Concord corpus scenario (KFX BS-40 / `[KFX-18]`): the boundary-observable
+# COMPOSITION gate for a WAVE-ALIGNED (glitch-free) consumer sitting downstream of a
+# recovered source — its output still equals the batch recompute over everything it
+# accepted, with no torn wave, no double count and no stranded partial-wave buffer.
 #
-# WHY THIS IS `24-DUR-04` AND NOT JUST `24-REPLAY-01` AGAIN. `24-REPLAY-01` puts a
-# PLAIN `quorum-set` behind the same journaled arm; this one puts a WAVE-ALIGNED one
-# there (`glitch-free: true`, the existing descriptor param — `concord/schema/
-# scenario.md`, `cell-catalog.md` — bound on the dur profile the same way the core
-# profile binds it: a downstream kernel `GlitchFreeCell` the fan-in's output is
-# routed through, see `KernelDriverDur.glitchFreeDelegate`). A wave-aligned consumer
-# is the construction that is *sensitive* to emission identity, because it keys
-# per-source wave completeness on it. The rebuilt wrapper's frontier is empty, so a
-# replayed cone re-entering as an ordinary live wave would sit forever waiting for a
-# sibling contribution the volatile arm can never replay — a torn wave, permanently
-# incomplete. What makes it not tear: the recovered source re-emits under its
-# replay-stable (ref-derived / checkpoint-restored) identity rather than a freshly
-# minted random one, and `recoverFrom` stamps that re-emission
-# `MessageContext.baseline` — so the frontier reads it as a catch-up baseline of a
-# lane it already knows and releases it immediately, instead of opening a second
-# lane it can never complete. No torn wave, no double count, no stranded
-# partial-wave buffer.
+# WHAT THIS COVERS, AND WHAT IT DELIBERATELY DOES NOT. It covers `[24-DUR-02]`
+# (rebuild the graph, restore the checkpoint, replay the frame tail through the
+# ordinary decode path) — read the NON-VACUITY block below: with the journaled arm
+# made volatile the golden fails on every run, so the check genuinely reads recovered
+# arm state.
+#
+# It does **not** carry `[24-DUR-04]`, and the reason is recorded rather than
+# glossed. `[24-DUR-04]` is about a recovered instance re-minting *the identities the
+# network already observed*. A wave-aligned consumer looks like the construction that
+# would be sensitive to that, because it keys per-source wave completeness on emission
+# identity — but on the replay path it is not, and the kernel says so in two places.
+# `WaveFrontier.offer` takes its `ctx.baseline != null` branch and releases the
+# invocation BEFORE any edge/lane lookup, so a replayed cone is released without the
+# frontier ever consulting the source id; and `DurableGlitchFreeReplayTest`'s own
+# control (b) ("PN-1 derivation reverted but baseline on — recovery still green")
+# pins exactly that independence over 100 seeds. What carries the recovered cone here
+# is PN-2's baseline stamp, not replay-stable identity. `[24-DUR-04]` is asserted
+# head-on by `DUR-SRCID-01`/`-02` on the effect plane, where the restored
+# processed-frontier really does have to match the re-emitted identity; the
+# wave-aligned consumer plane of it is not boundary-discriminable, and that is filed
+# in `DISPUTES.md`.
 #
 # The kernel-side arm of the same claim is `DurableGlitchFreeReplayTest` (a WAIT
 # fork-join diamond, one journaled arm, 100 seeds, released sequence == batch
@@ -29,18 +31,22 @@
 # replacement — G-59's partial-wave-buffer question stays research-gated and this
 # scenario asserts NO REGRESSION, not that the buffer question is solved.
 #
-# NON-VACUITY (verified by running the perturbations, as `24-REPLAY-01` did):
-#   * make `jarm` a plain volatile `set-source` and the recovered view loses g1/g2/g3
-#     entirely — the golden below fails. So the check genuinely reads the recovered
-#     arm state and not merely the post-recovery live traffic.
-#   * the wave-alignment half is discriminated on the kernel side rather than here:
-#     `DurableGlitchFreeReplayTest`'s control (a) removes the baseline stamp and the
-#     replayed cone stalls on every one of its 100 seeds. Dropping `glitch-free:
-#     true` from this scenario degrades it back to `24-REPLAY-01`'s plain fan-in,
-#     which passes — that is expected, and is exactly why the wrapper is asserted
-#     here as a *composition* gate (the wave-aligned consumer must not regress the
-#     recovery outcome) rather than as a positive glitch-freedom golden, which
+# NON-VACUITY (each perturbation was actually run, as `24-REPLAY-01` did):
+#   * make `jarm` a plain volatile `set-source` → the golden fails on 20 of 20 runs
+#     ("expected [g1,g2,g3,g4] but read [g4]"): the recovered view loses g1/g2/g3
+#     entirely. So the check reads recovered arm state, not merely post-recovery live
+#     traffic. This is the `[24-DUR-02]` discrimination.
+#   * drop `glitch-free: true` → still passes. The wave-alignment wrapper adds no
+#     discrimination of its own against the current kernel; it degrades to
+#     `24-REPLAY-01`'s plain fan-in. That is why the wrapper is asserted here as a
+#     *composition* gate — the wave-aligned consumer must not REGRESS the recovery
+#     outcome — and not as a positive glitch-freedom golden, which
 #     `22-WAVE-FANIN-01`/`24-OP-COMBINE-02` already carry on the core profile.
+#   * disable the kernel's replay-stable identity mechanism outright
+#     (`HostDurability.installDurableEpochs` and `restoreOutletWave` both neutered,
+#     i.e. a deliberate `[24-DUR-04]` violation) → this scenario still passes 20 of 20,
+#     while `DUR-SRCID-01`/`-02` fail 20 of 20 on a double-fired effect. That negative
+#     result is the evidence for the `covers:` line below carrying only `24-DUR-02`.
 #
 # The over-approximation `24-REPLAY-01` documents is unchanged here and is carried
 # deliberately (g9): the quorum is volatile and holds no record of its own pre-crash
@@ -49,7 +55,7 @@
 # threshold. The golden pins that convergence rather than papering over it.
 id: DUR-GF-01
 title: A wave-aligned fan-in downstream of a recovered source still equals the batch recompute
-covers: [24-DUR-02, 24-DUR-04]
+covers: [24-DUR-02]
 profile: dur
 kind: example
 narrative:
@@ -70,11 +76,11 @@ narrative:
   then: >
     the wave-aligned consumer's output equals the batch recompute over everything it
     accepted — the 2-of-2 intersection of the two arms' accepted ops — with no torn
-    wave, no double count and no stranded partial-wave buffer. The recovered source
-    re-emitted under its replay-stable identity (24-DUR-04) rather than a freshly
-    minted one, so the rebuilt frontier read the replayed cone as a catch-up
-    baseline of a lane it already knows and released it, instead of holding it as a
-    second lane whose sibling contribution the volatile arm can never supply
+    wave, no double count and no stranded partial-wave buffer. The rebuilt frontier
+    came back with no open wave, and the replayed cone still did not tear it: PN-2
+    stamps the re-emission MessageContext.baseline, and a baseline is released
+    immediately and excluded from every wave-completeness set, instead of being held
+    as a lane whose sibling contribution the volatile arm can never supply
 graph:
   cells:
     # the journaled arm: its accepted ops tee to the WAL and replay after the crash
