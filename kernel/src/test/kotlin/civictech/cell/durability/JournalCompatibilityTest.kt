@@ -16,8 +16,11 @@ import civictech.cell.port.OutletWaveState
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
+import civictech.cell.wire.WireCodec
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.collections.shouldHaveSize
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -50,11 +53,27 @@ import java.util.UUID
  *
  * ```
  * git archive 0126b8d | tar -x -C <scratch>
- * # drop a one-off JUnit test into <scratch>/kernel/src/test/kotlin/... that
- * # runs the sequence below against a FileJournal, then
+ * # drop a one-off JUnit test into <scratch>/kernel/src/test/kotlin/civictech/cell/
+ * # durability/ that reproduces [NotifierCell], the two proxy interfaces and [World]
+ * # below, then runs the sequence below against `FileJournal(File(tmpDir, "j.bin"))`
+ * # and prints that file's path.
  * (cd <scratch> && ./gradlew :kernel:test --tests '<that test>')
- * cp <its output> kernel/src/test/resources/civictech/cell/durability/prechange-journal.bin
+ * cp <the printed path> kernel/src/test/resources/civictech/cell/durability/prechange-journal.bin
  * ```
+ *
+ * Two things a future regenerator needs and cannot infer from the copy:
+ *
+ * - **Drop [World.derivedEpoch] from the copied [World].** It calls
+ *   [OutletWaveState.durable], which is *this* change — it does not exist at
+ *   `0126b8d` and the copy will not compile with it. Nothing else in [World] is
+ *   post-change.
+ * - **The fixture is not byte-reproducible.** The pre-change kernel minted its
+ *   emission epoch with `randomUUID`, so every regeneration carries a different
+ *   `sourceId`, and Java serialization of the checkpoint's maps is not
+ *   order-stable either. The acceptance test for a regenerated fixture is
+ *   therefore the *structural* assertions in the fixture arm below — record
+ *   types `[2, 1, 1, 3]`, no type 4, and a carried wave identity that is a
+ *   random v4 rather than the ref-derived epoch — not a diff against this file.
  *
  * The generator is deliberately *not* committed: it only compiles against the
  * pre-change tree, and a copy in this tree would rot silently.
@@ -102,6 +121,19 @@ import java.util.UUID
  * is exactly what the identity change buys for journals written *after* it
  * (`OutletWaveRecoveryTest`), and nothing it can retroactively buy for journals
  * written before.
+ *
+ * Concretely, `effects == ["cherry"]` after recovery is **one** fire out of two
+ * candidates, and both halves matter:
+ *
+ * - the journaled *sink* frame (record 2, carrying the pre-change random
+ *   `sourceId` at counter 3) **is** suppressed — the restored pre-change
+ *   frontier still keys on that same random id, so old frontier data written
+ *   before the change is honoured unchanged. That is the compatibility half;
+ * - the *source*'s replay of record 1 re-drives the `SetCell` and it **re-emits**
+ *   under the ref-derived epoch at counter 1, which no pre-change frontier entry
+ *   can match. That is the un-suppressed fire, and it is the boundary half —
+ *   observably the behaviour the pre-change kernel itself had here, where the
+ *   recovered outlet minted a fresh random epoch and was likewise unmatched.
  */
 class JournalCompatibilityTest {
 
@@ -198,6 +230,19 @@ class JournalCompatibilityTest {
         val effects = mutableListOf<String>()
         val world = World(controller, journal, effects)
         controller.runToIdle()
+
+        // PROVENANCE, checked rather than taken on the commit hash in this class's KDoc:
+        // the fixture was written by the pre-change kernel, not merely stripped of its
+        // type-4 records. The wave identity its one mid-graph frame carries is a RANDOM
+        // (version 4) UUID — what the pre-change kernel minted per incarnation — and is
+        // NOT the ref-derived epoch installDurableEpochs would have put that outlet on.
+        // A "fixture" regenerated from the current kernel would fail here.
+        val carried = records
+            .filter { it[0].toInt() == 1 }
+            .mapNotNull { WireCodec.decode(it.copyOfRange(1, it.size)).invocation.context?.timestamp?.sourceId }
+        carried shouldHaveSize 1
+        carried.single().version() shouldBe 4
+        carried.single() shouldNotBe world.derivedEpoch()
 
         // recovery COMPLETES: a RecoveryIncomplete (or any decode failure behind it)
         // would surface right here — the pre-change RECORD_CHECKPOINT blob still
