@@ -598,6 +598,43 @@ the honesty.
   and `[24-DUR-05]` holds unconditionally, as written. Filed as
   `computenet-yh6.1.3.5`.
 
+### The third boundary (`coverage-gap`, `[24-DUR-02]`, KFX BS-12) — the checkpoint's *frontier* half asserts nothing
+
+`CheckpointRecord` carries `state` **and** `frontier` together, and `[24-DUR-02]`'s
+atomicity claim covers both halves. `DUR-ATOMIC-01` (KFX, feature
+`computenet-yh6.1.4`) discriminates the pair that matter observably — the
+`Stateful` snapshot half and the frame tail — but its own perturbation sweep
+recorded an honest negative for the third: **deleting the checkpoint's frontier
+restore entirely changes nothing anyone can see.** Patch `restoreCheckpoint` to
+skip `record.frontier` (keeping the `RECORD_FRONTIER` tail records) and the
+whole `dur` profile stays green 20 of 20, *and* — re-verified during review —
+so does the entire kernel `civictech.cell.durability.*` suite, `EffectfulRecoveryTest`
+*"checkpoint compaction preserves the processed-frontier across recovery"*
+included, despite its name.
+
+It is not a weak test, it is the shape of the mechanism. Compaction removes
+exactly the frames whose frontier advance the checkpoint absorbed, so nothing the
+checkpoint frontier would suppress is ever replayed; every frame that *is*
+replayed arrives with its own `RECORD_FRONTIER` record in the same tail, and
+`recoverFrom` stages frames while restoring frontier records synchronously, so
+the tail's own frontier is fully in place before any replayed frame is delivered.
+The checkpoint's frontier copy is therefore dead weight on every recovery path
+this repo can currently build.
+
+The construction that *would* discriminate it needs an upstream that survives the
+crash and **re-delivers** a frame whose `(sourceId, counter)` is at or behind the
+checkpoint frontier — a duplicate live delivery, not a replay. Neither the corpus
+(no re-delivery/duplicate-frame verb) nor the kernel durability fixtures build
+that today. Recorded here rather than claimed: `DUR-ATOMIC-01` covers
+`[24-DUR-02]` on the two halves its perturbations actually move, and this ledger
+carries the third.
+
+- **Resolves**: a duplicate-delivery surface — a corpus verb (or kernel fixture)
+  that re-sends an already-delivered frame to an `Effectful` inlet after
+  recovery, at a position the checkpoint frontier covers and the replayed tail
+  does not. With it, dropping `record.frontier` in `restoreCheckpoint` becomes a
+  failing perturbation and the frontier half of `[24-DUR-02]` is asserted head-on.
+
 ### Not covered (deferred, honestly out of reach at W4-B)
 
 - `24-DUR-04` (replay-stable identity, no resurrected removals) — **NARROWED

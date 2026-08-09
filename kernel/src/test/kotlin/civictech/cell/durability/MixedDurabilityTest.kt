@@ -8,6 +8,7 @@ import civictech.cell.data.SetOps
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.port.FanInlet
+import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.cell.host.HostedCellProxy
@@ -143,6 +144,133 @@ class MixedDurabilityTest {
         // ...and NOTHING was re-delivered to the volatile cell: it was never journaled, so
         // replay cannot double-deliver to it — it comes back empty.
         recoveredVolatile.membership() shouldBe emptySet()
+    }
+
+    /**
+     * KFX BS-13 / `[KFX-07]`, the **`Effectful` arm** of per-journal scoping
+     * (`[24-DUR-03]`: "a journal SHALL only ever hold its own cells' records, such
+     * that replaying it restores exactly those cells and re-delivers nothing to a
+     * co-hosted volatile cell").
+     *
+     * The sibling test above proves the *state* half with two `SetCell`s. This one
+     * proves the half that actually costs something when it is wrong: the co-hosted
+     * cell is an `Effectful` sink whose every delivery acts on a world OUTSIDE the
+     * instance lifecycle ([EffectfulRecoveryTest.NotifierCell]'s `world`), so a
+     * foreign record leaking into chain A's journal does not merely restore a bit of
+     * state twice — it re-fires an effect the pre-crash instance already performed,
+     * and no downstream idempotence takes that back.
+     *
+     * Two independent chains on ONE host: chain A is a `SetCell` teeing to
+     * `journalA`; chain B is an (unhosted, volatile) source feeding an `Effectful`
+     * sink teeing to `journalB`. The source is unhosted deliberately — it is the
+     * producing outlet that mints the `(sourceId, counter)` the sink's
+     * processed-frontier keys on, and it survives the crash exactly as
+     * `EffectfulRecoveryTest`'s does, so post-recovery traffic continues the same
+     * source lane rather than opening a new one.
+     *
+     * Then: recover `journalA` ONLY. Chain A's state comes back; the co-hosted
+     * `Effectful` sink receives nothing and `world` does not grow. Recovering
+     * `journalB` afterwards replays chain B's own frames, which its own restored
+     * frontier suppresses as already-acted (`[24-DUR-05]`), so the effect count is
+     * still exactly one per logical delta — and live traffic after both recoveries
+     * still reaches the sink, so the scoping is not achieved by breaking delivery.
+     *
+     * This lives in the kernel rather than the `dur` corpus because the corpus cannot
+     * express it: `KernelDriverDur` holds ONE shared journal, so "two journals on one
+     * host, replay only one" has no scenario vocabulary. The additive descriptor that
+     * would give it one is filed as beads `computenet-elc` (a gated schema change
+     * under `concord/schema`), deliberately not invented here.
+     *
+     * NON-VACUITY. The "received nothing" assertion is not free, but it is also not
+     * discriminated by the obvious perturbation: the frontier records ride the SAME
+     * per-cell selector as the frames, so leaking *everything* into one journal leaks
+     * the suppressing frontier along with the frames and stays green. The perturbation
+     * that isolates `[24-DUR-03]` is therefore on the frame tee alone — make
+     * `ManagedHost`'s two intake WAL writes
+     * (`journalSelector(hostedInvocation.cellRef)?.append(hostDurability.journalFrame(...))`)
+     * resolve to the first non-null journal they ever saw, while
+     * `advanceAndJournalFrontier` keeps the honest per-cell selector. `journalA` then
+     * holds chain B's frames but not chain B's frontier, and `recoverFrom(journalA)`
+     * re-drives the sink: this test then fails with `world` = `[1, 2, 1, 2]` where it
+     * expects `[1, 2]`. The unperturbed kernel passes.
+     */
+    @Test
+    fun `replaying one journal re-delivers nothing to a co-hosted Effectful sink on another journal`() {
+        val controller = SimulationController(seed = 1)
+        val journalA = InMemoryJournal() // chain A's "disk"
+        val journalB = InMemoryJournal() // chain B's "disk" — a DIFFERENT journal on the same host
+        val world = mutableListOf<Int>() // the external effect target, outside any cell instance
+
+        val setRefA = CellRef(UUID.randomUUID())
+        val sinkRefB = CellRef(UUID.randomUUID())
+
+        // per-cell selector: each chain tees to its own journal, nothing else is journaled
+        val selector: (CellRef) -> Journal? = {
+            when (it) {
+                setRefA -> journalA
+                sinkRefB -> journalB
+                else -> null
+            }
+        }
+
+        var host = ManagedHost(scheduler = controller.scheduler(), journalFor = selector)
+        host.managementInlet.call.spawn(SetCell<String>(setRefA))
+        host.managementInlet.call.spawn(EffectfulRecoveryTest.NotifierCell(sinkRefB, world))
+        controller.runToIdle()
+
+        // chain B's producing outlet: unhosted, so it survives the crash and keeps
+        // minting the same source lane the sink's frontier is keyed on
+        val source = EffectfulRecoveryTest.SourceCell()
+        var link: PortRef? = null
+        fun rewire(target: ManagedHost) {
+            link?.let { source.outlet.unsubscribe(it) }
+            val portRef = PortRef.generate()
+            val sinkInlet = (
+                HostedCellProxy.create(sinkRefB, target, EffectfulRecoveryTest.NotifierProxy::class.java)
+                    as EffectfulRecoveryTest.NotifierProxy
+                ).inlet.call
+            source.outlet.subscribe(Use.fixed(sinkInlet, portRef))
+            link = portRef
+        }
+        rewire(host)
+        controller.runToIdle()
+
+        // pre-crash traffic on both chains; chain B's effects have ALREADY landed on the world
+        ops(host, setRefA).add("apple")
+        ops(host, setRefA).add("banana")
+        source.emit(1)
+        source.emit(2)
+        controller.runToIdle()
+        world shouldBe listOf(1, 2)
+
+        // CRASH: host, registry and every live instance vanish — both journals survive
+        host = ManagedHost(scheduler = controller.scheduler(), journalFor = selector)
+        val recoveredA = SetCell<String>(setRefA)
+        host.managementInlet.call.spawn(recoveredA)
+        host.managementInlet.call.spawn(EffectfulRecoveryTest.NotifierCell(sinkRefB, world))
+        controller.runToIdle()
+
+        // replay ONE journal: chain A's
+        host.recoverFrom(journalA)
+        controller.runToIdle()
+
+        // chain A is back...
+        recoveredA.membership() shouldBe setOf("apple", "banana")
+        // ...and the co-hosted Effectful sink received NOTHING: chain A's journal holds
+        // only chain A's records, so there is no frame there to re-drive the effect with.
+        world shouldBe listOf(1, 2)
+
+        // recovering chain B's OWN journal is what restores chain B — and it is still
+        // exactly-once: its replayed frames sit at or behind its restored frontier.
+        host.recoverFrom(journalB)
+        controller.runToIdle()
+        world shouldBe listOf(1, 2)
+
+        // and the scoping did not achieve "nothing fired" by breaking delivery
+        rewire(host)
+        source.emit(3)
+        controller.runToIdle()
+        world shouldBe listOf(1, 2, 3)
     }
 
     @Test
