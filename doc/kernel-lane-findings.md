@@ -104,8 +104,12 @@ kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:262: ... processedF
 kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:273: fun advanceAndJournalFrontier(...)
 ```
 
-(10 matches total — line 258 is `alreadyProcessed`'s body, the second line of its
-two-line declaration; included here for an exact match against `grep -c` output.)
+(10 matches total, i.e. `… | wc -l` is 10 and `grep -rc` reports
+`HostDurability.kt:8`, `ManagedHost.kt:2`. Paths and line numbers above are
+verbatim and the match set is complete; the matched *text* is elided to keep
+the block readable, and the two files are grouped rather than left in walk
+order. Line 258 is `alreadyProcessed`'s body — the second line of its
+two-line declaration — and is listed so the count reconciles.)
 
 **Exactly one** per-`(cellRef, portName)` processed-frontier mechanism
 exists: the `processedFrontier` map owned by `HostDurability`, with its
@@ -121,3 +125,47 @@ merges, re-running the grep above against the merged tree must still show
 exactly the one implementation site in `HostDurability` plus its one call
 site in `ManagedHost`. Reviewers of those sibling features: check the diff
 against this gate before approving.
+
+That grep is keyed on the three current identifiers, so on its own it would
+miss a duplicate built under different names. Two name-independent anchors
+close that hole; both are cheap and both are pinned to base commit `37a7f1c`:
+
+1. **Where a duplicate would have to sit.** Any per-invocation dedup at an
+   effect boundary needs an `Effectful` type test. In `kernel/src/main` there
+   are exactly five, of which only two are dedup-related:
+
+   ```
+   $ grep -rn "is Effectful\|is civictech.cell.evolve.Effectful" kernel/src/main
+   kernel/src/main/kotlin/civictech/cell/evolve/Evolution.kt:57:        if (cell is Effectful) suppress(cell)
+   kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt:823:                        if (cell is Effectful && timestamp != null &&
+   kernel/src/main/kotlin/civictech/cell/host/ManagedHost.kt:855:                            if (cell is Effectful && timestamp != null) {
+   kernel/src/main/kotlin/civictech/cell/link/CatchUp.kt:53: * PORT_API branch, which tests `cell is Effectful && timestamp != null` and does
+   kernel/src/main/kotlin/civictech/cell/replication/Replication.kt:190:        if (cell is civictech.cell.evolve.Effectful) {
+   ```
+
+   (Verbatim, 5 matches. Reading them: `ManagedHost.kt:823` is the guard and
+   `:855` the advance — the only two dedup sites. `Evolution.kt:57` is shadow
+   suppression, `Replication.kt:190` a replication-admission refusal, and
+   `CatchUp.kt:53` is KDoc prose, not code.)
+
+   A new `is Effectful` site in a sibling diff is the signal to look closely:
+   it is either a duplicate frontier (gate violation) or a deliberate,
+   argued extension of the single one.
+
+2. **What a duplicate would have to persist.** A second frontier that
+   survives recovery needs its own durable record type. The journal has
+   exactly three record tags at `HostDurability.kt:19-21` (`RECORD_FRAME`,
+   `RECORD_CHECKPOINT`, `RECORD_FRONTIER`) plus the frontier folded into
+   `CheckpointRecord` (`HostDurability.kt:41-45`). A fourth record tag, or a
+   second frontier field on a checkpoint payload, is a gate violation unless
+   it is demonstrably the *same* frontier being re-encoded.
+
+   Note the converse is not a pass: a duplicate that is purely in-memory
+   (never journaled) still violates the gate and is caught only by anchor 1
+   or by the identifier grep.
+
+Sibling `computenet-yh6.1.2` is the one to watch hardest — it changes
+recovered-outlet wave identity, i.e. the `sourceId`/`counter` the single
+frontier is keyed on. Changing what the existing frontier is keyed on is in
+scope for it and is *not* a gate violation; adding a parallel structure that
+records "already acted" per inlet is.
