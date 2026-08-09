@@ -78,6 +78,37 @@ jobs:
       - name: Fail on unexpected untracked files
         run: test -z "$(git status --porcelain -uall -- doc '*/src')"
 
+      # The JUnit XML is the only place a hang explains itself. Two artefacts
+      # live there and nowhere else (computenet-8ru.4):
+      #
+      #   - the SUPPRESSED InterruptedException that JUnit's InterruptTask
+      #     attaches to the TimeoutException, carrying the blocked thread's real
+      #     stack. Gradle's console stack filter drops the suppressed section
+      #     unconditionally, so the console shows only `TimeoutException ... at
+      #     ArrayList.forEach` and names nothing. Measured, not assumed: a local
+      #     probe reproduced the CI signature exactly while the same run's
+      #     TEST-*.xml named the real blocked frame.
+      #   - the pre-interrupt thread dump `PreInterruptThreadDumpPrinter` writes
+      #     to worker stdout (armed for :inspect in computenet-8ru.3). Gradle
+      #     does not set showStandardStreams — deliberately, a blanket one would
+      #     flood a suite this size — so stdout reaches the XML and not the log.
+      #     Note it uses Thread.getAllStackTraces() and therefore OMITS virtual
+      #     threads, so it is the weaker of the two.
+      #
+      # Uploaded only when the job did not succeed: a green run's XML is a large
+      # artifact nobody reads. `cancelled()` is included because a job killed by
+      # `timeout-minutes` — the outright-hang case — reports cancelled, not
+      # failed, and `failure()` alone would skip exactly the run worth keeping.
+      # XML only: build/reports/tests is a rendering of the same data.
+      - name: Upload test results (diagnostics for failed or hung runs)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-fast
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Serial lane: only the two-JVM/ProcessBuilder tests (`ExchangeScaffoldTest`,
   # `TwoJvmConvergenceTest`, `CrashRestartConvergenceTest`), --max-workers=1 to
   # remove Gradle's own cross-project scheduling as a contention source — the
@@ -104,6 +135,17 @@ jobs:
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
         run: ./gradlew check -PmultiJvmOnly=true --max-workers=1
 
+      # Same rationale as the fast lane above. This lane is where the
+      # process-kill/relaunch tests live, so it is the likeliest to hang.
+      - name: Upload test results (diagnostics for failed or hung runs)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-serial
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: ignore
+          retention-days: 14
+
   concord-full:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -129,6 +171,17 @@ jobs:
       # drifted from the corpus and was hand-edited or left stale.
       - name: Confirm concordance regeneration is a no-op
         run: git diff --exit-code doc/spec/CONCORDANCE.md
+
+      # Same rationale as the fast lane above. The corpus runs under the same
+      # 5-minute per-method timeout, so it can hang the same way.
+      - name: Upload test results (diagnostics for failed or hung runs)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-concord
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: ignore
+          retention-days: 14
 
   ui-test:
     runs-on: ubuntu-latest
