@@ -495,6 +495,57 @@ class InspectorPagedStateTest {
     }
 
     /**
+     * computenet-1xx — the *other* half of that reconciliation: what happens when
+     * the re-read itself cannot be completed.
+     *
+     * The re-read is a bounded read like any other, so it can miss the 200 ms
+     * wait. It used to `break` and serve the original page anyway — `entries`
+     * counting rows the value did not contain, and the cursor advancing past all
+     * of them. Silent state loss, and exactly what the reconciliation exists to
+     * prevent.
+     *
+     * This is not a corner: a 10⁵-entry cell walked at `limit = 400` renders
+     * ~309 entries per page inside the byte budget, so *every* page of that walk
+     * is reconciled, and one missed deadline loses exactly 400 − 309 = 91
+     * entries — the `expected:<100000> but was:<99909>` observed on CI.
+     *
+     * The honest answer is the same one a first-read miss gets: no page,
+     * `unanswered`, and a cursor the client can retry with.
+     */
+    @Test
+    fun `a reconciliation that cannot complete answers unanswered, never a short page`() {
+        val wide = "w".repeat(2_000)
+        val cell = set(*(0 until 100).map { "$it-$wide" }.toTypedArray())
+        val serving = started()
+
+        // the first read (limit=100) lands; the re-read the byte budget forces is
+        // swallowed, so the reconciliation cannot finish
+        val delegate = serving.reads
+        val abandoned = CompletableFuture<civictech.cell.StateReadResult>()
+        val reads = AtomicLong()
+        serving.reads = BoundedReadSource { ref, request ->
+            if (reads.getAndIncrement() == 1L) abandoned else delegate.readState(ref, request)
+        }
+
+        val state = stateOnce(cell.ref, limit = 100)
+
+        // no short page: the entries the cursor would have advanced past are not
+        // silently dropped, and no `page` object is served at all
+        state.kind shouldBe CellState.UNAVAILABLE
+        state.unreadable shouldBe CellState.UNANSWERED
+        state.page shouldBe null
+        // the reconciliation really was the read that was swallowed
+        reads.get() shouldBe 2L
+        abandoned.isCancelled shouldBe true
+
+        // …and the retry it invites succeeds, whole
+        serving.reads = delegate
+        val retried = state(cell.ref, limit = 100)
+        retried.kind shouldBe CellState.PAGE
+        rowsOf(retried).size shouldBe retried.page!!.entries
+    }
+
+    /**
      * The marker's existing meaning, unchanged: `$truncated` *inside* a rendered
      * entry means one value was abbreviated, never that entries went missing.
      */
@@ -581,6 +632,13 @@ class InspectorPagedStateTest {
             while (true) {
                 pages += 1
                 val elements = elementsOf(page)
+                // every page rendered every entry it counted. A page that counts
+                // more than it shows advances the cursor past entries that
+                // appear nowhere in the walk — which is how 91 of 100,000 went
+                // missing on CI (computenet-1xx). At limit=400 this walk renders
+                // ~309 entries per page, so every page here is reconciled and
+                // this assertion is on the live path, not a formality.
+                elements.size shouldBe page.page!!.entries
                 elements.forEach { element -> seen.add(element) shouldBe true }
                 val cursor = page.page!!.cursor ?: break
                 page = pageOf(big.ref, "?cursor=$cursor&limit=$BIG_PAGE_LIMIT")
