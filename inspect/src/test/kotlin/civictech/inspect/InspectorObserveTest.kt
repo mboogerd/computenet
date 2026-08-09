@@ -404,15 +404,19 @@ class InspectorObserveTest {
         val counter = CounterCell().also { host.managementInlet.call.spawn(it) }
         host.lookup<CounterApi>(counter.ref)!!.inlet.call.increment(5)
 
-        // `increment` is an ordinary data-band invocation (priority 20) and the
-        // read this test exercises is submitted at priority 0, which
-        // `ManagedHost.readState`'s own KDoc says "jumps ahead of every queued
-        // data-priority task". A single read taken straight after the call is
-        // therefore free to answer the *pre*-increment total — not rarely, but
-        // whenever the host thread has not drained the data band yet, which on a
-        // loaded runner is ordinary. So the delivery is awaited on the very
-        // surface under test (same convention as the fold assertions above)
-        // rather than assumed to have already happened.
+        // `increment` is an ordinary data-band invocation (priority 20); the
+        // snapshot read above it is submitted at priority 0, which — as
+        // `ManagedHost.readState`'s KDoc puts it for the submit both reads share
+        // — "jumps ahead of every queued data-priority task". A single read
+        // taken straight after the call is therefore free to answer the
+        // *pre*-increment total — not rarely, but whenever the host thread has
+        // not drained the data band yet, which on a loaded runner is ordinary.
+        // Two wrong answers are reachable, and the condition gates both: the
+        // value, because a read that overtakes the queued increment answers 0;
+        // and `kind`, because a host thread still busy at
+        // `InspectorServer.SNAPSHOT_WAIT_MS` answers UNAVAILABLE instead. So the
+        // delivery is awaited on the very surface under test (same convention as
+        // the fold assertions above) rather than assumed to have happened.
         lateinit var response: CellState
         awaitUntil("the wired default answers the counter's post-increment total") {
             response = state(counter.ref)
