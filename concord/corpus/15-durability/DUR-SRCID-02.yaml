@@ -1,0 +1,67 @@
+id: DUR-SRCID-02
+title: A checkpointed journaled source still fires each delta exactly once across a crash
+covers: [24-DUR-04, 24-DUR-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    the DUR-SRCID-01 construction — a durable host carrying a JOURNALED source
+    feeding an Effectful sink, plus a journal controller — but driven across a
+    checkpoint, so the recovered outlet's emission epoch cannot come from
+    replaying the whole frame history: the frames that produced the pre-crash
+    emissions have been compacted out of the WAL
+  when: >
+    two elements are added and the graph quiesces, the journaled cells are
+    checkpointed (Stateful snapshot plus WAL compaction, which also records each
+    outlet's emission epoch and counter high-water), a third element is added as
+    the journal tail, the host crashes and is rebuilt from its surviving journal
+    (checkpoint restore plus tail replay), then a fourth element is added
+    post-recovery and the graph is driven to quiescence again
+  then: >
+    each of the four logical deltas fired the sink's effect exactly once — the
+    checkpoint restored the outlet to the epoch and counter high-water in force
+    when it was taken (24-DUR-04's re-minted identity, restored rather than
+    re-derived), so the tail's replayed re-emission reproduced the identity and
+    counter the sink's restored frontier already recorded and was suppressed as
+    already-acted (24-DUR-05), while the post-recovery fourth element still
+    reached the sink live rather than being eaten as already-acted
+graph:
+  cells:
+    - {id: source, type: journal-set-source, host: dur}
+    - {id: sink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  # checkpoint prefix
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: apply, on: source, op: add, value: k2}
+  - {type: quiesce}
+  # compaction: k1/k2's frames leave the WAL, so the outlet's counter high-water
+  # survives only because the checkpoint carries it
+  - {type: snapshot, on: source, as: ck}
+  # journal tail: replayed on recovery, and must reproduce the counter it already
+  # emitted rather than continue past it (a double-fire) or restart below it
+  - {type: apply, on: source, op: add, value: k3}
+  - {type: quiesce}
+  # CRASH + checkpoint restore + tail replay
+  - {type: despawn, on: ctl}
+  # post-recovery live traffic: a restore that forgot the counter (or re-derived
+  # the identity over a rotation) would suppress this as already-acted — silent
+  # effect loss rather than the double-fire DUR-SRCID-01 pins
+  - {type: apply, on: source, op: add, value: k4}
+  - {type: quiesce}
+checks:
+  # each element the sink DID act on, acted on exactly once — the double-fire
+  # direction (a replayed re-emission the restored frontier could not match)
+  - {type: effect-count, sink: sink, exactly: 1}
+  # the silent-effect-LOSS direction, which the unkeyed form above cannot see:
+  # it asserts over the keys the sink produced, so an element that fired zero
+  # times is simply absent from the grouping and passes vacuously. Naming the
+  # keys explicitly turns "absent" into "observed 0, expected 1" — k3 is the
+  # journal tail (suppressed on replay, but it must have fired pre-crash) and k4
+  # is the live post-recovery add a forgotten counter high-water would eat.
+  - {type: effect-count, sink: sink, key: k3, exactly: 1}
+  - {type: effect-count, sink: sink, key: k4, exactly: 1}
+  - {type: no-dead-letters}
