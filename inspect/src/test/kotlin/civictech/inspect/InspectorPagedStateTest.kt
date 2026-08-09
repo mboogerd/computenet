@@ -505,7 +505,7 @@ class InspectorPagedStateTest {
             var page = state(big.ref, limit = BIG_PAGE_LIMIT)
             page.kind shouldBe CellState.PAGE
             page.provenance shouldBe CellState.LIVE
-            val servedAfterFirstPage = servedSize(busy.ref)
+            val servedAfterFirstPage = servedEntries(busy.ref)
 
             val seen = HashSet<String>(BIG_ENTRIES)
             var pages = 0
@@ -527,9 +527,11 @@ class InspectorPagedStateTest {
             page.page!!.cursor shouldBe null
             page.page!!.walkStable shouldBe true
 
-            // …and the graph kept serving throughout: the other cell's *served*
-            // state grew while the walk was in flight
-            servedSize(busy.ref) shouldBeGreaterThan servedAfterFirstPage
+            // …and the graph kept serving throughout: strictly more distinct
+            // entries were served out of the other cell than page 1 of this
+            // walk saw. Measured over a full walk, not one page — see
+            // [servedEntries] for why one page cannot express this.
+            servedEntries(busy.ref) shouldBeGreaterThan servedAfterFirstPage
             // no subscription, no tap, no new cell, for 10⁵ entries of reading
             serving.observedRefs.shouldBeEmpty()
             registry.localRefs() shouldContainExactly setOf(big.ref, busy.ref)
@@ -639,8 +641,33 @@ class InspectorPagedStateTest {
     private fun elementsOf(state: CellState): List<String> =
         rowsOf(state).map { it[0].jsonPrimitive.content }
 
-    /** How many entries [ref]'s served state currently holds, read through this endpoint. */
-    private fun servedSize(ref: CellRef): Int = state(ref).page?.entries ?: 0
+    /**
+     * How many **distinct** entries [ref]'s served state currently holds, read
+     * through this endpoint — counted over a *complete* walk, not off one page.
+     *
+     * The one-page reading this replaced was a saturating counter, which is why
+     * the traffic assertion above went flaky. A page read with no `?limit=`
+     * carries the server's default row bound, so once the cell holds that many
+     * entries the reading reports that bound forever, however much the cell
+     * grows afterwards. Two such readings then compare a constant with itself:
+     * `200 should be > 200` (computenet-68e). A complete walk has no ceiling —
+     * every request here sends an explicit `limit`, and the cursor is followed
+     * to the end.
+     *
+     * Counting *distinct* elements rather than summing each page's `entries` is
+     * deliberate. A walk over a cell that is still being written smears (its
+     * `walkStable` latches false), and this cell is written continuously by
+     * design, so the count must not depend on the walk being repetition-free.
+     * A set makes any repetition harmless.
+     *
+     * That leaves exactly the property the assertion needs and no more: for an
+     * add-only cell this count can only grow, so a strictly larger reading is
+     * evidence the host served new entries in between. It is a lower bound on
+     * the cell's size rather than a measurement of it — which is all a
+     * *progress* assertion should rest on.
+     */
+    private fun servedEntries(ref: CellRef): Int =
+        walk(ref, limit = BIG_PAGE_LIMIT).flatMapTo(HashSet()) { elementsOf(it) }.size
 
     private infix fun Any?.shouldNotBe(other: Any?) {
         (this == other) shouldBe false

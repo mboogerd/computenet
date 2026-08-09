@@ -68,12 +68,28 @@ class WsReconnectSmokeTest {
     // T12 finding 4: the reconnect loop's own backoff (WsTransport.DEFAULT_RECONNECT_BACKOFF)
     // used to be the only thing standing between this test and a real wall-clock wait, so
     // every await here carried a 20s deadline. Driving the connection's backoff to zero (see
-    // `connect` below) means reconnect is bounded only by scheduling, not sleep — 2s is ample.
-    private fun await(what: String, timeoutMs: Long = 2_000, condition: () -> Boolean) {
+    // `connect` below) means reconnect is bounded only by scheduling, not sleep.
+    //
+    // That last step — 20s down to 2s — is what made this test flaky in CI, and the deadline
+    // is back up to the 30s `testkit`'s canonical `awaitUntil` uses. "Bounded only by
+    // scheduling" is not the same as "bounded by a small number": on CI's 2-core runner,
+    // under a full `./gradlew build check`, scheduling is precisely the thing that gets slow.
+    // This test timed out here as `parked send replayed via reconnect` on PRs #13 and #15,
+    // neither of which touched `wire/` (computenet-8ru).
+    //
+    // Nothing about the T12 improvement is undone: the zero backoff stays, so a healthy run
+    // still returns the moment the condition holds. A deadline is only ever reached when the
+    // test is failing, so a generous one costs nothing and buys the runner room to breathe.
+    //
+    // The poll interval moves 20ms -> 100ms for the same reason, also matching `awaitUntil`.
+    // Spinning every 20ms on a saturated 2-core box competes for the very CPU the reconnect
+    // needs to make progress, so tight polling here makes the condition it waits for slower
+    // to come true.
+    private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
             if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
-            Thread.sleep(20)
+            Thread.sleep(100)
         }
     }
 
