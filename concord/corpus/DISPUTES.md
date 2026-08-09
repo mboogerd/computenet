@@ -600,11 +600,24 @@ the honesty.
 
 ### Not covered (deferred, honestly out of reach at W4-B)
 
-- `24-DUR-04` (replay-stable identity, no resurrected removals) is exercised
-  *indirectly* — `DUR-SNAPTAIL-01`'s recovered `SetCell` re-mints ref-derived
-  tags, so its recovered membership equals the twin's with no double-count — but
-  it is not asserted head-on (a directed add/remove/replay control belongs in a
-  kernel unit test; the OR-set tag plane is not boundary-observable per P1).
+- `24-DUR-04` (replay-stable identity, no resurrected removals) — **NARROWED to
+  the OR-set tag plane (KFX).** The requirement spans two planes, and only one of
+  them is still uncovered.
+  - The **emission-identity plane is now asserted head-on**: `DUR-SRCID-01` and
+    `DUR-SRCID-02` pin that a recovered source's re-emission carries the identity
+    (and counter high-water) the network already observed, so an `Effectful`
+    sink's restored processed-frontier matches it — once by replaying the frame
+    tail, once across a checkpoint that compacted those frames away.
+    `DUR-GF-01` pins the consumer-side consequence: a WAVE-ALIGNED (glitch-free)
+    fan-in downstream of the recovered source still ends at the batch recompute,
+    because the replayed cone re-enters as a catch-up baseline of a lane the
+    frontier already knows rather than a second lane it could never complete
+    (BS-40; kernel arm `DurableGlitchFreeReplayTest`).
+  - The **OR-set tag plane remains covered only indirectly**, with its original
+    rationale unchanged: `DUR-SNAPTAIL-01`'s recovered `SetCell` re-mints
+    ref-derived tags, so its recovered membership equals the twin's with no
+    double-count, but the directed add/remove/replay control belongs in a kernel
+    unit test — the tag plane itself is not boundary-observable per P1.
 - `24-REPLAY-01` — **RESOLVED (B2 / D-CONCORD, `kernel-gap`; kernel fix by
   D-REPLAY)**. *As filed (R3, empirically confirmed):* the PN-2 baseline path
   worked for the *generic* glitch-free join — `HostDurability.recoverFrom` stamps

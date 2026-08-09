@@ -1,0 +1,125 @@
+# Concord corpus scenario (KFX BS-40): the head-on `[24-DUR-04]` assertion for the
+# WAVE-ALIGNED consumer plane. `DUR-SRCID-01`/`-02` pin the same requirement on the
+# effect plane (a recovered source's re-emission lands at the identity the sink's
+# restored processed-frontier already recorded); this scenario pins the other thing
+# a replay-stable emission identity buys — that a glitch-free consumer downstream of
+# a recovered source still ends at the batch recompute.
+#
+# WHY THIS IS `24-DUR-04` AND NOT JUST `24-REPLAY-01` AGAIN. `24-REPLAY-01` puts a
+# PLAIN `quorum-set` behind the same journaled arm; this one puts a WAVE-ALIGNED one
+# there (`glitch-free: true`, the existing descriptor param — `concord/schema/
+# scenario.md`, `cell-catalog.md` — bound on the dur profile the same way the core
+# profile binds it: a downstream kernel `GlitchFreeCell` the fan-in's output is
+# routed through, see `KernelDriverDur.glitchFreeDelegate`). A wave-aligned consumer
+# is the construction that is *sensitive* to emission identity, because it keys
+# per-source wave completeness on it. The rebuilt wrapper's frontier is empty, so a
+# replayed cone re-entering as an ordinary live wave would sit forever waiting for a
+# sibling contribution the volatile arm can never replay — a torn wave, permanently
+# incomplete. What makes it not tear: the recovered source re-emits under its
+# replay-stable (ref-derived / checkpoint-restored) identity rather than a freshly
+# minted random one, and `recoverFrom` stamps that re-emission
+# `MessageContext.baseline` — so the frontier reads it as a catch-up baseline of a
+# lane it already knows and releases it immediately, instead of opening a second
+# lane it can never complete. No torn wave, no double count, no stranded
+# partial-wave buffer.
+#
+# The kernel-side arm of the same claim is `DurableGlitchFreeReplayTest` (a WAIT
+# fork-join diamond, one journaled arm, 100 seeds, released sequence == batch
+# recompute); this scenario is its boundary-observable recovery-shape twin, not a
+# replacement — G-59's partial-wave-buffer question stays research-gated and this
+# scenario asserts NO REGRESSION, not that the buffer question is solved.
+#
+# NON-VACUITY (verified by running the perturbations, as `24-REPLAY-01` did):
+#   * make `jarm` a plain volatile `set-source` and the recovered view loses g1/g2/g3
+#     entirely — the golden below fails. So the check genuinely reads the recovered
+#     arm state and not merely the post-recovery live traffic.
+#   * the wave-alignment half is discriminated on the kernel side rather than here:
+#     `DurableGlitchFreeReplayTest`'s control (a) removes the baseline stamp and the
+#     replayed cone stalls on every one of its 100 seeds. Dropping `glitch-free:
+#     true` from this scenario degrades it back to `24-REPLAY-01`'s plain fan-in,
+#     which passes — that is expected, and is exactly why the wrapper is asserted
+#     here as a *composition* gate (the wave-aligned consumer must not regress the
+#     recovery outcome) rather than as a positive glitch-freedom golden, which
+#     `22-WAVE-FANIN-01`/`24-OP-COMBINE-02` already carry on the core profile.
+#
+# The over-approximation `24-REPLAY-01` documents is unchanged here and is carried
+# deliberately (g9): the quorum is volatile and holds no record of its own pre-crash
+# view, so an element the durable arm asserted ALONE is baseline-installed on
+# recovery and only leaves once a live delta re-evaluates it under the ordinary
+# threshold. The golden pins that convergence rather than papering over it.
+id: DUR-GF-01
+title: A wave-aligned fan-in downstream of a recovered source still equals the batch recompute
+covers: [24-DUR-02, 24-DUR-04]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED set source and a volatile set source, both
+    feeding one 2-of-2 lane-counting fan-in that has been asked for WAVE-ALIGNED
+    (glitch-free) semantics, observed through a set view, plus a journal controller.
+    Only the journaled arm's accepted ops reach the write-ahead log; the volatile
+    arm, the fan-in, its wave-alignment wrapper and the view are all re-minted empty
+    on a crash — so the wrapper's wave frontier comes back with no open wave at all.
+  when: >
+    both arms assert g1, g2 and g3 (each meeting the 2-of-2 quorum, so the view
+    holds them) while the durable arm alone additionally asserts g9 (below the
+    quorum, absent from the view), then the whole durable host crashes and is
+    rebuilt from its surviving journal (24-DUR-02: rebuild the graph, restore the
+    checkpoint, replay the frame tail through the ordinary decode path), after
+    which live traffic resumes on both arms
+  then: >
+    the wave-aligned consumer's output equals the batch recompute over everything it
+    accepted — the 2-of-2 intersection of the two arms' accepted ops — with no torn
+    wave, no double count and no stranded partial-wave buffer. The recovered source
+    re-emitted under its replay-stable identity (24-DUR-04) rather than a freshly
+    minted one, so the rebuilt frontier read the replayed cone as a catch-up
+    baseline of a lane it already knows and released it, instead of holding it as a
+    second lane whose sibling contribution the volatile arm can never supply
+graph:
+  cells:
+    # the journaled arm: its accepted ops tee to the WAL and replay after the crash
+    - {id: jarm, type: journal-set-source, host: dur}
+    # the volatile arm: dies with the crash, replays nothing, ever
+    - {id: varm, type: set-source, host: dur}
+    # the consumer under test: the lane-counting fan-in with WAVE-ALIGNED semantics
+    # requested — the driver routes its output through a kernel GlitchFreeCell
+    - {id: q, type: quorum-set, k: 2, glitch-free: true, host: dur}
+    - {id: v, type: set-view, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: jarm, to: q}
+    - {from: varm, to: q}
+    - {from: q, to: v}
+script:
+  # both arms agree on g1/g2/g3 — each reaches the 2-of-2 quorum and enters the view
+  - {type: apply, on: jarm, op: add, value: g1}
+  - {type: apply, on: varm, op: add, value: g1}
+  - {type: apply, on: jarm, op: add, value: g2}
+  - {type: apply, on: varm, op: add, value: g2}
+  - {type: apply, on: jarm, op: add, value: g3}
+  - {type: apply, on: varm, op: add, value: g3}
+  # the divergent element: asserted by the durable arm alone, so lane count 1 < 2
+  - {type: apply, on: jarm, op: add, value: g9}
+  - {type: quiesce}
+  # pre-crash view: [g1, g2, g3]
+  # CRASH + journal replay: discard every instance (the fan-in AND its wave-alignment
+  # wrapper included), rebuild with the same refs, recoverFrom the surviving journal.
+  # The replayed frames re-enter flagged as a baseline of the source lane the
+  # pre-crash graph already saw — the wave-continuity claim this scenario exists for.
+  - {type: despawn, on: ctl}
+  # live traffic resumes: a fresh element still needs a live 2-of-2 quorum, and it
+  # must reach the view exactly once (a re-opened second lane would strand it, a
+  # double-counted replay would show up as membership the batch recompute lacks)
+  - {type: apply, on: jarm, op: add, value: g4}
+  - {type: apply, on: varm, op: add, value: g4}
+  # ...and a live delta on the divergent element re-evaluates the documented
+  # over-approximation under the ordinary threshold (lane count 1 < 2), so it leaves
+  - {type: apply, on: jarm, op: add, value: g9}
+  - {type: quiesce}
+checks:
+  # the batch recompute over everything the consumer accepted: the 2-of-2
+  # intersection of jarm {g1,g2,g3,g9,g4} with varm {g1,g2,g3,g4} — g1..g3 recovered
+  # across the crash, g4 admitted live, g9 never quorate on either side of it
+  - {type: final-view, view: v, equals: [g1, g2, g3, g4]}
+  - {type: no-dead-letters}
