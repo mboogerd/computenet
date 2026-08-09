@@ -99,9 +99,13 @@ kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:106: private val pr
 kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:216: val frontier = processedFrontier
 kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:244: record.frontier.forEach { ... processedFrontier ... }
 kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:257: fun alreadyProcessed(...)
+kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:258: ... processedFrontier[...]?.get(...) ...
 kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:262: ... processedFrontier.getOrPut(...) ...
 kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt:273: fun advanceAndJournalFrontier(...)
 ```
+
+(10 matches total — line 258 is `alreadyProcessed`'s body, the second line of its
+two-line declaration; included here for an exact match against `grep -c` output.)
 
 **Exactly one** per-`(cellRef, portName)` processed-frontier mechanism
 exists: the `processedFrontier` map owned by `HostDurability`, with its
