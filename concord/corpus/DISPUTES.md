@@ -634,6 +634,13 @@ carries the third.
   recovery, at a position the checkpoint frontier covers and the replayed tail
   does not. With it, dropping `record.frontier` in `restoreCheckpoint` becomes a
   failing perturbation and the frontier half of `[24-DUR-02]` is asserted head-on.
+  That surface is already filed as `computenet-yh6.1.3.3` (a gated
+  `concord/schema` change proposing a retransmit verb that re-sends a prior
+  invocation, or replays an explicit `(sourceId, counter)` live rather than via
+  journal replay), raised there for the live half of `[24-DUR-05]`. This entry is
+  its second consumer: the same verb discharges both, so whoever lands it should
+  author the `[24-DUR-02]` frontier perturbation above alongside the
+  `[24-DUR-05]` one.
 
 ### Not covered (deferred, honestly out of reach at W4-B)
 
