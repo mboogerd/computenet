@@ -245,7 +245,11 @@ object WsTransport {
 
         private val session = Session(side, { send(it) }, { shutdown() })
 
-        /** False once [shutdown] is called — the only way a client stays down (M10.3). */
+        /**
+         * False once [shutdown] is called (M10.3). Together with an interrupt of the
+         * retry thread — which nothing actually delivers, see [scheduleReconnect] — this
+         * is what keeps a client down.
+         */
         @Volatile
         private var reconnect = true
 
@@ -305,6 +309,17 @@ object WsTransport {
          * correctness property and not an optimisation.
          */
         private fun scheduleReconnect() {
+            // The `isOpen` test is what terminates the re-arm below, and it cannot swallow
+            // a close: java-websocket assigns `readyState = CLOSED` only *after* it has
+            // called `onClose`, so this reads the state as of the close event rather than
+            // after it — and every path that reaches `onClose` has already left OPEN.
+            // `WebSocketImpl.closeConnection` flips OPEN to CLOSING itself for the abnormal
+            // (1006) close a dropped socket takes; a close handshake sets CLOSING before
+            // the read thread's `eot()` gets there; a failed connect is still
+            // NOT_YET_CONNECTED; and the one remaining OPEN-capable caller,
+            // `WebSocketClient.reset()`, only ever runs on a retry thread that already
+            // holds the guard, so its close is covered by that loop's own re-arm.
+            // Re-check this against java-websocket's close ordering on any upgrade.
             if (!reconnect || isOpen) return
             if (!reconnecting.compareAndSet(false, true)) return // a loop is already retrying
             Thread {
@@ -326,10 +341,21 @@ object WsTransport {
                 } finally {
                     reconnecting.set(false)
                 }
-                // a close that landed while this loop was winding down found the
-                // guard held and returned; nothing else will retry for it. An
-                // interrupt is a deliberate stop, so it is not re-armed.
-                if (!interrupted) scheduleReconnect()
+                if (interrupted) {
+                    // Not re-armed — the behaviour M10.3 already had, kept because an
+                    // interrupt can only arrive from outside this class: nothing in this
+                    // repository and nothing in java-websocket 1.6.0 interrupts this
+                    // thread (`onWebsocketClose` and `reset()` interrupt only the client's
+                    // own write/read threads, never the retry thread). Announced rather
+                    // than silent, so a dialer that has stopped retrying is never
+                    // invisible — in-process and remote paths owe the same observable
+                    // semantics, and a quiet give-up would break that quietly.
+                    System.err.println("[WsConnection] reconnect loop interrupted; ${getURI()} will not retry")
+                } else {
+                    // a close that landed while this loop was winding down found the
+                    // guard held and returned; nothing else will retry for it
+                    scheduleReconnect()
+                }
             }.apply { isDaemon = true; name = "ws-reconnect-${getURI()}" }.start()
         }
 
