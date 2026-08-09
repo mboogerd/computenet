@@ -96,10 +96,25 @@ jobs:
       #     threads, so it is the weaker of the two.
       #
       # Uploaded only when the job did not succeed: a green run's XML is a large
-      # artifact nobody reads. `cancelled()` is included because a job killed by
-      # `timeout-minutes` — the outright-hang case — reports cancelled, not
-      # failed, and `failure()` alone would skip exactly the run worth keeping.
-      # XML only: build/reports/tests is a rendering of the same data.
+      # artifact nobody reads. `cancelled()` sits alongside `failure()` so the
+      # step fires whichever conclusion a `timeout-minutes` kill reports; steps
+      # conditioned this way do execute inside the cancellation window (run
+      # 31293198844 cancelled build-test-fast mid-build and its post-steps still
+      # ran to success).
+      #
+      # But know what that branch can hold, because it is less than it looks.
+      # Gradle materialises build/test-results at Test-TASK completion, not per
+      # test: measured mid-task, the XML for the running module does not exist
+      # yet and binary/*.bin are still 0 bytes. A mid-build kill therefore
+      # yields the XML of modules that already finished and nothing for the one
+      # actually hanging. The two artefacts above survive via `failure()`: a
+      # method that trips the 5-minute JUnit timeout fails, its task completes,
+      # and the XML is written — which is what run 31297641980 did. Treat
+      # `cancelled()` as cheap insurance, not as a rescue of a hung module's
+      # own evidence.
+      #
+      # XML only: build/reports/tests is a rendering of the same data, and
+      # binary/ carries nothing extra at the moment a kill lands.
       - name: Upload test results (diagnostics for failed or hung runs)
         if: ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v4
