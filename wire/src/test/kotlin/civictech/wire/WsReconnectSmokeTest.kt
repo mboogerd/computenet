@@ -85,6 +85,16 @@ class WsReconnectSmokeTest {
     // Spinning every 20ms on a saturated 2-core box competes for the very CPU the reconnect
     // needs to make progress, so tight polling here makes the condition it waits for slower
     // to come true.
+    //
+    // computenet-8ru: the generous deadline was not enough, and the diagnosis above was
+    // incomplete. The dialer was not merely slow to reconnect — it was starving itself.
+    // `WsConnection.onClose` started a retry thread per close, and java-websocket reports
+    // every *failed* connect attempt as a close, so retry loops multiplied without bound
+    // for as long as the listener stayed down (~950 threads after 250ms, ~2700 after 1s;
+    // by 3s `WsTransport.listen` could no longer win its own 10s start latch). The loops
+    // also raced each other's `reset()`/`connect()` on the one client. The transport now
+    // runs a single retry loop; `WsReconnectLoopBoundTest` is the regression gate, and
+    // these deadlines are left generous because a healthy run never approaches them.
     private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
