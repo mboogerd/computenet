@@ -275,6 +275,13 @@ data class CellState(
         /**
          * The read did not land inside the server's bounded wait. Nothing was
          * read; a retry may succeed.
+         *
+         * **The only [UNAVAILABLE] arm that is transient, and the only one whose
+         * `?cursor=` survives it.** Nothing was read, so the walk position the
+         * request carried was not spent: the same cursor id stays resumable and
+         * the correct client response is to re-send *that* request, not to
+         * restart the walk. Every other arm is terminal for the walk. See
+         * `PagedState.read`.
          */
         const val UNANSWERED = "unanswered"
 

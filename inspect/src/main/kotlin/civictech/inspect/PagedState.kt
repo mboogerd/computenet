@@ -88,8 +88,9 @@ internal class PagedState(
      *
      * The order is deliberate: a malformed `limit` is refused before a cursor is
      * consumed (so a client's typo does not cost it its walk), and the cursor is
-     * consumed before the read is issued (so an id is retired exactly once
-     * whatever the read answers).
+     * consumed before the read is issued (so an id is retired exactly once for
+     * every read that *answers* — the bounded-wait miss, which answers nothing
+     * and spends nothing, puts it back; see the `null` arm below).
      */
     fun read(ref: CellRef, encodedRef: String, params: Map<String, String>): Outcome {
         val limit = when (val requested = params[LIMIT_PARAM]?.takeIf { it.isNotBlank() }) {
@@ -116,7 +117,36 @@ internal class PagedState(
         val pending = reads().readState(ref, request) ?: return Outcome.NoSource
 
         return when (val result = await(pending)) {
-            null -> Outcome.Answered(unavailable(encodedRef, CellState.UNANSWERED))
+            // The one bounded wait expired, and **nothing was read**: `await`
+            // cancelled the future, and `ManagedHost.readState`'s task checks
+            // `isCancelled` before entering the cell, so the cell's own cursor
+            // never advanced — and even in the race where the task did run
+            // first, `BoundedStateful.readBounded` may not mutate the fold and
+            // a `Cursor` is an opaque, repeatable position token, so re-issuing
+            // it yields the same page. The walk position this request consumed
+            // is therefore still exactly valid, and is put back under the
+            // **same** id.
+            //
+            // Without this, `unreadable: "unanswered"` — documented as "nothing
+            // was read; a retry may succeed" — is a lie mid-walk: the retry it
+            // invites answers 410, and the client's only recourse is to restart
+            // the whole walk. On a host loaded enough to miss a 200 ms deadline
+            // at all, every restart is equally likely to miss another one, so a
+            // big walk can starve instead of merely being slow. That is what
+            // made `InspectorPagedStateTest`'s 10⁵-entry walk flake on a
+            // saturated runner (computenet-1xx).
+            //
+            // Re-serving the id cannot double-serve a page, because no page was
+            // served. The one-id-per-page rule exists so a page that *was*
+            // served is never silently skipped or repeated; that is untouched.
+            // The terminal arms below deliberately do **not** restore: for
+            // MIGRATING, NOT_HOSTED, NOT_STATEFUL, TERMINATED or READ_FAILED
+            // the walk really is over, and keeping a resumable id alive would
+            // invite a retry that cannot succeed.
+            null -> {
+                if (resumeId != null && resumed != null) cursors.restore(resumeId, resumed)
+                Outcome.Answered(unavailable(encodedRef, CellState.UNANSWERED))
+            }
 
             is StateReadResult.Page ->
                 Outcome.Answered(paged(ref, encodedRef, result.page, request, resumed, limit))
@@ -390,13 +420,32 @@ internal class CursorTable(
     }
 
     /** Mint a fresh id for [walk]; the id that produced it was already retired by [take]. */
-    fun mint(walk: Walk): String = synchronized(lock) {
+    fun mint(walk: Walk): String {
+        val id = "$ID_PREFIX${UUID.randomUUID()}"
+        synchronized(lock) { insert(id, walk) }
+        return id
+    }
+
+    /**
+     * Put [walk] back under the [id] [take] just consumed, for a read that
+     * answered **nothing** — see [PagedState.read]'s bounded-wait arm.
+     *
+     * One id still names at most one *served* page: this is reached only when no
+     * page was served, so the id is not being re-used, it was never spent. The
+     * mint clock is refreshed rather than preserved, for two reasons: an
+     * actively-retrying client is the opposite of the abandoned walk
+     * [InspectorServer.CURSOR_TTL_MS] exists to reclaim, and [expire] reads
+     * insertion order as mint order — re-inserting at the tail with a stale
+     * stamp would break that `takeWhile`.
+     */
+    fun restore(id: String, walk: Walk) = synchronized(lock) { insert(id, walk) }
+
+    /** [mint] and [restore]'s shared body: expire, evict to fit, stamp, insert. Caller holds [lock]. */
+    private fun insert(id: String, walk: Walk) {
         expire()
         while (open.size >= maxOpen) open.remove(open.keys.first())
-        val id = "$ID_PREFIX${UUID.randomUUID()}"
         walk.mintedAtMs = clock()
         open[id] = walk
-        id
     }
 
     fun clear() = synchronized(lock) { open.clear() }

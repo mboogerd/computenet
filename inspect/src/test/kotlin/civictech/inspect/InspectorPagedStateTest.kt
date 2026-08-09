@@ -185,6 +185,73 @@ class InspectorPagedStateTest {
         probe.get(statePath(cell.ref) + "?cursor=$next").statusCode() shouldBe 410
     }
 
+    /**
+     * computenet-1xx — the one [CellState.UNAVAILABLE] arm a walk survives.
+     *
+     * `unanswered` says "nothing was read; a retry may succeed", and mid-walk
+     * that is only true if the cursor the request carried is still resumable.
+     * It is: `PagedState.await` cancels the future and `ManagedHost.readState`'s
+     * task checks `isCancelled` before entering the cell, so the position was
+     * never spent — and `BoundedStateful.readBounded` may not mutate the fold in
+     * any case, so a `Cursor` re-issued yields the same page.
+     *
+     * Before this, `read` retired the id up front and re-minted only on the
+     * `Page` arm, so a 200 ms deadline missed anywhere in a walk 410'd the
+     * client into restarting it. On a host loaded enough to miss that deadline
+     * once, a restart is as likely to miss another — so a big walk could starve
+     * rather than merely be slow, which is how the 10⁵-entry walk below flaked.
+     */
+    @Test
+    fun `a bounded-wait miss mid-walk leaves the cursor resumable`() {
+        val cell = set("a", "b", "c", "d", "e")
+        val serving = started()
+        val first = state(cell.ref, limit = 2)
+        val cursor = first.page!!.cursor!!
+
+        // swallow exactly the next read: its future never completes, so that one
+        // request spends its whole bounded wait and answers `unanswered`
+        val delegate = serving.reads
+        val abandoned = CompletableFuture<civictech.cell.StateReadResult>()
+        val swallow = AtomicBoolean(true)
+        serving.reads = BoundedReadSource { ref, request ->
+            if (swallow.getAndSet(false)) abandoned else delegate.readState(ref, request)
+        }
+
+        val missed: CellState =
+            json.decodeFromString(probe.state(statePath(cell.ref) + "?cursor=$cursor&limit=2"))
+        missed.kind shouldBe CellState.UNAVAILABLE
+        missed.unreadable shouldBe CellState.UNANSWERED
+
+        // the same id — not a fresh walk: it resumes where page 1 stopped, and
+        // the walk is still whole and duplicate-free through the miss
+        val resumed = pageOf(cell.ref, "?cursor=$cursor&limit=2")
+        resumed.kind shouldBe CellState.PAGE
+        elementsOf(resumed) shouldContainExactly listOf("c", "d")
+        (listOf(first, resumed) + resume(cell.ref, resumed, limit = 2))
+            .flatMap { elementsOf(it) } shouldContainExactly listOf("a", "b", "c", "d", "e")
+    }
+
+    /**
+     * …and only that arm. A terminal `unavailable` must still retire the cursor:
+     * keeping it resumable would invite a retry that cannot succeed, and 410 is
+     * the honest answer for a walk that is over.
+     */
+    @Test
+    fun `a terminal unavailable mid-walk still retires the cursor`() {
+        val cell = set("a", "b", "c", "d")
+        started()
+        val cursor = state(cell.ref, limit = 2).page!!.cursor!!
+
+        registry.hold(cell.ref)
+        val held: CellState =
+            json.decodeFromString(probe.state(statePath(cell.ref) + "?cursor=$cursor&limit=2"))
+        held.kind shouldBe CellState.UNAVAILABLE
+        held.unreadable shouldBe CellState.MIGRATING
+        registry.release(cell.ref)
+
+        probe.get(statePath(cell.ref) + "?cursor=$cursor&limit=2").statusCode() shouldBe 410
+    }
+
     // -------------------------------------------------------- walk stability
 
     @Test
@@ -295,7 +362,9 @@ class InspectorPagedStateTest {
         val snapshotsConsulted = AtomicLong()
         serving.snapshots = SnapshotSource { snapshotsConsulted.incrementAndGet(); null }
 
-        val state = state(cell.ref)
+        // stateOnce: this test *is* the miss, so the client-shaped retry in
+        // [pageOf] would both hide it and break the one-deadline count below
+        val state = stateOnce(cell.ref)
 
         state.kind shouldBe CellState.UNAVAILABLE
         state.unreadable shouldBe CellState.UNANSWERED
@@ -514,9 +583,7 @@ class InspectorPagedStateTest {
                 val elements = elementsOf(page)
                 elements.forEach { element -> seen.add(element) shouldBe true }
                 val cursor = page.page!!.cursor ?: break
-                page = json.decodeFromString(
-                    probe.state(statePath(big.ref) + "?cursor=$cursor&limit=$BIG_PAGE_LIMIT"),
-                )
+                page = pageOf(big.ref, "?cursor=$cursor&limit=$BIG_PAGE_LIMIT")
                 page.kind shouldBe CellState.PAGE
             }
 
@@ -599,7 +666,48 @@ class InspectorPagedStateTest {
     private fun observePath(ref: CellRef) = "${InspectorServer.CELL_PATH}/${InspectorServer.encodeRef(ref)}/observe"
 
     private fun state(ref: CellRef, limit: Int? = null): CellState =
+        pageOf(ref, if (limit == null) "" else "?limit=$limit")
+
+    /** Exactly one request, whatever it answers — see [pageOf] for why that is the exception. */
+    private fun stateOnce(ref: CellRef, limit: Int? = null): CellState =
         json.decodeFromString(probe.state(statePath(ref) + if (limit == null) "" else "?limit=$limit"))
+
+    /**
+     * One `GET …/state$query`, retried while the server answers
+     * `unreadable: "unanswered"` — i.e. **what a correct client of this endpoint
+     * does**, which is why it belongs in the helper every read here goes through
+     * rather than at one call site.
+     *
+     * `unanswered` is not a failure and not a degraded page. It is the endpoint's
+     * documented, deliberate refusal to wait longer than
+     * [InspectorServer.SNAPSHOT_WAIT_MS] (200 ms) — sized so "a single slow or
+     * wedged cell costs one HTTP response a barely-noticeable delay rather than a
+     * perceptible stall". Nothing was read and nothing was spent, so the answer
+     * means precisely "ask again". On a CPU-saturated runner an ordinary page
+     * read *can* miss a 200 ms deadline, and a client that treated that as a
+     * terminal answer would be asserting the runner is fast, not that the
+     * endpoint is correct (computenet-1xx).
+     *
+     * Retrying is only sound because the server keeps the walk resumable across
+     * this arm — the same cursor id is re-sent, and `PagedState.read` puts it
+     * back precisely because no page was served. Without that, this loop would
+     * answer 410 on its second attempt.
+     *
+     * **Bounded, and it swallows nothing.** After [UNANSWERED_RETRIES] the
+     * unavailable body is returned as-is and the caller's own assertion fails, so
+     * a genuinely wedged read is still a red test rather than a hang. The two
+     * tests that assert `unanswered` *is* the answer — a deliberately abandoned
+     * read, and its "costs one deadline" count — use [stateOnce] instead, so this
+     * retry can never turn a real one into a pass.
+     */
+    private fun pageOf(ref: CellRef, query: String): CellState {
+        var attempts = 0
+        while (true) {
+            val state: CellState = json.decodeFromString(probe.state(statePath(ref) + query))
+            attempts += 1
+            if (state.unreadable != CellState.UNANSWERED || attempts > UNANSWERED_RETRIES) return state
+        }
+    }
 
     /** Page 1 and everything after it, following `page.cursor` to the end. */
     private fun walk(ref: CellRef, limit: Int): List<CellState> {
@@ -617,8 +725,7 @@ class InspectorPagedStateTest {
         val pages = ArrayList<CellState>()
         var cursor = from.page?.cursor
         while (cursor != null) {
-            val next: CellState =
-                json.decodeFromString(probe.state(statePath(ref) + "?cursor=$cursor&limit=$limit"))
+            val next = pageOf(ref, "?cursor=$cursor&limit=$limit")
             pages += next
             cursor = next.page?.cursor
         }
@@ -674,6 +781,15 @@ class InspectorPagedStateTest {
     }
 
     private companion object {
+        /**
+         * How many times [pageOf] re-sends a request the server answered
+         * `unanswered`. Generous enough that a saturated runner missing the
+         * 200 ms bounded wait a few times in a row still completes, small enough
+         * that a genuinely wedged read fails the test in seconds rather than
+         * looping.
+         */
+        const val UNANSWERED_RETRIES = 20
+
         /** ~10⁵ — the size `30-bounded-read-measurement.md` measured the stall at. */
         const val BIG_ENTRIES = 100_000
 
