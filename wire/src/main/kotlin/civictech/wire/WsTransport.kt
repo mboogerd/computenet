@@ -181,9 +181,26 @@ object WsTransport {
             mirror.peer = peer
             // ... and re-open the mirror's gate, which a previous `onClose`
             // shut (a client keeps ONE session, hence one mirror, across
-            // reconnects). Ordered before the ingress exists, so no frame can
-            // reach a detached mirror; the re-hello's announcement below is a
-            // full catch-up, so nothing dropped while detached is lost.
+            // reconnects). Ordered before the *new* ingress exists, so no frame
+            // of this connection can reach a detached mirror; the re-hello's
+            // announcement below is a full catch-up, so nothing dropped while
+            // detached is lost.
+            //
+            // Residual, and only on this client path where the mirror is reused:
+            // a frame the PREVIOUS connection already handed to the *old*
+            // ingress can still be sitting on the bridge host's queue when we
+            // get here, and if it is decoded after this `attach` it is applied
+            // as though the returning peer had announced it. For a ref the peer
+            // still holds that is merely redundant (the catch-up re-announces it
+            // anyway); for one it has since dropped it leaves a stale Remote
+            // that survives until the next disconnect retracts it. Reaching it
+            // needs the bridge host starved across an entire reconnect, and the
+            // pre-fence behaviour was strictly worse — the whole post-close
+            // burst was applied, fenced by nothing — so this is recorded as a
+            // known edge rather than bought with a per-connection epoch stamped
+            // through the ingress. A *listener* session cannot reach it at all:
+            // `WsListener.onOpen` builds a fresh Session, hence a fresh mirror,
+            // per connection, so `detach` there is permanent.
             mirror.attach()
             ingress = Peering.hostIngress(side, fromPeer = peer)
             announcement?.close() // a re-hello (reconnect) supersedes the previous announcer

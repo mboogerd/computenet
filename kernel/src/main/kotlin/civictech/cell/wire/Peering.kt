@@ -138,6 +138,14 @@ class RegistryMirrorCell(
      * A re-attached mirror needs no replay of what it lost while detached: the
      * peer's (re-)announcement is a full `localRefs` catch-up
      * ([Peering.announceTo]), so everything it still holds is re-announced.
+     *
+     * Re-attaching re-opens the gate for *whatever* reaches this mirror next,
+     * which on a transport that reuses one mirror across reconnects can include
+     * a frame the previous connection left queued on the bridge host. That
+     * window is bounded and strictly narrower than the pre-fence behaviour;
+     * `WsTransport.Session.onText` carries the full argument and why it is not
+     * closed with an epoch. A transport that spawns a mirror per connection (a
+     * `WsTransport` listener) never re-attaches and so never has the window.
      */
     fun attach() = synchronized(gate) { attached = true }
 
