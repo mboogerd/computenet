@@ -85,17 +85,29 @@ tasks.withType<Test>().configureEach {
     // from the JUnit XML. `:inspect:test` is unmoved either side (35.9s vs 36.8s),
     // which is the check that this opt-in is really scoped to one project.
     //
-    // Then measured ON CI, which is the number that actually matters (PR #30, run
-    // 31373109141, same log-attribution method as the baselines above, same full
-    // cache miss — a buildSrc edit invalidates everything):
-    //   `:kernel:test`        157.1s -> 125.2s   (960 tests, green)
-    //   its solo tail          138s  ->   95s
-    //   Gradle build           313s  ->  293s
-    //   build-test-fast job    336s  ->  312s    (-7%; the 6m03s baseline was 363s)
-    // So the task-level projection held and the job-level one was slightly optimistic:
-    // one fewer core-second of idle tail does not convert 1:1 into job time, because
-    // runner setup, the cold Kotlin daemon (computenet-dqy.15) and the compile chain
-    // are untouched. The remaining 95s tail is computenet-dqy.16's lever, not this one's.
+    // Then measured ON CI, which is the number that actually matters. Two green
+    // build-test-fast runs on PR #30, against the two baselines above:
+    //   `:kernel:test`   157.1s -> 125.2s and 124.6s   (960 tests green both times)
+    //   whole job         336s and 363s -> 312s and 331s
+    // Read those two rows differently, because they are not equally trustworthy. The
+    // task figure is derived from streamed per-test log lines, it reproduced to within
+    // 0.6s, and it is a clean 1.26x. The job figure is noisy at the +/-20s level: how
+    // much of the 32s shows up depends on where the kernel compile chain happens to
+    // land relative to the other modules, and in one of the two runs `:kernel:test`
+    // started only after every other test task had already finished. So the honest
+    // claim is "the task is reliably ~32s faster, the job is somewhere between 5s and
+    // 25s faster", not a headline percentage. Runner setup, configuration (12.7s, and
+    // the configuration cache misses on CI every run — computenet-aer) and the compile
+    // chain are all untouched by this knob; the remaining tail is computenet-dqy.16's.
+    //
+    // Caveat on the profile that motivated this, worth knowing before trusting the
+    // rest of that table: in a non-tty log Gradle prints `> Task :x` with the task's
+    // FIRST OUTPUT, so a task that is silent at lifecycle level gets its header at
+    // completion, not at start. Spans for the TEST tasks are unaffected — they are
+    // computed from streamed per-test lines, and both load-bearing facts here (this
+    // task's last test event coincides with BUILD SUCCESSFUL, and the last non-kernel
+    // test event precedes it by 138s) are streamed at both ends. The KSP and compile
+    // rows of that profile are NOT reliable and should not be requoted.
     //
     // `:kernel` alone opts in, deliberately. The socket-bound suites (`:wire`,
     // `:inspect`, `:demo:shopping`) are this repo's known flake sites, and running
