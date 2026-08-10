@@ -74,6 +74,12 @@ class WsPeerIdentityTest {
     // Note this is NOT the port-rebind race `relisten` guards against: `relisten` had already
     // succeeded in the observed failures. Diagnosing it as a bind flake and hardening the
     // rebind would have left the actual cause untouched.
+    //
+    // computenet-8ru: nor was the deadline the cause. The dialer starved itself — a retry
+    // thread per close, and java-websocket reports every failed connect attempt as a close,
+    // so retry loops multiplied for as long as the listener was down. See
+    // `WsReconnectLoopBoundTest`, which asserts the bound directly, and `WsConnection`'s
+    // `reconnecting` guard, which is the fix.
     private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
