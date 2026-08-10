@@ -179,6 +179,12 @@ object WsTransport {
             // a re-hello for the same reason the announcer below is replaced:
             // a client keeps one Session across reconnects.
             mirror.peer = peer
+            // ... and re-open the mirror's gate, which a previous `onClose`
+            // shut (a client keeps ONE session, hence one mirror, across
+            // reconnects). Ordered before the ingress exists, so no frame can
+            // reach a detached mirror; the re-hello's announcement below is a
+            // full catch-up, so nothing dropped while detached is lost.
+            mirror.attach()
             ingress = Peering.hostIngress(side, fromPeer = peer)
             announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
             announcement = Peering.announceTo(side, CellRef(UUID.fromString(parts[0])), via = egress)
@@ -199,7 +205,15 @@ object WsTransport {
             // per-connection, so replace-on-rehello never fires for them)
             announcement?.close()
             announcement = null
-            side.registry.unpublishRemotes(via = egress)
+            // The peer's refs go through the mirror's own fence rather than a
+            // bare `registry.unpublishRemotes(via = egress)`: this runs on the
+            // socket's IO thread, while the announcements it is retracting are
+            // applied two scheduler hops later on the bridge host, so an
+            // announcement decoded before this close can be applied after it.
+            // `detach` shuts the gate and retracts in one step, so a late
+            // announcement can no longer resurrect a departed peer's locations
+            // behind a dead egress (`RegistryMirrorCell.detach`).
+            mirror.detach()
         }
     }
 

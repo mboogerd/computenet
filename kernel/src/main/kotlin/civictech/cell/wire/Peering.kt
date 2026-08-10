@@ -48,6 +48,12 @@ interface RegistryAnnounce {
  * and reading an ambient on the per-message path is what P2 forbids. Holding
  * it on the connection's own cell costs one volatile read per *announcement*
  * — publish/unpublish/link/unlink — and nothing at all on the data path.
+ *
+ * Being per-connection is also what lets this cell carry the connection's
+ * *liveness* ([attach]/[detach]): a closed connection's announcements are no
+ * longer authoritative, and the retraction of what it installed has to exclude
+ * them rather than race them. That gate costs one uncontended monitor per
+ * announcement — again on the announcement path only, never on the data path.
  */
 class RegistryMirrorCell(
     private val registry: LocationRegistry,
@@ -91,15 +97,86 @@ class RegistryMirrorCell(
     @Volatile
     var peer: PeerId? = initialPeer
 
+    /**
+     * The connection gate: whether this mirror is currently authorized to speak
+     * for its peer. Held under a monitor rather than as a `@Volatile` flag
+     * because [detach] must shut it and retract this connection's locations as
+     * one indivisible step — see [detach].
+     */
+    private val gate = Any()
+    private var attached = true
+
     val inlet = registerPort("inlet", FanInlet.create<RegistryAnnounce>())
 
     init {
         inlet.serve(object : RegistryAnnounce {
-            override fun published(ref: CellRef) = registry.publish(ref, toPeer, peer)
-            override fun linked(link: civictech.cell.host.TopologyLink) = registry.mirrorLink(link)
-            override fun unlinked(id: UUID) = registry.mirrorUnlink(id)
-            override fun unpublished(ref: CellRef) = registry.mirrorUnpublish(ref)
+            override fun published(ref: CellRef) = synchronized(gate) {
+                if (attached) registry.publish(ref, toPeer, peer)
+            }
+
+            override fun linked(link: civictech.cell.host.TopologyLink) = synchronized(gate) {
+                if (attached) registry.mirrorLink(link)
+            }
+
+            override fun unlinked(id: UUID) = synchronized(gate) {
+                if (attached) registry.mirrorUnlink(id)
+            }
+
+            override fun unpublished(ref: CellRef) = synchronized(gate) {
+                if (attached) registry.mirrorUnpublish(ref)
+            }
         })
+    }
+
+    /**
+     * (Re)open the gate — the peering is live and this mirror may install
+     * locations again. Called by a transport from its hello, beside the [peer]
+     * bind and before any frame can be accepted, and by
+     * [Peering.Loopback.heal]. A mirror starts attached, so a peering that
+     * never detaches (the pre-existing shape) behaves exactly as before.
+     *
+     * A re-attached mirror needs no replay of what it lost while detached: the
+     * peer's (re-)announcement is a full `localRefs` catch-up
+     * ([Peering.announceTo]), so everything it still holds is re-announced.
+     */
+    fun attach() = synchronized(gate) { attached = true }
+
+    /**
+     * Shut the gate and drop every location this connection installed, as one
+     * step — the disconnect fence.
+     *
+     * **The race this closes.** A peer's announcements are applied
+     * *asynchronously*, two scheduler hops behind the socket: `WsTransport`'s
+     * IO thread only enqueues a frame on the bridge host
+     * ([Peering.hostIngress] returns a hosted proxy), the ingress cell decodes
+     * it there and hands the invocation back to `LocationRegistry.deliver`,
+     * which queues it again for this mirror. The close, by contrast, used to
+     * call [LocationRegistry.unpublishRemotes] straight from that same IO
+     * thread. So an announcement decoded *before* the close could be *applied*
+     * after it, re-installing [LocationRegistry.Remote] locations routed
+     * through an egress whose socket is gone — and nothing would ever retract
+     * them: the close has already happened, and the dead peer will not announce
+     * again on that connection. The peer's cells then linger in every observer
+     * of this registry (an inspector reports a departed peer's cells forever)
+     * and every send to them fails into the park queue.
+     *
+     * Holding the monitor across the retraction is what makes the fence total:
+     * a late announcement either lands before it (and is dropped with the rest
+     * of the batch) or finds the gate shut. It also serializes the
+     * publish-notification chain against the unpublish-notification chain for
+     * one connection, so a hook that reads the registry back — as the inspector
+     * does to resolve a mirrored node's network host — can no longer observe
+     * the two interleaved and record a node the removal event has already been
+     * emitted for.
+     *
+     * The transport's *send-failure* path (a dead socket noticed before the
+     * close event) deliberately keeps calling [LocationRegistry.unpublishRemotes]
+     * directly: it is an early park optimization, not the fence, and the close
+     * that follows is what makes the end state authoritative.
+     */
+    fun detach() = synchronized(gate) {
+        attached = false
+        registry.unpublishRemotes(toPeer)
     }
 }
 
@@ -139,15 +216,29 @@ object Peering {
      * the ordinary catch-up path.
      */
     class Loopback(private val a: Side, private val b: Side, val aToB: InvocationSink, val bToA: InvocationSink,
-                   private val mirrorOnA: CellRef, private val mirrorOnB: CellRef) {
+                   private val mirrorOnA: RegistryMirrorCell, private val mirrorOnB: RegistryMirrorCell) {
+        /**
+         * Sever the peering. Routed through each mirror's
+         * [RegistryMirrorCell.detach] rather than calling
+         * [LocationRegistry.unpublishRemotes] on the two registries directly:
+         * that is the same pair of retractions, plus the disconnect fence, so
+         * the in-process shape and the socket shape answer a mid-flight
+         * announcement identically. It matters here too — a loopback
+         * announcement crosses a hosted ingress and is applied on the bridge
+         * host's scheduler, so under a [civictech.cell.host.SimulationController]
+         * an announcement queued before the partition would otherwise be
+         * applied after it.
+         */
         fun partition() {
-            a.registry.unpublishRemotes(aToB)
-            b.registry.unpublishRemotes(bToA)
+            mirrorOnA.detach()
+            mirrorOnB.detach()
         }
 
         fun heal() {
-            announceTo(a, peerMirror = mirrorOnB, via = aToB)
-            announceTo(b, peerMirror = mirrorOnA, via = bToA)
+            mirrorOnA.attach()
+            mirrorOnB.attach()
+            announceTo(a, peerMirror = mirrorOnB.ref, via = aToB)
+            announceTo(b, peerMirror = mirrorOnA.ref, via = bToA)
         }
     }
 
@@ -157,10 +248,10 @@ object Peering {
         // V4-PEERID: the mirror on B serves A's announcements, so its peer is
         // A's name (and symmetrically). Both names are known here, so the
         // loopback path is a pure constructor value — it never uses the setter.
-        val mirrorOnB = spawnMirror(b, toPeer = bToA, peer = a.peer).ref
-        val mirrorOnA = spawnMirror(a, toPeer = aToB, peer = b.peer).ref
-        announceTo(a, peerMirror = mirrorOnB, via = aToB)
-        announceTo(b, peerMirror = mirrorOnA, via = bToA)
+        val mirrorOnB = spawnMirror(b, toPeer = bToA, peer = a.peer)
+        val mirrorOnA = spawnMirror(a, toPeer = aToB, peer = b.peer)
+        announceTo(a, peerMirror = mirrorOnB.ref, via = aToB)
+        announceTo(b, peerMirror = mirrorOnA.ref, via = bToA)
         return Loopback(a, b, aToB, bToA, mirrorOnA, mirrorOnB)
     }
 
