@@ -21,7 +21,7 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 | `GET /api/inspect/topology` | M0 | `TopologySnapshot` |
 | `GET /api/inspect/events` | M0 | SSE stream of `Event` |
 | `GET /api/inspect/cell/{ref}` | M1 | `CellDetail` |
-| `GET /api/inspect/cell/{ref}/state?cursor=&limit=` | M1, V1C-BE | `CellState`. `cursor` (opaque, from a previous response's `page.cursor`) and `limit` (1..1000, clamped, default 200) walk a cell's state one bounded page at a time instead of copying it whole. Both are ignored for a cell with an open observation, which keeps answering `kind: "view"` from its already-materialized fold. A malformed `limit` is 400; a `cursor` that is unknown, expired, evicted, wrong-cell or already spent on a page is 410 — drop it and restart the walk. One arm is exempt, and only one: a response carrying `unreadable: "unanswered"` served no page and therefore spent no cursor, so the `cursor` it was sent with stays resumable — the client re-sends that same request instead of restarting (see `page.cursor`) |
+| `GET /api/inspect/cell/{ref}/state?cursor=&limit=` | M1, V1C-BE | `CellState`. `cursor` (opaque, from a previous response's `page.cursor`) and `limit` (1..1000, clamped, default 200) walk a cell's state one bounded page at a time instead of copying it whole. Both are ignored for a cell with an open observation, which keeps answering `kind: "view"` from its already-materialized fold. A malformed `limit` is 400; a `cursor` that is unknown, expired, evicted, wrong-cell or already spent on a page is 410 — drop it and restart the walk. Exactly one `unavailable` arm is exempt: a response carrying `unreadable: "unanswered"` served no page and therefore spent no cursor, so the `cursor` it was sent with stays resumable — the client re-sends that same request instead of restarting. A 400, and the `view` an observed cell answers, likewise spend nothing (see `page.cursor`) |
 | `POST /api/inspect/cell/{ref}/observe` | M1 | 204; starts state summaries for this cell. 409 if the cell has no built-in fold to observe (no delta outlet, or an outlet kind with no `View`) — a client that ignores the 409 still behaves correctly, since `GET .../state` reports `kind: "unavailable"` for that cell |
 | `DELETE /api/inspect/cell/{ref}/observe` | M1 | 204; stops them |
 | `GET /api/inspect/errors` | M2 | `ErrorSnapshot` |
@@ -152,21 +152,27 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                    // "migrating", "remote", "notStateful", "terminated", "readFailed", "unknown".
                                    // Those walks are over; keeping the id alive would invite a retry that cannot
                                    // succeed, so the next request carrying it is an honest 410.
-                                   // THE ONE ARM THAT DOES NOT SPEND IT is "unreadable": "unanswered". Nothing was
-                                   // read — neither the page itself, nor (in the render-reconciliation case) the
-                                   // re-read that would have completed it — so the walk position was never consumed
-                                   // and the server puts it back under the SAME id. The correct client response is to
-                                   // RE-SEND THAT SAME REQUEST, not to restart the walk: the retry that "unanswered"
-                                   // invites costs one request, whereas a mid-walk restart on a host loaded enough to
-                                   // miss one bounded wait is as likely to miss another, so restarting can starve a
-                                   // long walk rather than merely slow it. ?limit= may differ on the retry —
-                                   // a cursor names a POSITION, not a page size. (V1C described this as an
-                                   // unconditional 410; the carve-out is the shipped behaviour, computenet-1xx.)
+                                   // THE ONE "unavailable" ARM THAT DOES NOT SPEND IT is "unreadable": "unanswered".
+                                   // NO PAGE WAS SERVED — either the read itself missed the bounded wait, or (in the
+                                   // render-reconciliation case) a page was read but the re-read that would have
+                                   // narrowed it to exactly what it shows did not complete, so it was discarded
+                                   // unserved. No page having been served, the walk position the request carried is
+                                   // still exactly valid, and the server puts it back under the SAME id. The correct
+                                   // client response is to RE-SEND THAT SAME REQUEST, not to restart the walk: the
+                                   // retry that "unanswered" invites costs one request, whereas a mid-walk restart on
+                                   // a host loaded enough to miss one bounded wait is as likely to miss another, so
+                                   // restarting can starve a long walk rather than merely slow it. ?limit= may differ
+                                   // on the retry — a cursor names a POSITION, not a page size. (V1C described this
+                                   // as an unconditional 410; the carve-out is the shipped behaviour, computenet-1xx.)
                                    // 410 STILL MEANS RESTART and a client must still handle it: an id this server
                                    // never minted, one past its 60 s TTL, one evicted by the 256-open-walk cap, one
                                    // used against another cell, or one already spent as above. A restored id's TTL
                                    // clock is refreshed, so an actively retrying client does not age out; the cap can
                                    // still evict it, so "resumable" is a strong expectation, never a guarantee.
+                                   // TWO NON-BODIES ALSO SPEND NOTHING, for the same reason — no page was served: a
+                                   // 400 on a malformed ?limit= is refused before the cursor is touched, so a client's
+                                   // typo does not cost it its walk; and the "view" an observed cell answers ignores
+                                   // ?cursor= entirely, leaving that id untouched and resumable within its TTL.
     "limit": 200,                  // the limit actually applied; the server clamps ?limit= to 1..1000, so this is
                                    // how a client learns its request was reduced.
     "entries": 200,                // entries in THIS page, as the cell counted them before encoding — what the
@@ -239,10 +245,10 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                    //                   bridge. Unchanged from M5, and deliberate.
                                    //   "notStateful" — the cell holds no readable state at all.
                                    //   "unanswered"  — the read did not land inside the server's bounded wait, or its
-                                   //                   render reconciliation could not complete. Nothing was read, so
-                                   //                   nothing partial is served and a retry may succeed. THE ONLY
-                                   //                   ARM THAT DOES NOT SPEND A ?cursor=: re-send the identical
-                                   //                   request to resume the walk — see "page.cursor".
+                                   //                   render reconciliation could not complete. No page is served —
+                                   //                   nothing partial, and nothing at all — and a retry may succeed.
+                                   //                   THE ONLY ARM HERE THAT DOES NOT SPEND A ?cursor=: re-send the
+                                   //                   identical request to resume the walk — see "page.cursor".
                                    //   "terminated"  — the host's scheduler is gone. A dead host has no state to
                                    //                   read, and a retry will not help.
                                    //   "readFailed"  — the cell's own readBounded()/snapshot() threw. A broken
@@ -296,8 +302,9 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // marker only ever means ONE VALUE WAS ABBREVIATED — never that entries went
 // missing: the server encodes a page under an unbounded row allowance and, if the
 // BYTE budget cut whole entries, re-reads the page at the smaller limit rather
-// than serving it short, so "page.entries" always equals the top-level rows
-// rendered. "page.cursor != null" is the one and only signal that more state
+// than serving it short — and serves no page at all when that re-read cannot
+// complete (see "page.cursor") — so "page.entries" always equals the top-level
+// rows rendered. "page.cursor != null" is the one and only signal that more state
 // exists. The 200-row bound above still applies verbatim to "view"/"snapshot".
 
 // ErrorSnapshot (M2, V3-BE)
