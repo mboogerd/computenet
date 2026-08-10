@@ -598,13 +598,93 @@ the honesty.
   and `[24-DUR-05]` holds unconditionally, as written. Filed as
   `computenet-yh6.1.3.5`.
 
+### The third boundary (`coverage-gap`, `[24-DUR-02]`, KFX BS-12) — the checkpoint's *frontier* half asserts nothing
+
+`CheckpointRecord` carries `state` **and** `frontier` together, and `[24-DUR-02]`'s
+atomicity claim covers both halves. `DUR-ATOMIC-01` (KFX, feature
+`computenet-yh6.1.4`) discriminates the pair that matter observably — the
+`Stateful` snapshot half and the frame tail — but its own perturbation sweep
+recorded an honest negative for the third: **deleting the checkpoint's frontier
+restore entirely changes nothing anyone can see.** Patch `restoreCheckpoint` to
+skip `record.frontier` (keeping the `RECORD_FRONTIER` tail records) and the
+whole `dur` profile stays green 20 of 20, *and* — re-verified during review —
+so does the entire kernel `civictech.cell.durability.*` suite, `EffectfulRecoveryTest`
+*"checkpoint compaction preserves the processed-frontier across recovery"*
+included, despite its name.
+
+It is not a weak test, it is the shape of the mechanism. Compaction removes
+exactly the frames whose frontier advance the checkpoint absorbed, so nothing the
+checkpoint frontier would suppress is ever replayed; every frame that *is*
+replayed arrives with its own `RECORD_FRONTIER` record in the same tail, and
+`recoverFrom` stages frames while restoring frontier records synchronously, so
+the tail's own frontier is fully in place before any replayed frame is delivered.
+The checkpoint's frontier copy is therefore dead weight on every recovery path
+this repo can currently build.
+
+The construction that *would* discriminate it needs an upstream that survives the
+crash and **re-delivers** a frame whose `(sourceId, counter)` is at or behind the
+checkpoint frontier — a duplicate live delivery, not a replay. Neither the corpus
+(no re-delivery/duplicate-frame verb) nor the kernel durability fixtures build
+that today. Recorded here rather than claimed: `DUR-ATOMIC-01` covers
+`[24-DUR-02]` on the two halves its perturbations actually move, and this ledger
+carries the third.
+
+- **Resolves**: a duplicate-delivery surface — a corpus verb (or kernel fixture)
+  that re-sends an already-delivered frame to an `Effectful` inlet after
+  recovery, at a position the checkpoint frontier covers and the replayed tail
+  does not. With it, dropping `record.frontier` in `restoreCheckpoint` becomes a
+  failing perturbation and the frontier half of `[24-DUR-02]` is asserted head-on.
+  That surface is already filed as `computenet-yh6.1.3.3` (a gated
+  `concord/schema` change proposing a retransmit verb that re-sends a prior
+  invocation, or replays an explicit `(sourceId, counter)` live rather than via
+  journal replay), raised there for the live half of `[24-DUR-05]`. This entry is
+  its second consumer: the same verb discharges both, so whoever lands it should
+  author the `[24-DUR-02]` frontier perturbation above alongside the
+  `[24-DUR-05]` one.
+
 ### Not covered (deferred, honestly out of reach at W4-B)
 
-- `24-DUR-04` (replay-stable identity, no resurrected removals) is exercised
-  *indirectly* — `DUR-SNAPTAIL-01`'s recovered `SetCell` re-mints ref-derived
-  tags, so its recovered membership equals the twin's with no double-count — but
-  it is not asserted head-on (a directed add/remove/replay control belongs in a
-  kernel unit test; the OR-set tag plane is not boundary-observable per P1).
+- `24-DUR-04` (replay-stable identity, no resurrected removals) — **NARROWED
+  (KFX).** The requirement spans three planes; one is now asserted head-on and
+  two remain uncovered, for different reasons.
+  - The **emission-identity plane is now asserted head-on**: `DUR-SRCID-01` and
+    `DUR-SRCID-02` pin that a recovered source's re-emission carries the identity
+    (and counter high-water) the network already observed, so an `Effectful`
+    sink's restored processed-frontier matches it — once by replaying the frame
+    tail, once across a checkpoint that compacted those frames away. These two
+    genuinely discriminate: with `HostDurability.installDurableEpochs` and
+    `restoreOutletWave` both neutered they fail 20 of 20 runs on a double-fired
+    effect.
+  - The **OR-set tag plane remains covered only indirectly**, with its original
+    rationale unchanged: `DUR-SNAPTAIL-01`'s recovered `SetCell` re-mints
+    ref-derived tags, so its recovered membership equals the twin's with no
+    double-count, but the directed add/remove/replay control belongs in a kernel
+    unit test — the tag plane itself is not boundary-observable per P1.
+  - The **wave-aligned-consumer plane is NOT boundary-discriminable, and is
+    therefore recorded here rather than claimed by a scenario.** BS-40 asked for
+    head-on `24-DUR-04` coverage via a glitch-free consumer downstream of a
+    recovered source, on the reasoning that such a consumer keys per-source wave
+    completeness on emission identity and so must be sensitive to it. On the
+    replay path it is not. `WaveFrontier.offer` takes its `ctx.baseline != null`
+    branch and releases the invocation *before* any edge/lane lookup, so a
+    replayed cone is released without the frontier ever consulting the source id;
+    PN-2's baseline stamp, not replay-stable identity, is what carries the
+    recovered cone. Two independent results pin this: kernel
+    `DurableGlitchFreeReplayTest` control (b) ("PN-1 derivation reverted but
+    baseline on — recovery still green") holds over 100 seeds; and `DUR-GF-01`,
+    the corpus scenario authored for BS-40, still passes 20 of 20 with the
+    kernel's whole replay-stable identity mechanism disabled. `DUR-GF-01`
+    therefore carries `covers: [24-DUR-02]` only. It remains a real composition
+    gate — a wave-aligned consumer downstream of a recovered source must not
+    regress the recovery outcome, and making its journaled arm volatile fails it
+    20 of 20 — but it is not a `24-DUR-04` check, and claiming the id would have
+    made the concordance assert coverage no run could falsify.
+  - **Resolves**: nothing at the corpus boundary — this is a property of the
+    mechanism, not a gap in the scenario vocabulary. A wave-aligned consumer
+    becomes identity-sensitive across recovery only if its own frontier survives
+    the crash (a journaled `GlitchFreeCell`, so the restored frontier has a lane
+    to disagree with). That is a kernel/durability design question adjacent to
+    G-59's research-gated partial-wave-buffer slice, not a scenario to author.
 - `24-REPLAY-01` — **RESOLVED (B2 / D-CONCORD, `kernel-gap`; kernel fix by
   D-REPLAY)**. *As filed (R3, empirically confirmed):* the PN-2 baseline path
   worked for the *generic* glitch-free join — `HostDurability.recoverFrom` stamps
