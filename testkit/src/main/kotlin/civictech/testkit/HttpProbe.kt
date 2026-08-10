@@ -14,8 +14,16 @@ import java.net.http.HttpResponse
  * `await` bodies) plus the T12 migration of `AgoraServerTest`/`TriageServerTest`/
  * shopping's `DemoServerTest` off their hand-rolled copies; see [SimWorld]'s
  * sibling helpers for the non-HTTP polling form ([awaitUntil]).
+ *
+ * [AutoCloseable] since computenet-4vh: the JDK `HttpClient` a probe owns is a
+ * real resource (its own selector thread plus an executor pool), and JUnit's
+ * PER_METHOD lifecycle builds one probe per test *method*, so a suite that never
+ * closes them holds every client of a `setForkEvery(80)` fork at once, released
+ * only if and when the collector clears their weak referents. Closing is
+ * therefore worth doing; not closing is not a correctness bug for any single
+ * test, which is why every existing caller still compiles unchanged.
  */
-class HttpProbe(private val baseUrl: String) {
+class HttpProbe(private val baseUrl: String) : AutoCloseable {
     private val client: HttpClient = HttpClient.newHttpClient()
 
     /** POST a form-urlencoded [body] to `$baseUrl$path`; returns the HTTP status code. */
@@ -66,5 +74,17 @@ class HttpProbe(private val baseUrl: String) {
             Thread.sleep(50)
         }
         throw AssertionFailedError("HttpProbe.await timed out after ${timeoutMs}ms on $path; last-seen body: $json")
+    }
+
+    /**
+     * Release the client this probe owns. [HttpClient.shutdownNow] and not
+     * [HttpClient.close]: `close()` waits for in-flight exchanges to terminate,
+     * and a teardown helper must never be the thing that introduces an unbounded
+     * wait. Every request this class issues is synchronous and has already
+     * completed by the time a caller can reach `close()`, so there is nothing
+     * legitimate left to wait for anyway.
+     */
+    override fun close() {
+        client.shutdownNow()
     }
 }
