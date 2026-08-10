@@ -45,9 +45,14 @@ tasks.withType<Test>().configureEach {
     // per-node policy work nudged past a constrained default heap). 2g gives margin;
     // forkEvery bounds accumulation by periodically starting a fresh test JVM.
     //
-    // Note what `forkEvery` actually counts: TEST CLASSES, not test methods. Only
-    // `:kernel` has enough classes to reach 80 (201 -> 3 forks); `:inspect` has 28,
-    // `:concord` 10, `:wire` 7 and every demo 6 or fewer, so this setting has never
+    // Note what `forkEvery` actually counts: TEST CLASSES, not test methods. That is
+    // Gradle's own unit here, not an inference from a log: the pipeline is
+    // MaxNParallelTestDefinitionProcessor -> RestartEveryNTestDefinitionProcessor ->
+    // ForkingTestDefinitionProcessor, the counter increments once per
+    // `processTestDefinition`, and on the JVM the definition type is
+    // `ClassTestDefinition(String testClassName)` — one unit, one test class. Only
+    // `:kernel` has enough classes to reach 80 (202 today); `:inspect` has 28,
+    // `:concord` 9, `:wire` 7 and every demo 6 or fewer, so this setting has never
     // forked those suites even once — the whole of `:inspect:test` runs in a single
     // JVM regardless of it. That is why computenet-4vh's leak measurement saw
     // `ManagedHost-` threads climb monotonically to 258 with no reset, and it also
@@ -55,8 +60,15 @@ tasks.withType<Test>().configureEach {
     // tests share a JVM with the 100k-entry paged-state walk) cannot occur: there
     // is only ever one partition. Measured 2026-08-10 (computenet-dqy.6): with the
     // resources released, `:kernel:test` costs 83.6s at forkEvery(80) and 83.4s at
-    // forkEvery(0) — the two extra JVM starts are not worth measuring, so this stays
+    // forkEvery(0) — the extra JVM starts are not worth measuring, so this stays
     // where it is, as the kernel heap guard its comment above says it is.
+    //
+    // It composes with `maxParallelForks` below rather than being overridden by it:
+    // MaxNParallel deals classes round-robin to N processors, each of which owns its
+    // OWN restart counter, so `:kernel`'s 202 classes become 101 per processor and
+    // each restarts once — 4 test JVMs where a single-fork run used 3. The bound the
+    // heap guard cares about is unchanged: still at most 80 classes' accumulation in
+    // any one JVM.
     maxHeapSize = "2g"
     setForkEvery(80)
     // `:kernel:test` is the whole wall time of the `build-test-fast` required check.
@@ -73,13 +85,31 @@ tasks.withType<Test>().configureEach {
     // from the JUnit XML. `:inspect:test` is unmoved either side (35.9s vs 36.8s),
     // which is the check that this opt-in is really scoped to one project.
     //
+    // Then measured ON CI, which is the number that actually matters (PR #30, run
+    // 31373109141, same log-attribution method as the baselines above, same full
+    // cache miss — a buildSrc edit invalidates everything):
+    //   `:kernel:test`        157.1s -> 125.2s   (960 tests, green)
+    //   its solo tail          138s  ->   95s
+    //   Gradle build           313s  ->  293s
+    //   build-test-fast job    336s  ->  312s    (-7%; the 6m03s baseline was 363s)
+    // So the task-level projection held and the job-level one was slightly optimistic:
+    // one fewer core-second of idle tail does not convert 1:1 into job time, because
+    // runner setup, the cold Kotlin daemon (computenet-dqy.15) and the compile chain
+    // are untouched. The remaining 95s tail is computenet-dqy.16's lever, not this one's.
+    //
     // `:kernel` alone opts in, deliberately. The socket-bound suites (`:wire`,
     // `:inspect`, `:demo:shopping`) are this repo's known flake sites, and running
     // their forks concurrently would put them in competition for ports — the class of
     // defect PR #22 fixed. They would also buy nothing: they are already fully
     // overlapped by the kernel compile+test chain and contribute zero wall time.
     // `kernel/src/test` binds no sockets at all (`ProtocolSupport.bind` is a cell
-    // port, not a TCP one) and the two-JVM tests are tag-excluded from this lane.
+    // port, not a TCP one), it reaches nothing socket-bound through `:testkit` either
+    // (it imports only SimWorld, awaitUntil and forEachSeed — never JvmPeer, whose
+    // `freePort()` is the one racy allocator in there, nor HttpProbe), it sets no
+    // system properties, and it has no `@Tag("multi-jvm")` class to exclude in the
+    // first place — those all live in `demo/shopping` and `demo/exchange`. Its only
+    // filesystem use is `@TempDir` and `Files.createTempDirectory`, both of which
+    // hand out a fresh path per call, so two forks cannot collide on one.
     //
     // Half the cores, capped at 2: Gradle's worker-lease pool already bounds total
     // concurrency to `--max-workers`, and each fork may grow to `maxHeapSize` above,
@@ -87,6 +117,19 @@ tasks.withType<Test>().configureEach {
     // and keeps the 30s `awaitUntil` budgets clear of starvation. Four forks measured
     // faster still (50.4s) on a 10-core dev machine; that is not the machine CI runs
     // on and the extra 4g of committed heap is not worth the flake exposure.
+    //
+    // `availableProcessors()` is read at configuration time and therefore baked into
+    // the configuration-cache entry rather than re-read on reuse. The clamp is what
+    // makes that harmless: every machine in play has >= 4 cores, so the value is 2
+    // either way, and the floor of 1 covers a genuinely small machine.
+    //
+    // Residual risk, stated rather than hidden: a class is never split across forks,
+    // so per-class statics are unaffected, but round-robin dealing changes WHICH
+    // classes share a JVM. A test that depended on state another class left behind
+    // would surface here. Nothing in `kernel/src/test` declares `@BeforeAll` or an
+    // execution order, and the config has now been run 6x over the full suite
+    // (960 tests, 0 failures each, from the JUnit XML) plus 10x over the
+    // timing-sensitive host/observe classes, all green, on top of the CI run above.
     if (project.path == ":kernel") {
         maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
     }
