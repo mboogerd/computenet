@@ -35,6 +35,8 @@ The managed Beads block is task-tracking guidance, not permission to override re
 - **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
 - **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
 
+**Carve-out — the reviewed-PR ready call.** Running `gh pr ready` on a pull request whose feature review has passed under the `/work` flow is permitted under every profile, including conservative, without asking: the feature reviewer owns that ready/draft call (`.claude/skills/work/SKILL.md` step 5e). Nothing else is relaxed. It authorises no commit, push, rebase, merge, or Dolt remote sync; it does not extend to an unreviewed PR, to a PR whose review recorded anything other than a pass, or to any PR other than the one just reviewed; and protected `main` with its required status checks remains the gate — a red check still holds the PR. Recorded by human decision 2026-08-10 on bead `computenet-nrv`, resolving the contradiction filed as `computenet-8sw`.
+
 ## Session Completion
 
 This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
