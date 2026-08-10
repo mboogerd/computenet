@@ -10,6 +10,7 @@ import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SupervisionPolicy
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
@@ -45,15 +46,37 @@ class InspectorErrorsTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh). `ManagedHost`
+     * exposes no shutdown of its own, and its default
+     * [VirtualThreadScheduler] eagerly starts a virtual thread that parks in
+     * `PriorityBlockingQueue.take()` until something interrupts it — nothing
+     * ever did. With JUnit's PER_METHOD lifecycle that leaked one live thread,
+     * retaining its whole graph, per test *method*; under `setForkEvery(80)`
+     * they accumulated for a whole fork. Named exactly as the default names it
+     * so a thread dump reads the same either way.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
     private var tap: SseTap? = null
 
+    /**
+     * Release order matters: the tap and the server first (so no feed is still
+     * emitting), then the probe's JDK client, then the host's drain thread last —
+     * a hook that fired during `server.close()` may still be enqueuing to the
+     * host, and [VirtualThreadScheduler.submit] rejects work after shutdown.
+     */
     @AfterEach
     fun tearDown() {
         tap?.close()
         server.close()
+        probe.close()
+        hostScheduler.shutdown()
     }
 
     private fun snapshot(): ErrorSnapshot = json.decodeFromString(probe.state(InspectorServer.ERRORS_PATH))
@@ -305,7 +328,14 @@ class InspectorErrorsTest {
 
     private inner class SseTap(url: String) : AutoCloseable {
         private val frames = LinkedBlockingQueue<Frame>()
-        private val reader: CompletableFuture<Void> = HttpClient.newHttpClient()
+
+        /**
+         * Held so [close] can release it (computenet-4vh). One client per
+         * `listen()`, i.e. per test method, each with its own selector thread and
+         * executor pool; cancelling [reader] alone left all of that alive.
+         */
+        private val client: HttpClient = HttpClient.newHttpClient()
+        private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->
                 response.body().forEach { line ->
@@ -329,8 +359,15 @@ class InspectorErrorsTest {
             return frames.filter { it.kind == kind }.map { it.payload }
         }
 
+        /**
+         * `shutdownNow()`, never `close()`: this client is deliberately parked on
+         * an SSE response that never ends, so `close()` — which awaits
+         * termination of in-flight exchanges — would turn this teardown into the
+         * unbounded wait the suite is being audited for.
+         */
         override fun close() {
             reader.cancel(true)
+            client.shutdownNow()
         }
     }
 
