@@ -369,11 +369,19 @@ class InspectorObserveTest {
         // what matters here is that the reader encodes and labels it correctly
         server.snapshots = SnapshotSource { ref -> if (ref == cell.ref) cell.snapshot() else null }
 
-        val state = state(cell.ref)
+        // `add` is asynchronous, and this stand-in source reads the cell on the
+        // HTTP thread without waiting for the data band to drain — the same
+        // unbounded delivery assumption as the wired-default test below, so the
+        // same bounded await rather than a single hopeful read.
+        lateinit var answer: CellState
+        awaitUntil("the whole-copy read carries the added element") {
+            answer = state(cell.ref)
+            answer.kind == CellState.SNAPSHOT && answer.value.toString() == """["ada"]"""
+        }
 
-        state.kind shouldBe CellState.SNAPSHOT
-        state.value.toString() shouldBe """["ada"]"""
-        state.frontier shouldBe null
+        answer.kind shouldBe CellState.SNAPSHOT
+        answer.value.toString() shouldBe """["ada"]"""
+        answer.frontier shouldBe null
     }
 
     @Test
@@ -396,7 +404,24 @@ class InspectorObserveTest {
         val counter = CounterCell().also { host.managementInlet.call.spawn(it) }
         host.lookup<CounterApi>(counter.ref)!!.inlet.call.increment(5)
 
-        val response = state(counter.ref)
+        // `increment` is an ordinary data-band invocation (priority 20); the
+        // snapshot read above it is submitted at priority 0, which — as
+        // `ManagedHost.readState`'s KDoc puts it for the submit both reads share
+        // — "jumps ahead of every queued data-priority task". A single read
+        // taken straight after the call is therefore free to answer the
+        // *pre*-increment total — not rarely, but whenever the host thread has
+        // not drained the data band yet, which on a loaded runner is ordinary.
+        // Two wrong answers are reachable, and the condition gates both: the
+        // value, because a read that overtakes the queued increment answers 0;
+        // and `kind`, because a host thread still busy at
+        // `InspectorServer.SNAPSHOT_WAIT_MS` answers UNAVAILABLE instead. So the
+        // delivery is awaited on the very surface under test (same convention as
+        // the fold assertions above) rather than assumed to have happened.
+        lateinit var response: CellState
+        awaitUntil("the wired default answers the counter's post-increment total") {
+            response = state(counter.ref)
+            response.kind == CellState.SNAPSHOT && response.value.toString() == "5"
+        }
 
         response.kind shouldBe CellState.SNAPSHOT
         response.value.toString() shouldBe "5"
