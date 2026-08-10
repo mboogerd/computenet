@@ -65,6 +65,22 @@
 # - linear.api_key  → use LINEAR_API_KEY env var instead
 # - github.token    → use GITHUB_TOKEN env var instead
 
-sync.remote: "git+https://github.com/mboogerd/computenet.git"
+# Cross-machine sync remote for the Dolt database (refs/dolt/data on the git
+# remote). Use SSH, not HTTPS: Dolt shells out to git and cannot prompt for
+# credentials, so an HTTPS remote fails outright on a machine without a stored
+# credential helper -- and it fails in exactly the place that hurts, an
+# unattended scheduled run, where every `bd dolt push` errors and the local
+# database silently stops being shared.
+#
+# SSH reuses the key `git fetch`/`git push` already use for `origin`, so there
+# is no second credential to provision or rotate.
+#
+# If you must use HTTPS on some machine, do not edit this shared file -- add a
+# machine-local rewrite instead:
+#   git config --global url."git@github.com:".insteadOf "https://github.com/"
+#
+# sync.remote: "git+https://github.com/mboogerd/computenet.git"
 export:
     auto: true
+sync:
+    remote: "git+ssh://git@github.com/mboogerd/computenet.git"
