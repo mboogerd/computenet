@@ -508,31 +508,50 @@ Two scenarios pass the 20-run sweep under `-Pconcord.profiles=core,dur`:
 - `DUR-SNAPTAIL-01` (`24-DUR-02/03`) — checkpoint + journal-tail replay of a
   journaled source→view equals an uninterrupted twin (`views-converge`).
 
-### The boundary (`kernel-gap` / design ceiling, G-59 / C-9) — not faked, respected
+### The boundary (`kernel-gap` / design ceiling, G-59 / C-9) — RESOLVED (KFX, commit `34892d9`)
 
-The `Effectful` frontier keys on `MessageContext.timestamp.sourceId`, which the
-**producing `FanOutlet` mints with a random per-instance `sourceId`** (not
-ref-derived; `SetCell.restore` restores its OR-set tag counter but *not* its
-outlet wave state). Consequence, verified by construction: a **journaled source
-that feeds an effectful sink would double-fire** on recovery — its replayed
-re-emission carries a fresh `sourceId` the sink's restored frontier cannot match.
-So exactly-once effect delivery is drivable only when the effect subgraph's source
-is **volatile** (it dies on the crash and is re-delivered nothing — exactly how
-`EffectfulRecoveryTest`'s unhosted source is discarded), and the sink recovers
-from its *own* journaled frames. This is the recorded G-59 gap ("spontaneously-
-emitting sources … `Effectful` sinks without idempotency keys are unhandled") and
-the C-9 boundary; the M10 mechanism is sound for the replay-stable idempotent
-vocabulary, and the "external-idempotency ceiling" (93 I-7) is a stated limit, not
-a bug. It is why `DUR-REPLAY-01` keeps the data-recovery path (journaled/snapshot,
-`incremental-equals-batch`) and the effect-once path (`effect-count`) as **two
-independent subgraphs**: a single cell cannot be both frontier-suppressed (never
-re-applied) *and* state-rebuilt-by-replay.
+*As filed*: the `Effectful` frontier keys on `MessageContext.timestamp.sourceId`, and the
+producing `FanOutlet` minted a random per-instance `sourceId` (not ref-derived;
+`SetCell.restore` restored its OR-set tag counter but *not* its outlet wave state).
+Consequence, verified by construction: a **journaled source that feeds an effectful sink
+would double-fire** on recovery — its replayed re-emission carried a fresh `sourceId` the
+sink's restored frontier could not match. Exactly-once effect delivery was drivable only
+when the effect subgraph's source was **volatile** (it dies on the crash and is
+re-delivered nothing — exactly how `EffectfulRecoveryTest`'s unhosted source is discarded),
+and the sink recovered from its *own* journaled frames. This was the recorded G-59 gap
+("spontaneously-emitting sources … `Effectful` sinks without idempotency keys are
+unhandled") and the C-9 boundary; it is why `DUR-REPLAY-01` keeps the data-recovery path
+(journaled/snapshot, `incremental-equals-batch`) and the effect-once path (`effect-count`)
+as **two independent subgraphs**.
 
-- **Resolves**: an output-mode / ref-derived wave identity for spontaneously-
-  emitting sources (or a captured-entropy WAL record), so a journaled source's
-  replayed emissions carry the identity the sink's frontier already recorded —
-  then a journaled source could feed an effectful sink and re-emit without
-  double-firing, and `DUR-REPLAY-01` could fold both concerns onto one subgraph.
+**How resolved**: commit `34892d9` (`computenet-yh6.1.2`, "A recovered outlet re-emits under
+replay-stable wave identity") made a durable outlet's `sourceId` ref-derived
+(`OutletWaveState.durable`, `UUID.nameUUIDFromBytes`) instead of `UUID.randomUUID()`, and
+carried it — plus the counter high-water — across a crash: installed via
+`HostDurability.installDurableEpochs` when durability is turned on, journaled per emission
+(`RECORD_OUTLET_WAVE`) and restored on recovery (`restoreOutletWave`), whole through a
+checkpoint. A recovered outlet's replayed re-emission now carries exactly the identity its
+sink's restored processed-frontier already recorded, so the double-fire this entry recorded
+no longer occurs — and, since a naive "restore the identity but forget the counter" fix
+would instead suppress live post-recovery traffic as already-acted, that opposite failure
+(silent effect loss) is checked for too, not just the fixed one.
+
+- **Filed scenarios**: `DUR-SRCID-01` (`covers: [24-DUR-04, 24-DUR-05]`) drives exactly the
+  construction this entry recorded as broken — a journaled source feeding an effectful sink,
+  crash, journal replay — asserting both directions: `effect-count(sink, exactly: 1)` over
+  the pre-crash pair (the double-fire this entry named) and a keyed
+  `effect-count(sink, key: k3, exactly: 1)` for the post-recovery element (ruling out silent
+  effect loss, which an unkeyed check alone cannot see). `DUR-SRCID-02` repeats the same
+  construction across a checkpoint, where the epoch must survive via `CheckpointRecord`
+  rather than by replaying frames compaction removed. Both discriminate genuinely: with
+  `installDurableEpochs`/`restoreOutletWave` neutered they fail 20 of 20 runs on a
+  double-fired effect.
+- **Not resolved by this entry**: `DUR-REPLAY-01`'s two-independent-subgraphs construction is
+  untouched — the fold into one subgraph this entry's original "Resolves" bullet named as the
+  natural consequence is a change to that scenario file, out of this ledger entry's scope.
+  `[24-DUR-04]`'s emission-identity plane is now asserted head-on by `DUR-SRCID-01`/
+  `DUR-SRCID-02`; its OR-set tag plane and wave-aligned-consumer plane are recorded
+  separately under "Not covered" below.
 
 ### The second boundary (`kernel-gap` / design ceiling, KFX-16, `24-DUR-05`) — the frame with no frontier position
 
@@ -551,11 +570,14 @@ re-fires on `recoverFrom` replay**.
 
 The decision recorded for KFX (feature `computenet-yh6.1.3`) is to keep that
 behaviour as an explicit bounded limit rather than close it in the guard, for the
-same reason the G-59/C-9 ceiling above stands: a *bounded* closure needs a real
-ingress *identity* the kernel does not have, and minting one is wider than this
-guard. Read the next two paragraphs together — the point is not that the hole
-cannot be closed, but that every way of closing it from inside this guard costs
-more than the limit does.
+same reason the G-59/C-9 boundary above stood before its resolution: a *bounded*
+closure needs a real ingress *identity* the kernel does not have, and minting one
+is wider than this guard. That earlier boundary was closed by restoring an
+*existing* identity a crash-surviving outlet already carried; this one has no
+such identity to restore — an externally-driven frame has none to begin with.
+Read the next two paragraphs together — the point is not that the hole cannot be
+closed, but that every way of closing it from inside this guard costs more than
+the limit does.
 
 *Stamping* a synthetic wave position at ingress does close the replay double-fire,
 and — stated precisely, because the imprecise version of this is tempting — it
