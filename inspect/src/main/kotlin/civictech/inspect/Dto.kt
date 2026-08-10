@@ -275,6 +275,19 @@ data class CellState(
         /**
          * The read did not land inside the server's bounded wait. Nothing was
          * read; a retry may succeed.
+         *
+         * Also the answer when a page *was* read but could not be rendered whole
+         * — the byte budget cut entries and the re-read that would have narrowed
+         * the page to exactly what it shows could not be completed. Serving that
+         * page would advance the cursor past entries appearing nowhere in the
+         * response, so nothing is served instead. See `PagedState.paged`.
+         *
+         * **The only [UNAVAILABLE] arm that is transient, and the only one whose
+         * `?cursor=` survives it.** Nothing was served, so the walk position the
+         * request carried was not spent: the same cursor id stays resumable and
+         * the correct client response is to re-send *that* request, not to
+         * restart the walk. Every other arm is terminal for the walk. See
+         * `PagedState.read`.
          */
         const val UNANSWERED = "unanswered"
 

@@ -88,8 +88,9 @@ internal class PagedState(
      *
      * The order is deliberate: a malformed `limit` is refused before a cursor is
      * consumed (so a client's typo does not cost it its walk), and the cursor is
-     * consumed before the read is issued (so an id is retired exactly once
-     * whatever the read answers).
+     * consumed before the read is issued (so an id is retired exactly once for
+     * every read that *answers* — the bounded-wait miss, which answers nothing
+     * and spends nothing, puts it back; see the `null` arm below).
      */
     fun read(ref: CellRef, encodedRef: String, params: Map<String, String>): Outcome {
         val limit = when (val requested = params[LIMIT_PARAM]?.takeIf { it.isNotBlank() }) {
@@ -116,10 +117,52 @@ internal class PagedState(
         val pending = reads().readState(ref, request) ?: return Outcome.NoSource
 
         return when (val result = await(pending)) {
-            null -> Outcome.Answered(unavailable(encodedRef, CellState.UNANSWERED))
+            // The one bounded wait expired, and **nothing was read**: `await`
+            // cancelled the future, and `ManagedHost.readState`'s task checks
+            // `isCancelled` before entering the cell, so the cell's own cursor
+            // never advanced — and even in the race where the task did run
+            // first, `BoundedStateful.readBounded` may not mutate the fold and
+            // a `Cursor` is an opaque, repeatable position token, so re-issuing
+            // it yields the same page. The walk position this request consumed
+            // is therefore still exactly valid, and is put back under the
+            // **same** id.
+            //
+            // Without this, `unreadable: "unanswered"` — documented as "nothing
+            // was read; a retry may succeed" — is a lie mid-walk: the retry it
+            // invites answers 410, and the client's only recourse is to restart
+            // the whole walk. On a host loaded enough to miss a 200 ms deadline
+            // at all, every restart is equally likely to miss another one, so a
+            // big walk can starve instead of merely being slow. That is what
+            // made `InspectorPagedStateTest`'s 10⁵-entry walk flake on a
+            // saturated runner (computenet-1xx).
+            //
+            // Re-serving the id cannot double-serve a page, because no page was
+            // served. The one-id-per-page rule exists so a page that *was*
+            // served is never silently skipped or repeated; that is untouched.
+            // The terminal arms below deliberately do **not** restore: for
+            // MIGRATING, NOT_HOSTED, NOT_STATEFUL, TERMINATED or READ_FAILED
+            // the walk really is over, and keeping a resumable id alive would
+            // invite a retry that cannot succeed.
+            null -> {
+                if (resumeId != null && resumed != null) cursors.restore(resumeId, resumed)
+                Outcome.Answered(unavailable(encodedRef, CellState.UNANSWERED))
+            }
 
+            // `paged` answers null when it could not render every entry the
+            // kernel returned — see its KDoc. Serving the short page anyway
+            // would advance the cursor past entries that appear nowhere in the
+            // response, which is silent state loss; instead the walk position is
+            // put back exactly as on the bounded-wait miss above, and the client
+            // is told to ask again.
             is StateReadResult.Page ->
-                Outcome.Answered(paged(ref, encodedRef, result.page, request, resumed, limit))
+                when (val body = paged(ref, encodedRef, result.page, request, resumed, limit)) {
+                    null -> {
+                        if (resumeId != null && resumed != null) cursors.restore(resumeId, resumed)
+                        Outcome.Answered(unavailable(encodedRef, CellState.UNANSWERED))
+                    }
+
+                    else -> Outcome.Answered(body)
+                }
 
             is StateReadResult.Unbounded -> Outcome.Answered(
                 CellState(
@@ -158,6 +201,26 @@ internal class PagedState(
      * `$truncated` may then still appear *inside* a rendered entry — one wide
      * record abbreviated — which is that marker's existing, unchanged meaning.
      * `page.cursor != null` is the one and only signal that more state exists.
+     *
+     * ### Null when the promise cannot be kept (computenet-1xx)
+     *
+     * The re-read is itself a bounded read, and it can miss the deadline. The
+     * three ways out of that loop other than success — the seam answering no
+     * source, the re-read missing its bounded wait, and the retry allowance
+     * running out — used to `break` and then serve `page` *anyway*, with
+     * `page.entries` counting entries the value did not contain and the minted
+     * cursor advancing past all of them. That is precisely the silent swallow
+     * the paragraph above forbids, and it is not theoretical: a 10⁵-entry cell
+     * walked at `limit = 400` renders ~309 entries per page inside
+     * [ValueEncoder.MAX_BYTES], so **every page of that walk goes through the
+     * reconciliation**, and one missed deadline anywhere in it loses exactly
+     * `400 - 309 = 91` entries — which is the `expected:<100000> but
+     * was:<99909>` seen on CI.
+     *
+     * So this answers null instead, and [read] turns that into the same
+     * `unanswered` + resumable-cursor pair a first-read miss produces. Nothing
+     * is served that cannot be believed, and the client's retry costs it one
+     * request rather than one walk.
      */
     private fun paged(
         ref: CellRef,
@@ -166,16 +229,17 @@ internal class PagedState(
         request: StateRead,
         resumed: CursorTable.Walk?,
         limit: Int,
-    ): CellState {
+    ): CellState? {
         var page = first
         var value = encode(page)
         var rendered = ValueEncoder.renderedOf(value, page.entries.size)
         var retries = 0
-        while (rendered < page.entries.size && retries < InspectorServer.PAGE_RENDER_RETRIES) {
+        while (rendered < page.entries.size) {
+            if (retries >= InspectorServer.PAGE_RENDER_RETRIES) return null
             retries += 1
             val narrowed = reads().readState(ref, request.copy(limit = rendered.coerceAtLeast(1)))
-                ?: break
-            val result = await(narrowed) as? StateReadResult.Page ?: break
+                ?: return null
+            val result = await(narrowed) as? StateReadResult.Page ?: return null
             page = result.page
             value = encode(page)
             rendered = ValueEncoder.renderedOf(value, page.entries.size)
@@ -390,13 +454,32 @@ internal class CursorTable(
     }
 
     /** Mint a fresh id for [walk]; the id that produced it was already retired by [take]. */
-    fun mint(walk: Walk): String = synchronized(lock) {
+    fun mint(walk: Walk): String {
+        val id = "$ID_PREFIX${UUID.randomUUID()}"
+        synchronized(lock) { insert(id, walk) }
+        return id
+    }
+
+    /**
+     * Put [walk] back under the [id] [take] just consumed, for a read that
+     * answered **nothing** — see [PagedState.read]'s bounded-wait arm.
+     *
+     * One id still names at most one *served* page: this is reached only when no
+     * page was served, so the id is not being re-used, it was never spent. The
+     * mint clock is refreshed rather than preserved, for two reasons: an
+     * actively-retrying client is the opposite of the abandoned walk
+     * [InspectorServer.CURSOR_TTL_MS] exists to reclaim, and [expire] reads
+     * insertion order as mint order — re-inserting at the tail with a stale
+     * stamp would break that `takeWhile`.
+     */
+    fun restore(id: String, walk: Walk) = synchronized(lock) { insert(id, walk) }
+
+    /** [mint] and [restore]'s shared body: expire, evict to fit, stamp, insert. Caller holds [lock]. */
+    private fun insert(id: String, walk: Walk) {
         expire()
         while (open.size >= maxOpen) open.remove(open.keys.first())
-        val id = "$ID_PREFIX${UUID.randomUUID()}"
         walk.mintedAtMs = clock()
         open[id] = walk
-        id
     }
 
     fun clear() = synchronized(lock) { open.clear() }
