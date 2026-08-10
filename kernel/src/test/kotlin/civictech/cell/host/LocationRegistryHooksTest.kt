@@ -15,6 +15,7 @@ import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * T21 — [LocationRegistry]'s notification seam.
@@ -271,7 +272,14 @@ class LocationRegistryHooksTest {
     }
 
     class Collector(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
-        val received = mutableListOf<Int>()
+        /**
+         * Appended on the host scheduler's virtual thread — a parked invocation's replay runs
+         * `provide` there — and read from the test thread inside `awaitUntil`. A plain
+         * `ArrayList` compares through `AbstractList.equals`, which iterates, so an append
+         * landing mid-iteration trips `modCount` and throws `ConcurrentModificationException`.
+         * Copy-on-write compares against an immutable snapshot instead.
+         */
+        val received: MutableList<Int> = CopyOnWriteArrayList()
 
         @Suppress("UNCHECKED_CAST")
         val inlet = registerPort("inlet", FanInlet(Consumer::class.java as Class<Consumer<Int>>))
