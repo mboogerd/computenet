@@ -508,7 +508,7 @@ Two scenarios pass the 20-run sweep under `-Pconcord.profiles=core,dur`:
 - `DUR-SNAPTAIL-01` (`24-DUR-02/03`) — checkpoint + journal-tail replay of a
   journaled source→view equals an uninterrupted twin (`views-converge`).
 
-### The boundary (`kernel-gap` / design ceiling, G-59 / C-9) — RESOLVED (KFX, commit `34892d9`)
+### The boundary (`kernel-gap` / design ceiling, G-59 / C-9) — RESOLVED for the journaled-source double-fire (KFX, commit `34892d9`)
 
 *As filed*: the `Effectful` frontier keys on `MessageContext.timestamp.sourceId`, and the
 producing `FanOutlet` minted a random per-instance `sourceId` (not ref-derived;
@@ -526,13 +526,22 @@ as **two independent subgraphs**.
 
 **How resolved**: commit `34892d9` (`computenet-yh6.1.2`, "A recovered outlet re-emits under
 replay-stable wave identity") made a durable outlet's `sourceId` ref-derived
-(`OutletWaveState.durable`, `UUID.nameUUIDFromBytes`) instead of `UUID.randomUUID()`, and
-carried it — plus the counter high-water — across a crash: installed via
-`HostDurability.installDurableEpochs` when durability is turned on, journaled per emission
-(`RECORD_OUTLET_WAVE`) and restored on recovery (`restoreOutletWave`), whole through a
-checkpoint. A recovered outlet's replayed re-emission now carries exactly the identity its
-sink's restored processed-frontier already recorded, so the double-fire this entry recorded
-no longer occurs — and, since a naive "restore the identity but forget the counter" fix
+(`OutletWaveState.durable`, `UUID.nameUUIDFromBytes`) instead of `UUID.randomUUID()`,
+installed at spawn for journaled cells only (`HostDurability.installDurableEpochs`), and
+carried the outlet's whole epoch — `sourceId` **and** counter high-water — across a crash.
+Stated precisely, because the two halves are *different* mechanisms and the two scenarios
+below separate them: with **no** checkpoint nothing is written per emission and there is
+nothing to read — the rebuilt outlet *re-derives* the same `sourceId` from its ref, and
+replaying the frame tail deterministically walks the counter back through the pairs it
+already emitted. **With** a checkpoint, compaction removes exactly those frames, so
+`checkpoint()` writes one `RECORD_OUTLET_WAVE` record per journaled outlet beside the
+`Stateful` snapshot — the epoch in force at checkpoint time, carried rather than re-derived
+because RESTART's `mintFreshEpoch` or a drain/migration/promotion adoption may have rotated
+the outlet off its derived epoch — and `restoreOutletWave` rewinds the outlet to it before
+the surviving tail replays. Either way a recovered outlet's replayed re-emission now carries
+exactly the identity its sink's restored processed-frontier already recorded, so the
+double-fire this entry recorded no longer occurs — and, since a naive "restore the identity
+but forget the counter" fix
 would instead suppress live post-recovery traffic as already-acted, that opposite failure
 (silent effect loss) is checked for too, not just the fixed one.
 
@@ -542,16 +551,26 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   the pre-crash pair (the double-fire this entry named) and a keyed
   `effect-count(sink, key: k3, exactly: 1)` for the post-recovery element (ruling out silent
   effect loss, which an unkeyed check alone cannot see). `DUR-SRCID-02` repeats the same
-  construction across a checkpoint, where the epoch must survive via `CheckpointRecord`
-  rather than by replaying frames compaction removed. Both discriminate genuinely: with
-  `installDurableEpochs`/`restoreOutletWave` neutered they fail 20 of 20 runs on a
-  double-fired effect.
+  construction across a checkpoint, where the epoch must survive via the checkpoint's
+  `RECORD_OUTLET_WAVE` records (not `CheckpointRecord`, which carries only `state` and
+  `frontier`) rather than by replaying frames compaction removed. Both discriminate
+  genuinely: with `installDurableEpochs`/`restoreOutletWave` neutered they fail 20 of 20
+  runs on a double-fired effect.
 - **Not resolved by this entry**: `DUR-REPLAY-01`'s two-independent-subgraphs construction is
   untouched — the fold into one subgraph this entry's original "Resolves" bullet named as the
   natural consequence is a change to that scenario file, out of this ledger entry's scope.
   `[24-DUR-04]`'s emission-identity plane is now asserted head-on by `DUR-SRCID-01`/
   `DUR-SRCID-02`; its OR-set tag plane and wave-aligned-consumer plane are recorded
   separately under "Not covered" below.
+- **The G-59 / C-9 gap rows themselves are not closed by this.** What is retired is the
+  slice this entry recorded — a spontaneously-emitting *journaled* source double-firing an
+  `Effectful` sink. G-59's row (`91-gap-analysis.md`) also spans non-deterministic
+  (wall-clock/random) cell logic, glitch-free partial-wave buffers (research-gated; named
+  under "Not covered" below) and cross-host recovery-frontier drift (also below, out of
+  scope for the single-host `dur` driver); `34892d9` touched none of those. C-9's "effects
+  re-fire on replay" statement keeps a live residual too: the second boundary immediately
+  below, where a frame carrying no `MessageContext` has no frontier position at all and
+  re-fires on `recoverFrom`. Read this heading as retiring *this* boundary, not those rows.
 
 ### The second boundary (`kernel-gap` / design ceiling, KFX-16, `24-DUR-05`) — the frame with no frontier position
 
