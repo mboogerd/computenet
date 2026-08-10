@@ -31,6 +31,13 @@ name: CI
 #     start new workflow runs, so no merge has triggered a `main` run since #2
 #     (the last one a human merged). The `push` trigger is kept because it is
 #     what *should* fire; making it actually fire is computenet-8z6.
+#
+#     Update (computenet-8z6): still inert, and still only firing for human
+#     merges and direct pushes. Restoring it needs a PAT or GitHub App token in
+#     `auto-merge.yml`, which is a human decision. In the meantime
+#     `post-merge.yml` validates `main` from the `pull_request` `closed` event
+#     plus a daily schedule — a separate workflow with `main-`-prefixed jobs
+#     precisely so it cannot collide with the required check names above.
 on:
   push:
     branches: [main]
