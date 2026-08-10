@@ -35,9 +35,12 @@ name: CI
 #     Update (computenet-8z6): still inert, and still only firing for human
 #     merges and direct pushes. Restoring it needs a PAT or GitHub App token in
 #     `auto-merge.yml`, which is a human decision. In the meantime
-#     `post-merge.yml` validates `main` from the `pull_request` `closed` event
-#     plus a daily schedule — a separate workflow with `main-`-prefixed jobs
-#     precisely so it cannot collide with the required check names above.
+#     `post-merge.yml` validates `main` on a daily schedule, plus a
+#     `pull_request` `closed` lane that is expected to be suppressed on a bot
+#     merge for the same reason this one is (see that file's header) — a
+#     separate workflow with `main-`-prefixed jobs, and `closed`-only as its
+#     `pull_request` activity type, precisely so it cannot collide with the
+#     required check names above or add a check to an open PR.
 on:
   push:
     branches: [main]

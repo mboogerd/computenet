@@ -22,21 +22,31 @@ name: Post-merge validation
 # agent may create, and it hands write-to-main to a long-lived credential —
 # a decision for a human. This workflow takes the routes that need no secret:
 #
-#   - `pull_request` `closed`, guarded on `merged == true`. This is a
-#     `pull_request` event, not a `push`, so it is not the event class the
-#     evidence above shows being suppressed. It is the timely lane: it starts
-#     within seconds of the squash landing.
-#   - `schedule`, daily. GitHub documents `workflow_dispatch` and
-#     `repository_dispatch` as the only events that *always* create a run
-#     regardless of actor, and describes the suppression rule broadly rather
-#     than as push-only. So there is a residual risk that the `closed` lane is
-#     suppressed too when the merge is token-driven — unverifiable without an
-#     actual bot merge. The daily run is the backstop that makes this workflow
-#     useful even in that case, and it is cheap: this suite is minutes, not
-#     hours. It also supplies the repeated `main` evidence computenet-dqy's
-#     acceptance criteria asks for. Verification is easy once this lands: if
-#     the next `app/github-actions` merge produces a run of this workflow, the
-#     `closed` lane works.
+#   - `pull_request` `closed`, guarded on `merged == true`. Expect this lane
+#     to be SUPPRESSED on a bot merge, and treat any run of it as a bonus
+#     rather than as the guarantee. Reviewed against the documentation
+#     (computenet-8z6 review): the suppression rule is stated for events in
+#     general, not for `push`, and the exceptions are enumerated —
+#     `workflow_dispatch` and `repository_dispatch` always create a run, and
+#     `pull_request` with the `opened`, `synchronize` or `reopened` activity
+#     types creates a run in an approval-required state. `closed` is not on
+#     that list, and the enumerated `pull_request` exception does not reach it.
+#     The repo evidence points the same way: across the last 100 runs here,
+#     every single one is actored by the human `mboogerd`, and the eleven
+#     `app/github-actions` merges to date produced no run of any workflow at
+#     all. So this lane is kept because it costs nothing, is correct if it does
+#     fire, and settles the question on the next bot merge — not because it can
+#     be relied on. It is the schedule below that carries this workflow.
+#   - `schedule`, daily. This is the load-bearing lane, for the reason above:
+#     a `schedule` event has no actor to suppress. It bounds how long a broken
+#     `main` can sit unreported at ~24h, and it supplies the repeated `main`
+#     evidence computenet-dqy's acceptance criteria asks for, at one data point
+#     per day. Daily rather than hourly is deliberate: the suite is minutes, so
+#     the minutes are not the constraint (this repo is public, so standard
+#     runners are free), but `:inspect` and `:demo:shopping` still have open
+#     flakes (computenet-8ru.5) and nothing here notifies anybody, so a faster
+#     cadence would mostly manufacture unread red runs. Raise the cadence once
+#     those lanes are green and a failure actually reaches a human.
 #   - `workflow_dispatch`, so a human can validate `main` on demand — after a
 #     manual merge, a revert, or a suspected flake.
 #
@@ -102,10 +112,18 @@ jobs:
   main-validation-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    #
+    # Every continuation line below sits at exactly the block's indentation. In
+    # a `>-` folded scalar a MORE-indented line is "more indented" and YAML
+    # keeps its line break literally, so aligning them is what makes this fold
+    # to a single line. A stray newline here would still evaluate (the
+    # expression lexer treats it as whitespace), but this is the one expression
+    # in the repo that decides whether `main` gets validated at all, and it
+    # should not depend on that.
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.pull_request.merged == true &&
-       github.event.pull_request.base.ref == 'main')
+      github.event.pull_request.base.ref == 'main')
     steps:
       - name: Explain what is being validated
         run: |
@@ -126,6 +144,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+
+      # `ref: main` resolves at checkout time, so it is a moving target: if
+      # another PR merges between this run being queued and this step, the lane
+      # validates a newer tip than the one that triggered it. That is the
+      # intended trade (a newer tip is a superset), but it means the run does
+      # not otherwise say WHICH commit it validated — and computenet-dqy's
+      # "10 consecutive green runs on main" has to be read off these runs.
+      # Every lane records its own, because each checks out independently and
+      # they can legitimately differ within one run.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -165,6 +194,10 @@ jobs:
         with:
           ref: main
 
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -195,6 +228,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -235,6 +272,10 @@ jobs:
         with:
           ref: main
 
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
@@ -263,6 +304,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
 
       - name: Set up Node
         uses: actions/setup-node@v4
