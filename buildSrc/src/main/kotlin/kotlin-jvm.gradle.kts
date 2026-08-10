@@ -44,8 +44,52 @@ tasks.withType<Test>().configureEach {
     // created across the suite accumulate (a pre-existing structural retention the
     // per-node policy work nudged past a constrained default heap). 2g gives margin;
     // forkEvery bounds accumulation by periodically starting a fresh test JVM.
+    //
+    // Note what `forkEvery` actually counts: TEST CLASSES, not test methods. Only
+    // `:kernel` has enough classes to reach 80 (201 -> 3 forks); `:inspect` has 28,
+    // `:concord` 10, `:wire` 7 and every demo 6 or fewer, so this setting has never
+    // forked those suites even once — the whole of `:inspect:test` runs in a single
+    // JVM regardless of it. That is why computenet-4vh's leak measurement saw
+    // `ManagedHost-` threads climb monotonically to 258 with no reset, and it also
+    // means 4vh's proposed mechanism (adding a test re-partitions which `:inspect`
+    // tests share a JVM with the 100k-entry paged-state walk) cannot occur: there
+    // is only ever one partition. Measured 2026-08-10 (computenet-dqy.6): with the
+    // resources released, `:kernel:test` costs 83.6s at forkEvery(80) and 83.4s at
+    // forkEvery(0) — the two extra JVM starts are not worth measuring, so this stays
+    // where it is, as the kernel heap guard its comment above says it is.
     maxHeapSize = "2g"
     setForkEvery(80)
+    // `:kernel:test` is the whole wall time of the `build-test-fast` required check.
+    // Measured from the CI logs of runs 31360185624 and 31370311748: 157s of a 314s
+    // Gradle build, and it runs ALONE for the last ~139s of it — every other test
+    // task, `:inspect:test` and `:demo:exchange:test` included, has finished by then,
+    // so 3 of the runner's 4 vCPUs idle while the build waits on one JVM. The classes
+    // that dominate it are deterministic seed sweeps (ShardedReplicaFrontierTest,
+    // UnknownJoinerFenceTest, AlignedObserveTest: 100-200 seeds each), i.e. CPU-bound
+    // work that spare cores turn directly into wall time. Locally, two forks: the task
+    // goes 83.6s -> 64.0s standalone (repeated: 65.1, 65.5, 64.7) and 84.5s -> 64.1s
+    // inside the whole fast lane, which takes the lane itself from 135.9s to 120.0s.
+    // 955 kernel tests and 1449 lane tests green in every one of those runs, counted
+    // from the JUnit XML. `:inspect:test` is unmoved either side (35.9s vs 36.8s),
+    // which is the check that this opt-in is really scoped to one project.
+    //
+    // `:kernel` alone opts in, deliberately. The socket-bound suites (`:wire`,
+    // `:inspect`, `:demo:shopping`) are this repo's known flake sites, and running
+    // their forks concurrently would put them in competition for ports — the class of
+    // defect PR #22 fixed. They would also buy nothing: they are already fully
+    // overlapped by the kernel compile+test chain and contribute zero wall time.
+    // `kernel/src/test` binds no sockets at all (`ProtocolSupport.bind` is a cell
+    // port, not a TCP one) and the two-JVM tests are tag-excluded from this lane.
+    //
+    // Half the cores, capped at 2: Gradle's worker-lease pool already bounds total
+    // concurrency to `--max-workers`, and each fork may grow to `maxHeapSize` above,
+    // so 2 is the largest value that leaves a 4-vCPU/16g runner room for the daemons
+    // and keeps the 30s `awaitUntil` budgets clear of starvation. Four forks measured
+    // faster still (50.4s) on a 10-core dev machine; that is not the machine CI runs
+    // on and the extra 4g of committed heap is not worth the flake exposure.
+    if (project.path == ":kernel") {
+        maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 2)
+    }
     // Hang -> failure, not a silently stuck build. 440+ unbudgeted runToIdle() call
     // sites and zero prior @Timeout meant a livelock regression could hang CI
     // indefinitely. 5 minutes is deliberately generous (seed sweeps); raise per-class
