@@ -30,6 +30,44 @@ class TwoJvmInspectorTest {
     private fun topology(inspectPort: Int): TopologySnapshot =
         json.decodeFromString(HttpProbe("http://localhost:$inspectPort").state("/api/inspect/topology"))
 
+    /**
+     * Poll an inspector's topology until [predicate] holds, and return **that**
+     * snapshot — the one the wait was satisfied by.
+     *
+     * Two disciplines, both of which this test used to get wrong, and both of
+     * which matter precisely because it perturbs a peer mid-flight:
+     *
+     * - **Await and assert on one observation.** Awaiting a condition and then
+     *   re-fetching the topology to assert on it is a check-then-act race: none
+     *   of the properties here is monotonic (A's view of B's cells legitimately
+     *   grows during an announcement burst, and empties again when the socket
+     *   drops), so the second read can be a different world than the one that
+     *   satisfied the wait.
+     * - **An unanswered probe is "not yet", never "condition met".** The old
+     *   `runCatching { … }.getOrDefault(emptyList())` made a failed request
+     *   indistinguishable from an empty topology — which silently *satisfies*
+     *   the retraction barrier, exactly when A's inspector is most likely to
+     *   hiccup (it is tearing down a peer session while being polled every
+     *   100ms). The same silent-pass class `HttpProbe.await` fixed in T12: a
+     *   request that did not answer is not evidence of anything, so the bounded
+     *   wait keeps polling and, failing that, times out naming what it wanted.
+     */
+    private fun awaitTopology(
+        inspectPort: Int,
+        what: String,
+        predicate: (TopologySnapshot) -> Boolean,
+    ): TopologySnapshot {
+        var satisfied: TopologySnapshot? = null
+        awaitUntil(what) {
+            val snapshot = runCatching { topology(inspectPort) }.getOrNull()
+            (snapshot != null && predicate(snapshot)).also { if (it) satisfied = snapshot }
+        }
+        return satisfied!!
+    }
+
+    /** The peer-announced (mirrored) nodes in [snapshot]: no process host (`Dto.kt`'s `Node.host`). */
+    private fun mirrored(snapshot: TopologySnapshot): List<Node> = snapshot.nodes.filter { it.host == null }
+
     @Test
     fun `peer A's inspector places its own cells and B's mirrored cells correctly`() {
         val httpA = JvmPeer.freePort()
@@ -51,18 +89,18 @@ class TwoJvmInspectorTest {
             // with no process host shows up in A's topology — there is no
             // `knowsNow` to call from outside the process, so poll the HTTP
             // response itself (mirrors InspectorNetTest.awaitNode's intent,
-            // out-of-process).
-            awaitUntil("peer A's inspector has adopted a cell mirrored from B") {
-                runCatching { topology(inspectA).nodes.any { it.host == null } }.getOrDefault(false)
+            // out-of-process). The snapshot every assertion below reads is the
+            // one that satisfied the wait, not a later re-fetch (see
+            // [awaitTopology]).
+            val snapshot = awaitTopology(inspectA, "peer A's inspector has adopted a cell mirrored from B") {
+                it.nodes.any { node -> node.host == null }
             }
-
-            val snapshot = topology(inspectA)
 
             val own = snapshot.nodes.filter { it.host == "shopping" }
             own.isEmpty() shouldBe false
             own.forEach { it.net shouldBe "jvm-a" }
 
-            val mirrored = snapshot.nodes.filter { it.host == null }
+            val mirrored = mirrored(snapshot)
             mirrored.isEmpty() shouldBe false
             // V4-PEERID: B's own --net-name DOES now cross the wire — as the
             // `PeerId` in B's transport hello, which B's announcements' mirror
@@ -111,23 +149,27 @@ class TwoJvmInspectorTest {
         )
         var peerB = JvmPeer.launch("civictech.demo.MainKt", *bArgs)
         try {
-            fun mirroredOnA(): List<Node> =
-                runCatching { topology(inspectA).nodes.filter { it.host == null } }.getOrDefault(emptyList())
+            fun awaitMirroredOnA(what: String, predicate: (List<Node>) -> Boolean): List<Node> =
+                mirrored(awaitTopology(inspectA, what) { predicate(mirrored(it)) })
 
-            awaitUntil("peer A adopted B's cells") { mirroredOnA().isNotEmpty() }
-            mirroredOnA().forEach { it.net shouldBe "jvm-b" }
+            val adopted = awaitMirroredOnA("peer A adopted B's cells") { it.isNotEmpty() }
+            adopted.forEach { it.net shouldBe "jvm-b" }
 
-            // B dies; A's listener session closes and unpublishes everything it
-            // learned through that socket
+            // B dies mid-burst — the adoption barrier above is satisfied by the
+            // FIRST of B's announced refs, so the rest of the burst is still in
+            // flight on A's bridge host when the socket dies. A's listener
+            // session closes and must retract everything it learned through
+            // that socket, including whatever lands after the close
+            // (`RegistryMirrorCell.detach`: without that fence a late-applied
+            // announcement re-installed B's locations behind the dead egress
+            // and this barrier could never come true).
             JvmPeer.destroy(peerB)
-            awaitUntil("peer A retracted B's cells") { mirroredOnA().isEmpty() }
+            awaitMirroredOnA("peer A retracted B's cells") { it.isEmpty() }
 
             // B returns, dials the same listener, and re-announces the same
             // refs through a *different* listener-side egress
             peerB = JvmPeer.launch("civictech.demo.MainKt", *bArgs)
-            awaitUntil("peer A re-adopted B's cells") { mirroredOnA().isNotEmpty() }
-
-            val afterReconnect = mirroredOnA()
+            val afterReconnect = awaitMirroredOnA("peer A re-adopted B's cells") { it.isNotEmpty() }
             afterReconnect.isEmpty() shouldBe false
             afterReconnect.forEach { node: Node ->
                 // the assertion the whole ticket exists for

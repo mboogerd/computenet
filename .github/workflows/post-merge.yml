@@ -1,0 +1,329 @@
+name: Post-merge validation
+
+# Validates `main` itself, which nothing else in this repo does.
+#
+# Why it has to exist (computenet-8z6). `auto-merge.yml` arms GitHub's
+# auto-merge with `secrets.GITHUB_TOKEN`, so GitHub performs the squash as
+# `app/github-actions`. Events attributed to that token deliberately do not
+# start new workflow runs, so `ci.yml`'s `on: push: branches: [main]` never
+# fires after an auto-merge and the squashed result is never tested. Measured,
+# not assumed: `main` at 0477d8d (#16, merged by `app/github-actions`) has no
+# CI run at all, while bacfe5f (#20, merged by the human `mboogerd`) does —
+# 31360185624. The push lane works; only bot merges bypass it.
+#
+# That matters because auto-merge lands PRs that were each green against an
+# *older* `main`. Two independently-green PRs can compose into a broken `main`,
+# and with the push lane inert nobody is ever told.
+#
+# Why the secret-free route. The three candidate fixes were: merge with a PAT
+# or GitHub App token instead of `GITHUB_TOKEN`; add scheduled/manual runs on
+# `main`; or drive validation from another event. The first is the only one
+# that genuinely restores `on: push`, but it needs a repository secret that no
+# agent may create, and it hands write-to-main to a long-lived credential —
+# a decision for a human. This workflow takes the routes that need no secret:
+#
+#   - `pull_request` `closed`, guarded on `merged == true`. Expect this lane
+#     to be SUPPRESSED on a bot merge, and treat any run of it as a bonus
+#     rather than as the guarantee. Reviewed against the documentation
+#     (computenet-8z6 review): the suppression rule is stated for events in
+#     general, not for `push`, and the exceptions are enumerated —
+#     `workflow_dispatch` and `repository_dispatch` always create a run, and
+#     `pull_request` with the `opened`, `synchronize` or `reopened` activity
+#     types creates a run in an approval-required state. `closed` is not on
+#     that list, and the enumerated `pull_request` exception does not reach it.
+#     The repo evidence points the same way: across the last 100 runs here,
+#     every single one is actored by the human `mboogerd`, and the eleven
+#     `app/github-actions` merges to date produced no run of any workflow at
+#     all. So this lane is kept because it costs nothing, is correct if it does
+#     fire, and settles the question on the next bot merge — not because it can
+#     be relied on. It is the schedule below that carries this workflow.
+#   - `schedule`, daily. This is the load-bearing lane, for the reason above:
+#     a `schedule` event has no actor to suppress. It bounds how long a broken
+#     `main` can sit unreported at ~24h, and it supplies the repeated `main`
+#     evidence computenet-dqy's acceptance criteria asks for, at one data point
+#     per day. Daily rather than hourly is deliberate: the suite is minutes, so
+#     the minutes are not the constraint (this repo is public, so standard
+#     runners are free), but `:inspect` and `:demo:shopping` still have open
+#     flakes (computenet-8ru.5) and nothing here notifies anybody, so a faster
+#     cadence would mostly manufacture unread red runs. Raise the cadence once
+#     those lanes are green and a failure actually reaches a human.
+#   - `workflow_dispatch`, so a human can validate `main` on demand — after a
+#     manual merge, a revert, or a suspected flake.
+#
+# Why this is a SEPARATE FILE with prefixed job names. `ci.yml`'s header
+# records an outage caused by exactly this class of change: one push matched
+# two triggers, branch protection then saw two check runs per required check
+# name, required every one of them to pass, and a single flake blocked the
+# merge while auto-merge parked the PR silently. The required check names are
+# `build-test-fast`, `build-test-serial`, `concord-full`, `ui-test` and
+# `agora-ui-test`. Branch protection matches a required check by its exact
+# check-run name, which for a non-matrix job is the job id. Every job here is
+# prefixed `main-`, so none of them can ever be mistaken for a required check
+# — including on the merged PR's own SHA, where the `closed`-event checks
+# surface. Adding a trigger to `ci.yml` instead would have reintroduced the
+# duplicate-check-run failure mode directly, so `ci.yml` is left untouched.
+#
+# The jobs below deliberately mirror `ci.yml`'s five lanes command-for-command.
+# Keep them in step when a lane changes there; a reusable `workflow_call` would
+# have deduplicated them, but calling it from `ci.yml` renames its check runs
+# and breaks branch protection.
+#
+# What this does NOT fix. `on: push: branches: [main]` in `ci.yml` is still
+# inert after a bot merge; this workflow does not restore it, it routes around
+# it. computenet-0pd's push lane stays effectively dead until somebody supplies
+# a PAT or a GitHub App token to `auto-merge.yml`, and that remains the only
+# real fix for the push trigger itself. Two further gaps are open by design:
+# validation is post-hoc, so a broken `main` is reported rather than prevented;
+# and nothing here notifies a human — the run's conclusion has to be looked at,
+# because failure notifications for a bot-actored `pull_request` event may reach
+# nobody.
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    # Daily, off the hour — on-the-hour crons queue behind everyone else's.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a run that has started. `ci.yml` exempts `main` from
+# cancellation for a reason worth restating: a cancelled run reports
+# `cancelled`, which fails quietly and notifies nobody, and a post-merge run is
+# the only place a semantic conflict between two independently-green PRs can
+# surface. Superseding a still-*pending* run (which GitHub does within a group)
+# is safe by contrast: it never executed anything, and because every job checks
+# out `main` by name the newer run validates a strictly newer tip — a superset
+# of what the pending one would have covered.
+concurrency:
+  group: post-merge-main
+  cancel-in-progress: false
+
+jobs:
+  # One place for the run condition, rather than five copies that can drift.
+  # Every lane below `needs` this, and a skipped `needs` skips its dependents.
+  #
+  # `github.event_name != 'pull_request'` admits `schedule` and
+  # `workflow_dispatch` unconditionally. For a `pull_request` event the only
+  # activity type delivered is `closed`, and the two clauses then require that
+  # the close was a merge and that it landed on `main` — a stacked PR merged
+  # into some other base has not changed `main` and does not need validating.
+  main-validation-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    #
+    # Every continuation line below sits at exactly the block's indentation. In
+    # a `>-` folded scalar a MORE-indented line is "more indented" and YAML
+    # keeps its line break literally, so aligning them is what makes this fold
+    # to a single line. A stray newline here would still evaluate (the
+    # expression lexer treats it as whitespace), but this is the one expression
+    # in the repo that decides whether `main` gets validated at all, and it
+    # should not depend on that.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main')
+    steps:
+      - name: Explain what is being validated
+        run: |
+          echo "Validating refs/heads/main (event: ${{ github.event_name }})."
+
+  # Fast lane — mirrors `ci.yml`'s `build-test-fast`.
+  main-build-test-fast:
+    needs: main-validation-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # `ref: main` in every lane, on every event. The point of this workflow
+      # is the squashed *result*, so it must not check out the PR head, nor
+      # the `refs/pull/N/merge` ref that a `pull_request` event checks out by
+      # default. On a manual dispatch this also means the run validates `main`
+      # whatever ref was selected in the UI — the selection only chooses which
+      # version of this file executes.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # `ref: main` resolves at checkout time, so it is a moving target: if
+      # another PR merges between this run being queued and this step, the lane
+      # validates a newer tip than the one that triggered it. That is the
+      # intended trade (a newer tip is a superset), but it means the run does
+      # not otherwise say WHICH commit it validated — and computenet-dqy's
+      # "10 consecutive green runs on main" has to be read off these runs.
+      # Every lane records its own, because each checks out independently and
+      # they can legitimately differ within one run.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
+        run: ./gradlew build check -PexcludeMultiJvm=true
+
+      # Clean-clone guard, as in `ci.yml`: a load-bearing file that was never
+      # committed shows up here as an untracked file and fails the build.
+      - name: Fail on unexpected untracked files
+        run: test -z "$(git status --porcelain -uall -- doc '*/src')"
+
+      # The JUnit XML is the only place a hang explains itself — see the long
+      # rationale in `ci.yml`. Uploaded only when the job did not succeed.
+      - name: Upload test results (diagnostics for failed or hung runs)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-test-results-fast
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Serial lane — mirrors `ci.yml`'s `build-test-serial`.
+  main-build-test-serial:
+    needs: main-validation-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
+        run: ./gradlew check -PmultiJvmOnly=true --max-workers=1
+
+      - name: Upload test results (diagnostics for failed or hung runs)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-test-results-serial
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Concord corpus — mirrors `ci.yml`'s `concord-full`.
+  main-concord-full:
+    needs: main-validation-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run full concord corpus (core, dist, dur)
+        run: ./gradlew :concord:test -Pconcord.profiles=core,dist,dur
+
+      - name: Regenerate concordance matrix
+        run: ./gradlew :concord:concordance
+
+      # Regeneration must be a no-op: if this diffs, doc/spec/CONCORDANCE.md
+      # drifted from the corpus and was hand-edited or left stale.
+      - name: Confirm concordance regeneration is a no-op
+        run: git diff --exit-code doc/spec/CONCORDANCE.md
+
+      - name: Upload test results (diagnostics for failed or hung runs)
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-test-results-concord
+          path: "**/build/test-results/**/*.xml"
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Inspector frontend — mirrors `ci.yml`'s `ui-test`.
+  main-ui-test:
+    needs: main-validation-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: inspect/ui/.nvmrc
+          cache: npm
+          cache-dependency-path: inspect/ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: inspect/ui
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: inspect/ui
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: inspect/ui
+        run: npm test
+
+  # Agora frontend — mirrors `ci.yml`'s `agora-ui-test`.
+  main-agora-ui-test:
+    needs: main-validation-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      # See the fast lane above for why each lane records this.
+      - name: Record the validated commit
+        run: git log -1 --format='validated main = %H %s'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: demo/agora/ui/.nvmrc
+          cache: npm
+          cache-dependency-path: demo/agora/ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: demo/agora/ui
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: demo/agora/ui
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: demo/agora/ui
+        run: npm test
