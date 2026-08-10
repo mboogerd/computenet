@@ -21,7 +21,7 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 | `GET /api/inspect/topology` | M0 | `TopologySnapshot` |
 | `GET /api/inspect/events` | M0 | SSE stream of `Event` |
 | `GET /api/inspect/cell/{ref}` | M1 | `CellDetail` |
-| `GET /api/inspect/cell/{ref}/state?cursor=&limit=` | M1, V1C-BE | `CellState`. `cursor` (opaque, from a previous response's `page.cursor`) and `limit` (1..1000, clamped, default 200) walk a cell's state one bounded page at a time instead of copying it whole. Both are ignored for a cell with an open observation, which keeps answering `kind: "view"` from its already-materialized fold. A malformed `limit` is 400; an unknown, expired, already-consumed or wrong-cell `cursor` is 410 — drop it and restart the walk |
+| `GET /api/inspect/cell/{ref}/state?cursor=&limit=` | M1, V1C-BE | `CellState`. `cursor` (opaque, from a previous response's `page.cursor`) and `limit` (1..1000, clamped, default 200) walk a cell's state one bounded page at a time instead of copying it whole. Both are ignored for a cell with an open observation, which keeps answering `kind: "view"` from its already-materialized fold. A malformed `limit` is 400; a `cursor` that is unknown, expired, evicted, wrong-cell or already spent on a page is 410 — drop it and restart the walk. One arm is exempt, and only one: a response carrying `unreadable: "unanswered"` served no page and therefore spent no cursor, so the `cursor` it was sent with stays resumable — the client re-sends that same request instead of restarting (see `page.cursor`) |
 | `POST /api/inspect/cell/{ref}/observe` | M1 | 204; starts state summaries for this cell. 409 if the cell has no built-in fold to observe (no delta outlet, or an outlet kind with no `View`) — a client that ignores the 409 still behaves correctly, since `GET .../state` reports `kind: "unavailable"` for that cell |
 | `DELETE /api/inspect/cell/{ref}/observe` | M1 | 204; stops them |
 | `GET /api/inspect/errors` | M2 | `ErrorSnapshot` |
@@ -143,19 +143,40 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
   "page": {                        // present iff kind == "page"; null otherwise — a whole "snapshot" has no page
                                    // contract, and its absence is how a client knows no bounded read was available
     "cursor": "p-7f3a…" | null,    // OPAQUE. Echo it back verbatim as ?cursor= to fetch the next page; null means
-                                   // the walk is complete. Never parse it, never construct one, never reuse one:
-                                   // each response mints a fresh cursor and RETIRES the one that produced it, so a
-                                   // re-sent cursor is a visible 410 rather than an invisible skipped page. A
-                                   // stale, unknown, expired (60 s TTL) or wrong-cell cursor answers 410 — a client
-                                   // that gets one drops it and restarts the walk from page 1.
+                                   // the walk is complete. Never parse it, never construct one.
+                                   // ONE ID PER SERVED PAGE. A response that serves a page mints a fresh cursor and
+                                   // RETIRES the one that produced it, so a cursor re-sent after it has already
+                                   // produced a page is a visible 410 rather than an invisible skipped or repeated
+                                   // page. That is what "already-consumed" means, precisely: SPENT ON A PAGE.
+                                   // WHAT ELSE SPENDS IT: a "snapshot" body, and every TERMINAL "unavailable" —
+                                   // "migrating", "remote", "notStateful", "terminated", "readFailed", "unknown".
+                                   // Those walks are over; keeping the id alive would invite a retry that cannot
+                                   // succeed, so the next request carrying it is an honest 410.
+                                   // THE ONE ARM THAT DOES NOT SPEND IT is "unreadable": "unanswered". Nothing was
+                                   // read — neither the page itself, nor (in the render-reconciliation case) the
+                                   // re-read that would have completed it — so the walk position was never consumed
+                                   // and the server puts it back under the SAME id. The correct client response is to
+                                   // RE-SEND THAT SAME REQUEST, not to restart the walk: the retry that "unanswered"
+                                   // invites costs one request, whereas a mid-walk restart on a host loaded enough to
+                                   // miss one bounded wait is as likely to miss another, so restarting can starve a
+                                   // long walk rather than merely slow it. ?limit= may differ on the retry —
+                                   // a cursor names a POSITION, not a page size. (V1C described this as an
+                                   // unconditional 410; the carve-out is the shipped behaviour, computenet-1xx.)
+                                   // 410 STILL MEANS RESTART and a client must still handle it: an id this server
+                                   // never minted, one past its 60 s TTL, one evicted by the 256-open-walk cap, one
+                                   // used against another cell, or one already spent as above. A restored id's TTL
+                                   // clock is refreshed, so an actively retrying client does not age out; the cap can
+                                   // still evict it, so "resumable" is a strong expectation, never a guarantee.
     "limit": 200,                  // the limit actually applied; the server clamps ?limit= to 1..1000, so this is
                                    // how a client learns its request was reduced.
     "entries": 200,                // entries in THIS page, as the cell counted them before encoding — what the
                                    // cursor advanced past, and exactly the number of top-level rows "value"
                                    // renders. The server never serves a page whose entries the encoder's byte
-                                   // budget cut; it re-reads a smaller page instead. So a "$truncated" marker
-                                   // inside "value" means one VALUE was abbreviated, never that entries went
-                                   // missing. "page.cursor" is the one and only signal that more state exists.
+                                   // budget cut; it re-reads a smaller page instead, and when that re-read cannot
+                                   // complete it serves NO page — "unavailable" / "unanswered", with the ?cursor=
+                                   // left resumable — never a short one. So a "$truncated" marker inside "value"
+                                   // means one VALUE was abbreviated, never that entries went missing.
+                                   // "page.cursor" is the one and only signal that more state exists.
     "exclusivesElided": 0,         // entries whose value is an Owned/Leased payload. The kernel pages a presence
                                    // descriptor and never a copy of the payload (spec 23 §Ownership), so > 0 means
                                    // this page is deliberately incomplete in a way no further page will ever fill
@@ -217,8 +238,11 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                                    //                   passes through no disclosure filter; it does not cross a
                                    //                   bridge. Unchanged from M5, and deliberate.
                                    //   "notStateful" — the cell holds no readable state at all.
-                                   //   "unanswered"  — the read did not land inside the server's bounded wait.
-                                   //                   Nothing was read; a retry may succeed.
+                                   //   "unanswered"  — the read did not land inside the server's bounded wait, or its
+                                   //                   render reconciliation could not complete. Nothing was read, so
+                                   //                   nothing partial is served and a retry may succeed. THE ONLY
+                                   //                   ARM THAT DOES NOT SPEND A ?cursor=: re-send the identical
+                                   //                   request to resume the walk — see "page.cursor".
                                    //   "terminated"  — the host's scheduler is gone. A dead host has no state to
                                    //                   read, and a retry will not help.
                                    //   "readFailed"  — the cell's own readBounded()/snapshot() threw. A broken
