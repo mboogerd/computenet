@@ -53,16 +53,40 @@ import java.util.UUID
  * processed-frontier — the last applied `(sourceId, counter)` per inlet — and a
  * replayed invocation at or behind that frontier is dropped as already-acted
  * (`24-DUR-05`). The frontier keys on the invocation's `MessageContext.timestamp`,
- * which is minted by the **producing outlet's** wave (a random `sourceId` per
- * cell instance, not ref-derived). That has one honest consequence the corpus
- * respects: a *journaled source* re-emits on recovery under a **fresh** outlet
- * `sourceId`, which the sink's restored frontier cannot match — so journaling a
- * source that feeds an effectful sink would double-fire (the G-59 boundary:
- * "spontaneously-emitting sources … Effectful sinks without idempotency keys").
- * Therefore the effect subgraph keeps its source **volatile** (it dies on the
- * crash, exactly as `EffectfulRecoveryTest`'s unhosted source is discarded), and
- * the sink recovers exactly-once from its **own** journaled frames + frontier.
- * See `concord/corpus/DISPUTES.md` for the full boundary note.
+ * which is minted by the **producing outlet's** wave.
+ *
+ * A **journaled** outlet's `sourceId` is no longer a random per-instance value:
+ * since the replay-stable wave identity fix (`24-DUR-04`,
+ * `OutletWaveState.durable`, kernel `OutletWaveRecoveryTest`), it is
+ * **ref-derived** (`UUID.nameUUIDFromBytes`, installed on the live path at
+ * spawn), and its whole epoch — identity *and* counter high-water — is
+ * journaled at checkpoint and adopted on recovery, rewound to the checkpoint's
+ * high-water so a replayed tail reproduces exactly the `(sourceId, counter)`
+ * pairs the pre-crash run emitted. Before any checkpoint exists there is no
+ * epoch record to adopt and the derivation alone carries it: the rebuilt outlet
+ * starts on the same derived id at counter 0, and replaying the whole frame
+ * history walks it back through the very same pairs. Consequence: **a journaled source feeding an
+ * effectful sink now fires each logical delta exactly once across a crash** —
+ * the replayed re-emission carries the identity the sink's restored frontier
+ * already recorded and is suppressed as already-acted, while post-recovery live
+ * traffic's counter continues past every pre-crash value so it is never
+ * mistaken for already-acted in turn. This driver's own `journal-set-source` →
+ * `effect-sink` construction is exactly that shape, and it is the corpus's
+ * headline coverage for it: `DUR-SRCID-01` (uncheckpointed) and `DUR-SRCID-02`
+ * (checkpointed), both `covers: [24-DUR-04, 24-DUR-05]`. `DUR-REPLAY-01`
+ * (`covers: [24-DUR-01, 24-DUR-02, 24-DUR-05]`) still feeds its journaled sink
+ * from a **volatile** source, in a subgraph held independent of its
+ * data-recovery subgraph; that construction remains valid coverage, it is
+ * simply no longer the *only* way to drive an `Effectful` sink exactly-once
+ * through this driver.
+ *
+ * One boundary this fix does not touch: a frame that reaches an `Effectful`
+ * inlet with **no** `MessageContext` — the externally-driven-root shape, e.g. a
+ * connector ingress calling in directly — has no `(sourceId, counter)` position
+ * to be deduped against at all, so it is never suppressed and re-fires on
+ * replay. That is a decided, recorded bounded limit against `24-DUR-05`
+ * (KFX-16), not an oversight; see `concord/corpus/DISPUTES.md`'s W4-B section
+ * for the full boundary notes, including this one.
  *
  * ## Scenario surface (neutral, expressed through the existing script verbs)
  *
