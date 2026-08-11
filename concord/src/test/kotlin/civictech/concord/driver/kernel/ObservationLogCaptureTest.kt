@@ -1,8 +1,10 @@
 package civictech.concord.driver.kernel
 
+import civictech.cell.observe.ObservationSink
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.collections.shouldHaveSize
+import java.util.concurrent.CountDownLatch
 import kotlin.test.Test
 
 /**
@@ -81,6 +83,117 @@ class ObservationLogCaptureTest {
             }
         }
     }
+
+    /**
+     * The load-free regression guard for the capture *mechanism*, as opposed to
+     * the stream's contents.
+     *
+     * The three content tests here can all pass against the pre-fix capture on a
+     * quiet machine — the dispatcher usually keeps up — so on their own they
+     * catch a revert to `sink.onChange` only by luck, which is the very property
+     * this ticket exists to remove. This one catches it on any machine, because
+     * it takes the dispatcher's opportunity to keep up away rather than hoping
+     * it does not get one: a listener that never returns
+     * occupies the sink's **single-thread** executor for the whole run, so every
+     * submission queued behind it (a capture listener's included) is stalled
+     * until after the checks have read the log.
+     *
+     * Pre-fix that leaves the log holding only the catch-up entry the driver's
+     * own listener was submitted with first; the fold-side capture is unaffected
+     * because it never touches the executor at all.
+     */
+    @Test
+    fun `a wedged listener dispatcher does not truncate the observation log`() {
+        val expected = (0..(2 * INCREMENTS)).map { Value.IntVal(it.toLong()) }
+        val driver = diamond(0L)
+        val wedge = CountDownLatch(1)
+        @Suppress("UNCHECKED_CAST")
+        (driver.cells.getValue("v").sink as ObservationSink<Any?>).onChange {
+            wedge.await() // holds the sink's only dispatch thread for the whole run
+        }
+        try {
+            repeat(INCREMENTS) { driver.apply("n", "increment", null) }
+            driver.quiesce(BUDGET)
+            driver.observationLog("v") shouldBe expected
+        } finally {
+            wedge.countDown()
+        }
+    }
+
+    /**
+     * The same capture change was made on the `dist` replica companion
+     * ([KernelDriverDist], which now builds it through the catalog rather than by
+     * hand) — and **no** corpus scenario currently declares an `observations-*`
+     * check on a replica, so without this the whole path is unguarded: a
+     * regression to `sink.onChange` there would be silent until the first
+     * scenario that reads a replica's stream, and would then read as a vacuous
+     * pass rather than a failure.
+     */
+    @Test
+    fun `a dist replica's observation stream is whole and run-identical`() {
+        val h1 = listOf(set(), set("from-h1"), set("from-h1", "from-h2"))
+        val h2 = listOf(set(), set("from-h2"), set("from-h1", "from-h2"))
+
+        for (run in 0 until RUNS) {
+            val driver = KernelDriver(run.toLong()).apply {
+                createHost("h1")
+                createHost("h2")
+                spawn("h1", "r1", "set-source", mapOf("replica-of" to Value.StrVal("shared")))
+                spawn("h2", "r2", "set-source", mapOf("replica-of" to Value.StrVal("shared")))
+                apply("r1", "add", Value.StrVal("from-h1"))
+                apply("r2", "add", Value.StrVal("from-h2"))
+                quiesce(BUDGET)
+            }
+            // Each replica observes its own write first and the sibling's merged
+            // gossip second, so the two streams differ in their middle element and
+            // meet at the converged fold — a truncated capture loses exactly that.
+            inRun(run) { driver.observationLog("r1") shouldBe h1 }
+            inRun(run) { driver.observationLog("r2") shouldBe h2 }
+        }
+    }
+
+    /**
+     * The `dur` driver keeps one log per *cell id* so it outlives the crash, and
+     * rebuilds the fold over that surviving list ([KernelDriverDur]'s `build`).
+     * This pins that the stream really is continuous across crash+recover —
+     * nothing dropped, nothing duplicated — which is the one place the capture
+     * change could have lost or double-counted an entry, and which no corpus
+     * scenario reads either.
+     */
+    @Test
+    fun `a dur view's observation stream is continuous across crash and recover`() {
+        val expected = listOf(
+            // pre-crash: the fold's catch-up, then one entry per accepted add
+            set(), set("o1"), set("o1", "o2"), set("o1", "o2", "o3"), set("o1", "o2", "o3", "o4"),
+            // the rebuilt (empty) fold's catch-up, then the journal tail replayed on
+            // top of the silently restored checkpoint {o1,o2} — `ObserveCell.restore`
+            // is a state assignment, not a fold, so it publishes no entry of its own
+            set(), set("o1", "o2", "o3"), set("o1", "o2", "o3", "o4"),
+        )
+
+        for (run in 0 until RUNS) {
+            val driver = KernelDriver(run.toLong()).apply {
+                spawn("dur", "dsource", "journal-set-source", emptyMap())
+                spawn("dur", "dview", "journal-set-view", emptyMap())
+                spawn("dur", "ctl", "journal", emptyMap())
+                connect("dsource", "dview", null, null, null)
+                apply("dsource", "add", Value.StrVal("o1"))
+                apply("dsource", "add", Value.StrVal("o2"))
+                quiesce(BUDGET)
+                snapshot("dsource")          // checkpoint the prefix
+                apply("dsource", "add", Value.StrVal("o3"))
+                apply("dsource", "add", Value.StrVal("o4"))
+                quiesce(BUDGET)
+                despawn("ctl")               // crash + recover
+                quiesce(BUDGET)
+            }
+            inRun(run) { driver.observationLog("dview") shouldBe expected }
+        }
+    }
+
+    /** A `set-view` observation, in the shape [KernelCatalog.readView] publishes. */
+    private fun set(vararg items: String): Value =
+        Value.ListVal(items.map { Value.StrVal(it) as Value }.sortedBy { it.toString() })
 
     private fun <T> inRun(run: Int, block: () -> T): T =
         try {
