@@ -30,3 +30,12 @@ script:
   - {type: apply, on: s, op: add, value: 4}
 checks:
   - {type: views-converge, views: [v1, v2]}
+# The failure this control exists to provoke (computenet-dqy.21). The two folds
+# are deterministic at quiescence (a set-view reads as a sorted list), so the
+# divergence is named exactly: the even arm holds [2,4] while the odd arm holds
+# [1,3]. Asserting only that *something* failed would accept, say, an empty v1
+# against a populated v2 as proof the harness detects divergence — a failing
+# control that no longer controls anything.
+expect-failure:
+  check: views-converge
+  message-contains: 'v1=[2,4] but v2=[1,3]'
