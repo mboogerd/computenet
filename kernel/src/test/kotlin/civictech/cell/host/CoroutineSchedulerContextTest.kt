@@ -387,4 +387,69 @@ class CoroutineSchedulerContextTest {
             hostExec.shutdownNow()
         }
     }
+
+    /**
+     * T06 §C2d (computenet-dqy.10, added in review) — §C2c's assertion on the
+     * *failure* path, which is the one that actually decides whether a stranded
+     * mark is possible.
+     *
+     * §C2c only ever unwinds a task that returned normally. The claim behind
+     * this fix is stronger than that: `restoreThreadContext` runs from a
+     * `finally`, so it must hold when the resumption carries a `Throwable`
+     * instead of a value. That is not a hypothetical branch — a suspending cell
+     * handler throwing after a hop is ordinary, and `CoroutineScheduler`'s
+     * `Throwable` backstop exists precisely so the drain loop survives it. A
+     * mark stranded by the exception path would therefore be *worse* than the
+     * timeout being fixed: the drain thread lives on and rejects every later
+     * legal `await` from it, invisibly to §C2c.
+     *
+     * The fence is the scheduler's own sequencing rather than a latch: the
+     * drain loop starts the second task only after the first task's
+     * `withContext(DrainingThreadElement())` has returned, and the hop's
+     * exception reaches the drain thread only after the resume thread has
+     * unwound. The second task completing therefore proves both unwinds
+     * happened — and proves the drain loop outlived the failure.
+     */
+    @Test
+    fun `C2d - the draining mark is cleared on both threads when a hopped task fails`() {
+        val hostExec = Executors.newSingleThreadExecutor { Thread(it, "t06-c2d-host") }
+        val resumeExec = Executors.newSingleThreadExecutor { Thread(it, "t06-c2d-resume") }
+        val scheduler = CoroutineScheduler("t06-c2d", hostExec.asCoroutineDispatcher())
+        try {
+            val resumeDispatcher = resumeExec.asCoroutineDispatcher()
+
+            // Throws *inside* the hop, so the resume thread unwinds
+            // exceptionally and the drain thread's resumption delivers a
+            // Throwable. The scheduler's backstop catches and prints it: a
+            // stack trace in this test's output is expected, not a failure.
+            scheduler.submit(0) {
+                withContext(resumeDispatcher) {
+                    throw IllegalArgumentException("C2d - deliberate failure inside the hop, expected")
+                }
+            }
+
+            val secondTaskRan = CompletableFuture<Unit>()
+            scheduler.submit(0) { secondTaskRan.complete(Unit) }
+            secondTaskRan.get(15, TimeUnit.SECONDS)
+
+            for ((label, exec) in listOf("drain" to hostExec, "resume" to resumeExec)) {
+                val outcome = CompletableFuture<Throwable?>()
+                exec.execute {
+                    outcome.complete(
+                        runCatching {
+                            scheduler.await(CompletableFuture.completedFuture(Unit))
+                        }.exceptionOrNull(),
+                    )
+                }
+                val leaked = outcome.get(15, TimeUnit.SECONDS)
+                require(leaked == null) {
+                    "the $label thread is still marked as draining after its task failed: $leaked"
+                }
+            }
+        } finally {
+            scheduler.shutdown()
+            resumeExec.shutdownNow()
+            hostExec.shutdownNow()
+        }
+    }
 }
