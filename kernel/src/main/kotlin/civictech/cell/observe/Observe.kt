@@ -139,6 +139,21 @@ interface View<in D, out S> {
  * *where* the listener runs: never the host thread, so a listener that
  * blocks stalls only its own sink's later notifications, never other cells'
  * dispatch.
+ *
+ * **The dispatcher is minted lazily, on the first submission** — and a
+ * submission only ever happens when at least one listener is registered
+ * (`propagate` skips the fire when [listeners] is empty). A view nobody
+ * observes therefore owns no thread at all. This is not tidiness: a graph is
+ * built and torn down per scenario per seed in the conformance suite, and the
+ * kernel's own instruments (concord's recorded views, the inspector's
+ * observation sinks) read through [current] rather than a listener, so an
+ * eager dispatcher was one idle daemon thread leaked per view per run inside
+ * a long-lived test JVM. Race-freedom of the lazy mint is *mechanical*, not
+ * argued: [dispatchIfOpen] asserts it holds [lock], and [lock] already
+ * serialized every fold, registration, close and reopen — so two concurrent
+ * registrations cannot both mint, and a registration racing a fold either
+ * lands in that fold's fired list or takes its catch-up from the
+ * already-updated [latest]. Neither order drops a notification.
  */
 class ObserveCell<D : Any, S>(
     private val view: View<D, S>,
@@ -155,8 +170,23 @@ class ObserveCell<D : Any, S>(
         Thread(r, "observe-cell-${ref.id}").apply { isDaemon = true }
     }
 
-    @Volatile
-    private var dispatcher: ExecutorService = newDispatcher()
+    /**
+     * The listener-dispatch executor, or `null` while this sink has never had
+     * anything to dispatch. Read and written **only under [lock]** (hence no
+     * `@Volatile`) — that is what makes the lazy mint in [dispatchIfOpen]
+     * race-free.
+     */
+    private var dispatcher: ExecutorService? = null
+
+    /**
+     * A [close]d dispatcher awaiting hand-off: [reopen] does not mint a
+     * replacement eagerly (that would resurrect a thread for a sink that may
+     * never dispatch again), so the superseded executor is parked here and the
+     * *next* mint chains a drain-wait on it as its first task, preserving the
+     * cross-reopen ordering documented on [reopen]. Lock-guarded like
+     * [dispatcher].
+     */
+    private var draining: ExecutorService? = null
 
     @Volatile
     private var closed = false
@@ -172,7 +202,9 @@ class ObserveCell<D : Any, S>(
                         latest = view.current()
                         val snapshot = latest
                         val fired = listeners.toList()
-                        dispatchIfOpen { fired.forEach { it(snapshot) } }
+                        // Nothing to notify ⇒ no submission, so an unobserved
+                        // view never mints a dispatcher (see the class doc).
+                        if (fired.isNotEmpty()) dispatchIfOpen { fired.forEach { it(snapshot) } }
                     }
                 }
             }
@@ -193,11 +225,31 @@ class ObserveCell<D : Any, S>(
         }
     }
 
-    /** Submits [block] to [dispatcher] unless [close]d; silently drops on a close race (no live listener to reach). */
+    /**
+     * Submits [block] to [dispatcher] unless [close]d, minting the dispatcher
+     * on first use; silently drops on a close race (no live listener to reach).
+     *
+     * **Must be called holding [lock]** — asserted, not merely documented,
+     * because that is the whole race argument for the lazy mint: mint,
+     * listener-list mutation, and fold all happen inside the same monitor, so
+     * two concurrent registrations cannot each create an executor and no
+     * submission can be interleaved out of its total order.
+     */
     private fun dispatchIfOpen(block: () -> Unit) {
+        check(Thread.holdsLock(lock)) { "dispatchIfOpen must be called under the sink lock" }
         if (closed) return
+        val target = dispatcher ?: newDispatcher().also { fresh ->
+            dispatcher = fresh
+            // First act of a post-[reopen] dispatcher: wait out the superseded
+            // one, so an invocation queued before the restart can never be
+            // overtaken by one submitted after it.
+            draining?.let { previous ->
+                draining = null
+                fresh.execute { runCatching { previous.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) } }
+            }
+        }
         try {
-            dispatcher.execute(block)
+            target.execute(block)
         } catch (_: RejectedExecutionException) {
             // raced a concurrent close(); nothing left to notify.
         }
@@ -213,7 +265,9 @@ class ObserveCell<D : Any, S>(
     }
 
     /**
-     * T08 finding 4 lifecycle: stops [dispatcher]. Idempotent. Wired into
+     * T08 finding 4 lifecycle: stops [dispatcher] if one was ever minted (a
+     * never-observed sink has no thread to stop, so this is a pure flag flip).
+     * Idempotent. Wired into
      * [onDeactivate] — the host already calls this on despawn (`Cell`'s own
      * disposal hook) — so a despawned sink's dispatch thread does not
      * outlive it; a caller that never despawns the sink (the common demo
@@ -226,11 +280,11 @@ class ObserveCell<D : Any, S>(
             closed = true
             dispatcher
         }
-        doomed.shutdown()
+        doomed?.shutdown()
     }
 
     /**
-     * Reopens a [close]d sink with a fresh [dispatcher]. Idempotent, and a
+     * Reopens a [close]d sink so it can dispatch again. Idempotent, and a
      * no-op on an already-open sink.
      *
      * Necessary because [onDeactivate] is **not** only a despawn hook:
@@ -242,23 +296,31 @@ class ObserveCell<D : Any, S>(
      * forever, which is precisely the class of silent degrade T08 set out to
      * remove.
      *
-     * Ordering across the reopen: the new dispatcher's first act is to wait
-     * for the old one to drain, so a listener invocation queued before the
-     * restart can never be overtaken by one submitted after it — the
+     * Ordering across the reopen: the replacement dispatcher's first act is to
+     * wait for the old one to drain, so a listener invocation queued before
+     * the restart can never be overtaken by one submitted after it — the
      * total-order guarantee in this class's doc survives the boundary. A
      * listener still blocked on the old dispatcher therefore also holds up
      * the new one, which is the same "delays only its own sink" property,
      * unchanged.
+     *
+     * The replacement is *not* minted here: reopen only clears the closed flag
+     * and parks the superseded executor in [draining], leaving the mint to the
+     * next actual submission ([dispatchIfOpen], which chains the drain-wait
+     * there). A restart or migration of a sink nobody observes therefore stays
+     * thread-free, exactly as its first activation was.
      */
     private fun reopen() {
-        val drained = synchronized(lock) {
+        synchronized(lock) {
             if (!closed) return
-            val previous = dispatcher
-            dispatcher = newDispatcher()
+            // Whatever close() shut down becomes the next mint's predecessor.
+            // Only overwrite when there is something to hand off, so a
+            // close/reopen cycle that dispatches nothing in between cannot
+            // lose an earlier still-draining executor.
+            dispatcher?.let { draining = it }
+            dispatcher = null
             closed = false
-            previous
         }
-        dispatcher.execute { runCatching { drained.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) } }
     }
 
     override fun onActivate(ctx: CellContext) {
@@ -422,10 +484,13 @@ class CompositeSink internal constructor(
     private val values = LinkedHashMap<String, Any?>()
     private val listeners = mutableListOf<(Map<String, Any?>) -> Unit>()
 
-    /** T08 finding 4: this composite's own single-consumer dispatch executor. */
-    private val dispatcher = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "observe-composite-${System.identityHashCode(this)}").apply { isDaemon = true }
-    }
+    /**
+     * T08 finding 4: this composite's own single-consumer dispatch executor —
+     * minted lazily on the first submission (i.e. only once a composite
+     * listener exists), for the same reason as [ObserveCell.dispatcher]. Read
+     * and written only under [lock].
+     */
+    private var dispatcher: ExecutorService? = null
 
     @Volatile
     private var closed = false
@@ -461,7 +526,9 @@ class CompositeSink internal constructor(
                         snapshot = LinkedHashMap(values)
                         val fired = listeners.toList()
                         val s = snapshot
-                        dispatchIfOpen { fired.forEach { it(s) } }
+                        // No composite listener ⇒ no submission, so a composite
+                        // read only through current() owns no dispatch thread.
+                        if (fired.isNotEmpty()) dispatchIfOpen { fired.forEach { it(s) } }
                     }
                 }
             }
@@ -479,10 +546,15 @@ class CompositeSink internal constructor(
         }
     }
 
+    /** Must be called holding [lock] — see [ObserveCell.dispatchIfOpen] for why. */
     private fun dispatchIfOpen(block: () -> Unit) {
+        check(Thread.holdsLock(lock)) { "dispatchIfOpen must be called under the composite lock" }
         if (closed) return
+        val target = dispatcher ?: Executors.newSingleThreadExecutor { r ->
+            Thread(r, "observe-composite-${System.identityHashCode(this)}").apply { isDaemon = true }
+        }.also { dispatcher = it }
         try {
-            dispatcher.execute(block)
+            target.execute(block)
         } catch (_: RejectedExecutionException) {
             // raced a concurrent close(); nothing left to notify.
         }
@@ -516,11 +588,12 @@ class CompositeSink internal constructor(
      * composite's own listener-dispatch thread.
      */
     fun close() {
-        synchronized(lock) {
+        val doomed = synchronized(lock) {
             if (closed) return
             closed = true
+            dispatcher
         }
-        dispatcher.shutdown()
+        doomed?.shutdown()
     }
 }
 
