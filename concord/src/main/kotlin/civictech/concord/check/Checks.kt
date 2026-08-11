@@ -436,7 +436,8 @@ object Checks {
         } else {
             CheckResult.Failed(
                 "$where: the view '$view' produced no observation at all — nothing was observed, " +
-                    "so nothing is asserted",
+                    "so nothing is asserted (check that it names a view cell and that the driver is " +
+                    "recording its observation stream)",
             )
         }
 

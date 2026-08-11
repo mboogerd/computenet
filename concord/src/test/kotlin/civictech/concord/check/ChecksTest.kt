@@ -185,7 +185,8 @@ class ChecksTest {
         )
         val r = Checks.observationsAllSatisfy(ObservationsAllSatisfy("v", "even"), ctx)
         fail(r)
-        (r as CheckResult.Failed).message shouldContain "nothing was observed"
+        (r as CheckResult.Failed).message shouldContain "observations-all-satisfy(v, even)"
+        r.message shouldContain "nothing was observed"
         r.message shouldContain "'v'"
     }
 
@@ -197,7 +198,8 @@ class ChecksTest {
         )
         val r = Checks.observationsMonotone(ObservationsMonotone("v"), ctx)
         fail(r)
-        (r as CheckResult.Failed).message shouldContain "nothing was observed"
+        (r as CheckResult.Failed).message shouldContain "observations-monotone(v)"
+        r.message shouldContain "nothing was observed"
         r.message shouldContain "'v'"
     }
 
@@ -206,17 +208,36 @@ class ChecksTest {
         val ctx = FakeContext(FakeDriver(observations = mapOf("v" to emptyList())), setViewScenario)
         val r = Checks.observationsWholeWaves(ObservationsWholeWaves("v", "a"), ctx)
         fail(r)
-        (r as CheckResult.Failed).message shouldContain "nothing was observed"
+        (r as CheckResult.Failed).message shouldContain "observations-whole-waves(v)"
+        r.message shouldContain "nothing was observed"
         r.message shouldContain "'v'"
     }
 
     @Test
+    fun `whole-waves refuses the empty log before it consults the op prefixes`() {
+        // Ordering matters: observationsWholeWaves computes the source's prefix
+        // folds *before* it reads the log, and that computation has its own
+        // early returns. This pins that an empty log still reaches the guard and
+        // reports "nothing was observed" rather than a prefix-shaped verdict —
+        // and, above all, that no route through this check returns Passed on an
+        // empty log.
+        val ctx = FakeContext(FakeDriver(observations = mapOf("v" to emptyList())), setViewScenario)
+        val r = Checks.observationsWholeWaves(ObservationsWholeWaves("v", "a"), ctx)
+        (r as CheckResult.Failed).message shouldContain "nothing was observed"
+    }
+
+    @Test
     fun `a view the driver never recorded at all is a failure, not a pass`() {
-        // No fixture for 'v' whatsoever — observationLog returns empty, which is
-        // the same hole seen from the other side: the check must not pass.
+        // No fixture for 'v' whatsoever. This driver answers an unknown cell with
+        // an empty log (the in-process KernelDriver instead throws
+        // NoSuchElementException for a cell it never spawned, which is loud on
+        // its own). Whichever way a binding renders "absent", the check must not
+        // pass: the SPI cannot distinguish "recorded nothing" from "never
+        // recorded", so the guard treats both as nothing observed.
         val ctx = FakeContext(FakeDriver(), scenario(listOf(cell("v", "value-view")), emptyList()))
         fail(Checks.observationsAllSatisfy(ObservationsAllSatisfy("v", "even"), ctx))
         fail(Checks.observationsMonotone(ObservationsMonotone("v"), ctx))
+        fail(Checks.observationsWholeWaves(ObservationsWholeWaves("v", "a"), ctx))
     }
 
     // --- replicas-converge --------------------------------------------------
