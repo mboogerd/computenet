@@ -157,23 +157,47 @@ object JvmPeer {
          * where a `BindException` shows up: a peer that cannot bind fails the test
          * naming that, not a later "timed out awaiting …" that has to be traced back
          * to a child process's log.
+         *
+         * A failure here also stops *this* peer before it throws (see [failWith]) —
+         * the callers read their ports before arming the `finally` that destroys
+         * them, so a peer whose handshake failed would otherwise outlive the test
+         * that launched it. Peers that already announced successfully are not
+         * covered by that and remain the caller's `finally` to destroy; the shutdown
+         * hook on [JvmPeer] is the backstop for both.
          */
         fun port(name: String, timeoutMs: Long = LAUNCH_TIMEOUT_MS): Int = synchronized(lock) {
             val deadline = System.currentTimeMillis() + timeoutMs
             while (ports[name] == null) {
-                if (ended) throw AssertionFailedError(
+                if (ended) failWith(
                     "peer `$described` produced no more output without announcing its \"$name\" port " +
                         "(${aliveDescription()}) — its own output below is the diagnosis; a BindException " +
                         "there means the peer lost the port it was told to bind\n\n${report()}"
                 )
                 val remaining = deadline - System.currentTimeMillis()
-                if (remaining <= 0) throw AssertionFailedError(
+                if (remaining <= 0) failWith(
                     "timed out after ${timeoutMs}ms awaiting peer `$described` to announce its \"$name\" " +
                         "port (announced so far: ${ports.keys.sorted()})\n\n${report()}"
                 )
                 lock.wait(minOf(remaining, POLL_MS))
             }
             ports.getValue(name)
+        }
+
+        /**
+         * Throw [message], having first stopped the peer it describes.
+         *
+         * [message] is composed by the caller, so the whole diagnosis — the peer's
+         * buffered output and its live-or-exited status — is captured before
+         * anything is killed. What the kill buys is that a *hung* peer (started,
+         * announced nothing more, still running) does not keep running alongside
+         * the rest of the suite: a module's test classes share one Gradle test JVM,
+         * so an abandoned demo process would compete with every later test for CPU
+         * and the shutdown hook below only reaps at JVM exit.
+         */
+        private fun failWith(message: String): Nothing {
+            val error = AssertionFailedError(message)
+            process.destroyForcibly()
+            throw error
         }
 
         /** kill -9, for the tests whose subject is a peer dying mid-session. */

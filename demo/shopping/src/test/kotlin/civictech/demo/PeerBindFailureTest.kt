@@ -1,11 +1,14 @@
 package civictech.demo
 
 import civictech.testkit.JvmPeer
+import io.kotest.matchers.ints.shouldBeGreaterThan
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.net.ServerSocket
+import java.util.concurrent.TimeUnit
 
 /**
  * computenet-dqy.25's diagnosability clause, as a test: a launched peer that cannot
@@ -47,6 +50,42 @@ class PeerBindFailureTest {
             } finally {
                 JvmPeer.destroy(peer)
             }
+        }
+    }
+
+    /**
+     * The companion promise, added in review: a handshake that fails does not leave
+     * the peer running.
+     *
+     * It matters because of where the callers read their ports — before the `try`
+     * whose `finally` destroys the peers, since the second peer's launch arguments
+     * contain the first peer's announced port. A peer that starts, announces
+     * nothing more and does not exit would therefore outlive the test it failed:
+     * every test class in this module shares one Gradle test JVM (`forkEvery(80)`
+     * never triggers on six classes), so an abandoned demo process would compete
+     * with every later test for CPU. `JvmPeer`'s shutdown hook only reaps at JVM
+     * exit, which is far too late to keep the rest of the suite honest.
+     *
+     * Solo mode is the deterministic version of "announces nothing more": a peer
+     * launched with no `--listen` and no `--peer` announces `http` and never a `ws`
+     * port, and stays up serving HTTP indefinitely.
+     */
+    @Test
+    fun `a peer that never announces the awaited port is stopped, not left running`() {
+        val peer = JvmPeer.launch("civictech.demo.MainKt", "0")
+        try {
+            peer.port("http") shouldBeGreaterThan 0
+
+            val failure = assertThrows<AssertionError> { peer.port("ws", timeoutMs = 2_000) }
+            val message = failure.message ?: ""
+            message shouldContain "announce its \"ws\" port"
+            // the diagnosis still names what the peer DID announce, and quotes it
+            message shouldContain "announced so far: [http]"
+            message shouldContain "computenet-port http"
+
+            peer.process.waitFor(10, TimeUnit.SECONDS) shouldBe true
+        } finally {
+            JvmPeer.destroy(peer)
         }
     }
 }
