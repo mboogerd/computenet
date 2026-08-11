@@ -325,4 +325,66 @@ class CoroutineSchedulerContextTest {
             hostExec.shutdownNow()
         }
     }
+
+    /**
+     * T06 §C2c (computenet-dqy.10, added in review) — the other half of the
+     * thread-confinement contract: the mark must be *cleared* again on every
+     * thread it was ever set on.
+     *
+     * §C2b pins the false negative (the guard failing to fire). This pins the
+     * false positive it would cost to fix that carelessly. The mark now lives in
+     * a `ThreadLocal`, and both threads a hopped task touches — the one that
+     * started the drain and the one it resumed on — are pooled and go on to run
+     * unrelated work. A mark stranded `true` on either would make a perfectly
+     * legal `await` from that thread throw `IllegalStateException`, which is a
+     * worse failure than the timeout being fixed: it is silent, it is sticky,
+     * and it accuses correct code. `restoreThreadContext` runs from a `finally`
+     * in kotlinx's `withCoroutineContext`/`withContinuationContext` (and, on the
+     * undispatched slow path, from `UndispatchedCoroutine.afterResume`), so this
+     * should hold — but "should, per a library's internals" is exactly the kind
+     * of claim that deserves a test rather than a comment.
+     *
+     * Awaiting an *already-complete* future is what makes this safe to assert:
+     * it needs no drain, so posting it back onto the drain thread cannot
+     * deadlock. It returns at once, or it reveals a stranded mark.
+     */
+    @Test
+    fun `C2c - the draining mark is cleared on both threads a hopped task touched`() {
+        val hostExec = Executors.newSingleThreadExecutor { Thread(it, "t06-c2c-host") }
+        val resumeExec = Executors.newSingleThreadExecutor { Thread(it, "t06-c2c-resume") }
+        val scheduler = CoroutineScheduler("t06-c2c", hostExec.asCoroutineDispatcher())
+        try {
+            val resumeDispatcher = resumeExec.asCoroutineDispatcher()
+            val drained = CompletableFuture<Unit>()
+
+            // One task that genuinely hops away and back, so both threads run
+            // `updateThreadContext` and both owe a `restoreThreadContext`.
+            scheduler.submit(0) {
+                withContext(resumeDispatcher) {
+                    Thread.currentThread().name.startsWith("t06-c2c-resume") shouldBe true
+                }
+                drained.complete(Unit)
+            }
+            drained.get(15, TimeUnit.SECONDS)
+
+            for ((label, exec) in listOf("drain" to hostExec, "resume" to resumeExec)) {
+                val outcome = CompletableFuture<Throwable?>()
+                exec.execute {
+                    outcome.complete(
+                        runCatching {
+                            scheduler.await(CompletableFuture.completedFuture(Unit))
+                        }.exceptionOrNull(),
+                    )
+                }
+                val leaked = outcome.get(15, TimeUnit.SECONDS)
+                require(leaked == null) {
+                    "the $label thread is still marked as draining after its task finished: $leaked"
+                }
+            }
+        } finally {
+            scheduler.shutdown()
+            resumeExec.shutdownNow()
+            hostExec.shutdownNow()
+        }
+    }
 }
