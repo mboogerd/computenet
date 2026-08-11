@@ -26,6 +26,7 @@ import civictech.cell.port.LinkFrom
 import civictech.cell.port.Use
 import civictech.cell.port.PortRef
 import civictech.cell.port.registerPort
+import civictech.concord.value.Value
 import civictech.nature.CellColor
 import civictech.nature.CellDescriptor
 import civictech.nature.ContractDescriptor
@@ -121,6 +122,59 @@ class ScalarSumCombineCell(override val ref: CellRef = CellRef(UUID.randomUUID()
         val s = state as LongArray
         leftTotal = s[0]; rightTotal = s[1]; lastSum = s[2]
     }
+}
+
+/**
+ * A [View] decorator that records the observation stream **synchronously, at the
+ * fold** — the sequence of settled materialized values the corpus's
+ * `observations-*` checks read.
+ *
+ * Why not [ObservationSink.onChange], which the driver used to register for this?
+ * Because the kernel's [civictech.cell.observe.ObserveCell] deliberately invokes
+ * its listeners on a per-sink single-thread executor (Observe.kt, T08 finding 4:
+ * a blocking app listener must not pin the host's dispatch). That is the right
+ * contract for an *app* listener and the wrong one for the harness: the runner
+ * quiesces the deterministic [civictech.cell.host.SimulationController] on its own
+ * thread and then reads the log, with no happens-before edge to the dispatcher
+ * thread, so the log it reads is whatever that thread happened to have appended.
+ * An oversubscribed machine can starve the dispatcher for the whole run and leave
+ * the log **empty**, which silently turns every `observations-*` check vacuous —
+ * observed as `CTL-GF-01` passing its declared check when a control must fail it
+ * (computenet-dqy.18).
+ *
+ * Recording here instead removes the thread hop entirely: [apply] runs on the
+ * host scheduler thread, inside `ObserveCell`'s own fold lock, in exactly the
+ * total order the kernel applies deltas. In the simulation that thread *is* the
+ * controller thread, so the log is complete and identical on every run — the
+ * determinism the whole schedule sweep depends on. [log] is a plain list for
+ * that reason: it is written and read on one thread.
+ *
+ * The constructor appends the fold's initial value, which is what `onChange`'s
+ * late-join catch-up used to contribute as the stream's first element. A caller
+ * that rebuilds a cell over a surviving log (the durable driver's crash/recover
+ * cycle) therefore gets one catch-up entry per rebuild, as before.
+ */
+internal class RecordedView<D : Any, S>(
+    private val inner: View<D, S>,
+    private val kind: KernelCatalog.ViewKind,
+    private val log: MutableList<Value>,
+) : View<D, S> {
+
+    init {
+        log += KernelCatalog.readView(kind, inner.current())
+    }
+
+    override fun apply(delta: D): Boolean {
+        val changed = inner.apply(delta)
+        if (changed) log += KernelCatalog.readView(kind, inner.current())
+        return changed
+    }
+
+    override fun current(): S = inner.current()
+
+    override fun snapshot(): Serializable = inner.snapshot()
+
+    override fun restore(state: Serializable) = inner.restore(state)
 }
 
 /**

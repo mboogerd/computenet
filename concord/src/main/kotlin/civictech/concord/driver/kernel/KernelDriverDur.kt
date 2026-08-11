@@ -219,10 +219,10 @@ internal class KernelDriverDur(
         val built = build(spec)
         host.managementInlet.call.spawn(built.cell)
         cells[spec.cellId] = built.copy(outletDelegate = glitchFreeDelegate(spec, built.ref))
-        built.sink?.let { sink ->
-            val log = logs.getOrPut(spec.cellId) { mutableListOf() }
-            sink.onChange { snapshot -> log += KernelCatalog.readView(built.viewKind, snapshot) }
-        }
+        // The observation stream is recorded at the fold in [build] (into this
+        // cell's surviving [logs] entry), not through `sink.onChange` — the sink's
+        // listener dispatch is asynchronous and nothing here waits for it, so a
+        // recovered view's replayed observations could be missing at check time.
     }
 
     /**
@@ -272,7 +272,14 @@ internal class KernelDriverDur(
             Bound(spec.ref, spec.type, SetCell<Any?>(spec.ref), null, KernelCatalog.ViewKind.NONE)
 
         "set-view", "journal-set-view" -> {
-            val cell = ObserveCell(View.set<Any?>(), spec.ref)
+            // The fold is wrapped so the observation stream is recorded on the
+            // folding thread ([RecordedView]) into this cell id's log, which
+            // outlives the crash+rebuild cycle. Constructing over the *surviving*
+            // list is what keeps a recovered view's stream continuous: the wrapper
+            // appends one catch-up entry per rebuild, exactly as the sink's
+            // late-join `onChange` used to.
+            val log = logs.getOrPut(spec.cellId) { mutableListOf() }
+            val cell = ObserveCell(RecordedView(View.set<Any?>(), KernelCatalog.ViewKind.SET, log), spec.ref)
             Bound(spec.ref, spec.type, cell, cell, KernelCatalog.ViewKind.SET)
         }
 

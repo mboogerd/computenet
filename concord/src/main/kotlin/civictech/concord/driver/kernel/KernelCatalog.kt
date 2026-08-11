@@ -72,6 +72,18 @@ internal object KernelCatalog {
          * port pair (see [inletName]).
          */
         val waveAligned: Boolean = false,
+        /**
+         * For a view cell: the live observation stream, appended to
+         * **synchronously on the folding thread** — see [RecordedView] for why the
+         * driver records here rather than through [ObservationSink.onChange], whose
+         * listener dispatch is asynchronous and left the log racily truncated (and,
+         * under starvation, empty) at check time.
+         *
+         * The list is the driver's to read; the catalog hands over the same
+         * instance it wired into the fold, so entries keep arriving as the run
+         * proceeds. `null` for a non-view cell.
+         */
+        val observations: MutableList<Value>? = null,
     )
 
     /**
@@ -293,16 +305,30 @@ internal object KernelCatalog {
     /** `exclusive-sink`: a running-count view over `ExclusivePush` deliveries (23-SPSC-01). */
     private fun exclusiveSink(): Built {
         val cell = ExclusiveSinkCell()
-        return Built(cell, cell, ViewKind.COUNT)
+        val log = mutableListOf<Value>()
+        // This adapter fires its listeners inline, under its own lock, on the
+        // delivering thread — no dispatcher hop — so `onChange` here *is* the
+        // synchronous settled stream (and its immediate catch-up seeds the log,
+        // exactly as [RecordedView]'s constructor does for the folded views).
+        cell.onChange { log += readView(ViewKind.COUNT, it) }
+        return Built(cell, cell, ViewKind.COUNT, observations = log)
     }
 
+    /**
+     * Build one view cell over [view], with its observation stream recorded at the
+     * fold ([RecordedView]) rather than through the sink's asynchronous listener
+     * dispatch — the log the driver publishes must be complete and identical on
+     * every run of the schedule sweep, on a loaded machine as much as an idle one.
+     */
     private fun <D : Any, S> observeCell(view: View<D, S>, kind: ViewKind, singleWriter: Boolean = false): Built {
+        val log = mutableListOf<Value>()
+        val recorded = RecordedView(view, kind, log)
         return if (singleWriter) {
-            val cell = SingleWriterObserveCell(view)
-            Built(cell, cell, kind)
+            val cell = SingleWriterObserveCell(recorded)
+            Built(cell, cell, kind, observations = log)
         } else {
-            val cell = ObserveCell(view)
-            Built(cell, cell, kind)
+            val cell = ObserveCell(recorded)
+            Built(cell, cell, kind, observations = log)
         }
     }
 
