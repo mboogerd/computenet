@@ -5,8 +5,6 @@ import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.HostedCellProxy
-import civictech.cell.observe.ObserveCell
-import civictech.cell.observe.View
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
@@ -106,22 +104,26 @@ internal class KernelDriverDist(private val driver: KernelDriver) {
 
         // A co-hosted read companion: the replica re-emits every effective delta
         // (local writes AND merged gossip, SetCell.applyRemote → outlet.originate)
-        // on its `outlet`, so an ObserveCell folding that outlet reflects the
+        // on its `outlet`, so a view cell folding that outlet reflects the
         // replica's converged membership — which is what readView(replicaId) reads.
-        val companion = ObserveCell(View.set<Any?>())
+        // Built through the catalog's `set-view` id rather than by hand, so the
+        // companion's observation stream is recorded at the fold like every other
+        // view's ([RecordedView]) instead of on the sink's own dispatcher thread,
+        // which the runner never waits for before reading the log.
+        val built = KernelCatalog.build("set-view", emptyMap())
+        val companion = built.cell
         host.managementInlet.call.spawn(companion)
         host.managementInlet.call.connect(replica.ref, "outlet", companion.ref, "inlet")
 
-        val bound = KernelDriver.Bound(
+        driver.cells[cellId] = KernelDriver.Bound(
             ref = replica.ref,
             type = type,
             host = host,
             cell = replica,
-            sink = companion,
-            viewKind = KernelCatalog.ViewKind.SET,
+            sink = built.sink,
+            viewKind = built.viewKind,
+            log = built.observations ?: mutableListOf(),
         )
-        driver.cells[cellId] = bound
-        companion.onChange { snapshot -> bound.log += KernelCatalog.readView(bound.viewKind, snapshot) }
     }
 
     /**
