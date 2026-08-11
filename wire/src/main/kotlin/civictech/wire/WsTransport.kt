@@ -147,6 +147,15 @@ object WsTransport {
          * for good, and both scheduler hops behind the socket — the ingress
          * decode and the mirror delivery — are covered by that one fact.
          *
+         * **A retired mirror stays spawned, deliberately.** Despawning it would
+         * turn the fence's *drop* into a *park*: `LocationRegistry.deliver`
+         * parks an invocation whose target ref has no location, so a stale
+         * announcement addressed to a despawned mirror would sit in the park
+         * queue instead of being refused at the gate. The cost is one detached
+         * cell per reconnect — measured, alongside the `BridgeIngressCell` that
+         * every re-hello already leaves behind, in computenet-vzb, which owns
+         * retiring a whole connection instance's cells safely.
+         *
          * `@Volatile` because [hello]/[onText]/[onClose] all run on the
          * socket's IO thread while `RegistryMirrorCell.peer` is read on the
          * bridge host's scheduler thread; the reference itself must be visible

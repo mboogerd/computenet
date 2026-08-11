@@ -11,6 +11,7 @@ import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.wire.BridgeEgressCell
 import civictech.cell.wire.Peering
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -105,19 +106,92 @@ class WsClientReconnectFenceTest {
         val secondInstance = mirrorOffered(session.hello())
         session.onText("HELLO ${UUID.randomUUID()} jvm-b")
 
-        // the re-hello opened a new connection instance, addressable in its own
-        // right — this is what the client path did not do before dqy.14
-        secondInstance shouldNotBe firstInstance
-
         // now the bridge host runs: the staged frame decodes and is delivered,
         // both hops, entirely after the reconnect completed
         controller.runToIdle()
 
         // `dropped` is a ref the peer let go of while it was away, so the
         // re-hello's catch-up never re-announced it. Only the stale frame could
-        // have installed it — and it must not have.
+        // have installed it — and it must not have. Asserted before the
+        // identity check below so a regression reports the fence, not a symptom.
         registry.location(dropped).shouldBeNull()
         registry.remoteRefs().contains(dropped) shouldBe false
+
+        // the re-hello opened a new connection instance, addressable in its own
+        // right — this is what the client path did not do before dqy.14, and it
+        // is the mechanism the assertions above depend on
+        secondInstance shouldNotBe firstInstance
+    }
+
+    /**
+     * The harder half of "both hops". The case above stages a frame that is
+     * still *undecoded* when the socket dies, which an ingress epoch would also
+     * have caught. This one lets the ingress decode run first, so the close
+     * finds an invocation already handed to `LocationRegistry.deliver` and
+     * queued for the mirror — past every point an epoch on the decode hop could
+     * reach. Addressing by mirror ref still fences it, because the queued
+     * invocation names the retired instance's cell.
+     *
+     * How many scheduler steps the two hops take is measured, not assumed: a
+     * control run counts steps to the install, and the fence run stops one step
+     * short of it. So the assertion below is about a delivery that was provably
+     * one step from being applied when the connection was superseded.
+     */
+    @Test
+    fun `a frame the superseded connection had already decoded is fenced at the delivery hop`() {
+        // ---- control: how many steps do the two hops take, undisturbed? ----
+        val stepsToInstall = run {
+            val controller = SimulationController(14)
+            val registry = LocationRegistry()
+            val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+            val side = Peering.Side(registry, bridgeHost, peer = PeerId("jvm-a"))
+            val session = WsTransport.Session(side, send = {}, refuse = {})
+            val instance = mirrorOffered(session.hello())
+            session.onText("HELLO ${UUID.randomUUID()} jvm-b")
+            controller.runToIdle() // settle the spawns, so only the frame's own hops are counted
+
+            val announced = CellRef(UUID.randomUUID())
+            session.onFrame(Peer().announces(announced, toMirror = instance))
+            var steps = 0
+            while (registry.location(announced) == null) {
+                check(controller.step()) { "bridge host went idle without applying the announcement" }
+                steps++
+            }
+            steps
+        }
+        // the decode and the delivery are separate scheduler tasks — the premise
+        // of the whole fence argument, asserted rather than assumed
+        stepsToInstall shouldBeGreaterThanOrEqual 2
+
+        // ---- the same run, stopped one step short of the install ----------
+        val controller = SimulationController(14)
+        val registry = LocationRegistry()
+        val bridgeHost = ManagedHost(scheduler = controller.scheduler(), registry = registry)
+        val side = Peering.Side(registry, bridgeHost, peer = PeerId("jvm-a"))
+        val session = WsTransport.Session(side, send = {}, refuse = {})
+
+        val firstInstance = mirrorOffered(session.hello())
+        session.onText("HELLO ${UUID.randomUUID()} jvm-b")
+        controller.runToIdle()
+
+        val dropped = CellRef(UUID.randomUUID())
+        session.onFrame(Peer().announces(dropped, toMirror = firstInstance))
+        repeat(stepsToInstall - 1) {
+            check(controller.step()) { "bridge host went idle early" }
+        }
+        // decoded, delivered to the registry, queued for the mirror — and one
+        // step from landing
+        registry.location(dropped).shouldBeNull()
+
+        // ---- and now the socket dies and the SAME Session reconnects ------
+        session.onClose()
+        val secondInstance = mirrorOffered(session.hello())
+        session.onText("HELLO ${UUID.randomUUID()} jvm-b")
+        controller.runToIdle()
+
+        registry.location(dropped).shouldBeNull()
+        registry.remoteRefs().contains(dropped) shouldBe false
+        secondInstance shouldNotBe firstInstance
     }
 
     @Test
