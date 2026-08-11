@@ -527,7 +527,13 @@ class CompositeSink internal constructor(
                         val fired = listeners.toList()
                         val s = snapshot
                         // No composite listener ⇒ no submission, so a composite
-                        // read only through current() owns no dispatch thread.
+                        // read only through current() owns no dispatch thread
+                        // *of its own*. Its member sinks are a different matter
+                        // and deliberately so: this composite registers the
+                        // callback above on each of them, so every member IS an
+                        // observed view and legitimately mints one dispatcher.
+                        // observeAll therefore costs one thread per outlet, not
+                        // zero — the saving here is the composite's own thread.
                         if (fired.isNotEmpty()) dispatchIfOpen { fired.forEach { it(s) } }
                     }
                 }

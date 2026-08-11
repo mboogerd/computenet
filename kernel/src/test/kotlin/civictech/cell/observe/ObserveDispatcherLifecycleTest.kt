@@ -14,6 +14,7 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -180,21 +181,40 @@ class ObserveDispatcherLifecycleTest {
         sink.close()
     }
 
+    /**
+     * Deliberately asserted on *state*, not on elapsed time: the two assertions
+     * that carry this test are [blockedOn] ≠ the propagating thread and
+     * `stillParked == true` at the moment the propagating thread has already
+     * settled five further folds. Both are what make it non-vacuous. An inline
+     * dispatch (the pre-T08 shape, and the shape a careless "just skip the
+     * executor when it is cheap" optimisation would reintroduce) would run the
+     * listener on the propagating thread and could not return from
+     * `propagate` until the listener's own 60s bail-out elapsed — so it would
+     * reach these assertions with `blockedOn` equal to this thread and the
+     * listener no longer parked, and FAIL. Without them the test passes under
+     * inline dispatch too, merely one minute later, which would prove nothing.
+     */
     @Test
     fun `a listener blocked indefinitely cannot pin the thread that propagates`() {
         val sink = ObserveCell(View.set<Int>())
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val blockedOn = AtomicReference<String>()
+        val stillParked = AtomicBoolean(false)
         val lastSeen = AtomicReference<Set<Int>>()
         sink.onChange { snap ->
             if (snap.contains(1) && entered.count > 0L) {
+                blockedOn.set(Thread.currentThread().name)
+                stillParked.set(true)
                 entered.countDown()
                 // a stalled app I/O call (a slow SSE write, say)
                 release.await(60, TimeUnit.SECONDS)
+                stillParked.set(false)
             }
             lastSeen.set(snap)
         }
 
+        val propagating = Thread.currentThread().name
         sink.inlet.call.propagate(SetDelta(adds = mapOf(1 to setOf(freshTag()))))
         check(entered.await(30, TimeUnit.SECONDS)) { "listener never entered" }
 
@@ -205,6 +225,11 @@ class ObserveDispatcherLifecycleTest {
         repeat(5) { i -> sink.inlet.call.propagate(SetDelta(adds = mapOf(i + 2 to setOf(freshTag())))) }
         val settled = setOf(1, 2, 3, 4, 5, 6)
         sink.current() shouldBe settled
+        // T08 finding 4, stated as the two facts that can only hold off-thread:
+        // the listener ran somewhere else, and it is STILL inside its blocking
+        // call now that this thread has propagated five more times.
+        blockedOn.get() shouldNotBe propagating
+        stillParked.get() shouldBe true
         entered.count shouldBe 0L   // still parked; nothing above unblocked it
 
         release.countDown()
