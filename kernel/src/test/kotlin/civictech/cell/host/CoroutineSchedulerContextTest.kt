@@ -18,13 +18,17 @@ import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Test
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.CoroutineContext
 
 /**
  * T06 §C: the real [CoroutineScheduler] against T04 finding 7 (coroutine
@@ -215,6 +219,110 @@ class CoroutineSchedulerContextTest {
             failure.shouldBeInstanceOf<IllegalStateException>()
         } finally {
             resumeOn.shutdown()
+        }
+    }
+
+    /**
+     * T06 §C2b (computenet-dqy.10) — §C2 with its losing interleaving forced,
+     * so the guard's correctness stops depending on which of two threads wins a
+     * race.
+     *
+     * §C2 flaked at roughly 1.5% per execution (6 timeouts in 400 scripted
+     * repetitions of its scenario), which is once every few full `:kernel:test`
+     * runs. The cause: a `ThreadContextElement`'s update/restore pair saves and
+     * restores state per *thread*, so the state it guards must be thread-
+     * confined. When `CoroutineScheduler` tracked its draining thread in one
+     * shared field, the `withContext(resumeOn)` hop had two threads writing it —
+     * the outgoing drain thread A unwinding (`restoreThreadContext`) and the
+     * incoming resume thread B arriving (`updateThreadContext`) — and when A's
+     * unwind landed after B's arrival it erased B's mark. `await` then failed to
+     * recognise its own execution context, blocked for the full 5s deadline
+     * (nothing can drain the `lookup` task: the drain coroutine is parked in
+     * this very `withContext`) and surfaced a `TimeoutException` instead of the
+     * fail-fast `IllegalStateException`.
+     *
+     * Two latches pin that order down instead of hoping for it: A is held inside
+     * `dispatch` until B has entered, and B waits until A has finished unwinding
+     * before it self-awaits. So B's arrival always precedes A's unwind, and A's
+     * unwind always precedes the guard — the exact sequence §C2 hit by chance.
+     * The awaits are bounded, so a future coroutines release that dispatches
+     * differently fails loudly here rather than passing vacuously.
+     */
+    @Test
+    fun `C2b - the self-await guard still fires when the pre-suspension thread unwinds after the resume thread arrives`() {
+        val hostExec = Executors.newSingleThreadExecutor { Thread(it, "t06-c2b-host") }
+        val resumeExec = Executors.newSingleThreadExecutor { Thread(it, "t06-c2b-resume") }
+        try {
+            val armed = AtomicBoolean(false)
+            val resumeThreadArrived = CountDownLatch(1)
+            val drainThreadUnwound = CountDownLatch(1)
+
+            // The drain thread A. The wrapper regains control only after
+            // `DispatchedTask.run` has restored the coroutine's thread context,
+            // so counting down here publishes "A has finished unwinding".
+            val hostDispatcher = object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) {
+                    hostExec.execute {
+                        block.run()
+                        if (armed.get() && resumeThreadArrived.count == 0L) drainThreadUnwound.countDown()
+                    }
+                }
+            }
+
+            // The resume thread B. Holding A inside `dispatch` until B has
+            // arrived forces B's arrival ahead of A's unwind.
+            val resumeDispatcher = object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) {
+                    resumeExec.execute(block)
+                    check(resumeThreadArrived.await(10, TimeUnit.SECONDS)) { "resume thread never arrived" }
+                }
+            }
+
+            lateinit var host: ManagedHost
+            val selfAwaitResult = CompletableFuture<Throwable?>()
+
+            val cell = object : Cell, SuspendingCell {
+                override val ref = CellRef(UUID.randomUUID())
+
+                @Suppress("UNCHECKED_CAST")
+                val inlet = registerPort("inlet", FanInlet(TriggerApi::class.java))
+
+                init {
+                    inlet.serve(object : TriggerApi {
+                        override suspend fun trigger() {
+                            withContext(resumeDispatcher) {
+                                resumeThreadArrived.countDown()
+                                check(drainThreadUnwound.await(10, TimeUnit.SECONDS)) {
+                                    "drain thread never unwound"
+                                }
+                                val failure = runCatching {
+                                    host.managementInlet.call.lookup(ref, Any::class.java)
+                                }.exceptionOrNull()
+                                selfAwaitResult.complete(failure)
+                            }
+                        }
+                    })
+                }
+            }
+            host = ManagedHost(scheduler = CoroutineScheduler("t06-c2b", hostDispatcher))
+            host.managementInlet.call.spawn(cell)
+
+            val invocation = HostedPortInvocation(
+                cell.ref, "inlet", HostedPortInvocation.Type.PORT_API,
+                Invocation("trigger", emptyList(), emptyList()),
+            )
+            armed.set(true)
+            host.enqueueHostedInvocation(invocation)
+
+            // Deliberately generous: the failure this guards against is a
+            // *5s block* reported as a TimeoutException, so the outcome is
+            // read off the exception type, never off the clock.
+            val failure = selfAwaitResult.get(30, TimeUnit.SECONDS)
+            requireNotNull(failure) { "expected the self-await guard to throw" }
+            failure.shouldBeInstanceOf<IllegalStateException>()
+        } finally {
+            resumeExec.shutdownNow()
+            hostExec.shutdownNow()
         }
     }
 }

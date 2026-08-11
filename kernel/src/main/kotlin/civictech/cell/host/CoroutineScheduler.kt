@@ -45,8 +45,13 @@ class CoroutineScheduler(
         dispatcher + CoroutineName(name) + CoroutineExceptionHandler { _, e -> e.printStackTrace() },
     )
 
-    @Volatile
-    private var drainingThread: Thread? = null
+    /**
+     * True on whichever thread is *currently* executing this scheduler's drain,
+     * so [await] can recognize a re-entrant call and refuse it (see
+     * [DrainingThreadElement] for why this is a thread-local rather than a
+     * field naming the thread).
+     */
+    private val draining: ThreadLocal<Boolean> = ThreadLocal.withInitial { false }
 
     /**
      * T04 finding 5: set once the drain coroutine exits for any reason, so a
@@ -57,25 +62,40 @@ class CoroutineScheduler(
     private var terminated = false
 
     /**
-     * T04 finding 7.2: [drainingThread] used to be set once *before*
+     * T04 finding 7.2: the draining mark used to be set once *before*
      * `task.action()` started and cleared once it returned — correct only if
      * the task never actually suspends across a thread hop. A genuinely
      * suspending task resuming on a different worker left the stale
-     * pre-suspension thread in [drainingThread], so the self-await deadlock
-     * guard in [await] stopped firing for a same-context re-entrant await
-     * after resumption. A [ThreadContextElement] runs on every resumption
-     * (not just task entry), so [drainingThread] always tracks the actual
-     * current-execution thread.
+     * pre-suspension thread recorded, so the self-await deadlock guard in
+     * [await] stopped firing for a same-context re-entrant await after
+     * resumption. A [ThreadContextElement] runs on every resumption (not just
+     * task entry), so the mark always tracks the actual current-execution
+     * thread.
+     *
+     * computenet-dqy.10: the mark itself must be **thread-confined**. It was a
+     * single shared `@Volatile var drainingThread: Thread?`, but a
+     * [ThreadContextElement]'s [updateThreadContext]/[restoreThreadContext]
+     * pair is a per-thread save/restore: across a dispatcher hop both the
+     * outgoing thread (unwinding, restoring its saved state) and the incoming
+     * thread (arriving, storing its own) write it, unordered. When the outgoing
+     * unwind landed after the incoming arrival it erased the incoming thread's
+     * mark, [await]'s guard silently did not fire, and a self-await blocked for
+     * the full 5s deadline and surfaced a `TimeoutException` instead of failing
+     * fast — reproduced at ~1.5% per execution of
+     * `CoroutineSchedulerContextTest` §C2, which is what made it flake in full
+     * `:kernel:test` runs. A [ThreadLocal] gives each thread its own slot, so
+     * the two writes no longer collide; §C2b pins the losing interleaving down
+     * deterministically.
      */
-    internal inner class DrainingThreadElement : ThreadContextElement<Thread?> {
+    internal inner class DrainingThreadElement : ThreadContextElement<Boolean> {
         override val key: CoroutineContext.Key<*> get() = DrainingThreadKey
-        override fun updateThreadContext(context: CoroutineContext): Thread? {
-            val previous = drainingThread
-            drainingThread = Thread.currentThread()
+        override fun updateThreadContext(context: CoroutineContext): Boolean {
+            val previous = draining.get()
+            draining.set(true)
             return previous
         }
-        override fun restoreThreadContext(context: CoroutineContext, oldState: Thread?) {
-            drainingThread = oldState
+        override fun restoreThreadContext(context: CoroutineContext, oldState: Boolean) {
+            draining.set(oldState)
         }
     }
 
@@ -115,7 +135,7 @@ class CoroutineScheduler(
     }
 
     override fun <T> await(future: CompletableFuture<T>): T {
-        check(Thread.currentThread() != drainingThread) {
+        check(!draining.get()) {
             "await called from the host's own execution context (would deadlock)"
         }
         return try {
