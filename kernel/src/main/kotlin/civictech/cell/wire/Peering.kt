@@ -50,18 +50,20 @@ interface RegistryAnnounce {
  * — publish/unpublish/link/unlink — and nothing at all on the data path.
  *
  * Being per-connection is also what lets this cell carry the connection's
- * *liveness* ([attach]/[detach]): a closed connection's announcements are no
- * longer authoritative, and the retraction of what it installed has to exclude
- * them rather than race them. That gate costs one uncontended monitor per
+ * *liveness* ([detach]): a closed connection's announcements are no longer
+ * authoritative, and the retraction of what it installed has to exclude them
+ * rather than race them. That gate costs one uncontended monitor per
  * announcement — again on the announcement path only, never on the data path.
  *
- * On a *socket* transport, "per connection" means per connection *instance*: it
- * mints a mirror per socket open, not per session object, so [ref] — the address
- * the hello hands the peer, and therefore the address every announcement frame
- * carries — identifies the instance that will be held to it, and [detach] is a
- * permanent fence rather than a window. [Peering.loopback] is the exception: it
- * holds one mirror per *peering*, re-opened across a partition/heal. [attach]
- * carries both halves of that.
+ * "Per connection" means per connection *instance*, on every path: a socket
+ * transport mints a mirror per socket open rather than per session object
+ * (computenet-dqy.14), and [Peering.Loopback.heal] mints a fresh pair rather
+ * than re-opening the pair its [Peering.Loopback.partition] shut
+ * (computenet-dqy.20). So [ref] — the address the hello hands the peer, and
+ * therefore the address every announcement frame carries — identifies the
+ * instance that will be held to it, and [detach] is a permanent fence rather
+ * than a window. There is no way to re-open a mirror; that is the whole
+ * property.
  */
 class RegistryMirrorCell(
     private val registry: LocationRegistry,
@@ -140,42 +142,6 @@ class RegistryMirrorCell(
     }
 
     /**
-     * Re-open the gate — this peering is live again and the mirror may install
-     * locations once more. A mirror starts attached, so a peering that never
-     * detaches (the pre-existing shape) behaves exactly as before.
-     *
-     * A re-attached mirror needs no replay of what it lost while detached: the
-     * peer's (re-)announcement is a full `localRefs` catch-up
-     * ([Peering.announceTo]), so everything it still holds is re-announced.
-     *
-     * **[Peering.Loopback.heal] is the only production caller, and that is the
-     * point** (`MirrorCloseFenceTest` also drives it directly, to pin the gate's
-     * own semantics). The disconnect fence is total across *connection
-     * instances*: no transport
-     * re-opens a mirror it once detached. Both `WsTransport` paths now mint a
-     * mirror per connection instance — a listener a whole fresh `Session` per
-     * socket, a client a fresh mirror in `Session.hello` per (re)connect
-     * (computenet-dqy.14) — so a superseded instance's mirror is shut for good
-     * and a frame that instance staged on the bridge host is dropped at the
-     * gate, however late it decodes. That works because the mirror's [ref] *is*
-     * the connection instance's identity on the wire: an announcement is
-     * addressed to the ref the hello carried, so it is attributable to the
-     * instance that offered it, at both scheduler hops behind the socket (the
-     * ingress decode and the delivery to this cell). No parallel epoch counter
-     * is needed, and none exists.
-     *
-     * [Peering.Loopback] is the one caller because a partition/heal is the
-     * *same* peering resuming, not a new instance: mirrors, ingresses and
-     * egresses all persist across it. The window that follows from that — an
-     * announcement decoded before [Peering.Loopback.partition] and applied
-     * after [Peering.Loopback.heal], which can install a ref the peer dropped
-     * while severed — is the one place the fence still does not reach, and it
-     * is tracked separately (computenet-dqy.20). It is not reachable from either
-     * socket path.
-     */
-    fun attach() = synchronized(gate) { attached = true }
-
-    /**
      * Shut the gate and drop every location this connection installed, as one
      * step — the disconnect fence.
      *
@@ -207,6 +173,25 @@ class RegistryMirrorCell(
      * close event) deliberately keeps calling [LocationRegistry.unpublishRemotes]
      * directly: it is an early park optimization, not the fence, and the close
      * that follows is what makes the end state authoritative.
+     *
+     * **The gate never re-opens, and that is what makes the fence total.** Every
+     * announcement is addressed to the mirror ref its connection instance
+     * offered, so a frame that instance staged on the bridge host is dropped
+     * here however late it decodes — at both scheduler hops behind the
+     * connection, the ingress decode and the delivery to this cell. No parallel
+     * epoch counter is needed, and none exists. What replaces a detached mirror
+     * is a *fresh* one: `WsTransport.Session.hello` per socket open
+     * (computenet-dqy.14), [Peering.Loopback.heal] per heal
+     * (computenet-dqy.20). The returning peer loses nothing by that, because a
+     * (re-)announcement is a full `localRefs` catch-up
+     * ([Peering.announceTo]) — everything it still holds is re-announced, and
+     * only what it no longer holds is left behind.
+     *
+     * What the gate can drop is bounded by what reaches this cell: [inlet] serves
+     * [RegistryAnnounce] alone, whose arguments are refs, link records and ids.
+     * No `Owned`/`Leased` payload can be dropped here — peer *data* is addressed
+     * to the data ref it names, not to this mirror, so it parks against a missing
+     * location like any other send (spec 33) rather than meeting this gate.
      */
     fun detach() = synchronized(gate) {
         attached = false
@@ -248,9 +233,60 @@ object Peering {
      * seam of M7.4. Disconnect drops Remote locations (senders park, spec 33);
      * heal re-announces, replaying parked traffic and re-syncing state via
      * the ordinary catch-up path.
+     *
+     * **A heal is a new connection instance, not a resumed one**
+     * (computenet-dqy.20). The two frame links — the egresses and the ingresses
+     * they feed — persist, because they are the wire; the *registry mirrors* and
+     * the announcement hooks that address them do not. Each [heal] mints a fresh
+     * [RegistryMirrorCell] pair and announces to those, exactly as
+     * `WsTransport.Session.hello` mints one per socket open, so
+     * [RegistryMirrorCell.detach] is a permanent fence on this path too.
+     *
+     * What that buys, and what the previous shape cost: an announcement decoded
+     * on the bridge host *before* [partition] leaves a delivery queued for the
+     * mirror. Re-opening the same mirror in [heal] applied it — and if the peer
+     * dropped that ref while severed, [heal]'s full `localRefs` catch-up never
+     * re-announces it, so nothing ever retracted the resurrected
+     * [LocationRegistry.Remote]. Addressing the returning peering to a *fresh*
+     * mirror ref drops that delivery at the superseded mirror's shut gate
+     * instead, which leaves the catch-up as the single authority on what the
+     * peer still holds. Under a [civictech.cell.host.SimulationController] that
+     * window is not exotic: it is whatever is left unrun between [partition] and
+     * [heal].
+     *
+     * The superseded mirrors stay *spawned*, deliberately, for the reason
+     * `WsTransport.Session.mirror` records: despawning turns the fence's drop
+     * into a park, since [LocationRegistry.deliver] parks an invocation whose
+     * target ref has no location. The cost — one detached cell per side per
+     * heal — is the same per-connection-instance residue a reconnect already
+     * leaves, and retiring a whole instance's cells safely is computenet-vzb.
      */
-    class Loopback(private val a: Side, private val b: Side, val aToB: InvocationSink, val bToA: InvocationSink,
-                   private val mirrorOnA: RegistryMirrorCell, private val mirrorOnB: RegistryMirrorCell) {
+    class Loopback(
+        private val a: Side,
+        private val b: Side,
+        val aToB: InvocationSink,
+        val bToA: InvocationSink,
+    ) {
+        private lateinit var mirrorOnA: RegistryMirrorCell
+        private lateinit var mirrorOnB: RegistryMirrorCell
+        private var announcerFromA: AutoCloseable? = null
+        private var announcerFromB: AutoCloseable? = null
+
+        init {
+            open()
+        }
+
+        /**
+         * The address this peering's *current* instance hands the peer on
+         * [b]'s side — the ref every announcement A serves is sent to. Fresh
+         * after every [heal]; the test surface for "a heal supersedes rather
+         * than resumes".
+         */
+        val mirrorRefOnA: CellRef get() = mirrorOnA.ref
+
+        /** [mirrorRefOnA]'s counterpart on [a]'s side. */
+        val mirrorRefOnB: CellRef get() = mirrorOnB.ref
+
         /**
          * Sever the peering. Routed through each mirror's
          * [RegistryMirrorCell.detach] rather than calling
@@ -262,31 +298,60 @@ object Peering {
          * host's scheduler, so under a [civictech.cell.host.SimulationController]
          * an announcement queued before the partition would otherwise be
          * applied after it.
+         *
+         * The announcement hooks go with the gate: a severed peering does not
+         * speak for its peer either, and a frame encoded onto a link that is
+         * down would only be dropped at the far gate anyway. A socket transport
+         * gets that for free (the send fails), so closing them here is what
+         * makes the two shapes answer a publish-while-severed the same way.
          */
-        fun partition() {
-            mirrorOnA.detach()
-            mirrorOnB.detach()
+        @Synchronized
+        fun partition() = closeInstance()
+
+        /**
+         * Re-establish the peering as a *fresh* connection instance: new
+         * mirrors, new announcement hooks, a full catch-up on both sides. Safe
+         * without a preceding [partition] — it supersedes whatever instance is
+         * current, the same way a re-hello does.
+         */
+        @Synchronized
+        fun heal() = open()
+
+        private fun open() {
+            closeInstance()
+            // V4-PEERID: the mirror on B serves A's announcements, so its peer
+            // is A's name (and symmetrically). Both names are known here, so the
+            // loopback path is a pure constructor value — it never uses the setter.
+            mirrorOnB = spawnMirror(b, toPeer = bToA, peer = a.peer)
+            mirrorOnA = spawnMirror(a, toPeer = aToB, peer = b.peer)
+            announcerFromA = announceTo(a, peerMirror = mirrorOnB.ref, via = aToB)
+            announcerFromB = announceTo(b, peerMirror = mirrorOnA.ref, via = bToA)
         }
 
-        fun heal() {
-            mirrorOnA.attach()
-            mirrorOnB.attach()
-            announceTo(a, peerMirror = mirrorOnB.ref, via = aToB)
-            announceTo(b, peerMirror = mirrorOnA.ref, via = bToA)
+        /**
+         * Retire the current connection instance: stop announcing, then shut
+         * both gates (each [RegistryMirrorCell.detach] also retracts what its
+         * side installed). Idempotent — [partition] twice, or [heal] on a
+         * severed peering, is a no-op the second time.
+         */
+        private fun closeInstance() {
+            announcerFromA?.close()
+            announcerFromA = null
+            announcerFromB?.close()
+            announcerFromB = null
+            if (::mirrorOnA.isInitialized) {
+                mirrorOnA.detach()
+                mirrorOnB.detach()
+            }
         }
     }
 
     fun loopback(a: Side, b: Side): Loopback {
         val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(b, fromPeer = a.peer), PortRef.generate())) }
         val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(a, fromPeer = b.peer), PortRef.generate())) }
-        // V4-PEERID: the mirror on B serves A's announcements, so its peer is
-        // A's name (and symmetrically). Both names are known here, so the
-        // loopback path is a pure constructor value — it never uses the setter.
-        val mirrorOnB = spawnMirror(b, toPeer = bToA, peer = a.peer)
-        val mirrorOnA = spawnMirror(a, toPeer = aToB, peer = b.peer)
-        announceTo(a, peerMirror = mirrorOnB.ref, via = aToB)
-        announceTo(b, peerMirror = mirrorOnA.ref, via = bToA)
-        return Loopback(a, b, aToB, bToA, mirrorOnA, mirrorOnB)
+        // the mirrors and announcers are the *connection instance*, minted by
+        // Loopback itself so that a heal can mint fresh ones (computenet-dqy.20)
+        return Loopback(a, b, aToB, bToA)
     }
 
     /** Spawn a [BridgeIngressCell] on [side]'s bridge host; returned api is safe to call from any thread. */
