@@ -257,9 +257,32 @@ object Peering {
      * The superseded mirrors stay *spawned*, deliberately, for the reason
      * `WsTransport.Session.mirror` records: despawning turns the fence's drop
      * into a park, since [LocationRegistry.deliver] parks an invocation whose
-     * target ref has no location. The cost — one detached cell per side per
-     * heal — is the same per-connection-instance residue a reconnect already
-     * leaves, and retiring a whole instance's cells safely is computenet-vzb.
+     * target ref has no location — so the stale announcement would sit in
+     * [LocationRegistry.parkedFor] forever instead of being refused, which is
+     * both a worse leak and a weaker fence.
+     *
+     * **The price of that, stated in full.** A retired mirror stays published as
+     * [LocationRegistry.Local], so it also stays in [LocationRegistry.localRefs]
+     * — which is what the next [heal]'s catch-up announces. Measured over ten
+     * partition/heal cycles on one loopback: each side grows by exactly one cell,
+     * one announced local ref, and one *mirrored* [LocationRegistry.Remote] per
+     * heal (2/2 refs per side before the first heal, 12/12 after ten). So the
+     * bead's "cell counts and announced localRefs stay flat across a heal" is
+     * **not** met here, and an observer of either registry — an inspector, say —
+     * sees the graveyard as peer cells.
+     *
+     * That is knowingly accepted rather than overlooked: it is the *same*
+     * mechanism, with the same reason the obvious despawn is wrong, that
+     * computenet-vzb already measures and owns for the socket path, and closing
+     * it needs either a quiescence bound before retiring an instance's cells or
+     * a "refuse, do not park" tombstone in [LocationRegistry] — a kernel
+     * semantics decision (an unconditional drop path in
+     * [LocationRegistry.deliver] owes an `Owned`/`Leased` accounting story),
+     * not a repair inside this fix. The trade this item does make is a
+     * monotonic, inert residue in place of a *silently wrong* registry, and a
+     * loopback is the in-process peering shape: the unbounded-reconnect hazard
+     * lives on the socket path, where `WsReconnectLoopBoundTest` and
+     * computenet-vzb watch it.
      */
     class Loopback(
         private val a: Side,
@@ -281,11 +304,15 @@ object Peering {
          * [b]'s side — the ref every announcement A serves is sent to. Fresh
          * after every [heal]; the test surface for "a heal supersedes rather
          * than resumes".
+         *
+         * Reads under the same monitor [heal] writes it under: the mirror fields
+         * became mutable here, so "which instance is current" is only a
+         * well-defined question against that lock.
          */
-        val mirrorRefOnA: CellRef get() = mirrorOnA.ref
+        val mirrorRefOnA: CellRef get() = synchronized(this) { mirrorOnA.ref }
 
         /** [mirrorRefOnA]'s counterpart on [a]'s side. */
-        val mirrorRefOnB: CellRef get() = mirrorOnB.ref
+        val mirrorRefOnB: CellRef get() = synchronized(this) { mirrorOnB.ref }
 
         /**
          * Sever the peering. Routed through each mirror's
