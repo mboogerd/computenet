@@ -167,6 +167,7 @@ tasks.withType<Test>().configureEach {
     //         if (interruptTask.executed) {
     //             Thread.interrupted();
     //             failure = TimeoutExceptionFactory.create(desc, timeout, failure);
+    //             ...
     //         }
     //     }
     //     if (failure != null) { throw failure; }
@@ -187,10 +188,12 @@ tasks.withType<Test>().configureEach {
     //    An assertion failure or bounded-wait miss that merely coincided with the
     //    deadline survives only as a suppressed section, and Gradle's console stack
     //    filter drops suppressed sections unconditionally (computenet-8ru.4).
-    // 3. THE STACK CAN NEVER NAME THE BLOCKED FRAME. The exception is constructed inside
-    //    the `finally`, on the interceptor's own stack — those two
-    //    `java.util.ArrayList.forEach` frames CI printed. The trace is evidence about
-    //    nothing, in either direction. Do not read it as a location.
+    // 3. THE TIMEOUTEXCEPTION'S OWN STACK CAN NEVER NAME THE BLOCKED FRAME. The exception
+    //    is constructed inside the `finally`, on the interceptor's own stack — those two
+    //    `java.util.ArrayList.forEach` frames CI printed. That trace is evidence about
+    //    nothing, in either direction. Do not read it as a location. It does NOT follow
+    //    that the RECORD names nothing: the XML around it usually does — see the
+    //    discriminator below, which is the part computenet-dqy.2 actually needs.
     //
     // SO READ A TIMEOUT OUT OF THE XML, NEVER THE CONSOLE. `build/test-results/**/TEST-*
     // .xml` DOES retain the suppressed section — established by running the probe above
@@ -212,6 +215,37 @@ tasks.withType<Test>().configureEach {
     // (computenet-8ru.4), and :inspect additionally arms PreInterruptThreadDumpPrinter
     // into <system-out> (inspect/src/test/resources/junit-platform.properties).
     //
+    // AND THE XML OFTEN NAMES THE BLOCKED FRAME ANYWAY. This is the corollary of (3) that
+    // matters, and the reason (3) is a statement about ONE STACK and not about the record
+    // as a whole. Two channels, both already armed, both measured against a probe class
+    // run in :inspect itself (review of computenet-dqy.12):
+    //
+    // - THE SUPPRESSED InterruptedException. If the test thread was in an INTERRUPTIBLE
+    //   wait, the interrupt makes that wait throw, the throw propagates out of
+    //   `delegate.proceed()`, and it reaches the suppressed slot by exactly the mechanism
+    //   in (2) — so the demotion that hides a failure from the console is the same thing
+    //   that carries the blocked frame into the XML:
+    //
+    //       Suppressed: java.lang.InterruptedException: sleep interrupted
+    //           at java.base/java.lang.Thread.sleep(Thread.java:509)
+    //           at ...ReviewTimeoutXmlProbe.reviewProbeBlockedFrameMarker(...kt:20)
+    //
+    // - THE PRE-INTERRUPT THREAD DUMP, `:inspect` only. It is written at the deadline,
+    //   just BEFORE the interrupt, so it captures the thread where it actually sat:
+    //   `"Test worker" prio=5 Id=1 TIMED_WAITING` over the probe's own frame. Platform
+    //   threads only (Thread.getAllStackTraces()), so a parked ManagedHost virtual thread
+    //   remains invisible — that still needs jcmd Thread.dump_to_file.
+    //
+    // Which makes the three hypotheses separable from ONE failed run's artifact:
+    //   suppressed InterruptedException present -> blocked in the JVM, at the named frame
+    //   absent, dump shows Test worker inside the test body -> blocked uninterruptibly
+    //   absent, dump shows Test worker in framework frames  -> the body had ALREADY
+    //       FINISHED; this is the (1) case, and the external-freeze candidate is live
+    // Verified by construction, not inferred: three probes — one blocked interruptibly,
+    // one that swallowed the interrupt and then threw, one that swallowed it and RETURNED
+    // NORMALLY — produced three distinguishable `<failure>` bodies while all three printed
+    // the identical bare `TimeoutException ... at ArrayList.forEach` to the console.
+    //
     // THREAD MODE STAYS SAME_THREAD, AS A DECISION (computenet-dqy.12), not as an
     // unexamined default. `junit.jupiter.execution.timeout.thread.mode.default =
     // SEPARATE_THREAD` is genuinely tempting: it routes through
@@ -232,8 +266,8 @@ tasks.withType<Test>().configureEach {
     // b. IT ABANDONS A LIVE TEST BODY INTO THE REST OF THE SUITE. assertTimeoutPreemptively
     //    only calls `executorService.shutdownNow()`, which interrupts; it cannot stop a
     //    thread that does not honour the interrupt, and the suite proceeds regardless.
-    //    In :inspect — the module with the open hang — every test class binds an
-    //    InspectorServer and a VirtualThreadScheduler and releases them in @AfterEach,
+    //    In :inspect — the module with the open hang — 18 of the 28 test classes bind an
+    //    InspectorServer and/or a VirtualThreadScheduler and release them in @AfterEach,
     //    and forkEvery never forks that suite (28 classes, one JVM), so a single hang
     //    would close a server and shut a scheduler down underneath a body still running
     //    inside it, and take the remaining 27 classes with it. One undiagnosed hang
@@ -259,7 +293,12 @@ tasks.withType<Test>().configureEach {
     //
     // If one class needs the blocked frame, scope it to that class —
     // `@Timeout(value = 5, unit = MINUTES, threadMode = SEPARATE_THREAD)` — rather than
-    // changing the default for every test in the repo.
+    // changing the default for every test in the repo. For InspectorErrorsTest
+    // (computenet-dqy.2) specifically, read the next failed run's `test-results-fast` XML
+    // FIRST: under SAME_THREAD that artifact already carries both channels above, so the
+    // annotation would buy a frame that is very likely already there while dropping any
+    // failure coincident with the deadline. Reach for it only if a real occurrence comes
+    // back with neither channel populated.
     // ---------------------------------------------------------------------------
     systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
     testLogging {
