@@ -149,6 +149,118 @@ tasks.withType<Test>().configureEach {
     // sites and zero prior @Timeout meant a livelock regression could hang CI
     // indefinitely. 5 minutes is deliberately generous (seed sweeps); raise per-class
     // with @Timeout if a legitimate test needs more, don't raise this default.
+    //
+    // ---------------------------------------------------------------------------
+    // HOW TO READ A TIMEOUT THIS SETTING PRODUCED (computenet-dqy.12). Three things
+    // that are not obvious, and that a hang investigation gets wrong by default.
+    //
+    // The thread mode is JUnit's default, SAME_THREAD (kept deliberately — see below),
+    // so every testable method is routed through
+    // org.junit.jupiter.engine.extension.SameThreadTimeoutInvocation. Read off the
+    // 5.14.2 sources jar; the class is unchanged in the 5.13.4 engine this repo
+    // resolves. Its proceed(), elided to the load-bearing lines:
+    //
+    //     try { result = delegate.proceed(); }
+    //     catch (Throwable t) { failure = t; }
+    //     finally {
+    //         ...
+    //         if (interruptTask.executed) {
+    //             Thread.interrupted();
+    //             failure = TimeoutExceptionFactory.create(desc, timeout, failure);
+    //         }
+    //     }
+    //     if (failure != null) { throw failure; }
+    //
+    // 1. A TimeoutException DOES NOT MEAN THE METHOD FAILED. The `interruptTask.executed`
+    //    branch is in the `finally` and is not guarded by whether `delegate.proceed()`
+    //    threw. If the scheduled interrupt ran at all, the invocation throws
+    //    TimeoutException even for a method that completed successfully. Measured with a
+    //    probe that slept past its deadline, swallowed the interrupt and RETURNED
+    //    NORMALLY: reported FAILED, with `TimeoutException ... at ArrayList.forEach` and
+    //    nothing else. That is exactly the CI signature of the undiagnosed 5-minute
+    //    InspectorErrorsTest stall (computenet-dqy.2 / 8ru.3), so that signature does not
+    //    establish that the test thread was blocked in the JVM at all — an external
+    //    whole-VM freeze (hypervisor steal, live migration, total I/O stall) produces
+    //    identical output, and is invisible from inside the build log.
+    // 2. A REAL FAILURE IS DEMOTED TO A SUPPRESSED EXCEPTION. TimeoutExceptionFactory
+    //    .create(sig, duration, failure) does `timeoutException.addSuppressed(failure)`.
+    //    An assertion failure or bounded-wait miss that merely coincided with the
+    //    deadline survives only as a suppressed section, and Gradle's console stack
+    //    filter drops suppressed sections unconditionally (computenet-8ru.4).
+    // 3. THE STACK CAN NEVER NAME THE BLOCKED FRAME. The exception is constructed inside
+    //    the `finally`, on the interceptor's own stack — those two
+    //    `java.util.ArrayList.forEach` frames CI printed. The trace is evidence about
+    //    nothing, in either direction. Do not read it as a location.
+    //
+    // SO READ A TIMEOUT OUT OF THE XML, NEVER THE CONSOLE. `build/test-results/**/TEST-*
+    // .xml` DOES retain the suppressed section — established by running the probe above
+    // and reading the file, not inferred:
+    //
+    //     <failure message="java.util.concurrent.TimeoutException: probeTimesOutAndFails()
+    //              timed out after 1 second" type="java.util.concurrent.TimeoutException">
+    //     java.util.concurrent.TimeoutException: probeTimesOutAndFails() timed out after 1 second
+    //         at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+    //         at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+    //         Suppressed: java.lang.AssertionError: PROBE-REAL-FAILURE-MARKER: this is the real failure
+    //             at TimeoutXmlProbe.probeTimesOutAndFails(TimeoutXmlProbe.kt:22)
+    //             at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+    //             ... 2 more
+    //     </failure>
+    //
+    // The same run's console showed only the TimeoutException and its two forEach
+    // frames. ci.yml uploads these XMLs whenever a job does not succeed
+    // (computenet-8ru.4), and :inspect additionally arms PreInterruptThreadDumpPrinter
+    // into <system-out> (inspect/src/test/resources/junit-platform.properties).
+    //
+    // THREAD MODE STAYS SAME_THREAD, AS A DECISION (computenet-dqy.12), not as an
+    // unexamined default. `junit.jupiter.execution.timeout.thread.mode.default =
+    // SEPARATE_THREAD` is genuinely tempting: it routes through
+    // assertTimeoutPreemptively, so (3) goes away — the TimeoutException gets an
+    // ExecutionTimeoutException cause whose stack is `thread.getStackTrace()` of the
+    // blocked thread (measured: `Execution timed out in thread junit-timeout-thread-2`
+    // over the probe's own frame) — and (1) goes away too, since the timeout is decided
+    // by `future.get(timeout)`, which returns the value if the task completed. Rejected
+    // anyway, for two reasons that outweigh a better stack:
+    //
+    // a. IT LOSES THE REAL FAILURE INSTEAD OF DEMOTING IT. The identical probe rerun
+    //    under SEPARATE_THREAD reported the TimeoutException with NO trace of the
+    //    AssertionError anywhere in the XML — the thread is abandoned at the deadline
+    //    and whatever it throws afterwards goes nowhere. That makes (2) strictly worse:
+    //    a suppressed failure is recoverable from the XML, a dropped one is gone. This
+    //    repo's whole failure-accounting posture is that no path silently drops a
+    //    failure; trading that away for a stack trace is the wrong direction.
+    // b. IT ABANDONS A LIVE TEST BODY INTO THE REST OF THE SUITE. assertTimeoutPreemptively
+    //    only calls `executorService.shutdownNow()`, which interrupts; it cannot stop a
+    //    thread that does not honour the interrupt, and the suite proceeds regardless.
+    //    In :inspect — the module with the open hang — every test class binds an
+    //    InspectorServer and a VirtualThreadScheduler and releases them in @AfterEach,
+    //    and forkEvery never forks that suite (28 classes, one JVM), so a single hang
+    //    would close a server and shut a scheduler down underneath a body still running
+    //    inside it, and take the remaining 27 classes with it. One undiagnosed hang
+    //    becomes a cascade of correlated failures with no obvious first cause.
+    //
+    // The thread-affinity objection, checked rather than assumed, turns out to be the
+    // WEAK one and should not be the reason quoted: there is no @BeforeEach or
+    // @BeforeAll anywhere in the repo (the only lifecycle methods are 18 @AfterEach, all
+    // in :inspect), and the five kernel tests that assert about threads compare
+    // `Thread.currentThread()` against itself within one method body, so they do not
+    // care which thread that is — all 28 of their tests pass under SEPARATE_THREAD. The
+    // bare ThreadLocals in MessageContext/Identity/Invocation are likewise set and read
+    // within a single body today. But that is a property of the code as it stands, which
+    // nobody maintains deliberately, so flipping the default would silently make "the
+    // body runs on the thread its lifecycle callbacks run on" a rule every future test
+    // must respect. Also measured, and reported for what it is: one full :inspect run
+    // under SEPARATE_THREAD came back 259/262 with three assertion failures
+    // (InspectorActivityTest, InspectorColdTest x2) that do NOT reproduce when those
+    // classes run in isolation under either mode — taken at load average ~118 on a
+    // shared machine, so it attributes to nothing. It does show the shape of the bill: a
+    // repo-wide mode flip needs a clean full-suite evaluation, for a diagnostic that
+    // helps only if the hang recurs.
+    //
+    // If one class needs the blocked frame, scope it to that class —
+    // `@Timeout(value = 5, unit = MINUTES, threadMode = SEPARATE_THREAD)` — rather than
+    // changing the default for every test in the repo.
+    // ---------------------------------------------------------------------------
     systemProperty("junit.jupiter.execution.timeout.testable.method.default", "5m")
     testLogging {
         events(
