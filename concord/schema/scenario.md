@@ -79,6 +79,11 @@ On any other `kind` the block would declare a failure the runner never asserts �
 every check on an example or generative scenario must PASS — so declaring it
 there is an error, not a harmless annotation.
 
+Both halves of that pairing are checked for **every** corpus file the runner
+discovers, before the `profile:` filter is applied — so a `dist`/`dur` control
+missing its declaration is caught by the `core`-only fast loop too, rather than
+only by whichever build happens to activate its profile.
+
 ## `graph`
 
 ```yaml

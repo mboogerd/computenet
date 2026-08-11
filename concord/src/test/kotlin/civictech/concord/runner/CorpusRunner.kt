@@ -108,8 +108,37 @@ class CorpusRunner {
         val active = activeProfiles()
         return files.mapNotNull { file ->
             val scenario = ConcordYaml.instance.decodeFromString(Scenario.serializer(), file.readText())
+            // The `expect-failure:`/`kind:` pairing is a property of the corpus, not of
+            // one run, so it is asserted for EVERY discovered file — before the profile
+            // filter. Asserting it inside the run would make the schema contract hold
+            // only for the selected profiles, so a `dist`/`dur` control missing its
+            // declaration (or an example carrying a meaningless one) would be invisible
+            // to the documented fast loop `-Pconcord.profiles=core`.
+            assertExpectFailureMatchesKind(scenario)
             if (scenario.profile.slug() !in active) return@mapNotNull null
             DynamicTest.dynamicTest("${scenario.id} (${file.parentFile.name})") { runScenario(scenario) }
+        }
+    }
+
+    /**
+     * `expect-failure:` is the control contract and nothing else's: **required** on
+     * every `kind: control` (or "something failed" stands in as proof the right
+     * thing failed — see [assertControlFailedAsDeclared]) and **rejected** on every
+     * other kind, where the runner asserts every check PASSES and the block would
+     * therefore declare a failure nothing ever asserts — coverage that does not
+     * exist.
+     */
+    internal fun assertExpectFailureMatchesKind(scenario: Scenario) {
+        if (scenario.kind == Kind.CONTROL) {
+            assertTrue(scenario.expectFailure != null) {
+                "${scenario.id}: `kind: control` carries no `expect-failure:` block. A control must declare " +
+                    "WHICH check must fail and WHY (see concord/schema/scenario.md)"
+            }
+        } else {
+            assertTrue(scenario.expectFailure == null) {
+                "${scenario.id}: only `kind: control` may declare `expect-failure:` (kind is ${scenario.kind}); " +
+                    "on any other kind the runner asserts every check PASSES, so the block would assert nothing"
+            }
         }
     }
 
@@ -132,13 +161,8 @@ class CorpusRunner {
     internal data class CheckFailure(val checkId: String, val message: String)
 
     private fun runScenario(scenario: Scenario) {
-        // `expect-failure:` is the control contract and nothing else's: on an
-        // example or a generative scenario it would declare a failure the runner
-        // never asserts, which reads as coverage that does not exist.
-        assertTrue(scenario.kind == Kind.CONTROL || scenario.expectFailure == null) {
-            "${scenario.id}: only `kind: control` may declare `expect-failure:` (kind is ${scenario.kind}); " +
-                "on any other kind the runner asserts every check PASSES, so the block would assert nothing"
-        }
+        // The `expect-failure:`/`kind:` pairing is asserted by the test factory, for
+        // every corpus file rather than only the profile-selected ones.
 
         // Generative scenarios (§0, §1.2 exemplar (f)) stand in a `generator:` block
         // for a fixed graph: the harness synthesizes one concrete graph per instance
@@ -293,13 +317,16 @@ class CorpusRunner {
     // ------------------------------------------------------------------------
 
     /** The synthetic stand-in for `CTL-GF-01`: one declared check, one declared reason. */
-    private fun gfLikeControl(expectFailure: ExpectFailure? = DECLARED_GF_FAILURE) = Scenario(
+    private fun gfLikeControl(
+        expectFailure: ExpectFailure? = DECLARED_GF_FAILURE,
+        checks: List<Check> = listOf(ObservationsAllSatisfy(view = "v", fn = "even")),
+    ) = Scenario(
         id = "CTL-SYNTHETIC-01",
         title = "synthetic control for the runner's own control assertion",
         covers = listOf("22-GF-01"),
         profile = Profile.CORE,
         kind = Kind.CONTROL,
-        checks = listOf(ObservationsAllSatisfy(view = "v", fn = "even")),
+        checks = checks,
         expectFailure = expectFailure,
     )
 
@@ -379,8 +406,26 @@ class CorpusRunner {
         val failures = mapOf(0 to listOf(tornSumFailure()))
 
         val rejected = assertThrows<AssertionError> { assertControlFailedAsDeclared(scenario, failures, runs = 1) }
-        assertTrue(rejected.message!!.contains("does not declare")) {
+        // The substring has to be one only the STALE-ID diagnosis produces. The
+        // wrong-reason diagnosis further down also says "does not declare", so
+        // matching that alone would let this test pass with the stale-id check
+        // deleted — the same wrong-reason-looks-like-the-right-reason confusion
+        // this whole item is about, one level up.
+        assertTrue(rejected.message!!.contains("the expectation can never be met")) {
             "expected the undeclared-check diagnosis, got: ${rejected.message}"
+        }
+        assertTrue(rejected.message!!.contains("names check 'final-view'")) {
+            "the diagnosis must quote the stale id, got: ${rejected.message}"
+        }
+    }
+
+    @Test
+    fun `a control declaring no check at all is rejected`() {
+        val rejected = assertThrows<AssertionError> {
+            assertControlFailedAsDeclared(gfLikeControl(checks = emptyList()), emptyMap(), runs = 20)
+        }
+        assertTrue(rejected.message!!.contains("declares no check at all")) {
+            "expected the no-check diagnosis, got: ${rejected.message}"
         }
     }
 
@@ -391,6 +436,30 @@ class CorpusRunner {
         }
         assertTrue(rejected.message!!.contains("every check passed on every one of 20 run(s)")) {
             "expected the never-failed diagnosis (P7), got: ${rejected.message}"
+        }
+    }
+
+    @Test
+    fun `expect-failure on a non-control kind is rejected, and on a control is required`() {
+        // The corpus-wide half of the contract (schema/scenario.md: required on
+        // every control, rejected on every other kind), asserted for every
+        // discovered file by the test factory rather than per run — so it holds
+        // under `-Pconcord.profiles=core` too, for the dist/dur files that loop
+        // never executes.
+        assertExpectFailureMatchesKind(gfLikeControl())
+
+        val example = gfLikeControl().copy(kind = Kind.EXAMPLE, expectFailure = DECLARED_GF_FAILURE)
+        val onExample = assertThrows<AssertionError> { assertExpectFailureMatchesKind(example) }
+        assertTrue(onExample.message!!.contains("only `kind: control` may declare")) {
+            "expected the wrong-kind diagnosis, got: ${onExample.message}"
+        }
+
+        assertExpectFailureMatchesKind(example.copy(expectFailure = null))
+
+        val bareControl = gfLikeControl(expectFailure = null)
+        val onControl = assertThrows<AssertionError> { assertExpectFailureMatchesKind(bareControl) }
+        assertTrue(onControl.message!!.contains("no `expect-failure:` block")) {
+            "expected the missing-declaration diagnosis, got: ${onControl.message}"
         }
     }
 
