@@ -125,10 +125,19 @@ object Checks {
         }
     }
 
-    /** Every event on the observation stream satisfies the catalog predicate. */
+    /**
+     * Every event on the observation stream satisfies the catalog predicate.
+     *
+     * Fails — rather than passes — when the named view produced no observation
+     * at all. An empty stream satisfies "every event passes" vacuously, and that
+     * is "the check had nothing to look at", which must never read as "the
+     * property held": a stream that stopped being recorded would otherwise
+     * silently disarm the check (observed on `CTL-GF-01`, computenet-qaz).
+     */
     fun observationsAllSatisfy(check: ObservationsAllSatisfy, ctx: CheckContext): CheckResult {
         val predicate = Functions.predicate(check.fn)
         val log = ctx.driver.observationLog(check.view)
+        nothingObserved("observations-all-satisfy(${check.view}, ${check.fn})", check.view, log)?.let { return it }
         val offending = log.withIndex().firstOrNull { !predicate(it.value) }
             ?: return CheckResult.Passed
         return CheckResult.Failed(
@@ -136,9 +145,16 @@ object Checks {
         )
     }
 
-    /** The observation stream never regresses under the stated order. */
+    /**
+     * The observation stream never regresses under the stated order.
+     *
+     * Fails — rather than passes — when the named view produced no observation
+     * at all, for the same reason as [observationsAllSatisfy]: an empty stream
+     * never regresses, so passing on it would be passing on nothing observed.
+     */
     fun observationsMonotone(check: ObservationsMonotone, ctx: CheckContext): CheckResult {
         val log = ctx.driver.observationLog(check.view)
+        nothingObserved("observations-monotone(${check.view})", check.view, log)?.let { return it }
         val decreasing = check.order?.lowercase()?.let { it.startsWith("desc") || it.startsWith("non-inc") } ?: false
         for (i in 1 until log.size) {
             val step = Values.compare(log[i - 1], log[i])
@@ -170,6 +186,10 @@ object Checks {
      * [BatchOracle] — the oracle only exposes the *final* fold (`view`/
      * `allViewValues`), not per-prefix history, and this check needs the whole
      * chain of intermediate states, not just the end of it.
+     *
+     * Fails — rather than passes — when the named view produced no observation
+     * at all: with no observed state there is no torn delivery to find, and "the
+     * check had nothing to look at" must never read as "the property held".
      */
     fun observationsWholeWaves(check: ObservationsWholeWaves, ctx: CheckContext): CheckResult {
         val ops = ctx.scenario.script.filterIsInstance<ApplyStep>().filter { it.on == check.source }
@@ -192,6 +212,7 @@ object Checks {
             prefixes += LinkedHashSet(running)
         }
         val log = ctx.driver.observationLog(check.view)
+        nothingObserved("observations-whole-waves(${check.view})", check.view, log)?.let { return it }
         val offending = log.withIndex().firstOrNull { (_, v) ->
             val observed = (v as? Value.ListVal)?.items?.toSet()
                 ?: return@firstOrNull true // not set-shaped — cannot be a whole-prefix state either
@@ -392,6 +413,32 @@ object Checks {
     }
 
     // --- helpers ------------------------------------------------------------
+
+    /**
+     * The empty-observation-log guard shared by the three `observations-*`
+     * evaluators: [CheckResult.Failed] when [log] is empty, `null` when there is
+     * something to assert over.
+     *
+     * Every one of those three quantifies over the events of a stream ("all
+     * satisfy", "never regresses", "each is a whole prefix"), so every one of
+     * them is vacuously true on an empty stream — and a vacuous truth is "the
+     * check had nothing to look at", never "the property held". Concord is the
+     * executable arbiter of spec↔code agreement (AGENTS.md); an arbiter that
+     * reads *nothing was observed* as *the requirement holds* can be disarmed by
+     * any future defect that empties a log, which is exactly what happened to
+     * `CTL-GF-01` (a control that must fail, passing on 17 of 20 runs purely
+     * because its log was empty — computenet-qaz). This mirrors the same refusal
+     * already made by [wavePlaneUnchanged] and [pagesEqualView].
+     */
+    private fun nothingObserved(where: String, view: String, log: List<Value>): CheckResult.Failed? =
+        if (log.isNotEmpty()) {
+            null
+        } else {
+            CheckResult.Failed(
+                "$where: the view '$view' produced no observation at all — nothing was observed, " +
+                    "so nothing is asserted",
+            )
+        }
 
     /** The catalog type of a cell (used to pick order-sensitive vs order-insensitive comparison). */
     private fun viewType(scenario: Scenario, cellId: String): String? =

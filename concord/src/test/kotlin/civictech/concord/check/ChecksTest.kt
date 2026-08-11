@@ -20,12 +20,14 @@ import civictech.concord.schema.LateJoinEqualsEarly
 import civictech.concord.schema.NoDeadLetters
 import civictech.concord.schema.ObservationsAllSatisfy
 import civictech.concord.schema.ObservationsMonotone
+import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.ViewsConverge
 import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.value.Value
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlin.test.Test
 
@@ -144,6 +146,76 @@ class ChecksTest {
             FakeDriver(observations = mapOf("v" to listOf(i(1), i(3), i(2)))),
             scenario(listOf(cell("v", "value-view")), emptyList()),
         )
+        fail(Checks.observationsMonotone(ObservationsMonotone("v"), ctx))
+    }
+
+    // --- observations-whole-waves --------------------------------------------
+
+    @Test
+    fun `observations-whole-waves holds when every observed set is a whole prefix`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("v" to listOf(list(), list(s("apple")), list(s("apple"), s("plum"))))),
+            setViewScenario,
+        )
+        pass(Checks.observationsWholeWaves(ObservationsWholeWaves("v", "a"), ctx))
+    }
+
+    @Test
+    fun `observations-whole-waves fails on a torn fork-join delivery`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("v" to listOf(list(s("plum"))))),
+            setViewScenario,
+        )
+        fail(Checks.observationsWholeWaves(ObservationsWholeWaves("v", "a"), ctx))
+    }
+
+    // --- the empty observation log is never a pass (computenet-qaz) ----------
+    //
+    // All three observations-* checks quantify over the events of a stream, so
+    // all three are vacuously true on an empty one. "Nothing was observed" must
+    // read as a failure, exactly as it already does for wave-plane-unchanged and
+    // pages-equal-view — otherwise any defect that empties a log silently
+    // disarms the arbiter (CTL-GF-01 passed on 17 of 20 runs that way).
+
+    @Test
+    fun `observations-all-satisfy fails when the view observed nothing at all`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("v" to emptyList())),
+            scenario(listOf(cell("v", "value-view")), emptyList()),
+        )
+        val r = Checks.observationsAllSatisfy(ObservationsAllSatisfy("v", "even"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "nothing was observed"
+        r.message shouldContain "'v'"
+    }
+
+    @Test
+    fun `observations-monotone fails when the view observed nothing at all`() {
+        val ctx = FakeContext(
+            FakeDriver(observations = mapOf("v" to emptyList())),
+            scenario(listOf(cell("v", "value-view")), emptyList()),
+        )
+        val r = Checks.observationsMonotone(ObservationsMonotone("v"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "nothing was observed"
+        r.message shouldContain "'v'"
+    }
+
+    @Test
+    fun `observations-whole-waves fails when the view observed nothing at all`() {
+        val ctx = FakeContext(FakeDriver(observations = mapOf("v" to emptyList())), setViewScenario)
+        val r = Checks.observationsWholeWaves(ObservationsWholeWaves("v", "a"), ctx)
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "nothing was observed"
+        r.message shouldContain "'v'"
+    }
+
+    @Test
+    fun `a view the driver never recorded at all is a failure, not a pass`() {
+        // No fixture for 'v' whatsoever — observationLog returns empty, which is
+        // the same hole seen from the other side: the check must not pass.
+        val ctx = FakeContext(FakeDriver(), scenario(listOf(cell("v", "value-view")), emptyList()))
+        fail(Checks.observationsAllSatisfy(ObservationsAllSatisfy("v", "even"), ctx))
         fail(Checks.observationsMonotone(ObservationsMonotone("v"), ctx))
     }
 
@@ -369,6 +441,7 @@ class ChecksTest {
             LateJoinEqualsEarly(early = "v", late = "w"),
             ObservationsAllSatisfy("v", "even"),
             ObservationsMonotone("v"),
+            ObservationsWholeWaves("v", "a"),
             ReplicasConverge("none"),
             NoDeadLetters,
             EffectCount(sink = "s", exactly = 1),
