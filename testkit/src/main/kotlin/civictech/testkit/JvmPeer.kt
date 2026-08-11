@@ -237,9 +237,15 @@ object JvmPeer {
 
     /**
      * Every peer launched in this JVM, so a test that fails *between* two launches
-     * cannot strand a child process on the runner: the old shape put both launches
-     * before its `try`, and reading a port from the child is a step that can now
-     * legitimately fail.
+     * cannot strand a child process on the runner past this JVM: the old shape put
+     * both launches before its `try`, and reading a port from the child is a step
+     * that can now legitimately fail.
+     *
+     * Note the "past this JVM" — the hook below only runs at exit, so it is the
+     * backstop and not the answer. The answer for the peer that actually failed is
+     * [Peer.failWith], which kills it there and then; a *healthy* peer launched
+     * before its sibling's handshake failed is neither, and does run on until the
+     * test JVM ends.
      */
     private val live: MutableSet<Peer> = Collections.newSetFromMap(ConcurrentHashMap())
 
