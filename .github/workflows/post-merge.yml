@@ -72,11 +72,54 @@ name: Post-merge validation
 # inert after a bot merge; this workflow does not restore it, it routes around
 # it. computenet-0pd's push lane stays effectively dead until somebody supplies
 # a PAT or a GitHub App token to `auto-merge.yml`, and that remains the only
-# real fix for the push trigger itself. Two further gaps are open by design:
-# validation is post-hoc, so a broken `main` is reported rather than prevented;
-# and nothing here notifies a human — the run's conclusion has to be looked at,
-# because failure notifications for a bot-actored `pull_request` event may reach
-# nobody.
+# real fix for the push trigger itself. One further gap is open by design:
+# validation is post-hoc, so a broken `main` is reported rather than prevented.
+#
+# Notification (computenet-dqy.9). The gap called out above used to include
+# "and nothing here notifies a human" — the run's conclusion had to be looked
+# at, because failure notifications for a bot-actored `pull_request` event may
+# reach nobody. `main-notify-on-failure` and `main-notify-on-success` below
+# close that: they open/update a GitHub issue through `secrets.GITHUB_TOKEN`.
+# Chosen over the other two options the ticket listed (a bd bead from CI; a
+# webhook/Slack notification) because it needs no new secret and no external
+# service — an unattended agent cannot provision either of those, and a step
+# that silently no-ops for lack of one is worse than useless here. A GitHub
+# issue is also where a human already looks, and `gh` ships preinstalled on
+# GitHub-hosted runners.
+#
+# Idempotent by construction: the `post-merge-failure` label identifies at
+# most one open tracking issue. A failing run comments on it if it exists and
+# opens it (once) otherwise — never a new issue per red run. A subsequent
+# green run comments and closes it, so the issue does not linger once `main`
+# recovers.
+#
+# Why the issue is ASSIGNED and @-mentions the repository owner. "An issue
+# exists" is not the same as "somebody was told": an issue opened by
+# `github-actions[bot]` only reaches a watcher whose notification settings
+# happen to include repository issues, which is precisely the kind of
+# depends-on-someone-looking channel this ticket exists to replace. An
+# assignment and a mention each raise a direct notification regardless of
+# watch state, and the assignment persists in "Assigned to you" until the
+# issue is closed. The assignment is best-effort — if the login cannot be
+# assigned the issue is still opened, unassigned, rather than lost.
+#
+# Where `continue-on-error` is and is NOT used, which is the whole design of a
+# notifier: its failure mode is silence, so a permanently broken notifier that
+# never fails anything is worse than one that occasionally cries wolf.
+#   - The failure job's notifying step is NOT `continue-on-error`. That run is
+#     already red by construction (the job only runs when a lane failed or was
+#     cancelled), so letting `gh` fail loudly costs nothing — the run's
+#     conclusion does not change — and it is the only thing that would ever
+#     reveal a notifier broken by a permissions, quota or API change. On the
+#     `schedule` lane that surfaces as GitHub's own scheduled-workflow-failure
+#     mail, which is a channel that does not depend on the Actions tab either.
+#   - The label step above it IS `continue-on-error`, so a hiccup creating the
+#     label cannot skip the notification that follows it.
+#   - The success job's step IS `continue-on-error`: there the run is green, so
+#     a `gh` hiccup would turn a healthy `main` red and corrupt the
+#     consecutive-green evidence computenet-dqy is collecting. Failing to close
+#     the issue is self-correcting anyway — the stale issue stays assigned to a
+#     human, who is thereby told to look.
 on:
   pull_request:
     types: [closed]
@@ -327,3 +370,163 @@ jobs:
       - name: Test
         working-directory: demo/agora/ui
         run: npm test
+
+  # Notify a human on failure (computenet-dqy.9) — see the header comment for
+  # why this is a GitHub issue rather than a bd bead or a webhook.
+  #
+  # `needs` lists every mirrored lane plus the gate, purely so `needs.*.result`
+  # (used below) sees all of them. The job-level `if` replaces the implicit
+  # "all needs succeeded" condition GitHub would otherwise apply, so this
+  # still runs when a needed job failed, was cancelled (a hung lane hitting
+  # its `timeout-minutes`, same signal the "Upload test results" steps above
+  # treat as failure-shaped), or the run is unrelated to `main` and everything
+  # upstream was cleanly skipped — that last case makes every entry
+  # `needs.*.result` returns 'skipped', `contains(..., 'failure')` and
+  # `contains(..., 'cancelled')` are both false, and this job is skipped too,
+  # so a non-merge `pull_request closed` event opens nothing.
+  main-notify-on-failure:
+    needs:
+      - main-validation-gate
+      - main-build-test-fast
+      - main-build-test-serial
+      - main-concord-full
+      - main-ui-test
+      - main-agora-ui-test
+    if: >-
+      always() &&
+      (contains(needs.*.result, 'failure') ||
+      contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Job-level `permissions` replaces the workflow-level block for this job
+    # rather than adding to it, so this grants exactly what `gh issue`/`gh
+    # label` need and nothing else — in particular no `contents` access,
+    # since this job never checks anything out.
+    permissions:
+      issues: write
+    steps:
+      # `--force` makes this idempotent: creates the label the first time,
+      # updates (no-ops on identical) color/description every time after.
+      # Needed because `gh issue create --label` fails outright if the label
+      # does not already exist, and nothing else in this repo creates it.
+      - name: Ensure the tracking label exists
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: >-
+          gh label create post-merge-failure --repo "$REPO"
+          --color b60205
+          --description "post-merge validation on main is failing"
+          --force
+
+      # One open issue per incident, not one per red run: look for an open
+      # issue carrying the tracking label and comment on it if found, else
+      # create it. `.[0].number // empty` is deliberate — `gh issue list`
+      # returns `[]` when nothing matches, `.[0]` on `[]` is `null` in jq, and
+      # `null.number` is `null` (jq's null-propagation), so `// empty` turns
+      # "nothing found" into an empty string rather than a jq error.
+      #
+      # The per-lane results go in the body on purpose. The acceptance
+      # criterion is that a failure reaches a human WITHOUT them browsing the
+      # Actions tab, and a notification that only carries a run URL sends them
+      # straight back to it; "main-concord-full: failure, everything else
+      # success" is triage that survives in the mail body.
+      #
+      # Deliberately not `continue-on-error` — see the header. The run is
+      # already failing, so a loud `gh` failure here changes nothing except
+      # that a broken notifier becomes discoverable.
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          R_GATE: ${{ needs.main-validation-gate.result }}
+          R_FAST: ${{ needs.main-build-test-fast.result }}
+          R_SERIAL: ${{ needs.main-build-test-serial.result }}
+          R_CONCORD: ${{ needs.main-concord-full.result }}
+          R_UI: ${{ needs.main-ui-test.result }}
+          R_AGORA: ${{ needs.main-agora-ui-test.result }}
+        run: |
+          set -e
+          number=$(gh issue list --repo "$REPO" \
+            --label post-merge-failure --state open \
+            --json number --jq '.[0].number // empty')
+          # printf rather than a heredoc or a multi-line shell string: both of
+          # those would carry this block's YAML indentation into the body, and
+          # four leading spaces make Markdown render the whole thing as a code
+          # block.
+          body=$(printf '%s\n' \
+            "@${OWNER} — post-merge validation failed on \`main\` (event: ${EVENT})." \
+            "" \
+            "| lane | result |" \
+            "| --- | --- |" \
+            "| main-validation-gate | ${R_GATE} |" \
+            "| main-build-test-fast | ${R_FAST} |" \
+            "| main-build-test-serial | ${R_SERIAL} |" \
+            "| main-concord-full | ${R_CONCORD} |" \
+            "| main-ui-test | ${R_UI} |" \
+            "| main-agora-ui-test | ${R_AGORA} |" \
+            "" \
+            "Run: ${RUN_URL}")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            create_args=(
+              --repo "$REPO"
+              --title "main is red: post-merge validation failing"
+              --label post-merge-failure
+              --body "$body"
+            )
+            # Assignment is what makes this land in somebody's inbox rather
+            # than in a list they have to visit. If the owner login cannot be
+            # assigned, fall back to opening the issue unassigned — an
+            # unassigned alarm still beats no alarm. `gh` resolves assignee
+            # logins before it POSTs, so the fallback cannot double-create.
+            gh issue create "${create_args[@]}" --assignee "$OWNER" \
+              || gh issue create "${create_args[@]}"
+          fi
+
+  # Mirror of the job above: once every mirrored lane is green again, stop
+  # nagging. Same `needs`/`if` shape, inverted — this only runs when the gate
+  # itself succeeded (so a skipped, irrelevant run stays silent) and nothing
+  # among the mirrored lanes failed or was cancelled.
+  main-notify-on-success:
+    needs:
+      - main-validation-gate
+      - main-build-test-fast
+      - main-build-test-serial
+      - main-concord-full
+      - main-ui-test
+      - main-agora-ui-test
+    if: >-
+      always() &&
+      needs.main-validation-gate.result == 'success' &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Close the tracking issue if main is green again
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -e
+          number=$(gh issue list --repo "$REPO" \
+            --label post-merge-failure --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue close "$number" --repo "$REPO" \
+              --reason completed \
+              --comment "main is green again (event: ${EVENT}, run: ${RUN_URL})."
+          else
+            echo "No open post-merge-failure issue to close."
+          fi
