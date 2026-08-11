@@ -74,6 +74,15 @@ import java.nio.channels.ServerSocketChannel
  * endpoint (hundreds of `ws-reconnect-*` threads), so the regression gate is
  * intact.
  *
+ * The one thing that difference does break is `WsTransport.connect`'s *initial*
+ * reachability probe: it treats a completed TCP connect as "the listener is up",
+ * and the guard completes one. Measured: the probe returns immediately against a
+ * bare guard, where an unbound port would have given it `ECONNREFUSED` to wait
+ * on. So **call [serve] before `WsTransport.connect`** — every test here does,
+ * and the alternative is not a hang but a confusing `could not connect to ws://…`
+ * ten seconds later. Reconnects are unaffected: those go through `onClose`, which
+ * a reset drives exactly as a refusal does.
+ *
  * Superseded by this class: T12 finding 4's "probe with a throwaway
  * `SO_REUSEADDR` bind, then retry the real listen". Its diagnosis — that the
  * OS is the adversary here — was right; its remedy assumed the adversary was
