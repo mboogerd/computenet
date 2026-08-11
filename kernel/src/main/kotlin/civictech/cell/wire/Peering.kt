@@ -54,6 +54,14 @@ interface RegistryAnnounce {
  * longer authoritative, and the retraction of what it installed has to exclude
  * them rather than race them. That gate costs one uncontended monitor per
  * announcement — again on the announcement path only, never on the data path.
+ *
+ * On a *socket* transport, "per connection" means per connection *instance*: it
+ * mints a mirror per socket open, not per session object, so [ref] — the address
+ * the hello hands the peer, and therefore the address every announcement frame
+ * carries — identifies the instance that will be held to it, and [detach] is a
+ * permanent fence rather than a window. [Peering.loopback] is the exception: it
+ * holds one mirror per *peering*, re-opened across a partition/heal. [attach]
+ * carries both halves of that.
  */
 class RegistryMirrorCell(
     private val registry: LocationRegistry,
@@ -89,10 +97,13 @@ class RegistryMirrorCell(
      * happens-before every announcement served here.
      *
      * `@Volatile` because the writer is the transport's IO thread and the
-     * reader is the bridge host's scheduler thread. Re-assignable, not
-     * set-once: a client keeps one `Session` — hence one mirror — across
-     * reconnects and re-runs the hello, so the same name is written again;
-     * writing the same name is a no-op in effect.
+     * reader is the bridge host's scheduler thread. A `var` rather than a
+     * constructor-only value because of the late bind above, not because it is
+     * re-written: since computenet-dqy.14 every socket connection instance mints
+     * its own mirror, so a transport mirror's name is written once, by the hello
+     * of the instance that owns it. (The setter stays capable of a re-bind — a
+     * peer that re-hellos on one socket is served, `PeerIdentityTest` covers it
+     * — but no transport path in this repository reaches that any more.)
      */
     @Volatile
     var peer: PeerId? = initialPeer
@@ -129,23 +140,38 @@ class RegistryMirrorCell(
     }
 
     /**
-     * (Re)open the gate — the peering is live and this mirror may install
-     * locations again. Called by a transport from its hello, beside the [peer]
-     * bind and before any frame can be accepted, and by
-     * [Peering.Loopback.heal]. A mirror starts attached, so a peering that
-     * never detaches (the pre-existing shape) behaves exactly as before.
+     * Re-open the gate — this peering is live again and the mirror may install
+     * locations once more. A mirror starts attached, so a peering that never
+     * detaches (the pre-existing shape) behaves exactly as before.
      *
      * A re-attached mirror needs no replay of what it lost while detached: the
      * peer's (re-)announcement is a full `localRefs` catch-up
      * ([Peering.announceTo]), so everything it still holds is re-announced.
      *
-     * Re-attaching re-opens the gate for *whatever* reaches this mirror next,
-     * which on a transport that reuses one mirror across reconnects can include
-     * a frame the previous connection left queued on the bridge host. That
-     * window is bounded and strictly narrower than the pre-fence behaviour;
-     * `WsTransport.Session.onText` carries the full argument and why it is not
-     * closed with an epoch. A transport that spawns a mirror per connection (a
-     * `WsTransport` listener) never re-attaches and so never has the window.
+     * **[Peering.Loopback.heal] is the only production caller, and that is the
+     * point** (`MirrorCloseFenceTest` also drives it directly, to pin the gate's
+     * own semantics). The disconnect fence is total across *connection
+     * instances*: no transport
+     * re-opens a mirror it once detached. Both `WsTransport` paths now mint a
+     * mirror per connection instance — a listener a whole fresh `Session` per
+     * socket, a client a fresh mirror in `Session.hello` per (re)connect
+     * (computenet-dqy.14) — so a superseded instance's mirror is shut for good
+     * and a frame that instance staged on the bridge host is dropped at the
+     * gate, however late it decodes. That works because the mirror's [ref] *is*
+     * the connection instance's identity on the wire: an announcement is
+     * addressed to the ref the hello carried, so it is attributable to the
+     * instance that offered it, at both scheduler hops behind the socket (the
+     * ingress decode and the delivery to this cell). No parallel epoch counter
+     * is needed, and none exists.
+     *
+     * [Peering.Loopback] is the one caller because a partition/heal is the
+     * *same* peering resuming, not a new instance: mirrors, ingresses and
+     * egresses all persist across it. The window that follows from that — an
+     * announcement decoded before [Peering.Loopback.partition] and applied
+     * after [Peering.Loopback.heal], which can install a ref the peer dropped
+     * while severed — is the one place the fence still does not reach, and it
+     * is tracked separately (computenet-dqy.20). It is not reachable from either
+     * socket path.
      */
     fun attach() = synchronized(gate) { attached = true }
 

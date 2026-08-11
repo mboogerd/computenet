@@ -8,6 +8,7 @@ import civictech.cell.port.Use
 import civictech.cell.host.IntakeClosedException
 import civictech.cell.wire.BridgeEgressCell
 import civictech.cell.wire.Peering
+import civictech.cell.wire.RegistryMirrorCell
 import org.java_websocket.WebSocket
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ClientHandshake
@@ -110,6 +111,11 @@ object WsTransport {
      * registry mirror is bound to that same identity at the same point, so the
      * `LocationRegistry.Remote` locations this connection installs name the
      * peer rather than only the (per-connection, reconnect-fresh) egress.
+     *
+     * A Session outlives its socket on the client path — [WsConnection] keeps
+     * one across every reconnect — so the per-connection state that the
+     * disconnect fence depends on is held per *open* rather than per Session:
+     * see [mirror] and [hello] (computenet-dqy.14).
      */
     internal class Session(
         private val side: Peering.Side,
@@ -119,12 +125,44 @@ object WsTransport {
         val egress = BridgeEgressCell()
 
         /**
-         * Spawned here, before any peer name exists, because [hello] must carry
-         * its ref. Its peer is therefore late-bound in [onText] (V4-PEERID) —
-         * `RegistryMirrorCell.peer` carries the happens-before argument that
-         * makes that safe.
+         * The registry mirror of the *current connection instance* — minted by
+         * [hello], retired by [onClose], never re-opened (computenet-dqy.14).
+         *
+         * **Why per open and not per [Session].** A listener builds a Session
+         * per socket, so "one mirror per Session" was already one mirror per
+         * connection instance there. A client does not: [WsConnection] keeps
+         * one Session — hence one egress, and formerly one mirror — across
+         * every reconnect. Re-opening that single mirror's gate on the re-hello
+         * left a window in which a frame the *previous* connection had already
+         * staged on the bridge host could be applied as though the returning
+         * peer had announced it, re-installing a `LocationRegistry.Remote` for
+         * a ref the peer had since dropped.
+         *
+         * Minting the mirror per open closes that window without a parallel
+         * epoch counter, because the mirror's [CellRef] *is* the connection
+         * instance's identity and the wire already carries it: an announcement
+         * is addressed to the mirror ref this side put in its hello, so every
+         * frame is attributed to the instance that offered that ref. A frame
+         * from a superseded instance names a retired mirror whose gate is shut
+         * for good, and both scheduler hops behind the socket — the ingress
+         * decode and the mirror delivery — are covered by that one fact.
+         *
+         * **A retired mirror stays spawned, deliberately.** Despawning it would
+         * turn the fence's *drop* into a *park*: `LocationRegistry.deliver`
+         * parks an invocation whose target ref has no location, so a stale
+         * announcement addressed to a despawned mirror would sit in the park
+         * queue instead of being refused at the gate. The cost is one detached
+         * cell per reconnect — measured, alongside the `BridgeIngressCell` that
+         * every re-hello already leaves behind, in computenet-vzb, which owns
+         * retiring a whole connection instance's cells safely.
+         *
+         * `@Volatile` because [hello]/[onText]/[onClose] all run on the
+         * socket's IO thread while `RegistryMirrorCell.peer` is read on the
+         * bridge host's scheduler thread; the reference itself must be visible
+         * to whichever IO thread java-websocket hands the next callback to.
          */
-        private val mirror = Peering.spawnMirror(side, toPeer = egress)
+        @Volatile
+        private var mirror: RegistryMirrorCell? = null
 
         @Volatile
         private var ingress: Propagate<ByteArray>? = null
@@ -159,7 +197,27 @@ object WsTransport {
             }, PortRef.generate()))
         }
 
-        fun hello(): String = HELLO + mirror.ref.id + (side.peer?.let { " ${it.name}" } ?: "")
+        /**
+         * Open a connection instance and return the hello that names it: the
+         * fresh [mirror]'s ref plus, since M8.2, this side's peer name.
+         *
+         * Called from `onOpen` on both paths — once for a listener session,
+         * once per (re)connect for a client one. Retiring the previous mirror
+         * here as well as in [onClose] is deliberate: the fence must not depend
+         * on the close callback having run, and detaching an already-detached
+         * mirror is a no-op.
+         *
+         * The mirror is spawned before any peer name exists, because the hello
+         * must carry its ref; its peer is therefore late-bound in [onText]
+         * (V4-PEERID) — `RegistryMirrorCell.peer` carries the happens-before
+         * argument that makes that safe.
+         */
+        fun hello(): String {
+            mirror?.detach() // this open supersedes whatever instance came before it
+            val fresh = Peering.spawnMirror(side, toPeer = egress)
+            mirror = fresh
+            return HELLO + fresh.ref.id + (side.peer?.let { " ${it.name}" } ?: "")
+        }
 
         fun onText(message: String) {
             require(message.startsWith(HELLO)) { "unexpected text message: $message" }
@@ -173,35 +231,21 @@ object WsTransport {
             // V4-PEERID: bind the mirror's peer BEFORE announcing, so every
             // Remote location this connection installs — including the peer's
             // own catch-up burst, which cannot start before it has seen our
-            // hello — records the peer's name. A listener builds a fresh
-            // Session (hence a fresh egress) per reconnect, so the name is the
-            // only part of a peer's identity that survives one. Re-assigned on
-            // a re-hello for the same reason the announcer below is replaced:
-            // a client keeps one Session across reconnects.
-            mirror.peer = peer
-            // ... and re-open the mirror's gate, which a previous `onClose`
-            // shut (a client keeps ONE session, hence one mirror, across
-            // reconnects). Ordered before the *new* ingress exists, so no frame
-            // of this connection can reach a detached mirror; the re-hello's
-            // announcement below is a full catch-up, so nothing dropped while
-            // detached is lost.
-            //
-            // Residual, and only on this client path where the mirror is reused:
-            // a frame the PREVIOUS connection already handed to the *old*
-            // ingress can still be sitting on the bridge host's queue when we
-            // get here, and if it is decoded after this `attach` it is applied
-            // as though the returning peer had announced it. For a ref the peer
-            // still holds that is merely redundant (the catch-up re-announces it
-            // anyway); for one it has since dropped it leaves a stale Remote
-            // that survives until the next disconnect retracts it. Reaching it
-            // needs the bridge host starved across an entire reconnect, and the
-            // pre-fence behaviour was strictly worse — the whole post-close
-            // burst was applied, fenced by nothing — so this is recorded as a
-            // known edge rather than bought with a per-connection epoch stamped
-            // through the ingress. A *listener* session cannot reach it at all:
-            // `WsListener.onOpen` builds a fresh Session, hence a fresh mirror,
-            // per connection, so `detach` there is permanent.
-            mirror.attach()
+            // hello — records the peer's name. Both paths now mint a fresh
+            // egress-plus-mirror per connection instance (a listener a whole
+            // fresh Session, a client a fresh mirror in `hello`), so the name
+            // is the only part of a peer's identity that survives a reconnect.
+            val instance = checkNotNull(mirror) { "onText before hello opened a connection instance" }
+            instance.peer = peer
+            // No re-attach: this mirror was minted by *this* connection's
+            // `hello` and starts attached. That is the whole disconnect fence
+            // (computenet-dqy.14). A frame the PREVIOUS connection staged on
+            // the bridge host — whether still undecoded, or already decoded and
+            // queued for delivery — is addressed to the previous mirror's ref,
+            // which `hello`/`onClose` detached for good, so it is dropped at
+            // the gate instead of re-installing a Remote for a ref the peer may
+            // since have dropped. The peer's re-announcement below is a full
+            // catch-up, so nothing it still holds is lost by that drop.
             ingress = Peering.hostIngress(side, fromPeer = peer)
             announcement?.close() // a re-hello (reconnect) supersedes the previous announcer
             announcement = Peering.announceTo(side, CellRef(UUID.fromString(parts[0])), via = egress)
@@ -229,8 +273,11 @@ object WsTransport {
             // announcement decoded before this close can be applied after it.
             // `detach` shuts the gate and retracts in one step, so a late
             // announcement can no longer resurrect a departed peer's locations
-            // behind a dead egress (`RegistryMirrorCell.detach`).
-            mirror.detach()
+            // behind a dead egress (`RegistryMirrorCell.detach`). The gate
+            // stays shut: the next `hello` mints a new mirror rather than
+            // re-opening this one, so this connection instance is fenced off
+            // permanently on the client path exactly as it is on a listener.
+            mirror?.detach()
         }
     }
 
