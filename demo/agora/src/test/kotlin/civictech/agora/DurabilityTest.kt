@@ -7,12 +7,15 @@ import civictech.agora.cell.StanceDelta
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.durability.FileJournal
+import civictech.cell.host.HostScheduler
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
 import civictech.cell.wire.WireCodec
+import civictech.testkit.awaitDrained
 import java.util.*
 import kotlin.math.abs
 import kotlin.test.Test
@@ -115,29 +118,55 @@ class DurabilityTest {
         val structure = java.io.File(dir, "graph.jsonl")
         val journalFile = java.io.File(dir, "host.journal")
 
-        fun world(): Pair<ManagedHost, AgoraService> {
+        fun world(name: String): Triple<HostScheduler, ManagedHost, AgoraService> {
             val registry = LocationRegistry()
+            // the production scheduler, held explicitly: `awaitSettled` needs a
+            // handle to fence against (ManagedHost mints exactly this otherwise)
+            val scheduler = VirtualThreadScheduler("agora-live-durability-$name")
             val host = ManagedHost(
+                scheduler = scheduler,
                 registry = registry,
                 attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
                 journal = FileJournal(journalFile),
             )
-            return host to AgoraService(host, registry, quiescence = q, structureLog = structure)
+            return Triple(scheduler, host, AgoraService(host, registry, quiescence = q, structureLog = structure))
         }
 
-        fun awaitStable(service: AgoraService, deadlineMs: Long = 5_000): Map<CellRef, Double> {
-            val deadline = System.currentTimeMillis() + deadlineMs
-            var last = emptyMap<CellRef, Double>()
-            while (System.currentTimeMillis() < deadline) {
-                Thread.sleep(150)
+        /**
+         * Read the graph once the host is genuinely done — the live twin of the
+         * deterministic test's `runToIdle()`.
+         *
+         * This used to poll `graph()` every 150ms inside a 5s deadline and
+         * return the first sample equal to its predecessor. Two equal samples
+         * are not convergence: a host starved of CPU also fails to advance for
+         * 300ms, so the detector returned mid-convergence snapshots under load
+         * and settled ones on an idle machine (computenet-dqy.24). Both arms of
+         * the comparison were exposed — a premature `before` baseline, or a
+         * premature `after` — which is what produced a 0.1125 gap against a
+         * 0.025 tolerance: one arm settled, the other did not. It also let the
+         * previous phase's host still be churning when the next one replayed the
+         * same journal file.
+         *
+         * [awaitDrained] replaces the guess with the fact: it blocks until the
+         * host's queue actually empties (see its doc for why starvation can only
+         * delay that, never counterfeit it). Every propagation hop here is
+         * staged through that one queue, and the observation sink folds and
+         * publishes inside the host task, so a drained queue means `graph()`
+         * reflects everything in flight. The second round is belt-and-braces: it
+         * costs another real drain, and confirms the snapshot no longer moves.
+         */
+        fun awaitSettled(scheduler: HostScheduler, service: AgoraService, what: String): Map<CellRef, Double> {
+            var last: Map<CellRef, Double>? = null
+            repeat(4) {
+                scheduler.awaitDrained(what)
                 val now = service.graph().associate { it.ref to it.credence }
                 if (now == last) return now
                 last = now
             }
-            error("graph never stabilized: $last")
+            error("$what: graph still moving after 4 full host drains: $last")
         }
 
-        val (_, s1) = world()
+        val (s1Scheduler, _, s1) = world("pre-crash")
         val a = s1.createClaim("A")
         val b = s1.createClaim("B")
         val e1 = s1.createEdge(b, a, Polarity.ATTACK)
@@ -145,12 +174,17 @@ class DurabilityTest {
         val c = s1.createClaim("C")
         s1.createEdge(c, e1, Polarity.ATTACK)
         s1.setStance(c, "a", 0.9)
-        val before = awaitStable(s1)
+        val before = awaitSettled(s1Scheduler, s1, "pre-crash graph settles")
+        // kill -9: the crashed host stops running. Only legal now that the
+        // baseline is a proven-quiescent read — a live predecessor sharing the
+        // journal file with the recovering host is exactly the interference the
+        // old detector could wave through.
+        s1Scheduler.shutdown()
 
         repeat(2) { phase ->
-            val (host, service) = world()
+            val (scheduler, host, service) = world("restart-${phase + 2}")
             host.recoverFrom(FileJournal(journalFile))
-            val after = awaitStable(service)
+            val after = awaitSettled(scheduler, service, "restart ${phase + 2} settles")
             assertEquals(before.keys, after.keys, "restart ${phase + 2}: recovered topology differs")
             before.forEach { (ref, credence) ->
                 assertTrue(
@@ -158,6 +192,9 @@ class DurabilityTest {
                     "restart ${phase + 2}, node $ref: before-crash $credence vs recovered ${after.getValue(ref)}"
                 )
             }
+            // this restart is done and proven quiescent; the next one replays the
+            // same journal file, so leave nothing behind that could still write
+            scheduler.shutdown()
         }
     }
 }
