@@ -72,14 +72,21 @@ def main():
     batch, skipped, taken = [], [], set()
     for task, resumed in candidates:
         tid = task["id"]
+        # Human-gated beads sit in bd ready like ordinary work, but they are
+        # decision gates: dispatching one hands an agent a call a human
+        # explicitly reserved. Surface them so the caller can park/defer.
+        if "human" in (task.get("labels") or []):
+            skipped.append({"id": tid, "reason": "human-gated"})
+            continue
         files = claim_of(task)
         if not files:
             if batch:
                 skipped.append({"id": tid, "reason": "no files claim; must run alone"})
                 continue
             batch.append(_entry(task, resumed, sorted(files)))
+            already = {s["id"] for s in skipped}
             skipped.extend({"id": t["id"], "reason": "deferred behind unclaimed-files task"}
-                           for t, _ in candidates if t["id"] != tid)
+                           for t, _ in candidates if t["id"] != tid and t["id"] not in already)
             break
         if files & taken:
             skipped.append({"id": tid,
