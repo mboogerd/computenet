@@ -102,6 +102,12 @@ object WsTransport {
      * image; ::1 on an image whose hosts file puts IPv6 first). That is what
      * makes a loopback bind portable instead of a guess about `/etc/hosts`:
      * nothing here hard-codes 127.0.0.1.
+     *
+     * `DemoShell.LOOPBACK` in `:demo:shell` is the one other copy of this rule
+     * (computenet-dqy.33, the same residual outside `:wire`). It cannot import
+     * this one: `:demo:shell` depends on nothing but kotlinx-serialization by
+     * design — see its `build.gradle.kts` — and `:wire` drags in `:kernel`.
+     * Change one and change the other.
      */
     private val LOOPBACK: InetAddress = try {
         InetAddress.getByName("localhost")
