@@ -130,6 +130,17 @@ Five things, all of them:
    `./gradlew :kernel:test --tests 'civictech.cell.…'`. If the task changes
    behavior, name the test that will assert it; the reviewer runs it.
 
+   For a bug, **a prescribed reproduction is a claim and must be labelled as
+   one.** Write either `verified-failing:` followed by the output you watched
+   it fail with (test name and assertion message, or the command and its
+   error), or `untested-hypothesis:`. Nothing in between, and never an
+   unlabelled sequence: the two carry completely different authority and are
+   indistinguishable once written down. computenet-dqy.20's prescribed
+   sequence read as authoritative and in fact *passes* against the unfixed
+   code, which buys an implementer a green test that proves nothing.
+   [task.md](task.md) step 3 makes the implementer check — that is the
+   backstop, not a reason to skip the label.
+
 Sizing is by read-surface, per [feature.md](feature.md).
 
 ## Smells that send an issue back
