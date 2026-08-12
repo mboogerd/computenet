@@ -1,0 +1,101 @@
+# Seed main-scoped Gradle caches for the CI lanes.
+#
+# Why this exists: setup-gradle's cache entries are keyed per JOB NAME
+# (gradle-home-v1|Linux-X64|<job>[confhash]-<sha>), and GitHub cache scoping
+# means a PR's FIRST run can only restore entries saved on main. But nothing
+# saves main-scoped entries for the CI job names: the CI `push: main` lane is
+# inert for bot merges (auto-merge squashes as GITHUB_TOKEN — computenet-8z6),
+# and post-merge.yml deliberately uses `main-`-prefixed job names, which
+# produce non-matching cache keys. Result: every PR's first run was near-cold
+# (~196s serial / ~350s fast, vs 38–75s warm — runs 31572635923 vs
+# 31577330038).
+#
+# This workflow runs the same commands under the SAME job names on a schedule
+# from main, so its saved caches carry exactly the keys the CI lanes look up.
+# Check runs from a scheduled workflow attach to the main commit only, never
+# to a PR, so the duplicated job names cannot collide with branch protection's
+# required checks on PRs.
+#
+# Not a validation lane: post-merge.yml owns catching semantic conflicts on
+# main. A failure here just means no fresh cache seed; the scheduled run of
+# post-merge will complain about anything real.
+name: Cache seed
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # daily, offset from post-merge's schedule
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+      - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
+        run: ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test --profile
+
+  kernel-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+      - name: Kernel test suite
+        run: ./gradlew :kernel:test -PexcludeMultiJvm=true
+
+  build-test-serial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+      - name: Compile the multi-jvm closure (parallel)
+        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses
+      - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
+        run: ./gradlew :demo:exchange:test :demo:shopping:test -PmultiJvmOnly=true --max-workers=1
+
+  concord-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+      - name: Run full concord corpus (core, dist, dur)
+        run: ./gradlew :concord:test -Pconcord.profiles=core,dist,dur

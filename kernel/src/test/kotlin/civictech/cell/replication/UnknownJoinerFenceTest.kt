@@ -236,16 +236,16 @@ class UnknownJoinerFenceTest {
 
     @Test
     fun `control a - the barrier off releases early for an unknown covering joiner on some seed`() {
-        var tornOn = 0
-        var tornOff = 0
-        for (seed in 0L until 100L) {
-            if (run(seed, converged = false, membershipBarrier = true).any { it.postJoin && !it.allCoveringDelivered }) tornOn++
-            if (run(seed, converged = false, membershipBarrier = false).any { it.postJoin && !it.allCoveringDelivered }) tornOff++
+        // The barrier-ON half of this control was byte-identical to the safety
+        // sweep above (same converged=false, barrier=true runs, same assertion),
+        // so only the diverging OFF half remains. Its claim is existential — SOME
+        // seed tears — so the scan stops at the first witness instead of running
+        // all 100 seeds; if no seed in the range diverges any more, the control
+        // still fails and the harness needs retuning.
+        val tornSeed = (0L until 100L).firstOrNull { seed ->
+            run(seed, converged = false, membershipBarrier = false).any { it.postJoin && !it.allCoveringDelivered }
         }
-        // The barrier (default, on) never surfaces an uncovered post-join value; off
-        // does, on some seed — the executable unknown-joiner premature-release bug.
-        tornOn shouldBe 0
-        (tornOff > 0).shouldBeTrue()
+        (tornSeed != null).shouldBeTrue()
     }
 
     @Test

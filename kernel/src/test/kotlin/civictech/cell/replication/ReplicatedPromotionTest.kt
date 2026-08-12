@@ -218,18 +218,20 @@ class ReplicatedPromotionTest {
     private fun diverges(run: Run): Boolean =
         run.memberships.any { it != run.universe } || run.surfaced.any { !it.allMembersDelivered }
 
+    // Both controls make an existential claim (SOME seed diverges), so the scans
+    // stop at the first diverging witness; if no seed in the range diverges any
+    // more, the control fails — the retune-the-harness signal.
+
     @Test
     fun `control a - T2 fresh-epoch (no tag carry) diverges - the restarted tag lane tears the frontier`() {
-        var diverged = 0
-        for (seed in 0L until 100L) if (diverges(runRoll(seed, Mode.NO_TAG_CARRY))) diverged++
-        (diverged > 0).shouldBeTrue()
+        val seed = (0L until 100L).firstOrNull { diverges(runRoll(it, Mode.NO_TAG_CARRY)) }
+        (seed != null).shouldBeTrue()
     }
 
     @Test
     fun `control b - fresh CellRef diverges - orphaned watermark tears the replica frontier`() {
-        var diverged = 0
-        for (seed in 0L until 100L) if (diverges(runRoll(seed, Mode.FRESH_REF))) diverged++
-        (diverged > 0).shouldBeTrue()
+        val seed = (0L until 100L).firstOrNull { diverges(runRoll(it, Mode.FRESH_REF)) }
+        (seed != null).shouldBeTrue()
     }
 
     @Test
