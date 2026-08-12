@@ -70,11 +70,16 @@ git -C <worktree> push
 gh pr ready <pr-url>
 bd comment <feature-id> "Review passed: <what you verified, what you repaired>. PR marked ready."
 bd update <feature-id> --set-metadata review=passed
-bd dolt push
 ```
 
 Auto-merge and the required status checks take it from here. Don't wait for
 the merge.
+
+That comment and metadata stay in the local beads DB; the orchestrator's
+Finalize push (SKILL.md step 6) sends them to the shared tracker. Don't sync
+yourself — the session pulls once at start and pushes once at the end. The
+`review=passed` marker is read by this machine, which is the one that resumes
+the feature, so local is where it needs to be.
 
 **Do not `bd close` the feature.** Ready is not merged: a required check can
 still fail and leave the PR open forever. Closing here would let the epic

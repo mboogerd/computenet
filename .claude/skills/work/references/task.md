@@ -58,8 +58,12 @@ than restarting. That's the whole reason the worktree is preserved.
 7. Finish:
    ```bash
    bd comment <id> "<what landed, and if unfinished, exactly what's left>"
-   bd dolt push
    ```
+   The comment stays in the local beads DB; the orchestrator's Finalize push
+   (SKILL.md step 6) is what sends it to the shared tracker. Don't sync it
+   yourself — per-session Dolt sync is down to that one push plus the one
+   pull at session start.
+
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
 8. Report: the task id, the outcome, and the files you **actually** touched,
