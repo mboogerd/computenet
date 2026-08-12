@@ -349,6 +349,22 @@ internal class InspectorModel(
     fun knows(ref: CellRef): Boolean = synchronized(lock) { ref in nodes }
 
     /**
+     * The lifecycle this view last *announced* for [ref] — the memory
+     * [lifecycleChanged] and [published] compare against, not what a fresh read
+     * of the host would say ([lifecycleOf]).
+     *
+     * Exposed because it is the only honest **barrier for "that transition has
+     * been announced"**: the compare-and-set and the `lifecycle` emission happen
+     * inside one [lock] section, so a reader taking the same lock cannot see the
+     * new value before the frame it produced has been handed to every attached
+     * client. The kernel's own state flags are *not* that barrier —
+     * `ManagedHost.beginDrain` sets `DRAINED` and only then notifies per cell,
+     * so `host.isDrained` is true for a moment during which the drain has not
+     * been announced yet.
+     */
+    fun announcedLifecycleOf(ref: CellRef): String? = synchronized(lock) { announcedLifecycle[ref] }
+
+    /**
      * `GET /api/inspect/cell/{ref}` — the contract's "[Node] plus" body, built
      * by *merging* the encoded node with M1's two extra fields rather than by
      * restating the node's own. One source for the shared half means a detail
