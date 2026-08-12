@@ -29,3 +29,12 @@ script:
   - {type: apply, on: b, op: add, value: pear}
 checks:
   - {type: final-view, view: v, equals: [this, is, deliberately, wrong]}
+# The failure this control exists to provoke (computenet-dqy.21). Asserting only
+# that *something* failed would let this control keep passing the gate while
+# failing for an unrelated reason — a broken union graph, a view that read
+# nothing — with its real coverage silently gone. The fragment names the correct
+# union the graph must still produce, so what stays pinned is "wrong golden over
+# a correct graph", not merely "final-view was unhappy".
+expect-failure:
+  check: final-view
+  message-contains: 'but read [apple,pear]'

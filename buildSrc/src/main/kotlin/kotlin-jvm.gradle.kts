@@ -116,8 +116,9 @@ tasks.withType<Test>().configureEach {
     // overlapped by the kernel compile+test chain and contribute zero wall time.
     // `kernel/src/test` binds no sockets at all (`ProtocolSupport.bind` is a cell
     // port, not a TCP one), it reaches nothing socket-bound through `:testkit` either
-    // (it imports only SimWorld, awaitUntil and forEachSeed — never JvmPeer, whose
-    // `freePort()` is the one racy allocator in there, nor HttpProbe), it sets no
+    // (it imports only SimWorld, awaitUntil and forEachSeed — never JvmPeer, which
+    // launches peer JVMs and, since computenet-dqy.25, lets each one bind its own
+    // ports rather than allocating any here, nor HttpProbe), it sets no
     // system properties, and it has no `@Tag("multi-jvm")` class to exclude in the
     // first place — those all live in `demo/shopping` and `demo/exchange`. Its only
     // filesystem use is `@TempDir` and `Files.createTempDirectory`, both of which

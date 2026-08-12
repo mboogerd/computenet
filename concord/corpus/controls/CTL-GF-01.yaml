@@ -42,3 +42,16 @@ script:
   - {type: apply, on: n, op: increment, times: 50}
 checks:
   - {type: observations-all-satisfy, view: v, fn: even}
+# The failure this control exists to provoke (computenet-dqy.21), and the reason
+# this block exists at all. `observations-all-satisfy` has two ways to fail: an
+# observed odd (torn) sum — the one this control is written around — and its
+# vacuity guard, which fails an EMPTY observation log (computenet-qaz). The two
+# are indistinguishable to an assertion that only asks whether the control
+# failed, so a stream that stopped being recorded would leave this control
+# failing, green on the gate, and no longer testing torn-sum detection at all.
+# The predicate wording pins the first, not the second. The event index and value
+# vary with the schedule sweep, so only the suffix is stable — and only the
+# suffix needs to be.
+expect-failure:
+  check: observations-all-satisfy
+  message-contains: fails the predicate

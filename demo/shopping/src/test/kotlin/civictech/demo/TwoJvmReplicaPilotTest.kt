@@ -44,16 +44,11 @@ class TwoJvmReplicaPilotTest {
     /** Where the captured evidence bodies land, for the runbook's "What we observed". */
     private val evidenceDir = File("build/v4-pilot-evidence").apply { mkdirs() }
 
-    // NOT JvmPeer.launch: that helper redirects to INHERIT, and this test kills
-    // a peer mid-session — a killed peer's own log file is the first diagnostic
-    // you want (CrashRestartConvergenceTest.kt:25-31's deliberate divergence).
-    private fun launch(vararg appArgs: String): Process {
-        val java = File(System.getProperty("java.home"), "bin/java").absolutePath
-        val log = File.createTempFile("computenet-replica-peer-", ".log").apply { deleteOnExit() }
-        return ProcessBuilder(
-            java, "-cp", System.getProperty("java.class.path"), "civictech.demo.MainKt", *appArgs,
-        ).redirectErrorStream(true).redirectOutput(log).start()
-    }
+    // `JvmPeer.launch` again (computenet-dqy.25): it buffers each peer's output and
+    // folds it into the failure message, which is what the local per-process log file
+    // was for — see CrashRestartConvergenceTest's note on the same change.
+    private fun launch(vararg appArgs: String): JvmPeer.Peer =
+        JvmPeer.launch("civictech.demo.MainKt", *appArgs)
 
     /** The demo's SSE state frame — its only read model (there is no `/state`). */
     private fun currentState(httpPort: Int): String {
@@ -114,22 +109,26 @@ class TwoJvmReplicaPilotTest {
      */
     @Test
     fun `two same-logical-id replicas converge over a real socket, and both inspectors see both instances`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
-        val inspectA = JvmPeer.freePort()
-        val inspectB = JvmPeer.freePort()
-
+        // every port is `0`: each peer binds its own and announces what it got, so
+        // no test-side number is ever handed to a process that has yet to bind it
+        // (computenet-dqy.25). A must announce its listening port before B can be
+        // told to dial it, which is what orders these two launches.
         val peerA = launch(
-            "$httpA", "--listen", "$ws", "--replicate",
-            "--inspect-port", "$inspectA", "--net-name", "jvm-a",
+            "0", "--listen", "0", "--replicate",
+            "--inspect-port", "0", "--net-name", "jvm-a",
         )
+        val httpA = peerA.port("http")
+        val inspectA = peerA.port("inspect")
         val peerB = launch(
-            "$httpB", "--peer", "ws://localhost:$ws", "--replicate",
-            "--inspect-port", "$inspectB", "--net-name", "jvm-b",
+            "0", "--peer", "ws://localhost:${peerA.port("ws")}", "--replicate",
+            "--inspect-port", "0", "--net-name", "jvm-b",
         )
+        val httpB = peerB.port("http")
+        val inspectB = peerB.port("inspect")
         try {
-            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
+            JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB), timeoutMs = 45_000) {
+                up(httpA) && up(httpB)
+            }
 
             // ---- 1. convergence, both directions, across the socket ----
             post(httpA, user = "alice", action = "share", item = "flour")
@@ -212,23 +211,27 @@ class TwoJvmReplicaPilotTest {
      */
     @Test
     fun `the replica mesh survives a killed and relaunched dialer`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
-        val inspectA = JvmPeer.freePort()
-        val inspectB = JvmPeer.freePort()
-
+        // see the sibling test: `0` everywhere, each peer announces what it bound
+        // (computenet-dqy.25). `bArgs` names no port, so it stays reusable across B's
+        // relaunch; the returning B binds fresh ones and re-announces them, which is
+        // why `httpB` is a `var` — nothing here needs B back at the same address,
+        // only back.
         val peerA = launch(
-            "$httpA", "--listen", "$ws", "--replicate",
-            "--inspect-port", "$inspectA", "--net-name", "jvm-a",
+            "0", "--listen", "0", "--replicate",
+            "--inspect-port", "0", "--net-name", "jvm-a",
         )
+        val httpA = peerA.port("http")
+        val inspectA = peerA.port("inspect")
         val bArgs = arrayOf(
-            "$httpB", "--peer", "ws://localhost:$ws", "--replicate",
-            "--inspect-port", "$inspectB", "--net-name", "jvm-b",
+            "0", "--peer", "ws://localhost:${peerA.port("ws")}", "--replicate",
+            "--inspect-port", "0", "--net-name", "jvm-b",
         )
         var peerB = launch(*bArgs)
+        var httpB = peerB.port("http")
         try {
-            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
+            JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB), timeoutMs = 45_000) {
+                up(httpA) && up(httpB)
+            }
 
             post(httpA, user = "alice", action = "share", item = "flour")
             post(httpB, user = "bob", action = "share", item = "yeast")
@@ -244,7 +247,7 @@ class TwoJvmReplicaPilotTest {
             capture("reconnect-mirrored-before.txt", mirroredOnA().joinToString("\n") { "${it.ref} net=${it.net}" })
 
             // the dialer dies
-            peerB.destroyForcibly()
+            peerB.kill()
             awaitUntil("peer B is gone", timeoutMs = 45_000) { down(httpB) }
             awaitUntil("A retracted B's mirrored cells", timeoutMs = 45_000) { mirroredOnA().isEmpty() }
 
@@ -261,7 +264,8 @@ class TwoJvmReplicaPilotTest {
             // pre-crash "yeast" is gone from its disk-less memory; anti-entropy
             // is what must put it back
             peerB = launch(*bArgs)
-            awaitUntil("peer B back up", timeoutMs = 45_000) { up(httpB) }
+            httpB = peerB.port("http")
+            JvmPeer.await("peer B back up", listOf(peerB), timeoutMs = 45_000) { up(httpB) }
 
             awaitUntil("the parked write reached the returning replica", timeoutMs = 45_000) {
                 "salt" in shared(httpB)

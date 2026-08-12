@@ -21,6 +21,7 @@ import civictech.cell.link.Interest
 import civictech.cell.link.PeerId
 import civictech.cell.wire.Peering
 import civictech.demo.shell.DemoShell
+import civictech.demo.shell.announcePort
 import civictech.demo.shell.demoPort
 import civictech.demo.shell.respond
 import civictech.demo.shell.value
@@ -172,7 +173,21 @@ class ExchangeApp(
 
     private val shell = DemoShell(port)
 
+    /** The `--listen` listener, kept so [boundWsPort] can report what it actually bound. */
+    private var wsListener: WsTransport.WsListener? = null
+
     val boundPort: Int get() = shell.boundPort
+
+    /**
+     * The peering port this JVM is listening on, or null in dial/solo mode.
+     *
+     * Distinct from `Wire.Listen.wsPort`, which is what was *asked for*: `--listen 0`
+     * means "any free port", and only the listener knows which one it got. The
+     * two-JVM tests launch with `--listen 0` precisely so that no test ever picks a
+     * port it does not yet hold (computenet-dqy.25), so this — not the requested
+     * value — is what `main` announces for the dialer to reach.
+     */
+    val boundWsPort: Int? get() = wsListener?.port
 
     init {
         manage.spawn(orderUnion)
@@ -206,7 +221,7 @@ class ExchangeApp(
             val bridgeHost = ManagedHost(registry = registry)
             val side = Peering.Side(registry, bridgeHost, peer = netName?.let { PeerId(it) })
             when (wire) {
-                is Wire.Listen -> WsTransport.listen(wire.wsPort, side)
+                is Wire.Listen -> wsListener = WsTransport.listen(wire.wsPort, side)
                 is Wire.Dial -> WsTransport.connect(URI(wire.uri), side)
             }
             // symmetric union chaining over the mesh: my order union streams into
@@ -301,8 +316,16 @@ fun main(args: Array<String>) {
 
     val app = ExchangeApp(port, wire, journalDir, netName).start()
     println("computenet exchange: http://localhost:${app.boundPort} — region→sum board across two JVM peers")
+    // a port this process HOLDS, so a supervising test never has to pick one for it
+    // — see [announcePort] (computenet-dqy.25)
+    announcePort("http", app.boundPort)
     when (wire) {
-        is ExchangeApp.Wire.Listen -> println("  awaiting a peer on ws://localhost:${wire.wsPort}")
+        is ExchangeApp.Wire.Listen -> {
+            // the BOUND port, not `wire.wsPort`: `--listen 0` asks for any free one
+            val wsPort = checkNotNull(app.boundWsPort) { "a listening peer must have a bound ws port" }
+            println("  awaiting a peer on ws://localhost:$wsPort")
+            announcePort("ws", wsPort)
+        }
         is ExchangeApp.Wire.Dial -> println("  peered with ${wire.uri}")
         null -> println("  single-process mode; add --listen <wsPort> or --peer <ws-uri> to span two JVMs")
     }

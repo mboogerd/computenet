@@ -14,9 +14,6 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldNotBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
-import java.net.BindException
-import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.URI
 import java.util.UUID
 
@@ -71,9 +68,10 @@ class WsPeerIdentityTest {
     // waiting on a dialer that has to notice the listener died, reconnect, re-hello and
     // re-announce, every step of which is scheduling-bound on a loaded 2-core runner.
     //
-    // Note this is NOT the port-rebind race `relisten` guards against: `relisten` had already
-    // succeeded in the observed failures. Diagnosing it as a bind flake and hardening the
-    // rebind would have left the actual cause untouched.
+    // Note this is NOT the port-rebind race: the re-listen had already succeeded in the
+    // observed failures. Diagnosing it as a bind flake and hardening the rebind would have
+    // left the actual cause untouched. (The rebind race was real too, and separately fatal
+    // in CI — computenet-dqy.22 removed the rebind rather than hardening it; see `HeldPort`.)
     //
     // computenet-8ru: nor was the deadline the cause. The dialer starved itself — a retry
     // thread per close, and java-websocket reports every failed connect attempt as a close,
@@ -86,24 +84,6 @@ class WsPeerIdentityTest {
             if (System.currentTimeMillis() > deadline) throw AssertionFailedError("timed out awaiting: $what")
             Thread.sleep(100)
         }
-    }
-
-    /** As `WsReconnectSmokeTest.relisten` — re-binding a just-freed port races the OS. */
-    private fun relisten(port: Int, side: Peering.Side, attempts: Int = 20): WsTransport.WsListener {
-        var lastFailure: BindException? = null
-        repeat(attempts) { attempt ->
-            try {
-                ServerSocket().use { probe ->
-                    probe.reuseAddress = true
-                    probe.bind(InetSocketAddress(port))
-                }
-                return WsTransport.listen(port, side)
-            } catch (e: BindException) {
-                lastFailure = e
-                if (attempt < attempts - 1) Thread.sleep(50)
-            }
-        }
-        throw IllegalStateException("could not re-bind port $port after $attempts attempts", lastFailure)
     }
 
     private fun LocationRegistry.remote(ref: CellRef): LocationRegistry.Remote =
@@ -184,20 +164,25 @@ class WsPeerIdentityTest {
         var collector = CollectingCell()
         server.host.managementInlet.call.spawn(collector)
 
-        var listener = WsTransport.listen(0, server.side)
-        val port = listener.port
+        // the same port across the restart, without ever unbinding it — the whole
+        // point of this test is the *same* endpoint, and `HeldPort` is how that is
+        // expressed without racing the OS for a freed port number
+        // (computenet-dqy.22)
+        val endpoint = HeldPort()
+        val port = endpoint.port
+        var listener = endpoint.serve(server.side)
         val connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
         try {
             await("collector announced") { client.registry.location(collector.ref) is LocationRegistry.Remote }
             client.registry.remote(collector.ref).peer shouldBe PeerId("jvm-a")
 
-            listener.stop(1000)
+            endpoint.release(listener)
             await("unpublish on disconnect") { client.registry.location(collector.ref) == null }
 
             server = Stack("jvm-a")
             collector = CollectingCell(collector.ref)
             server.host.managementInlet.call.spawn(collector)
-            listener = relisten(port, server.side)
+            listener = endpoint.serve(server.side)
 
             await("re-announced after reconnect") {
                 client.registry.location(collector.ref) is LocationRegistry.Remote
@@ -206,6 +191,7 @@ class WsPeerIdentityTest {
         } finally {
             connection.shutdown()
             runCatching { listener.stop(1000) }
+            endpoint.close()
         }
     }
 

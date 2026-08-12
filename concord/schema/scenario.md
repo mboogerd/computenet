@@ -29,13 +29,60 @@ graph:     { cells, links, hosts? } # the topology as data (omit for kind: gener
 script:    [ ... ]                  # ordered steps (see below)
 checks:    [ ... ]                  # closed check vocabulary (see below)
 generator: { ... }                 # only for kind: generative
+expect-failure: { ... }            # REQUIRED for kind: control, rejected otherwise
 runs:      20                      # optional; schedule-sweep run count (default 20)
 ```
 
 - **`profile`** gates optional capability (P9). `core` runs in every build; `dist`
   and `dur` are conformance levels a second implementation adopts wholly or not.
 - **`kind: control`** scenarios carry deliberately wrong expectations and MUST
-  fail; the runner asserts their failure (P7).
+  fail; the runner asserts their failure (P7), and asserts that it is *the
+  declared* failure — see `expect-failure` below.
+
+## `expect-failure` (kind: control only)
+
+```yaml
+expect-failure:
+  check: observations-all-satisfy         # the type: id of the declared check that must fail
+  message-contains: fails the predicate   # a substring of the message it must fail with
+```
+
+| field | meaning |
+|---|---|
+| `check` | the `type:` id of the check that must fail; must name a check this scenario's `checks:` list actually declares |
+| `message-contains` | a substring the failing check's message must contain — the *reason*, discriminating the provoked failure from every other way that same check can fail |
+
+**Required on every `kind: control`, and rejected on every other kind.** A
+control is a negative scenario: it asserts that the harness *detects* one
+specific violation. "At least one declared check failed" is not proof of that. A
+control whose check starts failing for an unrelated reason — a vacuity guard
+firing on an empty observation log, an evaluator reporting a missing view, an
+oracle that cannot model the graph — keeps failing, keeps satisfying a `!passed`
+assertion, and has silently stopped covering anything, which from outside is
+indistinguishable from the control still working. `CTL-GF-01` came within one
+empty observation log of exactly that (computenet-qaz / computenet-dqy.18), so
+the runner asserts the declared check **and** the declared reason, across every
+run of the sweep: at least one run must fail, and every failure recorded on any
+run must match: one wrong-reason failure is RED, even beside a sibling run that
+failed correctly.
+
+Choosing `message-contains`: pin wording that only the provoked failure produces,
+never the check's own name. `fails the predicate` distinguishes
+`observations-all-satisfy`'s torn-value failure from its empty-log guard;
+`observations-all-satisfy` would match both. Where the message is deterministic
+across the sweep, pin the values too (`v1=[2,4] but v2=[1,3]`), so the control
+cannot drift into failing over a state it was never written about; where the
+schedule varies the message (an event index, an observed value), pin only the
+stable part.
+
+On any other `kind` the block would declare a failure the runner never asserts —
+every check on an example or generative scenario must PASS — so declaring it
+there is an error, not a harmless annotation.
+
+Both halves of that pairing are checked for **every** corpus file the runner
+discovers, before the `profile:` filter is applied — so a `dist`/`dur` control
+missing its declaration is caught by the `core`-only fast loop too, rather than
+only by whichever build happens to activate its profile.
 
 ## `graph`
 
