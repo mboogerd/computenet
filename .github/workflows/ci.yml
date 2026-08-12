@@ -80,16 +80,35 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # `cache-encryption-key` lets setup-gradle save/restore the project's
+      # .gradle/configuration-cache directory, which it refuses to cache
+      # unencrypted because a configuration-cache entry can capture secrets.
+      # Without it every run recomputed ~12.7s of configuration per Gradle lane
+      # despite org.gradle.configuration-cache=true (computenet-aer). If the
+      # GRADLE_ENCRYPTION_KEY secret is unset the input is an empty string,
+      # which setup-gradle coerces to undefined (`getCacheEncryptionKey() ||
+      # undefined`) — it degrades to the old no-config-cache-save behavior
+      # rather than failing.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       # `:kernel:test` is excluded here because it runs in its own required
       # `kernel-test` job below (computenet-dqy.16): it is the repo's largest
       # suite and used to serialise the last ~139s of this lane behind one
       # test JVM. `:kernel` still compiles here (its dependents need it);
       # only its test task moves.
+      #
+      # `--profile` writes an HTML task-execution report to
+      # build/reports/profile. Uploaded below because per-task attribution from
+      # log header timestamps is unreliable: in a non-tty plain-console log
+      # Gradle emits the "Task :x" header with the task's first output, so a
+      # task silent at lifecycle level gets its header at completion and its
+      # wall time is mis-assigned to a neighbour (computenet-dqy.15 attributed
+      # a full 30s task to the wrong task this way).
       - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
-        run: ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test
+        run: ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test --profile
 
       # A CI checkout is always a fresh clone, so this also enforces the
       # clean-clone guard: any load-bearing file that was never committed (the
@@ -98,6 +117,18 @@ jobs:
       # untracked file and fails the build.
       - name: Fail on unexpected untracked files
         run: test -z "$(git status --porcelain -uall -- doc '*/src')"
+
+      # Gradle writes the profile report when the build finishes, pass or fail;
+      # `!cancelled()` keeps it for failed runs too, where attribution matters
+      # most. `ignore` covers a run killed before the report exists.
+      - name: Upload build profile report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-profile-fast
+          path: build/reports/profile
+          if-no-files-found: ignore
+          retention-days: 14
 
       # The JUnit XML is the only place a hang explains itself. Two artefacts
       # live there and nowhere else (computenet-8ru.4):
@@ -164,8 +195,14 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # Same `cache-encryption-key` rationale as the fast lane above. This lane
+      # was split out (computenet-dqy.16) after computenet-aer added the key to
+      # the other three, so it is included here to keep every Gradle lane on
+      # the same configuration-cache footing.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       - name: Kernel test suite
         run: ./gradlew :kernel:test -PexcludeMultiJvm=true
@@ -201,8 +238,19 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # `cache-encryption-key` lets setup-gradle save/restore the project's
+      # .gradle/configuration-cache directory, which it refuses to cache
+      # unencrypted because a configuration-cache entry can capture secrets.
+      # Without it every run recomputed ~12.7s of configuration per Gradle lane
+      # despite org.gradle.configuration-cache=true (computenet-aer). If the
+      # GRADLE_ENCRYPTION_KEY secret is unset the input is an empty string,
+      # which setup-gradle coerces to undefined (`getCacheEncryptionKey() ||
+      # undefined`) — it degrades to the old no-config-cache-save behavior
+      # rather than failing.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
         run: ./gradlew check -PmultiJvmOnly=true --max-workers=1
@@ -230,8 +278,19 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # `cache-encryption-key` lets setup-gradle save/restore the project's
+      # .gradle/configuration-cache directory, which it refuses to cache
+      # unencrypted because a configuration-cache entry can capture secrets.
+      # Without it every run recomputed ~12.7s of configuration per Gradle lane
+      # despite org.gradle.configuration-cache=true (computenet-aer). If the
+      # GRADLE_ENCRYPTION_KEY secret is unset the input is an empty string,
+      # which setup-gradle coerces to undefined (`getCacheEncryptionKey() ||
+      # undefined`) — it degrades to the old no-config-cache-save behavior
+      # rather than failing.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       - name: Run full concord corpus (core, dist, dur)
         run: ./gradlew :concord:test -Pconcord.profiles=core,dist,dur
