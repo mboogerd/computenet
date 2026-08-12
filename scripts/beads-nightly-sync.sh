@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # beads-nightly-sync.sh — nightly/manual Dolt round-trip for the beads tracker.
 #
-# Runs `bd dolt pull` then `bd dolt push` against refs/dolt/data (the git
-# remote configured as sync.remote in .beads/config.yaml). This is the ONLY
+# Runs `bd dolt pull` then `bd dolt push` against the Dolt remote configured
+# as sync.remote in .beads/config.yaml (DoltHub). This is the ONLY
 # place outside a live work session that should perform the round-trip once
 # computenet-o97.5.1 lands (see doc/ops/beads-sync-runbook.md's known-callers
 # inventory).

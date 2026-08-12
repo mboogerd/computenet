@@ -131,7 +131,8 @@ means work is failing, not merely crashing. The releases are local writes like
 everything else here; they reach the other machine at Finalize's push, not
 immediately.
 
-Then take the epic. Resume this machine's own before starting anything new:
+Then take the epic — but first check nothing live is holding one, and free
+whatever a dead run left claimed:
 
 ```bash
 bd list --type=epic --status=in_progress --assignee="$BEADS_ACTOR" --json
@@ -140,15 +141,19 @@ bd list --type=epic --status=in_progress --assignee="$BEADS_ACTOR" --json
 **If *any* result has an `updated_at` within the last 15 minutes, another run
 on this machine is probably live** — overlapping runs share `$BEADS_ACTOR`
 and cannot tell each other apart. Stop and report rather than driving one
-epic twice. Check every row, not just the first: the recent one is the live
-run's, and it need not be the one you'd have picked.
+epic twice. Check every row, not just the first.
 
-Otherwise, if it returns exactly one, resume it. If it returns **more than
-one**, previous sessions left epics claimed without finishing them. Resume
-the one with the oldest `updated_at` (the most neglected) and report the
-others by id — don't release them, and don't work them.
+Anything else this query returns is a crash leftover — a clean session
+releases its epic at Finalize. **Release each one** (`bd update <id>
+--status=open`, a local write like everything else here) so it competes on
+priority again instead of sticking to this machine.
 
-Nothing to resume → take the highest-priority unclaimed epic:
+There is deliberately **no resume preference**: an epic is bound to a session
+while the session runs, and to nothing afterwards. If a released epic is
+still the most important thing, the selection below picks it straight back
+up; if priorities moved since last session, the new top epic wins.
+
+Take the highest-priority unclaimed epic:
 
 ```bash
 bd ready --type=epic --limit 1 --json     # read the id
@@ -260,6 +265,14 @@ When a feature can't progress, move on rather than adding one alongside.
 bd update <feature-id> --claim          # idempotent if already yours
 bd show <feature-id> --json             # .metadata.branch / .worktree / .pr
 ```
+
+A resumed feature may still be assigned to the **other** machine — epics move
+freely between machines across sessions, and feature claims outlive them.
+Holding the epic claim makes it yours to take: claim it, and expect only what
+that machine pushed (`origin/feature/<feature-id>`), never its local
+worktree. Ignore a foreign `metadata.worktree` path; the commands below
+recompute a local one, and `ensure-worktree.sh` rebuilds from the remote
+branch.
 
 **`metadata.branch` exists** → reuse it; that branch and draft PR hold real
 work, so never start over. **Otherwise** record the metadata *first* — a
@@ -620,6 +633,12 @@ gh pr view <pr-url> --json state,mergeStateStatus     # per review=passed featur
 → resolve it per 5e if the budget allows; it merges on its own afterwards.
 Then close any epic whose features are now all closed (5f's check).
 
+**Release the epic claim.** If the epic didn't close above, set it back to
+open (`bd update <epic> --status=open`) — the claim binds it to *this
+session*, not to this machine, and the next session on either machine must
+select by priority, not by leftover assignee. The owner label stays as
+provenance.
+
 Do the friction log (step 7) **before** the push below, so its beads items go
 out with everything else.
 
@@ -653,15 +672,16 @@ Unfinished **tasks** left `in_progress` are released by the next session's
 startup sweep (step 3) once they age past 6h. That sweep — not a hook — is
 what stops a crashed run from locking work forever.
 
-It deliberately does **not** release epics or features: their claim is what
-keeps the other machine out *once Finalize has pushed it* — a claim from a
-session that died before step 6 was never pushed and keeps nobody out
-([references/claim-sync.md](references/claim-sync.md)) — and it has to outlive
-the session. The cost is
-that an epic abandoned by a crash is only recoverable by the machine that
-claimed it (step 3 resumes it by `assignee`) — if that machine is gone for
-good, a human has to reassign it. Name any epic or feature you leave
-`in_progress` in the summary so that's visible rather than silent.
+The sweep deliberately does **not** touch epics or features. An **epic**
+claim is released explicitly: here at a clean Finalize, or at the next
+startup on this machine for a crashed run (step 3) — either way it re-enters
+`bd ready` and the next session selects purely by priority. A **feature**
+claim outlives the session on purpose: it is the resume marker, and
+whichever machine holds the epic claim takes it over in 5a. A crashed
+session's epic claim was never pushed and keeps nobody out anyway
+([references/claim-sync.md](references/claim-sync.md)); its release
+propagates with this machine's next Finalize push. Name any feature you
+leave `in_progress` in the summary so that's visible rather than silent.
 
 ## 7. Log the friction
 

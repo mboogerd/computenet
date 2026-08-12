@@ -3,8 +3,9 @@
 #
 # Why this exists: `bd ready` hides in_progress items, so an abandoned claim is
 # invisible to every later session and the work is locked forever. Nothing else
-# reopens it. Epics and features are deliberately excluded — their claim is what
-# keeps the other machine out and must outlive the session.
+# reopens it. Epics and features are deliberately excluded — epics are released
+# explicitly (Finalize, or step-3 startup for a crashed run), and a feature
+# claim is the resume marker consumed under the epic claim (5a).
 #
 # Usage: sweep-stale-claims.sh [--hours N] [--dry-run]
 #   --hours  age past which a claim counts as abandoned (default 6, comfortably
