@@ -62,7 +62,8 @@ rewrite you do unilaterally.
 ## 4. Decide
 
 **Good enough → ready.** Every feature criterion met, checks green, no
-unowned seams:
+unowned seams — i.e. the three criteria in AGENTS.md § "Marking a PR ready is
+the agent's call" hold. The call is yours; nobody confirms it:
 
 ```bash
 git -C <worktree> push
