@@ -12,6 +12,9 @@ import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
+import java.io.IOException
+import java.net.ConnectException
+import java.net.Socket
 import java.net.URI
 import java.util.UUID
 
@@ -37,6 +40,11 @@ import java.util.UUID
  * get the exact same number back — the thing `HeldPort`'s KDoc documents as
  * racy. Here the port is simply abandoned; this test does not care what happens
  * to it afterwards because it never looks at it again.
+ *
+ * That the outage really is a refusal and not a reset is checked, not merely
+ * arranged — see [refusesConnections]. A fixture that quietly stopped producing
+ * `ECONNREFUSED` would otherwise leave this test green while covering nothing
+ * [WsReconnectLoopBoundTest] does not.
  *
  * Consequently this test only asserts the retry-loop bound, never recovery: a
  * closed listener that is never coming back has nothing to reconnect *to*. What
@@ -82,6 +90,29 @@ class WsReconnectRefusedTest {
     private fun retryLoops(port: Int): Int =
         Thread.getAllStackTraces().keys.count { it.isAlive && it.name == "ws-reconnect-ws://localhost:$port" }
 
+    /**
+     * True only when a TCP connect to [port] is *refused* — the answer the kernel
+     * gives when nothing at all is bound.
+     *
+     * This is what separates this test from the [HeldPort]-based ones, so it is
+     * checked rather than asserted in prose: a held port completes the handshake
+     * and resets it (`SO_LINGER 0`), so against a `HeldPort` guard the connect
+     * below **succeeds** and this returns false. Without this probe the whole
+     * distinction the test exists for would live only in a comment, and a later
+     * change of fixture — the very thing that opened this gap under
+     * computenet-dqy.22 — would leave the test passing while covering nothing
+     * [WsReconnectLoopBoundTest] does not already cover.
+     */
+    private fun refusesConnections(port: Int): Boolean =
+        try {
+            Socket("localhost", port).close()
+            false // something answered: a live listener, or a resetting guard
+        } catch (_: ConnectException) {
+            true // ECONNREFUSED: nothing is bound
+        } catch (_: IOException) {
+            false
+        }
+
     @Test
     fun `a dialer retries a permanently refused peer with one loop, not one per failed attempt`() {
         val client = Stack()
@@ -105,6 +136,15 @@ class WsReconnectRefusedTest {
             // attempt gets ECONNREFUSED from the kernel rather than ECONNRESET
             // from a HeldPort guard.
             listener.stop(1000)
+            // The stimulus, checked rather than assumed. Bounded polling because
+            // `WebSocketServer.stop` may return a moment before its channel is
+            // finally closed; in practice the first probe already sees the
+            // refusal, which is also why this cannot realistically lose the
+            // freed number to another process — the window it observes is
+            // milliseconds wide, and it is never asked for again afterwards.
+            await("the freed port refuses connections (ECONNREFUSED)", timeoutMs = 10_000) {
+                refusesConnections(port)
+            }
             await("unpublish on disconnect") { client.registry.location(collector.ref) == null }
 
             // hold the outage long enough for many attempts to fail against the
