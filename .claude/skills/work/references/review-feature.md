@@ -152,23 +152,28 @@ against the review base you recorded in §2 — **your own commits only** — an
 **paste the output into your report**:
 
 ```bash
-git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD
-for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD); do
+# your own commits: after the review base, and not already on main
+git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD --not origin/main
+for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD --not origin/main); do
   git -C <feature-worktree> show --stat --format='%h %s' "$c"
 done
 ```
 
-Do **not** measure it with `git diff --stat <review-base-sha>...HEAD`. Once
-you merge `origin/main` at §6 — which this file tells you to do — that diff
-credits you with everything that landed on `main` in the meantime. Measured
-during this file's own review, 2026-08-12: after merging `origin/main` and
-authoring nothing, `git diff --stat 5db1419...HEAD` reported
-`2 files changed, 131 insertions(+), 2 deletions(-)` including a whole new
-test file (`InspectorBindTest.kt`), all of it commit 0440342 from `main`.
-That is over the line on two of the bounds below, so the wrong command turns
-an untouched branch into a forced draft. The `--no-merges` list is the check:
-if it prints commits you did not write, your base is wrong, not your
-authorship.
+Read that list first and confirm every commit on it is one you wrote; the
+line counts are only meaningful once it is. Two ways of asking the question
+give the wrong answer, both because §6 tells you to merge `origin/main`
+mid-review:
+
+- `git diff --stat <review-base-sha>...HEAD` credits you with everything that
+  landed on `main` in the meantime. Measured during this file's own review,
+  2026-08-12: after merging `origin/main` and authoring nothing, it reported
+  `2 files changed, 131 insertions(+), 2 deletions(-)` — all of it commit
+  `0440342` from `main`, including a whole new test file
+  (`InspectorBindTest.kt`). That is over two of the bounds below, so it turns
+  an untouched branch into a forced draft.
+- `--no-merges` alone does not fix it. It drops the merge commit, not the
+  commits the merge brought in — the same run still listed `0440342`. The
+  `--not origin/main` is what excludes them.
 
 Your repairs are **substantive**, and disqualify you from certifying, if any
 of these is true:
