@@ -51,3 +51,4 @@ bin/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+.claude/last-sync.json
