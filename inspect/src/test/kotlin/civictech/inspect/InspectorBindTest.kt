@@ -109,19 +109,23 @@ class InspectorBindTest {
         // named port in a test means choosing a number now and binding it later
         // — computenet-dqy.25's race. So the decision is read off the seam and
         // NOTHING here binds NAMED_PORT: the stand-in shell below is ephemeral.
+        //
+        // The stand-in is passed to one constructor rather than installed on a
+        // shared field, so there is nothing for this test to restore and nothing
+        // another test in this JVM can observe (see InspectorServer.Shells).
         val asked = mutableListOf<Pair<Int, InetAddress?>>()
-        val real = InspectorServer.shells
-        InspectorServer.shells = object : InspectorServer.Shells {
+        val recording = object : InspectorServer.Shells {
             override fun open(port: Int, bindAddress: InetAddress?): DemoShell {
                 asked += port to bindAddress
                 return DemoShell(0)
             }
         }
-        try {
-            InspectorServer(registry, setOf(host), port = NAMED_PORT).start().use { }
-        } finally {
-            InspectorServer.shells = real
-        }
+        InspectorServer(
+            registry,
+            hosts = mapOf("test-host" to host),
+            port = NAMED_PORT,
+            shells = recording,
+        ).start().use { }
 
         val (port, bindAddress) = asked.single()
         port shouldBe NAMED_PORT

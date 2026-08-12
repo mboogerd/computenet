@@ -110,7 +110,7 @@ import java.util.concurrent.TimeUnit
  * dispatch threads hand frames to per-client bounded queues that drop their
  * oldest frames rather than wait (see [SseBroadcaster]).
  */
-class InspectorServer(
+class InspectorServer internal constructor(
     registry: LocationRegistry,
     /**
      * The process hosts to inspect, by the name their cells report as
@@ -150,7 +150,37 @@ class InspectorServer(
      * invokes `npm run build` itself (binding constraint 10).
      */
     uiDist: Path = defaultUiDist(),
+    /**
+     * Where [shell] comes from — [Shells.Real] for every caller outside this
+     * module, and the seam that makes T19's **named**-port half assertable
+     * (see [Shells], computenet-lxq).
+     *
+     * It is a *constructor* parameter, and deliberately not the instance `var`
+     * that [inspectorClock], [snapshots] and [reads] are: the shell binds
+     * during construction, so a seam reassigned afterwards would come too
+     * late. That leaves the two shapes that are early enough — a constructor
+     * parameter or a process-wide static — and this is the one that carries no
+     * mutable global, no restore obligation on the test that installs a
+     * stand-in, and no dependence on `:inspect` never enabling JUnit parallel
+     * execution. Deliberately un-defaulted, so a call that omits it cannot
+     * resolve here and lands on the public constructor below instead.
+     */
+    private val shells: Shells,
 ) : AutoCloseable {
+
+    /**
+     * The public form — identical to the primary but for [shells], which only
+     * this module's own tests supply. Every parameter is documented on the
+     * primary constructor above.
+     */
+    constructor(
+        registry: LocationRegistry,
+        hosts: Map<String, ManagedHost>,
+        port: Int = DEFAULT_PORT,
+        cellNames: Map<CellRef, String> = emptyMap(),
+        netName: String = Node.LOCAL_NET,
+        uiDist: Path = defaultUiDist(),
+    ) : this(registry, hosts, port, cellNames, netName, uiDist, Shells.Real)
 
     /** Name the hosts by ref — the convenience form when the app has no names of its own. */
     constructor(registry: LocationRegistry, hosts: Set<ManagedHost>, port: Int = DEFAULT_PORT) :
@@ -173,7 +203,7 @@ class InspectorServer(
      * computenet-dqy.33 the shell binds loopback by itself for an *ephemeral*
      * port and the wildcard for a *named* one, so dropping it here would
      * publish this read-only instrument on every interface. Built through
-     * [shells] so that stays pinned — see its doc (computenet-lxq).
+     * [shells] so that stays pinned — see [Shells] (computenet-lxq).
      */
     private val shell = shells.open(port, InetAddress.getLoopbackAddress())
     private val broadcaster = SseBroadcaster()
@@ -939,11 +969,14 @@ class InspectorServer(
      * — choosing a number now and binding it later is exactly the race
      * computenet-dqy.25 removed from this repo.
      *
-     * So the *decision* is what gets asserted, the same structural route
-     * `DemoShellBindTest` takes to `DemoShell.endpoint`: a test installs its own
-     * [Shells] on [shells], constructs an inspector on a named port, and reads
-     * back what that construction asked for while its stand-in binds nothing but
-     * an ephemeral loopback port.
+     * So the *decision* is what gets asserted, in the spirit of the structural
+     * route `DemoShellBindTest` takes to `DemoShell.endpoint`: a test passes its
+     * own [Shells] as [shells], constructs an inspector on a named port, and
+     * reads back what that construction asked for while its stand-in binds
+     * nothing but an ephemeral loopback port. A purely structural helper would
+     * not do here — a test that only asserts what some `bindAddressFor(port)`
+     * returns stays green when the call site stops calling it, which is the
+     * mutation this has to catch.
      *
      * [open]'s `bindAddress` carries the same `null` default `DemoShell` gives
      * it deliberately: dropping the argument at the call site has to stay
@@ -961,21 +994,6 @@ class InspectorServer(
     }
 
     companion object {
-        /**
-         * The shell source every [InspectorServer] in this JVM builds from —
-         * [Shells.Real] unless a test replaced it (see [Shells]).
-         *
-         * Process-wide rather than per-instance because the shell is bound
-         * during construction, before any instance seam of the kind
-         * [inspectorClock] and [snapshots] provide could be reassigned. A test
-         * that installs its own therefore restores this in a `finally`;
-         * `:inspect` configures no JUnit parallel execution
-         * (`inspect/src/test/resources/junit-platform.properties`), so a
-         * save/replace/restore around one construction is not observable by
-         * another test.
-         */
-        internal var shells: Shells = Shells.Real
-
         const val DEFAULT_PORT = 7071
         const val BASE_PATH = "/api/inspect"
         const val TOPOLOGY_PATH = "$BASE_PATH/topology"
