@@ -1,0 +1,6 @@
+
+=== run summaries (2026-08-12) ===
+SUMMARY label=linux-a runs=260 failingIterations=0 failingTests=0 announcementAwaitFailures=0 elapsedSeconds=974
+SUMMARY label=linux-b runs=260 failingIterations=1 failingTests=1 announcementAwaitFailures=0 elapsedSeconds=990
+SUMMARY label=linux-c runs=260 failingIterations=0 failingTests=0 announcementAwaitFailures=0 elapsedSeconds=974
+SUMMARY label=macos-control runs=260 failingIterations=1 failingTests=1 announcementAwaitFailures=1 elapsedSeconds=796
