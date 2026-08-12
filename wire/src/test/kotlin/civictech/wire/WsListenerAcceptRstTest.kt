@@ -38,14 +38,16 @@ import java.net.Socket
  * socket.setKeepAlive(true);              //    whose peer has already sent RST
  * ```
  *
- * `doAccept` declares `throws IOException` and does not catch that, so the
- * exception lands in the selector loop's last resort:
+ * `doAccept`'s own `try` starts three statements later, at
+ * `w.setChannel(...)` — read off the 1.6.0 bytecode, whose only entry in
+ * `doAccept`'s exception table covers offsets 85..117, while `setTcpNoDelay`
+ * is at 44. It declares `throws IOException`, so the exception lands in the
+ * selector loop's last resort instead:
  *
  * ```
  * } catch (IOException ex) {
- *     if (key != null) key.cancel();
- *     handleIOException(key, null, ex);
- * }
+ *     handleIOException(key, null, ex);   // and handleIOException starts with
+ * }                                       // `if (key != null) key.cancel();`
  * ```
  *
  * `key` there is the **server's** acceptable key, not the doomed connection's.
@@ -53,6 +55,14 @@ import java.net.Socket
  * `key.channel()` whenever it has no `WebSocket` to blame — closed. The
  * `WebSocketServer` object stays alive and its existing connections keep
  * working; it is simply deaf from that moment on, and the port is unbound.
+ *
+ * Which call throws is measured, not inferred: a JDK-only probe (bind a
+ * `ServerSocketChannel`, connect with `SO_LINGER 0`, close, then accept) throws
+ * `java.net.SocketException: Invalid argument` out of `setTcpNoDelay` — never
+ * out of `accept()` or `configureBlocking` — 10/10 on Temurin 21.0.11 and 10/10
+ * on JDK 26, macOS 26.6/aarch64. `accept()` raising `IOException` instead would
+ * reach the same catch and unbind the same listening channel, so the diagnosis
+ * does not rest on the exact call; the measurement just names it.
  *
  * Nothing reports it. `handleIOException` only `log.trace()`s, `onError` is
  * never called (that is `handleFatal`'s path, which this is not), and this
@@ -102,6 +112,16 @@ import java.net.Socket
  * socket is gone after **1-3** resets, 15/15. It is not a rare race when the
  * reset is deliberate; the 1% is how often the suite's incidental resets happen
  * to land in the window.
+ *
+ * The mechanism also reproduces with **no code from this repository at all** —
+ * a bare `WebSocketServer` on the 1.6.0 jar, bound to `localhost:0`, killed by
+ * the same `SO_LINGER 0` connect: dead after 1-21 resets, 25/25 trials, and
+ * `onError` invoked 0 times across all 25 (review of this bead). That matters
+ * for what this test proves: a bare server writes nothing to its clients, so
+ * the probe socket's own `close()` sends FIN, and the deliberate RST is the
+ * only possible cause. Here the listener does send a `HELLO`, so [accepts]'s
+ * close can send a reset too — which does not change the mechanism, only the
+ * bookkeeping of which of the two sockets landed the fatal one.
  */
 class WsListenerAcceptRstTest {
 

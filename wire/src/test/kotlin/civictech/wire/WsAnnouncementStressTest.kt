@@ -50,6 +50,13 @@ import java.util.UUID
  * The `@Test` runs [DEFAULT_ITERATIONS] cycles so it stays a cheap regression
  * gate in the fast lane; `-Dwire.stress.iterations=N` (or `main`, below) turns
  * it into the measurement instrument.
+ *
+ * Do not over-trust the default gate: 25 iterations is 50 awaits, which catches
+ * a regression that loses 1% of announcements only ~39% of the time (it would
+ * catch a 10% one ~99.5% of the time). It is a smoke test at that size, and the
+ * measurement power lives in the `-Dwire.stress.iterations` runs, not here.
+ * Raising [DEFAULT_ITERATIONS] buys power at ~11ms per iteration — 0.28s at 25,
+ * measured — so it is a fast-lane budget decision, not a technical limit.
  */
 class WsAnnouncementStressTest {
 
