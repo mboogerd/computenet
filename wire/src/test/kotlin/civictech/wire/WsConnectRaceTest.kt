@@ -5,7 +5,6 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.wire.Peering
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
-import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.URI
 import java.nio.channels.ServerSocketChannel
@@ -104,9 +103,13 @@ class WsConnectRaceTest {
             }
             // deliberately no SO_REUSEADDR: this bind must fail loudly if another
             // process took the port, rather than succeed over a binding on a more
-            // specific address and hand the dialer a stranger (computenet-8ru)
+            // specific address and hand the dialer a stranger (computenet-8ru).
+            // And loopback rather than the wildcard, the choice `listen(0, …)` and
+            // `HeldPort` now make (computenet-dqy.28/.32): this is the address the
+            // dialer below resolves `localhost` to, so a stranger's specific bind
+            // can neither precede us silently nor overlap the port afterwards.
             try {
-                channel.bind(InetSocketAddress(port), 16)
+                channel.bind(WsTransport.loopback(port), 16)
             } catch (e: Exception) {
                 channel.close()
                 throw IllegalStateException("the test lost port $port between choosing it and binding it", e)
