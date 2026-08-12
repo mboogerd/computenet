@@ -15,9 +15,11 @@ import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.handshake.ServerHandshake
 import org.java_websocket.server.WebSocketServer
 import java.io.IOException
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
+import java.net.UnknownHostException
 import java.nio.ByteBuffer
 import java.nio.channels.ServerSocketChannel
 import java.util.UUID
@@ -60,6 +62,11 @@ object WsTransport {
      * ephemeral range that is a live race no retry can win; `HeldPort` in
      * `:wire`'s tests is the shape this exists for).
      *
+     * A caller binding an *ephemeral* channel here owes the same address choice
+     * [listen] makes for `listen(0, …)`: bind [loopback], not the wildcard, or
+     * another process's specific-address binding of the same port can still take
+     * the name `localhost` away from it (computenet-dqy.28).
+     *
      * [channel] must be bound; whatever socket options it carries are the ones
      * the listener serves with — this path does not set [WsListener.isReuseAddr]
      * (java-websocket calls `setReuseAddress` on the already-bound socket, where
@@ -76,18 +83,71 @@ object WsTransport {
         return listener
     }
 
-    /** Serve peer connections on [port] (0 = ephemeral). Returns once accepting; `listener.port` is the bound port. */
+    /**
+     * The loopback endpoint an *ephemeral* listener binds: [port] on the address
+     * the name `localhost` resolves to in this JVM, rather than the wildcard
+     * (computenet-dqy.28). Public because a test fixture that binds the endpoint
+     * itself — `HeldPort` in `:wire`'s tests — owes the same choice; see
+     * [listen] for the measurements.
+     */
+    fun loopback(port: Int): InetSocketAddress = InetSocketAddress(LOOPBACK, port)
+
+    /**
+     * The address `localhost` names here.
+     *
+     * `getByName` returns the *first* address `localhost` resolves to, which is
+     * also the first address a dialer's `Socket("localhost", port)` tries — so
+     * binding it makes listener and dialer agree by construction on whichever
+     * family the host prefers (127.0.0.1 on macOS and on GitHub's ubuntu runner
+     * image; ::1 on an image whose hosts file puts IPv6 first). That is what
+     * makes a loopback bind portable instead of a guess about `/etc/hosts`:
+     * nothing here hard-codes 127.0.0.1.
+     */
+    private val LOOPBACK: InetAddress = try {
+        InetAddress.getByName("localhost")
+    } catch (_: UnknownHostException) {
+        InetAddress.getLoopbackAddress() // a hosts file with no `localhost` at all
+    }
+
+    /**
+     * Serve peer connections on [port] (0 = ephemeral). Returns once accepting;
+     * `listener.port` is the bound port.
+     *
+     * **An ephemeral listener binds loopback, not the wildcard**
+     * (computenet-dqy.28, the residual of computenet-8ru). A wildcard binding
+     * and another process's binding of the *same* port on a *specific* address
+     * can coexist, and the specific one wins the name `localhost` — so a dialer
+     * that resolves `localhost` reaches the stranger. Observed: `listen(0)`
+     * returned 52337 while the Gradle daemon held 127.0.0.1:52337, and the
+     * dialer handshook with Gradle until it timed out ("could not connect to
+     * ws://localhost:52337"). Binding [loopback] instead removes the ambiguity:
+     * a second binding of the same address *and* port needs SO_REUSEPORT on
+     * both sockets, which no unrelated process sets.
+     *
+     * Measured, 20 trials each, on **both** platforms — macOS 26.6 (aarch64) and
+     * Linux 6.12 (Ubuntu 26.04 container, aarch64): while our socket holds an
+     * ephemeral port, a foreign `ServerSocket` with SO_REUSEADDR — Java's default
+     * — binding `127.0.0.1:<that port>` succeeds **20/20 against a wildcard
+     * holder on macOS**, with SO_REUSEADDR *or* SO_REUSEPORT on our side, so no
+     * reuse flag ever fixed it; and **0/20 against a loopback holder**. On Linux
+     * it is 0/20 in every shape — an overlapping bind there needs SO_REUSEPORT on
+     * both sockets — so the defect is BSD-specific and the fix changes nothing
+     * that worked. Ephemeral *selection* was ruled out separately (a loopback
+     * `bind(0)` landed on one of 300 held ports 0/3000 times), the SO_REUSEPORT
+     * handover `HeldPort` depends on still works on a loopback bind (20/20), and
+     * the loopback endpoint is reachable as `localhost` 20/20 — all on both
+     * platforms.
+     *
+     * A *named* port keeps the wildcard: it is an endpoint someone off-box may
+     * have been told to dial, and only an ephemeral port is machine-local by
+     * construction (nothing can learn the number before this process announces
+     * it). SO_REUSEADDR follows the same line — it lets a restart re-bind a named
+     * port whose old connections are still in TIME_WAIT, while an ephemeral bind
+     * has no port to re-bind and asking for reuse there only widens what may
+     * overlap it (computenet-8ru).
+     */
     fun listen(port: Int, side: Peering.Side): WsListener {
-        val listener = WsListener(port, side)
-        // SO_REUSEADDR exists here so a restart can re-bind a named port whose old
-        // connections are still in TIME_WAIT. An *ephemeral* bind has no port to
-        // re-bind, and asking for reuse there is actively harmful (computenet-8ru):
-        // `WebSocketServer` binds the wildcard address, and on BSD/macOS SO_REUSEADDR
-        // lets a wildcard bind take a port another process already holds on a
-        // *specific* address. Observed: `listen(0)` returned 52337 while the Gradle
-        // daemon held 127.0.0.1:52337, so `ws://localhost:52337` resolved to the more
-        // specific binding and the dialer handshook with Gradle until it timed out
-        // ("could not connect to ws://localhost:52337" in WsTransportSmokeTest).
+        val listener = WsListener(if (port == 0) loopback(0) else InetSocketAddress(port), side)
         listener.isReuseAddr = port != 0
         listener.start()
         check(listener.awaitStart(10, TimeUnit.SECONDS)) { "WebSocket listener failed to start on port $port" }
@@ -313,7 +373,7 @@ object WsTransport {
 
         private val side: Peering.Side
 
-        internal constructor(port: Int, side: Peering.Side) : super(InetSocketAddress(port)) {
+        internal constructor(endpoint: InetSocketAddress, side: Peering.Side) : super(endpoint) {
             this.side = side
         }
 

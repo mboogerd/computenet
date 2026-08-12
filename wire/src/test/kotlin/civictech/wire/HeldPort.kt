@@ -50,11 +50,25 @@ import java.nio.channels.ServerSocketChannel
  *   *while the guard still holds the port* and only then closes the guard, and
  *   [release] re-binds the guard *while the listener still holds the port* and
  *   only then stops it.
- * - The port stays unstealable throughout. Measured: while a `SO_REUSEPORT`
- *   socket holds the port, an ordinary `bind()` and an `SO_REUSEADDR` `bind()`
- *   from elsewhere both fail — `SO_REUSEPORT` binds need the option on *every*
- *   socket in the group and the same effective user, so no other process's
- *   `bind(0)` can take it away.
+ * - The port stays unstealable throughout — but that needs both sockets to bind
+ *   [WsTransport.loopback], not the wildcard (computenet-dqy.32, completing
+ *   computenet-dqy.28). `SO_REUSEPORT` defends only the *same* address:
+ *   measured, while a `SO_REUSEPORT` socket holds an address, an ordinary
+ *   `bind()` and an `SO_REUSEADDR` `bind()` of that same address both fail,
+ *   because a `SO_REUSEPORT` bind needs the option on *every* socket in the
+ *   group and the same effective user. It says nothing about a *more specific*
+ *   address. Measured on macOS 26.6 (20 trials, JDK 21): a foreign
+ *   `ServerSocket` — `SO_REUSEADDR` is Java's default — binding
+ *   `127.0.0.1:<the held port>` took it **20/20 from a wildcard guard**, with
+ *   `SO_REUSEPORT` or without, and a dialer resolving `ws://localhost:<port>`
+ *   then reaches the stranger rather than this port. Against a **loopback
+ *   guard it is 0/20**, and on Linux 6.12 every shape is 0/20, so the hole is
+ *   BSD-specific and binding loopback closes it without changing what Linux
+ *   already got right.
+ * - The narrower address does not cost the handover. Measured 20/20 on both
+ *   platforms: [serve]'s overlapping bind and [release]'s re-bind each succeed
+ *   while the other socket holds the loopback address, and the endpoint stays
+ *   reachable under the name `localhost`.
  *
  * ## The one behavioural difference, stated plainly
  *
@@ -109,7 +123,9 @@ class HeldPort : AutoCloseable {
         val held = checkNotNull(guard) { "the held port is already serving a listener" }
         val channel = reusePortChannel()
         try {
-            channel.bind(InetSocketAddress(port), BACKLOG) // the guard still holds it: SO_REUSEPORT
+            // the guard still holds it: SO_REUSEPORT. Loopback, not the wildcard,
+            // so no stranger's specific bind owns `localhost:port` (dqy.32)
+            channel.bind(WsTransport.loopback(port), BACKLOG)
         } catch (e: IOException) {
             channel.close()
             throw IllegalStateException("could not bind the held port $port alongside its guard", e)
@@ -180,7 +196,8 @@ class HeldPort : AutoCloseable {
             fun bind(port: Int): Guard {
                 val channel = reusePortChannel()
                 try {
-                    channel.bind(InetSocketAddress(port), BACKLOG)
+                    // loopback, matching what an ephemeral listener binds (dqy.32)
+                    channel.bind(WsTransport.loopback(port), BACKLOG)
                 } catch (e: IOException) {
                     channel.close()
                     throw IllegalStateException("could not hold port $port", e)
