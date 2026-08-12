@@ -321,15 +321,14 @@ class ExchangeCompositionExitTest {
 
     @Test
     fun `control - an epoch-blind repartition forks a region and diverges on some seed`() {
-        var diverged = 0
-        for (seed in 0L until 60L) {
+        // Existential claim (SOME seed diverges): stop at the first witness.
+        val divergedSeed = (0L until 60L).firstOrNull { seed ->
             val s = runScenario(seed, epochAware = false)
-            val expected = batch(s.converged)
-            if (s.boards.any { it != expected }) diverged++
+            s.boards.any { it != batch(s.converged) }
         }
         // the routing-epoch guard is what keeps the flip clean; without it a moved
         // region forks across two shards and the scatter-gather double-counts.
-        assertTrue(diverged > 0, "epoch-blind control never diverged — the flip moved no live region")
+        assertTrue(divergedSeed != null, "epoch-blind control never diverged — the flip moved no live region")
     }
 
     // ------------------------------------------------------------------
@@ -426,12 +425,11 @@ class ExchangeCompositionExitTest {
 
     @Test
     fun `control - a point-consistent board tears (surfaces an undelivered order) on some seed`() {
-        var torn = 0
-        for (seed in 0L until 100L) {
-            val obs = runGlitchFreeBoard(seed, replicaFrontierOn = false)
-            if (obs.any { !it.allMembersDelivered }) torn++
+        // Existential claim (SOME seed tears): stop at the first witness.
+        val tornSeed = (0L until 100L).firstOrNull { seed ->
+            runGlitchFreeBoard(seed, replicaFrontierOn = false).any { !it.allMembersDelivered }
         }
-        assertTrue(torn > 0, "point-consistent control never tore — tune the interleaving")
+        assertTrue(tornSeed != null, "point-consistent control never tore — tune the interleaving")
     }
 
     // ==================================================================

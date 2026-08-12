@@ -219,13 +219,14 @@ class AlignedObserveTest {
 
     @Test
     fun `control - the point-consistent composite mixes waves on at least one seed`() {
-        var mixed = 0
-        for (seed in 0L until 50L) {
-            if (controlRun(seed, waves = 30).any { mixesWaves(it) }) mixed++
+        // Existential claim: stop at the first mixing witness instead of running
+        // all 50 seeds.
+        val mixedSeed = (0L until 50L).firstOrNull { seed ->
+            controlRun(seed, waves = 30).any { mixesWaves(it) }
         }
         // if this fails the harness is too weak to certify the aligned sink —
         // tune the interleaving as GlitchFreeDiamondTest does.
-        (mixed > 0).shouldBeTrue()
+        (mixedSeed != null).shouldBeTrue()
     }
 
     // ---- absorbed-arm liveness (the Progress absorb-ack path) ----------------

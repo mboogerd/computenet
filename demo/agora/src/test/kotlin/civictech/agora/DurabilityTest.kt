@@ -7,6 +7,7 @@ import civictech.agora.cell.StanceDelta
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.durability.FileJournal
+import civictech.cell.durability.InMemoryJournal
 import civictech.cell.host.HostScheduler
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -55,7 +56,13 @@ class DurabilityTest {
         val q = 1e-3
         val dir = kotlin.io.path.createTempDirectory("agora-durability").toFile()
         val structure = java.io.File(dir, "graph.jsonl")
-        val journalFile = java.io.File(dir, "host.journal")
+        // One in-memory journal shared across all three worlds plays "the disk"
+        // (the kernel durability idiom: no filesystem in the deterministic sim).
+        // The cyclic graph converges by ~5k journaled propagate rounds, and a
+        // FileJournal fsync per round put 18s of pure disk sync in this test;
+        // the FileJournal-on-real-disk path stays covered by the live-scheduler
+        // twin below and by JournalCompatibilityTest (on-disk format).
+        val journal = InMemoryJournal()
 
         fun world(): Triple<SimulationController, ManagedHost, AgoraService> {
             val controller = SimulationController(11L)
@@ -64,7 +71,7 @@ class DurabilityTest {
                 scheduler = controller.scheduler(),
                 registry = registry,
                 attention = civictech.cell.control.AttentionPolicy(magnitudeBands = AgoraService.MAGNITUDE_BANDS),
-                journal = FileJournal(journalFile),
+                journal = journal,
             )
             val service = AgoraService(host, registry, quiescence = q, structureLog = structure)
             return Triple(controller, host, service)
@@ -91,7 +98,7 @@ class DurabilityTest {
         // shows up as second-restart drift
         repeat(2) { phase ->
             val (controller, host, service) = world()
-            host.recoverFrom(FileJournal(journalFile))
+            host.recoverFrom(journal)
             controller.runToIdle()
             val after = service.graph().associate { it.ref to it.credence }
             assertEquals(before.keys, after.keys, "restart ${phase + 2}: recovered topology differs")
