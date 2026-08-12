@@ -181,7 +181,8 @@ the line the numbers fall on; it only strengthens the case.
 
 ## Verdict
 
-**GO.** Both prongs of the pre-registered rule independently hold:
+**GO.** Prong 1 of the pre-registered rule holds on its own; prong 2 also
+reads as satisfied, with the caveat recorded below:
 
 - Measured per-session sync cost is ≈2.3–7.6 minutes depending on which
   push-count model is used (≈2.3–3.0 min on the task description's
