@@ -323,7 +323,11 @@ class WsConnectRaceTest {
                     "channel line above is the only signal that covers that window"
             } else {
                 serving.listeningSocketLoss?.let { "the listener REPORTED losing its listening socket: ${it.message}" }
-                    ?: "the listener reported no loss"
+                    ?: ("the listener reported no loss — but it can only report a loss it has SEEN: its " +
+                        "watchdog polls on an interval (WsTransport's WATCHDOG_POLL_MS, 200ms) and only sees " +
+                        "the listening channel from the first accept onwards, so a report rendered within one " +
+                        "poll of the failure reads 'not reported YET', not 'no loss'. Where this line and a " +
+                        "CLOSED listening channel above disagree, the channel is the one to believe")
             }
 
         /**
@@ -366,7 +370,10 @@ class WsConnectRaceTest {
                     "      from a symptom. But it only polls from onStart, so on a run where the listener\n" +
                     "      never started it has nothing to say about a loss before that — read 'never\n" +
                     "      started' as 'no data', never as 'no loss'. That gap is exactly the 23ms window\n" +
-                    "      computenet-dqy.35 is about, which is why the line below still matters.\n" +
+                    "      computenet-dqy.35 is about, which is why the line below still matters. 'reported\n" +
+                    "      no loss' is only as fresh as the watchdog's last 200ms poll, so it too is 'no\n" +
+                    "      report', not 'no loss' — where it contradicts a CLOSED channel below, believe the\n" +
+                    "      channel.\n" +
                     "    * the listening channel's state is the next discriminator, and the only one that\n" +
                     "      also covers that pre-onStart window. CLOSED is computenet-dqy.34's family:\n" +
                     "      java-websocket's doAccept prologue (setTcpNoDelay on a reset victim, EINVAL on\n" +
