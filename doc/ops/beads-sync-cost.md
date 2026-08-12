@@ -139,6 +139,15 @@ the `bd dolt pull`/`push` call sites are:
 | PR creation (first time only) | step 5c, L463 | push | 1 |
 | Finalize, per worktree touched | step 6, L591 | push | 1 |
 
+This count is a **floor**, not a ceiling: it deliberately omits four further
+push sites that a fuller session hits — the epic claim (`SKILL.md` L139, when
+the session takes a new epic rather than resuming one), the epic- and
+feature-decomposition subagents' finish pushes (`references/epic.md` L67,
+`references/feature.md` L93), the feature review's own push
+(`references/review-feature.md` L73, once per feature reviewed), and the
+friction-chore push (`SKILL.md` L650). Counting those would raise the total,
+never lower it, so the arithmetic below errs toward NO-GO.
+
 Totals: **2 pulls, 8 pushes** for the smallest realistic session (one
 feature, two tasks, epic already claimed) — each task pushes twice: once
 from the task subagent finishing implementation (`task.md`), once more from
@@ -186,6 +195,25 @@ the line the numbers fall on; it only strengthens the case.
   direct `dolt` CLI conflict resolution outside `bd`'s own command surface.
   That failure class is not fixed by anything measured or changed in this
   report — it can recur on the next concurrent edit.
+
+**Which prong the verdict actually rests on.** Prong 1 (timing) carries this
+verdict on its own. Prong 2 is weaker than it looks and should not be leaned
+on: computenet-3v8's closing comment records that the 12:20 UTC conflict was
+resolved *"by the midday unattended run (work skill step 3), without a
+human"* — so a `bd`-external `dolt` CLI sequence was required, but no human
+operator was in fact blocked on it, and whether that counts as "manual
+intervention" is arguable. It is also worth stating plainly that prong 2 was
+already known to have occurred before this measurement was designed, so the
+pre-registered rule could only ever return GO. A rule with a prong that is
+satisfied before the first measurement is not a measurement gate; the
+measurement gate here is prong 1 alone.
+
+Prong 1's margin is honest but not enormous at the narrow end: the task
+description's illustrative "1 pull + 3 pushes" model on median timings gives
+2.26 min, clearing the 2-minute threshold by only ~16%, and a faster network
+day could put that single model under the line. The grounded call-site count
+(≈5.7–7.6 min, itself a floor per the section above) is what makes prong 1
+robust, and it is the model this verdict uses.
 
 TRK1 proceeds. Of the epic's remaining open features, the numbers most
 directly justify **computenet-o97.1** (shrink: prune/purge closed issues +
