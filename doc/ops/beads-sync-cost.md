@@ -225,17 +225,23 @@ is not blocked by anything this report found.
 
 The epic's core mandate — "no `bd dolt pull/push` in the unattended path" —
 is also directly justified by the >2-minute per-session cost measured here.
-However, as currently scoped, **computenet-o97.5** ("cutover") is written
-against the withdrawn shared-`dolt sql-server` design: its acceptance
-criteria talk about transactional arbitration in a sql-server and it depends
-on computenet-o97.4, which is closed as obsolete (Headscale/tailnet dropped).
-The epic's own body (§3) describes the surviving version of this mandate
-differently — moving `bd dolt pull/push` to "a nightly or manual job," no
-server-mode dependency. This report's numbers justify pursuing that
-mandate, but o97.5's text needs rescoping to match the epic's current
-(non-server-mode) design before it is actionable as written; that rescoping
-is outside this task's claim (`doc/ops/beads-sync-cost.md` only) and is
-flagged here for the feature reviewer.
+**computenet-o97.5** carries that mandate and the numbers here justify it.
+Its acceptance criteria (as rewritten 2026-08-12 13:50 UTC, after this
+report's measurements were taken) target the surviving non-server-mode
+design: a nightly/manual sync job, and the per-session call sites in
+`.claude/skills/work/` cut to exactly two — one pull at session start, one
+push at Finalize. On this report's numbers that reduced shape costs
+33.56 + 48.86 = 82.4s ≈ **1.37 min** on means, or 67.9s ≈ **1.13 min** on
+medians — under the 2-minute threshold, which is what o97.5's third
+criterion requires. So the cutover it describes is not merely justified by
+these numbers; it is arithmetically sufficient to clear the bar this report
+pre-registered.
+
+One stale edge remains on o97.5 and is **not** this report's to fix: it
+still carries a `blocks` dependency on computenet-o97.4, which is closed as
+obsolete (Headscale/tailnet dropped). That dependency predates o97.5's
+rescoping and should be dropped by whoever schedules the epic; flagged here
+for the feature reviewer and the orchestrator.
 
 **computenet-o97.6** (untrack `issues.jsonl` from main) is not justified by
 this report's timing numbers — untracking `issues.jsonl` affects `main`'s
