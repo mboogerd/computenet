@@ -83,8 +83,13 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # `:kernel:test` is excluded here because it runs in its own required
+      # `kernel-test` job below (computenet-dqy.16): it is the repo's largest
+      # suite and used to serialise the last ~139s of this lane behind one
+      # test JVM. `:kernel` still compiles here (its dependents need it);
+      # only its test task moves.
       - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
-        run: ./gradlew build check -PexcludeMultiJvm=true
+        run: ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test
 
       # A CI checkout is always a fresh clone, so this also enforces the
       # clean-clone guard: any load-bearing file that was never committed (the
@@ -143,11 +148,10 @@ jobs:
   # Kernel lane: only `:kernel:test`, split out of build-test-fast so the
   # repo's largest suite (157s of test events, ending when that build ends)
   # runs concurrently with the rest of the fast lane instead of serialising
-  # behind it (computenet-dqy.16). Phase 1 of the approved sequence: this job
-  # is ADDITIVE — build-test-fast still runs everything, so the gate never
-  # stops covering the kernel suite. Once this check name is added to the
-  # protected-branch ruleset's required set, a follow-up drops :kernel:test
-  # from build-test-fast.
+  # behind it (computenet-dqy.16). This check name is in the protected-branch
+  # ruleset's required set, and build-test-fast excludes :kernel:test, so
+  # this job is the sole merge gate for the kernel suite — do not remove or
+  # rename it without updating both.
   kernel-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
