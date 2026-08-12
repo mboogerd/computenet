@@ -2,8 +2,11 @@ package civictech.inspect
 
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.demo.shell.DemoShell
 import com.sun.net.httpserver.HttpServer
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.matchers.nulls.shouldNotBeNull
+import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.io.IOException
@@ -42,6 +45,12 @@ import java.net.Socket
  * skipped on a host where it proves nothing (see below), and the loopback half
  * has to keep pinning that the server is reachable at all when it is — which a
  * mid-method `assumeTrue` would abort along with it.
+ *
+ * **computenet-lxq closes the named-port hole the paragraph above records.** The
+ * third test below asserts the *decision* rather than a socket, through
+ * [InspectorServer.Shells] — so deleting `InspectorServer`'s
+ * `getLoopbackAddress()` argument now fails a test here, while still no named
+ * port is ever bound.
  */
 class InspectorBindTest {
 
@@ -90,6 +99,40 @@ class InspectorBindTest {
         }
     }
 
+    @Test
+    fun `a named inspector port is still handed a loopback bind address`() {
+        // Structural, deliberately, and the reason this test exists at all
+        // (computenet-lxq): the two probes above can only bind port 0, where
+        // `DemoShell` binds loopback by itself since computenet-dqy.33, so they
+        // cannot see whether the inspector *asked* for loopback. The path that
+        // needs the asking is the operator's `--inspect-port 9000`, and binding a
+        // named port in a test means choosing a number now and binding it later
+        // — computenet-dqy.25's race. So the decision is read off the seam and
+        // NOTHING here binds NAMED_PORT: the stand-in shell below is ephemeral.
+        val asked = mutableListOf<Pair<Int, InetAddress?>>()
+        val real = InspectorServer.shells
+        InspectorServer.shells = object : InspectorServer.Shells {
+            override fun open(port: Int, bindAddress: InetAddress?): DemoShell {
+                asked += port to bindAddress
+                return DemoShell(0)
+            }
+        }
+        try {
+            InspectorServer(registry, setOf(host), port = NAMED_PORT).start().use { }
+        } finally {
+            InspectorServer.shells = real
+        }
+
+        val (port, bindAddress) = asked.single()
+        port shouldBe NAMED_PORT
+        // null is what an omitted argument leaves, and for a named port
+        // `DemoShell.endpoint` answers that with the wildcard — the exposure T19
+        // forbids, and the one this assertion is here to catch.
+        bindAddress.shouldNotBeNull()
+        bindAddress.isLoopbackAddress shouldBe true
+        bindAddress.isAnyLocalAddress shouldBe false
+    }
+
     /**
      * Whether a deliberately **wildcard**-bound server — the inspector's
      * pre-T19 shape, and what its shell must no longer be — can actually be
@@ -129,6 +172,12 @@ class InspectorBindTest {
 
     private companion object {
         const val TIMEOUT_MS = 2_000
+
+        /**
+         * A plausible `--inspect-port`, and never bound by anything here — see
+         * the named-port test for why it must not be.
+         */
+        const val NAMED_PORT = 9000
 
         /** How many of this host's addresses the control probe is willing to try. */
         const val MAX_CANDIDATES = 4

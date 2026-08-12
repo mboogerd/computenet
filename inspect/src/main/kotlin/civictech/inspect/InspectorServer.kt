@@ -166,8 +166,16 @@ class InspectorServer(
      * way `DemoShell`'s wildcard bind would leave it (see
      * `doc/remediation/AUDIT-2026-07-28.md` §W6 item 1, `doc/architecture-
      * decisions.md` finding B8).
+     *
+     * The bind address is handed over **explicitly** rather than left to
+     * `DemoShell.endpoint`'s own default, and that argument is load-bearing for
+     * exactly the case an operator reaches with `--inspect-port`: since
+     * computenet-dqy.33 the shell binds loopback by itself for an *ephemeral*
+     * port and the wildcard for a *named* one, so dropping it here would
+     * publish this read-only instrument on every interface. Built through
+     * [shells] so that stays pinned — see its doc (computenet-lxq).
      */
-    private val shell = DemoShell(port, InetAddress.getLoopbackAddress())
+    private val shell = shells.open(port, InetAddress.getLoopbackAddress())
     private val broadcaster = SseBroadcaster()
 
     /**
@@ -917,7 +925,57 @@ class InspectorServer(
     /** The live components, as `GET /graphs` and `GET /search` see them — tests. */
     internal fun componentsNow(): List<Component> = model.components()
 
+    /**
+     * How an [InspectorServer] obtains its HTTP shell — the seam that makes
+     * T19's **named**-port half assertable (computenet-lxq).
+     *
+     * `DemoShell` exposes only its `boundPort`, never the address it bound, and
+     * since computenet-dqy.33 an *ephemeral* shell binds loopback whether or not
+     * it was told to — so over a socket `DemoShell(0)` and
+     * `DemoShell(0, loopback)` are the same server and no probe can tell them
+     * apart. The half that is left unpinned is the one that matters most: for a
+     * **named** port the shell keeps the wildcard unless [shell]'s explicit
+     * argument says otherwise, and a test cannot bind a named port to find out
+     * — choosing a number now and binding it later is exactly the race
+     * computenet-dqy.25 removed from this repo.
+     *
+     * So the *decision* is what gets asserted, the same structural route
+     * `DemoShellBindTest` takes to `DemoShell.endpoint`: a test installs its own
+     * [Shells] on [shells], constructs an inspector on a named port, and reads
+     * back what that construction asked for while its stand-in binds nothing but
+     * an ephemeral loopback port.
+     *
+     * [open]'s `bindAddress` carries the same `null` default `DemoShell` gives
+     * it deliberately: dropping the argument at the call site has to stay
+     * *expressible*, or the property this seam exists to pin could only ever
+     * fail as a compile error, which is not the failure the exposure would
+     * actually take.
+     */
+    internal interface Shells {
+        fun open(port: Int, bindAddress: InetAddress? = null): DemoShell
+
+        /** Exactly the construction this class has always performed. */
+        object Real : Shells {
+            override fun open(port: Int, bindAddress: InetAddress?): DemoShell = DemoShell(port, bindAddress)
+        }
+    }
+
     companion object {
+        /**
+         * The shell source every [InspectorServer] in this JVM builds from —
+         * [Shells.Real] unless a test replaced it (see [Shells]).
+         *
+         * Process-wide rather than per-instance because the shell is bound
+         * during construction, before any instance seam of the kind
+         * [inspectorClock] and [snapshots] provide could be reassigned. A test
+         * that installs its own therefore restores this in a `finally`;
+         * `:inspect` configures no JUnit parallel execution
+         * (`inspect/src/test/resources/junit-platform.properties`), so a
+         * save/replace/restore around one construction is not observable by
+         * another test.
+         */
+        internal var shells: Shells = Shells.Real
+
         const val DEFAULT_PORT = 7071
         const val BASE_PATH = "/api/inspect"
         const val TOPOLOGY_PATH = "$BASE_PATH/topology"
