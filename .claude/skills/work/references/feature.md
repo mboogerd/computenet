@@ -90,11 +90,13 @@ or API-shape choice), park a question on the feature instead of guessing.
 
 ```bash
 bd lint <task-ids...>
-bd dolt push
 ```
 
-Fix anything `bd lint` reports before pushing, and check that every feature
-rule is owned by some task.
+Fix anything `bd lint` reports, and check that every feature rule is owned by
+some task. The tasks you created live in the local beads DB until the
+orchestrator's Finalize push (SKILL.md step 6) sends them to the shared
+tracker — don't sync here; the session syncs twice in total, a pull at start
+and that push at the end.
 
 Comment the tasks created on the feature. Leave it `in_progress` — features
 close when their tasks do. Report the task ids.

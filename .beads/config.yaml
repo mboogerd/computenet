@@ -80,7 +80,19 @@
 #   git config --global url."git@github.com:".insteadOf "https://github.com/"
 #
 # sync.remote: "git+https://github.com/mboogerd/computenet.git"
+#
+# Sync frequency (both per-session minimal and the nightly/manual round-trip)
+# is documented in doc/ops/beads-sync-runbook.md, not here. That doc also
+# records the per-session cost recomputed from doc/ops/beads-sync-cost.md and
+# the residual-loss window if a sync is missed.
 export:
     auto: true
 sync:
+    # Sync frequency: per-session cost is minimal (one pull at session start,
+    # one push at Finalize -- see .claude/skills/work/SKILL.md). Anything
+    # beyond that is scripts/beads-nightly-sync.sh, which NO scheduler runs
+    # today -- a human invokes it, or installs a schedule per
+    # doc/ops/beads-sync-runbook.md section 8. That runbook also holds the
+    # reason two per-session calls survive (section 0), the recomputed
+    # per-session cost, the residual-loss window, and the proven recovery path.
     remote: "git+ssh://git@github.com/mboogerd/computenet.git"

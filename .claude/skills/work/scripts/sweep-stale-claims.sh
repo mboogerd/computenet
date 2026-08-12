@@ -49,5 +49,7 @@ for id in $stale; do
   count=$((count + 1))
 done
 
-[ "$DRY_RUN" -eq 1 ] || bd dolt push >/dev/null 2>&1 || true
+# Released claims are written locally only. They reach the other machine at the
+# session's Finalize push (SKILL.md step 6) — this script does not sync, and
+# no scheduled job does it for us (doc/ops/beads-sync-runbook.md section 5).
 echo "released $count claim(s) older than ${HOURS}h"

@@ -64,10 +64,14 @@ question on the epic rather than guessing a split.
 
 ```bash
 bd lint <feature-ids...>
-bd dolt push
 ```
 
-Fix anything `bd lint` reports before pushing. Then check the trace: every
+Fix anything `bd lint` reports. The features you created live in the local
+beads DB until the orchestrator's Finalize push (SKILL.md step 6) sends them
+to the shared tracker — don't sync here; the session syncs twice in total, a
+pull at start and that push at the end.
+
+Then check the trace: every
 epic success criterion is covered by at least one feature, and every feature
 serves at least one criterion. A criterion with no feature means the
 breakdown isn't finished; a feature serving none means it's out of scope.
