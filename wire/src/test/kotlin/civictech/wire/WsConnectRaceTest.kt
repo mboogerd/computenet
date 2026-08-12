@@ -36,13 +36,21 @@ import java.util.concurrent.TimeoutException
  *   test must not do.
  * - The obvious escape — reserve the port with a socket that is *bound but not
  *   listening* — does hold the port (an ordinary bind and an `SO_REUSEADDR`
- *   bind are both rejected, measured), but on macOS such a socket **drops** the
- *   SYN instead of resetting it: a connect attempt hangs to its timeout rather
- *   than being refused. `awaitReachable` dials with an untimed `Socket(host,
- *   port)`, so that trades a lost-port race for a guaranteed multi-minute stall.
- *   Worse, in a mixed `SO_REUSEPORT` group (silent holder + real listener) the
- *   kernel routed the SYN to the silent socket, so the handover `HeldPort.serve`
- *   performs does not even work in this shape.
+ *   bind are both rejected, measured). What it cannot hold is a port that
+ *   *refuses*, and refusal is the stimulus: on macOS such a socket **drops** the
+ *   SYN, so `awaitReachable`'s untimed `Socket(host, port)` fails `ETIMEDOUT`
+ *   after ~7.8s on loopback (measured, three runs) where an unbound port refuses
+ *   in under a millisecond. That is the disqualifying part — the test would stop
+ *   reproducing the production failure it exists for, the demo:exchange startup
+ *   `ECONNREFUSED`, and would pay a SYN timeout per probe to do it. The handover
+ *   is not clean either: in a mixed `SO_REUSEPORT` group (silent holder + real
+ *   listener) every connect was dropped while the holder was in the group (6/6)
+ *   and succeeded the instant it closed, so `HeldPort.serve`'s bind-before-release
+ *   overlap would have to be absorbed by the dialer's retry loop instead of being
+ *   invisible. All of this is macOS 15 / JDK 21; Linux — where the required checks
+ *   run — was not measured, and a holder there may well reset rather than drop.
+ *   That would change the cost, not the stimulus, so the rejection stands either
+ *   way: no socket can hold a TCP port *and* let it refuse.
  *
  * So the port is genuinely free for an instant, and the two remaining defences
  * are: make that instant as short as it can be, and make losing it *fail* rather
@@ -52,9 +60,16 @@ import java.util.concurrent.TimeoutException
  *   the listener's channel is created before its bind, so nothing but a thread
  *   hand-off sits between choosing the port and taking it back. The 300ms sleep
  *   this test used to wait out is gone: the listener binds the moment the dialer
- *   *reports* a failed probe (the `backoff` callback fires only after one), which
- *   also upgrades the stimulus from assumed to observed — a sleep that lost its
- *   ordering used to leave the test passing while proving nothing.
+ *   *reports* a failed probe, which also upgrades the stimulus from assumed to
+ *   observed — a sleep that lost its ordering used to leave the test passing
+ *   while proving nothing. `connect` reaches [WsTransport.DEFAULT_RECONNECT_BACKOFF]'s
+ *   seat from exactly two places: `awaitReachable`'s catch block, so the first
+ *   call happens-after a refused probe, and the post-open reconnect loop, which
+ *   `connect` can only reach once a probe *succeeded* — i.e. once someone else
+ *   holds the port, which fails this test loudly rather than passing it (measured:
+ *   a listening thief seeded before the dial fails in ~10s on `connect`'s own
+ *   "could not connect to ws://…"). So a countdown never manufactures the
+ *   stimulus for a green run.
  * - **Fails rather than hangs.** `awaitReachable`'s retry loop is unbounded by
  *   design, so a listener that never binds used to leave the dialer spinning
  *   until the repo's 5-minute JUnit timeout, which then reported the timeout and
@@ -118,17 +133,25 @@ class WsConnectRaceTest {
             }
         }
 
-        val connection = try {
-            dialed.get(DIAL_SECONDS, TimeUnit.SECONDS)
-        } catch (e: ExecutionException) {
-            throw AssertionError("connect() to ws://localhost:$port never reached a listener", e.cause)
-        } catch (e: TimeoutException) {
-            throw AssertionError("connect() to ws://localhost:$port had not returned after ${DIAL_SECONDS}s", e)
-        }
         try {
-            connection.isOpen shouldBe true
+            val connection = try {
+                dialed.get(DIAL_SECONDS, TimeUnit.SECONDS)
+            } catch (e: ExecutionException) {
+                throw AssertionError("connect() to ws://localhost:$port never reached a listener", e.cause)
+            } catch (e: TimeoutException) {
+                throw AssertionError("connect() to ws://localhost:$port had not returned after ${DIAL_SECONDS}s", e)
+            }
+            try {
+                connection.isOpen shouldBe true
+            } finally {
+                connection.shutdown()
+            }
         } finally {
-            connection.shutdown()
+            // A failure must not leave residue for the rest of :wire's tests, which
+            // share this JVM: an un-interrupted dialer would keep probing a dead port
+            // every 10ms forever, and an unbound `starter` listener would keep a port.
+            // The interrupt lands in `awaitReachable`'s `Thread.sleep(backoff)`.
+            dialer.interrupt()
             starter.join(JOIN_MILLIS)
             runCatching { bound.getNow(null)?.stop(1000) }
         }
