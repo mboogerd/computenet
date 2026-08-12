@@ -103,7 +103,10 @@ What to consume, per test run:
 - **The strongest signal is cache-proof: break it and watch it fail.** For a
   test-bearing task, mutate the production code the test is supposed to
   constrain, re-run, see the *named* test fail, revert. A test that passes
-  both ways proves nothing, and no cache can fake a red run.
+  both ways proves nothing, and no cache can fake a red run. Report the
+  mutation you made, the test name that went red, and its assertion message —
+  "I did the mutation check and it failed as expected" is the same
+  unfalsifiable sentence this section exists to stop.
 
 **Don't destroy a rare failure's evidence.** If a run's *failure* is what
 matters — a flake hunt, a repetition loop — do not pass `-q`: it keeps the
@@ -123,9 +126,10 @@ done
 
 ## 3. Your run is on macOS; the required checks are not
 
-You are on darwin. Every required check (`build-test-fast`,
-`build-test-serial`, `concord-full`, `ui-test`, `agora-ui-test`) runs on
-`ubuntu-latest`. For most diffs
+Run `uname -sm` and put its output in your report — this repo is developed on
+darwin, and that is where you almost certainly are. Every required check
+(`build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
+`agora-ui-test`) runs on `ubuntu-latest`. For most diffs
 that gap is invisible; for anything touching sockets, ports, filesystem
 semantics, path handling, or process spawning it is exactly where the defect
 hides — a `:wire:test` that passed 15/15 locally failed `build-test-fast`
@@ -134,13 +138,14 @@ behaviour, and nothing runnable locally could have shown that.
 
 So:
 
-- Report what you actually observed: "green on macOS", never "green" or
-  "the required checks pass". You have not run them and must not claim to
-  have.
+- Report what you actually observed, qualified by the platform you observed it
+  on: "green on darwin/arm64", never bare "green" and never "the required
+  checks pass". You have not run them and must not claim to have.
 - Defer the platform verdict to CI. The branch's own CI run is the only Linux
-  evidence that exists; it belongs to the feature reviewer and the ready call,
-  which is not yours. Say plainly in your report that Linux is unverified so
-  that gate is not skipped on your say-so.
+  evidence that exists, and reading it is not your step: the feature reviewer
+  checks `gh pr checks` before certifying, and the orchestrator re-checks it
+  before `gh pr ready` (SKILL.md step 5e). Say plainly in your report that
+  Linux is unverified, so neither of them skips that gate on your say-so.
 - For a port/socket/filesystem/process item, turn the inference into a
   measurement: run the suite in a JDK-21 Linux container (`groovy:4.0-jdk21`
   is present locally; `eclipse-temurin:21` costs a ~10-minute pull) and quote
