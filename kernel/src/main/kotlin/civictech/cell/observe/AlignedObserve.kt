@@ -133,6 +133,36 @@ import java.util.concurrent.TimeUnit
  * order — a fresh subscriber's catch-up never interleaves out of order with a
  * change. [onDeactivate]/[onActivate] close and reopen the dispatcher across a
  * `SupervisionPolicy.RESTART` or a migration, as [ObserveCell] does.
+ *
+ * **The dispatcher is minted lazily, on the first submission** — and a
+ * submission only ever happens when at least one listener is registered
+ * ([publish] skips the fire when [listeners] is empty). An aligned view nobody
+ * observes therefore owns no thread at all, and unlike [observeAll] — where the
+ * composite registers a listener on each member [ObserveCell], so every member
+ * legitimately mints one — an unobserved [observeAligned] costs *zero* threads,
+ * not one per outlet: the arms here are inlets on this one cell, not sinks of
+ * their own. This is [ObserveCell]'s fix (computenet-dqy.19) applied verbatim,
+ * for its reason: a graph is built and torn down per scenario per seed in the
+ * conformance suite, and the in-tree instruments read through [current] rather
+ * than a listener, so an eager dispatcher was one idle daemon thread leaked per
+ * view per run inside a long-lived test JVM.
+ *
+ * Race-freedom of the lazy mint is *mechanical*, not argued: [dispatchIfOpen]
+ * asserts it holds [lock], and [lock] already serialized every arrival, wave
+ * release, registration, close and reopen — so two concurrent registrations
+ * cannot both mint, and a registration racing a wave release either lands in
+ * that release's fired list or takes its catch-up from the already-published
+ * [latest]. Neither order drops a notification.
+ *
+ * **Alignment is unaffected by any of it.** What makes a composite visible is
+ * the [latest] swap inside [publish], under [lock], after a *complete* wave has
+ * been applied to every arm — the dispatcher only carries the notification
+ * that a swap happened. So deferring or skipping the mint cannot change *when*
+ * an aligned view becomes visible ([current] is thread-free either way), and a
+ * listener registered concurrently with a release cannot see a torn composite:
+ * [onChange] takes the same [lock] that [flushReady] holds for the whole
+ * apply-all-arms-then-publish sequence, so its catch-up snapshot is a composite
+ * from before that wave or after it, never inside it.
  */
 class AlignedCompositeCell(
     views: Map<String, View<*, *>>,
@@ -212,8 +242,23 @@ class AlignedCompositeCell(
         Thread(r, "aligned-observe-${ref.id}").apply { isDaemon = true }
     }
 
-    @Volatile
-    private var dispatcher: ExecutorService = newDispatcher()
+    /**
+     * The listener-dispatch executor, or `null` while this sink has never had
+     * anything to dispatch. Read and written **only under [lock]** (hence no
+     * `@Volatile`) — that is what makes the lazy mint in [dispatchIfOpen]
+     * race-free.
+     */
+    private var dispatcher: ExecutorService? = null
+
+    /**
+     * A [close]d dispatcher awaiting hand-off: [reopen] does not mint a
+     * replacement eagerly (that would resurrect a thread for a sink that may
+     * never dispatch again), so the superseded executor is parked here and the
+     * *next* mint chains a drain-wait on it as its first task, preserving the
+     * cross-reopen ordering documented on [reopen]. Lock-guarded like
+     * [dispatcher].
+     */
+    private var draining: ExecutorService? = null
 
     @Volatile
     private var closed = false
@@ -375,22 +420,50 @@ class AlignedCompositeCell(
         }
     }
 
-    /** The one composite snapshot: assembled under [lock], immutable, published once. */
+    /**
+     * The one composite snapshot: assembled under [lock], immutable, published
+     * once. The [latest] swap *is* the publication — it is what a [current]
+     * read sees, and it happens whether or not anyone is listening, so an
+     * aligned view's visibility never depends on the dispatcher.
+     */
     private fun publish() {
         val snapshot = assemble()
         latest = snapshot
         val fired = listeners.toList()
-        dispatchIfOpen { fired.forEach { it(snapshot) } }
+        // Nothing to notify ⇒ no submission, so an unobserved aligned view never
+        // mints a dispatcher (see the class doc). Without this the lazy mint
+        // would merely relocate from construction to the first released wave.
+        if (fired.isNotEmpty()) dispatchIfOpen { fired.forEach { it(snapshot) } }
     }
 
     private fun assemble(): Map<String, Any?> =
         arms.entries.associateTo(LinkedHashMap()) { (name, arm) -> name to arm.view.current() }
 
-    /** Submits [block] to [dispatcher] unless [close]d; silently drops on a close race. */
+    /**
+     * Submits [block] to [dispatcher] unless [close]d, minting the dispatcher on
+     * first use; silently drops on a close race.
+     *
+     * **Must be called holding [lock]** — asserted, not merely documented,
+     * because that is the whole race argument for the lazy mint: mint, listener
+     * registration, wave release and snapshot swap all happen inside the same
+     * monitor, so two concurrent registrations cannot each create an executor
+     * and no submission can be interleaved out of its total order.
+     */
     private fun dispatchIfOpen(block: () -> Unit) {
+        check(Thread.holdsLock(lock)) { "dispatchIfOpen must be called under the sink lock" }
         if (closed) return
+        val target = dispatcher ?: newDispatcher().also { fresh ->
+            dispatcher = fresh
+            // First act of a post-[reopen] dispatcher: wait out the superseded
+            // one, so an invocation queued before the restart can never be
+            // overtaken by one submitted after it.
+            draining?.let { previous ->
+                draining = null
+                fresh.execute { runCatching { previous.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) } }
+            }
+        }
         try {
-            dispatcher.execute(block)
+            target.execute(block)
         } catch (_: RejectedExecutionException) {
             // raced a concurrent close(); nothing left to notify.
         }
@@ -399,10 +472,11 @@ class AlignedCompositeCell(
     // ---- lifecycle ----
 
     /**
-     * Stops the listener-dispatch executor. Idempotent. Wired into
-     * [onDeactivate] (which the host calls on despawn), so a despawned sink's
-     * dispatch thread does not outlive it; a caller that never despawns the sink
-     * may call this directly at shutdown.
+     * Stops the listener-dispatch executor if one was ever minted (a
+     * never-observed sink has no thread to stop, so this is a pure flag flip).
+     * Idempotent. Wired into [onDeactivate] (which the host calls on despawn),
+     * so a despawned sink's dispatch thread does not outlive it; a caller that
+     * never despawns the sink may call this directly at shutdown.
      */
     fun close() {
         val doomed = synchronized(lock) {
@@ -410,25 +484,36 @@ class AlignedCompositeCell(
             closed = true
             dispatcher
         }
-        doomed.shutdown()
+        doomed?.shutdown()
     }
 
     /**
-     * Reopens a [close]d sink with a fresh dispatcher — [ObserveCell.reopen]'s
+     * Reopens a [close]d sink so it can dispatch again — [ObserveCell.reopen]'s
      * reason verbatim: [onDeactivate] is not only a despawn hook (`RESTART` and
      * migration drain call it too), and without this one restart would leave the
-     * sink permanently deaf. The new dispatcher's first act is to wait for the
-     * old one to drain, so the total-order guarantee survives the boundary.
+     * sink permanently deaf.
+     *
+     * Ordering across the reopen: the replacement dispatcher's first act is to
+     * wait for the old one to drain, so a listener invocation queued before the
+     * restart can never be overtaken by one submitted after it.
+     *
+     * The replacement is *not* minted here: reopen only clears the closed flag
+     * and parks the superseded executor in [draining], leaving the mint to the
+     * next actual submission ([dispatchIfOpen], which chains the drain-wait
+     * there). A restart or migration of an aligned view nobody observes
+     * therefore stays thread-free, exactly as its first activation was.
      */
     private fun reopen() {
-        val drained = synchronized(lock) {
+        synchronized(lock) {
             if (!closed) return
-            val previous = dispatcher
-            dispatcher = newDispatcher()
+            // Whatever close() shut down becomes the next mint's predecessor.
+            // Only overwrite when there is something to hand off, so a
+            // close/reopen cycle that dispatches nothing in between cannot lose
+            // an earlier still-draining executor.
+            dispatcher?.let { draining = it }
+            dispatcher = null
             closed = false
-            previous
         }
-        dispatcher.execute { runCatching { drained.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS) } }
     }
 
     override fun onActivate(ctx: CellContext) {
