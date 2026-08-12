@@ -1,5 +1,6 @@
 package civictech.demo.shell
 
+import com.sun.net.httpserver.HttpServer
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -55,6 +56,21 @@ class DemoShellBindTest {
     fun `an ephemeral endpoint is not reachable at this machine's own network address`() {
         val external = firstNonLoopbackIpv4()
         assumeTrue(external != null, "no non-loopback IPv4 interface to probe from")
+        // Added in review: prove the probe can tell the two binds apart HERE
+        // before trusting its refusal. On a host that refuses an inbound connect
+        // to its own address for reasons of its own — this dev macOS box does,
+        // measured 0/20 reachable with a deliberately WILDCARD-bound server —
+        // the assertion below holds no matter what `DemoShell` bound, so a green
+        // tick there would mean nothing. An honest skip, naming why, is worth
+        // more than an assertion that cannot fail. On GitHub's ubuntu runner the
+        // control server does answer at `external`, so this stays a real
+        // assertion exactly where it discriminates. This is the Linux-meaningful
+        // half of the pair, as the hijack test above is the macOS-meaningful one.
+        assumeTrue(
+            wildcardIsReachableAt(external!!),
+            "this host refuses inbound connects to its own $external even for a wildcard-bound server, " +
+                "so this probe cannot distinguish a wildcard bind from a loopback one",
+        )
         withEphemeralShell { shell ->
             shouldThrow<IOException> {
                 Socket().use { it.connect(InetSocketAddress(external, shell.boundPort), TIMEOUT_MS) }
@@ -98,6 +114,25 @@ class DemoShellBindTest {
         connection.inputStream.use { it.readAllBytes() }
         connection.disconnect()
         return code
+    }
+
+    /**
+     * Whether a deliberately **wildcard**-bound server — the shell's pre-fix
+     * shape, and what the ephemeral branch must no longer be — can actually be
+     * reached at [external] on this host. This is the control that decides
+     * whether the external-address probe means anything here.
+     */
+    private fun wildcardIsReachableAt(external: InetAddress): Boolean {
+        val control = HttpServer.create(InetSocketAddress(0), 0)
+        control.executor = null
+        control.start()
+        return try {
+            runCatching {
+                Socket().use { it.connect(InetSocketAddress(external, control.address.port), TIMEOUT_MS) }
+            }.isSuccess
+        } finally {
+            control.stop(0)
+        }
     }
 
     private fun firstNonLoopbackIpv4(): InetAddress? =
