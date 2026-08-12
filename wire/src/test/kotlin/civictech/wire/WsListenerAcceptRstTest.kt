@@ -81,9 +81,9 @@ import java.net.Socket
  * (10:32Z) with `-1 should be >= 1` — the listener still bound after 200
  * deliberate resets — with only comment changes between the two commits. Neither
  * outcome was a reproduction: the pass came from [accepts] scoring a transient
- * connect timeout as a kill, which is why that predicate now insists on
- * ECONNREFUSED. The chain has three links, and exactly one of them breaks on
- * Linux. The same JDK-only probe, run on both platforms, 10 trials each:
+ * connect timeout as a kill, which is why that predicate now re-probes instead of
+ * trusting one failed connect. The chain has three links, and exactly one of them
+ * breaks on Linux. The same JDK-only probe, run on both platforms, 10 trials each:
  *
  * | link | macOS 26.6 / JDK 21 and 26 | Linux 6.12 / Temurin 21.0.11 (container, aarch64) |
  * |---|---|---|
@@ -216,30 +216,43 @@ class WsListenerAcceptRstTest {
 
     /**
      * True unless the port is **unbound**, which is the claim this test makes —
-     * and specifically not "unless connecting failed somehow". Only
-     * `ConnectException` (ECONNREFUSED) means nothing is listening; a
-     * `SocketTimeoutException` from a backlog drop under a 200-cycle reset storm
-     * means the listener is alive and busy, and reading that as death is how the
-     * first version of this test PASSED on `ubuntu-latest` while the mechanism
-     * was absent (see "Platform scope"). Measured with a bare `WebSocketServer`,
-     * 15 trials each: macOS 15/15 `ConnectException` and still refused 500ms
-     * later; Linux 0/15 `ConnectException`, 8/15 `SocketTimeoutException` with
-     * the listener demonstrably back 500ms later, 7/15 surviving all 200. Any
-     * other `IOException` therefore rethrows rather than counting as a kill.
+     * and specifically not "unless connecting failed somehow". One failed connect
+     * does not distinguish the two, and both wrong readings have been measured
+     * against a bare `WebSocketServer` (120 macOS trials, 15 Linux):
+     *
+     * - `ConnectException` (ECONNREFUSED) is the only *definitive* answer:
+     *   nothing is bound. macOS 91/120, Linux 0/15.
+     * - Some other `IOException` is ambiguous, and which way it falls is
+     *   platform-shaped. On macOS it is `SocketException: Connection reset by
+     *   peer` — the dying listener's own RST racing this connect — and the
+     *   listener really is gone, 29/29 still refused 500ms later. On Linux it is
+     *   `SocketTimeoutException` from a backlog drop under the 200-cycle reset
+     *   storm, and the listener is **alive**, 8/8 answering again within 500ms.
+     *
+     * Reading the ambiguous case as death is how the first version of this test
+     * PASSED on `ubuntu-latest` with the mechanism absent; reading it as life
+     * would fail ~24% of macOS runs. So it is neither guessed nor classified by
+     * errno: it is re-probed, because a listening socket that is really gone
+     * stays gone. Costs nothing on the common path — the definitive refusal
+     * returns immediately.
      */
-    private fun accepts(port: Int): Boolean =
+    private fun accepts(port: Int): Boolean {
+        val failure = connectFailure(port) ?: return true
+        if (failure is ConnectException) return false
+        repeat(5) {
+            Thread.sleep(100)
+            if (connectFailure(port) == null) return true
+        }
+        return false
+    }
+
+    /** `null` when the connect succeeded. */
+    private fun connectFailure(port: Int): IOException? =
         try {
             Socket().use { it.connect(InetSocketAddress("localhost", port), 1_000) }
-            true
-        } catch (_: ConnectException) {
-            false
+            null
         } catch (e: IOException) {
-            throw AssertionError(
-                "connect to the listener failed with ${e.javaClass.simpleName}: ${e.message} — that is " +
-                    "not evidence the listening socket is gone (only ECONNREFUSED is), so this test " +
-                    "refuses to score it as a kill. See WsListenerAcceptRstTest's KDoc.",
-                e,
-            )
+            e
         }
 
     @Test
