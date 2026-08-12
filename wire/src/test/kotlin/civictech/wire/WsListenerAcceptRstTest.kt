@@ -13,6 +13,7 @@ import org.junit.jupiter.api.condition.OS
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.PrintStream
+import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.Socket
 
@@ -75,16 +76,29 @@ import java.net.Socket
  *
  * ## Platform scope: this is a BSD/macOS mechanism, and Linux does not have it
  *
- * The first version of this test failed **deterministically** on `ubuntu-latest`
- * (`-1 should be >= 1`: the listener was still bound after 200 deliberate resets;
- * CI run 31587771011). The chain has three links, and exactly one of them breaks
- * on Linux. The same JDK-only probe, run on both platforms, 10 trials each:
+ * The first version of this test was a **coin flip** on `ubuntu-latest`: it PASSED
+ * on CI run 31585819446 (2026-08-12T10:05Z) and FAILED on run 31587771011
+ * (10:32Z) with `-1 should be >= 1` — the listener still bound after 200
+ * deliberate resets — with only comment changes between the two commits. Neither
+ * outcome was a reproduction: the pass came from [accepts] scoring a transient
+ * connect timeout as a kill, which is why that predicate now insists on
+ * ECONNREFUSED. The chain has three links, and exactly one of them breaks on
+ * Linux. The same JDK-only probe, run on both platforms, 10 trials each:
  *
- * | link | macOS 26.6 / JDK 26 | Linux 6.12 / Temurin 21.0.11 (container, aarch64) |
+ * | link | macOS 26.6 / JDK 21 and 26 | Linux 6.12 / Temurin 21.0.11 (container, aarch64) |
  * |---|---|---|
  * | `close()` with `SO_LINGER 0` delivers RST to the listener | yes | **yes** — a `read()` on the accepted channel throws `SocketException: Connection reset`, 10/10 |
  * | `accept()` throws | no, 0/10 | no, 0/10 |
  * | `setTcpNoDelay` / `setKeepAlive` on the reset victim throws | **yes** — `SocketException: Invalid argument`, 10/10 | **no** — both succeed, 10/10 |
+ *
+ * Confirmed twice more in review, both platforms, same JDK 21 class file: a tight
+ * 3000-cycle reset storm through a `Selector` acceptor raises
+ * `SocketException: Invalid argument` from `setTcpNoDelay` on 2997/3000 accepts on
+ * macOS and on **0/3000** on Linux (Linux accepted all 3000 cleanly); and at the
+ * syscall level `setsockopt(TCP_NODELAY)` on a reset victim returns `EINVAL`
+ * 10/10 on macOS. The end-to-end consequence, against a bare `WebSocketServer`:
+ * the listening socket is truly unbound (ECONNREFUSED, still refused 500ms later)
+ * in 15/15 macOS trials and in **0/15** Linux trials.
  *
  * So **the third link is the one that breaks.** The RST arrives on Linux just as
  * it does on macOS; the difference is entirely in `setsockopt`. BSD's
@@ -100,12 +114,28 @@ import java.net.Socket
  * reports a dead peer from inside `doAccept`'s unguarded prologue, where the only
  * thing available to blame is the server's own key.
  *
- * **Consequence for the flake this bead investigated:** every rate measurement on
- * computenet-dqy.34 (3/1140 suite runs, 2/240 fresh-JVM, and the 1/100
- * `origin/main` baseline) was taken on macOS. If those failures were this
- * mechanism, they cannot occur on the Linux CI runners at all, and this flake
- * family does not threaten `build-test-fast`. See the bead comment for what that
- * evidence does and does not establish.
+ * **Consequence for the flake this bead investigated, stated carefully because it
+ * is easy to over-read:** every rate measurement on computenet-dqy.34 (3/1140
+ * suite runs, 2/240 fresh-JVM, and the 1/100 `origin/main` baseline) was taken on
+ * macOS. Those macOS failures are explained. What is *not* established is that
+ * the same signature on the Linux runners has the same cause — it cannot, since
+ * this mechanism does not exist there. So do not book this bead as the fix for a
+ * `build-test-fast` flake: if "timed out awaiting: collector announced" has ever
+ * been seen on a CI run, it is a **different** cause.
+ *
+ * computenet-dqy.34's own INVESTIGATE list left that question open ("whether the
+ * same signature has ever been seen on the Linux runners"). Partially answered in
+ * review: the eleven most recent failed CI runs (2026-08-09 to 08-11, every
+ * `feature/computenet-dqy.` failure plus the two `fix/` ones) contain **zero**
+ * occurrences of "collector announced" in their failed-step logs. Bounded sample,
+ * and CI keeps logs for a limited window — but it is the first Linux-side
+ * evidence on the question, and it points the same way as the platform
+ * measurement: this flake family is a macOS-only phenomenon.
+ *
+ * computenet-dqy.37 (the repair) is still worth doing on its own terms: it is a
+ * production defect on any BSD host — a peer that resets while a listener is
+ * accepting it takes that listener off the air permanently, and nothing reports
+ * it — and macOS is the development platform.
  *
  * Nothing reports it. `handleIOException` only `log.trace()`s, `onError` is
  * never called (that is `handleFatal`'s path, which this is not), and this
@@ -184,12 +214,32 @@ class WsListenerAcceptRstTest {
         }
     }
 
+    /**
+     * True unless the port is **unbound**, which is the claim this test makes —
+     * and specifically not "unless connecting failed somehow". Only
+     * `ConnectException` (ECONNREFUSED) means nothing is listening; a
+     * `SocketTimeoutException` from a backlog drop under a 200-cycle reset storm
+     * means the listener is alive and busy, and reading that as death is how the
+     * first version of this test PASSED on `ubuntu-latest` while the mechanism
+     * was absent (see "Platform scope"). Measured with a bare `WebSocketServer`,
+     * 15 trials each: macOS 15/15 `ConnectException` and still refused 500ms
+     * later; Linux 0/15 `ConnectException`, 8/15 `SocketTimeoutException` with
+     * the listener demonstrably back 500ms later, 7/15 surviving all 200. Any
+     * other `IOException` therefore rethrows rather than counting as a kill.
+     */
     private fun accepts(port: Int): Boolean =
         try {
             Socket().use { it.connect(InetSocketAddress("localhost", port), 1_000) }
             true
-        } catch (_: IOException) {
+        } catch (_: ConnectException) {
             false
+        } catch (e: IOException) {
+            throw AssertionError(
+                "connect to the listener failed with ${e.javaClass.simpleName}: ${e.message} — that is " +
+                    "not evidence the listening socket is gone (only ECONNREFUSED is), so this test " +
+                    "refuses to score it as a kill. See WsListenerAcceptRstTest's KDoc.",
+                e,
+            )
         }
 
     @Test
@@ -197,11 +247,14 @@ class WsListenerAcceptRstTest {
         value = [OS.MAC],
         disabledReason = "SKIPPED, AND THEREFORE GUARDING NOTHING HERE: this characterizes a " +
             "BSD/macOS-specific mechanism. Measured on Linux 6.12/JDK 21, setTcpNoDelay on a " +
-            "reset-victim socket succeeds 10/10 instead of throwing SocketException, so the RST " +
-            "surfaces on a later per-connection read, java-websocket blames the right connection, " +
-            "and the listening socket survives — the defect does not exist on this platform. On " +
-            "the Linux CI runners this test is a skip and build-test-fast going green says " +
-            "nothing about computenet-dqy.34. See the class KDoc, section 'Platform scope'.",
+            "reset-victim socket succeeds (10/10, and 3000/3000 in a tight storm) instead of " +
+            "throwing SocketException, so the RST surfaces on a later per-connection read, " +
+            "java-websocket blames the right connection, and the listening socket survives: " +
+            "0/15 trials ever reached ECONNREFUSED on Linux against 15/15 on macOS. The defect " +
+            "does not exist on this platform. So on the Linux CI runners this test is a skip and " +
+            "build-test-fast going green says nothing about computenet-dqy.34 — and if that " +
+            "failure signature has ever appeared on CI, it has a different cause. See the class " +
+            "KDoc, section 'Platform scope'.",
     )
     fun `a reset that races the accept closes the whole listening socket, and nothing reports it`() {
         val listener = WsTransport.listen(0, side())
