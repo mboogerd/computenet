@@ -310,11 +310,12 @@ bd comment <feature-id> "Review: staying in draft. <what's missing and why repai
 Create beads tasks for the remaining work (`bd create --parent=<feature-id>`
 with `model` and `files` metadata, per [feature.md](feature.md)) so the next
 batch picks them up — a feature left in draft with no tasks describing what's
-missing is a dead end. The one draft with legitimately no tasks is the
-substantive-repair case, where nothing is missing except a reader for your own
-commits; there, the commit shas and their `--stat` in the comment are what the
-orchestrator routes on (SKILL.md 5e), so a comment without them is the same
-dead end. Do not set `review=passed`.
+missing is a dead end. Two drafts legitimately have no tasks, and each is
+routed by what the comment names rather than by a task id (SKILL.md 5e):
+the **substantive-repair** case, where nothing is missing except a reader for
+your own commits — name the commit shas and their `--stat`, or it is the same
+dead end; and a **red required check** (§4), which is not the feature's work
+to task — name the check and its conclusion. Do not set `review=passed`.
 
 Draft is a legitimate outcome, not a failure. Half a feature merged is worse
 than half a feature parked on a branch.
