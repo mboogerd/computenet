@@ -1,6 +1,45 @@
 
-=== run summaries (2026-08-12) ===
+=== run summaries (2026-08-12), computenet-dqy.38 ===
+
+Instrument: scripts/flake-loop/SuiteLoop.java over package civictech.wire, one JVM per
+label, 260 iterations each. All four arms ran the SAME compiled test bytecode, built once
+on the host by Gradle; the containers only executed it.
+
+  linux-a/b/c    groovy:4.0-jdk21 container, Linux aarch64, JDK 21.0.11, via
+                 scripts/flake-loop/run-linux-loop.sh 260 linux-{a,b,c}
+                 14 tests + 1 skipped per iteration (WsListenerAcceptRstTest is
+                 @EnabledOnOs(MAC)) — all 780 iterations reported exactly that, so no
+                 iteration silently ran a short suite.
+  macos-control  host, macOS 26.6 aarch64, JDK 26, same SuiteLoop without the container
+                 (recipe in run-linux-loop.sh's header), 15 tests + 0 skipped in all 260.
+                 It is the POSITIVE CONTROL: it is what shows the harness can detect this
+                 flake family at all, and therefore what makes the Linux zero mean
+                 anything.
+  Contention: the three containers and the control ran concurrently on a 10-core host
+  under load ~15.
+
 SUMMARY label=linux-a runs=260 failingIterations=0 failingTests=0 announcementAwaitFailures=0 elapsedSeconds=974
 SUMMARY label=linux-b runs=260 failingIterations=1 failingTests=1 announcementAwaitFailures=0 elapsedSeconds=990
 SUMMARY label=linux-c runs=260 failingIterations=0 failingTests=0 announcementAwaitFailures=0 elapsedSeconds=974
 SUMMARY label=macos-control runs=260 failingIterations=1 failingTests=1 announcementAwaitFailures=1 elapsedSeconds=796
+
+READING THOSE LINES — `announcementAwaitFailures` is a trap and has since been renamed.
+It counted only computenet-dqy.34's message ("... collector announced"), never "an
+announcement was lost". linux-b's failure WAS an announcement loss and still scores 0
+there, because WsAnnouncementStressTest reports it as "announcement path: 1 failure(s)".
+SuiteLoop now prints that field as `collectorAnnouncedSignature` for exactly this reason;
+the lines above are kept verbatim as produced on the day.
+
+THE TWO FAILURES, both retained in full:
+  2026-08-12-macos-control-collector-announced.txt  macos-control iter 216,
+      WsPeerIdentityTest, "timed out awaiting: collector announced" — dqy.34's signature,
+      on the platform where its BSD-only mechanism can fire.
+  2026-08-12-linux-announcement-loss.txt            linux-b iter 52,
+      WsAnnouncementStressTest, a catch-up announcement that never arrived within 15000ms
+      while the other 49 awaits in the same run ran p99=43ms. Filed as computenet-dqy.40.
+
+WHAT THE SAMPLE SUPPORTS: 0/780 bounds the Linux rate of dqy.34's signature at 0.39%
+(rule of three, 95%), which makes the macOS fresh-JVM 0.83% implausible but does NOT
+exclude the directly comparable macOS in-process 0.26% (3/1140). 0/780 against the
+control's 1/260 is Fisher exact one-sided p=0.25 — these samples do not establish that
+Linux is cleaner. The Linux loss is n=1 in ~39000 awaits; do not quote a rate from it.

@@ -15,10 +15,28 @@
 //
 // Usage:
 //   java -cp <test-runtime-classpath> SuiteLoop.java \
-//        --package civictech.wire --runs 400 --out /path/to/evidence [--label linux]
+//        --package civictech.wire --runs 400 --out /path/to/evidence \
+//        [--label linux] [--expect-tests 14]
 //
 // Output: one progress line per iteration on stdout, a `failures/` file per failing
 // iteration, and a final SUMMARY line with the sample size and failure count.
+//
+// Reading the SUMMARY, because two of its fields are easy to misread:
+//   failingTests                  every failure, whatever it was. This is the field
+//                                 that answers "did the suite stay green".
+//   collectorAnnouncedSignature   ONLY computenet-dqy.34's message ("... collector
+//                                 announced"). computenet-dqy.40's lost announcement
+//                                 does not match it and scores 0 — so a run can have
+//                                 failingTests=1 collectorAnnouncedSignature=0 and
+//                                 still be an announcement loss.
+//   unexpectedTestCountIterations with --expect-tests, iterations whose executed test
+//                                 count differed from the expected one. Anything but
+//                                 0 means the sample is not what it claims to be
+//                                 (a class that failed to initialise, a selector that
+//                                 stopped matching), so a zero-failure result from a
+//                                 run with a nonzero count here proves nothing.
+//                                 :wire is 14 on Linux, 15 on macOS (WsListenerAcceptRstTest
+//                                 is @EnabledOnOs(MAC)).
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
 import org.junit.platform.launcher.Launcher;
@@ -43,19 +61,31 @@ public final class SuiteLoop {
 
     record Failure(String testId, String displayPath, Throwable cause) {}
 
+    private static String value(String[] args, int i, String flag) {
+        if (i >= args.length) throw new IllegalArgumentException(flag + " needs a value");
+        return args[i];
+    }
+
     public static void main(String[] args) throws Exception {
         String pkg = "civictech.wire";
         int runs = 100;
         Path out = Path.of("suite-loop-evidence");
         String label = "run";
+        int expectTests = -1;
 
-        for (int i = 0; i < args.length - 1; i++) {
+        // Unknown or value-less flags are fatal on purpose: a silently ignored
+        // `--run 2000` would produce a 100-iteration sample that still looks like a
+        // measurement, and a wrong n is worse than no n.
+        for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
-                case "--package" -> pkg = args[++i];
-                case "--runs" -> runs = Integer.parseInt(args[++i]);
-                case "--out" -> out = Path.of(args[++i]);
-                case "--label" -> label = args[++i];
-                default -> { }
+                case "--package" -> pkg = value(args, ++i, "--package");
+                case "--runs" -> runs = Integer.parseInt(value(args, ++i, "--runs"));
+                case "--out" -> out = Path.of(value(args, ++i, "--out"));
+                case "--label" -> label = value(args, ++i, "--label");
+                case "--expect-tests" -> expectTests = Integer.parseInt(value(args, ++i, "--expect-tests"));
+                default -> throw new IllegalArgumentException(
+                        "unknown argument: " + args[i]
+                                + " (expected --package/--runs/--out/--label/--expect-tests)");
             }
         }
 
@@ -70,7 +100,8 @@ public final class SuiteLoop {
 
         int totalFailingIterations = 0;
         int totalFailingTests = 0;
-        int announcementFailures = 0;
+        int signatureMatches = 0;
+        int shortIterations = 0;
         Instant started = Instant.now();
         StringBuilder logBuf = new StringBuilder();
 
@@ -87,10 +118,13 @@ public final class SuiteLoop {
             launcher.registerTestExecutionListeners(new TestExecutionListener() {
                 @Override
                 public void executionFinished(TestIdentifier id, TestExecutionResult result) {
-                    if (!id.isTest()) return;
-                    executed.incrementAndGet();
+                    if (id.isTest()) executed.incrementAndGet();
+                    // Container failures (a @BeforeAll blowing up, an engine-level
+                    // error) are recorded too — otherwise an iteration that never ran
+                    // its tests reports failures=0 and the zero means nothing.
                     if (result.getStatus() == TestExecutionResult.Status.FAILED) {
-                        failures.add(new Failure(id.getUniqueId(), id.getDisplayName(),
+                        failures.add(new Failure(id.getUniqueId(),
+                                id.isTest() ? id.getDisplayName() : id.getDisplayName() + " [container]",
                                 result.getThrowable().orElse(null)));
                     }
                 }
@@ -105,8 +139,11 @@ public final class SuiteLoop {
             launcher.execute(request);
             long ms = Duration.between(t0, Instant.now()).toMillis();
 
-            String line = String.format("%s iter=%d tests=%d skipped=%d failures=%d %dms",
-                    label, iteration, executed.get(), skipped.get(), failures.size(), ms);
+            boolean short_ = expectTests >= 0 && executed.get() != expectTests;
+            if (short_) shortIterations++;
+            String line = String.format("%s iter=%d tests=%d skipped=%d failures=%d %dms%s",
+                    label, iteration, executed.get(), skipped.get(), failures.size(), ms,
+                    short_ ? " UNEXPECTED-TEST-COUNT expected=" + expectTests : "");
             System.out.println(line);
             System.out.flush();
             logBuf.append(line).append('\n');
@@ -122,7 +159,12 @@ public final class SuiteLoop {
                     Throwable c = f.cause();
                     if (c != null) {
                         String msg = String.valueOf(c.getMessage());
-                        if (msg.contains("announced")) announcementFailures++;
+                        // Narrow, deliberate: computenet-dqy.34's signature only.
+                        // Other announcement losses do NOT match it — computenet-dqy.40's
+                        // WsAnnouncementStressTest failure says "announcement path: N
+                        // failure(s)" and scores 0 here. Read failingTests for "did
+                        // anything fail", this counter for "was it dqy.34's signature".
+                        if (msg.contains("announced")) signatureMatches++;
                         StringWriter sw = new StringWriter();
                         c.printStackTrace(new PrintWriter(sw));
                         sb.append(sw).append('\n');
@@ -143,8 +185,9 @@ public final class SuiteLoop {
 
         long elapsed = Duration.between(started, Instant.now()).toSeconds();
         String summary = String.format(
-                "SUMMARY label=%s runs=%d failingIterations=%d failingTests=%d announcementAwaitFailures=%d elapsedSeconds=%d",
-                label, runs, totalFailingIterations, totalFailingTests, announcementFailures, elapsed);
+                "SUMMARY label=%s runs=%d failingIterations=%d failingTests=%d collectorAnnouncedSignature=%d"
+                        + " unexpectedTestCountIterations=%d elapsedSeconds=%d",
+                label, runs, totalFailingIterations, totalFailingTests, signatureMatches, shortIterations, elapsed);
         System.out.println(summary);
         logBuf.append(summary).append('\n');
         Files.writeString(log, logBuf.toString(), StandardCharsets.UTF_8);

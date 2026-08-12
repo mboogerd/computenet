@@ -22,6 +22,20 @@
 #   OUT     evidence directory (default <repo>/build/flake-loop).
 #   CP      pre-resolved test runtime classpath; set it to skip the Gradle calls
 #           when launching several containers in parallel from one shell.
+#   EXPECT_TESTS  tests expected to execute per iteration (default 14, see below).
+#
+# THE HOST CONTROL ARM. A Linux zero is only worth something next to a positive
+# control on a platform where the flake does fire, so run this alongside it — same
+# instrument, same classes, no container:
+#
+#   CP=$(./gradlew -q --no-configuration-cache \
+#          -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
+#          :wire:printTestClasspath | grep -v '^WARNING' | tr '\n' ':')
+#   java -cp "$CP" scripts/flake-loop/SuiteLoop.java --package civictech.wire \
+#     --runs 260 --out build/flake-loop-macos --label macos-control --expect-tests 15
+#
+# (15, not 14: WsListenerAcceptRstTest runs on macOS.) That is how the 2026-08-12
+# control below was produced.
 #
 # WHAT IT MEASURED, 2026-08-12 (computenet-dqy.38). 780 Linux suite runs
 # (3 containers x 260, groovy:4.0-jdk21, Linux aarch64, JDK 21.0.11) against a
@@ -47,6 +61,12 @@ set -euo pipefail
 RUNS="${1:-400}"
 LABEL="${2:-linux}"
 IMAGE="${IMAGE:-groovy:4.0-jdk21}"
+# :wire executes 14 tests on Linux — WsListenerAcceptRstTest is @EnabledOnOs(MAC) and is
+# the one skip. Declaring it makes any iteration that ran a different number say so, so a
+# "0 failures" result cannot quietly mean "0 tests reached". Bump it when :wire gains a test.
+EXPECT_TESTS="${EXPECT_TESTS:-14}"
+
+command -v docker >/dev/null || { echo "docker is required and is not on PATH" >&2; exit 1; }
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="${OUT:-$REPO/build/flake-loop}"
@@ -72,11 +92,14 @@ if [[ -z "$CP" ]]; then
 fi
 
 echo "== running $RUNS iterations of the civictech.wire suite in $IMAGE =="
+# Only the dependency cache is mounted, not all of $GRADLE_HOME: gradle.properties there
+# can hold credentials, and the container needs nothing but the jars on $CP.
 exec docker run --rm \
   -v "$REPO:$REPO:ro" \
-  -v "$GRADLE_HOME:$GRADLE_HOME:ro" \
+  -v "$GRADLE_HOME/caches:$GRADLE_HOME/caches:ro" \
   -v "$OUT:/evidence" \
   -w "$REPO" \
   "$IMAGE" \
   java -cp "$CP" "$REPO/scripts/flake-loop/SuiteLoop.java" \
-    --package civictech.wire --runs "$RUNS" --out /evidence --label "$LABEL"
+    --package civictech.wire --runs "$RUNS" --out /evidence --label "$LABEL" \
+    --expect-tests "$EXPECT_TESTS"
