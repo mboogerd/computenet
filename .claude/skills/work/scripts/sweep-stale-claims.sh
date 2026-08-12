@@ -50,6 +50,6 @@ for id in $stale; do
 done
 
 # Released claims are written locally only. They reach the other machine at the
-# session's Finalize push (SKILL.md step 6) or via the nightly job
-# (doc/ops/beads-sync-runbook.md) — this script does not sync.
+# session's Finalize push (SKILL.md step 6) — this script does not sync, and
+# no scheduled job does it for us (doc/ops/beads-sync-runbook.md section 5).
 echo "released $count claim(s) older than ${HOURS}h"

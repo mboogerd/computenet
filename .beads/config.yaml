@@ -89,9 +89,10 @@ export:
     auto: true
 sync:
     # Sync frequency: per-session cost is minimal (one pull at session start,
-    # one push at Finalize -- see .claude/skills/work/SKILL.md); durability
-    # against a mid-session machine loss comes from the nightly/manual job.
-    # See doc/ops/beads-sync-runbook.md for the job's invocation path, the
-    # recomputed per-session cost, the residual-loss window, and the proven
-    # recovery path.
+    # one push at Finalize -- see .claude/skills/work/SKILL.md). Anything
+    # beyond that is scripts/beads-nightly-sync.sh, which NO scheduler runs
+    # today -- a human invokes it, or installs a schedule per
+    # doc/ops/beads-sync-runbook.md section 8. That runbook also holds the
+    # reason two per-session calls survive (section 0), the recomputed
+    # per-session cost, the residual-loss window, and the proven recovery path.
     remote: "git+ssh://git@github.com/mboogerd/computenet.git"

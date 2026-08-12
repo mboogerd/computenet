@@ -105,9 +105,12 @@ bd dolt pull
 **This pull is one of exactly two Dolt sync points in the whole session** —
 this one, and the `bd dolt push` at Finalize (step 6). Nothing in between
 syncs, so every claim, close, and metadata write you make below stays local
-until Finalize (or the nightly job — `doc/ops/beads-sync-runbook.md`) pushes
-it. Read [references/claim-sync.md](references/claim-sync.md) for what that
-costs: the window it opens is real and you need to recognize its collision.
+until Finalize pushes it. Read
+[references/claim-sync.md](references/claim-sync.md) for what that costs: the
+window it opens is real and you need to recognize its collision. (There is
+also a catch-up job, `scripts/beads-nightly-sync.sh`, but **no scheduler runs
+it** — a human invokes it. Never treat it as a push that will happen on its
+own; see `doc/ops/beads-sync-runbook.md` §5.)
 
 **If this pull fails, stop the session and report it.** It is the only look
 you get at the other machine's state, so proceeding without it means claiming
@@ -125,8 +128,8 @@ something reopens them, and nothing else does:
 
 Report what it released. The same item released repeatedly across sessions
 means work is failing, not merely crashing. The releases are local writes like
-everything else here; they reach the other machine at Finalize's push or via
-the nightly job, not immediately.
+everything else here; they reach the other machine at Finalize's push, not
+immediately.
 
 Then take the epic. Resume this machine's own before starting anything new:
 
@@ -628,12 +631,12 @@ bd dolt push
 
 **That `bd dolt push` is the session's only write to the shared tracker** —
 every claim, close, park and metadata write since step 3 rides on it. If it
-fails, say so at the top of your summary in plain words: this session's
-tracker state is local-only until the nightly job
-(`doc/ops/beads-sync-runbook.md`) or a human pushes it, the other machine
-still sees this epic's items as they were at step 3, and a lost machine loses
-the lot. Never swallow the error and never report the session as clean
-without it.
+fails, say so at the top of your summary in plain words, and ask for a human
+to run `scripts/beads-nightly-sync.sh` — **nothing is scheduled to do it for
+you** (`doc/ops/beads-sync-runbook.md` §5). Until someone does, this session's
+tracker state is local-only, the other machine still sees this epic's items as
+they were at step 3, and losing this machine loses the lot. Never swallow the
+error and never report the session as clean without it.
 
 Uncommitted leftovers mean an agent died mid-edit — report rather than
 committing work you didn't verify. Leave unfinished features' worktrees in
@@ -651,7 +654,10 @@ startup sweep (step 3) once they age past 6h. That sweep — not a hook — is
 what stops a crashed run from locking work forever.
 
 It deliberately does **not** release epics or features: their claim is what
-keeps the other machine out, and it has to outlive the session. The cost is
+keeps the other machine out *once Finalize has pushed it* — a claim from a
+session that died before step 6 was never pushed and keeps nobody out
+([references/claim-sync.md](references/claim-sync.md)) — and it has to outlive
+the session. The cost is
 that an epic abandoned by a crash is only recoverable by the machine that
 claimed it (step 3 resumes it by `assignee`) — if that machine is gone for
 good, a human has to reassign it. Name any epic or feature you leave

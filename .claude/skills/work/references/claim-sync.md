@@ -22,6 +22,11 @@ Claiming used to push immediately and then re-read the assignee to see who
 won; that protocol is gone. Per-session sync cost was `count × ~34s`, and the
 count was 10 in a minimal session (`doc/ops/beads-sync-cost.md`); it is now 2.
 
+Two, and not zero, on purpose: the pull is the only thing that shows you the
+other machine, and the push is the only thing that shows the other machine
+you. The full reasoning — and what it would take to drop them — is
+`doc/ops/beads-sync-runbook.md` §0.
+
 **Claim by id, never `bd ready --claim`.** This part did not change and still
 matters. `bd ready` has no `--id` filter, and `--claim` takes whatever is
 first *at claim time* — which need not be the item you just read and decided
@@ -65,7 +70,9 @@ that is the only decision made purely from just-pulled shared state.
 is no partial state on the other machine — a crash mid-slot means *none* of
 this session's claims, closes, parked questions or created features and tasks
 were ever pushed, and the window stays open until this machine's next Finalize
-or the nightly job pushes them. Two consequences worth naming:
+push — or until a human runs `scripts/beads-nightly-sync.sh`, which no
+scheduler does for them (`doc/ops/beads-sync-runbook.md` §5). Two consequences
+worth naming:
 
 - **Merged work the tracker doesn't know about.** 5c merges a task branch and
   pushes it to GitHub, then `bd close`s the task locally. Crash after that and
@@ -82,7 +89,8 @@ or the nightly job pushes them. Two consequences worth naming:
 
 ## What the collision looks like when it surfaces
 
-You will not see an error. You see, at the next pull or after the nightly job:
+You will not see an error. You see, at some later session's step-3 pull (or
+after someone runs the catch-up job by hand):
 
 - **One item, two sets of children.** Both machines ran a breakdown, so the
   epic has two near-duplicate feature sets, or the feature has two task sets
@@ -125,7 +133,9 @@ recover:
   the run's state.
 - **The Finalize push fails** → **say so at the top of the session summary,
   and never swallow it.** The session's entire tracker state — claims, closes,
-  parked questions, friction issues — is local-only until the nightly job or a
-  human pushes it. Until then the other machine sees this epic as it was at
-  step 3, which widens exactly the window described above, and losing this
-  machine loses all of it.
+  parked questions, friction issues — is local-only until a **human** pushes
+  it or runs `scripts/beads-nightly-sync.sh`. No scheduler will
+  (`doc/ops/beads-sync-runbook.md` §5), so a failed Finalize push that you
+  don't report is state nobody will ever recover. Until it is pushed the other
+  machine sees this epic as it was at step 3, which widens exactly the window
+  described above, and losing this machine loses all of it.

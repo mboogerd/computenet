@@ -11,6 +11,40 @@ on the git remote (`sync.remote` in `.beads/config.yaml`) — nothing here
 changes the mechanism, only how often the round-trip runs outside a live
 session.
 
+## 0. Why two per-session calls survive (a deliberate deviation)
+
+TRK1's "what done means" says **"No `bd dolt pull`/`push` in the unattended
+path."** Read literally that is zero calls per session. What shipped is two:
+one pull at `SKILL.md` step 3 and one push at Finalize. The deviation is
+deliberate, and the reasoning belongs here rather than only on the bead:
+
+1. **The cost goal is already met at two.** The epic's premise was a ~10
+   minute round-trip; `doc/ops/beads-sync-cost.md` measured ~34s per call and
+   showed the pain was *count*, not duration — 10 calls in a minimal session.
+   Two calls cost ~1.1–1.4 min (§2), under the 2-minute threshold that doc
+   pre-registered. Cutting the last two buys ~68s.
+2. **What those 68s would cost.** The session-start pull is the *only*
+   mechanism by which a machine sees the other machine's claims. Remove it and
+   two machines can take the same epic with nothing anywhere noticing until a
+   human looks — the same silent-divergence class that cost a full run's state
+   in computenet-kg7 and computenet-3v8. The Finalize push is the only thing
+   that makes this session's work visible at all; without it the tracker is
+   permanently machine-local and the "shared" tracker stops being shared.
+3. **Asymmetry of error.** Keeping the two and later dropping them is a
+   two-line edit. Dropping them and later discovering a double-claim costs a
+   run plus manual tracker repair.
+
+So the frequency target is met and the safety property is kept. The residual
+that this choice accepts — the one-session double-claim window — is §4, and
+what claim safety now does and does not guarantee is
+`.claude/skills/work/references/claim-sync.md`.
+
+If you actually want zero per-session sync — i.e. you accept that two machines
+can double-claim between nightly runs, or you intend claims to stop being
+cross-machine at all — that is a human decision; say so on `computenet-o97.5`
+(where the same reasoning was recorded as an assumption on 2026-08-12) and the
+two remaining sites come out.
+
 ## 1. The job: invocation path
 
 - **Script**: `scripts/beads-nightly-sync.sh` (repo root). Runs `bd dolt pull`
@@ -80,7 +114,11 @@ The window is bounded by:
 - **The gap until the next nightly/manual sync runs** — if the job is on a
   nightly schedule and the machine is lost right after that night's run, the
   window extends to nearly 24h of any manual work also done on that machine
-  outside the skill's own session boundaries.
+  outside the skill's own session boundaries. **With no schedule installed
+  (the state today — §5), there is no upper bound on this second term at
+  all**: the only pushes that happen are the ones sessions perform at
+  Finalize and the ones a human runs by hand. Installing §8's schedule is
+  what turns this term into ~24h.
 
 Because durability still rests on `refs/dolt/data`, nothing on the OTHER
 machine or on the remote is at risk — only the lost machine's own unpushed
@@ -159,10 +197,10 @@ With only a session-start pull and a Finalize push (computenet-o97.5.1), two
 machines that both start a session inside the same pull-to-push window can
 both see the same item as unclaimed, both claim it, and neither finds out
 until whichever machine pushes second overwrites — or conflicts with — the
-first machine's claim. This is the explicit tradeoff recorded in the
-feature's 13:50 UTC assumption comment (`bd comments computenet-o97.5`):
+first machine's claim. This is the explicit tradeoff stated in [§0](#0-why-two-per-session-calls-survive-a-deliberate-deviation):
 keeping exactly one pull/push per session bounds the window to a single
-session's length rather than eliminating it.
+session's length rather than eliminating it. (Zero per-session sync would not
+bound it at all.)
 
 ### 4.2 How it is discovered
 
@@ -192,10 +230,10 @@ session's length rather than eliminating it.
    step 1-2 on top for anything the automatic resolution didn't settle
    correctly (e.g. it picked the "wrong" side of a real divergence).
 4. This collision class is a known limitation of the o97.5 design, not a bug
-   to route around by adding more per-session syncs — see the feature's
-   13:50 UTC comment for the tradeoff reasoning; if it recurs often enough to
-   be a problem, that is a signal to park an escalation for a human, not to
-   silently tighten sync frequency back up.
+   to route around by adding more per-session syncs — see [§0](#0-why-two-per-session-calls-survive-a-deliberate-deviation)
+   for the tradeoff reasoning; if it recurs often enough to be a problem,
+   that is a signal to park an escalation for a human, not to silently
+   tighten sync frequency back up.
 
 ## 5. Known-callers inventory
 
@@ -206,8 +244,16 @@ lands:
 |---|---|---|
 | `.claude/skills/work/SKILL.md` step 3 | pull | Once, at session start |
 | `.claude/skills/work/SKILL.md` Finalize | push | Once, at session end |
-| `scripts/beads-nightly-sync.sh` (this job, §1) | pull + push | Nightly (once installed) or on manual invocation |
+| `AGENTS.md` / `CLAUDE.md` Session Completion (team-maintainer path) | push | Once, at end of a Beads workflow that is not a `/work` session |
+| `scripts/beads-nightly-sync.sh` (this job, §1) | pull + push | **Not scheduled anywhere today** — manual invocation only, until a human installs a schedule per §8 |
 | Humans, by hand | pull and/or push | Ad hoc — e.g. after resolving a conflict (§3.3), or before/after direct `bd` use outside a `/work` session |
+
+**Nothing in this repo runs the job automatically.** No launchd plist, cron
+entry, CI workflow or hook invokes `scripts/beads-nightly-sync.sh`; the word
+"nightly" in its name and elsewhere in the repo describes the schedule it is
+*meant* to be installed on (§8), not one that exists. Treat every reference to
+"the nightly job" as "a human runs the script, or has installed §8's schedule
+on this machine" until this table's row says otherwise.
 
 **Machine-side residual, unverifiable from the repo**: whether any OTHER
 automation on either machine still calls `bd dolt pull`/`push` — e.g. a
