@@ -632,10 +632,9 @@ red check as something other than this feature's defect:
    including `computenet-8ru`, the one carrying the diagnosis. A bead naming
    this test, or an earlier run of the identical failure you can link, is the
    artifact. "I have seen this before" is not. Nothing found in **either** →
-   this is
-   a first sighting, not a flake: file it as an unparented bug bead (the fix
-   belongs on `main`, not on a feature branch, because every other PR is
-   equally blocked) and treat the check as red work.
+   this is a first sighting, not a flake: file it as an unparented bug bead
+   (the fix belongs on `main`, not on a feature branch, because every other PR
+   is equally blocked) and treat the check as red work.
 4. **What that prior bead instructs** — read it even when it is closed. A
    closed bead can carry a standing constraint that outlives it:
    computenet-dqy.3 closed with "if either test reddens again, reopen
