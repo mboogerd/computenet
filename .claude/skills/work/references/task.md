@@ -68,7 +68,29 @@ than restarting. That's the whole reason the worktree is preserved.
      expanding silently.
 5. Verify per AGENTS.md's "Verification" section — narrowest relevant test
    first, then the affected module's suite. Don't report success on an
-   untested claim.
+   untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
+   replays cached results, so a green build is not evidence a test executed.
+   Your reviewer will demand the accounting in
+   [review-task.md](review-task.md) §2 — produce it yourself, from the same
+   run, using the counting snippet there:
+   - Read Gradle's `N actionable tasks: X executed, Y from cache` line, and
+     confirm the *specific* test task you care about is not `FROM-CACHE` or
+     `UP-TO-DATE` in the run's task output.
+   - Quote test counts read from the JUnit XML rather than the build result.
+     An unquantified "suite green" is not a verification record: nobody
+     re-runs your tests, so your report *is* the evidence the next session
+     trusts.
+   - `--rerun` binds to the task it follows, not to the command line
+     (`:kernel:test :wire:test --rerun` re-ran only `:wire:test`), and it does
+     not force the upstream tasks the named task depends on. Put one
+     `--rerun` per test task; use `--rerun-tasks` for a repo-wide run.
+
+   **Hunting a rare failure, don't destroy the occurrence you waited for.**
+   Told to "run it 100 times": do not pass `-q` — the detail reaches neither
+   the console nor the Gradle daemon log, and the JUnit XML is the only place
+   it lives — and copy `<module>/build/test-results` aside on a failing
+   iteration before the next one overwrites it. The archiving loop is in
+   [review-task.md](review-task.md) §2; use it rather than inventing one.
 6. Commit on your branch, then push it. Your worktree has its own index, so
    ordinary staging is safe here:
    ```bash

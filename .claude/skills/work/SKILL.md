@@ -484,7 +484,9 @@ children of an epic this machine claimed at step 3, so the other machine has
 no reason to be in here. What the local state *can* be stale about is the
 epic's own ownership, and that was settled by the step-3 pull.
 
-Then dispatch the batch in one message:
+Then dispatch the batch in one message. Anything you add to this template
+reaches the agent as established fact — relay artifacts, not mechanism
+(§ "What you write yourself"):
 
 ```
 Agent({
@@ -599,7 +601,11 @@ A red required check in an untouched module is still red, and "known flake" is
 exactly what a real regression looks like from the outside. This is the rule in
 this file most able to launder a genuine failure, so attribution is not a
 judgement call — it is four artifacts. Produce **all four** before treating a
-red check as something other than this feature's defect:
+red check as something other than this feature's defect — and whatever you
+then write onward, the bead you file or the brief you hand another agent,
+carries the run id, job and verbatim `FAILED` line and no mechanism you have
+not tested (§ "What you write yourself"; guessing one here cost a reviewer 8
+runs):
 
 1. **The failing test and its assertion message**, read from the run, not from
    the check's one-line summary:
@@ -724,7 +730,9 @@ Paste both outputs into the prompt below — the commits that landed since this
 branch forked, and the open PRs. Empty first output is itself worth saying
 ("origin/main unchanged at `<sha>`"): it tells the reviewer its §6 re-fetch is
 checking something you already looked at, and when it comes back non-empty
-instead, that is a real change and not a first sighting.
+instead, that is a real change and not a first sighting. Paste those outputs;
+do not summarize them into a conclusion the reviewer then inherits as fact
+(§ "What you write yourself").
 
 ```
 Agent({
