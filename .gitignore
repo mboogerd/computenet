@@ -38,6 +38,13 @@ bin/
 ### VS Code ###
 .vscode/
 
+### Python ###
+# Bytecode caches, e.g. from .claude/skills/work/scripts/. Generated on every
+# run of a helper script, so tracking one lands a binary blob on main that
+# churns per interpreter version (cpython-314.pyc et al).
+__pycache__/
+*.py[cod]
+
 ### Mac OS ###
 .DS_Store
 # Claude Code session worktrees
