@@ -215,11 +215,13 @@ class ShardedReplicaFrontierTest {
 
     @Test
     fun `control b - a trivial frontier tears the board on some seed`() {
-        var torn = 0
-        for (seed in 0L until 120L) {
-            if (run(seed, Variant.TRIVIAL).any { !it.allCoveringDelivered }) torn++
+        // Existential claim (SOME seed tears): stop at the first witness. If no
+        // seed in the range diverges any more, the control fails — the retune
+        // signal — rather than silently passing on a friendlier configuration.
+        val tornSeed = (0L until 120L).firstOrNull { seed ->
+            run(seed, Variant.TRIVIAL).any { !it.allCoveringDelivered }
         }
-        (torn > 0).shouldBeTrue()
+        (tornSeed != null).shouldBeTrue()
     }
 
     /**
@@ -293,15 +295,17 @@ class ShardedReplicaFrontierTest {
 
     @Test
     fun `control c - the creation fence off releases early for a joining covering member on some seed`() {
-        var prematureOn = 0
-        var prematureOff = 0
-        for (seed in 0L until 120L) {
-            if (runWithJoin(seed, creationFence = true).any { !it.allCoveringDelivered }) prematureOn++
-            if (runWithJoin(seed, creationFence = false).any { !it.allCoveringDelivered }) prematureOff++
-        }
         // The fence (default, on) never releases a wave for a known covering member
-        // that has not delivered it; turning it off does, on some seed.
-        prematureOn shouldBe 0
-        (prematureOff > 0).shouldBeTrue()
+        // that has not delivered it — a universal safety claim, so the ON sweep
+        // keeps its full seed range.
+        for (seed in 0L until 120L) {
+            runWithJoin(seed, creationFence = true).any { !it.allCoveringDelivered } shouldBe false
+        }
+        // Turning the fence off releases early on SOME seed — existential, so the
+        // scan stops at the first diverging witness (failing if none remains).
+        val prematureSeed = (0L until 120L).firstOrNull { seed ->
+            runWithJoin(seed, creationFence = false).any { !it.allCoveringDelivered }
+        }
+        (prematureSeed != null).shouldBeTrue()
     }
 }
