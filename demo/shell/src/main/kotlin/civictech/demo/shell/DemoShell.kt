@@ -130,6 +130,27 @@ fun demoPort(args: Array<String>): Int =
         ?: System.getenv("PORT")?.toIntOrNull() ?: 8080
 
 /**
+ * Print the port this process **actually bound** for [name], machine-readably:
+ * `computenet-port <name> <port>`.
+ *
+ * A demo launched with `0` for a port is the only party that can say which port it
+ * got — and the only one that should choose it. computenet-dqy.25's defect was a
+ * supervising test picking an ephemeral port, closing it, and handing the bare
+ * number to a child JVM to bind later: a window in which any other `bind(0)` on the
+ * machine could take it, which is how a `:demo:shopping` peer died of
+ * `BindException` on CI. With this line the supervisor never guesses.
+ *
+ * The reading side is `civictech.testkit.JvmPeer.Peer.port`, whose KDoc carries the
+ * rest of the reasoning; `JvmPeer.PORT_LINE_PREFIX` is this prefix. The names in use
+ * are `http` (the demo's own [DemoShell]), `ws` (a `--listen` peering port) and
+ * `inspect` (an `--inspect-port` inspector). The human-readable line each demo
+ * already prints stays — this one is additional, not a replacement.
+ */
+fun announcePort(name: String, port: Int) {
+    println("computenet-port $name $port")
+}
+
+/**
  * T12 finding 5: a correct JSON string escaper, replacing the byte-identical
  * hand-rolled `esc` in `tiering`/`skillmatch` (backslash + quote only — no
  * control-char/newline handling, a latent bug for any title/text containing

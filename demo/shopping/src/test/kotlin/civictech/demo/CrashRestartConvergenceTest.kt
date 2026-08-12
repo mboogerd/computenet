@@ -4,7 +4,6 @@ import civictech.testkit.JvmPeer
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 import java.nio.file.Files
@@ -18,17 +17,13 @@ import java.nio.file.Files
  */
 class CrashRestartConvergenceTest {
 
-    // NOT civictech.testkit.JvmPeer.launch: that helper always redirects the
-    // launched peer's output to INHERIT, but this test kills a peer mid-session,
-    // so its own per-process log file (not INHERIT) is the first diagnostic you
-    // want on failure — kept local deliberately (RS-9.2 divergence).
-    private fun launch(vararg appArgs: String): Process {
-        val java = File(System.getProperty("java.home"), "bin/java").absolutePath
-        val log = File.createTempFile("computenet-crash-peer-", ".log").apply { deleteOnExit() }
-        return ProcessBuilder(
-            java, "-cp", System.getProperty("java.class.path"), "civictech.demo.MainKt", *appArgs
-        ).redirectErrorStream(true).redirectOutput(log).start()
-    }
+    // `JvmPeer.launch` again (computenet-dqy.25). The local launcher this replaced
+    // existed only because the shared one redirected to INHERIT, which Gradle's
+    // console never renders for a passing-then-failing peer; JvmPeer now buffers
+    // each peer's output and folds it into the failure message instead — the same
+    // diagnostic the per-process log file was for, minus the file.
+    private fun launch(vararg appArgs: String): JvmPeer.Peer =
+        JvmPeer.launch("civictech.demo.MainKt", *appArgs)
 
     private fun currentState(httpPort: Int): String {
         val connection = URI("http://localhost:$httpPort/events").toURL().openConnection() as HttpURLConnection
@@ -62,14 +57,21 @@ class CrashRestartConvergenceTest {
     @Tag("multi-jvm")
     @Test
     fun `a kill -9'd peer recovers from its journal, re-peers, and both sides converge`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
         val journalB = Files.createTempDirectory("computenet-journal-b").toFile()
-        val peerA = launch("$httpA", "--listen", "$ws")
-        var peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
+        // every port is `0`: each peer binds its own and announces what it got, so no
+        // test-side number is handed to a process that has yet to bind it
+        // (computenet-dqy.25). B's relaunch below is a fresh process and therefore
+        // gets a fresh HTTP port — which is why `httpB` is a `var`; nothing here
+        // needs the restarted peer to reappear at the same address, only to reappear.
+        val peerA = launch("0", "--listen", "0")
+        val httpA = peerA.port("http")
+        val ws = peerA.port("ws")
+        var peerB = launch("0", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
+        var httpB = peerB.port("http")
         try {
-            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
+            JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB), timeoutMs = 45_000) {
+                up(httpA) && up(httpB)
+            }
 
             // shared pre-crash state, written on BOTH sides
             post(httpA, user = "alice", action = "add", item = "apples")
@@ -92,15 +94,16 @@ class CrashRestartConvergenceTest {
             }
 
             // B is kill -9'd mid-session
-            peerB.destroyForcibly()
+            peerB.kill()
             awaitUntil("peer B is gone", timeoutMs = 45_000) { down(httpB) }
 
             // life goes on at A: this edit parks at A until B returns
             post(httpA, user = "alice", action = "add", item = "cheese")
 
             // B relaunches with the SAME journal directory — recovery + reconnect
-            peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
-            awaitUntil("peer B back up", timeoutMs = 45_000) { up(httpB) }
+            peerB = launch("0", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
+            httpB = peerB.port("http")
+            JvmPeer.await("peer B back up", listOf(peerB), timeoutMs = 45_000) { up(httpB) }
 
             // B recovered its own pre-crash state from the journal (bread was
             // written AT B; apples arrived over the wire pre-crash — both are

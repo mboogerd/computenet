@@ -4,7 +4,6 @@ import civictech.testkit.JvmPeer
 import civictech.testkit.awaitUntil
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 import java.nio.file.Files
@@ -25,38 +24,14 @@ import java.nio.file.Files
  */
 class ExchangeScaffoldTest {
 
-    // NOT civictech.testkit.JvmPeer.launch: that helper always redirects the
-    // launched peer's output to INHERIT, but this test kills a peer mid-session,
-    // so its own per-process log file (not INHERIT) is the first diagnostic you
-    // want on failure — kept local deliberately (RS-9.2 divergence, mirrors
-    // CrashRestartConvergenceTest).
-    private class LaunchedPeer(val process: Process, val log: File)
-
-    private fun launch(vararg appArgs: String): LaunchedPeer {
-        val java = File(System.getProperty("java.home"), "bin/java").absolutePath
-        val log = File.createTempFile("computenet-exchange-peer-", ".log").apply { deleteOnExit() }
-        val process = ProcessBuilder(
-            java, "-cp", System.getProperty("java.class.path"), "civictech.demo.exchange.MainKt", *appArgs
-        ).redirectErrorStream(true).redirectOutput(log).start()
-        return LaunchedPeer(process, log)
-    }
-
-    // CI's "both peers serving HTTP" timeout has no other diagnostic: the
-    // peer's stdout/stderr goes to its own log file (not INHERIT), so on
-    // failure that log is the only way to see whether the JVM even started.
-    // Folded into the exception message (not println'd) since Gradle's
-    // console only ever renders a failed test's exception, never its stdout.
-    private fun awaitBothUp(httpA: Int, httpB: Int, peers: List<LaunchedPeer>) {
-        try {
-            awaitUntil("both peers serving HTTP", timeoutMs = 45_000) { up(httpA) && up(httpB) }
-        } catch (e: AssertionError) {
-            val logs = peers.joinToString("\n\n") { peer ->
-                "---- peer log (${peer.log.absolutePath}) ----\n" +
-                    runCatching { peer.log.readText() }.getOrDefault("<unreadable>")
-            }
-            throw AssertionError("${e.message}\n\n$logs", e)
-        }
-    }
+    // `JvmPeer.launch` again (computenet-dqy.25). The local launcher and the local
+    // log-folding wait that used to sit here existed only because the shared helper
+    // redirected the peer to INHERIT, which Gradle's console never renders — the
+    // finding that shaped them still holds, so `JvmPeer` now buffers every peer's
+    // output itself and folds it into the failure message of `JvmPeer.await` and
+    // `Peer.port`.
+    private fun launch(vararg appArgs: String): JvmPeer.Peer =
+        JvmPeer.launch("civictech.demo.exchange.MainKt", *appArgs)
 
     /** One SSE frame from /events — a fresh tab is sent the current board immediately. */
     private fun currentState(httpPort: Int): String {
@@ -94,13 +69,18 @@ class ExchangeScaffoldTest {
     @Tag("multi-jvm")
     @Test
     fun `edits on either JVM converge to the same region-sum board`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
-        val peerA = launch("$httpA", "--listen", "$ws")
-        val peerB = launch("$httpB", "--peer", "ws://localhost:$ws")
+        // every port is `0`: each peer binds its own and announces what it got, so
+        // no test-side number is ever handed to a process that has yet to bind it
+        // (computenet-dqy.25). A must announce its listening port before B can be
+        // told to dial it, which is what orders these two launches.
+        val peerA = launch("0", "--listen", "0")
+        val httpA = peerA.port("http")
+        val peerB = launch("0", "--peer", "ws://localhost:${peerA.port("ws")}")
+        val httpB = peerB.port("http")
         try {
-            awaitBothUp(httpA, httpB, listOf(peerA, peerB))
+            JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB), timeoutMs = 45_000) {
+                up(httpA) && up(httpB)
+            }
 
             // orders written on BOTH peers, two regions
             post(httpA, "add", "north", "o1", 10)
@@ -121,21 +101,26 @@ class ExchangeScaffoldTest {
             awaitUntil("A re-folds after retraction", timeoutMs = 45_000) { boardOf(httpA) == """{"north":10,"south":5}""" }
             awaitUntil("B re-folds after retraction", timeoutMs = 45_000) { boardOf(httpB) == """{"north":10,"south":5}""" }
         } finally {
-            JvmPeer.destroy(peerA.process, peerB.process)
+            JvmPeer.destroy(peerA, peerB)
         }
     }
 
     @Tag("multi-jvm")
     @Test
     fun `a kill -9'd peer recovers its journaled writer state and both sides re-converge`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
         val journalB = Files.createTempDirectory("computenet-exchange-journal-b").toFile()
-        val peerA = launch("$httpA", "--listen", "$ws")
-        var peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
+        // `0` everywhere, as in the test above. B's relaunch is a fresh process and
+        // gets a fresh HTTP port — hence `var httpB`: this test needs the restarted
+        // peer to come back with its journaled state, not at the same address.
+        val peerA = launch("0", "--listen", "0")
+        val httpA = peerA.port("http")
+        val ws = peerA.port("ws")
+        var peerB = launch("0", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
+        var httpB = peerB.port("http")
         try {
-            awaitBothUp(httpA, httpB, listOf(peerA, peerB))
+            JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB), timeoutMs = 45_000) {
+                up(httpA) && up(httpB)
+            }
 
             // shared pre-crash state: north written AT A, south written AT B (B journals its own)
             post(httpA, "add", "north", "o1", 10)
@@ -145,15 +130,16 @@ class ExchangeScaffoldTest {
             }
 
             // B is kill -9'd mid-session
-            peerB.process.destroyForcibly()
+            peerB.kill()
             awaitUntil("peer B is gone", timeoutMs = 45_000) { down(httpB) }
 
             // life goes on at A: this order parks at A until B returns
             post(httpA, "add", "north", "o3", 7)
 
             // B relaunches with the SAME journal dir — writer replay + reconnect
-            peerB = launch("$httpB", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
-            awaitUntil("peer B back up", timeoutMs = 45_000) { up(httpB) }
+            peerB = launch("0", "--peer", "ws://localhost:$ws", "--journal", journalB.absolutePath)
+            httpB = peerB.port("http")
+            JvmPeer.await("peer B back up", listOf(peerB), timeoutMs = 45_000) { up(httpB) }
 
             // B recovered its OWN journaled writer (south o2=5) from the per-cell WAL,
             // re-received A's north (o1) over the re-peered mesh, and replayed A's
@@ -165,7 +151,7 @@ class ExchangeScaffoldTest {
             post(httpB, "add", "south", "o4", 8)
             awaitUntil("post-restart edit visible on A", timeoutMs = 45_000) { boardOf(httpA) == """{"north":17,"south":13}""" }
         } finally {
-            JvmPeer.destroy(peerA.process, peerB.process)
+            JvmPeer.destroy(peerA, peerB)
             journalB.deleteRecursively()
         }
     }
@@ -180,22 +166,31 @@ class ExchangeScaffoldTest {
     @Test
     fun `writer journal alone reconstructs the board after restart`() {
         val journal = Files.createTempDirectory("computenet-exchange-journal-solo").toFile()
-        val port = JvmPeer.freePort()
-        val first = ExchangeApp(port, journalDir = journal).start()
+        // port `0` in-process too, read back from the app that bound it. The two
+        // ExchangeApps here were the same defect's in-process form: the second
+        // demanded the exact port the first had just released (computenet-dqy.25).
+        // What this test is about is the journal, not the address, so each app
+        // simply binds its own.
+        val first = ExchangeApp(0, journalDir = journal).start()
+        val firstPort = first.boundPort
         try {
-            post(port, "add", "north", "o1", 10)
-            post(port, "add", "north", "o2", 20)
-            post(port, "add", "south", "o3", 5)
-            awaitUntil("board built", timeoutMs = 45_000) { boardOf(port) == """{"north":30,"south":5}""" }
+            post(firstPort, "add", "north", "o1", 10)
+            post(firstPort, "add", "north", "o2", 20)
+            post(firstPort, "add", "south", "o3", 5)
+            awaitUntil("board built", timeoutMs = 45_000) { boardOf(firstPort) == """{"north":30,"south":5}""" }
         } finally {
             first.stop()
         }
-        awaitUntil("port released", timeoutMs = 45_000) { down(port) }
+        // still a real barrier: the first app must be fully gone before the second
+        // replays the journal directory they share
+        awaitUntil("the first app is gone", timeoutMs = 45_000) { down(firstPort) }
 
-        val recovered = ExchangeApp(port, journalDir = journal).start()
+        val recovered = ExchangeApp(0, journalDir = journal).start()
+        val recoveredPort = recovered.boundPort
         try {
             awaitUntil("board recovered from writer journal", timeoutMs = 45_000) {
-                boardOf(port) == """{"north":30,"south":5}""" && "\"total\":35" in currentState(port)
+                boardOf(recoveredPort) == """{"north":30,"south":5}""" &&
+                    "\"total\":35" in currentState(recoveredPort)
             }
         } finally {
             recovered.stop()

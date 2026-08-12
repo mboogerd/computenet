@@ -47,13 +47,16 @@ class TwoJvmConvergenceTest {
     @Tag("multi-jvm")
     @Test
     fun `edits on either JVM converge on the other`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
-        val peerA = JvmPeer.launch("civictech.demo.MainKt", "$httpA", "--listen", "$ws")
-        val peerB = JvmPeer.launch("civictech.demo.MainKt", "$httpB", "--peer", "ws://localhost:$ws")
+        // every port is `0`: each peer binds its own and announces what it got, so
+        // no test-side number is ever handed to a process that has yet to bind it
+        // (computenet-dqy.25). A must announce its listening port before B can be
+        // told to dial it, which is what orders these two launches.
+        val peerA = JvmPeer.launch("civictech.demo.MainKt", "0", "--listen", "0")
+        val httpA = peerA.port("http")
+        val peerB = JvmPeer.launch("civictech.demo.MainKt", "0", "--peer", "ws://localhost:${peerA.port("ws")}")
+        val httpB = peerB.port("http")
         try {
-            awaitUntil("both peers serving HTTP") { up(httpA) && up(httpB) }
+            JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB)) { up(httpA) && up(httpB) }
 
             post(httpA, user = "alice", action = "add", item = "apples")
             awaitUntil("apples visible on peer B") { "apples" in currentState(httpB) }
@@ -84,13 +87,16 @@ class TwoJvmConvergenceTest {
     @Tag("multi-jvm")
     @Test
     fun `a remove by a user who did not add the item converges on both JVMs`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
-        val peerA = JvmPeer.launch("civictech.demo.MainKt", "$httpA", "--listen", "$ws")
-        val peerB = JvmPeer.launch("civictech.demo.MainKt", "$httpB", "--peer", "ws://localhost:$ws")
+        // every port is `0`: each peer binds its own and announces what it got, so
+        // no test-side number is ever handed to a process that has yet to bind it
+        // (computenet-dqy.25). A must announce its listening port before B can be
+        // told to dial it, which is what orders these two launches.
+        val peerA = JvmPeer.launch("civictech.demo.MainKt", "0", "--listen", "0")
+        val httpA = peerA.port("http")
+        val peerB = JvmPeer.launch("civictech.demo.MainKt", "0", "--peer", "ws://localhost:${peerA.port("ws")}")
+        val httpB = peerB.port("http")
         try {
-            awaitUntil("both peers serving HTTP") { up(httpA) && up(httpB) }
+            JvmPeer.await("both peers serving HTTP", listOf(peerA, peerB)) { up(httpA) && up(httpB) }
 
             post(httpA, user = "alice", action = "add", item = "apples")
             awaitUntil("apples visible on peer B") { "apples" in items(httpB) }
