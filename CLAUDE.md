@@ -49,9 +49,15 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
    # Team-maintainer opt-in only, unless current instructions forbid it:
    git pull --rebase
+   bd dolt push          # once, at end of session — the only Dolt sync you run
    git push
    git status
    ```
+   That end-of-session `bd dolt push` is the single Dolt sync a session
+   performs. All other Dolt sync — the pull that refreshes shared tracker
+   state, and any catch-up push — is a nightly/manual job, documented in
+   `doc/ops/beads-sync-runbook.md`. Do not sync per claim, per close, or per
+   commit.
 5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
 
 **Critical rules:**

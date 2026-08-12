@@ -102,6 +102,19 @@ git fetch origin main
 bd dolt pull
 ```
 
+**This pull is one of exactly two Dolt sync points in the whole session** —
+this one, and the `bd dolt push` at Finalize (step 6). Nothing in between
+syncs, so every claim, close, and metadata write you make below stays local
+until Finalize (or the nightly job — `doc/ops/beads-sync-runbook.md`) pushes
+it. Read [references/claim-sync.md](references/claim-sync.md) for what that
+costs: the window it opens is real and you need to recognize its collision.
+
+**If this pull fails, stop the session and report it.** It is the only look
+you get at the other machine's state, so proceeding without it means claiming
+against state that may be hours or days stale — the computenet-kg7 /
+computenet-3v8 failure, where a whole slot ran against a local-only DB with
+claim safety silently gone.
+
 **Release stale claims first.** A run that crashed left items `in_progress`,
 and `bd ready` hides those — they are invisible to every later session until
 something reopens them, and nothing else does:
@@ -111,7 +124,9 @@ something reopens them, and nothing else does:
 ```
 
 Report what it released. The same item released repeatedly across sessions
-means work is failing, not merely crashing.
+means work is failing, not merely crashing. The releases are local writes like
+everything else here; they reach the other machine at Finalize's push or via
+the nightly job, not immediately.
 
 Then take the epic. Resume this machine's own before starting anything new:
 
@@ -136,13 +151,16 @@ Nothing to resume → take the highest-priority unclaimed epic:
 bd ready --type=epic --limit 1 --json     # read the id
 bd update <id> --claim                    # claim that id specifically
 bd update <id> --add-label=owner:$BEADS_ACTOR
-bd dolt push
 ```
 
 Always claim **the id you selected**. Never `bd ready --claim`: it claims
 whatever is first *at claim time*, which may not be what you just read, and
-you would then work an item you don't own. Confirm the claim per
-[references/claim-sync.md](references/claim-sync.md).
+you would then work an item you don't own.
+
+The claim is local until Finalize pushes it, so there is no confirm step to
+run and no race to resolve here — the step-3 pull above is the whole of your
+cross-machine claim safety. [references/claim-sync.md](references/claim-sync.md)
+describes exactly what that does and does not protect.
 
 Nothing claimable → report and stop.
 
@@ -247,8 +265,11 @@ retry then builds a second branch and a second PR for the same feature:
 bd update <feature-id> \
   --set-metadata branch=feature/<feature-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<feature-id>
-bd dolt push
 ```
+
+Recording it locally is enough for that ordering to do its job: a retry on
+this machine reads the local DB and finds the branch. It reaches the other
+machine at Finalize's push.
 
 Either way, attach the worktree the same way, then bring it up to date:
 
@@ -329,12 +350,10 @@ the last gate before `main`, so this distinction is not a formality.
 Claim each id in the batch, record its metadata, then attach its worktree:
 
 ```bash
-bd dolt pull                              # state may be hours old by now
 bd update <task-id> --claim
 bd update <task-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<task-id> \
   --set-metadata branch=task/<task-id>
-bd dolt push
 .claude/skills/work/scripts/ensure-worktree.sh \
   "$PWD/../computenet-worktrees/<task-id>" task/<task-id> feature/<feature-id>
 ```
@@ -344,6 +363,11 @@ exists but detached (a task resumed from an earlier session), or brand new —
 and fails loudly if it can't put the worktree on the requested branch. That
 matters: an agent handed a path that isn't there works somewhere
 unintended, and nothing would notice until the merge.
+
+These claims are not re-synced first, and don't need to be: the tasks are
+children of an epic this machine claimed at step 3, so the other machine has
+no reason to be in here. What the local state *can* be stale about is the
+epic's own ownership, and that was settled by the step-3 pull.
 
 Then dispatch the batch in one message:
 
@@ -416,10 +440,13 @@ looking unclaimed and get it re-implemented:
 git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
 git -C <feature-worktree> push
 bd close <task-id>
-bd dolt push
 git -C <task-worktree> status --short          # expect empty
 git worktree remove "$PWD/../computenet-worktrees/<task-id>"
 ```
+
+The close is local; it propagates at Finalize's push. That still protects the
+ordering above, because the machine that resumes after a crash is this one,
+reading this DB — and the merge commit is on the pushed branch either way.
 
 If that `status` isn't empty, the agent died mid-edit — report it and leave
 the worktree. Don't `--force` away work nobody has looked at.
@@ -460,12 +487,15 @@ gh pr create --draft --base main --head feature/<feature-id> \
   --title "<feature title>" \
   --body "Delivers <feature-id>. Tasks land as reviewed commits."
 bd update <feature-id> --set-metadata pr=<url>
-bd dolt push
 ```
 
 Early so CI gives feedback while the feature is still being built; recorded
-so a later session finds it instead of starting over. It stays **draft**
-until the feature review passes — never mark it ready yourself.
+so a later session finds it instead of starting over. Recorded locally, that
+is — it reaches the other machine at Finalize's push, which is soon enough,
+since only this machine works this epic.
+
+It stays **draft** until the feature review passes — never mark it ready
+yourself.
 
 ### 5e. Feature review
 
@@ -585,18 +615,30 @@ gh pr view <pr-url> --json state,mergeStateStatus     # per review=passed featur
 → resolve it per 5e if the budget allows; it merges on its own afterwards.
 Then close any epic whose features are now all closed (5f's check).
 
+Do the friction log (step 7) **before** the push below, so its beads items go
+out with everything else.
+
 ```bash
 git -C <worktree> status --short   # per worktree touched this session
 git -C <worktree> push
 bd dolt push
 ```
 
+**That `bd dolt push` is the session's only write to the shared tracker** —
+every claim, close, park and metadata write since step 3 rides on it. If it
+fails, say so at the top of your summary in plain words: this session's
+tracker state is local-only until the nightly job
+(`doc/ops/beads-sync-runbook.md`) or a human pushes it, the other machine
+still sees this epic's items as they were at step 3, and a lost machine loses
+the lot. Never swallow the error and never report the session as clean
+without it.
+
 Uncommitted leftovers mean an agent died mid-edit — report rather than
 committing work you didn't verify. Leave unfinished features' worktrees in
 place; the next session reuses them via `metadata.worktree`. Remove the
 worktree and local branch of any feature that closed.
 
-Then **log the friction (step 7)** and `TaskStop` the budget monitor.
+Then `TaskStop` the budget monitor.
 
 Summarize: the epic worked, tasks completed, features left in draft (with PR
 urls), items blocked on parked questions (and what they ask), stale claims
@@ -647,8 +689,11 @@ bd create --type=chore --priority=3 --label=skill-friction \
   --title="work skill: <the friction in one line>" \
   --description="<what the skill says, what actually happened, what you did instead, what it cost>" \
   --acceptance="<what would have to change in the skill for this not to recur>"
-bd dolt push
 ```
+
+Do this *before* Finalize's `bd dolt push` (step 6), which is what carries the
+new item off this machine — a friction issue that never syncs is exactly the
+lost-transcript problem this step exists to solve.
 
 Write it for someone editing `SKILL.md` next week with none of your context:
 name the step, quote the instruction, say what actually happened.
