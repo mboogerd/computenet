@@ -57,6 +57,21 @@ import java.util.UUID
  * measurement power lives in the `-Dwire.stress.iterations` runs, not here.
  * Raising [DEFAULT_ITERATIONS] buys power at ~11ms per iteration — 0.28s at 25,
  * measured — so it is a fast-lane budget decision, not a technical limit.
+ *
+ * ## What this gate is worth on Linux CI
+ *
+ * Unlike [WsListenerAcceptRstTest] this test is deliberately **not** platform
+ * scoped, and it is not vacuous anywhere: every iteration performs two real
+ * announcement awaits against a real listener and fails if either is lost, so on
+ * `ubuntu-latest` it is a genuine (if low-power) gate on the announcement path
+ * against *any* loss mechanism.
+ *
+ * But it has no power against the *specific* mechanism computenet-dqy.34 named.
+ * That mechanism is BSD-only — measured, see [WsListenerAcceptRstTest]'s "Platform
+ * scope" — so on the Linux runners this test cannot observe it however many
+ * iterations it runs, and its passing there is not evidence about it. It stays
+ * unscoped because a regression that loses announcements for some *other* reason
+ * would be caught on every platform, and that is worth having.
  */
 class WsAnnouncementStressTest {
 

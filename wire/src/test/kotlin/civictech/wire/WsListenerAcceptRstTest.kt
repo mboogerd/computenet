@@ -8,6 +8,8 @@ import io.kotest.matchers.ints.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.PrintStream
@@ -16,11 +18,18 @@ import java.net.Socket
 
 /**
  * computenet-dqy.34: **the named mechanism behind "timed out awaiting: collector
- * announced"** — a `:wire` flake measured at ~1% per suite run, on both sides of
- * the computenet-dqy.28/.32 bind work, and seen on four different tests
- * (`WsReconnectLoopBoundTest`, `WsTransportSmokeTest`, `WsPeerIdentityTest`,
+ * announced"** — a `:wire` flake measured at ~1% per suite run *on macOS*, on
+ * both sides of the computenet-dqy.28/.32 bind work, and seen on four different
+ * tests (`WsReconnectLoopBoundTest`, `WsTransportSmokeTest`, `WsPeerIdentityTest`,
  * `WsThreadEntryConformanceTest`), always on an *announcement* await that the
  * socket had already connected for.
+ *
+ * **This test is disabled off macOS, and it therefore guards nothing on the
+ * Linux CI runners.** That is not a convenience: the mechanism provably does not
+ * exist on Linux, and the reason is measured below under "Platform scope". Read
+ * that section before trusting this file as a gate — in the fast lane on
+ * `ubuntu-latest` it is a skip, and `build-test-fast` going green says nothing
+ * about this defect.
  *
  * ## The mechanism
  *
@@ -64,6 +73,40 @@ import java.net.Socket
  * reach the same catch and unbind the same listening channel, so the diagnosis
  * does not rest on the exact call; the measurement just names it.
  *
+ * ## Platform scope: this is a BSD/macOS mechanism, and Linux does not have it
+ *
+ * The first version of this test failed **deterministically** on `ubuntu-latest`
+ * (`-1 should be >= 1`: the listener was still bound after 200 deliberate resets;
+ * CI run 31587771011). The chain has three links, and exactly one of them breaks
+ * on Linux. The same JDK-only probe, run on both platforms, 10 trials each:
+ *
+ * | link | macOS 26.6 / JDK 26 | Linux 6.12 / Temurin 21.0.11 (container, aarch64) |
+ * |---|---|---|
+ * | `close()` with `SO_LINGER 0` delivers RST to the listener | yes | **yes** — a `read()` on the accepted channel throws `SocketException: Connection reset`, 10/10 |
+ * | `accept()` throws | no, 0/10 | no, 0/10 |
+ * | `setTcpNoDelay` / `setKeepAlive` on the reset victim throws | **yes** — `SocketException: Invalid argument`, 10/10 | **no** — both succeed, 10/10 |
+ *
+ * So **the third link is the one that breaks.** The RST arrives on Linux just as
+ * it does on macOS; the difference is entirely in `setsockopt`. BSD's
+ * `setsockopt(TCP_NODELAY)` on a socket whose connection is already torn down
+ * returns `EINVAL`, which the JDK surfaces as `SocketException`; Linux accepts
+ * the option on the dead socket and reports the reset only on the first read.
+ *
+ * That places the RST *after* `doAccept` has finished, inside the selector loop's
+ * per-connection read — where `handleIOException` is called with the doomed
+ * connection's own `WebSocket`, cancels the right key, and closes the right
+ * channel. The listening socket survives. On Linux java-websocket's error
+ * handling is, for this stimulus, correct; the defect is specifically that BSD
+ * reports a dead peer from inside `doAccept`'s unguarded prologue, where the only
+ * thing available to blame is the server's own key.
+ *
+ * **Consequence for the flake this bead investigated:** every rate measurement on
+ * computenet-dqy.34 (3/1140 suite runs, 2/240 fresh-JVM, and the 1/100
+ * `origin/main` baseline) was taken on macOS. If those failures were this
+ * mechanism, they cannot occur on the Linux CI runners at all, and this flake
+ * family does not threaten `build-test-fast`. See the bead comment for what that
+ * evidence does and does not establish.
+ *
  * Nothing reports it. `handleIOException` only `log.trace()`s, `onError` is
  * never called (that is `handleFatal`'s path, which this is not), and this
  * repository has `slf4j-api` with **no provider**, so java-websocket's own log
@@ -106,7 +149,9 @@ import java.net.Socket
  * be wrapped.
  *
  * **When the transport is fixed, invert this test** — assert that the listener
- * still accepts after the reset storm — rather than deleting it.
+ * still accepts after the reset storm — rather than deleting it. Note that on
+ * Linux the inverted assertion *already* passes, for the reason above, so the
+ * inverted test would need to stay macOS-scoped to mean anything either.
  *
  * Measured on macOS 26.6 / JDK 21 (the toolchain), 15 trials: the listening
  * socket is gone after **1-3** resets, 15/15. It is not a rare race when the
@@ -148,6 +193,16 @@ class WsListenerAcceptRstTest {
         }
 
     @Test
+    @EnabledOnOs(
+        value = [OS.MAC],
+        disabledReason = "SKIPPED, AND THEREFORE GUARDING NOTHING HERE: this characterizes a " +
+            "BSD/macOS-specific mechanism. Measured on Linux 6.12/JDK 21, setTcpNoDelay on a " +
+            "reset-victim socket succeeds 10/10 instead of throwing SocketException, so the RST " +
+            "surfaces on a later per-connection read, java-websocket blames the right connection, " +
+            "and the listening socket survives — the defect does not exist on this platform. On " +
+            "the Linux CI runners this test is a skip and build-test-fast going green says " +
+            "nothing about computenet-dqy.34. See the class KDoc, section 'Platform scope'.",
+    )
     fun `a reset that races the accept closes the whole listening socket, and nothing reports it`() {
         val listener = WsTransport.listen(0, side())
         val port = listener.port
