@@ -11,9 +11,6 @@ import civictech.cell.wire.Peering
 import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
-import java.net.BindException
-import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.URI
 import java.util.UUID
 
@@ -46,6 +43,16 @@ import java.util.UUID
  * assertion is about what the transport does *during* an outage, and any outage
  * long enough to admit several failed attempts exposes the defect. Every actual
  * wait below is bounded polling.
+ *
+ * computenet-dqy.22: "the window between `listener.stop` and the re-bind" above
+ * no longer exists. This test used to give the port back to the OS for the whole
+ * outage and then demand that exact number again behind a 20-attempt retry loop,
+ * and in CI it lost that race outright (`could not re-bind port 37973 after 20
+ * attempts`) — on the parallel lane, where sibling test JVMs are drawing from the
+ * same ephemeral range. [HeldPort] holds the endpoint for the whole test instead,
+ * so the outage is now a listener that is not serving rather than a port that is
+ * not bound. The dialer's failed attempts are reset rather than refused; see
+ * [HeldPort] for why that is the same stimulus for the defect asserted here.
  */
 class WsReconnectLoopBoundTest {
 
@@ -74,24 +81,6 @@ class WsReconnectLoopBoundTest {
         }
     }
 
-    /** As `WsReconnectSmokeTest.relisten` — re-binding a just-freed port races the OS. */
-    private fun relisten(port: Int, side: Peering.Side, attempts: Int = 20): WsTransport.WsListener {
-        var lastFailure: BindException? = null
-        repeat(attempts) { attempt ->
-            try {
-                ServerSocket().use { probe ->
-                    probe.reuseAddress = true
-                    probe.bind(InetSocketAddress(port))
-                }
-                return WsTransport.listen(port, side)
-            } catch (e: BindException) {
-                lastFailure = e
-                if (attempt < attempts - 1) Thread.sleep(50)
-            }
-        }
-        throw IllegalStateException("could not re-bind port $port after $attempts attempts", lastFailure)
-    }
-
     /**
      * The retry loops for *this* dialer only: `WsConnection` names them after its
      * URI, so a connection left over from another test in this fork cannot inflate
@@ -107,15 +96,21 @@ class WsReconnectLoopBoundTest {
         var collector = CollectingCell()
         server.host.managementInlet.call.spawn(collector)
 
-        var listener = WsTransport.listen(0, server.side)
-        val port = listener.port
+        // the peer's endpoint is held for the whole test, so its listener can die
+        // and return without the port ever passing back through the OS
+        // (computenet-dqy.22 — see `HeldPort`; this test is the one that lost that
+        // race in CI, and a 500ms outage with a zero-backoff dialer hammering the
+        // freed port is the widest window of the three)
+        val endpoint = HeldPort()
+        val port = endpoint.port
+        var listener = endpoint.serve(server.side)
         // zero backoff: the worst case for a per-close retry thread, and what the
         // two reconnect tests inject to keep reconnect timing scheduling-bound
         val connection = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 0L }
         try {
             await("collector announced") { client.registry.location(collector.ref) is LocationRegistry.Remote }
 
-            listener.stop(1000)
+            endpoint.release(listener)
             await("unpublish on disconnect") { client.registry.location(collector.ref) == null }
 
             // hold the peer down long enough for many attempts to fail
@@ -127,7 +122,7 @@ class WsReconnectLoopBoundTest {
             server = Stack()
             collector = CollectingCell(collector.ref)
             server.host.managementInlet.call.spawn(collector)
-            listener = relisten(port, server.side)
+            listener = endpoint.serve(server.side)
 
             // the bound is not "gave up": the surviving loop still reconnects
             await("re-announced after the peer returned") {
@@ -136,6 +131,7 @@ class WsReconnectLoopBoundTest {
         } finally {
             connection.shutdown()
             runCatching { listener.stop(1000) }
+            endpoint.close()
         }
     }
 }
