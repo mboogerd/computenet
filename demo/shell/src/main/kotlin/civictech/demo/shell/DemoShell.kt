@@ -146,10 +146,15 @@ class DemoShell(port: Int, bindAddress: InetAddress? = null) {
          * first). Nothing here hard-codes 127.0.0.1, which is what makes the
          * loopback bind portable rather than a guess about `/etc/hosts`.
          *
-         * `:wire`'s `WsTransport.loopback` resolves the same address for the
-         * same reason and is deliberately *not* reused: `:demo:shell` has no
-         * transport dependency, and keeping the WebSocket transport out of the
-         * demo shell is worth three lines (see AGENTS.md).
+         * `:wire`'s `WsTransport.LOOPBACK` resolves the same address for the same
+         * reason and is deliberately *not* reused. `:demo:shell` depends on
+         * nothing but kotlinx-serialization — not even `:kernel`, deliberately,
+         * as this module's own `build.gradle.kts` records — while `:wire` is the
+         * WebSocket transport and pulls `:kernel` in behind it. Importing it here
+         * to save four lines would invert the demo module graph; a shared home in
+         * `:kernel` would cost `:demo:shell` that same dependency for a rule that
+         * is about sockets, not the cell model. So: two copies, each pointing at
+         * the other. Change one and change the other.
          */
         val LOOPBACK: InetAddress = try {
             InetAddress.getByName("localhost")

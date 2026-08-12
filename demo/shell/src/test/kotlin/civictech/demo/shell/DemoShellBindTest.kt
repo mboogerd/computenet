@@ -54,22 +54,28 @@ class DemoShellBindTest {
 
     @Test
     fun `an ephemeral endpoint is not reachable at this machine's own network address`() {
-        val external = firstNonLoopbackIpv4()
-        assumeTrue(external != null, "no non-loopback IPv4 interface to probe from")
-        // Added in review: prove the probe can tell the two binds apart HERE
-        // before trusting its refusal. On a host that refuses an inbound connect
-        // to its own address for reasons of its own — this dev macOS box does,
-        // measured 0/20 reachable with a deliberately WILDCARD-bound server —
-        // the assertion below holds no matter what `DemoShell` bound, so a green
-        // tick there would mean nothing. An honest skip, naming why, is worth
-        // more than an assertion that cannot fail. On GitHub's ubuntu runner the
-        // control server does answer at `external`, so this stays a real
-        // assertion exactly where it discriminates. This is the Linux-meaningful
-        // half of the pair, as the hijack test above is the macOS-meaningful one.
+        // The address is chosen by what the probe can *prove* here, not by
+        // interface order: a wildcard-bound control server must actually answer
+        // at it, or the refusal below would hold whatever `DemoShell` bound and
+        // the green tick would mean nothing.
+        //
+        // Interface order alone is not enough, measured on this dev macOS box:
+        // the first non-loopback IPv4 is a VPN tunnel's `utun40` 198.19.254.2,
+        // where an inbound connect to a deliberately WILDCARD-bound server times
+        // out 0/20 — while `en0`'s 192.168.2.12, the next candidate, answers
+        // 20/20. Taking the first address unconditionally therefore skipped (or,
+        // before this control existed, passed vacuously) on a host where the
+        // probe discriminates perfectly well one interface further down.
+        //
+        // Only a host where *no* address answers — an offline or network-isolated
+        // container — skips, and it says so. This is the wildcard-vs-loopback
+        // half of the pair that is meaningful on Linux too, as the hijack test
+        // above is the half that only bites on BSD/macOS.
+        val external = firstExternallyReachableIpv4()
         assumeTrue(
-            wildcardIsReachableAt(external!!),
-            "this host refuses inbound connects to its own $external even for a wildcard-bound server, " +
-                "so this probe cannot distinguish a wildcard bind from a loopback one",
+            external != null,
+            "no interface on this host answers an inbound connect to its own address even for a " +
+                "wildcard-bound server, so this probe cannot distinguish a wildcard bind from a loopback one",
         )
         withEphemeralShell { shell ->
             shouldThrow<IOException> {
@@ -135,13 +141,28 @@ class DemoShellBindTest {
         }
     }
 
-    private fun firstNonLoopbackIpv4(): InetAddress? =
+    /**
+     * The first of this machine's own non-loopback IPv4 addresses at which a
+     * wildcard-bound server can actually be reached from here — i.e. the first
+     * address at which the external-address probe discriminates. `null` when no
+     * address does, which is the only honest skip.
+     *
+     * Bounded at [MAX_CANDIDATES] so a host full of filtered tunnel interfaces
+     * costs a bounded number of [TIMEOUT_MS] waits rather than one per interface.
+     */
+    private fun firstExternallyReachableIpv4(): InetAddress? =
+        nonLoopbackIpv4().take(MAX_CANDIDATES).firstOrNull { wildcardIsReachableAt(it) }
+
+    private fun nonLoopbackIpv4(): List<InetAddress> =
         NetworkInterface.getNetworkInterfaces().toList()
             .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
             .flatMap { it.inetAddresses.toList() }
-            .firstOrNull { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress }
+            .filter { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress }
 
     private companion object {
         const val TIMEOUT_MS = 2_000
+
+        /** How many of this host's addresses the control probe is willing to try. */
+        const val MAX_CANDIDATES = 4
     }
 }
