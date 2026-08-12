@@ -120,33 +120,67 @@ cost.
 
 ## Per-session sync cost
 
-Unattended-path assumption: one `bd dolt pull` at session start, plus one
-`bd dolt push` per claim/close. Using the epic's own example figure of 3
-claims/closes per session:
+**Assumption, grounded in `.claude/skills/work/SKILL.md` and
+`references/claim-sync.md`, not guessed.** The task description that spawned
+this report suggested "e.g. 3" claims/closes as an illustrative number; that
+figure is the task's own placeholder, not a count taken from the skill, and
+it undercounts what the skill actually prescribes. Walking the skill's own
+steps for the *smallest* unit of real work — one feature carrying two
+tasks, an epic already claimed in a prior session (no epic-claim push) —
+the `bd dolt pull`/`push` call sites are:
 
-    per-session cost = 1×pull + 3×push
+| Site | SKILL.md ref | Op | Count for 1 feature / 2 tasks |
+|---|---|---|---|
+| Session start | step 3, L102 | pull | 1 |
+| Feature setup (new `metadata.branch`) | step 5a, L250 | push | 1 |
+| Task batch claim | step 5b, L332/L337 | pull + push | 1 pull + 1 push (one batch covers both tasks) |
+| Per-task worker finish (task subagent, still `in_progress`) | `references/task.md` step 7, L61 | push | 2 (one per dispatched task — a distinct push from the merge-time one below, run by the task subagent itself before the orchestrator ever merges it) |
+| Task merge/close, "one at a time" (orchestrator) | step 5d, L419 | push | 2 (one per task closed, after merging into the feature branch) |
+| PR creation (first time only) | step 5c, L463 | push | 1 |
+| Finalize, per worktree touched | step 6, L591 | push | 1 |
+
+Totals: **2 pulls, 8 pushes** for the smallest realistic session (one
+feature, two tasks, epic already claimed) — each task pushes twice: once
+from the task subagent finishing implementation (`task.md`), once more from
+the orchestrator merging and closing it (`SKILL.md` step 5d). A session that
+lands the skill's own stated bar — "three of five features" (SKILL.md L21)
+— multiplies this by roughly the feature count, not by a flat "3" per
+session; the claim/close-only framing in the task description undercounts by
+ignoring the epic-claim, feature-setup, PR-creation, and finalize push
+sites, none of which are claims or closes, and by treating each task as one
+push instead of two.
 
 Using means (33.56s pull, 48.86s push):
 
-    33.56 + 3 × 48.86 = 33.56 + 146.57 = 180.13s ≈ 3.00 min
+    2 × 33.56 + 8 × 48.86 = 67.12 + 390.88 = 458.00s ≈ 7.63 min
 
 Using medians (34.09s pull, 33.84s push — i.e. excluding the run #4 outlier):
 
-    34.09 + 3 × 33.84 = 34.09 + 101.51 = 135.60s ≈ 2.26 min
+    2 × 34.09 + 8 × 33.84 = 68.18 + 270.72 = 338.90s ≈ 5.65 min
 
-Both the mean-based and the outlier-excluded median-based estimate exceed the
-2-minute threshold. The estimate is not sensitive to which push figure is
-used — even the more optimistic (median, outlier-excluded) case clears the
-bar.
+For comparison, the task description's own illustrative "1 pull + 3 push"
+shape (kept here only to show it is not load-bearing for the verdict):
+
+    33.56 + 3 × 48.86 = 180.13s ≈ 3.00 min (mean push)
+    34.09 + 3 × 33.84 = 135.60s ≈ 2.26 min (median push, outlier excluded)
+
+Every one of these estimates — the grounded minimal-session figure and the
+task description's placeholder figure alike — exceeds the 2-minute
+threshold. The grounded count is markedly higher (≈5.7–7.6 min vs.
+≈2.3–3.0 min), so correcting the undercount does not change which side of
+the line the numbers fall on; it only strengthens the case.
 
 ## Verdict
 
 **GO.** Both prongs of the pre-registered rule independently hold:
 
-- Measured per-session sync cost is ≈2.3–3.0 minutes, over the 2-minute
-  threshold, using this session's own timings (no reliance on the historical
-  "~10 minutes" figure from computenet-4bv, which remains unverified and is
-  not needed to reach GO).
+- Measured per-session sync cost is ≈2.3–7.6 minutes depending on which
+  push-count model is used (≈2.3–3.0 min on the task description's
+  illustrative "3 pushes" placeholder, ≈5.7–7.6 min on the grounded count of
+  actual `SKILL.md`/`task.md` push sites for the smallest realistic session)
+  — over the 2-minute threshold under every model, using this session's own
+  timings (no reliance on the historical "~10 minutes" figure from
+  computenet-4bv, which remains unverified and is not needed to reach GO).
 - A sync operation has already failed outright requiring manual intervention:
   the 2026-08-12 ~12:20 UTC `bd dolt pull` hard failure above, which needed
   direct `dolt` CLI conflict resolution outside `bd`'s own command surface.
