@@ -189,6 +189,29 @@ skipping drafts and forks). The practical consequence:
 The `auto-merge` job is `continue-on-error`, so a failure to arm auto-merge
 never blocks the PR; it just means the merge has to be triggered manually.
 
+### Marking a PR ready is the agent's call
+
+We are aiming at continuous integration: an agent that is confident a PR is
+done runs `gh pr ready` and lets it merge, without asking. No profile —
+conservative included — requires a human sentence for that call, and the
+"Agent Context Profiles" section below governs commit, push, rebase, manual
+merge, and Dolt remote sync, not this.
+
+Confidence means all three of:
+
+- **No open design decisions remain** on the change — nothing in the PR or its
+  bead is still a question someone has to answer.
+- **No regressions.** Required checks are green and the change does not break
+  functionality outside its own scope.
+- **Not risky or hard to revert.** A wrong call here is a revert or a follow-up
+  edit — not a migration, a wire-format change, or deleted data.
+
+If any of the three is in doubt, leave the PR in draft and park the doubt for a
+human (`.claude/skills/work/references/ask-human.md`), naming which criterion
+is unsettled. Asking in your output instead is a dropped question. Draft stays
+the default until all three hold; a green, finished PR left in draft for
+someone to click is equally a dropped task.
+
 ## Multi-agent run discipline
 
 When running as a plan worker, the host orchestrator owns Git lifecycle. Do not

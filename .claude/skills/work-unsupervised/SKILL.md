@@ -44,6 +44,15 @@ is a wrong guess on an interface, a wire format, or a semantic the spec doesn't 
 Record every assumption you *do* make in the PR body or a Beads comment, since that is
 the only place a human will ever see it.
 
+## Shipping is a decision, not a question
+
+Marking a reviewed PR ready is never a parking case. AGENTS.md § "Marking a PR
+ready is the agent's call" sets the bar — no open design decisions, no
+regressions, not hard to revert — and no profile overrides it. If all three
+hold, run `gh pr ready` and let auto-merge take it. Leaving a green, finished
+PR in draft for a human to click is a dropped task, same as asking a question
+nobody reads.
+
 ## Ending the run
 
 `work` finalizes properly on its own — follow its "Finalize" step rather than inventing an
