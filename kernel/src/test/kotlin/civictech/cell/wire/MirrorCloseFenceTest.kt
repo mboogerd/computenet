@@ -1,6 +1,7 @@
 package civictech.cell.wire
 
 import civictech.cell.CellRef
+import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
@@ -8,17 +9,22 @@ import civictech.cell.host.SimulationController
 import civictech.cell.host.TopologyLink
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import org.junit.jupiter.api.Test
 import java.util.UUID
 
 /**
- * computenet-dqy.5 — the disconnect fence
- * ([RegistryMirrorCell.detach]/[RegistryMirrorCell.attach]).
+ * computenet-dqy.5 — the disconnect fence ([RegistryMirrorCell.detach]) — and
+ * computenet-dqy.20, which made it total on the loopback path by minting a
+ * fresh mirror per connection instance instead of re-opening the shut one.
  *
  * **The race.** A peer's announcements are applied *asynchronously*, two
  * scheduler hops behind the connection: the transport hands a frame to a hosted
@@ -131,24 +137,30 @@ class MirrorCloseFenceTest {
     // ---------------------------------------------------------- the recovery
 
     @Test
-    fun `a re-attached mirror mirrors again, under the name its re-hello asserts`() {
+    fun `a returning peer is served by a fresh mirror, while the one it superseded stays shut`() {
         val registry = LocationRegistry()
         val egress = BridgeEgressCell()
-        val mirror = mirror(registry, egress)
+        val retired = mirror(registry, egress)
 
         val theirs = CellRef(UUID.randomUUID())
-        mirror.inlet.call.published(theirs)
-        mirror.detach()
+        retired.inlet.call.published(theirs)
+        retired.detach()
         registry.location(theirs).shouldBeNull()
 
-        // a client keeps one Session — hence one mirror — across reconnects, so
-        // the gate has to re-open on the re-hello or the returning peer would
-        // announce into a mirror that ignores it forever
-        mirror.peer = PeerId("jvm-b")
-        mirror.attach()
-        mirror.inlet.call.published(theirs)
-
+        // the returning peer's connection instance mints its own mirror (a
+        // socket's `hello`, a loopback's `heal`) and re-announces into that —
+        // and the returning peer loses nothing, because its (re-)announcement is
+        // a full localRefs catch-up
+        val fresh = mirror(registry, egress, peer = PeerId("jvm-b"))
+        fresh.inlet.call.published(theirs)
         (registry.location(theirs) as LocationRegistry.Remote).peer shouldBe PeerId("jvm-b")
+
+        // …and the superseded instance is fenced off for good: there is no
+        // `attach`, so a frame it staged before the close can never install a
+        // location behind the fresh instance, however late it decodes
+        val dropped = CellRef(UUID.randomUUID())
+        retired.inlet.call.published(dropped)
+        registry.location(dropped).shouldBeNull()
     }
 
     // ------------------------------------------- the same fence, in-process
@@ -184,5 +196,93 @@ class MirrorCloseFenceTest {
         loopback.heal()
         controller.runToIdle()
         (registryA.location(theirs.ref) as LocationRegistry.Remote).peer shouldBe PeerId("jvm-b")
+    }
+
+    // ------------------------------- a heal is a new connection instance (dqy.20)
+
+    /**
+     * The frame link with a switch: a severed one carries nothing, exactly as a
+     * dead socket does. This is what makes the peer's retraction *lost* rather
+     * than merely late — the case in which a heal's catch-up is the only thing
+     * that can still tell A what B holds.
+     *
+     * [Peering.loopback] wires the two egresses straight to the two hosted
+     * ingresses; this test does the same wiring by hand with the switch spliced
+     * in, and then hands the pair to [Peering.Loopback] — the composition under
+     * test — unchanged.
+     */
+    private class SeverableLink(private val target: Propagate<ByteArray>) : Propagate<ByteArray> {
+        @Volatile
+        var severed = false
+
+        override fun propagate(value: ByteArray) {
+            if (!severed) target.propagate(value)
+        }
+    }
+
+    @Test
+    fun `a heal does not apply the announcement a severed connection instance left queued`() {
+        // One controller per side, because the two sides of a partition do not
+        // stop running in lockstep: A's bridge host is starved across the whole
+        // outage (its queue is the "staged frame"), while B goes on to drop the
+        // ref it had already announced.
+        val controllerA = SimulationController(23)
+        val controllerB = SimulationController(24)
+        val registryA = LocationRegistry()
+        val registryB = LocationRegistry()
+        val bridgeA = ManagedHost(scheduler = controllerA.scheduler(), registry = registryA)
+        val bridgeB = ManagedHost(scheduler = controllerB.scheduler(), registry = registryB)
+        val hostB = ManagedHost(scheduler = controllerB.scheduler(), registry = registryB)
+        val a = Peering.Side(registryA, bridgeA, peer = PeerId("jvm-a"))
+        val b = Peering.Side(registryB, bridgeB, peer = PeerId("jvm-b"))
+
+        val linkAtoB = SeverableLink(Peering.hostIngress(b, fromPeer = a.peer))
+        val linkBtoA = SeverableLink(Peering.hostIngress(a, fromPeer = b.peer))
+        val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(linkAtoB, PortRef.generate())) }
+        val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(linkBtoA, PortRef.generate())) }
+        val loopback = Peering.Loopback(a, b, aToB, bToA)
+        controllerA.runToIdle()
+        controllerB.runToIdle()
+        val severedInstance = loopback.mirrorRefOnA
+
+        // B announces a ref, and the frame is left staged on A's bridge host —
+        // deliberately not drained, so it is decoded no further than the ingress
+        val theirs = SetCell<String>()
+        hostB.managementInlet.call.spawn(theirs)
+        registryB.localRefs() shouldContain theirs.ref
+        registryA.location(theirs.ref).shouldBeNull()
+
+        linkAtoB.severed = true
+        linkBtoA.severed = true
+        loopback.partition()
+
+        // the peer drops that ref while severed, so its retraction is LOST, not
+        // merely late — the only repair left is the heal's own catch-up
+        hostB.managementInlet.call.despawn(theirs.ref)
+        controllerB.runToIdle()
+        registryB.localRefs() shouldNotContain theirs.ref
+
+        linkAtoB.severed = false
+        linkBtoA.severed = false
+        loopback.heal()
+        controllerB.runToIdle()
+        controllerA.runToIdle()
+
+        // the catch-up is authoritative: B no longer holds `theirs`, so nothing
+        // re-announces it, and the superseded instance's queued announcement
+        // must not install it behind the heal
+        registryA.location(theirs.ref).shouldBeNull()
+        registryA.remoteRefs() shouldNotContain theirs.ref
+        // …because the heal addressed the returning peering to a *fresh* mirror,
+        // leaving the one that queued delivery names shut for good
+        loopback.mirrorRefOnA shouldNotBe severedInstance
+
+        // control: the healed peering is live, so the assertion above cannot
+        // pass by the peering having been broken outright
+        val alsoTheirs = SetCell<String>()
+        hostB.managementInlet.call.spawn(alsoTheirs)
+        controllerB.runToIdle()
+        controllerA.runToIdle()
+        (registryA.location(alsoTheirs.ref) as LocationRegistry.Remote).peer shouldBe PeerId("jvm-b")
     }
 }
