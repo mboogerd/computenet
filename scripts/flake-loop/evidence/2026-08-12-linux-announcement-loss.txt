@@ -1,0 +1,22 @@
+linux-b iter=52 tests=14 skipped=1 failures=1 18462ms
+
+TEST: the announcement path completes on every connection()
+ID:   [engine:junit-jupiter]/[class:civictech.wire.WsAnnouncementStressTest]/[method:the announcement path completes on every connection()]
+org.opentest4j.AssertionFailedError: announcement path: 1 failure(s) in 50 awaits over 25 iterations
+arrival latency ms: p50=2 p99=43 max=45
+--- iteration 1 (catch-up): never arrived within 15000ms
+  awaited ref: CellRef(id=2f15a497-6e36-4bcf-a7c7-4b10d4f28028, instanceId=0)
+  client location: null
+  client remoteRefs: [CellRef(id=86affbdd-d252-471d-bb56-d7ef3d6b31d7, instanceId=0)]
+  client localRefs: [CellRef(id=c8ce3596-d03a-4fff-a4d7-af533c873825, instanceId=0), CellRef(id=d8a1fe10-f3be-498c-b673-7d3f64f0b571, instanceId=0)]
+  parked for awaited ref: 0
+  live threads by name: [connectionLostChecker-1=2, WebSocketWorker-271204=1, ForkJoinPool-1-worker-2=1, WebSocketWorker-271200=1, WebSocketWorker-271202=1, WebSocketWorker-271195=1, WebSocketWorker-268089=1, WebSocketWorker-28596=1, WebSocketWorker-242947=1, Reference Handler=1, Signal Dispatcher=1, ForkJoinPool-1-worker-1=1]
+  stderr during this iteration: <silent>
+
+
+	at civictech.wire.WsAnnouncementStressTest.the announcement path completes on every connection(WsAnnouncementStressTest.kt:81)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1596)
+
+----
