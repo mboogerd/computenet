@@ -906,6 +906,14 @@ class InspectorServer(
     /** Has this view adopted [ref] yet? The barrier a peer-announcement test waits on. */
     internal fun knowsNow(ref: CellRef): Boolean = model.knows(ref)
 
+    /**
+     * The lifecycle last announced for [ref] — the barrier a test waits on when
+     * it needs a *previous* transition to be provably already announced before
+     * it attaches an SSE client. See [InspectorModel.announcedLifecycleOf] for
+     * why a kernel state flag will not do.
+     */
+    internal fun announcedLifecycle(ref: CellRef): String? = model.announcedLifecycleOf(ref)
+
     /** The live components, as `GET /graphs` and `GET /search` see them — tests. */
     internal fun componentsNow(): List<Component> = model.components()
 

@@ -32,7 +32,9 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * V2 — the activity feed and the push lifecycle path
@@ -295,6 +297,14 @@ class InspectorActivityTest {
      * republishes every cell it holds (reaching `InspectorModel.published`) and
      * reports `HOST_RESUMED` per cell (reaching `lifecycleChanged`). Exactly
      * one `HOT` must come out.
+     *
+     * The barrier before [listen] is load-bearing, and `host.isDrained` is not
+     * it: `ManagedHost.beginDrain` sets `DRAINED` and only *then* notifies
+     * `DRAINED` per cell, so a client attached between the two is legitimately
+     * told about the drain — which the next case pins deliberately. What *this*
+     * case is about is the resume, so it waits for the drain's own announcement
+     * to be out ([InspectorServer.announcedLifecycle] flips under the same lock
+     * that emits the frame) before it starts listening.
      */
     @Test
     fun `a host resume is announced once, though publish and the listener both see it`() {
@@ -302,6 +312,7 @@ class InspectorActivityTest {
         awaitUntil("in the view") { server.knowsNow(a) }
         host.managementInlet.call.drainHost()
         awaitUntil("drained") { host.isDrained }
+        awaitUntil("the drain is announced") { server.announcedLifecycle(a) == Node.SUSPENDED }
         val events = listen()
 
         host.managementInlet.call.resumeHost()
@@ -310,6 +321,63 @@ class InspectorActivityTest {
         events.awaitKind(Event.LIFECYCLE, 1)
         awaitUntil("the activity entry landed") { mine(a).any { it.kind == ActivityEntry.ACTIVATED } }
         events.lifecyclesOf(encoded(a)) shouldContainExactly listOf(Node.HOT)
+    }
+
+    /**
+     * The other side of that barrier, and the reason the case above needs one:
+     * a client that attaches *inside* the drain's announcement window is told
+     * `SUSPENDED`, because the announcement genuinely had not happened when it
+     * connected. That is not a stray transition — it is the drain, reported
+     * once, to a client that was there to hear it — and it does not cost the
+     * property this pair exists for: the resume that follows is still announced
+     * exactly once, by whichever of the two sources sees it first.
+     *
+     * Forced deterministically rather than waited for: a lifecycle listener
+     * registered *before* the inspector's own (hence this case's private host
+     * and server) holds the host's scheduler thread inside
+     * `ManagedHost.beginDrain`'s window until the SSE client is attached. Left
+     * to chance the window is microseconds wide and only a loaded machine ever
+     * lands in it — which is exactly how it was first seen, as a one-off CI
+     * failure of the case above (computenet-dqy.29).
+     */
+    @Test
+    fun `a client that attaches while a drain is still being announced is told about it`() {
+        val own = ManagedHost(registry = registry)
+        val reachedWindow = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        val gate = own.onLifecycle { _, transition ->
+            if (transition == ManagedHost.LifecycleTransition.DRAINED) {
+                reachedWindow.countDown()
+                released.await(30, TimeUnit.SECONDS)
+            }
+        }
+        val inspector = InspectorServer(registry, mapOf("own" to own), port = 0).start()
+        try {
+            val a = spawn(own, A)
+            awaitUntil("in the view") { inspector.knowsNow(a) }
+            own.managementInlet.call.drainHost()
+            // the host is DRAINED and has not announced it yet: the exact state
+            // `awaitUntil { host.isDrained }` can observe
+            reachedWindow.await(30, TimeUnit.SECONDS) shouldBe true
+            own.isDrained shouldBe true
+            inspector.announcedLifecycle(a) shouldBe Node.HOT
+            val events = listen(inspector)
+            released.countDown()
+
+            awaitUntil("the drain is announced") { inspector.announcedLifecycle(a) == Node.SUSPENDED }
+            own.managementInlet.call.resumeHost()
+            awaitUntil("host resumed") { !own.isDrained }
+
+            events.awaitKind(Event.LIFECYCLE, 2)
+            awaitUntil("the activity entry landed") {
+                inspector.activitySnapshot().entries.any { it.ref == encoded(a) && it.kind == ActivityEntry.ACTIVATED }
+            }
+            events.lifecyclesOf(encoded(a)) shouldContainExactly listOf(Node.SUSPENDED, Node.HOT)
+        } finally {
+            released.countDown()
+            gate.close()
+            inspector.close()
+        }
     }
 
     /**
@@ -460,10 +528,10 @@ class InspectorActivityTest {
 
     private fun encoded(ref: CellRef): String = InspectorServer.encodeRef(ref)
 
-    private fun listen(): SseTap {
-        val opened = SseTap("http://localhost:${server.boundPort}${InspectorServer.EVENTS_PATH}")
+    private fun listen(on: InspectorServer = server): SseTap {
+        val opened = SseTap("http://localhost:${on.boundPort}${InspectorServer.EVENTS_PATH}")
         tap = opened
-        awaitUntil("sse client attached", timeoutMs = 5_000) { server.attachedClients > 0 }
+        awaitUntil("sse client attached", timeoutMs = 5_000) { on.attachedClients > 0 }
         return opened
     }
 
