@@ -324,31 +324,50 @@ class WsConnectRaceTest {
              * How to turn the block above into a mechanism — written down because the
              * evidence is only worth what the next reader can do with it.
              *
-             * The two facts that do the work are the listening channel's state and
-             * whether stderr carries a `[WsConnection] …` line, because java-websocket
-             * 1.6.0's client reaches `onClose` without `onError` through exactly two
-             * paths (read of the shipped bytecode, 2026-08-12): `read() == -1` in
-             * `WebSocketClient.run`, which is `eot()` → close code **-1** for a socket
-             * that never handshook; and `closeConnectionDueToWrongHandshake`, which is
-             * an HTTP answer that is not a WebSocket upgrade → close code **1002**.
-             * Everything else — refusal, reset, timeout — prints.
+             * The fact that does the work is the **listening channel's state**. Stderr
+             * does not: java-websocket 1.6.0's client reaches `onClose` without
+             * `onError` from every non-SSL `IOException` in its read loop as well as
+             * from a clean EOF — `WebSocketClient.handleIOException` calls `onError`
+             * only for an `SSLException` and otherwise goes straight to `eot()` — so a
+             * *reset* is exactly as silent as a graceful close and carries the same
+             * close code, **-1**. The only other silent client code is **1002**, from
+             * `WebSocketImpl.decode`'s client-role handshake rejections.
+             *
+             * Read from the shipped bytecode and measured during this item's review
+             * (2026-08-12). It corrects the claim this block used to carry — that a
+             * reset always prints — which was an inference from an OS-level
+             * measurement and is false through java-websocket.
              */
             const val HOW_TO_READ =
                 "  how to read this:\n" +
-                    "    * listening channel CLOSED is computenet-dqy.34's family: java-websocket's\n" +
-                    "      doAccept prologue (setTcpNoDelay on a reset victim, EINVAL on BSD) cancels the\n" +
-                    "      SERVER key and closes the listening socket. Measured on macOS 26.6, 6/6: a\n" +
-                    "      connection still queued on a listening socket that closes gets an RST, so its\n" +
-                    "      dialer prints '[WsConnection] java.net.SocketException: Connection reset'.\n" +
-                    "      A silent failure with the channel still open is NOT that family.\n" +
-                    "    * a close with no '[WsConnection] …' line on stderr means something completed the\n" +
-                    "      TCP handshake and then went away without an error: close code -1 (EOF before any\n" +
-                    "      handshake reply) or 1002 (an HTTP reply that was not a WebSocket upgrade — i.e.\n" +
-                    "      a stranger answered the port). Those two are the whole silent set.\n" +
+                    "    * the listening channel's state is the one DIRECT discriminator here, so read it\n" +
+                    "      first. CLOSED is computenet-dqy.34's family: java-websocket's doAccept prologue\n" +
+                    "      (setTcpNoDelay on a reset victim, EINVAL on BSD) cancels the SERVER key and\n" +
+                    "      closes the listening socket. Still open means the listening socket survived,\n" +
+                    "      which that family does not.\n" +
+                    "    * stderr does NOT discriminate: an absent '[WsConnection] …' line rules nothing\n" +
+                    "      out. java-websocket 1.6.0's client swallows the reset a dying listening socket\n" +
+                    "      sends — WebSocketClient.handleIOException calls onError only for an SSLException\n" +
+                    "      and otherwise goes straight to eot(). Measured macOS 26.6, 8 trials each: a dial\n" +
+                    "      left queued on a listening socket that then closes IS reset at the OS level (a\n" +
+                    "      raw socket reads 'Connection reset' 8/8) and still reaches WsConnection with NO\n" +
+                    "      onError 8/8, close code -1 — indistinguishable from a graceful EOF. Only a port\n" +
+                    "      already dead before the dial connects prints, and it prints ConnectException:\n" +
+                    "      Connection refused, which is a different failure entirely.\n" +
+                    "    * so close code -1 means 'the socket ended before any handshake reply', NOT 'it\n" +
+                    "      ended gracefully'. The client's whole silent set (read of the shipped 1.6.0\n" +
+                    "      bytecode) is: eot() -> code -1, reached both from read() == -1 and from any\n" +
+                    "      non-SSL IOException in the read loop; and WebSocketImpl.decode's client-role\n" +
+                    "      handshake rejections -> 1002, i.e. an HTTP reply that was not an upgrade, or a\n" +
+                    "      draft that refused one. (closeConnectionDueToWrongHandshake is the SERVER-role\n" +
+                    "      path — it writes a 404 — and a client never reaches it.)\n" +
                     "    * the close CODE itself is not observable from here: WsTransport.connect throws its\n" +
                     "      own IllegalStateException and never lets the WsConnection out, so only connect()\n" +
                     "      can say what connectBlocking saw (computenet-dqy.35 — production change, not made).\n" +
-                    "    * 'NEVER BOUND' or 'NOT started' means the race was lost on the listener's side and\n" +
+                    "      The payoff is smaller than it looks: -1 does not separate an EOF from a reset.\n" +
+                    "    * 'NEVER BOUND' or 'NOT started' is a snapshot taken when this report rendered, not\n" +
+                    "      a verdict: a listener that started microseconds later still reads 'NOT started'\n" +
+                    "      (observed in a forced run, 0.3ms behind). Check the timeline before concluding\n" +
                     "      the dialer is innocent; the cause is then the AssertionError's own cause."
         }
     }
