@@ -61,14 +61,23 @@ gh pr diff --name-only <pr-url>    # or: git diff --name-only origin/main...HEAD
 
 Paste that list into your verdict. It is docs-only only if **every** path is
 prose that nothing consumes at build time — `.claude/skills/**`, `doc/**`
-(except as below), `backlog/**`, `bugs/**`, a top-level `*.md`. Not compiled
-is not the same as not verified, so three things disqualify a diff even
-though they look like docs: `concord/corpus/*.yaml` and the generated
-`doc/spec/CONCORDANCE.md`, both checked by `./gradlew :concord:check` (a
-dangling `covers:` id or an orphan scenario fails it); any `.md` or resource
+*except* `doc/spec/**`, `backlog/**`, `bugs/**`, a top-level `*.md`. That is
+an allowlist: a path it does not name is not docs-only, whatever its
+extension (`.github/**`, `gradle/**`, `concord/schema/*.md`, `demo/*/ui/**`,
+`inspect/ui/**`). Not compiled is not the same as not verified, so three
+things disqualify a diff even though they look like docs:
+**the whole of `doc/spec/**` and `concord/corpus/*.yaml`**, which
+`./gradlew :concord:check` reads as inputs to two fatal gates —
+`concordanceGate` (a dangling `covers:` id or an orphan scenario) and
+`docLints` (an unresolved `cell.<pkg>.<Type>` pointer, a bad Status header),
+plus the generated `doc/spec/CONCORDANCE.md`; any other `.md` or resource
 that is a build input; and any mix of docs with compiled source, even one
-file. In all three the whole diff falls through to the normal §3/§4 route —
-run the suite that covers the changed input and quote its accounting.
+file. Measured 2026-08-12: appending one sentence naming a nonexistent
+package to `doc/spec/00-foundations/03-glossary.md` — no corpus, no
+`CONCORDANCE.md`, no source — failed `:concord:docLints` with
+`[FATAL] Unresolved package pointer`. In all three the whole diff falls
+through to the normal §3/§4 route — run the suite that covers the changed
+input and quote its accounting.
 
 If it *is* docs-only, say so with the file list as the evidence, then state
 the limit instead of skipping the question: **green required checks on such a
