@@ -30,8 +30,47 @@ data class Scenario(
     val checks: List<Check> = emptyList(),
     /** Present only for `kind: generative`. */
     val generator: Generator? = null,
+    /**
+     * Present only for `kind: control` (Concord P7), where it is **required**:
+     * the failure this control exists to provoke. See [ExpectFailure].
+     */
+    @SerialName("expect-failure") val expectFailure: ExpectFailure? = null,
     /** Schedule-sweep run count; defaults to the harness default (20) when null. */
     val runs: Int? = null,
+)
+
+/**
+ * The declared failure of a `kind: control` scenario: which declared check must
+ * fail, and the reason it must fail for.
+ *
+ * A control is a negative scenario — it asserts that the harness *detects* one
+ * specific violation. "At least one check failed" is not proof of that. A
+ * control whose declared check starts failing for an unrelated reason (a vacuity
+ * guard firing on an empty observation log, an evaluator reporting a missing
+ * view, an oracle refusing the graph) keeps failing, keeps satisfying a
+ * `!passed` assertion, and has silently stopped testing what it was written to
+ * catch — from outside indistinguishable from the control still working. That is
+ * how `CTL-GF-01`'s vacuous pass survived (computenet-qaz / computenet-dqy.18).
+ *
+ * So a control names its failure and the runner asserts *that* failure: the
+ * declared check id, plus a substring of the evaluator's message pinning the
+ * reason. Any other failure — a different check, or the same check for a
+ * different reason — makes the suite RED rather than green.
+ */
+@Serializable
+data class ExpectFailure(
+    /**
+     * The `type:` id of the declared check that must fail (e.g. `final-view`).
+     * Must name a check this scenario's `checks:` list actually declares.
+     */
+    val check: String,
+    /**
+     * A substring the failing check's message must contain. It must discriminate
+     * the provoked failure from every *other* way the same check can fail —
+     * `fails the predicate` rather than `observations-all-satisfy`, which that
+     * check's vacuity guard would also match.
+     */
+    @SerialName("message-contains") val messageContains: String,
 )
 
 /** Conformance profile gating optional capability (Concord P9). Claimed wholly or not at all. */

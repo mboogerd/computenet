@@ -70,20 +70,23 @@ class TwoJvmInspectorTest {
 
     @Test
     fun `peer A's inspector places its own cells and B's mirrored cells correctly`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
-        val inspectA = JvmPeer.freePort()
-        val inspectB = JvmPeer.freePort()
-
+        // every port is `0`: each peer binds its own and announces what it got, so
+        // no test-side number is ever handed to a process that has yet to bind it
+        // (computenet-dqy.25). A must announce its listening port before B can be
+        // told to dial it, which is what orders these two launches.
         val peerA = JvmPeer.launch(
-            "civictech.demo.MainKt", "$httpA", "--listen", "$ws",
-            "--inspect-port", "$inspectA", "--net-name", "jvm-a",
+            "civictech.demo.MainKt", "0", "--listen", "0",
+            "--inspect-port", "0", "--net-name", "jvm-a",
         )
+        val inspectA = peerA.port("inspect")
         val peerB = JvmPeer.launch(
-            "civictech.demo.MainKt", "$httpB", "--peer", "ws://localhost:$ws",
-            "--inspect-port", "$inspectB", "--net-name", "jvm-b",
+            "civictech.demo.MainKt", "0", "--peer", "ws://localhost:${peerA.port("ws")}",
+            "--inspect-port", "0", "--net-name", "jvm-b",
         )
+        // not used below, but awaiting it is what makes a B that cannot bind fail
+        // HERE, naming its BindException, instead of as an unexplained
+        // "peer A adopted B's cells" timeout further down
+        peerB.port("inspect")
         try {
             // A has adopted at least one of B's announced cells once a node
             // with no process host shows up in A's topology — there is no
@@ -133,21 +136,21 @@ class TwoJvmInspectorTest {
      */
     @Test
     fun `peer A keeps B's network host across B being killed and relaunched`() {
-        val httpA = JvmPeer.freePort()
-        val httpB = JvmPeer.freePort()
-        val ws = JvmPeer.freePort()
-        val inspectA = JvmPeer.freePort()
-        val inspectB = JvmPeer.freePort()
-
+        // see the sibling test: `0` everywhere, each peer announces what it bound
+        // (computenet-dqy.25). `bArgs` stays reusable across B's relaunch precisely
+        // because it names no port — the returning B binds fresh ones, which is all
+        // this test needs of it (it is only ever observed through A's inspector).
         val peerA = JvmPeer.launch(
-            "civictech.demo.MainKt", "$httpA", "--listen", "$ws",
-            "--inspect-port", "$inspectA", "--net-name", "jvm-a",
+            "civictech.demo.MainKt", "0", "--listen", "0",
+            "--inspect-port", "0", "--net-name", "jvm-a",
         )
+        val inspectA = peerA.port("inspect")
         val bArgs = arrayOf(
-            "$httpB", "--peer", "ws://localhost:$ws",
-            "--inspect-port", "$inspectB", "--net-name", "jvm-b",
+            "0", "--peer", "ws://localhost:${peerA.port("ws")}",
+            "--inspect-port", "0", "--net-name", "jvm-b",
         )
         var peerB = JvmPeer.launch("civictech.demo.MainKt", *bArgs)
+        peerB.port("inspect")
         try {
             fun awaitMirroredOnA(what: String, predicate: (List<Node>) -> Boolean): List<Node> =
                 mirrored(awaitTopology(inspectA, what) { predicate(mirrored(it)) })
@@ -169,6 +172,7 @@ class TwoJvmInspectorTest {
             // B returns, dials the same listener, and re-announces the same
             // refs through a *different* listener-side egress
             peerB = JvmPeer.launch("civictech.demo.MainKt", *bArgs)
+            peerB.port("inspect")
             val afterReconnect = awaitMirroredOnA("peer A re-adopted B's cells") { it.isNotEmpty() }
             afterReconnect.isEmpty() shouldBe false
             afterReconnect.forEach { node: Node ->
