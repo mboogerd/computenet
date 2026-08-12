@@ -21,6 +21,7 @@ import java.net.Socket
 import java.net.URI
 import java.net.UnknownHostException
 import java.nio.ByteBuffer
+import java.nio.channels.SelectionKey
 import java.nio.channels.ServerSocketChannel
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -28,6 +29,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The WebSocket transport driver (spec 41 point 4, M5.5): frames from a
@@ -375,9 +377,68 @@ object WsTransport {
         }
     }
 
+    /**
+     * The listening side of the transport.
+     *
+     * ## The listening socket is watched, because it can die without a word
+     *
+     * A `WebSocketServer` can lose its **listening** channel while the object,
+     * its selector thread and its existing connections all stay perfectly
+     * healthy — and report it nowhere. [listeningSocketLoss] and the watchdog
+     * behind it exist so that event has a voice (computenet-dqy.39).
+     *
+     * The mechanism is java-websocket 1.6.0's, characterized as an executable
+     * fact by `WsListenerAcceptRstTest` (read its KDoc for the bytecode
+     * offsets and the platform measurements): `WebSocketServer.doAccept`
+     * configures a freshly accepted socket — `setTcpNoDelay`, `setKeepAlive` —
+     * before its own `try` block starts, and declares `throws IOException`. On
+     * a BSD/macOS host, `setsockopt` on a socket whose peer has already sent
+     * RST returns `EINVAL`, so a reset that races an accept throws out of that
+     * unguarded prologue and lands in the selector loop's last-resort
+     * `handleIOException(key, null, ex)` — where `key` is the **server's**
+     * acceptable key. The listening channel is deregistered *and* closed. The
+     * library then only `log.trace()`s it, `onError` is never called (that is
+     * `handleFatal`'s path, which this is not), and this repository ships
+     * `slf4j-api` with no provider, so nothing anywhere says a word.
+     *
+     * What that costs an operator is total: the process stays up, the cell
+     * graph stays healthy, and the peer is simply unreachable forever. Dialers
+     * get `ECONNREFUSED` on every retry, so no re-hello runs and
+     * `Peering.announceTo` never re-announces. The only symptom is absence.
+     * That is also a weaker guarantee than the in-process path offers, against
+     * AGENTS.md's "in-process and remote paths should preserve the same
+     * observable semantics".
+     *
+     * ## What the watchdog does, and firmly does not do
+     *
+     * It polls the listening channel's `isOpen` and, on a close nobody asked
+     * for, calls [onError] with a [ListeningSocketLostException] naming the
+     * cause. **That is diagnosability only.** The listener is *not* re-served,
+     * the port is *not* recovered, and the rate at which this happens is
+     * unchanged — the repair (a facade over a replaceable server, a vendored
+     * selector loop, or an upstream fix) is computenet-dqy.37, parked on a
+     * design decision. A 30s "timed out awaiting: collector announced"
+     * somewhere else becomes an immediate, named diagnosis here; nothing more.
+     *
+     * The channel comes from public API, not reflection: [onConnect] is called
+     * by `doAccept` with the server's own acceptable key before it accepts, so
+     * the first connection attempt hands over the [ServerSocketChannel] to
+     * watch (a listener that has never been connected to cannot yet have hit a
+     * mechanism that fires *during* an accept). A listener served on a
+     * caller-bound channel knows it from construction.
+     */
     class WsListener : WebSocketServer {
 
         private val side: Peering.Side
+
+        /**
+         * The listening channel, once known: handed over by the caller-bound
+         * constructor below, otherwise captured from the server's own key on
+         * the first accept ([onConnect]). `@Volatile` because the selector
+         * thread writes it and the watchdog thread reads it.
+         */
+        @Volatile
+        private var listeningChannel: ServerSocketChannel? = null
 
         internal constructor(endpoint: InetSocketAddress, side: Peering.Side) : super(endpoint) {
             this.side = side
@@ -391,14 +452,101 @@ object WsTransport {
          */
         internal constructor(channel: ServerSocketChannel, side: Peering.Side) : super(channel) {
             this.side = side
+            this.listeningChannel = channel
         }
 
         private val sessions = ConcurrentHashMap<WebSocket, Session>()
         private val started = CountDownLatch(1)
 
+        /**
+         * Set before any deliberate shutdown reaches the library, so the
+         * watchdog never mistakes a close we asked for for a loss.
+         *
+         * [stop] with a timeout and a message is the single funnel: 1.6.0's
+         * `stop()` and `stop(int)` both reach it through `invokevirtual`, so
+         * overriding it covers every deliberate stop, including
+         * `HeldPort.release`'s and the demos'.
+         */
+        @Volatile
+        private var stopRequested = false
+
+        /**
+         * The loss, once reported — one-shot, so a lost listener says it once
+         * rather than every poll.
+         *
+         * Non-null exactly when this listener's listening socket closed while
+         * nobody had asked it to stop; the same object that was handed to
+         * [onError]. A test or an operator-facing probe can read this instead
+         * of scraping stderr.
+         */
+        val listeningSocketLoss: ListeningSocketLostException? get() = loss.get()
+
+        private val loss = AtomicReference<ListeningSocketLostException?>(null)
+
         internal fun awaitStart(timeout: Long, unit: TimeUnit): Boolean = started.await(timeout, unit)
 
-        override fun onStart() = started.countDown()
+        override fun onStart() {
+            started.countDown()
+            watchListeningSocket(port)
+        }
+
+        /**
+         * `doAccept`'s first statement, called with the **server's** acceptable
+         * key — the one public seam that hands over the listening channel
+         * without reflecting on `WebSocketServer.server` (which is private).
+         * Always admits the connection: returning false would cancel that very
+         * key, which is the defect this class is trying to observe.
+         */
+        override fun onConnect(key: SelectionKey): Boolean {
+            if (listeningChannel == null) listeningChannel = key.channel() as? ServerSocketChannel
+            return super.onConnect(key)
+        }
+
+        /**
+         * Poll [listeningChannel] until it closes or [stop] is called. A daemon
+         * thread rather than a shared scheduler: it is one boolean read every
+         * [WATCHDOG_POLL_MS], it must outlive nothing, and a listener that has
+         * already reported its loss stops polling for good.
+         */
+        private fun watchListeningSocket(boundPort: Int) {
+            Thread {
+                while (!stopRequested) {
+                    val channel = listeningChannel
+                    if (channel != null && !channel.isOpen) {
+                        reportListeningSocketLost(boundPort)
+                        return@Thread
+                    }
+                    try {
+                        Thread.sleep(WATCHDOG_POLL_MS)
+                    } catch (_: InterruptedException) {
+                        return@Thread
+                    }
+                }
+            }.apply { isDaemon = true; name = "ws-listener-watchdog-$boundPort" }.start()
+        }
+
+        private fun reportListeningSocketLost(boundPort: Int) {
+            if (stopRequested) return // a stop that landed while this poll was in flight
+            val lost = ListeningSocketLostException(
+                "listening socket lost: the listener on port $boundPort stopped accepting because its " +
+                    "listening channel was closed without stop() being called. This peer is now UNREACHABLE " +
+                    "and will not recover on its own — dialers get ECONNREFUSED forever, so no re-hello runs " +
+                    "and Peering.announceTo never re-announces; a remote await for one of this peer's refs " +
+                    "will simply expire. Known cause (computenet-dqy.37): java-websocket 1.6.0's " +
+                    "WebSocketServer.doAccept configures a freshly accepted socket (setTcpNoDelay/setKeepAlive) " +
+                    "outside any try/catch of its own, so on a BSD/macOS host a TCP reset that races the accept " +
+                    "throws SocketException there, and the selector loop's last-resort handler attributes it to " +
+                    "the SERVER's acceptable key and closes the listening channel. THIS IS A DIAGNOSIS, NOT A " +
+                    "RECOVERY: nothing has been re-served and the port is gone.",
+            )
+            if (!loss.compareAndSet(null, lost)) return
+            onError(null, lost)
+        }
+
+        override fun stop(timeout: Int, closeMessage: String?) {
+            stopRequested = true
+            super.stop(timeout, closeMessage)
+        }
 
         override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
             val session = Session(side, { conn.send(it) }, { conn.close() })
@@ -421,6 +569,23 @@ object WsTransport {
         override fun onError(conn: WebSocket?, ex: Exception) {
             System.err.println("[WsListener] $ex")
             ex.printStackTrace()
+        }
+
+        /**
+         * This listener's listening socket closed while nobody had asked it to
+         * stop — see [WsListener]'s KDoc. Reported through [onError]; never
+         * thrown at a caller, because there is no caller on that path.
+         */
+        class ListeningSocketLostException internal constructor(message: String) : IOException(message)
+
+        internal companion object {
+            /**
+             * How often the watchdog looks. Small enough that the diagnosis is
+             * effectively immediate next to the 10-30s awaits that this failure
+             * otherwise expires, and cheap enough to ignore: one volatile read
+             * and one `isOpen` per listener per tick.
+             */
+            const val WATCHDOG_POLL_MS = 200L
         }
     }
 
