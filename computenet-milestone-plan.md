@@ -67,9 +67,12 @@ single kernel SCC (G-63). Spec references (G-x, E-x, C-x, R-x, PN-x, M-x) point 
 
 | ID | Chunk | Depends on | Unblocks / feeds |
 |---|---|---|---|
-| DSC1 | Cryptographic peer identity + signed announcements (G-29 crypto half; ingress-side) | — | SOC2, AGO2, ECO1 |
-| DSC2 | Peer discovery (mDNS / rendezvous) | DSC1 | SOC3 |
-| DSC3 | NAT traversal / relay | DSC2 | open-internet deployment |
+| DSC0 | **Adopt iroh as ComputeNet's peer transport** (was a spike; promoted 2026-08-12 when Headscale was dropped). Control is the EXISTING `demo:shopping` / `OrMapConvergenceTest` suites, which already pass — no tailnet needed for attribution. Cargo gated so default CI stays pure-JVM | — | BDS5; delivers DSC1 + DSC3, narrows DSC2 |
+| DSC1 | Cryptographic peer identity + signed announcements (G-29 crypto half; ingress-side) — **delivered by DSC0** (ed25519 `NodeId`) | DSC0 | SOC2, AGO2, ECO1 |
+| DSC2 | Peer discovery — narrowed to *which* iroh discovery mechanism, and whether a self-hosted rendezvous is needed | DSC0 | SOC3 |
+| DSC3 | NAT traversal / relay — **delivered by DSC0** (hole-punch + relay); residual is relay hosting policy | DSC0 | open-internet deployment |
+| GOS1 | HyParView partial-view membership as cells: active/passive views, shuffle, churn — replaces `Replication`'s "link every replica I learn about" full mesh | KX, KE3 (kernel SCC); CHA3 harness | GOS2, SOC3 open mesh, MEM2 churn argument |
+| GOS2 | PlumTree-shaped eager/lazy dissemination over delta-CRDT frontiers: edge classification, PRUNE on duplicate, promote on gap; lazy half rides the existing `TagFrontier`/`pullServe` catch-up rather than a message cache | GOS1 | bandwidth bound for every replicated demo; interest-scoped topology mixing |
 | SEC1 | `BoundaryPolicy` three seams (93 I-28) | — (small kernel-lane slot) | SOC2 moderation |
 | PLC1 | Mesh simulator + cost model | BEN1/BEN2 cost inputs | PLC2 |
 | PLC2 | Offline placement/economics policy engine (G-61/G-62) | PLC1 | PLC3, ECO1 |
@@ -80,6 +83,12 @@ single kernel SCC (G-63). Spec references (G-x, E-x, C-x, R-x, PN-x, M-x) point 
 
 | ID | Chunk | Depends on | Unblocks / feeds |
 |---|---|---|---|
+| BDS0 | *(spike)* Is `bd import` a sound replication write-seam? Echo suppression via `metadata.cn_dot`, `--allow-stale` as ordering authority, close-replicates/delete-doesn't, round-trip fidelity. No ComputeNet code; synthetic workspaces | — | de-risks BDS1, BDS4 |
+| BDS1 | Beads mirror: `bd` events-journal (`/v0/beads/events:watch`) → composite-key `OrMapCell` projector in `:demo:beadsmirror`; per-replica checkpoint, re-baseline on truncation, **echo suppression via `cn_dot` provenance** | BDS0 | BDS2, BDS3 |
+| BDS2 | Two-node replicated mirror, **transport-agnostic** — two JVMs + two workspaces on localhost over `:wire`; node B sees node A's mutations before the next `bd sync` would have. Becomes the convergence suite every transport must pass | BDS1 | BDS3, BDS4, BDS5 |
+| BDS5 | Cross-machine beads replication over iroh: two real machines, no overlay, no `bd dolt` between them; BDS2's assertions pass unmodified across the boundary; public-key admission | BDS2, DSC0 | the architecture, proven |
+| BDS3 | Readiness as an incremental derived cell over the dependency OR-set, differentially tested against `bd ready --json` | BDS2 | evidence for incremental dataflow on a live workload |
+| BDS4 | Write-back through `bd import` (content: labels/comments/notes/priority) **plus the gossiped lease plane** — `holder`/`expiry`/`heartbeat` as an ephemeral OR-map plane, the one beads made `dolt_ignore`d in migration 0055 to stop heartbeat commits starving sync. Advisory lease, compare-and-abort; `close` and dep-edits stay excluded | BDS2, KFX (idempotency seam shared with CON1), TRK1 (may moot the lease plane) | connector-lane pattern for effectful external sinks; cross-machine claim visibility beads cannot provide at any sync interval |
 | AGO1 | Dialogue → argumentation extraction pipeline from recorded transcripts | — | AGO2, AGO3 |
 | AGO2 | Live multi-speaker: per-speaker channels, per-Principal stance attribution | AGO1; DSC1 optional | flagship demo |
 | AGO3 | Revision/retraction: stable claim identity across re-extraction | AGO1, KE1 | live-map correctness |
