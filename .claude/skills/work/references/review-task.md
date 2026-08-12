@@ -11,9 +11,31 @@ them here, and don't expand the task's scope to close them.
 ## 1. The standard, then the diff
 
 ```bash
-bd show <task-id> --json                          # criteria, files claim
-git -C <task-worktree> diff <feature-branch>...HEAD
+bd show <task-id> --json                          # criteria, files claim (a LIST — unwrap .[0])
+bd comments <task-id> --json                      # the implementer's landing notes
+git -C <task-worktree> fetch origin <feature-branch> main
+git -C <task-worktree> diff origin/<feature-branch>...HEAD
 ```
+
+`bd show` never returns comment bodies, and the implementer's reasoning —
+what it decided, what it deliberately left — usually lives only there. Read
+both before the diff.
+
+**Diff against the fetched remote base, never a local ref.** A task worktree's
+`main` is whatever the machine last fetched, and its copy of the feature
+branch can be behind the merges the orchestrator has already made. Both
+produce a diff that looks plausible and is wrong: the obvious
+`git diff main...HEAD` once returned 21 files of unrelated repository history
+in place of a 4-file task change, and on 2026-08-12 a branch forked before
+`origin/main`'s last 20 commits produced a 24-file, 1,862-deletion diff that
+reverted merged wire and demo-shell tests — one `gh pr ready` from landing
+under auto-merge. If the diff's size or contents surprise you, the base is
+the first thing to suspect: re-fetch and diff again before reviewing a line
+of it. Fetch `main` in the same command so
+`git log --oneline origin/main..origin/<feature-branch>` is available — if the
+feature branch itself forked long before current `origin/main`, say so in your
+report: that is a merge hazard the feature review has to resolve, not
+something to fix on a task branch.
 
 Check:
 
@@ -21,8 +43,9 @@ Check:
 - **The file claim.** Files touched outside `metadata.files` are a real
   problem: sibling tasks were scheduled in parallel on the assumption that
   claim was accurate. Report every one, even if the change itself is fine.
-- **Tests.** Run the narrowest relevant suite per AGENTS.md. A task that
-  changed behavior without a test asserting it hasn't finished.
+- **Tests.** Run the narrowest relevant suite per AGENTS.md, and verify it
+  actually ran (§2). A task that changed behavior without a test asserting it
+  hasn't finished.
 - **Scope.** Changes nothing asked for, debug leftovers, unrelated
   reformatting.
 - **The criteria themselves.** If they don't meet
@@ -32,7 +55,98 @@ Check:
   against the tightened version, saying so. Where it doesn't, you can't judge
   this task: say that rather than passing it on vibes.
 
-## 2. Repair, don't bounce
+## 2. Prove the tests ran
+
+`BUILD SUCCESSFUL` is not evidence that a test executed. Gradle replays cached
+results for unchanged inputs, and a cached green build is indistinguishable
+from a real one in the output you normally read. Measured 2026-08-12: a green
+`build-test-fast` finished in 21s with `:demo:tiering:test FROM-CACHE` and
+`48 executed, 53 from cache`; the same sha re-dispatched went from
+`76 executed` to `48 executed`. So "I ran it and it was green" and "I ran it
+and nothing happened" are the same sentence unless you read further.
+
+What to consume, per test run:
+
+- **The task-count line.** Gradle prints
+  `N actionable tasks: X executed, Y from cache` (or `up-to-date`). Read it,
+  and confirm the *specific* test task you care about is not marked
+  `FROM-CACHE` or `UP-TO-DATE` in the run's task output. `gh pr checks`
+  reports a conclusion and a duration with no cache information at all, so a
+  green required check on a diff that touches no compiled input is evidence of
+  nothing.
+- **The JUnit XML**, which carries the counts and a timestamp proving the
+  results are from *this* run:
+
+  ```bash
+  python3 -c '
+  import glob, sys
+  from xml.etree import ElementTree as ET
+  t = f = e = 0; newest = ""
+  for p in glob.glob(sys.argv[1]):
+      r = ET.parse(p).getroot()
+      t += int(r.get("tests", 0)); f += int(r.get("failures", 0)); e += int(r.get("errors", 0))
+      newest = max(newest, r.get("timestamp", ""))
+  print(f"{t} tests, {f} failures, {e} errors, newest {newest}")' \
+    'wire/build/test-results/test/TEST-*.xml'
+  ```
+
+  Quote the numbers in your report. An unquantified "suite green" — yours or
+  the implementer's — is not a verification record, and the orchestrator never
+  re-runs it: your report *is* the evidence the next session trusts.
+
+- **`--rerun` binds to the task it follows, not to the command line.**
+  `./gradlew :kernel:test :wire:test --rerun` re-ran only `:wire:test` while
+  `:kernel:test` came back `UP-TO-DATE`, with both task names on screen and
+  `BUILD SUCCESSFUL` at the end. It also does not force the *upstream* tasks
+  the named task depends on. Put one `--rerun` per test task, or run one task
+  per invocation; use `--rerun-tasks` for a repo-wide run.
+- **The strongest signal is cache-proof: break it and watch it fail.** For a
+  test-bearing task, mutate the production code the test is supposed to
+  constrain, re-run, see the *named* test fail, revert. A test that passes
+  both ways proves nothing, and no cache can fake a red run.
+
+**Don't destroy a rare failure's evidence.** If a run's *failure* is what
+matters — a flake hunt, a repetition loop — do not pass `-q`: it keeps the
+detail off the console and it does not reach the Gradle daemon log either, and
+the JUnit XML is the only place the suppressed exception and pre-interrupt
+thread dump live. The next iteration overwrites `<module>/build/test-results`,
+so the one occurrence you waited for is the one you lose. Archive before
+re-running:
+
+```bash
+archive=$(mktemp -d)
+for i in $(seq 1 100); do
+  ./gradlew :wire:test --rerun || {
+    cp -R wire/build/test-results "$archive/fail-$i"; echo "kept $archive/fail-$i"; break; }
+done
+```
+
+## 3. Your run is on macOS; the required checks are not
+
+You are on darwin. Every required check (`build-test-fast`,
+`build-test-serial`, `concord-full`, `ui-test`, `agora-ui-test`) runs on
+`ubuntu-latest`. For most diffs
+that gap is invisible; for anything touching sockets, ports, filesystem
+semantics, path handling, or process spawning it is exactly where the defect
+hides — a `:wire:test` that passed 15/15 locally failed `build-test-fast`
+deterministically on ubuntu because the new test encoded BSD/macOS TCP
+behaviour, and nothing runnable locally could have shown that.
+
+So:
+
+- Report what you actually observed: "green on macOS", never "green" or
+  "the required checks pass". You have not run them and must not claim to
+  have.
+- Defer the platform verdict to CI. The branch's own CI run is the only Linux
+  evidence that exists; it belongs to the feature reviewer and the ready call,
+  which is not yours. Say plainly in your report that Linux is unverified so
+  that gate is not skipped on your say-so.
+- For a port/socket/filesystem/process item, turn the inference into a
+  measurement: run the suite in a JDK-21 Linux container (`groovy:4.0-jdk21`
+  is present locally; `eclipse-temurin:21` costs a ~10-minute pull) and quote
+  that result too.
+
+## 4. Repair, don't bounce
 
 Rejecting forfeits everything already spent on the task, so fix what you can
 within its stated scope: a missed criterion, a thin test, a small wrong
@@ -48,9 +162,10 @@ rewrite most of the diff. If the task turns out to be underspecified or the
 right call is genuinely ambiguous, apply the
 [ask-human.md](ask-human.md) bar rather than inventing an answer.
 
-## 3. Report
+## 5. Report
 
-**Pass** — say what you verified and what you repaired. The orchestrator
+**Pass** — say what you verified, with the test counts and the executed/from-cache
+accounting behind it, and what you repaired. The orchestrator
 merges the branch; do **not** merge it yourself, and do not touch the
 feature branch or its PR. Concurrent merges into one feature branch race
 each other, so merging is serialized by the orchestrator alone.
