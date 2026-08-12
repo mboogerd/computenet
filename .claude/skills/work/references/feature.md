@@ -48,6 +48,13 @@ Note the flag: `bd create` takes **`--metadata`** with a JSON object.
 Both metadata fields are load-bearing — a task missing either can't be
 scheduled and gets sent back.
 
+If the task is a bug fix and you write a reproduction into its description,
+label it `verified-failing:` (with the output you watched it fail with) or
+`untested-hypothesis:` — see [issue-quality.md](issue-quality.md). An
+unlabelled sequence is read as verified, and one that in fact passes against
+the unfixed code hands the implementer a test that goes green while proving
+nothing.
+
 **`model`** — route by how much is already decided, not by importance:
 
 | Task shape | model |

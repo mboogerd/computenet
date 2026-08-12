@@ -152,6 +152,11 @@ against the review base you recorded in §2 — **your own commits only** — an
 **paste the output into your report**:
 
 ```bash
+# refresh the exclusion base FIRST: --not origin/main is only as good as this
+# worktree's last fetch, and §6's fetch happens after this measurement
+git -C <feature-worktree> fetch origin main
+git -C <feature-worktree> rev-parse origin/main    # quote this next to the list below
+
 # your own commits: after the review base, and not already on main
 git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD --not origin/main
 for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD --not origin/main); do
@@ -174,6 +179,17 @@ mid-review:
 - `--no-merges` alone does not fix it. It drops the merge commit, not the
   commits the merge brought in — the same run still listed `0440342`. The
   `--not origin/main` is what excludes them.
+- **`--not origin/main` against a stale `origin/main` does not fix it either**,
+  which is why the fetch sits above the snippet rather than in §6. Measured
+  2026-08-12 on a synthetic branch built to this exact shape (base commit,
+  a commit landing on `main` mid-review, one merge of `origin/main`, one
+  `review:` repair): with `origin/main` left where the worktree happened to
+  have it, the command listed two commits — `review: my one repair` **and**
+  `main commit A`, which the reviewer never touched; after
+  `git fetch origin main`, the same command listed only `review: my one
+  repair`. It fails in the safe direction — it over-counts, and can never hide
+  your own work — but a single extra file is enough to cross the bounds below
+  and force a draft on an untouched branch.
 
 Your repairs are **substantive**, and disqualify you from certifying, if any
 of these is true:
@@ -294,7 +310,12 @@ bd comment <feature-id> "Review: staying in draft. <what's missing and why repai
 Create beads tasks for the remaining work (`bd create --parent=<feature-id>`
 with `model` and `files` metadata, per [feature.md](feature.md)) so the next
 batch picks them up — a feature left in draft with no tasks describing what's
-missing is a dead end. Do not set `review=passed`.
+missing is a dead end. Two drafts legitimately have no tasks, and each is
+routed by what the comment names rather than by a task id (SKILL.md 5e):
+the **substantive-repair** case, where nothing is missing except a reader for
+your own commits — name the commit shas and their `--stat`, or it is the same
+dead end; and a **red required check** (§4), which is not the feature's work
+to task — name the check and its conclusion. Do not set `review=passed`.
 
 Draft is a legitimate outcome, not a failure. Half a feature merged is worse
 than half a feature parked on a branch.

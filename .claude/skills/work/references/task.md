@@ -29,16 +29,47 @@ than restarting. That's the whole reason the worktree is preserved.
    depends on isn't actually done, that's a data problem in beads, not
    something to route around — park it ([ask-human.md](ask-human.md))
    rather than implementing against an assumption.
-3. Implement the smallest coherent change that satisfies the task.
+3. **If this is a bug fix, make its reproduction fail before you fix
+   anything.** A bead that prescribes the sequence to reproduce a bug carries
+   the authority of whoever filed it, and can still be a false lead:
+   computenet-dqy.20 prescribed "announce, do NOT runToIdle, partition, heal,
+   runToIdle", and that exact sequence **passes** against the unfixed code,
+   because `partition()` left the link carrying frames and the peer's
+   retraction silently repaired the very state the test was meant to catch. An
+   implementer who trusted it would have written a test, watched it pass,
+   closed the item having verified nothing, and left permanent false assurance
+   in the suite.
+
+   So write the reproduction, run it against the **unfixed** code, and read the
+   failure:
+
+   ```bash
+   ./gradlew :<module>:test --tests '<your new test>' --rerun    # expect FAILED
+   ```
+
+   Quote the failing test name and its assertion message in your report. That
+   output — not the fact that the test passes afterwards — is the evidence your
+   fix is a fix and not a no-op.
+
+   **If it passes unfixed, the prescribed reproduction is wrong.** Correct it
+   at the source rather than quietly substituting your own, so the next reader
+   does not pay for it again:
+
+   ```bash
+   bd comment <id> "Prescribed reproduction does not fail against unfixed code: <the sequence, verbatim> passes. Why it cannot reach the defect: <mechanism>. Real reproduction: <sequence>, which fails with <test name + assertion message>."
+   ```
+
+   Then derive the real one and report both.
+4. Implement the smallest coherent change that satisfies the task.
    - Hit a fork that clears the [ask-human.md](ask-human.md) bar (ambiguous,
      expensive, risky, hard to revert)? Park it instead of guessing, then
      report and finish.
    - Need a file outside your claim? **Stop and report it** rather than
      expanding silently.
-4. Verify per AGENTS.md's "Verification" section — narrowest relevant test
+5. Verify per AGENTS.md's "Verification" section — narrowest relevant test
    first, then the affected module's suite. Don't report success on an
    untested claim.
-5. Commit on your branch, then push it. Your worktree has its own index, so
+6. Commit on your branch, then push it. Your worktree has its own index, so
    ordinary staging is safe here:
    ```bash
    git -C <your-worktree> add <your paths>
@@ -52,10 +83,10 @@ than restarting. That's the whole reason the worktree is preserved.
    Push **your own branch only**. Never merge into the feature branch, push
    it, or touch its PR: the orchestrator merges after review and serializes
    it so concurrent merges don't race.
-6. If implementation reveals genuine new follow-up work, create it as a
+7. If implementation reveals genuine new follow-up work, create it as a
    beads item (`bd create --parent=<feature-id>`) with its own `model` and
    `files` metadata — don't fold unrelated scope into this task.
-7. Finish:
+8. Finish:
    ```bash
    bd comment <id> "<what landed, and if unfinished, exactly what's left>"
    ```
@@ -66,7 +97,7 @@ than restarting. That's the whole reason the worktree is preserved.
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
-8. Report: the task id, the outcome, and the files you **actually** touched,
+9. Report: the task id, the outcome, and the files you **actually** touched,
    not just the ones you claimed. Drift is how the orchestrator fixes
    scheduling for later batches.
 
