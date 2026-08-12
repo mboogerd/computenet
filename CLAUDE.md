@@ -5,6 +5,47 @@
 Architecture reference: `doc/ARCHITECTURE.md`. User-facing intro: `README.md`.
 
 
+## Choosing work: bv (beads_viewer)
+
+Work **selection and prioritization** starts with `bv`
+(https://github.com/Dicklesworthstone/beads_viewer), a graph-aware triage
+engine over the beads workspace. `bd` remains the single blessed CLI for
+mutations — create, update, claim, close, dep. Where the managed Beads blocks
+below say `bd ready` finds available work, read that as the *listing* command;
+the *decision* of what to pick up comes from `bv`. Do not use `br`
+(beads_rust); it is not installed here — `bd` is the mutation tool.
+
+Rules:
+
+- Use **only `--robot-*` flags**. Bare `bv` opens an interactive TUI that
+  blocks an agent session.
+- Run `bv` from the main repository checkout. It reads the passive export
+  `.beads/issues.jsonl`, which `bd` keeps fresh on every mutation; worktrees
+  have no export, so `bv` fails there by design.
+- `bv` output embeds `br ...` claim/show commands. Translate them to `bd`
+  (`bd update <id> --claim`, `bd show <id>`).
+- Recommendations can include blocked or already-claimed work ranked by graph
+  importance. Only `quick_ref.top_picks` and entries marked actionable are
+  claimable; verify with `bd show <id>` before claiming.
+
+Commands (verified in this workspace 2026-08-12, bv v0.18.0):
+
+```bash
+bv --robot-triage     # THE entry point: ranked picks, quick wins, blockers, health
+bv --robot-next       # single top pick only
+bv --robot-plan       # parallel execution tracks (multi-agent scheduling)
+bv --robot-alerts     # stale issues, blocking cascades
+bv --robot-suggest    # hygiene: duplicates, missing deps
+bv --robot-insights   # full graph metrics (PageRank, betweenness, cycles)
+bv --robot-triage --graph-root <epic-id>   # scope triage to one epic's subgraph
+```
+
+(`--format toon` is documented upstream but unavailable here — it needs the
+`tru` binary, which is not installed; bv falls back to JSON.)
+
+Workflow: `bv --robot-triage` → verify with `bd show <id>` → `bd update <id>
+--claim` → work → `bd close <id>`.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
