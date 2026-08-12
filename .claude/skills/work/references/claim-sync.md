@@ -37,16 +37,17 @@ to work. Select with `bd ready ... --json`, then claim that specific id with
 
 - **This machine's own work.** `bd list --status=in_progress
   --assignee="$BEADS_ACTOR"` reads the local DB, which is authoritative about
-  what this machine did. Resuming your own epic, finding your own in-progress
-  feature, and the stale-claim sweep all work exactly as before — none of them
-  ever needed the network.
+  what this machine did. Releasing your own crash-leftover epics at startup,
+  finding an in-progress feature, and the stale-claim sweep all work without
+  the network.
 - **Anything the other machine pushed at its last Finalize.** The step-3 pull
   brings those claims in. If machine B claimed an epic and finished a session
   since your last start, you see that claim and skip the epic.
 - **Two overlapping runs on the *same* machine** are handled without sync at
-  all, by the two guards in SKILL.md: a run refuses to resume an epic touched
-  in the last 15 minutes, and the sweep only releases claims older than 6h, so
-  a live run's items are never taken from under it. (They share a
+  all, by the two guards in SKILL.md: a run stops at startup if this machine
+  holds an epic claim touched in the last 15 minutes (a live run's mark), and
+  the sweep only releases claims older than 6h, so a live run's items are
+  never taken from under it. (They share a
   `BEADS_ACTOR` and cannot tell each other apart — `CLAUDE_SESSION_ID` is not
   in the shell environment, so anything built on it would be silently empty.)
 
