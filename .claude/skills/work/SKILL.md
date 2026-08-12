@@ -158,9 +158,11 @@ whatever is first *at claim time*, which may not be what you just read, and
 you would then work an item you don't own.
 
 The claim is local until Finalize pushes it, so there is no confirm step to
-run and no race to resolve here — the step-3 pull above is the whole of your
-cross-machine claim safety. [references/claim-sync.md](references/claim-sync.md)
-describes exactly what that does and does not protect.
+run and no race you can resolve here — the step-3 pull above is the whole of
+your cross-machine claim safety.
+[references/claim-sync.md](references/claim-sync.md) describes exactly what
+that does and does not protect, including what a crash before Finalize leaves
+behind.
 
 Nothing claimable → report and stop.
 

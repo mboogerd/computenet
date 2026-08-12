@@ -61,6 +61,25 @@ during the window; it is a record that becomes visible later.
 seconds. It is widest for a fresh epic taken from `bd ready` at step 3, since
 that is the only decision made purely from just-pulled shared state.
 
+**A session that dies before Finalize never closes the window at all.** There
+is no partial state on the other machine — a crash mid-slot means *none* of
+this session's claims, closes, parked questions or created features and tasks
+were ever pushed, and the window stays open until this machine's next Finalize
+or the nightly job pushes them. Two consequences worth naming:
+
+- **Merged work the tracker doesn't know about.** 5c merges a task branch and
+  pushes it to GitHub, then `bd close`s the task locally. Crash after that and
+  the commit is on `feature/<id>` for everyone while the other machine still
+  reads that task as open — and, if it also claimed the epic, will hand it to
+  an agent to implement again. The git side is durable; the tracker side is
+  not, and they diverge in that direction only.
+- **The startup sweep is unaffected, because it is local.**
+  `sweep-stale-claims.sh` reads and writes this machine's DB, so the crashed
+  session's `in_progress` tasks are still there to be released at the next
+  start, exactly as before — its releases just aren't visible to the other
+  machine until the same Finalize push. Recovery on the machine that crashed
+  needs no sync; only cross-machine visibility waits.
+
 ## What the collision looks like when it surfaces
 
 You will not see an error. You see, at the next pull or after the nightly job:
