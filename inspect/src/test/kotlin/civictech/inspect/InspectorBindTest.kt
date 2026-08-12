@@ -2,6 +2,7 @@ package civictech.inspect
 
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import com.sun.net.httpserver.HttpServer
 import io.kotest.assertions.throwables.shouldThrow
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
@@ -19,13 +20,28 @@ import java.net.Socket
  * `boundPort`), so this asserts the property the bind actually buys instead of
  * the field: a connect to *this machine's own non-loopback address* on the
  * inspector's port is refused, while the same port answers on loopback. That
- * is the same probe an operator would run by hand, and it fails if the
- * `InetAddress.getLoopbackAddress()` argument at `InspectorServer.kt`'s
- * `DemoShell(...)` construction is ever dropped.
+ * is the same probe an operator would run by hand, and it fails if
+ * `InspectorServer.kt`'s `DemoShell(...)` construction ever binds an address
+ * the network can reach.
  *
- * The non-loopback half is skipped, not failed, on a machine with no
- * non-loopback IPv4 interface (an offline container); the loopback half still
- * pins that the server is reachable at all.
+ * **What it does and does not pin, measured under computenet-dqy.36.** With
+ * `InetAddress.getByName("0.0.0.0")` substituted for `getLoopbackAddress()`
+ * there, this file fails. *Deleting* the argument outright does not fail it,
+ * and that is not a hole in the probe: since computenet-dqy.33
+ * `DemoShell.endpoint` binds loopback for an **ephemeral** port on its own, so
+ * `DemoShell(0)` is loopback-bound too and there is no observable difference
+ * left to catch. What the argument still buys by itself is the **named** port
+ * an operator passes as `--inspect-port`, which keeps the wildcard without it —
+ * and a test cannot bind a named port without choosing a number now and binding
+ * it later, which is computenet-dqy.25's race. So the named-port half stays
+ * pinned by `DemoShell.endpoint`'s structural assertions in
+ * `DemoShellBindTest`, and this file pins the property over a real socket for
+ * the port it can safely bind.
+ *
+ * The two halves are separate tests deliberately: the external half can be
+ * skipped on a host where it proves nothing (see below), and the loopback half
+ * has to keep pinning that the server is reachable at all when it is — which a
+ * mid-method `assumeTrue` would abort along with it.
  */
 class InspectorBindTest {
 
@@ -33,25 +49,88 @@ class InspectorBindTest {
     private val host = ManagedHost(registry = registry)
 
     @Test
-    fun `the inspector is reachable on loopback and refuses this machine's own network address`() {
+    fun `the inspector is reachable on loopback`() {
         InspectorServer(registry, setOf(host), port = 0).start().use { server ->
             Socket().use { it.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), server.boundPort), TIMEOUT_MS) }
+        }
+    }
 
-            val external = firstNonLoopbackIpv4()
-            assumeTrue(external != null, "no non-loopback IPv4 interface to probe from")
+    @Test
+    fun `the inspector refuses this machine's own network address`() {
+        // The address is chosen by what the probe can *prove* here, not by
+        // interface order: a wildcard-bound control server must actually answer
+        // at it, or the refusal below would hold whatever `InspectorServer`
+        // bound and the green tick would mean nothing.
+        //
+        // Interface order alone is not enough, measured on this dev macOS box
+        // (computenet-dqy.36): the first non-loopback IPv4 is a VPN tunnel's
+        // `utun40` 198.19.254.2, where an inbound connect to a deliberately
+        // WILDCARD-bound server times out 0/20 — while `en0`'s 192.168.2.12,
+        // the next candidate, answers 20/20. Taking the first address
+        // unconditionally therefore passed vacuously here: the
+        // `shouldThrow<IOException>` was satisfied by the tunnel's
+        // `SocketTimeoutException`, and the pre-fix probe was measured green
+        // against an inspector deliberately bound to `0.0.0.0` — the exact
+        // regression this file claims to catch, sailing straight through.
+        //
+        // Only a host where *no* address answers — an offline or
+        // network-isolated container — skips, and it says so. Same selection as
+        // `DemoShellBindTest`'s probe (computenet-dqy.33), where it was first
+        // proven, and while reviewing which this defect was found.
+        val external = firstExternallyReachableIpv4()
+        assumeTrue(
+            external != null,
+            "no interface on this host answers an inbound connect to its own address even for a " +
+                "wildcard-bound server, so this probe cannot distinguish a wildcard bind from a loopback one",
+        )
+        InspectorServer(registry, setOf(host), port = 0).start().use { server ->
             shouldThrow<IOException> {
                 Socket().use { it.connect(InetSocketAddress(external, server.boundPort), TIMEOUT_MS) }
             }
         }
     }
 
-    private fun firstNonLoopbackIpv4(): InetAddress? =
+    /**
+     * Whether a deliberately **wildcard**-bound server — the inspector's
+     * pre-T19 shape, and what its shell must no longer be — can actually be
+     * reached at [external] on this host. This is the control that decides
+     * whether the external-address probe means anything here.
+     */
+    private fun wildcardIsReachableAt(external: InetAddress): Boolean {
+        val control = HttpServer.create(InetSocketAddress(0), 0)
+        control.executor = null
+        control.start()
+        return try {
+            runCatching {
+                Socket().use { it.connect(InetSocketAddress(external, control.address.port), TIMEOUT_MS) }
+            }.isSuccess
+        } finally {
+            control.stop(0)
+        }
+    }
+
+    /**
+     * The first of this machine's own non-loopback IPv4 addresses at which a
+     * wildcard-bound server can actually be reached from here — i.e. the first
+     * address at which the external-address probe discriminates. `null` when no
+     * address does, which is the only honest skip.
+     *
+     * Bounded at [MAX_CANDIDATES] so a host full of filtered tunnel interfaces
+     * costs a bounded number of [TIMEOUT_MS] waits rather than one per interface.
+     */
+    private fun firstExternallyReachableIpv4(): InetAddress? =
+        nonLoopbackIpv4().take(MAX_CANDIDATES).firstOrNull { wildcardIsReachableAt(it) }
+
+    private fun nonLoopbackIpv4(): List<InetAddress> =
         NetworkInterface.getNetworkInterfaces().toList()
             .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
             .flatMap { it.inetAddresses.toList() }
-            .firstOrNull { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress }
+            .filter { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress }
 
     private companion object {
         const val TIMEOUT_MS = 2_000
+
+        /** How many of this host's addresses the control probe is willing to try. */
+        const val MAX_CANDIDATES = 4
     }
 }
