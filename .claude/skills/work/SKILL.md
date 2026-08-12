@@ -39,6 +39,21 @@ like giving up.
 ones unless you pass `--all`. Every check below uses the one it means. Don't
 "simplify" them into each other.
 
+**Two `bd` JSON traps that lie silently.** `bd show <id> --json` returns a
+**list** — unwrap `.[0]` before accessing fields, or `.status`/`.metadata`
+yield `null` and read as a legitimate answer. And it never includes comment
+bodies, only `comment_count`; piping it through `.comments[]?` yields empty
+for *every* issue. The only correct way to read comments — e.g. "has a human
+answered this parked question?" — is:
+
+```bash
+bd comments <id> --json
+```
+
+An empty result from the wrong query is indistinguishable from "no answer",
+and has already caused an epic to be wrongly deferred over gates that were
+cleared.
+
 **Bundled scripts do the fiddly parts** — the ones where a wrong flag or a
 missed filter silently loses work. Prefer them to hand-rolling the
 equivalent:
@@ -102,6 +117,22 @@ git fetch origin main
 bd dolt pull
 ```
 
+**This pull is one of exactly two Dolt sync points in the whole session** —
+this one, and the `bd dolt push` at Finalize (step 6). Nothing in between
+syncs, so every claim, close, and metadata write you make below stays local
+until Finalize pushes it. Read
+[references/claim-sync.md](references/claim-sync.md) for what that costs: the
+window it opens is real and you need to recognize its collision. (There is
+also a catch-up job, `scripts/beads-nightly-sync.sh`, but **no scheduler runs
+it** — a human invokes it. Never treat it as a push that will happen on its
+own; see `doc/ops/beads-sync-runbook.md` §5.)
+
+**If this pull fails, stop the session and report it.** It is the only look
+you get at the other machine's state, so proceeding without it means claiming
+against state that may be hours or days stale — the computenet-kg7 /
+computenet-3v8 failure, where a whole slot ran against a local-only DB with
+claim safety silently gone.
+
 **Release stale claims first.** A run that crashed left items `in_progress`,
 and `bd ready` hides those — they are invisible to every later session until
 something reopens them, and nothing else does:
@@ -111,9 +142,15 @@ something reopens them, and nothing else does:
 ```
 
 Report what it released. The same item released repeatedly across sessions
-means work is failing, not merely crashing.
+means work is failing, not merely crashing. The releases are local writes like
+everything else here; they reach the other machine at Finalize's push, not
+immediately. Items it reports as **"complete, awaiting decision"** are
+reviewed work waiting on a ship or human call — it deliberately does *not*
+release those, so don't treat them as fresh work; check their PR state
+instead (a `MERGED` one just needs `bd close`).
 
-Then take the epic. Resume this machine's own before starting anything new:
+Then take the epic — but first check nothing live is holding one, and free
+whatever a dead run left claimed:
 
 ```bash
 bd list --type=epic --status=in_progress --assignee="$BEADS_ACTOR" --json
@@ -122,35 +159,70 @@ bd list --type=epic --status=in_progress --assignee="$BEADS_ACTOR" --json
 **If *any* result has an `updated_at` within the last 15 minutes, another run
 on this machine is probably live** — overlapping runs share `$BEADS_ACTOR`
 and cannot tell each other apart. Stop and report rather than driving one
-epic twice. Check every row, not just the first: the recent one is the live
-run's, and it need not be the one you'd have picked.
+epic twice. Check every row, not just the first.
 
-Otherwise, if it returns exactly one, resume it. If it returns **more than
-one**, previous sessions left epics claimed without finishing them. Resume
-the one with the oldest `updated_at` (the most neglected) and report the
-others by id — don't release them, and don't work them.
+Anything else this query returns is a crash leftover — a clean session
+releases its epic at Finalize. **Release each one** (`bd update <id>
+--status=open`, a local write like everything else here) so it competes on
+priority again instead of sticking to this machine.
 
-Nothing to resume → take the highest-priority unclaimed epic:
+There is deliberately **no resume preference**: an epic is bound to a session
+while the session runs, and to nothing afterwards. If a released epic is
+still the most important thing, the selection below picks it straight back
+up; if priorities moved since last session, the new top epic wins.
+
+Take the highest-priority unclaimed epic:
 
 ```bash
 bd ready --type=epic --limit 1 --json     # read the id
 bd update <id> --claim                    # claim that id specifically
 bd update <id> --add-label=owner:$BEADS_ACTOR
-bd dolt push
 ```
+
+**Before committing to an epic that was already broken down, check it has
+workable surface.** An epic whose remaining ready items all carry the
+`human` label, or are blocked solely on items in *other* epics, has zero
+autonomously workable work, and every session would keep re-selecting it:
+
+```bash
+bd ready --parent=<epic> --json   # workable = items NOT labeled 'human'
+bd list --parent=<epic> --type=feature --status=in_progress --json  # resumable
+```
+
+Zero workable ready items *and* nothing resumable (for an epic that *has*
+children — one with none just needs breakdown, step 4) → **park it and
+select the next**:
+
+```bash
+bd comment <epic> "Parking: no workable surface. <each remaining id: human-gated / blocked on <other-epic-id>>"
+bd defer <epic>
+```
+
+`defer` is the right verb: it hides the epic from `bd ready` on both
+machines while preserving the assignee and owner label, so the provenance
+survives and no session keeps re-selecting a dead queue. A human reopens it
+once the gates clear. Then re-run the selection above for the next epic.
 
 Always claim **the id you selected**. Never `bd ready --claim`: it claims
 whatever is first *at claim time*, which may not be what you just read, and
-you would then work an item you don't own. Confirm the claim per
-[references/claim-sync.md](references/claim-sync.md).
+you would then work an item you don't own.
+
+The claim is local until Finalize pushes it, so there is no confirm step to
+run and no race you can resolve here — the step-3 pull above is the whole of
+your cross-machine claim safety.
+[references/claim-sync.md](references/claim-sync.md) describes exactly what
+that does and does not protect, including what a crash before Finalize leaves
+behind.
 
 Nothing claimable → report and stop.
 
-That epic id is `<epic>` below. **One epic per session.** When its queue goes
-dry the session ends; it does not go looking for another. Epics are
-independent, so nothing is gained by chaining two in one slot — and a session
-holding two claims is exactly what a concurrent run on this machine cannot
-tell apart from a crash.
+That epic id is `<epic>` below. **One epic *claim* per session.** The claim
+is what a concurrent run on this machine uses to tell a live session from a
+crash, so never hold two epic claims. But the rule limits *claims*, not
+work: when the epic's queue goes dry with budget left, 5f says exactly what
+you may still pick up (a cross-epic blocker, unparented ready work) — going
+idle for hours because the epic dried up early is a failure mode, not
+compliance.
 
 ## 4. Ensure the epic has features
 
@@ -220,7 +292,10 @@ Otherwise take the first unblocked one:
 bd ready --parent=<epic> --type=feature --limit 1 --json
 ```
 
-Take the first result **not recently parked** (`metadata.parked_at` within 6h). Nothing left after that filter →
+Take the first result **not recently parked** (`metadata.parked_at` within
+6h) **and not carrying the `human` label** — `bd ready` returns human-gated
+decision beads as if they were workable, and dispatching one hands an agent a
+decision a human explicitly reserved. Nothing left after both filters →
 **5f**.
 
 **A feature is the unit of integration**: its own worktree, branch, and
@@ -238,6 +313,14 @@ bd update <feature-id> --claim          # idempotent if already yours
 bd show <feature-id> --json             # .metadata.branch / .worktree / .pr
 ```
 
+A resumed feature may still be assigned to the **other** machine — epics move
+freely between machines across sessions, and feature claims outlive them.
+Holding the epic claim makes it yours to take: claim it, and expect only what
+that machine pushed (`origin/feature/<feature-id>`), never its local
+worktree. Ignore a foreign `metadata.worktree` path; the commands below
+recompute a local one, and `ensure-worktree.sh` rebuilds from the remote
+branch.
+
 **`metadata.branch` exists** → reuse it; that branch and draft PR hold real
 work, so never start over. **Otherwise** record the metadata *first* — a
 crash between recording and creating leaves an unrecorded branch, and the
@@ -247,8 +330,11 @@ retry then builds a second branch and a second PR for the same feature:
 bd update <feature-id> \
   --set-metadata branch=feature/<feature-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<feature-id>
-bd dolt push
 ```
+
+Recording it locally is enough for that ordering to do its job: a retry on
+this machine reads the local DB and finds the branch. It reaches the other
+machine at Finalize's push.
 
 Either way, attach the worktree the same way, then bring it up to date:
 
@@ -329,12 +415,10 @@ the last gate before `main`, so this distinction is not a formality.
 Claim each id in the batch, record its metadata, then attach its worktree:
 
 ```bash
-bd dolt pull                              # state may be hours old by now
 bd update <task-id> --claim
 bd update <task-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<task-id> \
   --set-metadata branch=task/<task-id>
-bd dolt push
 .claude/skills/work/scripts/ensure-worktree.sh \
   "$PWD/../computenet-worktrees/<task-id>" task/<task-id> feature/<feature-id>
 ```
@@ -344,6 +428,11 @@ exists but detached (a task resumed from an earlier session), or brand new —
 and fails loudly if it can't put the worktree on the requested branch. That
 matters: an agent handed a path that isn't there works somewhere
 unintended, and nothing would notice until the merge.
+
+These claims are not re-synced first, and don't need to be: the tasks are
+children of an epic this machine claimed at step 3, so the other machine has
+no reason to be in here. What the local state *can* be stale about is the
+epic's own ownership, and that was settled by the step-3 pull.
 
 Then dispatch the batch in one message:
 
@@ -416,10 +505,13 @@ looking unclaimed and get it re-implemented:
 git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
 git -C <feature-worktree> push
 bd close <task-id>
-bd dolt push
 git -C <task-worktree> status --short          # expect empty
 git worktree remove "$PWD/../computenet-worktrees/<task-id>"
 ```
+
+The close is local; it propagates at Finalize's push. That still protects the
+ordering above, because the machine that resumes after a crash is this one,
+reading this DB — and the merge commit is on the pushed branch either way.
 
 If that `status` isn't empty, the agent died mid-edit — report it and leave
 the worktree. Don't `--force` away work nobody has looked at.
@@ -460,12 +552,15 @@ gh pr create --draft --base main --head feature/<feature-id> \
   --title "<feature title>" \
   --body "Delivers <feature-id>. Tasks land as reviewed commits."
 bd update <feature-id> --set-metadata pr=<url>
-bd dolt push
 ```
 
 Early so CI gives feedback while the feature is still being built; recorded
-so a later session finds it instead of starting over. It stays **draft**
-until the feature review passes — never mark it ready yourself.
+so a later session finds it instead of starting over. Recorded locally, that
+is — it reaches the other machine at Finalize's push, which is soon enough,
+since only this machine works this epic.
+
+It stays **draft** until the feature review passes — you mark it ready only
+in 5e, on a reviewer's passing verdict, never before.
 
 ### 5e. Feature review
 
@@ -481,17 +576,32 @@ Agent({
   prompt: `Read .claude/skills/work/references/review-feature.md and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
-Repair what you can within the feature's scope. You decide the outcome: mark
-the PR ready if it's good enough, or leave it draft and file beads tasks for
-what's missing. Report which you chose and why.`
+Repair what you can within the feature's scope. You decide the verdict —
+ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
+draft verdict, file beads tasks for what's missing. Report your verdict, why,
+what you repaired, and any tasks you created.`
 })
 ```
 
-The reviewer owns the ready/draft call and runs `gh pr ready` itself. It
-does **not** close the feature — ready is not merged, and a red required
+**The reviewer certifies; you ship.** The reviewer reports a verdict and sets
+`metadata.review=passed`, but never runs `gh pr ready` — on this repo a
+ready PR merges itself, so a reviewer marking its own certification ready is
+self-approval, worse when it also committed repairs. You are the second
+party: read the verdict, spot-check it (`gh pr checks <pr-url>` green,
+verdict reasoning coherent), then ship it yourself:
+
+```bash
+gh pr ready <pr-url>
+```
+
+`review=passed` and the verdict comment reach the shared tracker at
+Finalize's push, like every other bead write.
+
+Neither party closes the feature — ready is not merged, and a red required
 check can leave the PR open indefinitely.
 
-- **Ready** → check whether it landed, and close the feature only then:
+- **Ready (and you marked it so)** → check whether it landed, and close the
+  feature only then:
   ```bash
   gh pr view <pr-url> --json state,mergeStateStatus,statusCheckRollup
   ```
@@ -557,9 +667,25 @@ and would burn the rest of the slot in silence. Each poll, if
 conflict that only you can clear is a deadlock. `MERGED` →
 `git fetch origin main` and start. `CLOSED`, or the cap is reached → park a
 question ([references/ask-human.md](references/ask-human.md)) rather than
-building on it, and fall through to 3.
+building on it, and continue down this list.
 
-**3. Nothing can progress → Finalize**, closing the epic only when it
+**3. The epic's remaining work is blocked solely by an item in a *different*
+epic** → claim and work **that specific blocking item** (task or feature, via
+5a/5b as appropriate), not the other epic itself. Without this route a
+cross-epic dependency is a permanent stall: no session on this epic can ever
+unblock it, and the one-claim rule is about *epic* claims, which this does
+not add.
+
+**4. The epic is dry but real budget remains (before T-90m)** → you may take
+**unparented ready work**: bugs and chores with no epic parent
+(`bd ready --json`, filter out anything with a parent or the `human` label,
+claim the specific id). Each is its own worktree/branch/PR like a feature.
+Never claim a second *epic* — that is the line the concurrent-run check
+depends on. If the epic went dry because everything left is human-gated or
+cross-epic blocked, also park the epic per step 3's `bd defer` route so the
+next session doesn't resume a dead queue.
+
+**5. Nothing can progress → Finalize**, closing the epic only when it
 actually has children and every one is closed:
 
 ```bash
@@ -585,18 +711,36 @@ gh pr view <pr-url> --json state,mergeStateStatus     # per review=passed featur
 → resolve it per 5e if the budget allows; it merges on its own afterwards.
 Then close any epic whose features are now all closed (5f's check).
 
+**Release the epic claim.** If the epic didn't close above, set it back to
+open (`bd update <epic> --status=open`) — the claim binds it to *this
+session*, not to this machine, and the next session on either machine must
+select by priority, not by leftover assignee. The owner label stays as
+provenance.
+
+Do the friction log (step 7) **before** the push below, so its beads items go
+out with everything else.
+
 ```bash
 git -C <worktree> status --short   # per worktree touched this session
 git -C <worktree> push
 bd dolt push
 ```
 
+**That `bd dolt push` is the session's only write to the shared tracker** —
+every claim, close, park and metadata write since step 3 rides on it. If it
+fails, say so at the top of your summary in plain words, and ask for a human
+to run `scripts/beads-nightly-sync.sh` — **nothing is scheduled to do it for
+you** (`doc/ops/beads-sync-runbook.md` §5). Until someone does, this session's
+tracker state is local-only, the other machine still sees this epic's items as
+they were at step 3, and losing this machine loses the lot. Never swallow the
+error and never report the session as clean without it.
+
 Uncommitted leftovers mean an agent died mid-edit — report rather than
 committing work you didn't verify. Leave unfinished features' worktrees in
 place; the next session reuses them via `metadata.worktree`. Remove the
 worktree and local branch of any feature that closed.
 
-Then **log the friction (step 7)** and `TaskStop` the budget monitor.
+Then `TaskStop` the budget monitor.
 
 Summarize: the epic worked, tasks completed, features left in draft (with PR
 urls), items blocked on parked questions (and what they ask), stale claims
@@ -606,12 +750,16 @@ Unfinished **tasks** left `in_progress` are released by the next session's
 startup sweep (step 3) once they age past 6h. That sweep — not a hook — is
 what stops a crashed run from locking work forever.
 
-It deliberately does **not** release epics or features: their claim is what
-keeps the other machine out, and it has to outlive the session. The cost is
-that an epic abandoned by a crash is only recoverable by the machine that
-claimed it (step 3 resumes it by `assignee`) — if that machine is gone for
-good, a human has to reassign it. Name any epic or feature you leave
-`in_progress` in the summary so that's visible rather than silent.
+The sweep deliberately does **not** touch epics or features. An **epic**
+claim is released explicitly: here at a clean Finalize, or at the next
+startup on this machine for a crashed run (step 3) — either way it re-enters
+`bd ready` and the next session selects purely by priority. A **feature**
+claim outlives the session on purpose: it is the resume marker, and
+whichever machine holds the epic claim takes it over in 5a. A crashed
+session's epic claim was never pushed and keeps nobody out anyway
+([references/claim-sync.md](references/claim-sync.md)); its release
+propagates with this machine's next Finalize push. Name any feature you
+leave `in_progress` in the summary so that's visible rather than silent.
 
 ## 7. Log the friction
 
@@ -647,8 +795,11 @@ bd create --type=chore --priority=3 --label=skill-friction \
   --title="work skill: <the friction in one line>" \
   --description="<what the skill says, what actually happened, what you did instead, what it cost>" \
   --acceptance="<what would have to change in the skill for this not to recur>"
-bd dolt push
 ```
+
+Do this *before* Finalize's `bd dolt push` (step 6), which is what carries the
+new item off this machine — a friction issue that never syncs is exactly the
+lost-transcript problem this step exists to solve.
 
 Write it for someone editing `SKILL.md` next week with none of your context:
 name the step, quote the instruction, say what actually happened.

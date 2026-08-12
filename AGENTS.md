@@ -212,6 +212,23 @@ is unsettled. Asking in your output instead is a dropped question. Draft stays
 the default until all three hold; a green, finished PR left in draft for
 someone to click is equally a dropped task.
 
+Within the /work skill's orchestrated flow, the two roles split: the feature
+reviewer certifies (verdict + `metadata.review=passed`) and the orchestrator
+runs `gh pr ready`, so the agent that certified a change is never also the
+one that ships it.
+
+### Dolt sync of issue state is not "remote sync"
+
+`bd` writes — status, metadata, comments — land in the local Dolt database
+and are ordinary task-tracking bookkeeping. The conservative profile's "no
+Dolt remote sync unless asked" governs dispatched workers, not the /work
+orchestrator: an unattended orchestrator runs `bd dolt pull`/`bd dolt push`
+routinely as part of the session flow (without it, review/PR state never
+reaches the next session and finished work gets redone). Dispatched
+implementers and reviewers write bead state locally and never push — both by
+the conservative profile and because concurrent pushes from parallel agents
+contend.
+
 ## Multi-agent run discipline
 
 When running as a plan worker, the host orchestrator owns Git lifecycle. Do not
@@ -250,7 +267,7 @@ bd close <id>         # Complete work
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+**Architecture in one line:** issues live in a local Dolt DB; sync uses a native Dolt remote on DoltHub (`sync.remote` in .beads/config.yaml); `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
 ## Agent Context Profiles
 
@@ -274,10 +291,19 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
    # Team-maintainer opt-in only, unless current instructions forbid it:
    git pull --rebase
-   bd dolt push
+   bd dolt push          # once, at end of session — the only Dolt sync you run
    git push
    git status
    ```
+   That end-of-session `bd dolt push` is the only Dolt sync in this block, and
+   a full `/work` session performs exactly two: one `bd dolt pull` at session
+   start (`.claude/skills/work/SKILL.md` step 3) and this push at Finalize.
+   Do not sync per claim, per close, or per commit. Any other round-trip —
+   catch-up after a failed push, refreshing a machine that has been idle — is
+   `scripts/beads-nightly-sync.sh`, which **no scheduler currently runs**: a
+   human invokes it or installs a schedule. See
+   `doc/ops/beads-sync-runbook.md` (§0 for why two calls survive, §5 for the
+   caller inventory, §8 for installing a schedule).
 5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
 
 **Critical rules:**
@@ -307,5 +333,5 @@ bd prime                # Refresh Beads context
 - Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
 - Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+**Architecture in one line:** issues live in a local Dolt DB; sync uses a native Dolt remote on DoltHub (`sync.remote` in .beads/config.yaml); `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->

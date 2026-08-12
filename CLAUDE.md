@@ -25,7 +25,7 @@ bd close <id>         # Complete work
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+**Architecture in one line:** issues live in a local Dolt DB; sync uses a native Dolt remote on DoltHub (`sync.remote` in .beads/config.yaml); `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
 ## Agent Context Profiles
 
@@ -49,9 +49,19 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
    # Team-maintainer opt-in only, unless current instructions forbid it:
    git pull --rebase
+   bd dolt push          # once, at end of session — the only Dolt sync you run
    git push
    git status
    ```
+   That end-of-session `bd dolt push` is the only Dolt sync in this block, and
+   a full `/work` session performs exactly two: one `bd dolt pull` at session
+   start (`.claude/skills/work/SKILL.md` step 3) and this push at Finalize.
+   Do not sync per claim, per close, or per commit. Any other round-trip —
+   catch-up after a failed push, refreshing a machine that has been idle — is
+   `scripts/beads-nightly-sync.sh`, which **no scheduler currently runs**: a
+   human invokes it or installs a schedule. See
+   `doc/ops/beads-sync-runbook.md` (§0 for why two calls survive, §5 for the
+   caller inventory, §8 for installing a schedule).
 5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
 
 **Critical rules:**

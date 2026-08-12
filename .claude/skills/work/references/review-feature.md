@@ -61,20 +61,28 @@ rewrite you do unilaterally.
 
 ## 4. Decide
 
-**Good enough → ready.** Every feature criterion met, checks green, no
-unowned seams — i.e. the three criteria in AGENTS.md § "Marking a PR ready is
-the agent's call" hold. The call is yours; nobody confirms it:
+**Good enough → verdict: ready.** Every feature criterion met, checks green,
+no unowned seams — i.e. the three criteria in AGENTS.md § "Marking a PR ready
+is the agent's call" hold. Record the verdict, but **do not run
+`gh pr ready`** — on this repo a ready PR merges itself, and you are the
+party that just certified (and possibly repaired) this code, so shipping it
+too would be self-approval. The orchestrator reads your verdict and ships:
 
 ```bash
 git -C <worktree> push
-gh pr ready <pr-url>
-bd comment <feature-id> "Review passed: <what you verified, what you repaired>. PR marked ready."
+bd comment <feature-id> "Review passed: <what you verified, what you repaired>. Verdict: ready."
 bd update <feature-id> --set-metadata review=passed
-bd dolt push
 ```
 
-Auto-merge and the required status checks take it from here. Don't wait for
-the merge.
+Don't run `bd dolt push` either — issue-state sync to the remote is the
+orchestrator's job (it serializes pushes across concurrent agents); your
+local `bd` writes are enough.
+
+That comment and metadata stay in the local beads DB; the orchestrator's
+Finalize push (SKILL.md step 6) sends them to the shared tracker. Don't sync
+yourself — the session pulls once at start and pushes once at the end. The
+`review=passed` marker is read by this machine, which is the one that resumes
+the feature, so local is where it needs to be.
 
 **Do not `bd close` the feature.** Ready is not merged: a required check can
 still fail and leave the PR open forever. Closing here would let the epic

@@ -32,8 +32,12 @@ Hand the item to a human — reassign it, don't just tag it:
 ```bash
 bd update <id> --status=blocked --add-label=human --assignee=human
 bd comment <id> "QUESTION: <the actual question, with enough context that someone cold can answer it — what you were doing, the options you're choosing between, what you'd do by default, and why it's not a call you should make unilaterally>"
-bd dolt push
 ```
+
+The parked question lives in the local beads DB until the session's Finalize
+push (SKILL.md step 6) — that push is what puts it in front of a human via
+`bd human list` on another machine. Don't sync it yourself, and do name the
+parked item in your report: the report is what reaches a human first.
 
 All three flags do work. `assignee=human` + `blocked` takes the item out of
 the startup stale-claim sweep (which reopens `assignee=<machine>` items left

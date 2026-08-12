@@ -65,22 +65,27 @@
 # - linear.api_key  → use LINEAR_API_KEY env var instead
 # - github.token    → use GITHUB_TOKEN env var instead
 
-# Cross-machine sync remote for the Dolt database (refs/dolt/data on the git
-# remote). Use SSH, not HTTPS: Dolt shells out to git and cannot prompt for
-# credentials, so an HTTPS remote fails outright on a machine without a stored
-# credential helper -- and it fails in exactly the place that hurts, an
-# unattended scheduled run, where every `bd dolt push` errors and the local
-# database silently stops being shared.
+# Cross-machine sync remote for the Dolt database. This is a native Dolt
+# remote on DoltHub (2026-08-12): the database outgrew the refs/dolt/data
+# sync on the GitHub remote, whose pushes started failing outright.
 #
-# SSH reuses the key `git fetch`/`git push` already use for `origin`, so there
-# is no second credential to provision or rotate.
+# Per-machine, one-time setup -- an unauthorized machine fails every
+# `bd dolt push`, exactly where it hurts (unattended scheduled runs):
+#   dolt creds new              # prints a public key
+#   then add that key at https://www.dolthub.com/settings/credentials
 #
-# If you must use HTTPS on some machine, do not edit this shared file -- add a
-# machine-local rewrite instead:
-#   git config --global url."git@github.com:".insteadOf "https://github.com/"
-#
-# sync.remote: "git+https://github.com/mboogerd/computenet.git"
+# Sync frequency (both per-session minimal and the nightly/manual round-trip)
+# is documented in doc/ops/beads-sync-runbook.md, not here. That doc also
+# records the per-session cost recomputed from doc/ops/beads-sync-cost.md and
+# the residual-loss window if a sync is missed.
 export:
     auto: true
 sync:
-    remote: "git+ssh://git@github.com/mboogerd/computenet.git"
+    # Sync frequency: per-session cost is minimal (one pull at session start,
+    # one push at Finalize -- see .claude/skills/work/SKILL.md). Anything
+    # beyond that is scripts/beads-nightly-sync.sh, which NO scheduler runs
+    # today -- a human invokes it, or installs a schedule per
+    # doc/ops/beads-sync-runbook.md section 8. That runbook also holds the
+    # reason two per-session calls survive (section 0), the recomputed
+    # per-session cost, the residual-loss window, and the proven recovery path.
+    remote: "https://doltremoteapi.dolthub.com/mrboo/computenet"
