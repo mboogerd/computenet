@@ -19,6 +19,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URI
 import java.nio.ByteBuffer
+import java.nio.channels.ServerSocketChannel
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -46,6 +47,33 @@ object WsTransport {
     val DEFAULT_RECONNECT_BACKOFF: (attempt: Int) -> Long = { attempt ->
         // guard overflow on a long-lived failing connection: cap the shift itself
         (1_000L shl attempt.coerceAtMost(20)).coerceAtMost(30_000L)
+    }
+
+    /**
+     * Serve peer connections on a socket the caller has **already bound**.
+     *
+     * The port therefore never passes back through the OS between one listener
+     * and the next: a caller that must keep an endpoint reachable across a
+     * listener's death binds the socket itself and hands it over, instead of
+     * closing a port and asking for that exact number again (computenet-dqy.22
+     * — a bind of a specific port loses to whoever holds it, and inside the OS
+     * ephemeral range that is a live race no retry can win; `HeldPort` in
+     * `:wire`'s tests is the shape this exists for).
+     *
+     * [channel] must be bound; whatever socket options it carries are the ones
+     * the listener serves with — this path does not set [WsListener.isReuseAddr]
+     * (java-websocket calls `setReuseAddress` on the already-bound socket, where
+     * it has no effect on the existing binding). Ownership transfers with the
+     * call: `listener.stop()` closes the channel.
+     */
+    fun listen(channel: ServerSocketChannel, side: Peering.Side): WsListener {
+        require(channel.localAddress != null) { "listen(channel) needs an already-bound channel" }
+        val listener = WsListener(channel, side)
+        listener.start()
+        check(listener.awaitStart(10, TimeUnit.SECONDS)) {
+            "WebSocket listener failed to start on ${channel.localAddress}"
+        }
+        return listener
     }
 
     /** Serve peer connections on [port] (0 = ephemeral). Returns once accepting; `listener.port` is the bound port. */
@@ -281,8 +309,23 @@ object WsTransport {
         }
     }
 
-    class WsListener internal constructor(port: Int, private val side: Peering.Side) :
-        WebSocketServer(InetSocketAddress(port)) {
+    class WsListener : WebSocketServer {
+
+        private val side: Peering.Side
+
+        internal constructor(port: Int, side: Peering.Side) : super(InetSocketAddress(port)) {
+            this.side = side
+        }
+
+        /**
+         * Serve on an already-bound channel — see [listen]. java-websocket 1.6.0
+         * keeps a channel handed to this constructor (`doSetupSelectorAndServerThread`
+         * opens one only `if (server == null)` and binds only `if (!socket.isBound())`),
+         * so the caller's binding, and its socket options, survive.
+         */
+        internal constructor(channel: ServerSocketChannel, side: Peering.Side) : super(channel) {
+            this.side = side
+        }
 
         private val sessions = ConcurrentHashMap<WebSocket, Session>()
         private val started = CountDownLatch(1)
