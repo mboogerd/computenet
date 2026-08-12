@@ -148,12 +148,27 @@ worktree is yours alone — no other agent is committing here.
 **But you cannot certify code you wrote.** SKILL.md 5c insists a task
 reviewer is never the agent that wrote the code; the same rule has to hold
 for you, who also holds the certification. Measure your own authorship
-against the review base you recorded in §2, and **paste the output into your
-report**:
+against the review base you recorded in §2 — **your own commits only** — and
+**paste the output into your report**:
 
 ```bash
-git -C <feature-worktree> diff --stat <review-base-sha>...HEAD
+git -C <feature-worktree> log --oneline --no-merges <review-base-sha>..HEAD
+for c in $(git -C <feature-worktree> log --format=%H --no-merges <review-base-sha>..HEAD); do
+  git -C <feature-worktree> show --stat --format='%h %s' "$c"
+done
 ```
+
+Do **not** measure it with `git diff --stat <review-base-sha>...HEAD`. Once
+you merge `origin/main` at §6 — which this file tells you to do — that diff
+credits you with everything that landed on `main` in the meantime. Measured
+during this file's own review, 2026-08-12: after merging `origin/main` and
+authoring nothing, `git diff --stat 5db1419...HEAD` reported
+`2 files changed, 131 insertions(+), 2 deletions(-)` including a whole new
+test file (`InspectorBindTest.kt`), all of it commit 0440342 from `main`.
+That is over the line on two of the bounds below, so the wrong command turns
+an untouched branch into a forced draft. The `--no-merges` list is the check:
+if it prints commits you did not write, your base is wrong, not your
+authorship.
 
 Your repairs are **substantive**, and disqualify you from certifying, if any
 of these is true:
@@ -248,17 +263,19 @@ Merge it, and keep the residual alive:
 bd create --parent=<epic-id> -t "<the unmet criterion, verbatim>" \
   -d "Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
   --acceptance="<the original criterion, unchanged>"
-bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as <new-id> under <epic-id>. Do not close <feature-id> as fully done: the residual is <new-id>."
+bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as <new-id> under <epic-id>, which is what carries the unmet criterion forward."
 bd update <feature-id> --set-metadata review=passed
 bd update <feature-id> --set-metadata residual=<new-id>
 ```
 
 `review=passed` is deliberate: an unmet criterion is not a reason to withhold
-a merge of code that is otherwise correct. The residual bead is what carries
-the criterion forward — it survives whether or not the orchestrator closes
-the feature on merge, and it is the epic's owner who schedules it, not you.
-Name the unmet criterion verbatim in the comment; a residual glossed as
-"minor follow-up" is how it stops existing.
+a merge of code that is otherwise correct. The orchestrator still closes
+`<feature-id>` when the PR merges (SKILL.md 5e) and that is correct — the
+residual bead, not the feature, is what carries the criterion forward. That
+is why it is filed under the **epic**: the epic cannot close while it is
+open, and it is the epic's owner who schedules it, not you. Name the unmet
+criterion verbatim in the comment; a residual glossed as "minor follow-up" is
+how it stops existing.
 
 ### Draft
 
