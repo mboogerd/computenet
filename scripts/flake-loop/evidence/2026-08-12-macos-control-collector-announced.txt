@@ -1,0 +1,13 @@
+macos-control iter=216 tests=15 skipped=0 failures=1 33823ms
+
+TEST: an unnamed side still peers anonymously over a socket()
+ID:   [engine:junit-jupiter]/[class:civictech.wire.WsPeerIdentityTest]/[method:an unnamed side still peers anonymously over a socket()]
+org.opentest4j.AssertionFailedError: timed out awaiting: collector announced
+	at civictech.wire.WsPeerIdentityTest.await(WsPeerIdentityTest.kt:84)
+	at civictech.wire.WsPeerIdentityTest.await$default(WsPeerIdentityTest.kt:81)
+	at civictech.wire.WsPeerIdentityTest.an unnamed side still peers anonymously over a socket(WsPeerIdentityTest.kt:208)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+
+----
