@@ -27,12 +27,22 @@ done
 cutoff=$(( $(date +%s) - HOURS * 3600 ))
 
 # --limit 0 = unlimited; the default of 50 would silently strand the rest.
-stale=$(bd list --status=in_progress --assignee="$BEADS_ACTOR" \
+aged=$(bd list --status=in_progress --assignee="$BEADS_ACTOR" \
           --exclude-type=epic,feature --limit 0 --json 2>/dev/null \
-        | jq -r --argjson cutoff "$cutoff" '
-            .[]
-            | select((.updated_at | fromdateiso8601) < $cutoff)
-            | .id' || true)
+        | jq -c --argjson cutoff "$cutoff" '
+            [.[] | select((.updated_at | fromdateiso8601) < $cutoff)]' || echo '[]')
+
+# An item with review=passed or a pending ship decision is WAITING, not
+# abandoned: releasing it to open puts reviewed work back in bd ready as if
+# unstarted, and the next session re-implements it. Report, never release.
+waiting=$(jq -r '.[] | select((.metadata.review == "passed")
+            or (.metadata.ship_decision != null)) | .id' <<<"$aged")
+stale=$(jq -r '.[] | select((.metadata.review == "passed")
+            or (.metadata.ship_decision != null) | not) | .id' <<<"$aged")
+
+for id in $waiting; do
+  echo "complete, awaiting decision (NOT released): $id"
+done
 
 if [ -z "$stale" ]; then
   echo "no stale claims"
