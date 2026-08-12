@@ -363,7 +363,7 @@ class WsConnectRaceTest {
                     "      path — it writes a 404 — and a client never reaches it.)\n" +
                     "    * the close CODE itself is not observable from here: WsTransport.connect throws its\n" +
                     "      own IllegalStateException and never lets the WsConnection out, so only connect()\n" +
-                    "      can say what connectBlocking saw (computenet-dqy.35 — production change, not made).\n" +
+                    "      can say what connectBlocking saw (computenet-dqy.41 — production change, not made).\n" +
                     "      The payoff is smaller than it looks: -1 does not separate an EOF from a reset.\n" +
                     "    * 'NEVER BOUND' or 'NOT started' is a snapshot taken when this report rendered, not\n" +
                     "      a verdict: a listener that started microseconds later still reads 'NOT started'\n" +
