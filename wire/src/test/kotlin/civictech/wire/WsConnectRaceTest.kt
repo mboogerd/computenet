@@ -290,6 +290,7 @@ class WsConnectRaceTest {
                         (serving?.let { "started and serving ${it.address}" } ?: "NOT started") + ", " +
                         "listening channel " + (if (channel.isOpen) "still open" else "CLOSED"),
                 )
+                appendLine("  watchdog:  " + watchdogVerdict(serving))
                 appendLine("  dialer:    ws://localhost:$port, and localhost resolves to ${resolutions()}")
                 appendLine("  stimulus:  ${refusals.get()} refused probe(s) before the port answered")
                 appendLine(
@@ -304,6 +305,26 @@ class WsConnectRaceTest {
                 append(HOW_TO_READ)
             }
         }
+
+        /**
+         * The watchdog's own answer to "did the listener lose its socket?"
+         * (computenet-dqy.39's `WsListener.listeningSocketLoss`), rendered as an
+         * ADDITIONAL, stronger signal alongside the `channel.isOpen` inference above —
+         * never a replacement for it. The watchdog only starts polling once [onStart]
+         * has run, i.e. once [startedAt] has recorded a listener; it is silent about
+         * any loss before that, which is exactly the 23ms window computenet-dqy.35 is
+         * about. A `serving == null` run therefore gets an explicit "never started"
+         * verdict here, so a reader cannot mistake this line's silence for health.
+         */
+        private fun watchdogVerdict(serving: WsTransport.WsListener?): String =
+            if (serving == null) {
+                "the listener never started, so its watchdog never started either — this line " +
+                    "says NOTHING about a loss before onStart (the dqy.35 window); the listening " +
+                    "channel line above is the only signal that covers that window"
+            } else {
+                serving.listeningSocketLoss?.let { "the listener REPORTED losing its listening socket: ${it.message}" }
+                    ?: "the listener reported no loss"
+            }
 
         /**
          * Every address the name `localhost` carries here, in resolution order.
@@ -340,11 +361,17 @@ class WsConnectRaceTest {
              */
             const val HOW_TO_READ =
                 "  how to read this:\n" +
-                    "    * the listening channel's state is the one DIRECT discriminator here, so read it\n" +
-                    "      first. CLOSED is computenet-dqy.34's family: java-websocket's doAccept prologue\n" +
-                    "      (setTcpNoDelay on a reset victim, EINVAL on BSD) cancels the SERVER key and\n" +
-                    "      closes the listening socket. Still open means the listening socket survived,\n" +
-                    "      which that family does not.\n" +
+                    "    * the watchdog line is the strongest signal here (computenet-dqy.39): a REPORTED\n" +
+                    "      loss is the listener itself naming computenet-dqy.34's family, not an inference\n" +
+                    "      from a symptom. But it only polls from onStart, so on a run where the listener\n" +
+                    "      never started it has nothing to say about a loss before that — read 'never\n" +
+                    "      started' as 'no data', never as 'no loss'. That gap is exactly the 23ms window\n" +
+                    "      computenet-dqy.35 is about, which is why the line below still matters.\n" +
+                    "    * the listening channel's state is the next discriminator, and the only one that\n" +
+                    "      also covers that pre-onStart window. CLOSED is computenet-dqy.34's family:\n" +
+                    "      java-websocket's doAccept prologue (setTcpNoDelay on a reset victim, EINVAL on\n" +
+                    "      BSD) cancels the SERVER key and closes the listening socket. Still open means\n" +
+                    "      the listening socket survived, which that family does not.\n" +
                     "    * stderr does NOT discriminate: an absent '[WsConnection] …' line rules nothing\n" +
                     "      out. java-websocket 1.6.0's client swallows the reset a dying listening socket\n" +
                     "      sends — WebSocketClient.handleIOException calls onError only for an SSLException\n" +
