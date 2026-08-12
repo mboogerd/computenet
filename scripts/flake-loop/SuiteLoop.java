@@ -16,7 +16,13 @@
 // Usage:
 //   java -cp <test-runtime-classpath> SuiteLoop.java \
 //        --package civictech.wire --runs 400 --out /path/to/evidence \
-//        [--label linux] [--expect-tests 14]
+//        --expect-tests 14 [--label linux]
+//
+// --expect-tests is REQUIRED, and deliberately so: without it an iteration that ran
+// no tests at all — a selector that stopped matching, a class that failed to
+// initialise — prints `tests=0 failures=0` and ends in a SUMMARY that is
+// byte-for-byte the shape of a clean sample. A measurement that cannot tell "nothing
+// failed" from "nothing ran" is unfalsifiable, so the count has to be declared.
 //
 // Output: one progress line per iteration on stdout, a `failures/` file per failing
 // iteration, and a final SUMMARY line with the sample size and failure count.
@@ -29,12 +35,12 @@
 //                                 does not match it and scores 0 — so a run can have
 //                                 failingTests=1 collectorAnnouncedSignature=0 and
 //                                 still be an announcement loss.
-//   unexpectedTestCountIterations with --expect-tests, iterations whose executed test
-//                                 count differed from the expected one. Anything but
-//                                 0 means the sample is not what it claims to be
-//                                 (a class that failed to initialise, a selector that
-//                                 stopped matching), so a zero-failure result from a
-//                                 run with a nonzero count here proves nothing.
+//   unexpectedTestCountIterations iterations whose executed test count differed from
+//                                 --expect-tests. Anything but 0 means the sample is
+//                                 not what it claims to be (a class that failed to
+//                                 initialise, a selector that stopped matching), so a
+//                                 zero-failure result from a run with a nonzero count
+//                                 here proves nothing.
 //                                 :wire is 14 on Linux, 15 on macOS (WsListenerAcceptRstTest
 //                                 is @EnabledOnOs(MAC)).
 import org.junit.platform.engine.TestExecutionResult;
@@ -71,7 +77,7 @@ public final class SuiteLoop {
         int runs = 100;
         Path out = Path.of("suite-loop-evidence");
         String label = "run";
-        int expectTests = -1;
+        int expectTests = -1; // sentinel only — there is no default, see the check below
 
         // Unknown or value-less flags are fatal on purpose: a silently ignored
         // `--run 2000` would produce a 100-iteration sample that still looks like a
@@ -87,6 +93,16 @@ public final class SuiteLoop {
                         "unknown argument: " + args[i]
                                 + " (expected --package/--runs/--out/--label/--expect-tests)");
             }
+        }
+
+        // Same reasoning as the unknown-flag check, one step further: an omitted
+        // --expect-tests leaves the run unable to distinguish "no test failed" from
+        // "no test ran", and a zero-test iteration then reports a SUMMARY identical
+        // to a clean one. Refuse to measure without it.
+        if (expectTests < 0) {
+            throw new IllegalArgumentException(
+                    "--expect-tests N is required (:wire is 14 on Linux, 15 on macOS); "
+                            + "without it a run that executed 0 tests reports a clean zero");
         }
 
         Path failureDir = out.resolve("failures");
@@ -139,7 +155,7 @@ public final class SuiteLoop {
             launcher.execute(request);
             long ms = Duration.between(t0, Instant.now()).toMillis();
 
-            boolean short_ = expectTests >= 0 && executed.get() != expectTests;
+            boolean short_ = executed.get() != expectTests;
             if (short_) shortIterations++;
             String line = String.format("%s iter=%d tests=%d skipped=%d failures=%d %dms%s",
                     label, iteration, executed.get(), skipped.get(), failures.size(), ms,
