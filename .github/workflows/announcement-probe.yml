@@ -349,6 +349,14 @@ on:
 # No `cancel-in-progress`: a superseded run of a multi-hour measurement is
 # wasted compute, and two concurrent dispatches are two independent samples,
 # which is a legitimate thing to want.
+#
+# THEY ARE INDEPENDENT SAMPLES, NOT CONCURRENT ONES. The group is per-ref, so a
+# second dispatch on the SAME ref does not run alongside the first — it sits
+# `pending` until the first finishes. Observed 2026-08-13: runs 31691243326 and
+# 31691272219 were dispatched 23 seconds apart on `feature/computenet-dqy.55`
+# and the second waited ~19 minutes (first ended 10:47:55Z, second's first step
+# ran 10:48:12Z). Budget wall time as the SUM of the dispatches, or dispatch
+# from two different refs if they must overlap.
 concurrency:
   group: announcement-probe-${{ github.ref }}
   cancel-in-progress: false
@@ -476,7 +484,7 @@ jobs:
             # three-digit pass count fails in two seconds rather than burning
             # an afternoon of runner time.
             if [ "$PASSES" -gt 60 ]; then
-              echo "::error::lane=build-check with lane_passes=$PASSES: refused. At ~2.5 min/pass that is over 2.5 hours; ceiling 60. Dispatch again for a bigger sample — two dispatches of 30 are two independent samples and this workflow does not cancel them against each other."
+              echo "::error::lane=build-check with lane_passes=$PASSES: refused. At ~2.5 min/pass that is over 2.5 hours; ceiling 60. Dispatch again for a bigger sample — two dispatches of 30 are two independent samples and this workflow does not cancel them against each other. They do not run at the same time, though: the concurrency group is per-ref, so a second dispatch on this ref QUEUES behind the first (observed 2026-08-13: ~19 minutes pending). Budget the wall time as their sum."
               exit 1
             fi
           fi

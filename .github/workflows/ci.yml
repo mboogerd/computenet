@@ -142,18 +142,23 @@ jobs:
       # the same code and cannot disagree by accident. The script never fails a
       # run on the strength of a roster (see its docstring); the one case it
       # exits non-zero on is "no XML at all", which here means `:wire:test` did
-      # not run, so the `-d` check below owns that case and reports it without
+      # not run, so the guard below owns that case and reports it without
       # reddening a lane whose own build already succeeded or already failed for
-      # its own reasons.
+      # its own reasons. The guard tests for the XML itself, not for the
+      # directory: Gradle can leave `test-results/test` behind holding only
+      # `binary/` (a test JVM that died before writing a report, a run that was
+      # interrupted), and a directory-only check would hand the script an empty
+      # directory, take its exit 1, and turn a required check red over a
+      # diagnostic. This step must never be the reason build-test-fast fails.
       - name: "Publish the fast lane's :wire: class order"
         if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
-          if [ -d wire/build/test-results/test ]; then
+          if ls wire/build/test-results/test/TEST-*.xml >/dev/null 2>&1; then
             python3 .github/scripts/announcement_probe_cotenancy.py \
               wire/build/test-results/test WsAnnouncementStressTest
           else
-            echo "no wire/build/test-results/test — :wire:test did not run in this build" \
+            echo "no :wire: JUnit XML in wire/build/test-results/test — :wire:test did not run in this build" \
               | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
