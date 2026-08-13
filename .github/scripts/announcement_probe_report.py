@@ -13,12 +13,20 @@ with its own filtering (it drops suppressed exceptions unconditionally, for
 one), so it is not a safe channel for evidence. The JUnit XML carries the whole
 message plus the whole failure text, and this prints both untouched.
 
-It also guards the sample size. A probe run that executed nothing — a test task
-satisfied from cache, a `--tests` filter matching no class, a skipped test —
-looks exactly like a clean bulk sample in the log unless something asserts the
-testcase was really there. This exits non-zero if the expected class produced no
-executed testcase, so a vacuous run fails loudly instead of being recorded as a
-large negative result.
+It also guards the sample size, for the cases it can see. A probe run that
+produced no JUnit XML at all, a `--tests` filter matching no class, or a skipped
+test looks exactly like a clean bulk sample in the log unless something asserts
+the testcase was really there. This exits non-zero if the expected class
+produced no executed testcase, so such a vacuous run fails loudly instead of
+being recorded as a large negative result.
+
+IT DOES NOT CATCH A CACHED RUN, and `--rerun` in the workflow is therefore
+load-bearing — do not drop it on the grounds that this script covers it.
+Measured on this branch, 2026-08-13: re-invoking the probe without `--rerun`
+reports `> Task :wire:test UP-TO-DATE`, and deleting the results directory first
+only makes it `FROM-CACHE`. Either way the previous run's XML is present, still
+carrying that run's `timestamp` and `time`, so this script sees one executed
+testcase and reports a clean pass over a sample that never ran.
 
 Usage: announcement_probe_report.py <results-dir> <label> <expected-class-simple-name>
 """
