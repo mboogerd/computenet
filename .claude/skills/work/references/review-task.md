@@ -152,6 +152,22 @@ What to consume, per test run:
   "I did the mutation check and it failed as expected" is the same
   unfalsifiable sentence this section exists to stop.
 
+  **Leave the marker while it is applied** — the same rule
+  [task.md](task.md) step 3 gives implementers, and it matters more here,
+  because the incident that produced it (computenet-leg) was a *feature
+  review* killed mid-run. A budget expiry between the mutation and the revert
+  leaves a worktree dirty in exactly the shape of finished work, and the next
+  session cannot tell them apart:
+
+  ```bash
+  echo "<the call site you mutated, and what you removed>" > .mutation-in-progress
+  # ... mutate, re-run, watch the named test FAIL, revert ...
+  rm .mutation-in-progress
+  ```
+
+  It is gitignored, so it can never be committed. Never commit while it
+  exists. SKILL.md 5a is what reads it.
+
 **Don't destroy a rare failure's evidence.** If a run's *failure* is what
 matters — a flake hunt, a repetition loop — do not pass `-q`: it keeps the
 detail off the console and it does not reach the Gradle daemon log either, and

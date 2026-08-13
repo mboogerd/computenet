@@ -406,14 +406,20 @@ premises first and to park rather than produce children that inherit a false
 one — so a *correct refusal* looks exactly like a dead breakdown if you only
 count children:
 
+Key on what a park actually leaves. `ask-human.md`'s park is
+`--status=blocked --add-label=human --assignee=human` plus a `QUESTION:`
+comment — it does **not** write `metadata.parked_at`, which is a
+*feature*-level marker written by hand at step 5 and by nothing on this path:
+
 ```bash
-bd show <epic> --json | jq -r '.[0].metadata.parked_at // "not parked"'
-bd comments <epic> --json > "$SCRATCH/epic-comments.json"   # read the park comment
+bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
+bd comments <epic> --json > "$SCRATCH/epic-comments.json"   # read the QUESTION: comment
 ```
 
-Parked deliberately → **do not dispatch a second breakdown** and do not log it
-as friction; the agent did its job. Park the epic per this step's `bd defer`
-route and select the next one.
+`blocked` with `assignee=human` and the `human` label → **parked deliberately.
+Do not dispatch a second breakdown** and do not log it as friction; the agent
+did its job. Park the epic per step 3's `bd defer` route and select the next
+one.
 
 Otherwise the breakdown produced nothing. **Try once
 more, then stop** — park a question on the epic
@@ -428,8 +434,9 @@ Agent({
   description: "Break down epic <epic>",
   model: "fable",
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/epic.md and follow it to break
-epic ${epic} into features. It is already claimed and labeled — skip both.
+  prompt: `Read .claude/skills/work/references/epic.md — from YOUR OWN
+worktree, never the main checkout, whose local branch is stale — and follow it
+to break epic ${epic} into features. Run bd with -C <main-checkout>. It is already claimed and labeled — skip both.
 Report the feature ids created.`
 })
 ```
@@ -548,35 +555,6 @@ Recording it locally is enough for that ordering to do its job: a retry on
 this machine reads the local DB and finds the branch. It reaches the other
 machine at Finalize's push.
 
-Either way, attach the worktree the same way, then bring it up to date:
-
-```bash
-.claude/skills/work/scripts/ensure-worktree.sh \
-  "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
-
-# Verify the worktree actually holds the branch's remote work before using it.
-if git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null; then
-  git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
-    && echo "OK: worktree contains origin/feature/<feature-id>" \
-    || echo "STOP: on the branch at the wrong commit — origin/feature/<feature-id> is not in HEAD"
-else
-  echo "OK: origin has no feature/<feature-id> yet (first run, nothing to compare)"
-fi
-
-git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
-git -C <worktree> merge origin/main -m "Merge main into feature/<feature-id>"
-git -C <worktree> push -u origin feature/<feature-id>
-```
-
-**That `merge origin/main` is not optional on a resumed feature.** `pull` only
-refreshes the branch from its own remote — nothing else in this flow ever
-brings `main` in, so a feature carried across sessions drifts for days and
-first discovers it at the final gate, where the conflict gets resolved after
-review has already passed. Paying it down here keeps each merge small and
-keeps the reviewer looking at integrated code. Conflicts here are yours to
-resolve; re-run the affected module suite afterwards, since a hand-resolved
-merge is code nobody reviewed.
-
 **A dirty worktree you inherited may be a half-applied MUTATION, and
 committing it would break production code.** This repo routinely verifies a
 pin by mutation — delete an argument at the production call site, confirm the
@@ -605,6 +583,35 @@ git -C <worktree> diff
 
 The marker is what makes this recoverable *without* reading; the reading rules
 are the fallback for worktrees predating it.
+
+Either way, attach the worktree the same way, then bring it up to date:
+
+```bash
+.claude/skills/work/scripts/ensure-worktree.sh \
+  "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
+
+# Verify the worktree actually holds the branch's remote work before using it.
+if git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null; then
+  git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
+    && echo "OK: worktree contains origin/feature/<feature-id>" \
+    || echo "STOP: on the branch at the wrong commit — origin/feature/<feature-id> is not in HEAD"
+else
+  echo "OK: origin has no feature/<feature-id> yet (first run, nothing to compare)"
+fi
+
+git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
+git -C <worktree> merge origin/main -m "Merge main into feature/<feature-id>"
+git -C <worktree> push -u origin feature/<feature-id>
+```
+
+**That `merge origin/main` is not optional on a resumed feature.** `pull` only
+refreshes the branch from its own remote — nothing else in this flow ever
+brings `main` in, so a feature carried across sessions drifts for days and
+first discovers it at the final gate, where the conflict gets resolved after
+review has already passed. Paying it down here keeps each merge small and
+keeps the reviewer looking at integrated code. Conflicts here are yours to
+resolve; re-run the affected module suite afterwards, since a hand-resolved
+merge is code nobody reviewed.
 
 **Read the verification line it prints, and only that line.** `STOP` means
 the worktree is on the right branch at the wrong commit — proceeding
@@ -637,8 +644,9 @@ Agent({
   description: "Break down feature <id>",
   model: "fable",
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/feature.md and follow it to
-break feature ${id} into tasks. It is already claimed — skip claiming.
+  prompt: `Read .claude/skills/work/references/feature.md — from YOUR OWN
+worktree, never the main checkout, whose local branch is stale — and follow it
+to break feature ${id} into tasks. Run bd with -C <main-checkout>. It is already claimed — skip claiming.
 Report the task ids created.`
 })
 ```
@@ -836,7 +844,8 @@ Report back: the task id, the outcome, and the files you actually touched.`
 Don't set `isolation: "worktree"` — you create and record the worktree
 yourself precisely so it outlives the agent and can be resumed.
 
-**`bd` lives in the main checkout; the skill files do not.** Worktrees are cut
+**`bd` lives in the main checkout; the skill files do not** — this governs
+*every* dispatch template in this file, not just 5b's. Worktrees are cut
 from `origin/main`, so an agent reading `.claude/skills/work/**` from *its own
 worktree* gets the current text — while the main checkout's local branch is
 refreshed by nothing here and drifts. Measured at the start of one session:
@@ -1013,7 +1022,8 @@ Agent({
   description: "Review feature <id>",
   model: "opus",
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/review-feature.md and follow
+  prompt: `Read .claude/skills/work/references/review-feature.md — from
+${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
 origin/main as of dispatch: ${mainSha}; landed since this branch forked:
@@ -1047,9 +1057,9 @@ fine; the fifth cost the epic its close exactly here.
 `metadata.review=passed`, but never runs `gh pr ready` — on this repo a
 ready PR merges itself, so a reviewer marking its own certification ready is
 self-approval, worse when it also committed repairs. You are the second
-party: read the verdict, spot-check it, then ship it yourself. Three commands,
-in this order — the fetch pairs with the reviewer's own §6 re-fetch, and it is
-the last chance to notice that `main` moved between the verdict and the ship:
+party: read the verdict, spot-check it, then ship it yourself. In this order —
+the fetch pairs with the reviewer's own §6 re-fetch, and it is the last chance
+to notice that `main` moved between the verdict and the ship:
 
 ```bash
 git -C <feature-worktree> fetch origin main
@@ -1074,8 +1084,8 @@ commit N while the branch is at N+1 marks a PR ready on evidence that never
 covered the code being merged, and auto-merge then lands it. Wait for the
 shas to agree and re-read the checks.
 
-Read the first two before running the third. Commits the reviewer's verdict
-does not mention landed *after* it certified: if any of them touches the same
+Read the `log` output and the two shas before running `gh pr ready`. Commits
+the reviewer's verdict does not mention landed *after* it certified: if any of them touches the same
 files as this diff (`gh pr diff <pr-url> --name-only` against that log),
 merge `origin/main` in and send it back for a re-check rather than shipping a
 verdict against a base that no longer exists. A red or pending required check
