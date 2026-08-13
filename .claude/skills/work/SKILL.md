@@ -221,13 +221,24 @@ while the session runs, and to nothing afterwards. If a released epic is
 still the most important thing, the selection below picks it straight back
 up; if priorities moved since last session, the new top epic wins.
 
-Take the highest-priority unclaimed epic:
+Take the highest-priority unclaimed epic — **skipping `computenet-wpvy`,
+the SDLC epic**. That epic and its children belong exclusively to the SDLC
+orchestrator lane (`.claude/skills/remediate-friction/SKILL.md` today, a
+reactive orchestrator eventually) and are never /work's to claim, **on any
+route** — not here, not as a cross-epic blocker (5f route 3), not as
+continuation work (5f route 4):
 
 ```bash
-bd ready --type=epic --limit 1 --json     # read the id
+bd ready --type=epic --json               # take the first id that is NOT computenet-wpvy
 bd update <id> --claim                    # claim that id specifically
 bd update <id> --add-label=owner:$BEADS_ACTOR
+bd update <id> --set-metadata skill_version=$(git hash-object .claude/skills/work/SKILL.md)
 ```
+
+That last line records **which revision of this skill the session ran
+under**. Friction items filed in step 7 carry it, so a fix is attributable
+to the revision that produced the report, and a report against a superseded
+revision can be re-validated instead of silently carried forward.
 
 **Before committing to an epic that was already broken down, check it has
 workable surface.** An epic whose remaining ready items all carry the
@@ -1121,6 +1132,9 @@ Build the candidate pool from `bd ready --json`: ready **features and tasks
 parented to other epics**, plus unparented bugs and chores. Drop from it:
 
 - anything with the `human` label (this exclusion holds on every route);
+- anything parented to the SDLC epic `computenet-wpvy` or labeled
+  `skill-friction` — process work belongs to the SDLC orchestrator lane
+  (step 7), never to a session running under the skill it would edit;
 - anything with `parked_at` within 6h;
 - **anything that is review or verification of output this session
   produced** — warm context is exactly what makes self-approval likely, and
@@ -1301,10 +1315,21 @@ bd search "<a few distinctive words>" --json      # look for it first
 ```
 
 Found one → comment on it with this session's instance (what you were doing,
-what happened, what it cost). Not found → create it:
+what happened, what it cost). Not found → create it as a **bug or feature
+under the SDLC epic** `computenet-wpvy`: a `bug` when the skill misbehaved —
+an instruction that failed, contradicted reality, or didn't cover your case —
+and a `feature` when the skill worked as written but is missing a capability
+that would have made the session better. Process defects are high priority
+(the SDLC epic is drained on its own lane —
+`.claude/skills/remediate-friction/SKILL.md` today, a reactive orchestrator
+eventually — and parenting plus the label keeps friction out of 5f's
+continuation pool):
 
 ```bash
-bd create --type=chore --priority=3 --label=skill-friction \
+SKILL_V=$(bd show <epic> --json | jq -r '.[0].metadata.skill_version')   # recorded at claim (step 3)
+bd create --type=<bug|feature> --priority=2 --label=skill-friction \
+  --parent=computenet-wpvy \
+  --metadata "{\"skill_version\":\"$SKILL_V\"}" \
   --title="work skill: <the friction in one line>" \
   --description="<what the skill says, what actually happened, what you did instead, what it cost>" \
   --acceptance="<what would have to change in the skill for this not to recur>"
@@ -1317,10 +1342,11 @@ lost-transcript problem this step exists to solve.
 Write it for someone editing `SKILL.md` next week with none of your context:
 name the step, quote the instruction, say what actually happened.
 
-Review the accumulated log with:
+Review the accumulated log — open count and per-item comment totals — with
+one command:
 
 ```bash
-bd list --label=skill-friction --status=open --json
+bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
 ```
 
 Comment count is the signal. One report is an anecdote; the same issue
