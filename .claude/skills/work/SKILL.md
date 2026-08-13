@@ -47,20 +47,25 @@ for *every* issue. The only correct way to read comments — e.g. "has a human
 answered this parked question?" — is:
 
 ```bash
-bd comments <id> --json > <scratchpad>/comments.json   # then read the file
+bd comments <id> --json > "$SCRATCH/comments.json"   # then read the file
 ```
 
 An empty result from the wrong query is indistinguishable from "no answer",
 and has already caused an epic to be wrongly deferred over gates that were
 cleared.
 
+`$SCRATCH` throughout this skill is **your harness-provided scratchpad
+directory** — the session-scoped path for temporary files, outside the user's
+project. Set it once at the top of the session (`SCRATCH=<that path>`); use
+`$(mktemp -d)` if your harness gives you none.
+
 **Redirect it, don't read it inline.** On exactly the beads where comments
 matter — the long-lived ones — the JSON overruns the tool-result limit and
 what lands is a *truncated* array. That does not present as an error: it
 presents as a parse failure, or worse, as **fewer comments than exist**,
 which is the same "has a human answered this?" misread as the wrong query
-above. Measured 2026-08-13: `computenet-dqy.31` (14 comments) returns 34KB
-and `computenet-dqy.44` (9 comments) 25KB. Write it to a file and parse the
+above. Measured 2026-08-13: `computenet-dqy.31` returns 34,019 bytes over 16
+comments and `computenet-dqy.44` 25,319 over 9. Write it to a file and parse the
 file; when you only need the tail of each comment, pipe through `python3` and
 print the fields you want rather than widening the read.
 
