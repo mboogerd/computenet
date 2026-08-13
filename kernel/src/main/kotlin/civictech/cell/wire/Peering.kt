@@ -119,24 +119,50 @@ class RegistryMirrorCell(
     private val gate = Any()
     private var attached = true
 
+    /**
+     * How many announcements this mirror's shut gate has refused
+     * (computenet-dqy.40). Diagnostics only — nothing reads it to decide
+     * anything, and the drop itself is unchanged.
+     *
+     * The gate is a *correct* drop (see [detach]) but it was, until this
+     * counter, an entirely **silent** one, and that is what made the
+     * 2026-08-12 Linux announcement loss undiagnosable after the fact. Measured
+     * by execution in `WsAnnouncementSilenceInventoryTest`: of every way an
+     * announcement can fail on this path, only two swallow it without a word —
+     * this gate and `WsTransport.Session`'s pre-hello frame drop. A throw out
+     * of the transport's `onText` (which truncates
+     * [Peering.announceTo]'s catch-up sweep), a failing publish hook, an
+     * unknown cell or port, and the scheduler's backstop all reach
+     * `System.err`. So "never arrived, and stderr was silent" could not
+     * previously separate a refusal here from a delivery that never ran; with
+     * this counter and the pre-hello count it can.
+     */
+    val refusedAnnouncements: Long get() = refused.get()
+
+    private val refused = java.util.concurrent.atomic.AtomicLong()
+
+    private fun refuse() {
+        refused.incrementAndGet()
+    }
+
     val inlet = registerPort("inlet", FanInlet.create<RegistryAnnounce>())
 
     init {
         inlet.serve(object : RegistryAnnounce {
             override fun published(ref: CellRef) = synchronized(gate) {
-                if (attached) registry.publish(ref, toPeer, peer)
+                if (attached) registry.publish(ref, toPeer, peer) else refuse()
             }
 
             override fun linked(link: civictech.cell.host.TopologyLink) = synchronized(gate) {
-                if (attached) registry.mirrorLink(link)
+                if (attached) registry.mirrorLink(link) else refuse()
             }
 
             override fun unlinked(id: UUID) = synchronized(gate) {
-                if (attached) registry.mirrorUnlink(id)
+                if (attached) registry.mirrorUnlink(id) else refuse()
             }
 
             override fun unpublished(ref: CellRef) = synchronized(gate) {
-                if (attached) registry.mirrorUnpublish(ref)
+                if (attached) registry.mirrorUnpublish(ref) else refuse()
             }
         })
     }
@@ -412,6 +438,42 @@ object Peering {
      * through [via]. Announcement hooks are multicast (M7.2): a registry may
      * peer with several remotes at once; each peer only ever hears about
      * *local* refs, so nothing loops or forwards second-hand locations.
+     *
+     * **The catch-up sweep is failure-isolated per ref** (computenet-dqy.40),
+     * for the reason [LocationRegistry.publish]'s own hook notification already
+     * is: *hooks are notifications, not participants*. Until this item the
+     * sweep was the one place on the announcement path without that isolation,
+     * and the asymmetry was the defect — the same send failure was survivable
+     * on the [LocationRegistry.onLocalPublish] path and fatal on the sweep.
+     *
+     * What that cost, measured rather than reasoned. A send on [via] that
+     * fails takes `WsTransport.Session`'s egress branch, which retracts this
+     * connection's remotes and rethrows `IntakeClosedException`; that throw
+     * unwound `forEach` and abandoned **every remaining local ref**, and then
+     * escaped `Session.onText` entirely. Three consequences, each reproduced in
+     * `:wire`'s `WsAnnouncementSilenceInventoryTest`:
+     *
+     * 1. the refs behind the failure were never announced;
+     * 2. the socket **stays open** — java-websocket reports the failed callback
+     *    and carries on — so there is no close, no reconnect, no re-hello and
+     *    therefore no second catch-up to repair it: the loss is permanent on a
+     *    connection that looks healthy;
+     * 3. `announceTo` never returned, so the three hooks it had already
+     *    registered were never handed back to the caller and could not be
+     *    closed — a leaked announcer per occurrence, on a `via` that had just
+     *    failed.
+     *
+     * Observed in the ordinary `:wire` suite on Linux (groovy:4.0-jdk21,
+     * aarch64), from both sides, in 3 of 3 container runs of the whole
+     * package — so this is a path the code actually takes, not a hypothesis.
+     *
+     * A failure is *reported*, never swallowed, exactly as
+     * `LocationRegistry.notify` reports a failing hook: the silence inventory
+     * on this path (`WsAnnouncementSilenceInventoryTest`) is a property worth
+     * keeping, and a catch-up that lost a ref must stay loud.
+     *
+     * This is **not** a claim about the 2026-08-12 Linux loss, which was
+     * silent for its whole iteration and therefore cannot be this.
      */
     fun announceTo(side: Side, peerMirror: CellRef, via: InvocationSink): AutoCloseable {
         val announce = (HostedCellProxy.create(peerMirror, via, AnnounceInletProxy::class.java)
@@ -419,9 +481,19 @@ object Peering {
         val registration = side.registry.onLocalPublish { announce.published(it) }
         val unpublishRegistration = side.registry.onLocalUnpublish { announce.unpublished(it) }
         val topologyRegistration = side.registry.onLocalTopology(announce::linked, announce::unlinked)
-        side.registry.localRefs().forEach(announce::published) // catch-up for pre-peering spawns
-        side.registry.localLinks().forEach(announce::linked)
+        // catch-up for pre-peering spawns
+        side.registry.localRefs().forEach { ref -> catchUp("published $ref") { announce.published(ref) } }
+        side.registry.localLinks().forEach { link -> catchUp("linked ${link.id}") { announce.linked(link) } }
         return AutoCloseable { registration.close(); unpublishRegistration.close(); topologyRegistration.close() }
+    }
+
+    /** One catch-up announcement, isolated from its siblings — see [announceTo]. */
+    private inline fun catchUp(what: String, send: () -> Unit) {
+        try {
+            send()
+        } catch (e: Exception) {
+            System.err.println("[Peering] catch-up announcement failed ($what): $e")
+        }
     }
 
     /**
