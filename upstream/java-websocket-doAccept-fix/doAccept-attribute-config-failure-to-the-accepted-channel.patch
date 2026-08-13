@@ -1,0 +1,55 @@
+Subject: [PATCH] Do not close the listening socket when configuring an accepted
+ socket fails
+
+WebSocketServer.doAccept configures a freshly accepted socket (setTcpNoDelay,
+setKeepAlive) outside any try/catch of its own, and declares `throws
+IOException`. On a BSD-family host, setsockopt on a socket whose peer has
+already sent RST returns EINVAL, which the JDK surfaces as SocketException. It
+unwinds out of doAccept into the selector loop's last resort:
+
+    } catch (IOException ex) {
+      handleIOException(key, null, ex);
+    }
+
+where `key` is the SERVER's acceptable key. handleIOException cancels it and,
+having no WebSocket to blame, closes key.channel() -- the listening channel.
+The server object, its selector thread and its existing connections all stay
+healthy; it simply stops accepting, and the port is unbound. Nothing reports
+it: handleIOException only log.trace()s, and onError is handleFatal's path,
+not this one.
+
+Attribute the failure to the connection it came from instead.
+
+--- a/src/main/java/org/java_websocket/server/WebSocketServer.java
++++ b/src/main/java/org/java_websocket/server/WebSocketServer.java
+@@
+     SocketChannel channel = server.accept();
+     if (channel == null) {
+       return;
+     }
+-    channel.configureBlocking(false);
+-    Socket socket = channel.socket();
+-    socket.setTcpNoDelay(isTcpNoDelay());
+-    socket.setKeepAlive(true);
++    try {
++      channel.configureBlocking(false);
++      Socket socket = channel.socket();
++      socket.setTcpNoDelay(isTcpNoDelay());
++      socket.setKeepAlive(true);
++    } catch (IOException ex) {
++      // This failure belongs to the connection we just accepted, not to the
++      // server. Letting it out of doAccept sends it to the selector loop's
++      // last-resort handleIOException(key, null, ex), where `key` is the
++      // server's own acceptable key -- which cancels that key and closes the
++      // listening channel, taking the whole server off the air silently.
++      log.trace("Could not configure an accepted socket; closing that connection", ex);
++      try {
++        channel.close();
++      } catch (IOException ignored) {
++        // nothing useful to do; the connection is being discarded anyway
++      }
++      return;
++    }
+     WebSocketImpl w = wsf.createWebSocket(this, drafts);
+     w.setSelectionKey(channel.register(selector, SelectionKey.OP_READ, w));
+     try {

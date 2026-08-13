@@ -10,6 +10,8 @@ import civictech.cell.wire.BridgeEgressCell
 import civictech.cell.wire.Peering
 import civictech.cell.wire.RegistryMirrorCell
 import org.java_websocket.WebSocket
+import org.java_websocket.WebSocketImpl
+import org.java_websocket.WebSocketServerFactory
 import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.handshake.ServerHandshake
@@ -21,8 +23,12 @@ import java.net.Socket
 import java.net.URI
 import java.net.UnknownHostException
 import java.nio.ByteBuffer
+import java.nio.channels.ClosedChannelException
+import java.nio.channels.ClosedSelectorException
 import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -433,16 +439,31 @@ object WsTransport {
      * AGENTS.md's "in-process and remote paths should preserve the same
      * observable semantics".
      *
+     * ## That mechanism is repaired here (computenet-dqy.37)
+     *
+     * [takeOverAccepting] takes the accept off the library's selector and
+     * [admit] vendors 1.6.0's accept path with the two setters inside a
+     * `try/catch`, so an `IOException` from configuring a freshly accepted
+     * socket is attributed to **that** socket — closed, counted on
+     * [rejectedAccepts] — instead of to the server's acceptable key.
+     * `WsListenerAcceptRstTest` asserts the inverted claim the repair makes
+     * true: the listener still accepts after a deliberate reset storm.
+     *
+     * Scope, stated because it is easy to over-read: this closes the
+     * `doAccept`-prologue mechanism. It is not a claim that a listening socket
+     * can no longer be lost by any route, which is why the watchdog below
+     * stays.
+     *
      * ## What the watchdog does, and firmly does not do
      *
      * It polls the listening channel's `isOpen` and, on a close nobody asked
      * for, calls [onError] with a [ListeningSocketLostException] naming the
-     * cause. **That is diagnosability only.** The listener is *not* re-served,
-     * the port is *not* recovered, and the rate at which this happens is
-     * unchanged — the repair (a facade over a replaceable server, a vendored
-     * selector loop, or an upstream fix) is computenet-dqy.37, parked on a
-     * design decision. A 30s "timed out awaiting: collector announced"
-     * somewhere else becomes an immediate, named diagnosis here; nothing more.
+     * cause. **That is diagnosability only** (computenet-dqy.39). The listener
+     * is *not* re-served and the port is *not* recovered. It now guards the
+     * residue rather than the known mechanism: any *other* way the listening
+     * channel could close unasked still surfaces as an immediate named
+     * diagnosis rather than as a distant 30s "timed out awaiting: collector
+     * announced".
      *
      * The channel comes from public API, not reflection: [onConnect] is called
      * by `doAccept` with the server's own acceptable key before it accepts, so
@@ -529,19 +550,265 @@ object WsTransport {
 
         override fun onStart() {
             started.countDown()
+            takeOverAccepting()
             watchListeningSocket(port)
         }
 
         /**
+         * How many freshly accepted connections this listener discarded because
+         * configuring them threw — the reset-victim count, and the number of
+         * times the listening socket would have been closed instead under
+         * unvendored java-websocket 1.6.0.
+         *
+         * Monotonic and per-listener. Expected to be 0 on Linux (`setsockopt`
+         * there succeeds on a reset victim, so the failure surfaces on the first
+         * per-connection read, which java-websocket already attributes
+         * correctly) and non-zero on BSD/macOS under reset load.
+         */
+        val rejectedAccepts: Long get() = rejectedAcceptCount.get()
+
+        private val rejectedAcceptCount = AtomicLong()
+
+        /**
          * `doAccept`'s first statement, called with the **server's** acceptable
-         * key — the one public seam that hands over the listening channel
-         * without reflecting on `WebSocketServer.server` (which is private).
-         * Always admits the connection: returning false would cancel that very
-         * key, which is the defect this class is trying to observe.
+         * key. Only reached if [takeOverAccepting] failed, since it cancels the
+         * server key that makes `doAccept` run at all; kept so that a listener
+         * on the fallback path still hands its listening channel to the
+         * watchdog. Always admits: returning false would `key.cancel()` that
+         * very key.
          */
         override fun onConnect(key: SelectionKey): Boolean {
             if (listeningChannel == null) listeningChannel = key.channel() as? ServerSocketChannel
             return super.onConnect(key)
+        }
+
+        /**
+         * **The repair (computenet-dqy.37): java-websocket 1.6.0's accept path,
+         * vendored with one `try/catch` added, and taken off the library's
+         * selector so the library's version can no longer run.**
+         *
+         * Upstream `WebSocketServer.doAccept` reads (1.6.0, verbatim):
+         *
+         * ```java
+         * SocketChannel channel = server.accept();
+         * if (channel == null) return;
+         * channel.configureBlocking(false);
+         * Socket socket = channel.socket();
+         * socket.setTcpNoDelay(isTcpNoDelay());   // throws on a reset victim, BSD only
+         * socket.setKeepAlive(true);              // and outside any try of its own
+         * WebSocketImpl w = wsf.createWebSocket(this, drafts);
+         * w.setSelectionKey(channel.register(selector, SelectionKey.OP_READ, w));
+         * try { w.setChannel(wsf.wrapChannel(channel, w.getSelectionKey()));
+         *       i.remove(); allocateBuffers(w); }
+         * catch (IOException ex) { ... handleIOException(w.getSelectionKey(), null, ex); }
+         * ```
+         *
+         * The two setters are the whole defect. `doAccept` declares
+         * `throws IOException`, so a `SocketException` from them unwinds into
+         * the selector loop's last resort, `handleIOException(key, null, ex)`,
+         * where `key` is the **server's** acceptable key — cancelled and closed,
+         * silently. [admit] performs the same sequence with the configuration
+         * inside its own `catch`: the failure is charged to the channel it came
+         * from, that channel is closed, [rejectedAccepts] counts it, and the
+         * listening socket is untouched.
+         *
+         * ## Why the whole accept has to move, not just the configuration
+         *
+         * `doAccept` and `handleIOException` are both `private` in 1.6.0
+         * (verified with `javap -p`), so neither can be overridden. `onConnect`
+         * is `protected` and runs at the top of `doAccept`, which looks like the
+         * seam — and it is not sufficient, **measured**: accepting there and
+         * returning true still leaves `doAccept`'s own `server.accept()` to run
+         * immediately afterwards, so any connection queued or arriving in that
+         * window goes through the unguarded prologue anyway. With that version
+         * in place the pre-repair reproduction still killed the listener after
+         * 2 resets. So the library must not accept at all: [takeOverAccepting]
+         * cancels the server's key on the library's selector, which makes
+         * `key.isValid()` false in the selector loop and `doAccept` unreachable,
+         * and this class owns the accept from then on.
+         *
+         * ## What that costs, stated because it is real
+         *
+         * - Two `private` fields are read reflectively once per listener,
+         *   `WebSocketServer.server` and `WebSocketServer.selector`, at
+         *   [onStart] — after `doSetupSelectorAndServerThread` has assigned
+         *   both. java-websocket is on the classpath (unnamed module), so this
+         *   needs no `--add-opens`. If either read fails the listener says so
+         *   through [onError] and stays on the library's own accept path,
+         *   defect and all, rather than silently not listening.
+         * - One extra `Selector` and one daemon thread per listener.
+         * - Connections are registered with the library's selector from that
+         *   thread instead of from the selector thread. They are registered with
+         *   interest `0`, wired up, and only then switched to `OP_READ` and
+         *   woken, so the selector cannot see a key whose `WebSocketImpl` has no
+         *   channel yet. Cross-thread mutation of that selector is already
+         *   normal here — 1.6.0's own `onWriteDemand` does `interestOps` +
+         *   `wakeup` from the worker threads.
+         *
+         * This pins the vendored code to 1.6.0's internals, which is why
+         * `upstream/java-websocket-doAccept-fix/` carries the same fix as a
+         * patch against upstream: when a release with it ships, [takeOverAccepting],
+         * [acceptLoop] and [admit] delete and `onConnect` goes back to capturing
+         * [listeningChannel] only.
+         */
+        private fun takeOverAccepting() {
+            val server = privateField("server", ServerSocketChannel::class.java)
+            val libSelector = privateField("selector", Selector::class.java)
+            if (server == null || libSelector == null) {
+                onError(
+                    null,
+                    IOException(
+                        "computenet-dqy.37: could not take over WebSocketServer's accept path " +
+                            "(server=$server, selector=$libSelector). This listener stays on " +
+                            "java-websocket 1.6.0's own doAccept, where a TCP reset that races an " +
+                            "accept closes the LISTENING socket on a BSD/macOS host. It still " +
+                            "listens; it is just exposed to that defect, and the watchdog will " +
+                            "report the loss if it happens.",
+                    ),
+                )
+                return
+            }
+            listeningChannel = server
+            server.keyFor(libSelector)?.cancel()
+            libSelector.wakeup()
+            Thread { acceptLoop(server, libSelector) }
+                .apply { isDaemon = true; name = "ws-listener-accept-$port" }
+                .start()
+        }
+
+        private fun <T : Any> privateField(name: String, type: Class<T>): T? =
+            runCatching {
+                val field = WebSocketServer::class.java.getDeclaredField(name)
+                field.isAccessible = true
+                type.cast(field.get(this))
+            }.getOrNull()
+
+        /** @see takeOverAccepting */
+        private fun acceptLoop(server: ServerSocketChannel, libSelector: Selector) {
+            val acceptSelector = try {
+                Selector.open()
+            } catch (e: IOException) {
+                reportAcceptorStopped(e)
+                return
+            }
+            var cause: Throwable? = null
+            try {
+                server.register(acceptSelector, SelectionKey.OP_ACCEPT)
+                while (!stopRequested && server.isOpen) {
+                    acceptSelector.select(ACCEPT_SELECT_MS)
+                    acceptSelector.selectedKeys().clear()
+                    while (!stopRequested) {
+                        val channel = server.accept() ?: break
+                        // One connection must never cost this listener its
+                        // acceptor. [admit] can raise unchecked exceptions the
+                        // narrow catches inside it do not cover
+                        // (`CancelledKeyException` and `ClosedSelectorException`
+                        // are `RuntimeException`s, and the factory is foreign
+                        // code), and an escape here would kill this thread while
+                        // the listening channel stayed OPEN — see
+                        // [reportAcceptorStopped] for why that is worse than the
+                        // defect being repaired.
+                        try {
+                            admit(channel, libSelector)
+                        } catch (t: Throwable) {
+                            runCatching { channel.close() }
+                            if (!stopRequested) {
+                                onError(
+                                    null,
+                                    IOException(
+                                        "computenet-dqy.37: admitting an accepted connection failed; " +
+                                            "that connection was dropped and this listener keeps accepting",
+                                        t,
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (_: ClosedChannelException) {
+                // the listener is going down, or has lost its channel: the
+                // watchdog owns that diagnosis, not this loop
+            } catch (_: ClosedSelectorException) {
+            } catch (t: Throwable) {
+                cause = t
+            } finally {
+                runCatching { acceptSelector.close() }
+                if (!stopRequested && server.isOpen) reportAcceptorStopped(cause)
+            }
+        }
+
+        /**
+         * The acceptor thread owns this listener's accept path, so if it stops
+         * while the listening channel is still **open** the listener is deaf
+         * with nothing closed — and [watchListeningSocket] cannot see that,
+         * because it only looks for a channel that closed. Worse than the
+         * defect this bead repairs: dialers reach an unattended backlog and hang
+         * instead of being refused fast.
+         *
+         * So the acceptor never dies quietly. Every exit that is not a
+         * requested [stop] or a closed listening channel says so through
+         * [onError].
+         */
+        private fun reportAcceptorStopped(cause: Throwable?) {
+            onError(
+                null,
+                IOException(
+                    "computenet-dqy.37: the vendored acceptor for port $port stopped while its listening " +
+                        "socket is still open. This peer will accept TCP connections and complete no " +
+                        "handshake, so dialers hang rather than being refused, and the listening-socket " +
+                        "watchdog cannot see it. THIS IS A DIAGNOSIS, NOT A RECOVERY: this listener will " +
+                        "not accept again on its own.",
+                    cause,
+                ),
+            )
+        }
+
+        /** @see takeOverAccepting */
+        private fun admit(channel: SocketChannel, libSelector: Selector) {
+            try {
+                channel.configureBlocking(false)
+                val socket = channel.socket()
+                socket.tcpNoDelay = isTcpNoDelay
+                socket.keepAlive = true
+            } catch (_: IOException) {
+                // THE FIX. Upstream lets this reach the selector loop, which
+                // blames the server's key — the listener. It belongs to
+                // `channel`, and to nothing else.
+                rejectedAcceptCount.incrementAndGet()
+                runCatching { channel.close() }
+                return
+            }
+            // Never silently: `getWebSocketFactory()` is declared to return the
+            // wider `WebSocketFactory`, and a listener that quietly discarded
+            // every connection would be exactly the invisible deafness this
+            // repair exists to remove. [acceptLoop] reports it per connection.
+            val factory = getWebSocketFactory() as? WebSocketServerFactory
+                ?: throw IllegalStateException(
+                    "computenet-dqy.37: WebSocketServer.getWebSocketFactory() is not a " +
+                        "WebSocketServerFactory, so the vendored accept path cannot create a connection",
+                )
+            val w: WebSocketImpl = factory.createWebSocket(this, getDraft())
+            var key: SelectionKey? = null
+            try {
+                // interest 0 first: the selector thread must not be able to see
+                // this key as readable before `w` has its channel.
+                key = channel.register(libSelector, 0, w)
+                w.setSelectionKey(key)
+                w.setChannel(factory.wrapChannel(channel, key))
+                allocateBuffers(w)
+                key.interestOps(SelectionKey.OP_READ)
+                libSelector.wakeup()
+            } catch (_: IOException) {
+                // upstream's own tail of doAccept, minus the private
+                // handleIOException: cancel this connection's key, close this
+                // connection's channel. Same attribution, same effect.
+                key?.cancel()
+                runCatching { channel.close() }
+            } catch (_: InterruptedException) {
+                key?.cancel()
+                runCatching { channel.close() }
+                Thread.currentThread().interrupt()
+            }
         }
 
         /**
@@ -628,6 +895,13 @@ object WsTransport {
              * and one `isOpen` per listener per tick.
              */
             const val WATCHDOG_POLL_MS = 200L
+
+            /**
+             * How long the vendored acceptor blocks in `select` before
+             * re-checking that it is still wanted. Only a shutdown-latency
+             * bound: accepts themselves arrive as selector wakeups.
+             */
+            const val ACCEPT_SELECT_MS = 200L
         }
     }
 
