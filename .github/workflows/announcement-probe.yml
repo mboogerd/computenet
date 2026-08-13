@@ -38,6 +38,45 @@ name: Announcement probe (on-demand Linux bulk sample)
 #   - the executed-size assertions after each probe, which require the expected
 #     testcase to actually appear in the JUnit XML.
 #
+# THE SIZE MUST FIT THE BUILD'S PER-TEST TIMEOUT (computenet-dqy.50). Every
+# test method in this build gets 5 minutes
+# (`junit.jupiter.execution.timeout.testable.method.default = 5m`, set in
+# `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`), so the deadline is not this
+# job's to raise: it is repo-wide, argued at length there, and both probes are
+# under it. A dispatched size that does not fit that deadline does not produce a
+# smaller sample — it produces NO sample: the probes report
+# only at the end, so the timeout throws away every iteration that did run, and
+# the run reddens having measured nothing. This job's original default,
+# stress_iterations=20000, was such a size. Measured, on ubuntu-latest:
+#
+#   run 31668681959  stress 20000  ->  TimeoutException at 300.028s, NO sample
+#   run 31669727862  stress  2000  ->  PASSED,  75.468s  (37.7ms/iteration)
+#   run 31669883848  stress  4000  ->  PASSED, 159.639s  (39.9ms/iteration)
+#
+# The 20000 run is only a bound — the log never says how far it got — so the two
+# green runs are the measurement. They are slightly superlinear (~42ms marginal
+# between them), so read the ceiling off the marginal cost, not the average:
+# ~7,000 iterations is where a single invocation meets the deadline. The default
+# is 4,000 (8,000 announcement awaits, 159.6s measured) — a little over half the
+# budget, ~1.9x margin for a slower runner. That ceiling is not low enough to justify
+# chunking a sample across invocations: a caller who wants more awaits dispatches
+# this job again (the concurrency group deliberately does not cancel, so two
+# dispatches are two independent samples). Do NOT raise that 5-minute default,
+# or pin a longer `@Timeout` on the probes, to make a larger number fit — the
+# deadline is what makes an unfinished run visible instead of silent.
+#
+# The burst probe is a separate budget: 6000 x 40 measured 269.152s on run
+# 31668681959, inside the same 5 minutes but with much less headroom per
+# iteration to spare.
+#
+# A TIMED-OUT ARM IS NOT AN OCCURRENCE. computenet-dqy.12 established for this
+# repo that a JUnit 5m TimeoutException proves neither a failure of the code
+# under test nor an in-JVM block. The report script therefore classifies each
+# arm as clean / incomplete / loss and hands the verdict to the Conclude step
+# through $STRESS_OUTCOME / $BURST_OUTCOME, so the job's own conclusion says
+# which happened and an unfinished sample can never be read as a lost
+# announcement.
+#
 # THE REPORT MUST SURVIVE. The value of an occurrence is the full two-sided
 # failure report — server localRefs vs client remoteRefs, per-ref park depths on
 # both sides, and the preHello/gate silent-drop counters PR #83 added. Gradle's
@@ -48,11 +87,11 @@ on:
   workflow_dispatch:
     inputs:
       stress_iterations:
-        description: "WsAnnouncementStressTest iterations (2 announcement awaits each; committed default is 25)"
+        description: "WsAnnouncementStressTest iterations (2 announcement awaits each; committed default is 25). MUST fit the build's 5-minute per-test JUnit timeout: measured 37.7-39.9ms/iteration on ubuntu-latest, so ~7,000 is the ceiling. Dispatch again for a bigger sample."
         required: false
-        default: "20000"
+        default: "4000"
       burst_iterations:
-        description: "WsAnnouncementCatchUpBurstTest iterations (committed default is 10)"
+        description: "WsAnnouncementCatchUpBurstTest iterations (committed default is 10). 6000 x 40 measured 269.152s against the same 5-minute deadline — it fits, but with only ~11% headroom; go lower if a run comes back INCOMPLETE."
         required: false
         default: "6000"
       burst_refs:
@@ -169,6 +208,8 @@ jobs:
 
       - name: Stress probe - full report
         if: ${{ !cancelled() }}
+        env:
+          PROBE_OUTCOME_KEY: STRESS_OUTCOME
         run: python3 .github/scripts/announcement_probe_report.py probe-evidence/stress "stress (${{ inputs.stress_iterations }} iterations)" WsAnnouncementStressTest
 
       - name: Catch-up burst probe
@@ -188,6 +229,8 @@ jobs:
 
       - name: Catch-up burst probe - full report
         if: ${{ !cancelled() }}
+        env:
+          PROBE_OUTCOME_KEY: BURST_OUTCOME
         run: python3 .github/scripts/announcement_probe_report.py probe-evidence/burst "burst (${{ inputs.burst_iterations }} iterations x ${{ inputs.burst_refs }} refs)" WsAnnouncementCatchUpBurstTest
 
       # Cheap and unconditional: two XML files. A green run's XML is the
@@ -204,14 +247,56 @@ jobs:
       # The probe steps swallow their exit status so that a failure in the first
       # probe does not cost the second probe's sample. The job conclusion is set
       # here instead, so a lost announcement still reddens this run.
+      #
+      # THREE OUTCOMES, NOT TWO (computenet-dqy.50). This step used to say
+      # "stress probe reported failures" for both a lost announcement and a
+      # sample that never finished, which invites a timeout being recorded as an
+      # occurrence — computenet-dqy.12 is explicit that a JUnit 5m
+      # TimeoutException proves neither a failure nor an in-JVM block. The
+      # classification comes from the report script (which reads the JUnit XML),
+      # not from an exit status, because a Gradle exit status cannot tell the two
+      # apart. Both still redden the run: an unfinished sample is a wasted
+      # dispatch and must not pass quietly either.
       - name: Conclude
         if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
-          echo "stress exit=${STRESS_STATUS:-missing} burst exit=${BURST_STATUS:-missing}"
+          echo "stress exit=${STRESS_STATUS:-missing} outcome=${STRESS_OUTCOME:-missing}"
+          echo "burst  exit=${BURST_STATUS:-missing} outcome=${BURST_OUTCOME:-missing}"
           rc=0
-          [ "${STRESS_STATUS:-1}" = "0" ] || { echo "::error::stress probe reported failures — read the full report above"; rc=1; }
-          [ "${BURST_STATUS:-1}" = "0" ] || { echo "::error::burst probe reported failures — read the full report above"; rc=1; }
+          verdict() {
+            arm="$1"; outcome="$2"; status="$3"; hint="$4"
+            case "$outcome" in
+              clean)
+                if [ "$status" = "0" ]; then
+                  echo "$arm: CLEAN — a real sample completed and lost nothing."
+                else
+                  echo "::error::$arm: the probe invocation failed for a reason outside the testcase (exit $status) — read the log above"
+                  rc=1
+                fi
+                ;;
+              loss)
+                echo "::error::$arm: ANNOUNCEMENT LOST — this is an occurrence. The full two-sided report is above and the JUnit XML is attached as an artifact; record it verbatim on computenet-dqy.40."
+                rc=1
+                ;;
+              incomplete)
+                echo "::error::$arm: SAMPLE DID NOT COMPLETE — the requested size did not fit the build's 5-minute per-test JUnit timeout, so NO sample was produced. This is NOT an announcement loss (computenet-dqy.12) and must not be recorded as one. Re-dispatch smaller: $hint"
+                rc=1
+                ;;
+              vacuous)
+                echo "::error::$arm: NOTHING RAN — no executed testcase in the JUnit XML, so the sample size was zero rather than the requested one."
+                rc=1
+                ;;
+              *)
+                echo "::error::$arm: the report step did not classify this arm (outcome='${outcome:-missing}', exit ${status:-missing}) — treat the run as inconclusive."
+                rc=1
+                ;;
+            esac
+          }
+          verdict "stress probe" "${STRESS_OUTCOME:-}" "${STRESS_STATUS:-1}" \
+            "measured 39.9ms/iteration on ubuntu-latest; ceiling ~7000, default 4000."
+          verdict "burst probe" "${BURST_OUTCOME:-}" "${BURST_STATUS:-1}" \
+            "6000 x 40 took 269s of the 300s budget; go below that."
           if [ "$rc" = "0" ]; then
             echo "Both probes green: ${STRESS_AWAITS:-?} announcement awaits and ${BURST_REFS_TOTAL:-?} announced refs, 0 losses." \
               | tee -a "$GITHUB_STEP_SUMMARY"

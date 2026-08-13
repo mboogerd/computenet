@@ -70,30 +70,62 @@ import java.util.UUID
  *   ~2.5e-5 loss per ref. That headline figure bounds the sweep and nothing
  *   else; it never touched the `onLocalPublish` path.
  * - **The register-then-sweep handover** (the `onLocalPublish` leg): bounded
- *   only by runs of *this* shape, and now bounded at the sweep's own size —
- *   **120,000 refs released inside the window with 0 losses** (computenet-dqy.46,
- *   2026-08-13, macOS arm64 / JBR 25.0.2, 6,000 iterations x 20 racing refs;
- *   240,000 refs announced in total, 25.2s wall), and again at 25.4s in the
- *   review's independent re-run on the same host. Rule of three: under ~2.5e-5
- *   loss per racing ref, the same order as the sweep's. Note the JDK: the sweep's
- *   own 120,000 was taken on JDK 21.0.11, so the two figures are the same size on
- *   different runtimes, which is a caveat on comparing them, not on either one.
- *   The command is the whole cost:
+ *   only by runs of *this* shape, at the sweep's own size, and now on **both**
+ *   platforms. The two long runs are kept separate — same size, different hosts
+ *   and different JDKs, so they are two bounds, not one pooled one:
+ *
+ *   - **macOS**: **120,000 refs released inside the window with 0 losses**
+ *     (computenet-dqy.46, 2026-08-13, macOS arm64 / JBR 25.0.2, 6,000
+ *     iterations x 20 racing refs; 240,000 refs announced in total, 25.2s
+ *     wall), and again at 25.4s in the review's independent re-run on the same
+ *     host.
+ *   - **Linux**: **120,000 refs released inside the window with 0 losses**
+ *     (computenet-dqy.48, 2026-08-13, `ubuntu-latest` GitHub-hosted runner /
+ *     Temurin JDK 21.0.11, 6,000 iterations x 20 racing refs; 240,000 refs
+ *     announced in total, 269.152s of JUnit-reported wall time — an order of
+ *     magnitude slower than the macOS host, which is the runner, not the
+ *     path). Taken by the `announcement-probe.yml` `workflow_dispatch` job
+ *     (computenet-dqy.49) at `burst_iterations=6000 burst_refs=40`, GitHub
+ *     Actions **run 31668681959**, whose report step reads, verbatim:
+ *
+ *         civictech.wire.WsAnnouncementCatchUpBurstTest :: every ref published
+ *         before the peering arrives through the catch-up sweep()  [wall time 269.152s]
+ *         PASSED - no announcement was lost in this sample.
+ *         1 executed testcase(s), 0 failure record(s).
+ *
+ *     The size is not taken on trust: that job poisons each `-D` key with a
+ *     non-numeric value and requires the `NumberFormatException` before it
+ *     measures anything, and passes `--rerun`, so a default-size or replayed
+ *     run cannot be reported as a bulk one.
+ *
+ *   Rule of three on each: under ~2.5e-5 loss per racing ref, the same order as
+ *   the sweep's — **a bound, not a demonstration that the handover cannot lose
+ *   a ref**. A rate anywhere below ~2.5e-5 is entirely consistent with both
+ *   runs.
+ *
+ *   **Mind the JDK when comparing.** The sweep's own 120,000 and the Linux
+ *   figure here were taken on JDK 21.0.11; the macOS figure was taken on JBR
+ *   25.0.2. So the macOS/Linux pair differs in *both* OS and runtime, and
+ *   neither run isolates which of the two any difference would belong to. The
+ *   Linux figure is the one that shares a runtime with the sweep's bound.
+ *
+ *   The command is the whole cost on a machine you control:
  *
  *       java -cp <:wire test runtime classpath> \
  *         civictech.wire.WsAnnouncementCatchUpBurstTestKt 6000 40
  *
- *   The bound above is **macOS only**, and that is the open gap: the loss this
- *   family chases (computenet-dqy.38) was seen on Linux. No *long-run* Linux
- *   figure exists for this path — the container route
- *   (`scripts/flake-loop/run-linux-loop.sh`) needs a running Docker daemon, and
- *   on the machine this was measured the daemon could not be brought up
- *   unattended. What Linux evidence there is, is the fast lane's own: this test
- *   runs in `build-test-fast` on `ubuntu-latest` and contributes 200 racing refs
- *   per CI run (green there on PR #84's run, in the same job where
- *   [WsAnnouncementStressTest] lost an announcement). That is four orders of
- *   magnitude short of the bound above. Anyone with a Linux box or a live daemon
- *   should run the same command there and add the number here.
+ *   or, without a machine, `gh workflow run announcement-probe.yml --ref main
+ *   -f burst_iterations=6000 -f burst_refs=40`. The container route
+ *   (`scripts/flake-loop/run-linux-loop.sh`) needs a running Docker daemon and
+ *   is no longer the only way to a Linux number.
+ *
+ *   **What the Linux figure does not settle.** This test also runs in
+ *   `build-test-fast` on `ubuntu-latest`, contributing 200 racing refs per CI
+ *   run, and has stayed green there. On those same runners computenet-dqy.47
+ *   measured the *stress* path losing 2 announcements in 450 instrumented
+ *   awaits. That is a different path in a different test and the two must not
+ *   be pooled; it is recorded here only so that "the burst probe is green on
+ *   Linux" is not read as "the announcement path is clean on Linux".
  *
  *   The **committed fast lane stays at 10 iterations x 20 racing refs = 200
  *   refs** (rule of three, under ~1.5e-2 per ref) — deliberately, on measured
@@ -140,10 +172,12 @@ import java.util.UUID
  * the sweep's `localRefs()` snapshot, so what they overwhelmingly exercise is
  * the hook leg of the handover rather than an install landing astride the
  * snapshot read. At fast-lane sizes the report's "already Local when it opened"
- * count is 0 in every iteration observed; the 6,000-iteration runs above put an
- * order of magnitude on it — **14 of 120,000 racing refs**, and **1 of 120,000**
- * in the review's re-run of the same command on the same host, were already
- * `Local` when the window opened, i.e. certainly swept. It is a race, so read
+ * count is 0 in every iteration observed; the two macOS 6,000-iteration runs
+ * above put an order of magnitude on it — **14 of 120,000 racing refs**, and
+ * **1 of 120,000** in the review's re-run of the same command on the same host,
+ * were already `Local` when the window opened, i.e. certainly swept. (The Linux
+ * run passed, and this probe prints its per-iteration counts only in a failure
+ * report, so it contributes no figure here.) It is a race, so read
  * that as "of order 1e-5 to 1e-4", not as a rate either run pinned down. So the
  * racing arm does occasionally land on the other side of the snapshot, but at a
  * rate that makes the 120,000 above a bound on the *hook* leg and not on the
