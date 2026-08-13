@@ -31,6 +31,15 @@ The method, and why each check is here (computenet-dqy.47, computenet-dqy.58):
     lost is unknown too. Crediting it with a full run of awaits and zero losses
     would bias the rate DOWN, which is the direction that manufactures a null.
     It is reported as its own excluded category so it stays visible.
+  * TWO UNITS ARE REPORTED, awaits and RUNS CARRYING >= 1 LOSS, because a
+    per-await rate is only a rate if awaits are independent, and the awaits
+    inside one run share a JVM, a runner and a machine (computenet-dqy.64).
+    Every occurrence on record is 1 loss in its run's 50 awaits, and nothing
+    here can tell a per-await carrier from a per-run one -- with 2 losses in 53
+    runs, landing in different runs is what both models predict (P(same run) =
+    1/53 under per-await independence). The unit chosen moves the probability
+    of a probe arm's null by two orders of magnitude, so both numerators are
+    printed and neither is called THE rate.
 
 POSITIVE CONTROL. Run with `--since 2026-08-13T02:06:45Z` (the merge of 38bbd71,
 the two-sided instrument) and the first 1h53m of output must reproduce
@@ -180,6 +189,7 @@ def harvest(since: str) -> dict:
 
 def tally(data: dict) -> dict:
     counted, awaits, losses, excluded = 0, 0, 0, []
+    lossy_runs = 0
     for r in data["runs"]:
         for a in r.get("attempts", []) or [{"verdict": r.get("verdict", "excluded: no attempt")}]:
             v = a.get("verdict", "")
@@ -188,8 +198,19 @@ def tally(data: dict) -> dict:
                 continue
             counted += 1
             awaits += r["awaits_per_run"] or 0
-            losses += sum(x["failures"] for x in a.get("reports", []))
-    return {"counted_runs": counted, "awaits": awaits, "losses": losses, "excluded": excluded}
+            here = sum(x["failures"] for x in a.get("reports", []))
+            losses += here
+            if here:
+                lossy_runs += 1
+    return {
+        "counted_runs": counted,
+        "awaits": awaits,
+        "losses": losses,
+        # The run-level numerator, alongside the await-level one: see the
+        # two-units note in the module docstring (computenet-dqy.64).
+        "runs_with_loss": lossy_runs,
+        "excluded": excluded,
+    }
 
 
 def main() -> int:
@@ -210,6 +231,8 @@ def main() -> int:
                   f"-> {a.get('verdict')}")
     print()
     print(f"counted runs: {t['counted_runs']}   awaits: {t['awaits']}   losses: {t['losses']}")
+    print(f"per-await:  {t['losses']}/{t['awaits']}      "
+          f"per-run:  {t['runs_with_loss']}/{t['counted_runs']} runs carried >= 1 loss")
     for e in t["excluded"]:
         print(f"excluded: run {e[0]} attempt {e[1]}: {e[2]}")
     return 0
