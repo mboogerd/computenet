@@ -139,15 +139,19 @@ import java.net.Socket
  * ## REPAIRED by computenet-dqy.37, and this test is now inverted
  *
  * Everything above is the mechanism as it stood. `WsTransport.WsListener` now
- * vendors 1.6.0's accept path in
- * `WsListener.acceptWithoutBlamingTheListener`, reached from the one
- * non-private seam on the selector path (`protected onConnect(SelectionKey)`,
- * which `doAccept` calls with the server's own acceptable key *before* it
- * accepts). It performs the accept itself, configures the socket inside its
- * own `try/catch`, and on failure closes **that** channel and counts it on
- * `WsListener.rejectedAccepts` — leaving the listening channel alone. The
- * selector loop's last-resort `handleIOException(serverKey, null, ex)` is
- * therefore never reached from the accept prologue.
+ * vendors 1.6.0's accept path: `WsListener.takeOverAccepting` cancels the
+ * server's key on the library's own selector at `onStart`, which makes
+ * `key.isValid()` false in the selector loop and `doAccept` unreachable, and an
+ * acceptor thread with its own `Selector` runs `WsListener.admit` instead.
+ * (`protected onConnect(SelectionKey)` alone is *not* enough, and that is
+ * measured rather than assumed: `doAccept` runs its own `server.accept()`
+ * immediately after `onConnect` returns, so an earlier revision that accepted
+ * there still lost the listener after 2 resets.) `admit` performs the accept
+ * itself, configures the socket inside its own `try/catch`, and on failure
+ * closes **that** channel and counts it on `WsListener.rejectedAccepts` —
+ * leaving the listening channel alone. The selector loop's last-resort
+ * `handleIOException(serverKey, null, ex)` is therefore never reached from the
+ * accept prologue.
  *
  * So the assertions below are inverted, as this bead's TEST clause required
  * rather than deleting the file: **the listener still accepts after 200

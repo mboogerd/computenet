@@ -441,10 +441,11 @@ object WsTransport {
      *
      * ## That mechanism is repaired here (computenet-dqy.37)
      *
-     * [acceptWithoutBlamingTheListener] vendors 1.6.0's accept path with the
-     * two setters inside a `try/catch`, so an `IOException` from configuring a
-     * freshly accepted socket is attributed to **that** socket — closed,
-     * counted on [rejectedAccepts] — instead of to the server's acceptable key.
+     * [takeOverAccepting] takes the accept off the library's selector and
+     * [admit] vendors 1.6.0's accept path with the two setters inside a
+     * `try/catch`, so an `IOException` from configuring a freshly accepted
+     * socket is attributed to **that** socket — closed, counted on
+     * [rejectedAccepts] — instead of to the server's acceptable key.
      * `WsListenerAcceptRstTest` asserts the inverted claim the repair makes
      * true: the listener still accepts after a deliberate reset storm.
      *
@@ -687,9 +688,10 @@ object WsTransport {
             val acceptSelector = try {
                 Selector.open()
             } catch (e: IOException) {
-                onError(null, e)
+                reportAcceptorStopped(e)
                 return
             }
+            var cause: Throwable? = null
             try {
                 server.register(acceptSelector, SelectionKey.OP_ACCEPT)
                 while (!stopRequested && server.isOpen) {
@@ -697,18 +699,68 @@ object WsTransport {
                     acceptSelector.selectedKeys().clear()
                     while (!stopRequested) {
                         val channel = server.accept() ?: break
-                        admit(channel, libSelector)
+                        // One connection must never cost this listener its
+                        // acceptor. [admit] can raise unchecked exceptions the
+                        // narrow catches inside it do not cover
+                        // (`CancelledKeyException` and `ClosedSelectorException`
+                        // are `RuntimeException`s, and the factory is foreign
+                        // code), and an escape here would kill this thread while
+                        // the listening channel stayed OPEN — see
+                        // [reportAcceptorStopped] for why that is worse than the
+                        // defect being repaired.
+                        try {
+                            admit(channel, libSelector)
+                        } catch (t: Throwable) {
+                            runCatching { channel.close() }
+                            if (!stopRequested) {
+                                onError(
+                                    null,
+                                    IOException(
+                                        "computenet-dqy.37: admitting an accepted connection failed; " +
+                                            "that connection was dropped and this listener keeps accepting",
+                                        t,
+                                    ),
+                                )
+                            }
+                        }
                     }
                 }
             } catch (_: ClosedChannelException) {
                 // the listener is going down, or has lost its channel: the
                 // watchdog owns that diagnosis, not this loop
             } catch (_: ClosedSelectorException) {
-            } catch (e: IOException) {
-                if (!stopRequested) onError(null, e)
+            } catch (t: Throwable) {
+                cause = t
             } finally {
                 runCatching { acceptSelector.close() }
+                if (!stopRequested && server.isOpen) reportAcceptorStopped(cause)
             }
+        }
+
+        /**
+         * The acceptor thread owns this listener's accept path, so if it stops
+         * while the listening channel is still **open** the listener is deaf
+         * with nothing closed — and [watchListeningSocket] cannot see that,
+         * because it only looks for a channel that closed. Worse than the
+         * defect this bead repairs: dialers reach an unattended backlog and hang
+         * instead of being refused fast.
+         *
+         * So the acceptor never dies quietly. Every exit that is not a
+         * requested [stop] or a closed listening channel says so through
+         * [onError].
+         */
+        private fun reportAcceptorStopped(cause: Throwable?) {
+            onError(
+                null,
+                IOException(
+                    "computenet-dqy.37: the vendored acceptor for port $port stopped while its listening " +
+                        "socket is still open. This peer will accept TCP connections and complete no " +
+                        "handshake, so dialers hang rather than being refused, and the listening-socket " +
+                        "watchdog cannot see it. THIS IS A DIAGNOSIS, NOT A RECOVERY: this listener will " +
+                        "not accept again on its own.",
+                    cause,
+                ),
+            )
         }
 
         /** @see takeOverAccepting */
@@ -726,10 +778,15 @@ object WsTransport {
                 runCatching { channel.close() }
                 return
             }
-            val factory = getWebSocketFactory() as? WebSocketServerFactory ?: run {
-                runCatching { channel.close() }
-                return
-            }
+            // Never silently: `getWebSocketFactory()` is declared to return the
+            // wider `WebSocketFactory`, and a listener that quietly discarded
+            // every connection would be exactly the invisible deafness this
+            // repair exists to remove. [acceptLoop] reports it per connection.
+            val factory = getWebSocketFactory() as? WebSocketServerFactory
+                ?: throw IllegalStateException(
+                    "computenet-dqy.37: WebSocketServer.getWebSocketFactory() is not a " +
+                        "WebSocketServerFactory, so the vendored accept path cannot create a connection",
+                )
             val w: WebSocketImpl = factory.createWebSocket(this, getDraft())
             var key: SelectionKey? = null
             try {
