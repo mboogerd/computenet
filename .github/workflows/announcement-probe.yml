@@ -1,0 +1,219 @@
+name: Announcement probe (on-demand Linux bulk sample)
+
+# An INSTRUMENT, not a gate (computenet-dqy.49).
+#
+# What it is for. The announcement-loss family (computenet-dqy.34 / .38 / .40 /
+# .44 / .47) needs a Linux sample of the announcement path at a size the fast
+# lane cannot afford. The container route computenet-dqy.44 prescribes needs a
+# Docker daemon, which cannot be started unattended on the dev host; a
+# GitHub-hosted `ubuntu-latest` runner is the same Linux JVM with no daemon and
+# no human. This job is that route.
+#
+# Deliberate non-properties, all of them load-bearing:
+#
+#   - `workflow_dispatch` ONLY. No `push`, no `pull_request`, no `schedule`. It
+#     costs nothing until somebody asks for it.
+#   - NOT a required check. The protected-branch ruleset requires
+#     build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test.
+#     This job's name is not among them and must not be added: a probe that
+#     deliberately runs the flakiest path in the repo at 100x size is the last
+#     thing that should be able to block a merge.
+#   - It does not touch `ci.yml`, so it cannot lengthen build-test-fast, whose
+#     wall time computenet-dqy.15 and computenet-dqy.16 spent real effort on.
+#
+# THE TRAP THIS JOB EXISTS TO NOT FALL INTO. Gradle's Test task does not inherit
+# the daemon's system properties, so before PR #81 `./gradlew :wire:test
+# -Dwire.stress.iterations=100000` ran silently at the committed default of 25 —
+# a small sample wearing a large sample's label, with nothing in the output
+# saying so. `wire/build.gradle.kts` now forwards the three keys explicitly. The
+# preflight step below re-proves that forwarding IN THIS JOB, on every run, by
+# poisoning each key with a non-numeric value and requiring the resulting
+# NumberFormatException: if the forwarding ever regresses, this job fails before
+# it collects a single number rather than reporting a default-size run as a bulk
+# one.
+#
+# Two more places the sample size could quietly collapse, both guarded:
+#   - `--rerun` on every probe invocation. A test task satisfied FROM-CACHE or
+#     UP-TO-DATE executes nothing and still reports success.
+#   - the executed-size assertions after each probe, which require the expected
+#     testcase to actually appear in the JUnit XML.
+#
+# THE REPORT MUST SURVIVE. The value of an occurrence is the full two-sided
+# failure report — server localRefs vs client remoteRefs, per-ref park depths on
+# both sides, and the preHello/gate silent-drop counters PR #83 added. Gradle's
+# console rendering of a failed test is not a contract, so the report is
+# extracted verbatim from the JUnit XML (message + text, untruncated) into the
+# job log AND the step summary, and the XML itself is uploaded as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      stress_iterations:
+        description: "WsAnnouncementStressTest iterations (2 announcement awaits each; committed default is 25)"
+        required: false
+        default: "20000"
+      burst_iterations:
+        description: "WsAnnouncementCatchUpBurstTest iterations (committed default is 10)"
+        required: false
+        default: "6000"
+      burst_refs:
+        description: "Refs published per burst iteration (committed default is 40)"
+        required: false
+        default: "40"
+
+# No `cancel-in-progress`: a superseded run of a multi-hour measurement is
+# wasted compute, and two concurrent dispatches are two independent samples,
+# which is a legitimate thing to want.
+concurrency:
+  group: announcement-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  announcement-probe:
+    name: Announcement probe (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Same setup as every Gradle lane in ci.yml, including the
+      # `cache-encryption-key` that lets setup-gradle save the configuration
+      # cache (computenet-aer). Unset secret degrades to no-config-cache-save
+      # rather than failing.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: Record the requested sample size
+        env:
+          STRESS: ${{ inputs.stress_iterations }}
+          BURST: ${{ inputs.burst_iterations }}
+          REFS: ${{ inputs.burst_refs }}
+        run: |
+          set -euo pipefail
+          for v in "$STRESS" "$BURST" "$REFS"; do
+            case "$v" in
+              ''|*[!0-9]*) echo "::error::inputs must be positive integers; got '$v'"; exit 1 ;;
+            esac
+            [ "$v" -gt 0 ] || { echo "::error::inputs must be > 0; got '$v'"; exit 1; }
+          done
+          awaits=$((STRESS * 2))
+          refs=$((BURST * REFS))
+          {
+            echo "## Announcement probe — requested sample"
+            echo ""
+            echo "| knob | value | derived |"
+            echo "| --- | --- | --- |"
+            echo "| wire.stress.iterations | $STRESS | $awaits announcement awaits |"
+            echo "| wire.burst.iterations | $BURST | $refs announced refs |"
+            echo "| wire.burst.refs | $REFS | |"
+            echo ""
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "STRESS_AWAITS=$awaits" >> "$GITHUB_ENV"
+          echo "BURST_REFS_TOTAL=$refs" >> "$GITHUB_ENV"
+
+      # PREFLIGHT. Poison each forwarded key in turn with a non-numeric value
+      # and require the probe to die on `Integer.parseInt`. A run where the
+      # forwarding is broken cannot reach the measurement steps.
+      #
+      # Verified locally on this branch before landing (macOS, same Gradle
+      # build): `./gradlew :wire:test --tests '*WsAnnouncementCatchUpBurstTest*'
+      # --rerun -Dwire.burst.iterations=NOT_A_NUMBER` exits 1 with
+      # `java.lang.NumberFormatException: For input string: "NOT_A_NUMBER"` at
+      # WsAnnouncementCatchUpBurstTest.kt:151.
+      - name: Preflight - prove each -D reaches the test JVM
+        run: |
+          set -uo pipefail
+          poison() {
+            key="$1"; filter="$2"
+            echo "== poisoning -D$key =="
+            set +e
+            ./gradlew :wire:test --tests "$filter" --rerun "-D$key=NOT_A_NUMBER" > "preflight-$key.log" 2>&1
+            status=$?
+            set -e
+            cat "preflight-$key.log"
+            if [ "$status" -eq 0 ]; then
+              echo "::error::-D$key was IGNORED — a poisoned value produced a green run, so any size passed to this job is a lie. Check the forwarding block in wire/build.gradle.kts."
+              return 1
+            fi
+            if ! grep -q 'NumberFormatException: For input string: "NOT_A_NUMBER"' "preflight-$key.log"; then
+              echo "::error::-D$key run failed, but not with the expected NumberFormatException — cannot conclude the value arrived."
+              return 1
+            fi
+            echo "-D$key reaches the test JVM."
+          }
+          rc=0
+          poison wire.stress.iterations '*WsAnnouncementStressTest*' || rc=1
+          poison wire.burst.iterations '*WsAnnouncementCatchUpBurstTest*' || rc=1
+          poison wire.burst.refs '*WsAnnouncementCatchUpBurstTest*' || rc=1
+          exit $rc
+
+      - name: Stress probe (announcement path, catch-up + live shapes)
+        env:
+          STRESS: ${{ inputs.stress_iterations }}
+        run: |
+          set -uo pipefail
+          set +e
+          ./gradlew :wire:test --tests '*WsAnnouncementStressTest*' --rerun \
+            "-Dwire.stress.iterations=$STRESS"
+          echo "STRESS_STATUS=$?" >> "$GITHUB_ENV"
+          set -e
+          mkdir -p probe-evidence/stress
+          cp -a wire/build/test-results/test/. probe-evidence/stress/
+
+      - name: Stress probe - full report
+        if: ${{ !cancelled() }}
+        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/stress "stress (${{ inputs.stress_iterations }} iterations)" WsAnnouncementStressTest
+
+      - name: Catch-up burst probe
+        if: ${{ !cancelled() }}
+        env:
+          BURST: ${{ inputs.burst_iterations }}
+          REFS: ${{ inputs.burst_refs }}
+        run: |
+          set -uo pipefail
+          set +e
+          ./gradlew :wire:test --tests '*WsAnnouncementCatchUpBurstTest*' --rerun \
+            "-Dwire.burst.iterations=$BURST" "-Dwire.burst.refs=$REFS"
+          echo "BURST_STATUS=$?" >> "$GITHUB_ENV"
+          set -e
+          mkdir -p probe-evidence/burst
+          cp -a wire/build/test-results/test/. probe-evidence/burst/
+
+      - name: Catch-up burst probe - full report
+        if: ${{ !cancelled() }}
+        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/burst "burst (${{ inputs.burst_iterations }} iterations x ${{ inputs.burst_refs }} refs)" WsAnnouncementCatchUpBurstTest
+
+      # Cheap and unconditional: two XML files. A green run's XML is the
+      # executed-size record, a red run's is the occurrence.
+      - name: Upload probe evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: announcement-probe-evidence
+          path: probe-evidence
+          if-no-files-found: warn
+          retention-days: 90
+
+      # The probe steps swallow their exit status so that a failure in the first
+      # probe does not cost the second probe's sample. The job conclusion is set
+      # here instead, so a lost announcement still reddens this run.
+      - name: Conclude
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          echo "stress exit=${STRESS_STATUS:-missing} burst exit=${BURST_STATUS:-missing}"
+          rc=0
+          [ "${STRESS_STATUS:-1}" = "0" ] || { echo "::error::stress probe reported failures — read the full report above"; rc=1; }
+          [ "${BURST_STATUS:-1}" = "0" ] || { echo "::error::burst probe reported failures — read the full report above"; rc=1; }
+          if [ "$rc" = "0" ]; then
+            echo "Both probes green: ${STRESS_AWAITS:-?} announcement awaits and ${BURST_REFS_TOTAL:-?} announced refs, 0 losses." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $rc
