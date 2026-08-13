@@ -20,6 +20,20 @@
 #                     Prints bd import's own report unmodified and exits
 #                     nonzero if bd import fails. Also writes the stamped
 #                     delta JSONL to $BDS0_RIG_ROOT/last-hop.jsonl.
+#   rig.sh journal <WS> <issue-id>
+#                     Print workspace <WS>'s journal (Dolt `events` table)
+#                     rows for <issue-id>, as JSON, ordered by created_at.
+#                     bd 1.1.2 has no `bd events` command and `bd sql` is
+#                     not supported in embedded mode, so this reads the
+#                     workspace's embedded Dolt database directly with the
+#                     `dolt` CLI. Fails with a clear message if `dolt` is
+#                     not installed or the embedded Dolt directory is
+#                     missing.
+#   rig.sh smoke      Self-contained end-to-end exercise of the whole rig:
+#                     init, one hop A->B of a seeded issue, then journal
+#                     that issue in B. Asserts the issue landed in B and
+#                     that its journal has at least one event. Exits
+#                     nonzero on any failure.
 set -euo pipefail
 
 # bd_ws <root> <name> -> path of workspace <name> under rig root <root>.
@@ -151,6 +165,92 @@ cmd_hop() {
   bd_ws_run "$ws_to" "${import_args[@]}" < "$delta_file"
 }
 
+# cmd_journal <WS> <issue-id> -> print the journal (Dolt `events` table)
+# rows for <issue-id> in workspace <WS>, as JSON, ordered by created_at.
+# Locates the embedded Dolt directory by globbing
+# <ws>/.beads/embeddeddolt/*/ rather than hardcoding the workspace's issue
+# prefix, since that prefix varies per workspace (bdsa, bdsb, ...).
+cmd_journal() {
+  local ws="${1:-}" issue_id="${2:-}"
+  if [[ -z "$ws" || -z "$issue_id" ]]; then
+    echo "usage: $0 journal <WS> <issue-id>" >&2
+    exit 1
+  fi
+
+  if ! command -v dolt >/dev/null 2>&1; then
+    echo "error: 'dolt' is not installed; the journal is read directly from" \
+      "the workspace's embedded Dolt database (bd 1.1.2 has no 'bd events'" \
+      "command and 'bd sql' fails in embedded mode)" >&2
+    exit 1
+  fi
+
+  local -a db_dirs=("$ws"/.beads/embeddeddolt/*/)
+  if [[ ! -d "${db_dirs[0]}" ]]; then
+    echo "error: no embedded Dolt database found under $ws/.beads/embeddeddolt" >&2
+    exit 1
+  fi
+  if [[ ${#db_dirs[@]} -gt 1 ]]; then
+    echo "error: expected exactly one embedded Dolt database under" \
+      "$ws/.beads/embeddeddolt, found ${#db_dirs[@]}" >&2
+    exit 1
+  fi
+
+  (
+    cd "${db_dirs[0]}"
+    dolt sql -r json -q \
+      "select * from events where issue_id='$issue_id' order by created_at"
+  )
+}
+
+# cmd_smoke -> self-contained end-to-end exercise of the whole rig: init,
+# one hop A->B of a seeded issue, then journal that issue in B. Asserts the
+# issue landed in B and that its journal has at least one event row.
+cmd_smoke() {
+  echo "== rig.sh smoke: init ==" >&2
+  local init_output
+  init_output=$(cmd_init)
+  echo "$init_output" >&2
+  eval "$init_output"
+  export BDS0_RIG_ROOT
+
+  local ws_a ws_b
+  ws_a=$(bd_ws "$BDS0_RIG_ROOT" A)
+  ws_b=$(bd_ws "$BDS0_RIG_ROOT" B)
+
+  # Pick the plain seeded task in A as the smoke's hop subject: it is the
+  # simplest seed shape (no pre-existing provenance metadata to confuse
+  # the assertion that hop stamped metadata.cn_dot).
+  local seed_id
+  seed_id=$(bd_ws_run "$ws_a" list --json \
+    | jq -r '[.[] | select(.title == "Plain seeded task in bdsa")][0].id')
+  if [[ -z "$seed_id" || "$seed_id" == "null" ]]; then
+    echo "smoke FAILED: could not find seeded issue in workspace A" >&2
+    exit 1
+  fi
+  echo "== rig.sh smoke: hop A B --dot 'A:1' $seed_id ==" >&2
+  cmd_hop A B --dot 'A:1' "$seed_id" >&2
+
+  echo "== rig.sh smoke: verify $seed_id exists in B ==" >&2
+  if ! bd_ws_run "$ws_b" show "$seed_id" --json >/dev/null; then
+    echo "smoke FAILED: $seed_id does not exist in workspace B after hop" >&2
+    exit 1
+  fi
+
+  echo "== rig.sh smoke: journal B $seed_id ==" >&2
+  local journal_output
+  journal_output=$(cmd_journal "$ws_b" "$seed_id")
+  echo "$journal_output"
+
+  local event_count
+  event_count=$(echo "$journal_output" | jq '(.rows // []) | length')
+  if [[ "$event_count" -lt 1 ]]; then
+    echo "smoke FAILED: expected at least one journal event for $seed_id in B, got $event_count" >&2
+    exit 1
+  fi
+
+  echo "== rig.sh smoke: OK ($event_count journal event(s) for $seed_id in B) ==" >&2
+}
+
 main() {
   local sub="${1:-}"
   case "$sub" in
@@ -161,8 +261,15 @@ main() {
       shift
       cmd_hop "$@"
       ;;
+    journal)
+      shift
+      cmd_journal "$@"
+      ;;
+    smoke)
+      cmd_smoke
+      ;;
     *)
-      echo "usage: $0 {init|hop}" >&2
+      echo "usage: $0 {init|hop|journal|smoke}" >&2
       exit 1
       ;;
   esac
