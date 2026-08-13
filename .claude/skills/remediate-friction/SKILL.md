@@ -7,10 +7,34 @@ description: Drains the skill-friction items under the SDLC epic (computenet-wpv
 
 Drains the `skill-friction`-labeled bugs and features under
 `computenet-wpvy`, the SDLC epic, by fixing `.claude/skills/work/`
-(SKILL.md, `references/`, `scripts/`). This is the interim stand-in for the
-SDLC epic's eventual reactive orchestrator — one that picks up any issue
-the moment an orchestrator files it there. Until that exists, this skill is
-the drain, run on demand or on a schedule.
+(SKILL.md, `references/`, `scripts/`). Run on demand, or reactively via the
+trigger below.
+
+## The reactive trigger
+
+`scripts/gate.sh` + `scripts/install-trigger.sh` make this lane
+event-driven: `bd` rewrites `.beads/issues.jsonl` on every mutation, so a
+launchd `WatchPaths` agent fires the gate the moment anything is filed —
+including the step-7 filings of a /work session finishing on this machine.
+The gate exits in milliseconds when nothing is actionable, holds a
+single-flight lock (with stale-lock recovery), and otherwise launches one
+headless `claude -p "/remediate-friction"` under a watchdog cap
+(`SDLC_MAX_SECONDS`, default 90m). The plist adds an hourly `StartInterval`
+as the cross-machine fallback — items filed and *not* claimed by the other
+machine become visible here only after a Dolt sync, so the watcher covers
+the local case and the hourly tick covers the rest.
+
+Install once per machine, from a shell where `BEADS_ACTOR`, `claude`, `bd`
+and `jq` resolve (their paths and the actor get baked into the plist):
+
+```bash
+.claude/skills/remediate-friction/scripts/install-trigger.sh
+```
+
+Nothing installs itself — a human runs that. First firing may need a macOS
+Files-and-Folders approval; the log is
+`~/Library/Logs/sdlc-orchestrator.log`, and `SDLC_DRY_RUN=1 scripts/gate.sh`
+shows what the filter would do without launching anything.
 
 This lane is deliberately separate from /work: a work session must never
 edit the skill it is executing under, and this orchestrator must never look
