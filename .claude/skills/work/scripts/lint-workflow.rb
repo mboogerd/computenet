@@ -29,11 +29,22 @@ ARGV.each do |path|
     next
   end
 
+  # An empty file parses to `false` and a top-level list to an Array; both used
+  # to crash with a Ruby backtrace on the `doc['jobs']` below (review, PR #116).
+  unless doc.is_a?(Hash)
+    warn "#{path}: not a YAML mapping (#{doc.class}) — no jobs to check"
+    failures += 1
+    next
+  end
+
   steps = 0
   bad = 0
-  (doc['jobs'] || {}).each do |job, spec|
-    (spec['steps'] || []).each do |st|
-      next unless st['run']
+  jobs = doc['jobs']
+  (jobs.is_a?(Hash) ? jobs : {}).each do |job, spec|
+    next unless spec.is_a?(Hash)
+    steps_list = spec['steps']
+    (steps_list.is_a?(Array) ? steps_list : []).each do |st|
+      next unless st.is_a?(Hash) && st['run']
       steps += 1
       IO.popen(['bash', '-n'], 'w') { |io| io.write(st['run']) }
       next if $?.success?
