@@ -91,6 +91,19 @@ import java.util.UUID
  *   quiet half rides the sweep, the racing half rides the hook. Before the seam
  *   the same mutation gave 0/40.
  *
+ * All three were re-measured after computenet-dqy.40's per-ref `catchUp`
+ * wrapper landed on the sweep (#83), because they had been taken against a
+ * sweep where a failed send propagated. They still hold, at 10/10, 36/40 (every
+ * lost ref racing), 10/10, 37/40 (every lost ref quiet), and 10/10 at exactly
+ * 20/40 — the few-ref differences are the mutation's own arithmetic, not a
+ * change of verdict. A fourth mutation checks the wrapper itself: making every
+ * 7th sweep *send throw* is swallowed by `catchUp` and logged (30 `[Peering]
+ * catch-up announcement failed` lines), and the probe still **fails 10/10** at
+ * 37-39/40, naming the lost refs. So the isolation shrinks a failure's blast
+ * radius — pre-#83 that throw also abandoned every ref behind it — without
+ * making a lost ref quieter here: this probe asserts arrival at the client, and
+ * a send that failed did not arrive however its exception was handled.
+ *
  * The honest limit of the racing arm: its publishes are *issued* inside the
  * window and installed concurrently with the sweep, but they consistently miss
  * the sweep's `localRefs()` snapshot (the report's "already Local when it
