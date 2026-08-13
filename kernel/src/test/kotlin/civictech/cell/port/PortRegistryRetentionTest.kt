@@ -79,7 +79,20 @@ import java.util.UUID
  *   `PortRegistry.release(owner)` (and `ProtocolSupport.unbind`, the pair
  *   `ManagedHost.unbindPortsRecursively` already uses on despawn) called before
  *   they are dropped, ARE collected. That is what distinguishes "this map holds
- *   it" from "something else does".
+ *   it" from "something else does". Review of computenet-uo75 (2026-08-13)
+ *   narrowed the pair to the single call: `PortRegistry.release` **alone** is
+ *   sufficient — both shapes are collected without `ProtocolSupport.unbind` —
+ *   and `unbind` is a no-op for them, because `ProtocolSupport.registries` holds
+ *   no entry for these ports at all (nothing here calls `ProtocolSupport.of`;
+ *   `FanInlet` acquires it lazily in `onEdgeEvent`). `unbind` is kept in the
+ *   arm because it is what despawn actually does, not because it is load-bearing.
+ *
+ * Every builder below is a **separate method** that returns only a
+ * [WeakReference], and must stay one. A named local in a test method's own frame
+ * — including inside an inlined `run { }` — keeps its object reachable for the
+ * whole method, which silently turns every `shouldNotBe null` here into a pass.
+ * That is not hypothetical: it is what the first revision of the review's own
+ * perturbation probes did.
  *
  * The first arm asserts the leak, so **it is a characterization test, and the
  * fix flips it**: whoever makes a dropped owner collectable on its own changes
