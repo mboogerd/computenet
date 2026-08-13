@@ -146,9 +146,8 @@ import java.util.UUID
  * `Local` when the window opened, i.e. certainly swept. It is a race, so read
  * that as "of order 1e-5 to 1e-4", not as a rate either run pinned down. So the
  * racing arm does occasionally land on the other side of the snapshot, but at a
- * rate that makes
- * the 120,000 above a bound on the *hook* leg and not on the snapshot seam
- * itself. A publish that fell between the two legs would still be caught — that
+ * rate that makes the 120,000 above a bound on the *hook* leg and not on the
+ * snapshot seam itself. A publish that fell between the two legs would still be caught — that
  * is the property under test — but the probe still cannot claim to have aimed
  * one at that seam.
  *
