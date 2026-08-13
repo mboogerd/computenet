@@ -415,7 +415,10 @@ object WsTransport {
      * A `WebSocketServer` can lose its **listening** channel while the object,
      * its selector thread and its existing connections all stay perfectly
      * healthy — and report it nowhere. [listeningSocketLoss] and the watchdog
-     * behind it exist so that event has a voice (computenet-dqy.39).
+     * behind it exist so that event has a voice (computenet-dqy.39). Its
+     * sibling [acceptorStopped] covers the *other* way this listener can go
+     * deaf — the acceptor stopping with that channel still open
+     * (computenet-dqy.56) — because neither seam can see the other's failure.
      *
      * The mechanism is java-websocket 1.6.0's, characterized as an executable
      * fact by `WsListenerAcceptRstTest` (read its KDoc for the bytecode
@@ -545,6 +548,32 @@ object WsTransport {
         val listeningSocketLoss: ListeningSocketLostException? get() = loss.get()
 
         private val loss = AtomicReference<ListeningSocketLostException?>(null)
+
+        /**
+         * The acceptor's stop, once reported — one-shot, the same shape as
+         * [listeningSocketLoss] and for the same reason (computenet-dqy.56).
+         *
+         * Non-null exactly when this listener's vendored acceptor thread left
+         * [acceptLoop] while nobody had asked it to stop and its listening
+         * channel was still open; the same object that was handed to [onError].
+         *
+         * The two seams cover the two ways this listener can go deaf, and
+         * neither can see the other's: [listeningSocketLoss] polls for a channel
+         * that CLOSED, so it stays null when the channel is open and nothing is
+         * accepting — which is the *worse* of the two for a dialer, because a
+         * TCP connect into an unattended backlog hangs rather than being
+         * refused. Before this seam existed that state was reported through
+         * [onError] only, so a health check had to scrape stderr to learn the
+         * listener had gone deaf while an operator could poll for the other
+         * half. A listener that can go deaf with no observable signal is the
+         * weaker remote-side guarantee this line of work exists to remove.
+         *
+         * Like [listeningSocketLoss], this is a DIAGNOSIS, not a recovery: the
+         * acceptor does not come back.
+         */
+        val acceptorStopped: AcceptorStoppedException? get() = acceptorStop.get()
+
+        private val acceptorStop = AtomicReference<AcceptorStoppedException?>(null)
 
         internal fun awaitStart(timeout: Long, unit: TimeUnit): Boolean = started.await(timeout, unit)
 
@@ -747,20 +776,26 @@ object WsTransport {
          *
          * So the acceptor never dies quietly. Every exit that is not a
          * requested [stop] or a closed listening channel says so through
-         * [onError].
+         * [acceptorStopped] and [onError].
+         *
+         * The seam is published *before* [onError] is called, deliberately and
+         * for the same reason [reportListeningSocketLost] does it in that order:
+         * `onError` renders foreign objects — the cause chain of whatever ended
+         * the loop — so it can itself throw, and a diagnosis that only exists if
+         * the printing succeeds is not a diagnosis. One-shot via
+         * `compareAndSet`, so the first exit is the one recorded.
          */
         private fun reportAcceptorStopped(cause: Throwable?) {
-            onError(
-                null,
-                IOException(
-                    "computenet-dqy.37: the vendored acceptor for port $port stopped while its listening " +
-                        "socket is still open. This peer will accept TCP connections and complete no " +
-                        "handshake, so dialers hang rather than being refused, and the listening-socket " +
-                        "watchdog cannot see it. THIS IS A DIAGNOSIS, NOT A RECOVERY: this listener will " +
-                        "not accept again on its own.",
-                    cause,
-                ),
+            val stopped = AcceptorStoppedException(
+                "computenet-dqy.37: the vendored acceptor for port $port stopped while its listening " +
+                    "socket is still open. This peer will accept TCP connections and complete no " +
+                    "handshake, so dialers hang rather than being refused, and the listening-socket " +
+                    "watchdog cannot see it. THIS IS A DIAGNOSIS, NOT A RECOVERY: this listener will " +
+                    "not accept again on its own.",
+                cause,
             )
+            if (!acceptorStop.compareAndSet(null, stopped)) return
+            onError(null, stopped)
         }
 
         /** @see takeOverAccepting */
@@ -886,6 +921,18 @@ object WsTransport {
          * thrown at a caller, because there is no caller on that path.
          */
         class ListeningSocketLostException internal constructor(message: String) : IOException(message)
+
+        /**
+         * This listener's vendored acceptor thread stopped while its listening
+         * socket was still open, without a [stop] having been asked for — see
+         * [acceptorStopped] and [reportAcceptorStopped]. Reported through
+         * [onError] and readable from [acceptorStopped]; never thrown at a
+         * caller, because there is no caller on that path.
+         */
+        class AcceptorStoppedException internal constructor(
+            message: String,
+            cause: Throwable?,
+        ) : IOException(message, cause)
 
         internal companion object {
             /**
