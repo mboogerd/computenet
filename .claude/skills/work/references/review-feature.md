@@ -29,7 +29,36 @@ a test name, a command's output. A step you could satisfy by writing
 ```bash
 bd show <feature-id> --json          # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
+bd comments <feature-id> --json > "$SCRATCH/comments.json"   # then read the file
 ```
+
+**Read the comments — that third command is not optional.** `bd show --json`
+carries only `comment_count`, never the bodies, so a review that skips this
+has not seen the thread. On a long-lived item the thread is where the
+decisive context lives: prior sessions' handoffs, a *withdrawn*
+certification, a corrected premise, a human's answer to a parked question. A
+reviewer unaware of a withdrawn certification reviews the wrong thing.
+Redirect it (`$SCRATCH` is SKILL.md's name for your scratchpad directory) —
+the JSON overruns the tool-result limit
+on exactly the beads that need it, and a truncated array reads as fewer
+comments rather than as an error (SKILL.md, "Two `bd` JSON traps").
+
+**`bd list --parent` coming back empty is a shape, not a dead end.** This
+file is written for a feature with child tasks, but an epic can be broken
+down **flat** — bug/task/chore items worked directly, each with its own
+worktree, branch and PR and no children of their own (SKILL.md 5f route 4 explicitly
+permits working unparented bugs and chores, and route 3 a single cross-epic
+item; computenet-9xj records that a task parented straight to an epic has no
+feature to merge into). When the
+list is empty, there is simply no task layer to reconcile. Judge the item
+against **its own** acceptance criteria and diff, and skip exactly the three
+§2 bullets that presuppose tasks — "Criteria with no owner", "Seams", and the
+"no task claimed" half of "Scope drift" (judge scope against the item's own
+`metadata.files` instead). Everything else in §2 through §8 applies
+unchanged, reading "feature" as "the item". Two sentences written for the
+common shape do not hold here either, and neither is a defect to report: §5's
+"you reach this point only once every task has merged" (there were none) and
+this file's opening "every task here is closed".
 
 Read the parent epic too, and any spec sections the feature cites — those
 are the authority (AGENTS.md), above the feature's own prose.
@@ -356,8 +385,8 @@ disappear, are both wrong.
 Merge it, and keep the residual alive:
 
 ```bash
-bd create --parent=<epic-id> -t "<the unmet criterion, verbatim>" \
-  -d "Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
+bd create "<the unmet criterion, verbatim>" --type=bug --parent=<epic-id> \
+  --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
   --acceptance="<the original criterion, unchanged>"
 bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as <new-id> under <epic-id>, which is what carries the unmet criterion forward."
 bd update <feature-id> --set-metadata review=passed
