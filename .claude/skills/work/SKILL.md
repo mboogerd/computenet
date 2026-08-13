@@ -64,55 +64,43 @@ equivalent:
 | `scripts/next-batch.py` | Picks the next set of tasks that can safely run in parallel |
 | `scripts/ensure-worktree.sh` | Attaches a worktree on a branch, new or resumed, or fails loudly |
 
+**References carry the deep protocols** — this file is the decision spine;
+read a reference at the moment its situation arises, not upfront:
+
+| Reference | Read when |
+|---|---|
+| `references/claim-sync.md` | before deciding a claim is safe; when any sync fails |
+| `references/red-check-attribution.md` | a required check is red in a module the diff doesn't touch |
+| `references/ship-feature.md` | right after `gh pr ready`; on any draft verdict |
+| `references/orchestrator-authorship.md` | before writing a durable causal claim |
+| `references/ask-human.md` | parking a question a human must answer |
+| `references/epic.md` / `feature.md` / `task.md` | handed to breakdown/implementer dispatches |
+| `references/review-task.md` / `review-feature.md` | handed to reviewer dispatches |
+
 ## What you write yourself is the one thing nobody reviews
 
-Every task and every feature here goes to a dispatched reviewer. Your own
-output does not: the conflict resolutions and unblocking fixes of 5e, the
-commit messages and PR bodies you write, and the framing you put in a dispatch
-prompt all land in `main`'s history and in other agents' heads exactly as you
-wrote them.
+Everything dispatched gets a reviewer; your own output — commit messages,
+PR bodies, dispatch-prompt framing, conflict resolutions — lands in
+`main`'s history and in other agents' heads exactly as you wrote it. Three
+rules, in force throughout this file:
 
-**Claim the observation; do not claim the mechanism unless you tested it.** A
-causal sentence — "this fixes the flake", "the two runs raced each other for
-the runner's CPU", "the failure is about thread ordering" — is a claim about
-the world. 2026-08-09, PR #14: the orchestrator observed a real defect (every
-commit on an open PR started two CI runs) and then invented a mechanism for the
-flakes it was seeing. A reviewer disproved it three ways — isolated re-runs
-with nothing else in flight still failed, a lone push run on a PR-less branch
-failed the same port-rebinding test, and every Actions job gets its own
-ephemeral VM (zero self-hosted runners), so two runs cannot share a CPU or a
-port. By then the mechanism was in the commit message, the PR body, and a
-comment in `ci.yml`.
+- **Claim the observation; never the mechanism unless you tested it.** A
+  causal sentence needs a distinguishing run (quoted, with run id and the
+  verbatim `FAILED` line) or a mechanism that cannot be otherwise, cited to
+  its artifact. Otherwise write what you actually have — "whether that
+  affects the flakes is untested" is a true sentence — and count counts
+  from the output before writing them.
+- **Dispatch prompts relay artifacts, not framing.** A subagent cannot
+  tell your speculation from your evidence; hand it the run id, job, and
+  `FAILED` line plus "mechanism unknown, read the log".
+- **Code you write yourself** (conflict resolutions, unblocking fixes)
+  goes to a reviewer on the same terms as task work (5c) — it is the one
+  code path no dedicated reader sees.
 
-Before a causal claim goes into durable text, it needs one of:
-
-- **a run that distinguishes it from the alternative** — you changed the
-  supposed cause and the effect changed — quoted with the run id and the
-  verbatim `FAILED` (or now-passing) line; or
-- **a mechanism that cannot be otherwise**, cited to the artifact that makes it
-  so (the workflow file, the runner documentation), not to your reading of it.
-
-Without one of those, write what you actually have. "Halves the number of CI
-runs per commit; whether that affects the observed flakes is untested" is a
-true sentence and costs nothing to write. Counts fall under the same rule: in
-those same texts "six distinct tests" was five and "every required check both
-passed and failed on the same sha" was two of five. Count them from the output
-before you write them.
-
-The rule is *more* expensive in a **dispatch prompt**, because a subagent
-cannot tell your speculation from your evidence — your framing arrives as
-established fact. Relay only the artifact: the run id, the job, and the
-verbatim `FAILED` line, plus an explicit "the mechanism is unknown, read it
-from the log." A brief that guessed a test's package (`cell.wire` for what was
-`cell.host`, so `--tests` matched nothing) and guessed its mechanism cost a
-reviewer 8 wasted runs before it stopped trusting the framing and read the CI
-log, and produced a duplicate bead on top. Search beads for the failing test
-before you ask a second agent to look at it.
-
-And code **you** write — a merge conflict resolution, an unblocking fix — goes
-to a reviewer on the same terms as task work (5c). It is the one code path in
-this flow that no dedicated reader sees, so dispatching that reviewer is not
-discretionary.
+The full case for these — the PR #14 invented-mechanism incident and the
+8-wasted-runs brief — is
+[references/orchestrator-authorship.md](references/orchestrator-authorship.md);
+read it before writing any durable causal claim.
 
 ## 1. Identity
 
@@ -168,23 +156,16 @@ bd dolt pull
 ```
 
 **Sync brackets acquisition, not writes; ownership makes writes free.**
-That principle (decided 2026-08-13, computenet-wpvy.3) governs every Dolt
-sync in this file. Writes inside territory you own — items under the epic
-you claimed, items you claimed — stay local and ride the Finalize push,
-which is *publication*. **Acquiring** anything, or writing to a surface you
-don't own — this step's epic claim, a cross-epic item claim (5f routes 3–4),
-filing or upvoting under the SDLC epic (step 7) — gets its own bracket:
-pull → verify → write → push. A round-trip costs ~30s
-(`doc/ops/beads-sync-cost.md`), so a handful per session is noise; the old
-"exactly two syncs" rule dates from ~10-minute round-trips and survives
-only as the publication cadence, not an invariant.
-[references/claim-sync.md](references/claim-sync.md) states the exact
-guarantees. One accepted gap: another agent may still write *into* your
-claimed epic — say, filing a story that thematically belongs there — so
-ownership is a working convention, not a fence. (There is also a catch-up
-job, `scripts/beads-nightly-sync.sh`, but **no scheduler runs it** — a
-human invokes it. Never treat it as a push that will happen on its own; see
-`doc/ops/beads-sync-runbook.md` §5.)
+Writes inside territory you own (items under your claimed epic) stay local
+and ride the Finalize push. Acquisitions — this step's epic claim, a
+cross-epic item claim (5f routes 3–4), filing under the SDLC epic (step
+7) — each get their own pull → verify → write → push bracket; at ~30s a
+round-trip, a handful per session is noise.
+[references/claim-sync.md](references/claim-sync.md) is the full statement:
+what a claim does and does not guarantee, the accepted gaps, and what to do
+when a sync fails. (The catch-up job `scripts/beads-nightly-sync.sh` exists
+but **no scheduler runs it** — never treat it as a push that will happen on
+its own; `doc/ops/beads-sync-runbook.md` §5.)
 
 **If this pull fails, stop the session and report it.** It is the only look
 you get at the other machine's state, so proceeding without it means claiming
@@ -481,37 +462,21 @@ keeps the reviewer looking at integrated code. Conflicts here are yours to
 resolve; re-run the affected module suite afterwards, since a hand-resolved
 merge is code nobody reviewed.
 
-**Compare HEAD against the remote branch, not against nothing.** The check
-above is the one that matters on a resumed feature: the branch exists on
-origin and carries the PR's commits, and a worktree that does not contain
-them looks perfectly clean while having silently orphaned reviewed work — the
-`merge origin/main` right below it is then a no-op and the `push` failure
-reads like an unrelated remote hiccup (computenet-aeg). Read the line it
-prints, and only that line: `STOP` means the worktree is on the right branch
-at the wrong commit — do not proceed into 5b. Either `OK` is fine; the second
-one is the first-run case, where origin has no such branch and there is
-nothing to compare against. (The two are worth telling apart in the output:
-a bare `&&` chain prints nothing in either case, and "silence" is exactly how
-the orphaned worktree passed for normal in the first place.)
+**Read the verification line it prints, and only that line.** `STOP` means
+the worktree is on the right branch at the wrong commit — proceeding
+silently orphans reviewed work while looking perfectly clean
+(computenet-aeg); do not enter 5b. Either `OK` is fine; the second is the
+first-run case, where origin has no such branch yet.
 
-The script is idempotent and verifies the branch, so resume and first-run
-take the same path. It resolves the branch in this order: an already-attached
-worktree is left alone; a local branch is attached; a **remote-only** branch is
-attached tracking `origin/<branch>` **at the remote tip**; and only when the
-branch exists neither locally nor on origin is it created from the base ref.
-Where both exist it fast-forwards a local branch that is strictly behind,
-keeps a local branch that is strictly ahead (unpushed work), and **fails
-loudly on divergence** rather than picking a side. Use the feature id as the
-branch name rather than a model-chosen slug: a fresh slug on retry is exactly
-what spawns a duplicate branch and a second PR.
-
-Those states are covered by `scripts/ensure-worktree.test.sh`, which builds
-throwaway repos with a real origin in a temp dir and touches nothing live.
-Run it after any change to the script:
-
-```bash
-.claude/skills/work/scripts/ensure-worktree.test.sh    # expect "8 passed, 0 failed"
-```
+The script is idempotent, so resume and first-run take the same path: it
+leaves an attached worktree alone, attaches local branches, tracks
+remote-only branches **at the remote tip**, fast-forwards a strictly-behind
+local branch, keeps a strictly-ahead one (unpushed work), and **fails
+loudly on divergence** rather than picking a side. Use the feature id as
+the branch name rather than a model-chosen slug: a fresh slug on retry is
+exactly what spawns a duplicate branch and a second PR. After any change to
+the script, run `.claude/skills/work/scripts/ensure-worktree.test.sh`
+(expect "8 passed, 0 failed").
 
 ### 5b. Break down, then batch tasks
 
@@ -706,149 +671,17 @@ builds. Red is work, not a footnote: file a task for it (`bd create
 it. Left alone it sits behind three more merges and lands on the feature
 reviewer as a wall.
 
-That is the default and it is right nearly every time. The exception — a red
-check in a module this diff does not touch — is the next section, and it is
-deliberately narrow.
-
-#### Red check: prove whose it is before you treat it as not yours
-
-A red required check in an untouched module is still red, and "known flake" is
-exactly what a real regression looks like from the outside. This is the rule in
-this file most able to launder a genuine failure, so attribution is not a
-judgement call — it is four artifacts. Produce **all four** before treating a
-red check as something other than this feature's defect — and whatever you
-then write onward, the bead you file or the brief you hand another agent,
-carries the run id, job and verbatim `FAILED` line and no mechanism you have
-not tested (§ "What you write yourself"; guessing one here cost a reviewer 8
-runs):
-
-1. **The failing test and its assertion message**, read from the run, not from
-   the check's one-line summary:
-   ```bash
-   gh pr checks <pr-url>                        # which check failed, and its run url
-   gh run view <run-id> --log-failed | tail -60
-   ```
-   Quote the `FAILED` line. A red check whose log you have not read is
-   unattributed, full stop.
-2. **Proof the diff does not touch that test's module**:
-   ```bash
-   gh pr diff <pr-url> --name-only
-   ```
-   The failing test's module path must not appear in that list. If it does, the
-   red is yours: file the task above and stop here.
-3. **A prior occurrence that already exists** — found, not remembered:
-   ```bash
-   bd search "<failing test class>" --status all --json    # titles + ids
-   bd list --all --desc-contains "<failing test class>" --json   # descriptions
-   ```
-   **Both queries, and they are different commands.** `bd search` **excludes
-   closed issues by default** (hence `--status all`) and matches **titles
-   only** — its `--desc-contains` is an extra *filter* on that title match,
-   not a description search, so adding it can only narrow the result. A flake
-   this test-specific is usually named in a *description*, which is what
-   `bd list --all --desc-contains` finds. Measured 2026-08-12 for
-   `WsReconnectSmokeTest`: `bd search` with `--status all` returned 1 bead;
-   with `--desc-contains` added it returned **0**; `bd list --all
-   --desc-contains` returned the 10 beads that name it in a description,
-   including `computenet-8ru`, the one carrying the diagnosis. A bead naming
-   this test, or an earlier run of the identical failure you can link, is the
-   artifact. "I have seen this before" is not. Nothing found in **either** →
-   this is a first sighting, not a flake: file it as an unparented bug bead
-   (the fix belongs on `main`, not on a feature branch, because every other PR
-   is equally blocked) and treat the check as red work.
-4. **What that prior bead instructs** — read it even when it is closed. A
-   closed bead can carry a standing constraint that outlives it:
-   computenet-dqy.3 closed with "if either test reddens again, reopen
-   investigation rather than rerunning past it", and its epic's criteria said
-   "no retries-as-fix". A session that skipped this step would have re-run,
-   gone green, merged, and violated both silently. A standing do-not-rerun
-   instruction overrides everything below.
-
-With all four in hand and no standing instruction against it:
-
-```bash
-gh run rerun <run-id> --failed
-```
-
-**At most two re-runs.** A third red is not a flake; it is a failure you have
-now reproduced three times, and it goes back to being red work under the
-default above. Comment each occurrence on the flake bead (run id, sha,
-pass/fail) — the occurrence count is what eventually gets it fixed, and it only
-exists if you write it.
-
-- **It goes green** → that is a green required check; carry on normally.
-- **It stays red** → the feature is *blocked on infrastructure, not defective*.
-  Leave the PR as it is, leave the feature `in_progress` (keeping any
-  `review=passed`), set its `parked_at`, comment "blocked on
-  `<flake-bead-id>`: `<check name>`, runs `<ids>`", and go to **5f**. Do not
-  file a task under the feature for it — that misattributes an unrelated
-  failure to finished work and creates a task nobody should pick up. The PR
-  merges on its own once the flake bead is fixed on `main`.
-
-**Never ship on the assertion that a red check is a flake.** The four
-artifacts, or it is red. What you may do is attribute, re-run, and park
-honestly — not wave through: a required check that is red at ship time stops
-the ship in every case. That is the orchestrator side of a rule the reviewer
-already has ([references/review-feature.md](references/review-feature.md) §4:
-a red required check is not the *reviewer's* to wave through either, and it
-certifies draft). Nothing here relaxes it; the division is that you can see the
-flake beads, the other PRs, and the run history, and the reviewer cannot.
-
-**Where a fix for a red check gets dispatched — check who is live in the
-worktree first.** A red required check arriving *after* you marked a feature
-PR ready (5e) is a normal event, and when it lands the feature reviewer is
-usually **still running** in that feature worktree: it hands back its verdict
-and then keeps going for a while on bead bookkeeping and follow-up checks.
-Return the PR to draft (`gh pr ready --undo <pr-url>`) so it cannot merge,
-then pick one of these — never dispatch a second agent into a worktree whose
-agent, dispatched *this session*, has not reported:
-
-- **Wait for the reviewer's notification, then dispatch into its worktree.**
-  This is the default and it is nearly always right: the PR is back in draft
-  and cannot merge, so waiting costs nothing but the wait. Measured
-  2026-08-12 on PR #58, the report arrived about 30 minutes later.
-- **Only if you cannot wait, give the fix its own worktree on the same
-  branch**, and never the occupied one. **Do the `SendMessage` first, and wait
-  for the reviewer's answer, before you create the worktree** — the ordering
-  below is what makes this safe, not the `--force`:
-  ```bash
-  # 1. SendMessage the still-running reviewer FIRST:
-  #    "Push everything you have on feature/<feature-id> now, then make no
-  #     further commits in <feature-worktree>; a fix agent is joining this
-  #     branch in <feature-id>-fix. Reply when you have pushed."
-  # 2. Only after it replies:
-  git worktree add --force "$PWD/../computenet-worktrees/<feature-id>-fix" feature/<feature-id>
-  ```
-  `--force` is required — git otherwise refuses a branch that is already
-  checked out — and what it buys is separation of *files*, not of *commits*:
-  **two worktrees now share one branch ref**, and the second worktree's index
-  and working tree do **not** follow when the first commits. Measured
-  2026-08-13 in a throwaway repo, running exactly the two-agent sequence this
-  bullet describes: after the fix agent committed and pushed, the reviewer's
-  `git status --short` reported `M src.txt` for a file it had never touched,
-  its working copy still held the pre-fix content, and its own
-  `git commit -am` (which is what
-  [review-feature.md](references/review-feature.md) §5 tells it to run)
-  committed that stale content as a descendant — **silently reverting the fix,
-  and pushing clean**. There is no non-fast-forward rejection to catch this:
-  the ref is shared locally, so the reverting commit is a legitimate
-  fast-forward. That is why the reviewer must stop committing before the
-  second worktree exists; a warning it receives afterwards arrives too late.
-  Then: tell the fix agent to commit and push promptly, and **do not mark the
-  PR ready again until both agents have reported**. Marking it ready while an
-  agent is still working is what stranded a substantive repair commit through
-  PR #58's squash (computenet-zqf) — the AGENTS.md hazard, "the squash
-  captures only what was on the branch at that instant, and the rest is
-  stranded". Remove the extra worktree at Finalize with the rest —
-  expecting that a shared ref leaves the *non-committing* worktree looking
-  dirty for files it never edited (measured: the reviewer's `status --short`
-  reported `M src.txt` after the fix agent committed, while the fix agent's
-  own tree stayed clean). Finalize's gate 2 cannot tell that apart from real
-  unsaved work, so it will keep that worktree and report it. That is the safe
-  direction: leave it and say so in the summary.
-
-The one thing that is never an option is dispatching a second agent into a
-worktree an agent is still working in.
+That is the default and it is right nearly every time. The one exception —
+a red check in a module this diff does not touch — is deliberately narrow
+and evidence-heavy: read
+[references/red-check-attribution.md](references/red-check-attribution.md)
+and produce its four artifacts before treating any red as not this
+feature's defect. It also covers where a fix gets dispatched when the
+feature worktree is still occupied (return the PR to draft first, and never
+put a second agent in a live agent's worktree). Never ship on the assertion
+that a red check is a flake: attribute, re-run within its limits, or park
+as blocked-on-infrastructure — a required check red at ship time stops the
+ship in every case.
 
 Then 5b again.
 
@@ -945,167 +778,30 @@ does not mention landed *after* it certified: if any of them touches the same
 files as this diff (`gh pr diff <pr-url> --name-only` against that log),
 merge `origin/main` in and send it back for a re-check rather than shipping a
 verdict against a base that no longer exists. A red or pending required check
-in `gh pr checks` is not shippable either — red goes to the red-check route in
-5c, pending waits.
+in `gh pr checks` is not shippable either — red goes to
+[references/red-check-attribution.md](references/red-check-attribution.md),
+pending waits.
 
 `review=passed` and the verdict comment reach the shared tracker at
 Finalize's push, like every other bead write.
 
-**`gh pr ready` is the ship decision, not the ship.** A PR can go ready and
-then sit open forever: `.github/workflows/auto-merge.yml` is
-`continue-on-error`, so when its merge command fails the job still reports
-green, nothing retries it, and no later event fires. Measured 2026-08-10 on
-PRs #20 and #21 — both `CLEAN`, all five required checks green, both
-`review=passed`, neither merged, both with `autoMergeRequest` null, while three
-sibling PRs marked ready in the same burst armed and merged normally.
+**`gh pr ready` is the ship decision, not the ship** — arming can silently
+fail, checks can redden, conflicts can appear, and none of it fixes itself.
+The moment the ready call returns, read
+[references/ship-feature.md](references/ship-feature.md) and follow its
+state table until the PR is `MERGED` or honestly parked. The short form:
+mark PRs ready **one at a time** (a burst races auto-merge against itself);
+`MERGED` → `bd close` the feature but leave its worktree for Finalize (the
+reviewer may still be live in it); a red check goes to
+[references/red-check-attribution.md](references/red-check-attribution.md);
+conflicts are yours to resolve and get a reviewer like any code you write.
 
-So the state check below reads **`autoMergeRequest`**, not just the checks: it
-is the only field that separates "still waiting on its checks" from "never
-armed". `gh pr checks` cannot make that distinction — in exactly this case the
-auto-merge job appears there as a **pass**.
-
-**Cheaper than recovering it: mark PRs ready one at a time**, waiting for each
-to merge before marking the next. The burst is what creates the race. Creating
-a PR non-draft in a single `gh pr create` avoids both shapes at once (at the
-`opened` event the checks have not finished, so `--auto` queues instead of
-racing), but that only applies where the review has already passed at
-PR-creation time; 5d's draft PR exists to get CI feedback during the build,
-which is worth more.
-
-Neither party closes the feature — ready is not merged, and a red required
-check can leave the PR open indefinitely.
-
-- **Ready (and you marked it so)** → check whether it landed, and close the
-  feature only then:
-  ```bash
-  gh pr view <pr-url> --json state,mergeStateStatus,autoMergeRequest,statusCheckRollup
-  ```
-  `MERGED` → `bd close <feature-id>`. Leave its worktree and local branch
-  alone here: the reviewer that just certified it is very likely still live in
-  that worktree, and a merged PR's worktree is not urgent to reclaim. Finalize
-  (step 6) removes it, after every dispatched agent has reported.
-
-  Still `OPEN` → **auto-merge will not fix itself; look at why before you
-  walk away.** Read the two fields together; either alone is ambiguous:
-
-  | `autoMergeRequest` | `mergeStateStatus` | Meaning | Do |
-  |---|---|---|---|
-  | object | `UNKNOWN` | GitHub hasn't computed mergeability yet | re-query once after ~10s; still `UNKNOWN` → treat as pending, move on |
-  | object | `DIRTY` / `BEHIND` | conflicts with `main`, or needs updating | **resolve it yourself** (below) |
-  | object | `BLOCKED` / `UNSTABLE` | a required check is red or still running | red → the red-check route in **5c**; running → move on, it merges on its own |
-  | object (`enabledAt`, `enabledBy`) | `CLEAN` | armed and waiting on the merge | move on |
-  | **`null`** | **`CLEAN`** | **arming failed; nothing will retry it** | recover it, below |
-  | `null` | anything else | undecidable yet — the checks are still running | re-check once they settle |
-
-  `UNKNOWN` is the common first answer, not an error — GitHub computes
-  mergeability lazily, so a fresh push almost always returns it. Reading it as
-  "no conflict" is how a conflicted PR gets left to rot.
-
-  **`null` + `CLEAN`: recover it.** Which of two shapes it is decides the
-  remedy, and the run list is what tells them apart:
-
-  ```bash
-  gh run list --workflow=auto-merge.yml --branch feature/<feature-id> \
-    --json databaseId,conclusion,createdAt
-  ```
-
-  - **A run with conclusion `success`** → the job passed but its merge command
-    did not. Confirm in the step output, which says so verbatim:
-    `GraphQL: Base branch was modified. Review and try the merge again.
-    (mergePullRequest)` (`gh run view <run-id> --log`). That error is
-    explicitly transient — `--auto` on an already-mergeable PR merges
-    immediately instead of queueing, so a burst of ready PRs makes each one
-    race the others' merges. `gh run rerun <run-id>` fixes it: confirmed
-    2026-08-10, re-running run 31349461091 landed PR #21.
-  - **Only runs with conclusion `skipped`, or no runs at all** → the workflow
-    never fired for the ready transition. The run you can see fired from a push
-    made while the PR was still draft, and the workflow's condition requires
-    `draft == false`. **Re-running a skipped run re-evaluates the original
-    draft-time payload and skips again**, so there is no re-run remedy here; it
-    needs a fresh event — a push to the branch, or a manual merge.
-
-  If neither route is open to you — `gh pr merge --squash` has been denied by
-  the sandbox permission classifier on this repo, while `gh pr ready` is
-  permitted — **say so in the session summary, naming the PR url and the exact
-  blocked command**, and leave the feature `in_progress` with `review=passed`
-  so the next session finds it. Two finished, green, reviewed PRs once sat open
-  through a whole session because nothing said this out loud.
-
-  Resolving a conflict is the orchestrator's job, not a reviewer's — it's the
-  one thing standing between finished work and `main`:
-
-  ```bash
-  git -C <feature-worktree> fetch origin main
-  git -C <feature-worktree> merge origin/main       # resolve, then test
-  git -C <feature-worktree> push
-  ```
-  Re-run the affected module suite after resolving, and dispatch a task
-  reviewer over the resolution (5c): a conflict resolved by hand is new code
-  nobody has reviewed, and it is yours (§ "What you write yourself"). Describe
-  what you resolved without asserting a cause you did not test. If the
-  conflict is substantive enough that resolving it means redesigning either
-  side, that clears the
-  [ask-human.md](references/ask-human.md) bar — park it rather than guessing
-  which side wins.
-
-  Anything still `OPEN` after that → leave the feature `in_progress`, add it
-  its `parked_at`, and move on; Finalize re-checks it, and a later session sees
-  `metadata.review=passed`, re-checks the PR, and closes it then. Don't block
-  the slot waiting unless something depends on it (5f).
-- **Draft** → four shapes, routing differently. Read the **verdict comment**
-  (`bd comments <feature-id> --json`) to tell them apart; `metadata.review` is
-  absent in all four and distinguishes nothing.
-
-  | Draft because | Evidence in the verdict | Route |
-  |---|---|---|
-  | the feature has gaps, and the reviewer filed tasks for them | the task ids it created | ready work → **5b** |
-  | the reviewer's own repairs were substantive ([review-feature.md](references/review-feature.md) §5) | the repair commit shas and their per-commit `--stat` | independent check of *those commits* → below |
-  | a required check is red | the check name and conclusion it quoted from `gh pr checks` | the red-check route in **5c** — attribute, re-run, or park as blocked-on-infrastructure |
-  | none of the above | nothing actionable named | dead end: leave `in_progress`, set `parked_at`, go to **5f** |
-
-  **The substantive-repair draft is a finished feature with no second reader.**
-  The reviewer repaired past the §5 authorship bound, so the code is done and
-  the only thing missing is that its last author also holds the certification.
-  Do not send it to 5b — there is no implementation work — and do not park it.
-  Dispatch a reader for the reviewer's own commits — into the same feature
-  worktree, so only once the first reviewer's completion notification has
-  arrived, not merely once its verdict comment is readable ("One worktree, one
-  live agent", step 5):
-
-  ```
-  Agent({
-    description: "Independent check of review repairs on <feature-id>",
-    model: "opus",
-    run_in_background: true,
-    prompt: `Feature ${id}'s reviewer repaired it past the authorship bound in
-  .claude/skills/work/references/review-feature.md section 5 and handed back a
-  draft verdict, so its own repairs need a reader who did not write them.
-  Worktree: ${worktree} · Branch: ${branch} · PR: ${pr}
-  Review ONLY these commits, authored by the previous reviewer: ${shas}
-    git -C ${worktree} show --stat --format='%h %s' <each sha>
-  The rest of the feature is already certified — do not re-review it, and say
-  in your report which shas you actually read.
-  Follow review-feature.md scoped to those commits: are they correct, within
-  the feature's scope, and covered by a test that fails without them? Repair
-  what you can. You wrote none of this, so you may certify: on a pass, set
-  metadata.review=passed on ${id} with a comment naming the shas. Do NOT run
-  gh pr ready — the orchestrator ships.`
-  })
-  ```
-
-  The shas come from the first reviewer's verdict comment. If it did not name
-  them, recover them from the branch — §5 commits repairs with a `review:`
-  subject — and log it as friction (step 7), because a §5 draft that omits its
-  own shas is a `review-feature.md` defect, not something to guess around:
-
-  ```bash
-  git -C <feature-worktree> log --oneline --no-merges origin/main..HEAD --grep='^review:'
-  ```
-
-  On the second reviewer's **pass** → ship it yourself with the ready sequence
-  above; the feature is then certified by an agent that wrote none of the code
-  it certified, which is the whole point. On its **fail** → it filed tasks, go
-  to **5b**.
+- **Draft verdict** → four shapes routing differently (gaps → 5b, the
+  reviewer's own substantive repairs → a second reader, red check →
+  attribution, nothing actionable → park and 5f). Read the verdict comment,
+  then [references/ship-feature.md](references/ship-feature.md) §3–4 to
+  route it — the substantive-repair case in particular is a finished
+  feature needing only an independent reader, never 5b and never a park.
 
 ### 5f. Next feature, or wait, or stop
 
