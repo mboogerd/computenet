@@ -157,8 +157,10 @@ this branch's ref, so the other agent's commit moves your `HEAD` while your
 index and working tree stay where they were, and your next `commit -am` lands
 as a clean fast-forward that silently reverts its work (measured 2026-08-13 in
 a throwaway repo; the push succeeded). The symptom you *can* see is
-`git -C <feature-worktree> status --short` reporting modifications to files
-you never touched. If that happens — or if a push is rejected — **do not
+`git -C <feature-worktree> status --short` reporting changes to files you
+never touched — `M` for a file the other agent edited, and `D` for one it
+*added* (your index has never seen it, so a `commit -am` of yours deletes it).
+If that happens — or if a push is rejected — **do not
 commit**: run `git -C <feature-worktree> log --oneline -5`, and if commits you
 did not write are there, stop, leave your edits uncommitted, and report that
 another agent is on this branch.

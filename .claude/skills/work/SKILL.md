@@ -808,10 +808,12 @@ agent, dispatched *this session*, has not reported:
   PR #58's squash (computenet-zqf) — the AGENTS.md hazard, "the squash
   captures only what was on the branch at that instant, and the rest is
   stranded". Remove the extra worktree at Finalize with the rest —
-  expecting that a shared ref leaves both worktrees looking dirty for files
-  neither has edited, which Finalize's gate 2 cannot tell apart from real
-  unsaved work, so it will keep both and report them. That is the safe
-  direction: leave them and say so in the summary.
+  expecting that a shared ref leaves the *non-committing* worktree looking
+  dirty for files it never edited (measured: the reviewer's `status --short`
+  reported `M src.txt` after the fix agent committed, while the fix agent's
+  own tree stayed clean). Finalize's gate 2 cannot tell that apart from real
+  unsaved work, so it will keep that worktree and report it. That is the safe
+  direction: leave it and say so in the summary.
 
 The one thing that is never an option is dispatching a second agent into a
 worktree an agent is still working in.
