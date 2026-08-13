@@ -159,10 +159,25 @@ class WsAnnouncementStressTest {
         /** At least one non-injected failure was observed. Artifacts are on disk. */
         const val EXIT_FAILURES = 2
 
-        /** Stopped early at the heap ceiling (or another bound) with no failures — resume in a fresh process. */
+        /**
+         * Stopped early at the heap ceiling (or another bound) with no failures —
+         * resume in a fresh process. **Not a discriminator, so do not key on it:**
+         * `-XX:+ExitOnOutOfMemoryError`, which `run.sh` always passes, also exits 3
+         * (measured in review, 3/3). `result.tsv` presence is what separates a
+         * ceiling stop from a death, and that is what `run.sh` reads.
+         */
         const val EXIT_BOUNDED = 3
 
-        /** `OutOfMemoryError` reached a thread. Halted rather than left hanging. */
+        /**
+         * `OutOfMemoryError` reached a thread and [installHaltOnOutOfMemory] got to
+         * run. **Best effort, not the normal OOM status:** the handler must write and
+         * `halt` with no heap left, and measured in review (`-Xmx256m --heap-ceiling
+         * 0`, JDK 26 macOS aarch64) it won that race 1 of 3 times; the others ended
+         * `OutOfMemoryError thrown from the UncaughtExceptionHandler in thread
+         * "main"` and exited 1. Preallocating its stream was tried and did not help
+         * (0/3). The bound guarantees *termination*, not a status — those runs all
+         * exited in under 25s instead of hanging.
+         */
         const val EXIT_OOM = 70
 
         /** `--deadline-seconds` elapsed. Halted rather than left hanging. */
@@ -580,10 +595,16 @@ class WsAnnouncementStressTest {
  * still `Up 2 hours` with no report and no exit status, which is how one
  * unattended session lost its slot. So the heap ceiling normally stops the loop
  * first; if an `OutOfMemoryError` happens anyway the handler installed below
- * `halt`s with [WsAnnouncementStressTest.EXIT_OOM] rather than unwinding through
- * code that would need to allocate; `--deadline-seconds` halts a wedged run; and
- * the last statement is an explicit exit so live WebSocket threads cannot hold
- * the JVM open after the measurement is done.
+ * *tries* to `halt` with [WsAnnouncementStressTest.EXIT_OOM] rather than unwinding
+ * through code that would need to allocate; `--deadline-seconds` halts a wedged
+ * run; and the last statement is an explicit exit so live WebSocket threads cannot
+ * hold the JVM open after the measurement is done.
+ *
+ * What is guaranteed is that it terminates, not which status it terminates with: an
+ * OOM was measured exiting 70, 1 and 3 depending on which mechanism fired first.
+ * Read [WsAnnouncementStressTest.EXIT_OOM] and
+ * [WsAnnouncementStressTest.EXIT_BOUNDED] before branching on `$?`; a caller that
+ * needs to know whether the sample is short reads `result.tsv` instead.
  */
 fun main(args: Array<String>) {
     installHaltOnOutOfMemory()

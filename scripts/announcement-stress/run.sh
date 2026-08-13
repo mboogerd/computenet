@@ -17,7 +17,11 @@
 # *before* the OutOfMemoryError rather than after, and this script starts the
 # next one and adds up the awaits. Every process's progress is read off disk, so
 # a process that dies for any reason still contributes what it had reached, and
-# any failure it observed is already in its own artifact file.
+# any failure it observed is already in its own artifact file. A process's exit
+# status does NOT say whether its sample is short: -XX:+ExitOnOutOfMemoryError,
+# passed below, also exits 3 (measured 3/3 in review), so an OOM death and a clean
+# ceiling stop share a status. Hence the reach and stop reason are read from
+# result.tsv/progress.tsv rather than from $?.
 #
 # Usage:
 #   scripts/announcement-stress/run.sh [options]
@@ -57,7 +61,7 @@ while [ $# -gt 0 ]; do
     --max-processes) max_processes=$2; shift 2 ;;
     --inject-failure-at) inject=$2; shift 2 ;;
     --classpath) classpath_file=$2; shift 2 ;;
-    -h|--help) sed -n '1,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '/^set -/q;p' "${BASH_SOURCE[0]}"; exit 0 ;;  # the whole header, not a fixed range
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
