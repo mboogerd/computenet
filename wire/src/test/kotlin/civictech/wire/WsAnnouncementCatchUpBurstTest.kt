@@ -12,6 +12,9 @@ import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
 import java.net.URI
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.UUID
 
 /**
@@ -37,24 +40,69 @@ import java.util.UUID
  *   ref. The Linux failure looked exactly like a truncation — the client held
  *   one `Remote` when the server had three local refs to announce — and one ref
  *   per iteration cannot tell a truncation from a loss.
- * - **concurrency** — half the refs are spawned from a *separate* thread that is
- *   released at the moment the dialer connects, so their `publish` is at least
- *   *intended* to land in the window `announceTo` closes by registering
- *   `onLocalPublish` before it sweeps. Every ref must arrive through exactly one
- *   of the two paths; a ref that falls between them is the defect.
+ * - **concurrency** — half the refs are published from a *separate* thread that
+ *   is released from **inside `announceTo`'s register-then-sweep window**: the
+ *   kernel seam `Peering.Side.onCatchUpWindowOpen` fires after the
+ *   `onLocalPublish` hook is installed and before the `localRefs()` sweep runs,
+ *   and that is what unblocks the spawner. Their installation into the registry
+ *   therefore runs concurrently with the sweep, which is exactly the handover
+ *   `announceTo`'s ordering argument rests on: a publish is either seen by the
+ *   sweep or delivered by the hook, never neither.
  *
- *   **Measured, review of computenet-dqy.40: today it does not reach that
- *   window.** Deleting the `localRefs()` sweep from `Peering.announceTo`
- *   entirely loses **0/40 refs per iteration, in all 10 iterations** — so every
- *   ref of *both* halves, racing included, is delivered by the sweep and none by
- *   the hook. (Correspondingly, dropping 1 in 5 `onLocalPublish` announcements
- *   is invisible here, while dropping 1 in 7 sweep announcements fails all 10
- *   iterations.) The racing publishes are in-memory enqueues and beat the socket
- *   round trip that gates the peer's `announceTo`, so they land *before* the
- *   sweep rather than beside it. The honest reading: this arm adds volume to the
- *   sweep, and the loss bound this probe buys is a bound on the **sweep** only,
- *   not on the register-then-sweep handover. Making the arm genuinely race the
- *   handover is computenet-dqy.45.
+ *   **Why the seam, and why timing it against connect does not work**
+ *   (computenet-dqy.45, measured). The previous shape released the spawner at
+ *   the moment the dialer connected. A local publish is an in-memory enqueue on
+ *   the server host, while the peer's `announceTo` is gated on a socket round
+ *   trip (the client's hello) — so the enqueues always won and every racing ref
+ *   was already `Local` when the sweep read. Deleting the sweep then lost
+ *   **40/40 refs in 10/10 iterations**: both halves travelled the sweep and the
+ *   hook was entirely unobserved. No widened await or retry can move that
+ *   ordering; only releasing the publishes from something ordered against the
+ *   *server's* `announceTo` can.
+ *
+ * ## Which path each measured bound covers
+ *
+ * The two paths are bounded separately, and the figures must NOT be pooled:
+ *
+ * - **The `localRefs()` sweep**: 120,000 refs announced with 0 losses
+ *   (computenet-dqy.40's long run, made on the *pre-seam* shape where — as
+ *   above — every ref of both halves travelled the sweep). Rule of three: under
+ *   ~2.5e-5 loss per ref. That headline figure bounds the sweep and nothing
+ *   else; it never touched the `onLocalPublish` path.
+ * - **The register-then-sweep handover** (the `onLocalPublish` leg): bounded
+ *   only by runs of *this* shape. The committed fast lane is 10 iterations x 20
+ *   racing refs = 200 refs released inside the window — rule of three, under
+ *   ~1.5e-2 per ref. That is a smoke test, not a measurement, and it is stated
+ *   here so nobody reads the sweep's 2.5e-5 as covering it.
+ *   `-Dwire.burst.iterations` and [main] are how it is made strong; the report
+ *   prints the racing-ref count so any run says what it bounds.
+ *
+ * ## What is live, established by mutation of `Peering.announceTo`
+ *
+ * Not by argument (computenet-dqy.45, all at the fast-lane size, 10 x 40):
+ *
+ * - drop 1 in 5 `onLocalPublish` announcements -> **fails 9/10 iterations**,
+ *   30-38 of 40 arriving, and *every* lost ref is a racing one. Before the seam
+ *   this mutation was invisible (BUILD SUCCESSFUL).
+ * - drop 1 in 7 sweep announcements -> **fails 10/10**, 38-39 of 40 arriving,
+ *   and every lost ref is a quiet one. Sweep coverage is unchanged.
+ * - delete the sweep entirely -> **fails 10/10 at exactly 20/40**, the quiet
+ *   half lost and the racing half arriving. That is the split, measured: the
+ *   quiet half rides the sweep, the racing half rides the hook. Before the seam
+ *   the same mutation gave 0/40.
+ *
+ * The honest limit of the racing arm: its publishes are *issued* inside the
+ * window and installed concurrently with the sweep, but they consistently miss
+ * the sweep's `localRefs()` snapshot (the report's "already Local when it
+ * opened" count is 0 in every iteration observed), so what they exercise is the
+ * hook leg of the handover rather than an install landing exactly astride the
+ * snapshot read. A publish that fell between the two legs would still be caught
+ * — that is the property under test — but the probe cannot claim to have aimed
+ * one at the seam of the snapshot itself.
+ *
+ * The probe also refuses to be vacuous: it fails if the seam never fires (the
+ * peer never announced, so nothing was raced) and fails if any ref never
+ * becomes `Local` on the server.
  *
  * A publish is asynchronous in both arms (`managementInlet.call.spawn` enqueues
  * on the host's scheduler), so the racing arm is genuinely racing the sweep and
@@ -110,6 +158,10 @@ class WsAnnouncementCatchUpBurstTest {
         class Report(
             val iterations: Int,
             val refsAnnounced: Long,
+            /** Refs released from inside the register-then-sweep window. */
+            val racingRefs: Long,
+            /** Of those, the ones already `Local` when the window opened — certainly swept. */
+            val racingAlreadyLocal: Long,
             val failures: List<Failure>,
             val latencies: LongArray,
         ) {
@@ -117,6 +169,10 @@ class WsAnnouncementCatchUpBurstTest {
                 appendLine(
                     "catch-up burst: ${failures.size} failed iteration(s) in $iterations iterations " +
                         "($refsAnnounced refs announced)"
+                )
+                appendLine(
+                    "released inside the register-then-sweep window: $racingRefs refs, " +
+                        "of which $racingAlreadyLocal were already Local when it opened (certainly swept)"
                 )
                 val sorted = latencies.sorted()
                 if (sorted.isNotEmpty()) {
@@ -141,25 +197,52 @@ class WsAnnouncementCatchUpBurstTest {
             }
         }
 
-        private class Stack {
+        private class Stack(onCatchUpWindowOpen: (() -> Unit)? = null) {
             val registry = LocationRegistry()
             val host = ManagedHost(registry = registry)
             val bridgeHost = ManagedHost(registry = registry)
-            val side = Peering.Side(registry, bridgeHost)
+            val side = Peering.Side(registry, bridgeHost, onCatchUpWindowOpen = onCatchUpWindowOpen)
         }
 
         fun burst(iterations: Int, refsPerIteration: Int, progressEvery: Int = 0): Report {
             val failures = mutableListOf<Failure>()
             val latencies = mutableListOf<Long>()
             var announced = 0L
+            var racingRefsTotal = 0L
+            var racingAlreadyLocal = 0L
             repeat(iterations) { i ->
-                val server = Stack()
-                val client = Stack()
                 val quiet = List(refsPerIteration / 2) { CollectingCell() }
                 val racing = List(refsPerIteration - quiet.size) { CollectingCell() }
-                quiet.forEach { server.host.managementInlet.call.spawn(it) }
+                val racingRefs = racing.mapTo(mutableSetOf()) { it.ref }
 
+                // The racing half is released from INSIDE announceTo's window —
+                // between the onLocalPublish registration and the localRefs()
+                // sweep — not from the dialer's connect. Timing it against
+                // connect is what computenet-dqy.45 measured as missing the
+                // window entirely: a local spawn is an in-memory enqueue and the
+                // peer's announceTo is gated on a socket round trip, so those
+                // publishes were always installed before the sweep read.
                 val release = CountDownLatch(1)
+                val windowOpened = CountDownLatch(1)
+                val windowFired = AtomicBoolean(false)
+                val localAtWindowOpen = AtomicInteger(0)
+                lateinit var server: Stack
+                server = Stack(onCatchUpWindowOpen = {
+                    if (windowFired.compareAndSet(false, true)) {
+                        release.countDown()
+                        // Proxy split measurement, taken as close to the sweep's
+                        // own read as a test can stand: a racing ref already
+                        // Local here is certainly in the sweep; the rest are
+                        // racing it. The authoritative account of which path
+                        // carries them is the mutation evidence in the KDoc.
+                        localAtWindowOpen.set(server.registry.localRefs().count { it in racingRefs })
+                        windowOpened.countDown()
+                    }
+                })
+                val client = Stack()
+                quiet.forEach { server.host.managementInlet.call.spawn(it) }
+                racingRefsTotal += racing.size
+
                 val spawner = Thread {
                     release.await()
                     racing.forEach { server.host.managementInlet.call.spawn(it) }
@@ -167,48 +250,76 @@ class WsAnnouncementCatchUpBurstTest {
 
                 val listener = WsTransport.listen(0, server.side)
                 val connection = try {
-                    release.countDown() // the racing publishes land while the hello crosses
                     WsTransport.connect(URI("ws://localhost:${listener.port}"), client.side)
                 } catch (t: Throwable) {
+                    release.countDown()
                     runCatching { listener.stop(1000) }
                     throw t
                 }
                 try {
-                    spawner.join(LOST_AFTER_MS)
-                    // What the server actually holds is the contract: a spawn is
-                    // asynchronous, so the set to be announced is the registry's,
-                    // not the test's wish list.
-                    val expected = (quiet + racing).map { it.ref }.toSet()
-                    val start = System.currentTimeMillis()
-                    fun missing(): Set<CellRef> {
-                        val local = server.registry.localRefs()
-                        return expected.filter { it in local && client.registry.location(it) !is LocationRegistry.Remote }
-                            .toSet()
+                    // Vacuity guard 1: the seam must have fired. Without it the
+                    // racing half is never published at all and the probe would
+                    // assert over the quiet half alone, silently.
+                    if (!windowOpened.await(LOST_AFTER_MS, TimeUnit.MILLISECONDS)) {
+                        failures += Failure(
+                            iteration = i,
+                            arrived = 0,
+                            expected = refsPerIteration,
+                            diagnostics = "  announceTo's register-then-sweep window never opened: " +
+                                "the peer never announced, so nothing was raced.\n",
+                        )
+                        return@repeat
                     }
+                    racingAlreadyLocal += localAtWindowOpen.get()
+                    spawner.join(LOST_AFTER_MS)
+                    val expected = (quiet + racing).mapTo(mutableSetOf()) { it.ref }
+                    // Vacuity guard 2: a spawn is asynchronous, so the set to be
+                    // announced is the registry's, not the test's wish list — but
+                    // it must eventually BE the wish list, or the assertion below
+                    // is over a set the test never populated.
+                    val installStart = System.currentTimeMillis()
+                    while (!server.registry.localRefs().containsAll(expected) &&
+                        System.currentTimeMillis() - installStart < LOST_AFTER_MS
+                    ) Thread.sleep(1)
+                    val neverLocal = expected - server.registry.localRefs()
+                    if (neverLocal.isNotEmpty()) {
+                        failures += Failure(
+                            iteration = i,
+                            arrived = 0,
+                            expected = expected.size,
+                            diagnostics = "  ${neverLocal.size} ref(s) never became Local on the SERVER, " +
+                                "so they were never announced by either path: ${neverLocal.take(5)}\n",
+                        )
+                        return@repeat
+                    }
+
+                    val start = System.currentTimeMillis()
+                    fun missing(): Set<CellRef> =
+                        expected.filterTo(mutableSetOf()) { client.registry.location(it) !is LocationRegistry.Remote }
                     while (missing().isNotEmpty() && System.currentTimeMillis() - start < EXPECT_WITHIN_MS) {
                         Thread.sleep(1)
                     }
+                    announced += expected.size
                     if (missing().isEmpty()) {
                         latencies += System.currentTimeMillis() - start
-                        announced += expected.size
                         return@repeat
                     }
                     while (missing().isNotEmpty() && System.currentTimeMillis() - start < LOST_AFTER_MS) {
                         Thread.sleep(10)
                     }
                     val lost = missing()
-                    announced += expected.size
                     if (lost.isNotEmpty()) {
                         failures += Failure(
                             iteration = i,
                             arrived = expected.size - lost.size,
                             expected = expected.size,
-                            diagnostics = diagnose(lost, server.registry, client.registry),
+                            diagnostics = diagnose(lost, racingRefs, localAtWindowOpen.get(), server.registry, client.registry),
                         )
                     } else {
                         latencies += System.currentTimeMillis() - start
                     }
                 } finally {
+                    release.countDown()
                     connection.shutdown()
                     runCatching { listener.stop(1000) }
                 }
@@ -216,7 +327,7 @@ class WsAnnouncementCatchUpBurstTest {
                     System.err.println("[burst] ${i + 1}/$iterations refs=$announced failures=${failures.size}")
                 }
             }
-            return Report(iterations, announced, failures, latencies.toLongArray())
+            return Report(iterations, announced, racingRefsTotal, racingAlreadyLocal, failures, latencies.toLongArray())
         }
 
         /**
@@ -228,10 +339,17 @@ class WsAnnouncementCatchUpBurstTest {
          */
         private fun diagnose(
             lost: Set<CellRef>,
+            racingRefs: Set<CellRef>,
+            racingAlreadyLocal: Int,
             server: LocationRegistry,
             client: LocationRegistry,
         ): String = buildString {
             appendLine("  lost refs (${lost.size}): ${lost.take(5)}${if (lost.size > 5) " …" else ""}")
+            appendLine(
+                "  of the lost, ${lost.count { it in racingRefs }} were released inside the " +
+                    "register-then-sweep window (${racingAlreadyLocal} of ${racingRefs.size} racing refs " +
+                    "were already Local when it opened)"
+            )
             appendLine("  server localRefs: ${server.localRefs().size}, client remoteRefs: ${client.remoteRefs().size}")
             appendLine("  all lost refs still Local on the server: ${lost.all { server.location(it) is LocationRegistry.Local }}")
             client.localRefs().forEach { ref ->
