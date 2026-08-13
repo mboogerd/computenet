@@ -793,6 +793,331 @@ Surprises worth recording, observed but not diagnosed here:
   pair is asymmetric in journaling terms on the originate path. Not exercised;
   noted because any close-replication design will eventually meet reopen.
 
-<!-- VERDICT PLACEHOLDER — the "Verdict and implications" subsection is owned
-     by the follow-up task (computenet-8kj.4, task 2) and is appended here.
-     Do not write it in this task. -->
+## Verdict and implications
+
+Everything asserted below traces to a transcript in this section, to a
+transcript in `claim-a-echo-suppression.md` or `claim-b-ordering-authority.md`,
+or is explicitly marked as an inference. **This subsection ran no new probes**
+— the sub-checks above were sufficient — so where a statement reaches past what
+was measured, it says so in its own words and names the single command that
+would settle it.
+
+**Verdict in one line: claim (c) passes as posed on the three legs that
+matter — a peer's close replicates with no new `bd` surface, and the
+originate/replicate asymmetry is real and structural — while the epic's
+delete premise is factually wrong in a way that makes deletion *more*
+dangerous than the epic assumed, not less.**
+
+### Pass/fail, per sub-check
+
+| Sub-check | Result | What was actually established |
+|---|---|---|
+| **C1** — a close in A replicates into B | **PASS** | On both shapes. Create shape: B's copy is born closed with `closed_at` byte-identical (`2026-08-13T16:56:11Z`) and `close_reason` `"done"`. Update shape (the one that exercises the transition): open→closed applied as an ordinary update, `closed_at` and `close_reason` identical to A's. No `bd close`, `bd update` or any other write command was run in B. Two negatives fall out: the report's `changes` string omits `closed_at` (which lands anyway), and B's journal for the subject stayed exactly `["created"]` across the close-carrying import. |
+| **C2** — `bd close` guards fire when *originating* | **PASS, with a narrowing** | Both guards fire, exit 1, mutating nothing: `cannot close epic <id>: 1 open child issue(s); close children first or use --force to override` and `cannot close <id>: blocked by open issues [<id>] (use --force to override)`. Neither string names `ErrCloseBlocked` or `ErrCloseOpenChildren`, and `bd close --json` emits the same bare string with no structured error object. The narrowing: the open-children guard is **epic-only** — a `task` parent with an open `parent-child` child closes cleanly, exit 0. |
+| **C3** — the guards do **not** fire on the replication path | **PASS — the load-bearing one** | B held the guard-violating structure locally (open child under the epic; open blocker on the blocked issue) and B's own `bd close` refused both closes one command earlier, on those exact ids. The forged bundle then imported **unflagged** and applied both closes silently, reporting the same benign `status open → closed, close_reason, metadata` string an ordinary close replication reports. Child and blocker remained open afterwards. |
+| **C4** — a `tombstone` row is dropped; hard delete does not replicate | **Mechanism PASS; premise FALSE** | The drop is real and specific: `tombstone` yields `{"created": 0, "skipped": 0}`, no id list, exit 0, before LWW and before any field merge — while an unrecognised status (`banana`) fails the whole import with a structured `{"error": ...}` and exit 1. But `bd 1.1.2` **does** have `bd delete`, a real hard delete. After it, A's export mentions the row zero times: no row, no tombstone, nothing. |
+
+### The claim (c) verdict against the epic's wording
+
+Epic `computenet-8kj` §1(c) asserts three things. Two are confirmed and one is
+confirmed-by-accident.
+
+1. **"Replicating a peer's close should need no new beads surface."**
+   **Confirmed (C1).** `status`, `closed_at` and `close_reason` are ordinary
+   exported fields, they upsert through `bd import` unchanged, and B's
+   re-export carries them onward. This is the cleanest result in the whole
+   BDS0 spike: the write half of BDS4 §1's close story needs nothing that does
+   not already exist.
+
+2. **"*Originating* a close goes through `bd close` where the guards must
+   fire; *replicating* one applies an already-adjudicated fact where they must
+   not."** **Confirmed (C2 + C3),** and confirmed for a better reason than the
+   epic gives. The asymmetry is not a policy `bd` implements on behalf of
+   replication — it is **structural**: the guards live in the `close` command
+   path and there is no guard code on the write path at all. C3's control
+   makes that unambiguous, because the same workspace refused the same close
+   one command before accepting it by import. `bd import --help` offers no
+   guard-related flag of any kind, so this is not a configurable that could be
+   flipped the wrong way in some other build; it is the only behavior
+   available. The asymmetry BDS4 depends on is therefore free, and is
+   *impossible to switch off* — which is also the shape of its cost, see the
+   consistency point below.
+
+3. **"`bd import` skips rows with status `tombstone` and `bd` has no delete
+   verb, so hard deletion is out of scope for replication — close is the
+   removal interface."** **The conclusion survives; the reasoning does not.**
+   The skip is real (C4a/C4b/C4c). The "no delete verb" clause is simply false
+   (C4d). Hard deletion is still out of scope for replication, but for a
+   different and worse reason, which the next subsection states, because the
+   epic's version is a statement about a missing capability and the true one is
+   a statement about a *silent failure mode*.
+
+No sub-check failed as posed, so the epic §2 rule — "if the claim fails, the
+finding proposes the alternative seam" — is not triggered for claim (c)'s main
+legs. It *is* triggered in spirit for the deletion half of C4, whose stated
+premise was falsified, so the candidate seams for deletion are named below
+under the required VERIFIED / PROPOSED labelling.
+
+### The accepted gap, restated: deletion is expressed as **absence**
+
+This is the finding with teeth and it must not be softened into "bd can't
+delete, so we don't have to think about it".
+
+Measured (C4d): `bd delete <id> --force` removes the row from A entirely.
+`bd -C "$A" --sandbox export | grep -c "$Z"` returns `0`. There is no
+tombstone, no `deleted_at`, no status transition — the row's representation in
+the replication seam is *nothing*. And a JSONL delta is defined by the rows it
+contains, so:
+
+> **A deleted row and a row that simply was not part of this delta are the
+> same bytes on the wire: none.**
+
+That single fact forks every possible replication design into two failure
+modes, and there is no third option available at this seam:
+
+- **Treat absence as "no news"** — which is what `bd import` does today, and
+  what the rig's `hop` does — and deletions never propagate. Measured: after
+  `bd delete Z` in A, a full **unfiltered** hop of everything A holds into B
+  left B's copy of `Z` open and alive. The seam carried the deletion nowhere.
+- **Treat absence as deletion** and any partial delta destroys every row it
+  omits. Since the entire BDS4 design is delta-shaped — replicate the rows the
+  OR-map says changed — this is not a tuning choice, it is a guaranteed data
+  loss. It is also unimplementable against `bd import`, which has no "delete
+  the rows I didn't send" mode.
+
+**The consequence BDS4 has to absorb: under bidirectional replication a hard
+delete is not merely non-replicating, it is anti-durable — it undoes itself.**
+Machine A deletes a row; every peer still holds it; the next hop *from* any
+peer re-creates it in A, because an id not present in the destination is
+exactly C1a's create shape. The deletion survives only until the next inbound
+hop touches that row.
+
+Labelling that honestly: **the A→B direction is VERIFIED** (C4d's unfiltered
+hop, twice, on two independent rig roots — B kept `Z`). **The B→A resurrection
+is an INFERENCE, not measured.** It follows directly from C1a, where a row
+absent from the destination was created by import with its fields intact, and
+from C4d, where B's copy of `Z` remained a perfectly ordinary exportable row.
+It is one command from being measured — `rig.sh hop B A --dot "B:1" "$Z"` after
+the delete, then `bd -C "$A" --sandbox show "$Z"` — and that command should be
+run before BDS4 writes anything that depends on the answer.
+
+So: **close is the removal interface**, not as a convenience but as the only
+removal signal that has a representation on the wire at all. C1 verifies it
+works.
+
+#### If a future BDS item needs deletion to actually replicate
+
+Named for completeness, per the epic §2 discipline, and **not designed here** —
+designing a delete-replication mechanism is an explicit non-goal of this
+feature.
+
+- **Seam A — close instead of delete. VERIFIED ON THE RIG (C1).** Available
+  today, needs nothing. The cost is that closed rows accumulate and `bd
+  delete`'s actual purpose (removing junk from the store) is not served.
+- **Seam B — snapshot diff.** A peer compares whole exports and infers
+  deletions from disappearance. **PROPOSED, UNTESTED**, and it inherits the
+  ambiguity above rather than resolving it: disappearance from A's snapshot
+  cannot be distinguished from "A never had it", so a machine that joins late,
+  or a snapshot taken mid-write, reads as a mass deletion. It also requires
+  full-snapshot exchange on a line whose whole premise is deltas.
+- **Seam C — a ComputeNet-side tombstone driving `bd delete` on peers.**
+  **PROPOSED, UNTESTED**, and it inverts the risk profile: an OR-map tombstone
+  arriving at a machine would execute an irreversible, un-undoable hard delete
+  through a verb whose own help text says "cannot be undone". Two measured
+  facts make it worse than it looks: `bd delete` also **rewrites text
+  references in surviving issues to `[deleted:ID]`**, which would replicate as
+  ordinary field updates and mutate rows nobody adjudicated (noted in the
+  surprises above; not exercised); and per claim (b) the replication write path
+  cannot aim `--allow-stale` at a single row, so the collateral edits arrive
+  with the same blast-radius problem as everything else.
+- **Seam D — upstream: make `bd export` emit a tombstone row for a deleted
+  issue and make `bd import` honour it as a delete.** **PROPOSED, UNTESTED.**
+  The receiving half is closer than it looks — C4c proves `tombstone` is
+  *specifically recognised* on the import path rather than falling through
+  generic status validation, so the concept already exists in `bd 1.1.2` — but
+  today that recognition means "drop", and both halves would have to change.
+  Where `tombstone` rows are produced inside `bd`, if anywhere, was not
+  investigated.
+
+### Implications for BDS4 (`computenet-6wc`)
+
+Named, not adjudicated — adjudication belongs to `computenet-8kj.6`.
+
+1. **BDS4 §1's close story stands as written, and is the strongest-supported
+   sentence in the epic.** "Status, `closed_at` and `close_reason` are ordinary
+   importable fields, so no new beads surface is needed" is verified end to end
+   on both the create and the update shape (C1). No re-scope needed.
+
+2. **BDS4 §1's originate/replicate table stands, but one cell needs
+   amending.** The table's originating cell says the guards "MUST fire
+   (`ErrCloseBlocked`, `ErrCloseOpenChildren`) and the refusal must reach the
+   caller". The refusal does reach the caller, but **those identifiers are not
+   observable anywhere** (C2): no output names them, and `bd close --json`
+   emits no structured error. BDS4 must specify detection by **exit status**,
+   optionally corroborated by prose match, and must not specify matching on an
+   error name. Anything that greps for `ErrCloseBlocked` will never match and
+   will silently treat every refusal as a success.
+
+3. **The open-children guard covers less than BDS4 assumes.** It is epic-only
+   (C2's narrowing). If any part of the `/work` flow relies on `bd close`
+   refusing to close a parent with unfinished children — the natural reading of
+   "a peer already decided" is that `bd` is the arbiter of local consistency —
+   that protection does not exist for `task` parents. ComputeNet must not
+   inherit an assumption `bd` does not implement.
+
+4. **The asymmetry's cost, which BDS4 does not currently state: import performs
+   no compensating consistency work.** C3 measured it directly — after the
+   replicated close, B holds a **closed epic with an open child** and a
+   **closed issue blocked by an open blocker**, states B's own `bd close` had
+   refused to create seconds earlier. That is the correct behavior for
+   replication (the fact was adjudicated elsewhere), but under a converging
+   topology it is not a transient anomaly: gossip means *every* machine ends up
+   holding it. BDS4 should state this as an accepted consequence the way §2
+   already accepts partition as a property rather than a defect — and should
+   decide explicitly whether the *originating* side is required to close
+   children first, since that is the only place the invariant can be preserved.
+
+5. **The removal interface inherits every ordering defect claim (b) found.** A
+   close-carrying row is an ordinary row to `bd import`; nothing about it is
+   privileged. Cross-referencing rather than re-deriving: a close whose
+   `updated_at` ties with B's stored value is **not applied** and the report
+   says `tie_kept_local_ids` — so the issue stays open on B until some later
+   write happens to move it — and claim (b)'s `≥ .500` round-half-up means the
+   converse is reachable too, an unflagged same-second close clobbering a
+   local edit while the report calls it a tie. A replication design whose only
+   removal signal is a close must treat a *lost* close as a first-class
+   failure, not as an eventual-consistency detail.
+
+6. **"Did my replicated close land" cannot be answered from the import
+   report.** Measured here (C1b): `updated_issues[].changes` names `status`,
+   `close_reason` and `metadata` and **omits `closed_at`**, which lands anyway.
+   The `changes` string is a partial summary, not an audit record. Combined
+   with claim (a)'s finding that imported updates journal nothing — re-observed
+   here, B's journal for the C1b subject stayed `["created"]` across the
+   close-carrying import — and with claim (b)'s implication 3, the surviving
+   acknowledgment surfaces for a replicated close are a `bd show`/`bd export`
+   read-back or claim (a)'s Seam 1 (the Dolt commit graph). BDS4 must specify
+   one of those.
+
+7. **BDS4 §4's "Still excluded: hard deletes" should stay excluded, with its
+   reason rewritten and a consequence added.** The current reason ("`bd import`
+   skips `tombstone` rows and has no delete verb") is half false. The true
+   statement is: *deletion has no representation in the replication seam, so a
+   hard delete performed on any machine will be silently undone by the next
+   inbound hop that carries the row.* That converts "excluded" from a scope
+   note into an operational warning that belongs in the runbook, not only the
+   epic — a human running `bd delete` on a BDS4-replicated workspace will watch
+   the row come back and have no diagnostic explaining why.
+
+8. **Reopen is the removal interface's inverse and was not exercised.** `bd
+   reopen` exists and, per its own description, "emits a Reopened event" — so
+   the close/reopen pair is asymmetric in journaling terms on the *originate*
+   path. On the replication path there is no reason to expect asymmetry, since
+   `status` is an ordinary field and C1b already showed open→closed applied as
+   a plain update; closed→open should be the same mechanism. **INFERENCE, not
+   measured.** BDS4 specifies close as the removal interface without saying
+   what un-removal is, and a design in which removal replicates but un-removal
+   was never tested is one experiment short.
+
+9. **Untouched by claim (c):** the lease plane (§2) never goes through
+   `bd import`. The two §3 hazards turn on `bd create` idempotency and lease
+   re-checks; note only that hazard 1's remedy ("a content-derived id or a
+   breakdown marker") is unaffected by anything here, and that hazard 2's
+   auto-merge race is not a close-replication question.
+
+### Implications for BDS1 (`computenet-dqj`)
+
+Named, not adjudicated.
+
+1. **A replicated close is invisible at BDS1's declared feed, and closed-ness
+   is the state consumers care about most.** This is claim (a)'s completeness
+   failure arriving at its most damaging instance, and it was re-observed here
+   rather than assumed: B's journal for the C1b subject stayed exactly
+   `["created"]` across the import that closed it. A journal-only projector
+   mirroring a workspace whose closes arrive by replication will show every
+   such issue permanently open. Claim (a)'s Seam 1 (`dolt_diff_issues`) is the
+   verified fallback; nothing in claim (c) changes that assessment, it only
+   raises the stakes.
+
+2. **BDS1 must not model deletion at all.** There is no delete event, no
+   tombstone in the export, and no status transition to observe. A row that
+   `bd delete` removed simply stops appearing. BDS1's truncation-recovery path
+   (re-baseline from `bd export`) is the *only* mechanism that would ever
+   notice, and it notices by rebuilding rather than by observing a change.
+   **INFERENCE, not measured** — it follows from C4d plus claim (a)'s
+   re-baseline note; no BDS1 projector was run against a deleted row.
+
+3. **`tombstone` must not enter any projection vocabulary.** `bd statuses`
+   does not list it, no user-facing command produces it, and the import path
+   drops it. It is an internal concept of `bd 1.1.2`, not a status a mirror
+   should be able to represent or emit.
+
+### Recommendation carried to `computenet-8kj.6`
+
+Claim (c) is the BDS0 spike's **clean pass**, and it is the one claim that
+makes a piece of BDS4 cheaper rather than more expensive: close replication
+needs no beads change, no new verb, and no flag, and the originate/replicate
+asymmetry it depends on is structural rather than configured. Where claims (a)
+and (b) each removed an assumed seam, claim (c) confirms one.
+
+What `8kj.6` should weigh, and what this section deliberately does not decide:
+
+- whether the **closed-epic-with-open-child** state C3 makes reachable on every
+  machine is acceptable, or whether the origin side must be required to close
+  children first;
+- whether the **anti-durable hard delete** is tolerable as a documented
+  operational warning, or whether it needs a guard (a wrapper that refuses
+  `bd delete` on a replicated workspace) before BDS4 ships;
+- whether the **lost-close** hazard that claim (b)'s tie and rounding results
+  imply for the removal interface changes the priority of fixing the `≥ .500`
+  defect upstream.
+
+None of the three is a reason to re-found the BDS line. All three are BDS4
+specification text that does not exist yet. The overall go/re-scope
+adjudication is `8kj.6`'s and is not made here.
+
+### What would overturn this verdict
+
+Each is a single command away, and any one changes a conclusion above:
+
+- **`bd import` applying a `tombstone` row as a delete** in a later bd. Re-run
+  C4b and read B's copy. That would give deletion a wire representation and
+  retire the entire absence argument, along with BDS4 §4's exclusion.
+- **`bd import` enforcing close guards.** Re-run C3's forged unflagged import.
+  It would invalidate the originate/replicate asymmetry outright and make
+  close replication unsound as specified — the single most consequential
+  regression this section could suffer.
+- **`bd close --json` emitting a structured error object.** Re-run C2's
+  `--json` probe. That removes BDS4 implication 2 and makes guard refusals
+  machine-detectable by kind rather than by exit status alone.
+- **The open-children guard extended to non-epic parents.** Re-run C2's
+  `P2`/`K2` probe. It would retire the narrowing and make BDS4 implication 3
+  moot.
+- **`closed_at` appearing in `updated_issues[].changes`.** Re-run C1b and read
+  the report. It would make the report a partial assertion surface, though
+  claim (a)'s journal silence still forbids using it as *the* acknowledgment.
+- **`bd export` emitting anything at all for a hard-deleted issue.** Re-run
+  C4d's `grep -c`. Non-zero is the whole finding reversed.
+- **`bd import` gaining a `--force`/guard flag.** `bd import --help` is the
+  entire check; today it offers only `--allow-stale`, `--dedup`, `--dry-run`
+  and `-i`, which is why "guards off on this path" is a property rather than a
+  setting.
+- **A B→A hop failing to resurrect a hard-deleted row.** The one inference in
+  this verdict that is not measured; `rig.sh hop B A` after `bd delete` settles
+  it either way.
+
+### What did not work, in this subsection
+
+- **No new probe was run.** The four sub-checks answered every verdict
+  sentence, so nothing here is a fresh measurement; the honest cost is that the
+  two forward-looking claims — B→A resurrection, and BDS1's re-baseline being
+  the only deletion-aware path — are labelled inferences and remain unmeasured.
+- **The epic's §2 "propose the alternative seam" rule could not be applied
+  cleanly.** It is written for a *failed* claim, and claim (c) did not fail: a
+  premise inside a passing sub-check was falsified instead. The deletion seams
+  above are therefore offered under that rule's spirit rather than its letter,
+  and none of them is recommended.
+- **`ErrCloseBlocked`/`ErrCloseOpenChildren` could not be recovered from any
+  surface**, so no verdict sentence here can promise BDS4 a typed refusal —
+  only an exit code and a prose string that a future bd release may reword
+  without warning.
