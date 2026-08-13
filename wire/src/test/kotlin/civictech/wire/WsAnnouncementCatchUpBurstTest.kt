@@ -70,12 +70,43 @@ import java.util.UUID
  *   ~2.5e-5 loss per ref. That headline figure bounds the sweep and nothing
  *   else; it never touched the `onLocalPublish` path.
  * - **The register-then-sweep handover** (the `onLocalPublish` leg): bounded
- *   only by runs of *this* shape. The committed fast lane is 10 iterations x 20
- *   racing refs = 200 refs released inside the window — rule of three, under
- *   ~1.5e-2 per ref. That is a smoke test, not a measurement, and it is stated
- *   here so nobody reads the sweep's 2.5e-5 as covering it.
- *   `-Dwire.burst.iterations` and [main] are how it is made strong; the report
- *   prints the racing-ref count so any run says what it bounds.
+ *   only by runs of *this* shape, and now bounded at the sweep's own size —
+ *   **120,000 refs released inside the window with 0 losses** (computenet-dqy.46,
+ *   2026-08-13, macOS arm64 / JBR 25.0.2, 6,000 iterations x 20 racing refs;
+ *   240,000 refs announced in total, 25.2s wall), and again at 25.4s in the
+ *   review's independent re-run on the same host. Rule of three: under ~2.5e-5
+ *   loss per racing ref, the same order as the sweep's. Note the JDK: the sweep's
+ *   own 120,000 was taken on JDK 21.0.11, so the two figures are the same size on
+ *   different runtimes, which is a caveat on comparing them, not on either one.
+ *   The command is the whole cost:
+ *
+ *       java -cp <:wire test runtime classpath> \
+ *         civictech.wire.WsAnnouncementCatchUpBurstTestKt 6000 40
+ *
+ *   The bound above is **macOS only**, and that is the open gap: the loss this
+ *   family chases (computenet-dqy.38) was seen on Linux. No *long-run* Linux
+ *   figure exists for this path — the container route
+ *   (`scripts/flake-loop/run-linux-loop.sh`) needs a running Docker daemon, and
+ *   on the machine this was measured the daemon could not be brought up
+ *   unattended. What Linux evidence there is, is the fast lane's own: this test
+ *   runs in `build-test-fast` on `ubuntu-latest` and contributes 200 racing refs
+ *   per CI run (green there on PR #84's run, in the same job where
+ *   [WsAnnouncementStressTest] lost an announcement). That is four orders of
+ *   magnitude short of the bound above. Anyone with a Linux box or a live daemon
+ *   should run the same command there and add the number here.
+ *
+ *   The **committed fast lane stays at 10 iterations x 20 racing refs = 200
+ *   refs** (rule of three, under ~1.5e-2 per ref) — deliberately, on measured
+ *   cost. This test's own JUnit-reported duration is 0.242s at 10 iterations,
+ *   0.741s at 100, 1.209s at 200 (`./gradlew :wire:test --tests
+ *   '*WsAnnouncementCatchUpBurstTest*' --rerun -Dwire.burst.iterations=N`,
+ *   ~4.9ms marginal per iteration). Buying even 4,000 racing refs costs ~1s,
+ *   the fast lane's stated ceiling, and still lands ~30x short of the sweep's
+ *   bound: parity is what the long run above is for, not what the fast lane can
+ *   be stretched into. What the fast lane is sized for is regression detection,
+ *   and at 10 x 40 it already fails 9/10 and 10/10 against every mutation below.
+ *   `-Dwire.burst.iterations` and [main] are how it is made strong on demand;
+ *   the report prints the racing-ref count so any run says what it bounds.
  *
  * ## What is live, established by mutation of `Peering.announceTo`
  *
@@ -105,13 +136,20 @@ import java.util.UUID
  * a send that failed did not arrive however its exception was handled.
  *
  * The honest limit of the racing arm: its publishes are *issued* inside the
- * window and installed concurrently with the sweep, but they consistently miss
- * the sweep's `localRefs()` snapshot (the report's "already Local when it
- * opened" count is 0 in every iteration observed), so what they exercise is the
- * hook leg of the handover rather than an install landing exactly astride the
- * snapshot read. A publish that fell between the two legs would still be caught
- * — that is the property under test — but the probe cannot claim to have aimed
- * one at the seam of the snapshot itself.
+ * window and installed concurrently with the sweep, but they almost always miss
+ * the sweep's `localRefs()` snapshot, so what they overwhelmingly exercise is
+ * the hook leg of the handover rather than an install landing astride the
+ * snapshot read. At fast-lane sizes the report's "already Local when it opened"
+ * count is 0 in every iteration observed; the 6,000-iteration runs above put an
+ * order of magnitude on it — **14 of 120,000 racing refs**, and **1 of 120,000**
+ * in the review's re-run of the same command on the same host, were already
+ * `Local` when the window opened, i.e. certainly swept. It is a race, so read
+ * that as "of order 1e-5 to 1e-4", not as a rate either run pinned down. So the
+ * racing arm does occasionally land on the other side of the snapshot, but at a
+ * rate that makes the 120,000 above a bound on the *hook* leg and not on the
+ * snapshot seam itself. A publish that fell between the two legs would still be caught — that
+ * is the property under test — but the probe still cannot claim to have aimed
+ * one at that seam.
  *
  * The probe also refuses to be vacuous: it fails if the seam never fires (the
  * peer never announced, so nothing was raced) and fails if any ref never
