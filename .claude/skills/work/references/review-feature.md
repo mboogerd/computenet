@@ -13,6 +13,17 @@ Every step below names the evidence it consumes — a diff, a task-count line,
 a test name, a command's output. A step you could satisfy by writing
 "verified" has not been done.
 
+## Contents
+
+1. Establish the standard — criteria and tasks from the bead
+2. Read the actual diff — against freshly fetched origin/main
+3. Prove the feature's tests actually ran — no FROM-CACHE evidence
+4. Your run is on macOS; the required checks are not
+5. Repair by default — up to a bound (authorship limit + `review:` commits)
+6. Re-fetch immediately before you certify
+7. Decide — verdict shapes and what each requires
+8. Report
+
 ## 1. Establish the standard
 
 ```bash
