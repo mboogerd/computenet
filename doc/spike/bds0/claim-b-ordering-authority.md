@@ -775,7 +775,9 @@ Explicitly **not tested** in this section, and therefore not claimed either way:
 - How `labels`, `comments` and `dependencies` behave on the tie, stale and
   `--allow-stale` paths. The help says they still merge on a tie; this section
   measured scalar columns and `metadata` only.
-- `--dry-run`, alone or combined with `--allow-stale`.
+- `--dry-run`, alone or combined with `--allow-stale` — untested *by E1–E4*;
+  it was measured later, in the verdict subsection, and is not a staleness
+  pre-flight.
 - Whether the same adjudication holds outside embedded mode, or under a
   `--dolt-auto-commit` policy other than the default.
 - Whether closed/tombstone rows adjudicate the same way — that is claim (c).
