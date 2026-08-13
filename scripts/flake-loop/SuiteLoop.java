@@ -40,11 +40,21 @@
 // Reading the SUMMARY, because three of its fields are easy to misread:
 //   failingTests                  every failure, whatever it was. This is the field
 //                                 that answers "did the suite stay green".
-//   collectorAnnouncedSignature   ONLY computenet-dqy.34's message ("... collector
-//                                 announced"). computenet-dqy.40's lost announcement
-//                                 does not match it and scores 0 — so a run can have
+//   collectorAnnouncedSignature   ONLY computenet-dqy.34's message ("timed out
+//                                 awaiting: collector announced", by prefix — see
+//                                 matchesCollectorAnnouncedSignature). computenet-
+//                                 dqy.40's lost announcement throws a different
+//                                 message shape ("announcement path: N failure(s)
+//                                 ...") that only quotes the word "announced" in a
+//                                 diagnostic line, not as this prefix, so it does
+//                                 not match and scores 0 — so a run can have
 //                                 failingTests=1 collectorAnnouncedSignature=0 and
-//                                 still be an announcement loss.
+//                                 still be an announcement loss. (computenet-dqy.62:
+//                                 this counter used to be a bare
+//                                 msg.contains("announced"), which matched dqy.40's
+//                                 diagnostic line too — the exact false positive
+//                                 this paragraph says cannot happen. Fixed to the
+//                                 prefix check the paragraph now describes.)
 //   expectedTests                 the baseline the run actually checked against — the
 //                                 --expect-tests value, or the count iteration 1
 //                                 derived. Read it: unexpectedTestCountIterations=0
@@ -82,6 +92,34 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class SuiteLoop {
 
     record Failure(String testId, String displayPath, Throwable cause) {}
+
+    // computenet-dqy.62: this used to be `msg.contains("announced")`, which
+    // false-positived on computenet-dqy.40's WsAnnouncementStressTest failure —
+    // every occurrence of that catch-up-loss shape prints a diagnostic line
+    // ("announced: server localRefs=3 -> client remoteRefs=2") that contains the
+    // substring, so the counter fired on precisely the failures its own header
+    // says it will not fire on.
+    //
+    // computenet-dqy.34's signature is a specific AssertionFailedError shape,
+    // not a word that can appear anywhere in a report: testkit's AwaitUntil
+    // throws exactly `"timed out awaiting: " + what`, and every await site that
+    // is part of dqy.34's family names `what` starting with "collector
+    // announced" — "collector announced" itself (WsPeerIdentityTest,
+    // WsReconnectSmokeTest, WsReconnectLoopBoundTest, WsReconnectRefusedTest),
+    // "collector announced to client" (WsTransportSmokeTest,
+    // WsThreadEntryConformanceTest) and "collector announced to the dialer"
+    // (WsPeerIdentityTest). All of those messages start with
+    // "timed out awaiting: collector announced" and nothing else does:
+    // WsAnnouncementStressTest's own failure (dqy.40's shape) throws
+    // `AssertionFailedError(report.render())`, whose message starts with
+    // "announcement path: N failure(s) ..." and only ever quotes the word
+    // "announced" — never "collector announced" — inside a later diagnostic
+    // line. A prefix check on the top-level message is therefore a positive,
+    // specific match on dqy.34's signature rather than a substring test that
+    // happens to also match whatever quotes the same word.
+    static boolean matchesCollectorAnnouncedSignature(String msg) {
+        return msg != null && msg.startsWith("timed out awaiting: collector announced");
+    }
 
     private static String value(String[] args, int i, String flag) {
         if (i >= args.length) throw new IllegalArgumentException(flag + " needs a value");
@@ -209,7 +247,7 @@ public final class SuiteLoop {
                         // WsAnnouncementStressTest failure says "announcement path: N
                         // failure(s)" and scores 0 here. Read failingTests for "did
                         // anything fail", this counter for "was it dqy.34's signature".
-                        if (msg.contains("announced")) signatureMatches++;
+                        if (matchesCollectorAnnouncedSignature(msg)) signatureMatches++;
                         StringWriter sw = new StringWriter();
                         c.printStackTrace(new PrintWriter(sw));
                         sb.append(sw).append('\n');
