@@ -67,11 +67,21 @@ Order sensitivity, stated rather than left to be discovered:
 - **Step 6 must follow step 3.** C4b needs an existing row in B to attempt to
   overwrite; `Y` is that row, and its stored `updated_at` is the one C4b's
   forged timestamp must beat.
-- **Step 7 is last and is not idempotent.** Its final hop is unfiltered — it
-  re-imports every A row into B. In the recorded run that reported
-  `{"created": 8, "skipped": 2, tie: 4, stale: 2}`; the two stale skips are
-  `P` and `Q`, whose forged closes made B's copies strictly newer than A's.
-  Running this hop earlier would have overwritten C3's forged state.
+- **Step 7's hop is unfiltered — and its ordering had to be measured, not
+  assumed.** It re-imports every A row into B; in the recorded run that
+  reported `{"created": 8, "skipped": 2, tie: 4, stale: 2}`, the two stale
+  skips being `P` and `Q`, whose forged closes made B's copies strictly newer
+  than A's. So it does **not** overwrite C3's forged state, and repeating it
+  is a no-op: an immediate second unfiltered hop reported
+  `{"created": 8, "skipped": 2, tie: 8, stale: 2}` and changed no stored
+  field — not even `metadata.cn_dot`, which stayed at each row's earlier
+  stamp, because a tied row is kept local wholesale rather than merged.
+  Placing this hop *before* the forged import would not have destroyed C3
+  either: it is a superset of step 4's hop, leaving `P`/`Q` open at A's own
+  `updated_at` — exactly the precondition C3's forged bundle was built to
+  beat. The one ordering step 7 genuinely requires is that it follow `bd
+  delete Z`; a hop before the delete would simply carry `Z` again and say
+  nothing about deletion.
 - **C2's probe (`P2`/`K2`) closes `P2` for real.** It is a separate pair of
   issues touched by nothing else, so it is order-independent — but it does
   leave a closed issue behind in A, which is why the unfiltered hop in step 7
