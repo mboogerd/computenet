@@ -32,9 +32,28 @@ neither a failure of the code under test nor an in-JVM block — it is an
 uninformative red. So a run whose only failure records are timeouts is reported
 as `incomplete`, never as a loss, and the distinction is carried out of this
 script through `$PROBE_OUTCOME_KEY` in `$GITHUB_ENV` so the job's conclusion can
-say which one happened. Outcomes: `clean`, `incomplete`, `loss` (any
-non-timeout failure record; a loss alongside a timeout is still a loss, since
-the loss is the real evidence), `vacuous`.
+say which one happened.
+
+A LOSS IS RECOGNISED POSITIVELY, NOT BY ELIMINATION (computenet-dqy.54). This
+classifier used to read "no failures -> clean; all failures are timeouts ->
+incomplete; ANYTHING ELSE -> loss", so a testcase whose only record was
+`<error type='java.lang.OutOfMemoryError'>` was announced by the job as "an
+occurrence ... record it verbatim on computenet-dqy.40". That is the mirror of
+the computenet-dqy.12 trap, and in the direction that MANUFACTURES a false
+positive: computenet-dqy.52's `load=suite` arm is by construction the
+higher-heap-pressure, higher-disk-pressure arm, hence the arm most likely to
+die of infrastructure — and the arm whose infrastructure death would be
+reported as exactly the result the experiment is hunting. Both probes always
+render their own report line when they lose an announcement, so its ABSENCE is
+positive evidence the failure came from somewhere else. A non-timeout failure
+record without a report line is therefore `unrecognised`, not `loss`.
+
+Outcomes: `clean`, `incomplete` (all records are timeouts), `loss` (at least
+one record carries a probe report line; a loss alongside a timeout or an
+unrecognised record is still a loss, since the loss is the real evidence),
+`unrecognised` (failed, but not with a probe report line and not with a
+timeout — an UNUSABLE sample, not a pass: it reddens the run and contributes
+neither numerator nor denominator), `vacuous`.
 
 It also RECORDS A NUMERATOR AND A DENOMINATOR (computenet-dqy.52). Comparing
 two conditions — the probe alone versus the probe under concurrent suite load —
@@ -45,10 +64,10 @@ probe, `catch-up burst: N failed iteration(s) in K iterations (R refs
 announced)` for the burst probe) and publishes them through
 `$PROBE_LOSSES_KEY` / `$PROBE_UNITS_KEY`. On a clean arm the probe prints
 nothing, so the denominator comes from `$PROBE_EXPECTED_UNITS` (the dispatched
-size) and the numerator is 0. On an `incomplete` or `vacuous` arm BOTH are
-`unknown` and neither may be counted: an unfinished sample has no denominator,
-which is exactly the trap computenet-dqy.12 and the excluded run 31668681959
-came from.
+size) and the numerator is 0. On an `incomplete`, `unrecognised` or `vacuous`
+arm BOTH are `unknown` and neither may be counted: an unusable sample has no
+denominator, which is exactly the trap computenet-dqy.12 and the excluded run
+31668681959 came from.
 
 IT DOES NOT CATCH A CACHED RUN, and `--rerun` in the workflow is therefore
 load-bearing — do not drop it on the grounds that this script covers it.
@@ -97,10 +116,26 @@ def is_timeout(problem):
     return TIMEOUT_MARKER in haystack
 
 
-def parse_counts(message):
-    """(numerator, denominator) out of a probe's own report line, or None."""
+def problem_text(problem):
+    """Everything the JUnit XML carries about one failure record.
+
+    Both the `message` attribute and the element body are searched, because a
+    probe's report line is the exception message and therefore appears in the
+    message attribute AND at the head of the stack trace in the body. Reading
+    both means a runner or reporter that populates only one of them still gets
+    the loss recognised as a loss.
+    """
+    return (problem.get("message") or "") + "\n" + (problem.text or "")
+
+
+def parse_counts(text):
+    """(numerator, denominator) out of a probe's own report line, or None.
+
+    None is the load-bearing answer, not a fallback: it means this failure
+    record is not the probe reporting a lost announcement (computenet-dqy.54).
+    """
     for pattern in COUNT_PATTERNS:
-        found = pattern.search(message or "")
+        found = pattern.search(text or "")
         if found:
             return int(found.group(1)), int(found.group(2))
     return None
@@ -148,6 +183,8 @@ def main(argv):
         executed = 0
         failures = 0
         timeouts = 0
+        loss_records = 0
+        unrecognised = 0
         counted = None  # (numerator, denominator) read off a loss report
         for path in files:
             root = ET.parse(path).getroot()
@@ -172,26 +209,43 @@ def main(argv):
                     continue
                 failures += len(problems)
                 for problem in problems:
-                    timed_out = is_timeout(problem)
-                    if timed_out:
+                    if is_timeout(problem):
                         timeouts += 1
+                        headline = (
+                            "INCOMPLETE - the requested size did not finish inside "
+                            "the build's 5-minute per-test JUnit timeout. NO SAMPLE "
+                            "was produced. This is "
+                            "NOT an announcement loss (computenet-dqy.12: a JUnit "
+                            "TimeoutException proves neither a failure nor an in-JVM "
+                            "block); dispatch a smaller size."
+                        )
                     else:
-                        found = parse_counts(problem.get("message") or "")
+                        found = parse_counts(problem_text(problem))
                         if found:
+                            loss_records += 1
                             counted = found
+                            headline = (
+                                "LOST - an announcement did not arrive. This is the "
+                                "occurrence; the full two-sided report follows."
+                            )
+                        else:
+                            unrecognised += 1
+                            headline = (
+                                "UNRECOGNISED FAILURE (type %r) - this record is "
+                                "neither the per-test JUnit timeout nor a probe "
+                                "report line, so it did NOT come from the "
+                                "announcement path. NOT an announcement loss "
+                                "(computenet-dqy.54): both probes always render "
+                                "their own report line when they lose one, so its "
+                                "absence is positive evidence the failure came from "
+                                "somewhere else - infrastructure, the JVM, or the "
+                                "build. The sample is UNUSABLE: it contributes no "
+                                "numerator and no denominator. Read the text below "
+                                "and re-dispatch."
+                                % (problem.get("type") or "unknown")
+                            )
                     emit("", summary)
-                    emit(
-                        "INCOMPLETE - the requested size did not finish inside "
-                        "the build's 5-minute per-test JUnit timeout. NO SAMPLE "
-                        "was produced. This is "
-                        "NOT an announcement loss (computenet-dqy.12: a JUnit "
-                        "TimeoutException proves neither a failure nor an in-JVM "
-                        "block); dispatch a smaller size."
-                        if timed_out
-                        else "LOST - an announcement did not arrive. This is the "
-                        "occurrence; the full two-sided report follows.",
-                        summary,
-                    )
+                    emit(headline, summary)
                     emit("```", summary)
                     emit((problem.get("message") or "").rstrip(), summary)
                     emit("---- full failure text ----", summary)
@@ -208,12 +262,19 @@ def main(argv):
             record_outcome("vacuous")
             return 1
 
+        # Precedence, strongest evidence first: a recognised loss is the finding
+        # this instrument exists to make, and survives being accompanied by a
+        # timeout or an unexplained failure. An unrecognised failure outranks a
+        # timeout because it is the less explained of the two unusable samples
+        # and should be the headline a reader acts on.
         if failures == 0:
             outcome = "clean"
-        elif timeouts == failures:
-            outcome = "incomplete"
-        else:
+        elif loss_records:
             outcome = "loss"
+        elif unrecognised:
+            outcome = "unrecognised"
+        else:
+            outcome = "incomplete"
 
         # The arm's own numerator/denominator. A clean arm did not print one,
         # so its denominator is the dispatched size; a loss prints both; an
@@ -221,11 +282,15 @@ def main(argv):
         expected_units = os.environ.get("PROBE_EXPECTED_UNITS", "").strip()
         if outcome == "clean":
             losses, units = "0", expected_units or "unknown"
-        elif outcome == "loss" and counted:
-            losses, units = str(counted[0]), str(counted[1])
         elif outcome == "loss":
-            losses, units = "unparsed", expected_units or "unknown"
+            # A loss is now recognised BY its report line (computenet-dqy.54),
+            # so both counts are always present here. The former `unparsed`
+            # numerator existed only because a failure carrying no report line
+            # could reach this branch; such a failure is `unrecognised` now.
+            losses, units = str(counted[0]), str(counted[1])
         else:
+            # incomplete / unrecognised: no numerator AND no denominator. An
+            # unusable sample is not a pass and must contribute to no rate.
             losses, units = "unknown", "unknown"
         record_outcome(outcome, losses, units)
 
@@ -235,11 +300,19 @@ def main(argv):
             summary,
         )
         detail = ""
+        parts = []
         if timeouts:
-            detail = (
-                " (%d of them the per-test JUnit timeout, i.e. an unfinished sample "
-                "rather than a lost announcement)" % timeouts
+            parts.append(
+                "%d the per-test JUnit timeout, i.e. an unfinished sample rather "
+                "than a lost announcement" % timeouts
             )
+        if unrecognised:
+            parts.append(
+                "%d carrying neither a timeout nor a probe report line, i.e. a "
+                "failure from outside the announcement path" % unrecognised
+            )
+        if parts:
+            detail = " (%s)" % "; ".join(parts)
         emit(
             "%d executed testcase(s), %d failure record(s)%s. Outcome: %s."
             % (executed, failures, detail, outcome),
