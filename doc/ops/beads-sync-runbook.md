@@ -45,6 +45,30 @@ cross-machine at all — that is a human decision; say so on `computenet-o97.5`
 (where the same reasoning was recorded as an assumption on 2026-08-12) and the
 two remaining sites come out.
 
+### 0.1 Amendment 2026-08-13: exactly-two retired as an invariant (computenet-wpvy.3)
+
+Decided by the user 2026-08-13. The exactly-two count above was shaped by the
+~10-minute-round-trip era; with the measured ~30s round-trip the constraint
+moved from cost to correctness, and the policy is now the principle **sync
+brackets acquisition, not writes; ownership makes writes free**:
+
+- **Owned territory** (items under an epic the session claimed, items it
+  claimed): writes stay local; the Finalize push is *publication*. The two
+  boundary calls of §0 survive as this publication cadence — a floor, no
+  longer a ceiling.
+- **Acquisitions and shared-surface writes** (claiming an epic, claiming an
+  item in another epic, filing/upvoting under the SDLC epic
+  `computenet-wpvy`, stealing a stale claim): each is bracketed
+  pull → verify → write → push at the moment it happens. The push turns the
+  claim from a record into a lock; the double-claim window of §4 shrinks
+  from a session to seconds.
+
+Accepted residuals: two machines racing the same acquisition inside the
+seconds-wide window, and agents legitimately writing *into* a claimed epic
+(e.g. filing a story that thematically belongs there) — ownership is a
+working convention, not a fence. Skill-side statement of the same policy:
+`.claude/skills/work/references/claim-sync.md`.
+
 ## 1. The job: invocation path
 
 - **Script**: `scripts/beads-nightly-sync.sh` (repo root). Runs `bd dolt pull`

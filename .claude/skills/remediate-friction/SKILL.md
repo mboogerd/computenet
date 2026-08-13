@@ -33,8 +33,10 @@ git fetch origin main
 bd dolt pull
 ```
 
-One pull here, one push at the end — same discipline as /work. If the pull
-fails, stop and report.
+Same sync principle as /work (`references/claim-sync.md` there): this pull
+plus a publication push at the end, with an extra push whenever step 2
+acquires an item this machine doesn't already hold. If the pull fails, stop
+and report.
 
 ## 2. Pick the most-reported item
 
@@ -45,14 +47,26 @@ bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
 The label filter matters: the SDLC epic also holds ordinary process
 features that belong to /work sessions, not this lane. Order by
 `comment_count` descending — comment count is recurrence, and recurrence is
-priority. Skip anything labeled `human` or already `in_progress` (another
-remediation run owns it). Claim the winner **by id**:
+priority. Skip anything labeled `human`. Then pick by assignee — filing
+machines pre-claim items (SKILL.md step 7), and the claim decides which
+orchestrator drains what:
+
+- **Assigned to `$BEADS_ACTOR`** → yours already; work it, no sync needed.
+- **Unassigned** → an acquisition: claim by id, `bd dolt push`. Push
+  rejected → pull, re-check the assignee, take the next item if it's gone.
+- **Assigned to the other machine** → theirs; skip it — *unless* the claim
+  is stale (untouched for more than 12h, per `updated_at` from the step-1
+  pull). Then steal it with the full bracket: `bd dolt pull` to confirm it
+  is still untouched, re-claim, `bd dolt push`, and note the steal in a
+  comment. This is the liveness backstop for a machine that claimed at
+  filing and died before draining.
 
 ```bash
 bd update <id> --claim
 ```
 
-Nothing open → report the log is drained and stop.
+Nothing workable → report the log is drained (or fully claimed elsewhere)
+and stop.
 
 ## 3. Re-validate against the current skill revision
 

@@ -167,15 +167,24 @@ git fetch origin main
 bd dolt pull
 ```
 
-**This pull is one of exactly two Dolt sync points in the whole session** —
-this one, and the `bd dolt push` at Finalize (step 6). Nothing in between
-syncs, so every claim, close, and metadata write you make below stays local
-until Finalize pushes it. Read
-[references/claim-sync.md](references/claim-sync.md) for what that costs: the
-window it opens is real and you need to recognize its collision. (There is
-also a catch-up job, `scripts/beads-nightly-sync.sh`, but **no scheduler runs
-it** — a human invokes it. Never treat it as a push that will happen on its
-own; see `doc/ops/beads-sync-runbook.md` §5.)
+**Sync brackets acquisition, not writes; ownership makes writes free.**
+That principle (decided 2026-08-13, computenet-wpvy.3) governs every Dolt
+sync in this file. Writes inside territory you own — items under the epic
+you claimed, items you claimed — stay local and ride the Finalize push,
+which is *publication*. **Acquiring** anything, or writing to a surface you
+don't own — this step's epic claim, a cross-epic item claim (5f routes 3–4),
+filing or upvoting under the SDLC epic (step 7) — gets its own bracket:
+pull → verify → write → push. A round-trip costs ~30s
+(`doc/ops/beads-sync-cost.md`), so a handful per session is noise; the old
+"exactly two syncs" rule dates from ~10-minute round-trips and survives
+only as the publication cadence, not an invariant.
+[references/claim-sync.md](references/claim-sync.md) states the exact
+guarantees. One accepted gap: another agent may still write *into* your
+claimed epic — say, filing a story that thematically belongs there — so
+ownership is a working convention, not a fence. (There is also a catch-up
+job, `scripts/beads-nightly-sync.sh`, but **no scheduler runs it** — a
+human invokes it. Never treat it as a push that will happen on its own; see
+`doc/ops/beads-sync-runbook.md` §5.)
 
 **If this pull fails, stop the session and report it.** It is the only look
 you get at the other machine's state, so proceeding without it means claiming
@@ -233,7 +242,17 @@ bd ready --type=epic --json               # take the first id that is NOT comput
 bd update <id> --claim                    # claim that id specifically
 bd update <id> --add-label=owner:$BEADS_ACTOR
 bd update <id> --set-metadata skill_version=$(git hash-object .claude/skills/work/SKILL.md)
+bd dolt push                              # the claim is an acquisition — push it now
 ```
+
+**That push is what turns the claim from a record into a lock.** Without it,
+two machines starting slots between each other's Finalize pushes could both
+claim this epic and neither would find out all session (the computenet-kg7
+class). If the push fails, `bd dolt pull` and retry once — a rejection
+usually means the other machine pushed since your step-3 pull, so re-verify
+the epic is still unclaimed before re-claiming. Still failing → stop and
+report; an unpushed epic claim is exactly the window this bracket exists to
+close.
 
 That last line records **which revision of this skill the session ran
 under**. Friction items filed in step 7 carry it, so a fix is attributable
@@ -268,12 +287,13 @@ Always claim **the id you selected**. Never `bd ready --claim`: it claims
 whatever is first *at claim time*, which may not be what you just read, and
 you would then work an item you don't own.
 
-The claim is local until Finalize pushes it, so there is no confirm step to
-run and no race you can resolve here — the step-3 pull above is the whole of
-your cross-machine claim safety.
+With the claim pushed, the race window is the seconds between your pull and
+your push, not the session — and a crash after this point leaves a *visible*
+claim the other machine can reason about, instead of an invisible one.
+Everything you write **under** this epic from here on is owned territory:
+local until Finalize, no per-write sync.
 [references/claim-sync.md](references/claim-sync.md) describes exactly what
-that does and does not protect, including what a crash before Finalize leaves
-behind.
+is and is not protected.
 
 Nothing claimable → report and stop.
 
@@ -1118,7 +1138,11 @@ epic** → claim and work **that specific blocking item** (task or feature, via
 5a/5b as appropriate), not the other epic itself. Without this route a
 cross-epic dependency is a permanent stall: no session on this epic can ever
 unblock it, and the one-claim rule is about *epic* claims, which this does
-not add.
+not add. The item lives outside your owned territory, so the claim is an
+acquisition — bracket it: `bd dolt pull`, re-verify it is still ready and
+unclaimed, claim by id, `bd dolt push`. Claimed by the other machine after
+the pull → it's being handled; go back to waiting or continue down this
+list.
 
 **4. The epic is dry but real budget remains (before T-90m)** → top up with
 **continuation work**, claimed by specific id. Route 3 already established
@@ -1165,6 +1189,12 @@ defaults to 15 minutes; `WORK_CONTINUATION_MARGIN_MIN` overrides it. Never
 admit on elapsed fraction alone — that converts idle time into half-finished
 branches at slot end, which is worse than idling. The T-90m gate above still
 applies on top.
+
+A continuation claim is an acquisition on a surface this session does not
+own — bracket it: `bd dolt pull`, re-verify the candidate is still ready and
+unclaimed (and re-run the collision check above against the fresh state),
+claim by id, `bd dolt push`. If the pull shows it claimed, take the next
+candidate.
 
 Work the admitted item by its shape: a feature via 5a, a task via its parent
 feature's flow (5b's claim/metadata/worktree/dispatch, branched from that
@@ -1226,14 +1256,15 @@ git -C <worktree> push
 bd dolt push
 ```
 
-**That `bd dolt push` is the session's only write to the shared tracker** —
-every claim, close, park and metadata write since step 3 rides on it. If it
-fails, say so at the top of your summary in plain words, and ask for a human
-to run `scripts/beads-nightly-sync.sh` — **nothing is scheduled to do it for
-you** (`doc/ops/beads-sync-runbook.md` §5). Until someone does, this session's
-tracker state is local-only, the other machine still sees this epic's items as
-they were at step 3, and losing this machine loses the lot. Never swallow the
-error and never report the session as clean without it.
+**That `bd dolt push` is the session's publication** — every owned-territory
+write since step 3 (closes, parks, metadata, breakdown children) rides on
+it; only acquisition brackets pushed earlier. If it fails, say so at the top
+of your summary in plain words, and ask for a human to run
+`scripts/beads-nightly-sync.sh` — **nothing is scheduled to do it for you**
+(`doc/ops/beads-sync-runbook.md` §5). Until someone does, this session's
+unpublished tracker state is local-only, the other machine still sees this
+epic's items as they were at step 3, and losing this machine loses the lot.
+Never swallow the error and never report the session as clean without it.
 
 Uncommitted leftovers mean an agent died mid-edit — report rather than
 committing work you didn't verify.
@@ -1307,23 +1338,34 @@ already durable: they're parked beads items. This is for the things that made
   claims that keep being wrong, reviews that keep failing for the same reason
 - a dead end that cost real time
 
-**One issue per kind of friction, deduped** — the point is seeing what recurs,
-and ten identical issues are worse than one issue with ten comments:
+**Filing under the SDLC epic is a shared-surface write** — the epic belongs
+to no session, both machines write to it, and its orchestrator lane reacts
+to what lands there. So the whole registration is bracketed
+(pull → dedup → write → claim → push), and the claim decides **which
+machine's orchestrator drains the item** — exactly one:
 
 ```bash
-bd search "<a few distinctive words>" --json      # look for it first
+bd dolt pull                                      # see the other machine first
+bd search "<a few distinctive words>" --json      # dedup against fresh state
 ```
 
-Found one → comment on it with this session's instance (what you were doing,
-what happened, what it cost). Not found → create it as a **bug or feature
-under the SDLC epic** `computenet-wpvy`: a `bug` when the skill misbehaved —
-an instruction that failed, contradicted reality, or didn't cover your case —
-and a `feature` when the skill worked as written but is missing a capability
-that would have made the session better. Process defects are high priority
-(the SDLC epic is drained on its own lane —
+**One issue per kind of friction, deduped** — the point is seeing what
+recurs, and ten identical issues are worse than one issue with ten comments.
+
+Found one → **upvote it**: comment with this session's instance (what you
+were doing, what happened, what it cost) — comment count is the remediation
+priority. Then read its assignee: claimed by the other machine → done, its
+orchestrator owns it and your comment raised its priority. Unclaimed →
+claim it for this machine (`bd update <id> --claim`).
+
+Not found → create it as a **bug or feature under the SDLC epic**
+`computenet-wpvy`: a `bug` when the skill misbehaved — an instruction that
+failed, contradicted reality, or didn't cover your case — and a `feature`
+when the skill worked as written but is missing a capability that would
+have made the session better. Then claim it. (Parenting plus the label
+keeps friction out of 5f's continuation pool; the drain is
 `.claude/skills/remediate-friction/SKILL.md` today, a reactive orchestrator
-eventually — and parenting plus the label keeps friction out of 5f's
-continuation pool):
+eventually.)
 
 ```bash
 SKILL_V=$(bd show <epic> --json | jq -r '.[0].metadata.skill_version')   # recorded at claim (step 3)
@@ -1335,9 +1377,13 @@ bd create --type=<bug|feature> --priority=2 --label=skill-friction \
   --acceptance="<what would have to change in the skill for this not to recur>"
 ```
 
-Do this *before* Finalize's `bd dolt push` (step 6), which is what carries the
-new item off this machine — a friction issue that never syncs is exactly the
-lost-transcript problem this step exists to solve.
+Close the bracket with `bd dolt push` once every friction item is filed and
+claimed (one push for the batch, not one per item). That push is what makes
+the claim exclusive — the other machine's orchestrator sees it on its next
+pull and stays off — and what carries the report off this machine: a
+friction issue that never syncs is exactly the lost-transcript problem this
+step exists to solve. Push rejected → pull, re-check your items against
+what arrived, push again.
 
 Write it for someone editing `SKILL.md` next week with none of your context:
 name the step, quote the instruction, say what actually happened.

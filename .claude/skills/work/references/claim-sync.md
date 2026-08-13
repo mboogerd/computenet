@@ -3,140 +3,99 @@
 You (the orchestrator) claim every item — epics, features, and tasks.
 Subagents are handed ids that are already claimed and never claim their own.
 
-**Read this before you decide a claim is safe.** Claim safety here is weaker
-than it used to be, and the weakening is deliberate. It is worth knowing the
-exact shape of what it no longer covers, because the failure is silent.
+## The principle
 
-## What actually happens now
+**Sync brackets acquisition, not writes. Ownership makes writes free.**
+(Decided 2026-08-13, computenet-wpvy.3, superseding the exactly-two-syncs
+rule — which dated from ~10-minute round-trips; a round-trip is now ~30s,
+`doc/ops/beads-sync-cost.md`.)
 
-A session touches the shared tracker twice:
+- **Owned territory** — items under the epic you claimed, items you
+  claimed — is yours to write locally. Closes, parks, metadata, breakdown
+  children: no per-write sync. The Finalize push (SKILL.md step 6) is the
+  *publication* that carries them off this machine.
+- **Acquisition** — claiming an epic (step 3), claiming an item in another
+  epic (5f routes 3–4), filing or upvoting under the SDLC epic (step 7),
+  stealing a stale claim — is a write to a surface you don't own yet. Each
+  gets its own bracket: `bd dolt pull` → verify (still unclaimed? not a
+  duplicate?) → write → `bd dolt push`.
 
-```bash
-bd dolt pull            # SKILL.md step 3, session start
-...                     # every claim, close, park, metadata write — all local
-bd dolt push            # SKILL.md step 6, Finalize
-```
+The push half of the bracket is what turns a claim from a record into a
+lock: the other machine's next pull sees it and stays off. The race window
+is the seconds between your pull and your push, not the hours between
+session boundaries.
 
-That is the whole of it. There is **no per-claim push, and no confirm cycle**.
-Claiming used to push immediately and then re-read the assignee to see who
-won; that protocol is gone. Per-session sync cost was `count × ~34s`, and the
-count was 10 in a minimal session (`doc/ops/beads-sync-cost.md`); it is now 2.
+**Claim by id, never `bd ready --claim`.** `bd ready` has no `--id` filter,
+and `--claim` takes whatever is first *at claim time* — which need not be
+the item you just read and decided to work. Select with `bd ready ...
+--json`, then claim that specific id with `bd update`.
 
-Two, and not zero, on purpose: the pull is the only thing that shows you the
-other machine, and the push is the only thing that shows the other machine
-you. The full reasoning — and what it would take to drop them — is
-`doc/ops/beads-sync-runbook.md` §0.
+## What a claim guarantees
 
-**Claim by id, never `bd ready --claim`.** This part did not change and still
-matters. `bd ready` has no `--id` filter, and `--claim` takes whatever is
-first *at claim time* — which need not be the item you just read and decided
-to work. Select with `bd ready ... --json`, then claim that specific id with
-`bd update`.
-
-## What a claim still guarantees
-
+- **Cross-machine exclusivity on acquired surfaces**, up to the seconds-wide
+  pull→push window. Two machines racing the *same* acquisition inside that
+  window can still both win it; the residue is accepted, and the collision
+  signs below are how it surfaces.
 - **This machine's own work.** `bd list --status=in_progress
-  --assignee="$BEADS_ACTOR"` reads the local DB, which is authoritative about
-  what this machine did. Releasing your own crash-leftover epics at startup,
-  finding an in-progress feature, and the stale-claim sweep all work without
-  the network.
-- **Anything the other machine pushed at its last Finalize.** The step-3 pull
-  brings those claims in. If machine B claimed an epic and finished a session
-  since your last start, you see that claim and skip the epic.
+  --assignee="$BEADS_ACTOR"` reads the local DB, which is authoritative
+  about what this machine did. Crash-leftover release at startup, resume
+  queries, and the stale-claim sweep all work without the network.
 - **Two overlapping runs on the *same* machine** are handled without sync at
   all, by the two guards in SKILL.md: a run stops at startup if this machine
-  holds an epic claim touched in the last 15 minutes (a live run's mark), and
-  the sweep only releases claims older than 6h, so a live run's items are
-  never taken from under it. (They share a
-  `BEADS_ACTOR` and cannot tell each other apart — `CLAUDE_SESSION_ID` is not
-  in the shell environment, so anything built on it would be silently empty.)
+  holds an epic claim touched in the last 15 minutes, and the sweep only
+  releases claims older than 6h. (They share a `BEADS_ACTOR` and cannot tell
+  each other apart — `CLAUDE_SESSION_ID` is not in the shell environment, so
+  anything built on it would be silently empty.)
 
-## What it no longer guarantees
+## What it does not guarantee
 
-**Two machines starting slots between each other's Finalize pushes can both
-claim the same item, and neither finds out during the session.**
+- **Ownership is a convention, not a fence.** Another agent may legitimately
+  write *into* your claimed epic — most commonly filing a story that
+  thematically belongs there. Accepted by design: the value of a stable home
+  for such items outweighs the occasional surprise child. Consequence: a
+  breakdown or close-out query can return children this session didn't
+  create; treat them as work, not corruption.
+- **A crash between acquiring and Finalize** publishes the acquisition but
+  not the work: the claim is visible, the closes and metadata under it are
+  not. The other machine sees a claimed epic with no progress — that is what
+  a *visible-but-stale* claim means, and why the startup release (step 3)
+  and the 6h sweep exist. The git side (pushed branches, PRs) is durable
+  independently; tracker and git diverge in that direction only.
+- **Owned-territory writes are invisible until publication.** A task closed
+  locally at 5c is still open in the other machine's view until Finalize
+  pushes. That is fine precisely because the other machine has no business
+  inside your claimed epic — the epic-level claim is what it respects.
 
-Concretely. Machine A starts at 02:00, pulls, sees `computenet-xyz` unclaimed,
-claims it, and works it for five hours. Machine B starts at 02:20, pulls — A's
-claim is still sitting in A's local DB and will not be pushed until 07:00 — so
-B also sees `computenet-xyz` unclaimed, claims it, and works it too. Both
-sessions run to completion believing they own it. The claim is not a lock
-during the window; it is a record that becomes visible later.
+## What a collision looks like when it surfaces
 
-**The window is the whole session**, up to the slot length (~5h), not a few
-seconds. It is widest for a fresh epic taken from `bd ready` at step 3, since
-that is the only decision made purely from just-pulled shared state.
+Rare now, but the signs are unchanged — you will not see an error at claim
+time. At some later pull:
 
-**A session that dies before Finalize never closes the window at all.** There
-is no partial state on the other machine — a crash mid-slot means *none* of
-this session's claims, closes, parked questions or created features and tasks
-were ever pushed, and the window stays open until this machine's next Finalize
-push — or until a human runs `scripts/beads-nightly-sync.sh`, which no
-scheduler does for them (`doc/ops/beads-sync-runbook.md` §5). Two consequences
-worth naming:
-
-- **Merged work the tracker doesn't know about.** 5c merges a task branch and
-  pushes it to GitHub, then `bd close`s the task locally. Crash after that and
-  the commit is on `feature/<id>` for everyone while the other machine still
-  reads that task as open — and, if it also claimed the epic, will hand it to
-  an agent to implement again. The git side is durable; the tracker side is
-  not, and they diverge in that direction only.
-- **The startup sweep is unaffected, because it is local.**
-  `sweep-stale-claims.sh` reads and writes this machine's DB, so the crashed
-  session's `in_progress` tasks are still there to be released at the next
-  start, exactly as before — its releases just aren't visible to the other
-  machine until the same Finalize push. Recovery on the machine that crashed
-  needs no sync; only cross-machine visibility waits.
-
-## What the collision looks like when it surfaces
-
-You will not see an error. You see, at some later session's step-3 pull (or
-after someone runs the catch-up job by hand):
-
-- **One item, two sets of children.** Both machines ran a breakdown, so the
-  epic has two near-duplicate feature sets, or the feature has two task sets
-  with different ids describing the same work.
-- **Two branches and two PRs for the same id shape** — `feature/<id>` exists
-  on both machines' pushes, or two PRs titled from the same feature.
-  `metadata.branch` / `metadata.pr` holds whichever value the *later* Finalize
-  push wrote; the earlier machine's PR url is simply gone from the tracker
-  while its PR is still open on GitHub.
-- **`assignee` naming one machine while the other machine's worktree is full
-  of committed work for it** — last-write-wins on `updated_at` picks a winner
-  silently.
-- **A `bd dolt pull` that aborts with `merge conflicts in issues require
-  operator resolution`** — the loud version, since the two sides edited the
-  same rows. `bd` has no conflict-resolution subcommand; the resolution goes
-  through the `dolt` CLI directly (see `doc/ops/beads-sync-cost.md`, which
-  transcribes one that happened).
-
-A human spots it by looking for duplicate work rather than for an error:
-`bd list --parent=<epic> --all` showing two features with the same intent, or
-`gh pr list` showing two open PRs for one feature id. Recovery — which branch
-survives, which duplicate ids get closed — is a human call, not something a
-session should attempt mid-run. It is documented in
-`doc/ops/beads-sync-runbook.md`.
+- **One item, two sets of children** — both machines ran a breakdown.
+- **Two branches and two PRs for the same feature shape** — `metadata.branch`
+  / `metadata.pr` holds whichever value the later push wrote.
+- **`assignee` naming one machine while the other machine's worktree holds
+  committed work for it** — last-write-wins on `updated_at` picked silently.
+- **A `bd dolt pull` aborting with `merge conflicts ... require operator
+  resolution`** — the loud version; resolution goes through the `dolt` CLI
+  (`doc/ops/beads-sync-runbook.md` §3.3). More frequent brackets make these
+  conflicts smaller but not impossible.
 
 **If you find one, stop working that item and park a question**
-([ask-human.md](ask-human.md)). Do not pick a winner yourself: the losing side
-may hold committed, pushed, unreviewed work.
+([ask-human.md](ask-human.md)). Do not pick a winner yourself: the losing
+side may hold committed, pushed, unreviewed work.
 
-## The two surviving sync sites fail loudly
+## When sync fails
 
-There is no retry protocol left to run, so both sites report rather than
-recover:
+Every bracket fails loudly; none retries silently:
 
-- **The step-3 pull fails** → **stop the session and report.** Do not proceed
-  on stale state. Without that pull you cannot see the other machine at all,
-  and you would claim from a snapshot of unknown age. This is the
-  computenet-kg7 / computenet-3v8 lesson: a session once ran a whole slot
-  against a local-only DB with claim safety silently gone, and the cost was
-  the run's state.
-- **The Finalize push fails** → **say so at the top of the session summary,
-  and never swallow it.** The session's entire tracker state — claims, closes,
-  parked questions, friction issues — is local-only until a **human** pushes
-  it or runs `scripts/beads-nightly-sync.sh`. No scheduler will
-  (`doc/ops/beads-sync-runbook.md` §5), so a failed Finalize push that you
-  don't report is state nobody will ever recover. Until it is pushed the other
-  machine sees this epic as it was at step 3, which widens exactly the window
-  described above, and losing this machine loses all of it.
+- **The step-3 pull fails** → stop the session and report. Without it you
+  cannot see the other machine at all (the computenet-kg7 / computenet-3v8
+  lesson).
+- **An acquisition push is rejected** → pull, re-verify the target is still
+  yours to take, retry once. Still failing → stop and report; an unpushed
+  acquisition is exactly the window the bracket exists to close.
+- **The Finalize publication push fails** → say so at the top of the session
+  summary and ask for a human to run `scripts/beads-nightly-sync.sh` —
+  nothing is scheduled to do it (`doc/ops/beads-sync-runbook.md` §5). Never
+  swallow it: unpublished state is local-only and dies with this machine.

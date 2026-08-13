@@ -90,19 +90,26 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
    # Team-maintainer opt-in only, unless current instructions forbid it:
    git pull --rebase
-   bd dolt push          # once, at end of session — the only Dolt sync you run
+   bd dolt push          # publication push at end of session (acquisition brackets may have synced earlier)
    git push
    git status
    ```
-   That end-of-session `bd dolt push` is the only Dolt sync in this block, and
-   a full `/work` session performs exactly two: one `bd dolt pull` at session
-   start (`.claude/skills/work/SKILL.md` step 3) and this push at Finalize.
-   Do not sync per claim, per close, or per commit. Any other round-trip —
-   catch-up after a failed push, refreshing a machine that has been idle — is
-   `scripts/beads-nightly-sync.sh`, which **no scheduler currently runs**: a
-   human invokes it or installs a schedule. See
-   `doc/ops/beads-sync-runbook.md` (§0 for why two calls survive, §5 for the
-   caller inventory, §8 for installing a schedule).
+   That end-of-session `bd dolt push` is the session's *publication* sync.
+   The governing principle (decided 2026-08-13, computenet-wpvy.3): **sync
+   brackets acquisition, not writes; ownership makes writes free.** Writes
+   inside owned territory — items under an epic the session claimed, items
+   it claimed — stay local until the publication push; do not sync per
+   close, per comment, or per commit there. Acquisitions and shared-surface
+   writes — claiming an epic, claiming an item in another epic, filing or
+   upvoting under the SDLC epic (`computenet-wpvy`) — are each bracketed
+   pull → verify → write → push at the moment they happen. A round-trip is
+   ~30s, so a handful per session is noise; the former exactly-two-syncs
+   rule is retired as an invariant and survives only as the publication
+   cadence. Any other round-trip — catch-up after a failed push, refreshing
+   an idle machine — is `scripts/beads-nightly-sync.sh`, which **no
+   scheduler currently runs**: a human invokes it or installs a schedule.
+   See `doc/ops/beads-sync-runbook.md` (§0 for the sync policy and its
+   history, §5 for the caller inventory, §8 for installing a schedule).
 5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
 
 **Critical rules:**
