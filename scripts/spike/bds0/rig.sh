@@ -60,7 +60,11 @@ cmd_init() {
   init_workspace "$ws_a" bdsa
   init_workspace "$ws_b" bdsb
 
-  bd version >"$root/bd-version.txt"
+  # Record the bd version via a sandboxed workspace invocation, not a bare
+  # `bd version` — per the isolation rules, every bd invocation must use
+  # `-C <workspace> --sandbox` and never run with cwd (or an implicit
+  # config lookup) inside the repository checkout.
+  bd_ws_run "$ws_a" version >"$root/bd-version.txt"
 
   echo "export BDS0_RIG_ROOT=$root"
 }
