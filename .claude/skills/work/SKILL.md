@@ -654,19 +654,22 @@ the dotted-id prefix, and each overrides the other in a different case:
 ```bash
 epic_of() {                       # effective parent = .parent, else dotted prefix
   local id="$1" row p n=0
-  row=$(bd show "$id" --json 2>/dev/null | jq -r '.[0].id // empty' 2>/dev/null)
-  [ -z "$row" ] && { echo "(no such id: $id)"; return 1; }
   while [ $n -lt 12 ]; do n=$((n+1))
     row=$(bd show "$id" --json 2>/dev/null)
+    # guard EVERY hop, not just the first: a vanished ancestor must not
+    # fall through to "(unparented)", i.e. to "no check needed"
+    if [ -z "$(printf '%s' "$row" | jq -r '.[0].id // empty' 2>/dev/null)" ]; then
+      echo "(no such id: $id)"; return 1
+    fi
     if [ "$(printf '%s' "$row" | jq -r '.[0].issue_type // empty')" = epic ]; then
-      echo "$id"; return
+      echo "$id"; return 0
     fi
     p=$(printf '%s' "$row" | jq -r '.[0].parent // empty')
     [ -z "$p" ] && case "$id" in *.*) p="${id%.*}";; esac
-    [ -z "$p" ] && { echo "(unparented)"; return; }
+    [ -z "$p" ] && { echo "(unparented)"; return 0; }
     id="$p"
   done
-  echo "(cycle?)"
+  echo "(cycle? $1)"; return 1
 }
 epic_of <candidate-id>
 bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
@@ -683,8 +686,11 @@ say; take the next candidate. The assignee reads as JSON `null` when clear,
 not `""`. **A genuine `(unparented)` needs no check and is not a
 gap**: an unparented bug or chore can never be somebody's locally-claimed
 child, so any competing claim on it is itself an acquisition and is therefore
-already pushed. `(no such id: …)` is a different answer entirely — fix the id
-and re-run; never read it as "unparented, carry on". And if you later find a sibling PR touching
+already pushed. Only that answer is safe to act on. **`(no such id: …)` and
+`(cycle? …)` both return non-zero and mean "unresolved", never "no check
+needed"** — fix the id, or break the cycle (`bd update --parent` accepts one:
+it does no cycle validation), and re-run. Key on the exit status, not on the
+string. And if you later find a sibling PR touching
 your own item's files, treat it as the collision it is: stop working that
 item and park a question — do not pick a winner, since the losing side may
 hold committed, pushed, unreviewed work.
