@@ -1,24 +1,27 @@
 ---
 name: remediate-friction
-description: Drains the standing skill-friction epic (computenet-mfaw) on its own lane, separate from /work — picks the most-reported open friction item, re-validates it against the current skill revision, and fixes .claude/skills/work/ in a reviewed branch and PR. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated skill-friction backlog worked.
+description: Drains the skill-friction items under the SDLC epic (computenet-wpvy) on its own lane, separate from /work — picks the most-reported open friction bug or feature, re-validates it against the current skill revision, and fixes .claude/skills/work/ in a reviewed branch and PR. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated skill-friction backlog worked.
 ---
 
 # /remediate-friction
 
-Drains `computenet-mfaw`, the standing skill-friction epic, by fixing
-`.claude/skills/work/` (SKILL.md, `references/`, `scripts/`). This lane is
-deliberately separate from /work: a work session must never edit the skill
-it is executing under, and this orchestrator must never look like a work
-session to /work's concurrent-run check.
+Drains the `skill-friction`-labeled bugs and features under
+`computenet-wpvy`, the SDLC epic, by fixing `.claude/skills/work/`
+(SKILL.md, `references/`, `scripts/`). This is the interim stand-in for the
+SDLC epic's eventual reactive orchestrator — one that picks up any issue
+the moment an orchestrator files it there. Until that exists, this skill is
+the drain, run on demand or on a schedule.
+
+This lane is deliberately separate from /work: a work session must never
+edit the skill it is executing under, and this orchestrator must never look
+like a work session to /work's concurrent-run check.
 
 **The two lines that keep the lanes apart:**
 
-- **Never claim, undefer, or close `computenet-mfaw` itself.** It is
-  `defer`-ed on purpose (hidden from `bd ready --type=epic`) and is a
-  container, not a unit of work. Address it by id only. Because it never
-  goes `in_progress`, /work's concurrent-run check (which lists
-  `in_progress` epics) never sees this lane, and no work-session epic claim
-  is consumed.
+- **Never claim the SDLC epic.** Address it by id and claim only its child
+  items. Because this lane never puts an epic `in_progress`, /work's
+  concurrent-run check (which lists `in_progress` epics) never sees it, and
+  no work-session epic claim is consumed.
 - **Touch only `.claude/skills/work/` and `.claude/skills/remediate-friction/`.**
   Product code is /work's lane.
 
@@ -36,13 +39,14 @@ fails, stop and report.
 ## 2. Pick the most-reported item
 
 ```bash
-bd list --parent=computenet-mfaw --status=open --json
+bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
 ```
 
-Order by `comment_count` descending — comment count is recurrence, and
-recurrence is priority. Skip anything labeled `human` or already
-`in_progress` (another remediation run owns it). Claim the winner **by
-id**:
+The label filter matters: the SDLC epic also holds ordinary process
+features that belong to /work sessions, not this lane. Order by
+`comment_count` descending — comment count is recurrence, and recurrence is
+priority. Skip anything labeled `human` or already `in_progress` (another
+remediation run owns it). Claim the winner **by id**:
 
 ```bash
 bd update <id> --claim
@@ -107,5 +111,5 @@ Report: items closed (with PRs), items superseded-closed, items left open
 and why, and the one-command oversight view for the human:
 
 ```bash
-bd list --parent=computenet-mfaw --status=open --json
+bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
 ```

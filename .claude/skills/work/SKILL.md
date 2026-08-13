@@ -1309,16 +1309,20 @@ bd search "<a few distinctive words>" --json      # look for it first
 ```
 
 Found one → comment on it with this session's instance (what you were doing,
-what happened, what it cost). Not found → create it, **parented to the
-standing friction epic** `computenet-mfaw` — that epic is `defer`-ed so no
-work session ever selects it, and parenting keeps friction out of 5f's
-continuation pool; a separate remediation lane
-(`.claude/skills/remediate-friction/SKILL.md`) drains it by id:
+what happened, what it cost). Not found → create it as a **bug or feature
+under the SDLC epic** `computenet-wpvy`: a `bug` when the skill misbehaved —
+an instruction that failed, contradicted reality, or didn't cover your case —
+and a `feature` when the skill worked as written but is missing a capability
+that would have made the session better. Process defects are high priority
+(the SDLC epic is drained on its own lane —
+`.claude/skills/remediate-friction/SKILL.md` today, a reactive orchestrator
+eventually — and parenting plus the label keeps friction out of 5f's
+continuation pool):
 
 ```bash
 SKILL_V=$(bd show <epic> --json | jq -r '.[0].metadata.skill_version')   # recorded at claim (step 3)
-bd create --type=chore --priority=3 --label=skill-friction \
-  --parent=computenet-mfaw \
+bd create --type=<bug|feature> --priority=2 --label=skill-friction \
+  --parent=computenet-wpvy \
   --metadata "{\"skill_version\":\"$SKILL_V\"}" \
   --title="work skill: <the friction in one line>" \
   --description="<what the skill says, what actually happened, what you did instead, what it cost>" \
@@ -1336,7 +1340,7 @@ Review the accumulated log — open count and per-item comment totals — with
 one command:
 
 ```bash
-bd list --parent=computenet-mfaw --status=open --json
+bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
 ```
 
 Comment count is the signal. One report is an anecdote; the same issue
