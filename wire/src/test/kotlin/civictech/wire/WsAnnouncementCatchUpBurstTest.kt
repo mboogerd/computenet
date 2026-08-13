@@ -38,10 +38,23 @@ import java.util.UUID
  *   one `Remote` when the server had three local refs to announce — and one ref
  *   per iteration cannot tell a truncation from a loss.
  * - **concurrency** — half the refs are spawned from a *separate* thread that is
- *   released at the moment the dialer connects, so their `publish` lands in the
- *   window `announceTo` closes by registering `onLocalPublish` before it sweeps.
- *   Every one of them must arrive through exactly one of the two paths; a ref
- *   that falls between them is the defect.
+ *   released at the moment the dialer connects, so their `publish` is at least
+ *   *intended* to land in the window `announceTo` closes by registering
+ *   `onLocalPublish` before it sweeps. Every ref must arrive through exactly one
+ *   of the two paths; a ref that falls between them is the defect.
+ *
+ *   **Measured, review of computenet-dqy.40: today it does not reach that
+ *   window.** Deleting the `localRefs()` sweep from `Peering.announceTo`
+ *   entirely loses **0/40 refs per iteration, in all 10 iterations** — so every
+ *   ref of *both* halves, racing included, is delivered by the sweep and none by
+ *   the hook. (Correspondingly, dropping 1 in 5 `onLocalPublish` announcements
+ *   is invisible here, while dropping 1 in 7 sweep announcements fails all 10
+ *   iterations.) The racing publishes are in-memory enqueues and beat the socket
+ *   round trip that gates the peer's `announceTo`, so they land *before* the
+ *   sweep rather than beside it. The honest reading: this arm adds volume to the
+ *   sweep, and the loss bound this probe buys is a bound on the **sweep** only,
+ *   not on the register-then-sweep handover. Making the arm genuinely race the
+ *   handover is computenet-dqy.45.
  *
  * A publish is asynchronous in both arms (`managementInlet.call.spawn` enqueues
  * on the host's scheduler), so the racing arm is genuinely racing the sweep and

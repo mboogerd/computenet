@@ -207,6 +207,17 @@ class WsAnnouncementStressTest {
          *   the event was a burst that stopped, not a single announcement that
          *   went missing. Nothing in the old report said so; [expected] and
          *   [announced] below say it outright.
+         *
+         *   Two limits on that reading, measured in review of computenet-dqy.40
+         *   and recorded so it is not requoted past them. **Three is the steady
+         *   state, not an invariant**: the mirror and the ingress are published
+         *   asynchronously around `announceTo`, and this report has been seen to
+         *   render `server localRefs=2` when taken at t≈0. The 2026-08-12 record
+         *   was taken 15s in, so three holds there. And **the event is not
+         *   attributable to the sweep**: the one ref that did arrive was not the
+         *   collector, so it was the mirror or the ingress — exactly the two refs
+         *   that race the sweep and may travel the `onLocalPublish` hook instead.
+         *   "A burst that stopped" is earned; "the sweep truncated" is not.
          * - **Is it lost or parked?** An announcement stalled at either
          *   scheduler hop behind the socket — the bridge ingress decode, then
          *   the delivery to the registry mirror — parks under the *client's own*
