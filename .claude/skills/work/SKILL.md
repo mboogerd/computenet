@@ -391,6 +391,16 @@ Either way, attach the worktree the same way, then bring it up to date:
 ```bash
 .claude/skills/work/scripts/ensure-worktree.sh \
   "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
+
+# Verify the worktree actually holds the branch's remote work before using it.
+if git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null; then
+  git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
+    && echo "OK: worktree contains origin/feature/<feature-id>" \
+    || echo "STOP: on the branch at the wrong commit — origin/feature/<feature-id> is not in HEAD"
+else
+  echo "OK: origin has no feature/<feature-id> yet (first run, nothing to compare)"
+fi
+
 git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
 git -C <worktree> merge origin/main -m "Merge main into feature/<feature-id>"
 git -C <worktree> push -u origin feature/<feature-id>
@@ -405,10 +415,37 @@ keeps the reviewer looking at integrated code. Conflicts here are yours to
 resolve; re-run the affected module suite afterwards, since a hand-resolved
 merge is code nobody reviewed.
 
+**Compare HEAD against the remote branch, not against nothing.** The check
+above is the one that matters on a resumed feature: the branch exists on
+origin and carries the PR's commits, and a worktree that does not contain
+them looks perfectly clean while having silently orphaned reviewed work — the
+`merge origin/main` right below it is then a no-op and the `push` failure
+reads like an unrelated remote hiccup (computenet-aeg). Read the line it
+prints, and only that line: `STOP` means the worktree is on the right branch
+at the wrong commit — do not proceed into 5b. Either `OK` is fine; the second
+one is the first-run case, where origin has no such branch and there is
+nothing to compare against. (The two are worth telling apart in the output:
+a bare `&&` chain prints nothing in either case, and "silence" is exactly how
+the orphaned worktree passed for normal in the first place.)
+
 The script is idempotent and verifies the branch, so resume and first-run
-take the same path. Use the feature id as the branch name rather than a
-model-chosen slug: a fresh slug on retry is exactly what spawns a duplicate
-branch and a second PR.
+take the same path. It resolves the branch in this order: an already-attached
+worktree is left alone; a local branch is attached; a **remote-only** branch is
+attached tracking `origin/<branch>` **at the remote tip**; and only when the
+branch exists neither locally nor on origin is it created from the base ref.
+Where both exist it fast-forwards a local branch that is strictly behind,
+keeps a local branch that is strictly ahead (unpushed work), and **fails
+loudly on divergence** rather than picking a side. Use the feature id as the
+branch name rather than a model-chosen slug: a fresh slug on retry is exactly
+what spawns a duplicate branch and a second PR.
+
+Those states are covered by `scripts/ensure-worktree.test.sh`, which builds
+throwaway repos with a real origin in a temp dir and touches nothing live.
+Run it after any change to the script:
+
+```bash
+.claude/skills/work/scripts/ensure-worktree.test.sh    # expect "8 passed, 0 failed"
+```
 
 ### 5b. Break down, then batch tasks
 
@@ -473,11 +510,15 @@ bd update <task-id> \
   "$PWD/../computenet-worktrees/<task-id>" task/<task-id> feature/<feature-id>
 ```
 
-`ensure-worktree.sh` handles all three states — already attached, branch
-exists but detached (a task resumed from an earlier session), or brand new —
-and fails loudly if it can't put the worktree on the requested branch. That
-matters: an agent handed a path that isn't there works somewhere
-unintended, and nothing would notice until the merge.
+`ensure-worktree.sh` handles every state a resumed task can be in — already
+attached, a local branch with no worktree, a **remote-only** branch (a task
+whose worktree was removed, or that ran on another machine: it is attached at
+the remote tip, not recreated from `feature/<feature-id>`), or brand new — and
+fails loudly if it can't put the worktree on the requested branch holding the
+remote's commits. See 5a for the full resolution order. That matters: an agent
+handed a path that isn't there works somewhere unintended, and one handed the
+right path at the wrong commit rewrites work that was already reviewed —
+neither would be noticed until the merge.
 
 These claims are not re-synced first, and don't need to be: the tasks are
 children of an epic this machine claimed at step 3, so the other machine has
