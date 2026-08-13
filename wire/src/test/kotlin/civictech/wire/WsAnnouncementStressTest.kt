@@ -8,7 +8,11 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.port.FanInlet
 import civictech.cell.port.registerPort
 import civictech.cell.wire.Peering
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.io.TempDir
 import org.opentest4j.AssertionFailedError
 import java.io.ByteArrayOutputStream
 import java.io.FileDescriptor
@@ -130,8 +134,82 @@ class WsAnnouncementStressTest {
         val report = stress(
             iterations = System.getProperty("wire.stress.iterations")?.toInt() ?: DEFAULT_ITERATIONS,
             sink = artifactSink(),
+            injectFailuresAt = parseInjectFailuresAt(System.getProperty("wire.stress.injectFailureAt")),
         )
         if (report.failures.isNotEmpty()) throw AssertionFailedError(report.render())
+    }
+
+    /**
+     * computenet-dqy.63: `-Dwire.stress.injectFailureAt` used to be read only by
+     * [main], never by this `@Test`, so the KDoc and the injected-record banner
+     * advertised a knob that did nothing through `./gradlew :wire:test`, CI, or
+     * `SuiteLoop` — silently: no exception, no warning, just zero injected
+     * failures. This pins the parsing [parseInjectFailuresAt] shares with [main]
+     * against the two ways that regression could return: a malformed or unset
+     * value must never be read as "inject at iteration 0" (that would redden
+     * every fast-lane run with no `-D` in sight), and a *valid* value must not be
+     * silently dropped either.
+     */
+    @Test
+    fun `injectFailuresAt parsing tolerates unset, blank, and malformed values without ever defaulting to iteration 0`() {
+        assertEquals(emptySet<Int>(), parseInjectFailuresAt(null))
+        assertEquals(emptySet<Int>(), parseInjectFailuresAt(""))
+        assertEquals(emptySet<Int>(), parseInjectFailuresAt("   "))
+        assertEquals(emptySet<Int>(), parseInjectFailuresAt("not-a-number"))
+        assertEquals(setOf(1, 7), parseInjectFailuresAt("1,7"))
+        assertEquals(setOf(3, 5), parseInjectFailuresAt(" 3 , 5 "))
+        // a malformed entry mixed with a valid one drops only the malformed one,
+        // never substitutes 0 for it.
+        assertEquals(setOf(7), parseInjectFailuresAt("garbage,7"))
+    }
+
+    /**
+     * The end-to-end regression guard (computenet-dqy.63): invokes the actual
+     * production `@Test` — not a stand-in — with the system properties an
+     * operator would pass on the command line, and requires it to fail with an
+     * injected record, both in the thrown message and in the on-disk artifact
+     * [ArtifactSink] writes for it. `wire.stress.artifacts` is redirected to
+     * [tempDir] so this always-triggering injection never leaves a file under
+     * the shared `build/announcement-stress` that a later reader could mistake
+     * for a real occurrence (the trap computenet-ba27 is about).
+     *
+     * Checked in two places rather than one because they carry different text:
+     * [Report.render] (the thrown [AssertionFailedError]'s message) says
+     * "injected synthetic failure(s)"; only the per-[Failure] artifact
+     * [ArtifactSink] writes — via [Failure.render], not [Report.render] — carries
+     * the literal "INJECTED SYNTHETIC FAILURE" banner the KDoc and this test's
+     * name both point at, so asserting only on the thrown message would not
+     * prove the banner is real.
+     */
+    @Test
+    fun `-Dwire stress injectFailureAt makes the JUnit path fail with an injected record`(@TempDir tempDir: Path) {
+        val priorInject = System.getProperty("wire.stress.injectFailureAt")
+        val priorIterations = System.getProperty("wire.stress.iterations")
+        val priorArtifacts = System.getProperty("wire.stress.artifacts")
+        System.setProperty("wire.stress.injectFailureAt", "0")
+        System.setProperty("wire.stress.iterations", "1")
+        System.setProperty("wire.stress.artifacts", tempDir.toString())
+        try {
+            val failure = assertThrows<AssertionFailedError> {
+                `the announcement path completes on every connection`()
+            }
+            assertTrue(
+                failure.message?.contains("injected synthetic failure") == true,
+                "expected the injected-failure summary in: ${failure.message}",
+            )
+            val artifactFiles = Files.walk(tempDir).use { it.filter(Files::isRegularFile).toList() }
+            assertTrue(
+                artifactFiles.any { Files.readString(it).contains("INJECTED SYNTHETIC FAILURE") },
+                "expected an on-disk artifact under $tempDir carrying the INJECTED SYNTHETIC FAILURE banner, found: $artifactFiles",
+            )
+        } finally {
+            fun restore(key: String, prior: String?) {
+                if (prior == null) System.clearProperty(key) else System.setProperty(key, prior)
+            }
+            restore("wire.stress.injectFailureAt", priorInject)
+            restore("wire.stress.iterations", priorIterations)
+            restore("wire.stress.artifacts", priorArtifacts)
+        }
     }
 
     companion object {
@@ -266,6 +344,23 @@ class WsAnnouncementStressTest {
         )
 
         fun runId(): String = "%d-%s".format(System.currentTimeMillis(), ProcessHandle.current().pid())
+
+        /**
+         * Parses the comma-separated iteration list `--inject-failure-at` /
+         * `-Dwire.stress.injectFailureAt` accept. Shared by the `@Test` and
+         * [main] (computenet-dqy.63) so the two entry points cannot read the
+         * same knob two different ways.
+         *
+         * Unset, blank, and unparsable entries are all silently dropped rather
+         * than thrown, matching the parsing this replaced: a malformed value
+         * must never be read as "inject at iteration 0", or an unset/empty
+         * property would turn into an injection and redden the fast lane for
+         * everyone. A comma list with one bad entry keeps the good ones rather
+         * than failing the whole run — this knob exists to unblock unattended
+         * long measurements, not to add a new way for them to crash.
+         */
+        fun parseInjectFailuresAt(raw: String?): Set<Int> =
+            raw?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.toSet() ?: emptySet()
 
         /**
          * The fraction of max heap still retained *after the last collection*, or
@@ -656,8 +751,9 @@ fun main(args: Array<String>) {
     val heapCeiling = flag("heap-ceiling")?.toDouble()
         ?: System.getProperty("wire.stress.heapCeiling")?.toDouble()
         ?: WsAnnouncementStressTest.DEFAULT_HEAP_CEILING
-    val inject = (flag("inject-failure-at") ?: System.getProperty("wire.stress.injectFailureAt"))
-        ?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.toSet() ?: emptySet()
+    val inject = WsAnnouncementStressTest.parseInjectFailuresAt(
+        flag("inject-failure-at") ?: System.getProperty("wire.stress.injectFailureAt"),
+    )
     val deadlineSeconds = flag("deadline-seconds")?.toLong() ?: 0L
 
     val sink = WsAnnouncementStressTest.artifactSink(flag("artifacts")?.let { Paths.get(it) })

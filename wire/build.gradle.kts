@@ -17,8 +17,19 @@ dependencies {
 // which is exactly the trap when someone tries to turn the fast lane into the
 // long measurement the KDoc points them at (computenet-dqy.45 review, measured:
 // `-Dwire.burst.iterations=2` still ran 10 iterations before this).
+//
+// `wire.stress.injectFailureAt` (computenet-dqy.63) is the same trap's other
+// half: WsAnnouncementStressTest's `@Test` reads it, but a value that never
+// reaches the test JVM is indistinguishable from one nobody passed, so this
+// key has to be forwarded exactly like the others or `-Dwire.stress.
+// injectFailureAt=N` silently does nothing under `./gradlew :wire:test`.
 tasks.withType<Test>().configureEach {
-    listOf("wire.burst.iterations", "wire.burst.refs", "wire.stress.iterations").forEach { key ->
+    listOf(
+        "wire.burst.iterations",
+        "wire.burst.refs",
+        "wire.stress.iterations",
+        "wire.stress.injectFailureAt",
+    ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }
 }

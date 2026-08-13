@@ -25,12 +25,26 @@ name: Announcement probe (on-demand Linux bulk sample)
 # the daemon's system properties, so before PR #81 `./gradlew :wire:test
 # -Dwire.stress.iterations=100000` ran silently at the committed default of 25 —
 # a small sample wearing a large sample's label, with nothing in the output
-# saying so. `wire/build.gradle.kts` now forwards the three keys explicitly. The
+# saying so. `wire/build.gradle.kts` now forwards these keys explicitly. The
 # preflight step below re-proves that forwarding IN THIS JOB, on every run, by
-# poisoning each key with a non-numeric value and requiring the resulting
+# poisoning each numeric key with a non-numeric value and requiring the resulting
 # NumberFormatException: if the forwarding ever regresses, this job fails before
 # it collects a single number rather than reporting a default-size run as a bulk
 # one.
+#
+# `wire.stress.injectFailureAt` (computenet-dqy.63) is the same trap, but its
+# preflight check cannot be "poison with garbage, expect an exception": that
+# property's own parser (`WsAnnouncementStressTest.parseInjectFailuresAt`) is
+# deliberately tolerant — a malformed entry is dropped, not thrown, so a long
+# measurement run's `-D` typo does not crash it. Poisoning it with garbage would
+# therefore prove nothing: forwarding broken and forwarding fine-but-tolerant
+# look identical (both green, both silent). So this key is proved the opposite
+# way — forward it a REAL injection value and require the induced failure, the
+# `INJECTED SYNTHETIC FAILURE` banner named in the test's own KDoc and failure
+# record. computenet-dqy.63 also found and fixed the OTHER half of this same
+# trap: the `@Test` used to not read this property at all, so even a perfectly
+# forwarded value did nothing — the two failure modes look the same from here
+# (a silently green run), which is exactly why this preflight exists.
 #
 # Two more places the sample size could quietly collapse, both guarded:
 #   - `--rerun` on every probe invocation. A test task satisfied FROM-CACHE or
@@ -508,8 +522,8 @@ jobs:
           echo "BURST_REFS_TOTAL=$refs" >> "$GITHUB_ENV"
           echo "LANE_AWAITS=$lane_awaits" >> "$GITHUB_ENV"
 
-      # PREFLIGHT. Poison each forwarded key in turn with a non-numeric value
-      # and require the probe to die on `Integer.parseInt`. A run where the
+      # PREFLIGHT. Poison each forwarded key in turn and require the probe to
+      # fail in the specific way that proves the value arrived. A run where the
       # forwarding is broken cannot reach the measurement steps.
       #
       # Verified locally on this branch before landing (macOS, same Gradle
@@ -517,6 +531,18 @@ jobs:
       # --rerun -Dwire.burst.iterations=NOT_A_NUMBER` exits 1 with
       # `java.lang.NumberFormatException: For input string: "NOT_A_NUMBER"` at
       # WsAnnouncementCatchUpBurstTest.kt:151.
+      #
+      # `wire.stress.injectFailureAt` cannot use that same poison (see the job
+      # header): its parser tolerates a non-numeric value by design, so
+      # `NOT_A_NUMBER` would produce a clean, silent, ZERO-failure run whether
+      # forwarding works or is broken — indistinguishable either way. Verified
+      # locally instead with a REAL injection value: `./gradlew :wire:test
+      # --tests '*WsAnnouncementStressTest*' --rerun
+      # -Dwire.stress.injectFailureAt=0` exits 1, and the console carries
+      # `plus 2 injected synthetic failure(s), which measure nothing` — the
+      # `INJECTED SYNTHETIC FAILURE` banner itself is written only to the
+      # per-failure artifact file, not to the console/exception text, so that
+      # banner is not what this preflight can grep for.
       #
       # SKIPPED for `lane=build-check`, and that is not a shortcut: that arm
       # forwards no -D at all — its whole claim is that it runs at the
@@ -544,10 +570,34 @@ jobs:
             fi
             echo "-D$key reaches the test JVM."
           }
+          # computenet-dqy.63: wire.stress.injectFailureAt's parser is
+          # deliberately tolerant of garbage (a malformed entry in a long
+          # measurement run's -D is dropped, not fatal), so poisoning it with
+          # NOT_A_NUMBER proves nothing — forward it a real value instead and
+          # require the induced failure.
+          poison_inject() {
+            key="wire.stress.injectFailureAt"
+            echo "== forwarding -D$key=0, expecting an induced failure =="
+            set +e
+            ./gradlew :wire:test --tests '*WsAnnouncementStressTest*' --rerun "-D$key=0" > "preflight-$key.log" 2>&1
+            status=$?
+            set -e
+            cat "preflight-$key.log"
+            if [ "$status" -eq 0 ]; then
+              echo "::error::-D$key was IGNORED — forcing an injection at iteration 0 produced a green run, so the property never reached (or was never read by) the test JVM. Check the @Test in WsAnnouncementStressTest.kt and the forwarding block in wire/build.gradle.kts."
+              return 1
+            fi
+            if ! grep -q 'injected synthetic failure' "preflight-$key.log"; then
+              echo "::error::-D$key run failed, but not with the expected injected-failure summary — cannot conclude the value arrived and was honoured rather than the run failing for some unrelated reason."
+              return 1
+            fi
+            echo "-D$key reaches the test JVM and forces the expected failure."
+          }
           rc=0
           poison wire.stress.iterations '*WsAnnouncementStressTest*' || rc=1
           poison wire.burst.iterations '*WsAnnouncementCatchUpBurstTest*' || rc=1
           poison wire.burst.refs '*WsAnnouncementCatchUpBurstTest*' || rc=1
+          poison_inject || rc=1
           exit $rc
 
       # ---------------- the loaded arm (computenet-dqy.52) ----------------
