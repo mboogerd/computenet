@@ -356,6 +356,40 @@ passes review.
 **Work exactly one feature at a time** — the parallelism lives in its tasks.
 When a feature can't progress, move on rather than adding one alongside.
 
+**One worktree, one live agent.** A worktree belongs to exactly one dispatched
+agent at a time, and it stays that agent's until **its completion notification
+has arrived in this session** — not until its tree looks clean, not until its
+PR merged, not until it pushed its last commit. Before you dispatch a second
+agent into a worktree, and before you remove one, ask the same question: has
+the agent you dispatched into it reported back?
+
+- **You never dispatched an agent into it this session** (a first run, or a
+  worktree resumed from an earlier session via `metadata.worktree`, 5a) →
+  nobody is live in it and it is yours to use. An earlier session's agent
+  died with that session and its notification will **never** arrive here, so
+  do not wait for one. This is the normal resume case; it must not stall.
+- **You dispatched one and its notification has arrived**, or you
+  `TaskStop`ped it and the stop landed → it is free. Reuse it (5b resumes a
+  stopped task in a later batch this way) or remove it.
+- **You dispatched one and it is still running** → it is occupied. Do not
+  dispatch a second agent into it, and do not remove it. Wait for the
+  notification, `TaskStop` it and wait for the stop to land, or give the new
+  agent a separate worktree (5c's repair path).
+
+If you cannot say which of the three you are in, you are in the third: treat
+the worktree as occupied and wait.
+
+`git -C <worktree> status --short` does **not** answer that question. It asks
+whether the tree has uncommitted edits — a fact about the *tree*. An agent
+that has finished committing and pushing and is now writing bead comments or
+running a final verification leaves a perfectly clean tree, so the check
+reports "safe" at exactly the moment removal is most disruptive
+(computenet-ys7: a worktree removed out from under a live reviewer seconds
+after `gh pr ready`, both checks having passed honestly). Keep running it —
+it is the second guard, against destroying uncommitted work nobody has looked
+at — but read it as "nothing unsaved here", never as "nobody is working
+here".
+
 ### 5a. Set up or resume the feature
 
 ```bash
@@ -603,15 +637,23 @@ git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
 git -C <feature-worktree> push
 bd close <task-id>
 git -C <task-worktree> status --short          # expect empty
-git worktree remove "$PWD/../computenet-worktrees/<task-id>"
 ```
 
 The close is local; it propagates at Finalize's push. That still protects the
 ordering above, because the machine that resumes after a crash is this one,
 reading this DB — and the merge commit is on the pushed branch either way.
 
-If that `status` isn't empty, the agent died mid-edit — report it and leave
-the worktree. Don't `--force` away work nobody has looked at.
+If that `status` isn't empty, the agent died mid-edit — report it. Don't
+`--force` away work nobody has looked at.
+
+**Do not remove the task worktree here.** A merged task's worktree is not
+urgent to reclaim, and the merge is also roughly when its reviewer is
+finishing its own bead bookkeeping, so removing it now races the very agent
+that just told you to merge. **Every worktree removal in this session happens
+at Finalize (step 6)**, after all dispatched agents have returned; note the
+worktree as removable and move on. That empty `status` is the second guard for
+Finalize's removal, not a licence to remove now — per "One worktree, one live
+agent" above, it says nothing about whether the reviewer is still live.
 
 A merge conflict means two claims overlapped that shouldn't have. Resolve in
 the feature worktree, fix **both** tasks' `files` metadata, and say so.
@@ -719,6 +761,42 @@ already has ([references/review-feature.md](references/review-feature.md) §4:
 a red required check is not the *reviewer's* to wave through either, and it
 certifies draft). Nothing here relaxes it; the division is that you can see the
 flake beads, the other PRs, and the run history, and the reviewer cannot.
+
+**Where a fix for a red check gets dispatched — check who is live in the
+worktree first.** A red required check arriving *after* you marked a feature
+PR ready (5e) is a normal event, and when it lands the feature reviewer is
+usually **still running** in that feature worktree: it hands back its verdict
+and then keeps going for a while on bead bookkeeping and follow-up checks.
+Return the PR to draft (`gh pr ready --undo <pr-url>`) so it cannot merge,
+then pick one of these — never dispatch into a worktree whose agent has not
+reported:
+
+- **Wait for the reviewer's notification, then dispatch into its worktree.**
+  This is the default and it is nearly always right: the PR is back in draft
+  and cannot merge, so waiting costs nothing but the wait. Measured
+  2026-08-12 on PR #58, the report arrived about 30 minutes later.
+- **Only if you cannot wait, give the fix its own worktree on the same
+  branch**, and never the occupied one:
+  ```bash
+  git worktree add --force "$PWD/../computenet-worktrees/<feature-id>-fix" feature/<feature-id>
+  ```
+  `--force` is required — git otherwise refuses a branch that is already
+  checked out — and it is doing exactly what it says: **two worktrees now
+  share one branch ref**, so a commit in either moves the other's HEAD under
+  it. That buys separation of *files*, not of *commits*. So: tell the fix
+  agent to commit and push promptly; **tell the still-running reviewer it is
+  no longer alone on the branch** (`SendMessage` to it, naming the fix
+  worktree and branch — [review-feature.md](references/review-feature.md) §5
+  assumes exclusivity by default and would read a rejected push as a remote
+  hiccup); and **do not mark the PR ready again until both agents have
+  reported**. Marking it ready while an agent is still working is what
+  stranded a substantive repair commit through PR #58's squash
+  (computenet-zqf) — the AGENTS.md hazard, "the squash captures only what was
+  on the branch at that instant, and the rest is stranded". Remove the extra
+  worktree at Finalize with the rest.
+
+The one thing that is never an option is dispatching a second agent into a
+worktree an agent is still working in.
 
 Then 5b again.
 
@@ -850,7 +928,10 @@ check can leave the PR open indefinitely.
   ```bash
   gh pr view <pr-url> --json state,mergeStateStatus,autoMergeRequest,statusCheckRollup
   ```
-  `MERGED` → `bd close <feature-id>`, remove its worktree and local branch.
+  `MERGED` → `bd close <feature-id>`. Leave its worktree and local branch
+  alone here: the reviewer that just certified it is very likely still live in
+  that worktree, and a merged PR's worktree is not urgent to reclaim. Finalize
+  (step 6) removes it, after every dispatched agent has reported.
 
   Still `OPEN` → **auto-merge will not fix itself; look at why before you
   walk away.** Read the two fields together; either alone is ambiguous:
@@ -934,7 +1015,10 @@ check can leave the PR open indefinitely.
   The reviewer repaired past the §5 authorship bound, so the code is done and
   the only thing missing is that its last author also holds the certification.
   Do not send it to 5b — there is no implementation work — and do not park it.
-  Dispatch a reader for the reviewer's own commits:
+  Dispatch a reader for the reviewer's own commits — into the same feature
+  worktree, so only once the first reviewer's completion notification has
+  arrived, not merely once its verdict comment is readable ("One worktree, one
+  live agent", step 5):
 
   ```
   Agent({
@@ -1035,9 +1119,10 @@ the next session a round trip:
 gh pr view <pr-url> --json state,mergeStateStatus     # per review=passed feature
 ```
 
-`MERGED` → `bd close <feature-id>` and remove its worktree. `DIRTY`/`BEHIND`
-→ resolve it per 5e if the budget allows; it merges on its own afterwards.
-Then close any epic whose features are now all closed (5f's check).
+`MERGED` → `bd close <feature-id>`; its worktree comes off in the removal
+sweep below, not here. `DIRTY`/`BEHIND` → resolve it per 5e if the budget
+allows; it merges on its own afterwards. Then close any epic whose features
+are now all closed (5f's check).
 
 **Release the epic claim.** If the epic didn't close above, set it back to
 open (`bd update <epic> --status=open`) — the claim binds it to *this
@@ -1064,9 +1149,36 @@ they were at step 3, and losing this machine loses the lot. Never swallow the
 error and never report the session as clean without it.
 
 Uncommitted leftovers mean an agent died mid-edit — report rather than
-committing work you didn't verify. Leave unfinished features' worktrees in
-place; the next session reuses them via `metadata.worktree`. Remove the
-worktree and local branch of any feature that closed.
+committing work you didn't verify.
+
+**The worktree removal sweep — the session's only removals.** 5c and 5e
+deliberately defer every removal to here, so this is the one place a worktree
+comes off, and it runs after 5f, i.e. after the session has stopped
+dispatching, and after the pushes above. Remove only what passes **both**
+gates:
+
+1. **Its agent has reported.** Every agent you dispatched into that worktree
+   this session has returned a completion notification (or you `TaskStop`ped
+   it and the stop landed). One still running → **leave the worktree**, name
+   it in the summary, and let the next session's 5a reuse it. Do not wait on
+   it here; Finalize is not the place to spend the remainder of the slot. A
+   worktree no agent was dispatched into this session — resumed from an
+   earlier session, or never used — passes this gate: that session's agent is
+   gone and its notification will never arrive here ("One worktree, one live
+   agent", step 5).
+2. **`git -C <worktree> status --short` is empty.** Not empty → leave it and
+   report; that is uncommitted work nobody has looked at. This gate says
+   nothing about gate 1 — both, or neither.
+
+```bash
+git -C <worktree> status --short                 # gate 2; expect empty
+git worktree remove "$PWD/../computenet-worktrees/<id>"
+```
+
+Remove the worktrees of **tasks merged in 5c**, of **features that closed**
+(their local branch too), and of any extra fix worktree 5c's repair path
+created. Leave unfinished features' and tasks' worktrees in place; the next
+session reuses them via `metadata.worktree`.
 
 Then `TaskStop` the budget monitor.
 

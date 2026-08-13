@@ -143,7 +143,16 @@ git -C <feature-worktree> commit -am "review: <what you fixed>"
 ```
 
 You reach this point only once every task has merged, so the feature
-worktree is yours alone — no other agent is committing here.
+worktree is yours alone — no other agent is committing here. SKILL.md step 5
+("One worktree, one live agent") is what holds that true: the orchestrator
+will not dispatch into or remove this worktree until your completion
+notification arrives. It has exactly one escape hatch — a fix for a red
+post-ready check, dispatched onto **this same branch in a separate worktree**
+while you are still running (SKILL.md 5c) — and it tells you so when it does.
+If you were not told, and a push of yours is rejected as non-fast-forward,
+stop assuming you are alone: `git -C <feature-worktree> pull --rebase`, re-run
+the affected tests, and report that another agent was committing on this
+branch.
 
 **But you cannot certify code you wrote.** SKILL.md 5c insists a task
 reviewer is never the agent that wrote the code; the same rule has to hold
