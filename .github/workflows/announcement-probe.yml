@@ -144,6 +144,12 @@ name: Announcement probe (on-demand Linux bulk sample)
 # EXTRAPOLATION, not a measurement: they assume load costs at most ~4x, which
 # the first loaded dispatch is what actually tests.
 #
+# THAT ASSUMPTION HAS NOW BEEN TESTED and it held with room to spare. Loaded
+# stress 500 took 27.124s (run 31673273722) and 31.639s (run 31673494600)
+# against 16.64-19.255s unloaded — a 1.4-1.6x slowdown, not 4x. At the ceiling
+# of 1000 that projects to ~55-65s against the 300s deadline. The ceilings are
+# conservative, and it is the 4x figure, not the ceilings, that was pessimistic.
+#
 # The isolated control at the size intended for the loaded arm HAS been
 # measured, on ubuntu-latest, run 31672139859 (`load=none`, stress 500, burst
 # 500 x 40):
