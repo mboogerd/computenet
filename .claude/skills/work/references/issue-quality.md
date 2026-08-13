@@ -141,6 +141,17 @@ Five things, all of them:
    [task.md](task.md) step 3 makes the implementer check — that is the
    backstop, not a reason to skip the label.
 
+**Do not prescribe a mechanism the acceptance criterion cannot verify.**
+Prose describing *how* is the clause most likely to be wrong — it can name a
+design no codebase ever had — and when it contradicts the criterion, the
+criterion wins ([task.md](task.md) step 1). computenet-lxq prescribed
+expressing a bind as a structural seam while its criterion demanded a
+mutation kill at the production call site; the two cannot both hold, and both
+the implementer and its reviewer spent effort re-deriving which one governed.
+Before writing an Implement clause, ask what observation would distinguish
+"followed it" from "did not", and if the criterion cannot make that
+observation, either strengthen the criterion or drop the prescription.
+
 Sizing is by read-surface, per [feature.md](feature.md).
 
 ## Smells that send an issue back
@@ -154,3 +165,5 @@ Sizing is by read-surface, per [feature.md](feature.md).
 | Task criteria == feature criteria | the split never happened |
 | An invented `[NN-SLUG-nn]` id | dangling reference; breaks `:concord:check` |
 | A task that starts "investigate whether…" | that's design, and it belongs in the breakdown or a parked question |
+| Implement prose the acceptance criterion cannot check | the two can contradict; the implementer has to diverge to pass |
+| "Re-measure at N runs" with no per-run cost | unsizeable, and an affordable substitute silently stands in for it |
