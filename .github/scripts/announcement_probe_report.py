@@ -36,6 +36,20 @@ say which one happened. Outcomes: `clean`, `incomplete`, `loss` (any
 non-timeout failure record; a loss alongside a timeout is still a loss, since
 the loss is the real evidence), `vacuous`.
 
+It also RECORDS A NUMERATOR AND A DENOMINATOR (computenet-dqy.52). Comparing
+two conditions — the probe alone versus the probe under concurrent suite load —
+is only meaningful if each condition's counts are kept apart and both are
+reported, so this script parses the counts out of the probe's own report line
+(`announcement path: N failure(s) in M awaits over K iterations` for the stress
+probe, `catch-up burst: N failed iteration(s) in K iterations (R refs
+announced)` for the burst probe) and publishes them through
+`$PROBE_LOSSES_KEY` / `$PROBE_UNITS_KEY`. On a clean arm the probe prints
+nothing, so the denominator comes from `$PROBE_EXPECTED_UNITS` (the dispatched
+size) and the numerator is 0. On an `incomplete` or `vacuous` arm BOTH are
+`unknown` and neither may be counted: an unfinished sample has no denominator,
+which is exactly the trap computenet-dqy.12 and the excluded run 31668681959
+came from.
+
 IT DOES NOT CATCH A CACHED RUN, and `--rerun` in the workflow is therefore
 load-bearing — do not drop it on the grounds that this script covers it.
 Measured on this branch, 2026-08-13: re-invoking the probe without `--rerun`
@@ -49,11 +63,21 @@ Usage: announcement_probe_report.py <results-dir> <label> <expected-class-simple
 
 import glob
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 
 
 TIMEOUT_MARKER = "java.util.concurrent.TimeoutException"
+
+# The first line of each probe's own report. Group 1 is the numerator, group 2
+# the denominator. Kept as two explicit patterns rather than one clever one:
+# the two probes count different things (lost awaits vs failed burst
+# iterations) and conflating them would produce a ratio of nothing.
+COUNT_PATTERNS = (
+    re.compile(r"announcement path: (\d+) failure\(s\) in (\d+) awaits"),
+    re.compile(r"catch-up burst: (\d+) failed iteration\(s\) in (\d+) iterations"),
+)
 
 
 def emit(text, summary):
@@ -73,13 +97,33 @@ def is_timeout(problem):
     return TIMEOUT_MARKER in haystack
 
 
-def record_outcome(outcome):
-    """Publish the classification to the job, if we are running in one."""
-    key = os.environ.get("PROBE_OUTCOME_KEY")
+def parse_counts(message):
+    """(numerator, denominator) out of a probe's own report line, or None."""
+    for pattern in COUNT_PATTERNS:
+        found = pattern.search(message or "")
+        if found:
+            return int(found.group(1)), int(found.group(2))
+    return None
+
+
+def publish(key_env, value):
+    key = os.environ.get(key_env)
     env_path = os.environ.get("GITHUB_ENV")
     if key and env_path:
         with open(env_path, "a", encoding="utf-8") as handle:
-            handle.write("%s=%s\n" % (key, outcome))
+            handle.write("%s=%s\n" % (key, value))
+
+
+def record_outcome(outcome, losses="unknown", units="unknown"):
+    """Publish the classification and the arm's own counts to the job.
+
+    `losses`/`units` are the numerator and denominator for THIS arm, kept
+    separate from any other arm's (computenet-dqy.52). Both stay `unknown`
+    unless the arm actually produced a countable sample.
+    """
+    publish("PROBE_OUTCOME_KEY", outcome)
+    publish("PROBE_LOSSES_KEY", losses)
+    publish("PROBE_UNITS_KEY", units)
     return outcome
 
 
@@ -104,6 +148,7 @@ def main(argv):
         executed = 0
         failures = 0
         timeouts = 0
+        counted = None  # (numerator, denominator) read off a loss report
         for path in files:
             root = ET.parse(path).getroot()
             for case in root.iter("testcase"):
@@ -130,6 +175,10 @@ def main(argv):
                     timed_out = is_timeout(problem)
                     if timed_out:
                         timeouts += 1
+                    else:
+                        found = parse_counts(problem.get("message") or "")
+                        if found:
+                            counted = found
                     emit("", summary)
                     emit(
                         "INCOMPLETE - the requested size did not finish inside "
@@ -165,9 +214,26 @@ def main(argv):
             outcome = "incomplete"
         else:
             outcome = "loss"
-        record_outcome(outcome)
+
+        # The arm's own numerator/denominator. A clean arm did not print one,
+        # so its denominator is the dispatched size; a loss prints both; an
+        # unfinished arm has neither and must contribute to no rate.
+        expected_units = os.environ.get("PROBE_EXPECTED_UNITS", "").strip()
+        if outcome == "clean":
+            losses, units = "0", expected_units or "unknown"
+        elif outcome == "loss" and counted:
+            losses, units = str(counted[0]), str(counted[1])
+        elif outcome == "loss":
+            losses, units = "unparsed", expected_units or "unknown"
+        else:
+            losses, units = "unknown", "unknown"
+        record_outcome(outcome, losses, units)
 
         emit("", summary)
+        emit(
+            "LEDGER %s: losses=%s of %s (outcome %s)" % (label, losses, units, outcome),
+            summary,
+        )
         detail = ""
         if timeouts:
             detail = (

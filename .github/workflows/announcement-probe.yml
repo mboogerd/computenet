@@ -77,6 +77,101 @@ name: Announcement probe (on-demand Linux bulk sample)
 # which happened and an unfinished sample can never be read as a lost
 # announcement.
 #
+# THE ONE CONTROLLED COMPARISON THIS JOB CAN MAKE (computenet-dqy.52). The
+# strongest lead on computenet-dqy.40 is a rate difference: 2 losses in 450
+# awaits when WsAnnouncementStressTest ran inside build-test-fast, against 0 in
+# 20,000 awaits when this job ran it essentially alone on the same runner class
+# (runs 31669727862, 31669883848, 31670959177). Those rates are incompatible —
+# at 2/450 the isolated sample predicts ~89 losses. WHAT CAUSES THE DIFFERENCE
+# IS NOT MEASURED, and the comparison that produced it is uncontrolled: the two
+# conditions differ in concurrent load, but also in JVM reuse, Gradle worker
+# configuration, heap pressure, and how many live sockets and threads share the
+# test JVM.
+#
+# `load` narrows that to one axis. Dispatch this job TWICE with identical sizes,
+# once with `load=none` and once with `load=suite`, and the only intended
+# difference is whether a second, independent copy of the repository is running
+# build-test-fast's own command on the same runner while the probe runs.
+#
+#   ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test
+#
+# The load runs from a COPY of the checkout under $RUNNER_TEMP with its own
+# project directory and its own Gradle daemon, because two Gradle invocations
+# in one project directory contend on that directory's locks — which would make
+# the load block the probe rather than compete with it, and would measure the
+# wrong thing. It shares $GRADLE_USER_HOME, which is the ordinary situation for
+# two projects built at once on one machine.
+#
+# WHAT STILL DIFFERS BETWEEN THE TWO ARMS, all of it inseparable by
+# construction, and none of it something a run of this job can rule out:
+#
+#   - CPU, memory, page cache and disk contention arrive together. This job
+#     tests "concurrent suite load", NOT "CPU starvation" — no arm here can
+#     separate those.
+#   - The load's Gradle daemon and test JVMs consume RAM, so the loaded arm is
+#     also the higher-heap-pressure arm. MEASURED on run 31673273722's sampler,
+#     not assumed: this runner reports `4 cores`, MemAvailable fell from
+#     14,289MB to 10,014MB while the load ramped, and java process count went
+#     2 -> 8. (An earlier draft of this header said "2-core, ~7GB"; that is the
+#     old hosted-runner spec and is wrong for the runner these numbers came
+#     from — the contention arithmetic must use 4 cores.)
+#   - The two arms share $GRADLE_USER_HOME, so they contend on Gradle's global
+#     caches. build-test-fast has no such co-tenant; this is an interference
+#     channel the loaded arm ADDS rather than reproduces.
+#   - The load IS build-test-fast's command, and that command runs `:wire:test`
+#     (neither announcement test carries the `multi-jvm` tag that
+#     `-PexcludeMultiJvm=true` strips). So the loaded arm runs a SECOND copy of
+#     the announcement tests, in another JVM, peering over loopback while the
+#     probe peers over loopback. build-test-fast has no such concurrent
+#     co-tenant on the loopback stack — there the `:wire:` tests run one after
+#     another in a single JVM — so this too is a channel the loaded arm ADDS.
+#     A loss appearing only in the loaded arm therefore does not separate
+#     machine-level load from concurrent loopback/port co-tenancy either.
+#
+# WHAT NEITHER ARM REPRODUCES, and this bounds what a null result here can
+# mean: inside build-test-fast, WsAnnouncementStressTest runs in the SAME test
+# JVM as every other `:wire:` test, after them, with their heap churn, their
+# sockets and their threads. Both arms of this job run the probe alone in a
+# freshly filtered `:wire:test`. If the loss lives in that in-JVM co-tenancy,
+# both arms read clean and this experiment refutes nothing about it — it only
+# rules out (or in) the machine-level load.
+#
+# SIZE THE LOADED ARM TO FINISH. An INCOMPLETE arm teaches nothing (see the
+# timeout note above), and load makes every iteration slower, so the loaded
+# ceiling is BELOW the isolated 39.9ms/iteration figure by an amount nobody has
+# measured yet. The guard in the size step therefore refuses `load=suite` above
+# 1000 stress iterations and 500 burst iterations. Those two ceilings are an
+# EXTRAPOLATION, not a measurement: they assume load costs at most ~4x, which
+# the first loaded dispatch is what actually tests.
+#
+# THAT ASSUMPTION HAS NOW BEEN TESTED and it held with room to spare. Loaded
+# stress 500 took 27.124s (run 31673273722) and 31.639s (run 31673494600)
+# against 16.64-19.255s unloaded — a 1.4-1.6x slowdown, not 4x. At the ceiling
+# of 1000 that projects to ~55-65s against the 300s deadline. The ceilings are
+# conservative, and it is the 4x figure, not the ceilings, that was pessimistic.
+#
+# The isolated control at the size intended for the loaded arm HAS been
+# measured, on ubuntu-latest, run 31672139859 (`load=none`, stress 500, burst
+# 500 x 40):
+#
+#   stress 500  ->  CLEAN, wall time 19.255s   (38.5ms/iteration, 1,000 awaits)
+#   burst  500  ->  CLEAN, wall time 23.613s   (47.2ms/iteration, 20,000 refs)
+#
+# Both sit at ~6-15x margin against the 5-minute deadline, which is what makes
+# 500/500 the right first loaded dispatch: it can absorb a large slowdown and
+# still produce a sample. `burst_iterations=0` skips the burst arm entirely and
+# is the fallback if even that comes back INCOMPLETE. Do NOT dispatch the
+# committed defaults under load — 6000 x 40 spent 269s of the 300s budget with
+# no load at all.
+#
+# WHAT ONE LOADED DISPATCH DELIVERS AS A DENOMINATOR: 2 awaits per iteration, so
+# 500 iterations is 1,000 awaits — more than double build-test-fast's entire
+# 450-await harvest, in one run. That is the point of doing it here: the fast
+# lane yields 50 awaits per run, and the loaded condition is the expensive one.
+# If the suite rate of 2/450 (0.444%/await) is real and load carries it, a
+# single 1,000-await loaded run expects ~4.4 losses and sees zero with
+# probability ~1.2%.
+#
 # THE REPORT MUST SURVIVE. The value of an occurrence is the full two-sided
 # failure report — server localRefs vs client remoteRefs, per-ref park depths on
 # both sides, and the preHello/gate silent-drop counters PR #83 added. Gradle's
@@ -91,13 +186,21 @@ on:
         required: false
         default: "4000"
       burst_iterations:
-        description: "WsAnnouncementCatchUpBurstTest iterations (committed default is 10). 6000 x 40 measured 269.152s against the same 5-minute deadline — it fits, but with only ~11% headroom; go lower if a run comes back INCOMPLETE."
+        description: "WsAnnouncementCatchUpBurstTest iterations (committed default is 10). 6000 x 40 measured 269.152s against the same 5-minute deadline — it fits, but with only ~11% headroom; go lower if a run comes back INCOMPLETE. 0 SKIPS the burst arm entirely — the fallback if 500 still comes back INCOMPLETE under load=suite."
         required: false
         default: "6000"
       burst_refs:
         description: "Refs published per burst iteration (committed default is 40)"
         required: false
         default: "40"
+      load:
+        description: "Concurrency condition (computenet-dqy.52). 'none' = the probe runs essentially alone. 'suite' = a separate copy of the repo runs build-test-fast's own command on the same runner throughout. Dispatch the SAME sizes under both to get a controlled pair; keep loaded sizes small (start at 500 stress / 500 burst, and drop to burst_iterations=0 if the burst arm comes back INCOMPLETE) or the loaded arm times out and measures nothing."
+        required: false
+        type: choice
+        default: "none"
+        options:
+          - none
+          - suite
 
 # No `cancel-in-progress`: a superseded run of a multi-hour measurement is
 # wasted compute, and two concurrent dispatches are two independent samples,
@@ -134,14 +237,32 @@ jobs:
           STRESS: ${{ inputs.stress_iterations }}
           BURST: ${{ inputs.burst_iterations }}
           REFS: ${{ inputs.burst_refs }}
+          LOAD: ${{ inputs.load }}
         run: |
           set -euo pipefail
           for v in "$STRESS" "$BURST" "$REFS"; do
             case "$v" in
-              ''|*[!0-9]*) echo "::error::inputs must be positive integers; got '$v'"; exit 1 ;;
+              ''|*[!0-9]*) echo "::error::inputs must be non-negative integers; got '$v'"; exit 1 ;;
             esac
-            [ "$v" -gt 0 ] || { echo "::error::inputs must be > 0; got '$v'"; exit 1; }
           done
+          # burst_iterations=0 is the documented "skip the burst arm" value; the
+          # other two knobs have no meaningful zero.
+          [ "$STRESS" -gt 0 ] || { echo "::error::stress_iterations must be > 0; got '$STRESS'"; exit 1; }
+          [ "$REFS" -gt 0 ] || { echo "::error::burst_refs must be > 0; got '$REFS'"; exit 1; }
+          # THE LOADED CEILING IS AN EXTRAPOLATION, NOT A MEASUREMENT (see the
+          # header). It exists so that flipping `load` on an otherwise default
+          # dispatch fails here — in two seconds — instead of half an hour later
+          # as an INCOMPLETE arm that measured nothing.
+          if [ "$LOAD" = "suite" ]; then
+            if [ "$STRESS" -gt 1000 ]; then
+              echo "::error::load=suite with stress_iterations=$STRESS: refused. Under concurrent suite load every iteration costs more than the 39.9ms measured alone, and an arm that trips the 5-minute per-test timeout produces NO sample (computenet-dqy.12). Ceiling 1000; dispatch 500 first and read the wall time."
+              exit 1
+            fi
+            if [ "$BURST" -gt 500 ]; then
+              echo "::error::load=suite with burst_iterations=$BURST: refused. Unloaded, 6000x40 already used 269s of the 300s budget, so the burst arm has no headroom for any slowdown. Ceiling 500; pass burst_iterations=0 to skip the arm."
+              exit 1
+            fi
+          fi
           awaits=$((STRESS * 2))
           refs=$((BURST * REFS))
           {
@@ -149,8 +270,9 @@ jobs:
             echo ""
             echo "| knob | value | derived |"
             echo "| --- | --- | --- |"
+            echo "| load (concurrency condition) | $LOAD | $([ "$LOAD" = suite ] && echo 'build check runs alongside the probe' || echo 'probe runs essentially alone') |"
             echo "| wire.stress.iterations | $STRESS | $awaits announcement awaits |"
-            echo "| wire.burst.iterations | $BURST | $refs announced refs |"
+            echo "| wire.burst.iterations | $BURST | $([ "$BURST" -eq 0 ] && echo 'burst arm SKIPPED' || echo "$refs announced refs") |"
             echo "| wire.burst.refs | $REFS | |"
             echo ""
           } | tee -a "$GITHUB_STEP_SUMMARY"
@@ -193,6 +315,68 @@ jobs:
           poison wire.burst.refs '*WsAnnouncementCatchUpBurstTest*' || rc=1
           exit $rc
 
+      # ---------------- the loaded arm (computenet-dqy.52) ----------------
+      # Everything between here and "Stop the concurrent suite load" is skipped
+      # entirely when load=none, so the isolated arm is byte-for-byte the job
+      # that produced runs 31669727862 / 31669883848 / 31670959177 and remains
+      # comparable with them.
+      - name: Start the concurrent suite load
+        if: ${{ inputs.load == 'suite' }}
+        run: |
+          set -euo pipefail
+          echo "runner: $(nproc) cores"; free -m
+          # A separate project directory (see the header: two Gradle builds in
+          # one project directory block each other on that directory's locks,
+          # which would serialise the load against the probe instead of running
+          # it alongside). $GRADLE_USER_HOME stays shared, as it would be for
+          # any two projects built at once on one machine.
+          cp -a "$GITHUB_WORKSPACE" "$RUNNER_TEMP/load-copy"
+
+          cat > "$RUNNER_TEMP/load.sh" <<'EOF'
+          #!/usr/bin/env bash
+          cd "$RUNNER_TEMP/load-copy"
+          n=0
+          while [ ! -f "$RUNNER_TEMP/probe-done" ]; do
+            n=$((n + 1))
+            echo "===== load pass $n starting $(date -Is) ====="
+            # build-test-fast's own command. `--rerun-tasks` so a second pass
+            # is real work rather than an up-to-date no-op; failures are
+            # irrelevant here — this build is load, not a gate.
+            ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test --rerun-tasks || true
+            echo "===== load pass $n finished $(date -Is) ====="
+          done
+          echo "===== load loop exited after $n pass(es) $(date -Is) ====="
+          EOF
+          chmod +x "$RUNNER_TEMP/load.sh"
+
+          # Evidence that the condition was real, sampled throughout: without
+          # this, "loaded" is an assertion about a background process nobody
+          # looked at.
+          cat > "$RUNNER_TEMP/sampler.sh" <<'EOF'
+          #!/usr/bin/env bash
+          while [ ! -f "$RUNNER_TEMP/probe-done" ]; do
+            echo "$(date -Is) loadavg=$(cut -d' ' -f1-3 /proc/loadavg) mem_available_mb=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo) java_procs=$(pgrep -c java || echo 0)"
+            sleep 10
+          done
+          EOF
+          chmod +x "$RUNNER_TEMP/sampler.sh"
+
+          rm -f "$RUNNER_TEMP/probe-done"
+          # setsid so the whole load process group can be killed later; killing
+          # the loop alone would leave its Gradle child loading the runner
+          # through the upload steps.
+          setsid nohup "$RUNNER_TEMP/load.sh" > load.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/load.pid"
+          setsid nohup "$RUNNER_TEMP/sampler.sh" > loadavg.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/sampler.pid"
+
+          # Let the load reach steady state before the probe starts; the first
+          # pass spends its opening seconds in Gradle configuration, which is
+          # not the contention the probe is supposed to meet.
+          sleep 60
+          echo "== loadavg after 60s of warm-up =="
+          tail -5 loadavg.log
+
       - name: Stress probe (announcement path, catch-up + live shapes)
         env:
           STRESS: ${{ inputs.stress_iterations }}
@@ -210,10 +394,13 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           PROBE_OUTCOME_KEY: STRESS_OUTCOME
-        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/stress "stress (${{ inputs.stress_iterations }} iterations)" WsAnnouncementStressTest
+          PROBE_LOSSES_KEY: STRESS_LOSSES
+          PROBE_UNITS_KEY: STRESS_UNITS
+          PROBE_EXPECTED_UNITS: ${{ env.STRESS_AWAITS }}
+        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/stress "stress, load=${{ inputs.load }} (${{ inputs.stress_iterations }} iterations)" WsAnnouncementStressTest
 
       - name: Catch-up burst probe
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.burst_iterations != '0' }}
         env:
           BURST: ${{ inputs.burst_iterations }}
           REFS: ${{ inputs.burst_refs }}
@@ -228,10 +415,43 @@ jobs:
           cp -a wire/build/test-results/test/. probe-evidence/burst/
 
       - name: Catch-up burst probe - full report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.burst_iterations != '0' }}
         env:
           PROBE_OUTCOME_KEY: BURST_OUTCOME
-        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/burst "burst (${{ inputs.burst_iterations }} iterations x ${{ inputs.burst_refs }} refs)" WsAnnouncementCatchUpBurstTest
+          PROBE_LOSSES_KEY: BURST_LOSSES
+          PROBE_UNITS_KEY: BURST_UNITS
+          PROBE_EXPECTED_UNITS: ${{ inputs.burst_iterations }}
+        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/burst "burst, load=${{ inputs.load }} (${{ inputs.burst_iterations }} iterations x ${{ inputs.burst_refs }} refs)" WsAnnouncementCatchUpBurstTest
+
+      # The load must outlive both arms and nothing else. Killing the process
+      # group (not just the loop) matters: the loop's Gradle child would
+      # otherwise keep the runner busy through the upload steps and, worse,
+      # could still be running if a future arm is added below.
+      - name: Stop the concurrent suite load
+        if: ${{ !cancelled() && inputs.load == 'suite' }}
+        run: |
+          set -uo pipefail
+          touch "$RUNNER_TEMP/probe-done"
+          for pidfile in load.pid sampler.pid; do
+            pid=$(cat "$RUNNER_TEMP/$pidfile" 2>/dev/null || echo "")
+            [ -n "$pid" ] && kill -TERM -"$pid" 2>/dev/null
+          done
+          sleep 5
+          mkdir -p probe-evidence/load
+          cp -a load.log loadavg.log probe-evidence/load/ 2>/dev/null || true
+          echo "== load passes =="
+          grep -E '^===== load pass' load.log || echo "(no load pass completed a boundary marker)"
+          echo "== machine load sampled while the probe ran =="
+          cat loadavg.log || true
+          {
+            echo "### Concurrency condition: load=suite"
+            echo ""
+            echo "Load command (separate repo copy, own Gradle daemon, shared GRADLE_USER_HOME):"
+            echo '`./gradlew build check -PexcludeMultiJvm=true -x :kernel:test --rerun-tasks`, looped until the probes finished.'
+            echo ""
+            echo "loadavg (1m) samples: $(awk '{for(i=1;i<=NF;i++) if($i ~ /^loadavg=/) {split(substr($i,9),a,","); print a[1]}}' loadavg.log | sort -n | awk '{v[NR]=$1} END {if (NR) printf "n=%d min=%s median=%s max=%s", NR, v[1], v[int((NR+1)/2)], v[NR]; else printf "none"}')"
+            echo ""
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Cheap and unconditional: two XML files. A green run's XML is the
       # executed-size record, a red run's is the occurrence.
@@ -259,10 +479,35 @@ jobs:
       # dispatch and must not pass quietly either.
       - name: Conclude
         if: ${{ !cancelled() }}
+        env:
+          LOAD: ${{ inputs.load }}
+          BURST_REQUESTED: ${{ inputs.burst_iterations }}
         run: |
           set -uo pipefail
           echo "stress exit=${STRESS_STATUS:-missing} outcome=${STRESS_OUTCOME:-missing}"
           echo "burst  exit=${BURST_STATUS:-missing} outcome=${BURST_OUTCOME:-missing}"
+
+          # THE LEDGER (computenet-dqy.52). One row per arm, numerator and
+          # denominator kept apart and labelled with the condition they were
+          # collected under, so two dispatches can be compared without anyone
+          # having to reconstruct which run had which sizes. `unknown` is not a
+          # zero: an incomplete arm contributes to no rate at all.
+          {
+            echo "### Ledger — condition \`load=$LOAD\`"
+            echo ""
+            echo "| arm | condition | losses (numerator) | sample (denominator) | outcome |"
+            echo "| --- | --- | --- | --- | --- |"
+            echo "| stress | load=$LOAD | ${STRESS_LOSSES:-unknown} | ${STRESS_UNITS:-unknown} awaits | ${STRESS_OUTCOME:-missing} |"
+            if [ "$BURST_REQUESTED" = "0" ]; then
+              echo "| burst | load=$LOAD | — | — | SKIPPED (burst_iterations=0) |"
+            else
+              echo "| burst | load=$LOAD | ${BURST_LOSSES:-unknown} | ${BURST_UNITS:-unknown} iterations | ${BURST_OUTCOME:-missing} |"
+            fi
+            echo ""
+            echo "This is ONE condition. The comparison computenet-dqy.52 asks for needs the other dispatch, same sizes, other \`load\` value."
+            echo ""
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
           rc=0
           verdict() {
             arm="$1"; outcome="$2"; status="$3"; hint="$4"
@@ -294,11 +539,20 @@ jobs:
             esac
           }
           verdict "stress probe" "${STRESS_OUTCOME:-}" "${STRESS_STATUS:-1}" \
-            "measured 39.9ms/iteration on ubuntu-latest; ceiling ~7000, default 4000."
-          verdict "burst probe" "${BURST_OUTCOME:-}" "${BURST_STATUS:-1}" \
-            "6000 x 40 took 269s of the 300s budget; go below that."
+            "measured 39.9ms/iteration on ubuntu-latest unloaded; ceiling ~7000, default 4000. Under load=suite the per-iteration cost is higher by an unmeasured factor — halve it."
+          if [ "$BURST_REQUESTED" = "0" ]; then
+            echo "burst probe: SKIPPED by request (burst_iterations=0). It contributes no sample and no verdict."
+          else
+            verdict "burst probe" "${BURST_OUTCOME:-}" "${BURST_STATUS:-1}" \
+              "6000 x 40 took 269s of the 300s budget; go below that."
+          fi
           if [ "$rc" = "0" ]; then
-            echo "Both probes green: ${STRESS_AWAITS:-?} announcement awaits and ${BURST_REFS_TOTAL:-?} announced refs, 0 losses." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$BURST_REQUESTED" = "0" ]; then
+              echo "Probe green under load=$LOAD: ${STRESS_AWAITS:-?} announcement awaits, 0 losses (burst arm skipped)." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Both probes green under load=$LOAD: ${STRESS_AWAITS:-?} announcement awaits and ${BURST_REFS_TOTAL:-?} announced refs, 0 losses." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           exit $rc
