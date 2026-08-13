@@ -69,6 +69,35 @@ class AttentionScheduler(
         queue.count { (_, invocation) -> invocation.type != HostedPortInvocation.Type.PORT_MANAGEMENT }
     }
 
+    /**
+     * Per-cell depth of work that [stage] accepted and [dispatchOne] has not yet
+     * run — the third silent outcome on the announcement path (computenet-hdq).
+     *
+     * Distinct from every depth an observer could already read.
+     * [civictech.cell.host.LocationRegistry.parkedFor] counts invocations parked
+     * *before* a host accepted them (no location yet, or intake closed); this
+     * counts invocations a host **did** accept. An invocation staged here is
+     * therefore invisible to `parkedFor`, writes nothing to stderr, and — until
+     * this accessor — was indistinguishable from one that was never sent.
+     *
+     * Unlike [dataQueuedCount] (the backpressure reading, which excludes
+     * management traffic because management must stay admissible on a saturated
+     * host) this counts *everything* staged: the question here is "did a
+     * delivery run", and a management invocation that never ran is as lost as a
+     * data one.
+     *
+     * Read-only by construction, not just by convention: the result holds
+     * **counts**, never [HostedPortInvocation]s, so no caller can reach a staged
+     * payload — let alone drain, reorder or re-own one. Attention-parked traffic
+     * ([attentionParked]) is deliberately excluded: parking emits a typed stall
+     * notice, so it is an announced condition rather than a silent one.
+     *
+     * Takes [dataLock] itself, so any thread may call it.
+     */
+    fun stagedDepths(): Map<CellRef, Int> = synchronized(dataLock) {
+        dataQueues.mapValuesTo(LinkedHashMap()) { (_, queue) -> queue.size }
+    }
+
     /** Callers hold dataLock. Same source+wave slot preserves wave identity and source FIFO. */
     fun stage(hostedInvocation: HostedPortInvocation) {
         val cellRef = hostedInvocation.cellRef
