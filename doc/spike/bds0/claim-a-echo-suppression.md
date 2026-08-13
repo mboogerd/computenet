@@ -13,6 +13,12 @@ the store and the re-export byte-identically; the journal cannot see it,
 because the journal record has no metadata column and imported *updates*
 produce no journal record at all.
 
+Verdict in one line: **claim (a) fails as posed, with a verified fallback** —
+the Dolt commit graph (`dolt_diff_issues`) carries exactly the point-in-time
+provenance `events` lacks, so BDS1's *feed* needs re-selecting, not the BDS
+line re-founding. See "Verdict and implications" below; the sub-checks come
+first.
+
 Everything below was executed. The whole sequence was re-run end to end on
 independent rig roots and produced the same outcomes (issue ids differ per
 init — they are `mktemp`-fresh workspaces, so substitute your own).
@@ -35,6 +41,12 @@ this one linear sequence:
 7. the local-edit **control** (`bd update --priority 3` in B) — presented inside
    sub-check (ii), but run *last*, because it makes B's row locally newer than
    A's and so changes what steps 4 and 6 observe
+
+The **two-events block** (hop `--dot A:9` of the labelled seed `L`) is the one
+result outside this sequence: it acts on a different issue, so it is
+order-independent and may be run at any point after `init`. The
+`dolt_diff_issues` transcripts in "The alternative seam" were measured on a
+*second*, independently initialised rig root, as that subsection states.
 
 Steps 4, 6 and 7 are order-sensitive, and each of those blocks below repeats
 its precondition. Running the control (7) before the tie (6) turns the tie into
@@ -138,6 +150,9 @@ cd "$B/.beads/embeddeddolt"/*/ && dolt sql -q "describe events"
 | created_at | datetime     | NO   | MUL | CURRENT_TIMESTAMP |
 +------------+--------------+------+-----+-------------------+
 ```
+
+(A trailing `Extra` column is elided above; its only non-empty value is
+`DEFAULT_GENERATED` on `created_at`. No column carries metadata either way.)
 
 Provenance could in principle ride in `new_value`, which is a JSON blob for
 locally-originated edits. It does not. The record the import left is:
@@ -490,6 +505,11 @@ looked for and did not find in `events`.
 Measured on a fresh rig (`init`; mutate `$X` in A; `sleep 1`; hop
 `--dot A:7` — a create; mutate again; `sleep 1`; hop `--dot A:8` — an update,
 the one that journals nothing):
+
+Commit hashes below are abridged (`h493b8g7...`), so to re-run this select on
+your own rig either read them out of `dolt log` first, or use the equivalent
+self-contained form that selects by issue instead of by commit — `where
+to_id='$X'`:
 
 ```bash
 cd "$B/.beads/embeddeddolt"/*/
