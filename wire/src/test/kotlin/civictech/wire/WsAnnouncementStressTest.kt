@@ -11,9 +11,21 @@ import civictech.cell.wire.Peering
 import org.junit.jupiter.api.Test
 import org.opentest4j.AssertionFailedError
 import java.io.ByteArrayOutputStream
+import java.io.FileDescriptor
+import java.io.FileOutputStream
 import java.io.OutputStream
 import java.io.PrintStream
+import java.lang.management.ManagementFactory
+import java.lang.management.MemoryType
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.nio.file.StandardOpenOption.APPEND
+import java.nio.file.StandardOpenOption.CREATE
+import java.nio.file.StandardOpenOption.SYNC
+import java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+import java.nio.file.StandardOpenOption.WRITE
 import java.util.UUID
 
 /**
@@ -58,6 +70,44 @@ import java.util.UUID
  * Raising [DEFAULT_ITERATIONS] buys power at ~11ms per iteration — 0.28s at 25,
  * measured — so it is a fast-lane budget decision, not a technical limit.
  *
+ * ## A long run must survive its own death (computenet-h6a)
+ *
+ * Two defects, both measured on 2026-08-13 and both fixed here, made the long
+ * measurement runs lose exactly the evidence they were launched to collect.
+ *
+ * **Failures are written to disk when they are observed, not at the end.** The
+ * report used to accumulate [Failure]s in memory and render them only after the
+ * loop, so a run that died rendered nothing: one 25000-iteration arm reported
+ * `failures=2` on its last progress line and both diagnostic blocks were
+ * unrecoverable. Every failure now goes to `<artifacts>/failure-<n>-<shape>.txt`
+ * through [ArtifactSink], opened with [SYNC], at the moment [observe] gives up on
+ * it. `-Dwire.stress.injectFailureAt=1,7` (or `--inject-failure-at`) forces
+ * synthetic failures through that same write, so the artifact path is
+ * demonstrable without waiting for a rare event; injected records say so on their
+ * first line and are counted separately, because an injected record is not an
+ * observation of the defect.
+ *
+ * **The run is bounded, and it exits.** This harness retains about 176 KB per
+ * iteration — measured from two heap sizes: OOM at 11250 iterations on a 1.94GiB
+ * container-default heap and at 5525 on 1.00GiB — so a run long enough to matter
+ * runs out of heap, and it did not *die* of that, it *hung*: the
+ * `OutOfMemoryError` reached non-daemon WebSocket threads, `main` stopped writing,
+ * and the container stayed `Up 2 hours` with no output and no exit code. So
+ * [stress] watches the heap actually retained after the last collection
+ * ([retainedHeapFraction]) and stops the loop at [DEFAULT_HEAP_CEILING] of max,
+ * before the OOM rather than after it; [main] additionally installs an
+ * `OutOfMemoryError` handler that `halt`s, and honours `--deadline-seconds`, so no
+ * unattended caller can be left waiting on a wedged JVM. Exit codes are
+ * [EXIT_OK]/[EXIT_FAILURES]/[EXIT_BOUNDED]/[EXIT_OOM]/[EXIT_DEADLINE]/[EXIT_CRASH].
+ *
+ * **Consequence for the measurement.** 100000 awaits is ~4x past where one
+ * process dies, so it is not reachable in one JVM on a container-default heap
+ * while that retention exists. `scripts/announcement-stress/run.sh` accumulates
+ * the awaits across bounded processes instead, summing each process's on-disk
+ * progress record — including a process that died — and that, not a single
+ * process, is what computenet-dqy.40's ">= 100000 stress awaits" clause should be
+ * read against.
+ *
  * ## What this gate is worth on Linux CI
  *
  * Unlike [WsListenerAcceptRstTest] this test is deliberately **not** platform
@@ -77,7 +127,10 @@ class WsAnnouncementStressTest {
 
     @Test
     fun `the announcement path completes on every connection`() {
-        val report = stress(iterations = System.getProperty("wire.stress.iterations")?.toInt() ?: DEFAULT_ITERATIONS)
+        val report = stress(
+            iterations = System.getProperty("wire.stress.iterations")?.toInt() ?: DEFAULT_ITERATIONS,
+            sink = artifactSink(),
+        )
         if (report.failures.isNotEmpty()) throw AssertionFailedError(report.render())
     }
 
@@ -90,26 +143,177 @@ class WsAnnouncementStressTest {
         /** The budget the failing tests' own awaits gave the first announcement. */
         const val EXPECT_WITHIN_MS = 3_000L
 
+        /**
+         * Stop the loop when this fraction of max heap is still retained after a
+         * collection. Chosen with a wide margin rather than tuned: at ~176 KB
+         * retained per iteration and ~11ms per iteration (both measured), the heap
+         * grows ~16 KB per millisecond, so the last 20% of a 1GiB heap is some
+         * 13 seconds of headroom — thousands of times the interval between two
+         * checks, which is one iteration.
+         */
+        const val DEFAULT_HEAP_CEILING = 0.80
+
+        /** The whole run finished the iterations it was asked for, with no failures. */
+        const val EXIT_OK = 0
+
+        /** At least one non-injected failure was observed. Artifacts are on disk. */
+        const val EXIT_FAILURES = 2
+
+        /** Stopped early at the heap ceiling (or another bound) with no failures — resume in a fresh process. */
+        const val EXIT_BOUNDED = 3
+
+        /** `OutOfMemoryError` reached a thread. Halted rather than left hanging. */
+        const val EXIT_OOM = 70
+
+        /** `--deadline-seconds` elapsed. Halted rather than left hanging. */
+        const val EXIT_DEADLINE = 71
+
+        /** Any other throwable out of the run. */
+        const val EXIT_CRASH = 72
+
         class Failure(
             val iteration: Int,
             val shape: String,
             val arrivedAfterMs: Long?,
             val diagnostics: String,
+            /** True when `--inject-failure-at` manufactured this record; not an observation of the defect. */
+            val injected: Boolean = false,
+        ) {
+            fun headline(): String = "iteration $iteration ($shape): " + when {
+                injected -> "forced by --inject-failure-at; the await was never given a chance to arrive"
+                arrivedAfterMs != null -> "arrived late after ${arrivedAfterMs}ms"
+                else -> "never arrived within ${LOST_AFTER_MS}ms"
+            }
+
+            fun render(): String = buildString {
+                if (injected) {
+                    appendLine(
+                        "INJECTED SYNTHETIC FAILURE (--inject-failure-at / -Dwire.stress.injectFailureAt): this record " +
+                            "was manufactured to exercise the artifact path and is NOT an observation of a lost " +
+                            "announcement. The diagnostics below are a real snapshot of a healthy iteration.",
+                    )
+                }
+                appendLine(headline())
+                append(diagnostics)
+            }
+        }
+
+        /**
+         * Failure artifacts, each written the moment its failure is observed.
+         *
+         * computenet-h6a: the previous design accumulated failures in memory and
+         * rendered them after the loop, so a run that died lost every diagnostic it
+         * had collected — measured, on a 25000-iteration arm that had already found
+         * two. Files are opened with [SYNC] so the record is on the device, not just
+         * in this process's buffers, before the write returns; directories are
+         * created lazily so a clean fast-lane run leaves nothing behind.
+         */
+        class ArtifactSink(val dir: Path) {
+
+            /** Written as `<dir>/failure-<iteration>-<shape>.txt`, plus a row in `failures.tsv`. */
+            fun failure(f: Failure): Path {
+                val slug = f.shape.replace(Regex("[^A-Za-z0-9]+"), "-").trim('-')
+                val file = dir.resolve("failure-%06d-%s.txt".format(f.iteration, slug))
+                write(file, f.render(), append = false)
+                write(
+                    dir.resolve("failures.tsv"),
+                    "${f.iteration}\t${f.shape}\t${f.arrivedAfterMs ?: -1}\t${if (f.injected) "injected" else "observed"}\t${file.fileName}\n",
+                    append = true,
+                )
+                return file
+            }
+
+            /** One row per progress tick, so a process that dies still reports how far it got. */
+            fun progress(line: String) = write(dir.resolve("progress.tsv"), line, append = true)
+
+            fun note(name: String, text: String) = write(dir.resolve(name), text, append = false)
+
+            private fun write(file: Path, text: String, append: Boolean) {
+                Files.createDirectories(file.parent)
+                val options = if (append) arrayOf(CREATE, WRITE, APPEND, SYNC) else arrayOf(CREATE, WRITE, TRUNCATE_EXISTING, SYNC)
+                Files.newOutputStream(file, *options).use { it.write(text.toByteArray()) }
+            }
+        }
+
+        /**
+         * The sink a run writes to: an explicit directory, else
+         * [defaultArtifactRoot] plus a per-run subdirectory. A factory rather than a
+         * bare constructor call because a class nested in a companion object is not
+         * reachable as `WsAnnouncementStressTest.ArtifactSink` from outside it.
+         */
+        fun artifactSink(dir: Path? = null): ArtifactSink =
+            ArtifactSink(dir ?: defaultArtifactRoot().resolve(runId()))
+
+        fun defaultArtifactRoot(): Path = Paths.get(
+            System.getProperty("wire.stress.artifacts")
+                ?: System.getenv("WIRE_STRESS_ARTIFACTS")
+                ?: "build/announcement-stress",
         )
 
-        class Report(val iterations: Int, val awaits: Int, val failures: List<Failure>, val latencies: LongArray) {
+        fun runId(): String = "%d-%s".format(System.currentTimeMillis(), ProcessHandle.current().pid())
+
+        /**
+         * The fraction of max heap still retained *after the last collection*, or
+         * null if the JVM does not report collection usage.
+         *
+         * `Runtime.totalMemory - freeMemory` is not usable for a bound: it counts
+         * garbage that has not been collected yet, so it reads near the ceiling on
+         * a healthy allocating loop. `MemoryPoolMXBean.getCollectionUsage()` is the
+         * occupancy each heap pool was left at by the most recent collection of
+         * that pool, which is what "retained" means.
+         */
+        fun retainedHeapFraction(): Double? {
+            val max = ManagementFactory.getMemoryMXBean().heapMemoryUsage.max
+            if (max <= 0L) return null
+            var used = 0L
+            var reported = false
+            ManagementFactory.getMemoryPoolMXBeans().forEach { pool ->
+                if (pool.type != MemoryType.HEAP) return@forEach
+                val usage = pool.collectionUsage ?: return@forEach
+                reported = true
+                used += usage.used
+            }
+            return if (reported) used.toDouble() / max else null
+        }
+
+        class Report(
+            val iterations: Int,
+            val awaits: Int,
+            val failures: List<Failure>,
+            val latencies: LongArray,
+            /** Non-null when the loop stopped before [requested] — the bound that stopped it. */
+            val stopReason: String? = null,
+            val artifacts: Path? = null,
+            /** What the caller asked for; differs from [iterations] exactly when a bound stopped the loop. */
+            val requested: Int = iterations,
+        ) {
+            val observedFailures: Int get() = failures.count { !it.injected }
+            val injectedFailures: Int get() = failures.count { it.injected }
+
             fun render(): String = buildString {
-                appendLine("announcement path: ${failures.size} failure(s) in $awaits awaits over $iterations iterations")
+                appendLine("announcement path: $observedFailures failure(s) in $awaits awaits over $iterations iterations")
+                if (injectedFailures > 0) appendLine("plus $injectedFailures injected synthetic failure(s), which measure nothing")
+                if (stopReason != null) appendLine("STOPPED EARLY: $stopReason")
+                if (artifacts != null) appendLine("per-failure artifacts: $artifacts")
                 val sorted = latencies.sorted()
                 if (sorted.isNotEmpty()) {
                     fun q(p: Double) = sorted[((sorted.size - 1) * p).toInt()]
                     appendLine("arrival latency ms: p50=${q(0.5)} p99=${q(0.99)} max=${sorted.last()}")
                 }
                 failures.forEach { f ->
-                    appendLine("--- iteration ${f.iteration} (${f.shape}): " +
-                        (f.arrivedAfterMs?.let { "arrived late after ${it}ms" } ?: "never arrived within ${LOST_AFTER_MS}ms"))
+                    appendLine("--- ${f.headline()}")
                     appendLine(f.diagnostics)
                 }
+            }
+
+            /** Machine-readable, one `key\tvalue` per line, for the accumulating runner. */
+            fun resultRows(): String = buildString {
+                appendLine("iterations_requested\t$requested")
+                appendLine("iterations_run\t$iterations")
+                appendLine("awaits\t$awaits")
+                appendLine("failures_observed\t$observedFailures")
+                appendLine("failures_injected\t$injectedFailures")
+                appendLine("stop_reason\t${stopReason ?: "completed"}")
             }
         }
 
@@ -130,11 +334,25 @@ class WsAnnouncementStressTest {
             }
         }
 
-        fun stress(iterations: Int, progressEvery: Int = 0): Report {
+        /**
+         * @param sink where each failure is written the moment it is observed.
+         * @param injectFailuresAt iterations whose awaits are forced to fail, to exercise
+         *   [ArtifactSink] on demand. The forced record travels the same code as a real one.
+         * @param heapCeiling stop the loop when [retainedHeapFraction] reaches this; 0 disables.
+         */
+        fun stress(
+            iterations: Int,
+            progressEvery: Int = 0,
+            sink: ArtifactSink? = null,
+            injectFailuresAt: Set<Int> = emptySet(),
+            heapCeiling: Double = 0.0,
+        ): Report {
             val failures = mutableListOf<Failure>()
             val latencies = mutableListOf<Long>()
             var awaits = 0
-            repeat(iterations) { i ->
+            var stopReason: String? = null
+            var ran = 0
+            for (i in 0 until iterations) {
                 val captured = ByteArrayOutputStream()
                 val realErr = System.err
                 System.setErr(PrintStream(TeeStream(realErr, captured), true))
@@ -146,15 +364,16 @@ class WsAnnouncementStressTest {
                     server.host.managementInlet.call.spawn(early)
                     val listener = WsTransport.listen(0, server.side)
                     val connection = WsTransport.connect(URI("ws://localhost:${listener.port}"), client.side)
+                    val inject = i in injectFailuresAt
                     try {
                         awaits++
-                        observe(i, "catch-up", early.ref, client.registry, server.registry, connection, listener, captured, failures, latencies)
+                        observe(i, "catch-up", early.ref, client.registry, server.registry, connection, listener, captured, failures, latencies, sink, inject)
                         // live shape: published after connect returned, while the
                         // hello exchange may still be in flight
                         val late = CollectingCell()
                         server.host.managementInlet.call.spawn(late)
                         awaits++
-                        observe(i, "live", late.ref, client.registry, server.registry, connection, listener, captured, failures, latencies)
+                        observe(i, "live", late.ref, client.registry, server.registry, connection, listener, captured, failures, latencies, sink, inject)
                     } finally {
                         connection.shutdown()
                         runCatching { listener.stop(1000) }
@@ -162,11 +381,34 @@ class WsAnnouncementStressTest {
                 } finally {
                     System.setErr(realErr)
                 }
-                if (progressEvery > 0 && (i + 1) % progressEvery == 0) {
-                    realErr.println("[stress] ${i + 1}/$iterations awaits=$awaits failures=${failures.size}")
+                ran = i + 1
+                if (progressEvery > 0 && ran % progressEvery == 0) {
+                    val line = "[stress] $ran/$iterations awaits=$awaits failures=${failures.count { !it.injected }}" +
+                        (retainedHeapFraction()?.let { " heapRetained=%.1f%%".format(it * 100) } ?: "")
+                    realErr.println(line)
+                    sink?.progress("$ran\t$awaits\t${failures.count { !it.injected }}\t${failures.count { it.injected }}\n")
+                }
+                // computenet-h6a: the bound. This loop retains ~176 KB per
+                // iteration, and the OOM it eventually hits does not kill the
+                // JVM — non-daemon WebSocket threads keep it alive with the heap
+                // gone, so the process hangs instead of exiting. Stop before it.
+                if (heapCeiling > 0.0) {
+                    val retained = retainedHeapFraction()
+                    if (retained != null && retained >= heapCeiling) {
+                        stopReason = "heap ceiling at iteration $ran: %.1f%% of max heap (%d MiB) still retained after the last collection, ceiling %.1f%%"
+                            .format(
+                                retained * 100,
+                                ManagementFactory.getMemoryMXBean().heapMemoryUsage.max / (1024 * 1024),
+                                heapCeiling * 100,
+                            )
+                        break
+                    }
                 }
             }
-            return Report(iterations, awaits, failures, latencies.toLongArray())
+            if (progressEvery > 0 && (stopReason != null || ran % progressEvery != 0)) {
+                sink?.progress("$ran\t$awaits\t${failures.count { !it.injected }}\t${failures.count { it.injected }}\n")
+            }
+            return Report(ran, awaits, failures, latencies.toLongArray(), stopReason, sink?.dir, iterations)
         }
 
         private fun observe(
@@ -180,20 +422,46 @@ class WsAnnouncementStressTest {
             captured: ByteArrayOutputStream,
             failures: MutableList<Failure>,
             latencies: MutableList<Long>,
+            sink: ArtifactSink?,
+            inject: Boolean,
         ) {
             val start = System.currentTimeMillis()
-            fun arrived() = registry.location(ref) is LocationRegistry.Remote
-            while (!arrived() && System.currentTimeMillis() - start < EXPECT_WITHIN_MS) Thread.sleep(1)
+            // computenet-h6a: an injected failure is a real trip through this
+            // function with the arrival predicate forced false and both budgets
+            // collapsed to zero, so the record below — and the write that follows
+            // it — is produced by exactly the code a real loss produces it with.
+            // Its diagnostics are a truthful snapshot; only the verdict is forced.
+            fun arrived() = !inject && registry.location(ref) is LocationRegistry.Remote
+            val expectWithin = if (inject) 0L else EXPECT_WITHIN_MS
+            val lostAfter = if (inject) 0L else LOST_AFTER_MS
+            while (!arrived() && System.currentTimeMillis() - start < expectWithin) Thread.sleep(1)
             if (arrived()) {
                 latencies += System.currentTimeMillis() - start
                 return
             }
             // missed the budget the real tests give it: keep waiting, so the report
             // can say whether this was slow or lost
-            while (!arrived() && System.currentTimeMillis() - start < LOST_AFTER_MS) Thread.sleep(10)
+            while (!arrived() && System.currentTimeMillis() - start < lostAfter) Thread.sleep(10)
             val elapsed = System.currentTimeMillis() - start
             val late = if (arrived()) elapsed else null
-            failures += Failure(iteration, shape, late, diagnose(ref, registry, server, connection, listener, captured))
+            val failure = Failure(
+                iteration = iteration,
+                shape = if (inject) "$shape injected" else shape,
+                arrivedAfterMs = late,
+                diagnostics = diagnose(ref, registry, server, connection, listener, captured),
+                injected = inject,
+            )
+            failures += failure
+            // On disk BEFORE this function returns: a run that dies at any later
+            // point keeps every failure it had already found (computenet-h6a).
+            sink?.let { s ->
+                try {
+                    s.failure(failure)
+                } catch (t: Throwable) {
+                    // Never silent: a lost artifact is the defect this bead exists for.
+                    System.err.println("[stress] FAILED TO WRITE FAILURE ARTIFACT under ${s.dir}: $t")
+                }
+            }
         }
 
         /**
@@ -294,9 +562,128 @@ class WsAnnouncementStressTest {
  * the Gradle test task so a 5000-iteration measurement never lands in the fast
  * lane, and so a run's report survives the next run (the JUnit XML does not —
  * see computenet-dqy.34's diagnosability note).
+ *
+ * Flags, all optional (the bare positional iteration count still works):
+ *
+ * ```
+ *   --iterations N          how many cycles to attempt (default 1000)
+ *   --artifacts DIR         where per-failure records go (default build/announcement-stress/<runid>)
+ *   --progress-every N      progress line + on-disk progress row cadence (default 50)
+ *   --inject-failure-at L   comma-separated iteration numbers to force a failure at
+ *   --heap-ceiling F        stop at this retained-heap fraction, 0 disables (default 0.80)
+ *   --deadline-seconds N    halt the JVM if the run outlives this (default 0, off)
+ * ```
+ *
+ * **This process always exits.** computenet-h6a measured the alternative: the
+ * `OutOfMemoryError` this harness eventually provokes was delivered to a
+ * non-daemon WebSocket thread, `main` stopped writing, and the container was
+ * still `Up 2 hours` with no report and no exit status, which is how one
+ * unattended session lost its slot. So the heap ceiling normally stops the loop
+ * first; if an `OutOfMemoryError` happens anyway the handler installed below
+ * `halt`s with [WsAnnouncementStressTest.EXIT_OOM] rather than unwinding through
+ * code that would need to allocate; `--deadline-seconds` halts a wedged run; and
+ * the last statement is an explicit exit so live WebSocket threads cannot hold
+ * the JVM open after the measurement is done.
  */
 fun main(args: Array<String>) {
-    val iterations = args.firstOrNull()?.toInt() ?: 1000
-    val report = WsAnnouncementStressTest.stress(iterations, progressEvery = 50)
-    println(report.render())
+    installHaltOnOutOfMemory()
+
+    fun flag(name: String): String? {
+        val i = args.indexOf("--$name")
+        return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
+    }
+
+    val iterations = flag("iterations")?.toInt() ?: args.firstOrNull()?.takeIf { !it.startsWith("--") }?.toInt() ?: 1000
+    val progressEvery = flag("progress-every")?.toInt() ?: 50
+    val heapCeiling = flag("heap-ceiling")?.toDouble()
+        ?: System.getProperty("wire.stress.heapCeiling")?.toDouble()
+        ?: WsAnnouncementStressTest.DEFAULT_HEAP_CEILING
+    val inject = (flag("inject-failure-at") ?: System.getProperty("wire.stress.injectFailureAt"))
+        ?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.toSet() ?: emptySet()
+    val deadlineSeconds = flag("deadline-seconds")?.toLong() ?: 0L
+
+    val sink = WsAnnouncementStressTest.artifactSink(flag("artifacts")?.let { Paths.get(it) })
+    val artifacts = sink.dir
+    val maxHeapMib = ManagementFactory.getMemoryMXBean().heapMemoryUsage.max / (1024 * 1024)
+    sink.note(
+        "run.txt",
+        buildString {
+            appendLine("pid\t${ProcessHandle.current().pid()}")
+            appendLine("started\t${java.time.Instant.now()}")
+            appendLine("iterations_requested\t$iterations")
+            appendLine("max_heap_mib\t$maxHeapMib")
+            appendLine("heap_ceiling\t$heapCeiling")
+            appendLine("inject_failure_at\t${inject.sorted().joinToString(",")}")
+            appendLine("deadline_seconds\t$deadlineSeconds")
+            appendLine("java\t${System.getProperty("java.version")} ${System.getProperty("os.name")} ${System.getProperty("os.arch")}")
+        },
+    )
+    System.err.println(
+        "[stress] pid=${ProcessHandle.current().pid()} iterations=$iterations maxHeap=${maxHeapMib}MiB " +
+            "heapCeiling=$heapCeiling artifacts=$artifacts inject=${inject.sorted()}",
+    )
+
+    if (deadlineSeconds > 0) {
+        Thread {
+            Thread.sleep(deadlineSeconds * 1000)
+            runCatching { sink.note("deadline.txt", "halted after ${deadlineSeconds}s deadline\n") }
+            writeToStderrFd("[stress] deadline of ${deadlineSeconds}s elapsed; halting\n")
+            Runtime.getRuntime().halt(WsAnnouncementStressTest.EXIT_DEADLINE)
+        }.apply { isDaemon = true; name = "stress-deadline" }.start()
+    }
+
+    val report = try {
+        WsAnnouncementStressTest.stress(iterations, progressEvery, sink, inject, heapCeiling)
+    } catch (t: Throwable) {
+        // Artifacts for every failure found before this point are already on disk.
+        if (t is OutOfMemoryError) {
+            writeToStderrFd("[stress] OutOfMemoryError out of the run; halting with ${WsAnnouncementStressTest.EXIT_OOM}\n")
+            Runtime.getRuntime().halt(WsAnnouncementStressTest.EXIT_OOM)
+        }
+        runCatching { sink.note("crash.txt", "$t\n${t.stackTraceToString()}") }
+        t.printStackTrace()
+        System.err.flush()
+        Runtime.getRuntime().halt(WsAnnouncementStressTest.EXIT_CRASH)
+        return
+    }
+
+    val rendered = report.render()
+    println(rendered)
+    runCatching { sink.note("summary.txt", rendered) }
+    runCatching { sink.note("result.tsv", report.resultRows()) }
+    System.out.flush()
+
+    val code = when {
+        report.observedFailures > 0 -> WsAnnouncementStressTest.EXIT_FAILURES
+        report.stopReason != null -> WsAnnouncementStressTest.EXIT_BOUNDED
+        else -> WsAnnouncementStressTest.EXIT_OK
+    }
+    // Explicit: live non-daemon WebSocket threads would otherwise hold this JVM open.
+    kotlin.system.exitProcess(code)
 }
+
+/**
+ * Halt on `OutOfMemoryError`, in any thread, without allocating.
+ *
+ * computenet-h6a measured both shapes of the hang this prevents: an OOM that
+ * reached `main` ("Exception: java.lang.OutOfMemoryError thrown from the
+ * UncaughtExceptionHandler in thread \"main\"" — the handler itself could not
+ * allocate) and an OOM that reached only a `WebSocketConnectReadThread` while
+ * `main` carried on and then stopped writing. Both left the JVM alive with no
+ * exit code. The message bytes are built here, before the heap is gone, and the
+ * handler only writes them to the stderr file descriptor and calls `halt`, which
+ * skips shutdown hooks and any code that might need to allocate.
+ */
+private fun installHaltOnOutOfMemory() {
+    val message = "[stress] OutOfMemoryError: halting with code ${WsAnnouncementStressTest.EXIT_OOM}\n".toByteArray()
+    Thread.setDefaultUncaughtExceptionHandler { _, e ->
+        if (e is OutOfMemoryError) {
+            FileOutputStream(FileDescriptor.err).write(message)
+            Runtime.getRuntime().halt(WsAnnouncementStressTest.EXIT_OOM)
+        } else {
+            e.printStackTrace()
+        }
+    }
+}
+
+private fun writeToStderrFd(text: String) = FileOutputStream(FileDescriptor.err).write(text.toByteArray())
