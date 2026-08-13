@@ -13,10 +13,35 @@ the store and the re-export byte-identically; the journal cannot see it,
 because the journal record has no metadata column and imported *updates*
 produce no journal record at all.
 
-Everything below was executed. Every transcript is a paste-able block against
-a fresh `rig.sh init`; the whole sequence was re-run end to end on a second,
-independent rig root and produced the same outcomes (issue ids differ per
+Everything below was executed. The whole sequence was re-run end to end on
+independent rig roots and produced the same outcomes (issue ids differ per
 init — they are `mktemp`-fresh workspaces, so substitute your own).
+
+**Execution order — the prose order is not the run order.** Each block is
+paste-able against a fresh `rig.sh init`, but only from the state its
+predecessor left, and two blocks are presented out of sequence because they
+read better where the argument needs them. Every result here was produced by
+this one linear sequence:
+
+1. `init`, pick `X`, mutate in A, `sleep 1`, hop 1 `--dot A:7` (a create)
+2. sub-check (i): `bd show` in B
+3. sub-check (ii): `describe events`, `journal B`, `journal A` for contrast
+4. **sub-check (iii)**, the re-export — presented after the whole of sub-check
+   (ii), but run *here*, which is why its transcript still shows
+   `"status":"open"` and `cn_dot` `A:7`
+5. hop 2: mutate in A, `sleep 1`, hop `--dot A:8` (an update); `journal B` again
+6. **the tie block** (`--dot A:10`, no mutation) — presented last, under
+   "An adjacent result", but run *here*
+7. the local-edit **control** (`bd update --priority 3` in B) — presented inside
+   sub-check (ii), but run *last*, because it makes B's row locally newer than
+   A's and so changes what steps 4 and 6 observe
+
+Steps 4, 6 and 7 are order-sensitive, and each of those blocks below repeats
+its precondition. Running the control (7) before the tie (6) turns the tie into
+a *stale* skip — measured:
+`{"created": 0, "skipped": 1, "stale_skipped_ids": ["<id>"]}` — which is a
+different result about a different thing. Running it before the re-export (4)
+leaves `priority: 3` and B's own `updated_at` in the exported row.
 
 ## Environment, verified rather than assumed
 
@@ -180,7 +205,10 @@ The write landed on the stored issue —
 {"rows": [{"event_type":"created","id":"019ffbad-282f-71e8-bf83-c41316fac150", ...}]}
 ```
 
-Control, same workspace, same issue, a local edit instead of an import:
+Control, same workspace, same issue, a local edit instead of an import.
+**Precondition: run this last** (step 7 of the execution order above) — it
+gives B's row an `updated_at` newer than A's, which turns the later tie block
+into a stale skip and adds `priority: 3` to the re-export:
 
 ```bash
 bd -C "$B" --sandbox update "$X" --priority 3
@@ -219,6 +247,9 @@ material, not a sub-check result.
 
 ## Sub-check (iii) — re-export: **PASS**
 
+**Precondition: run immediately after hop 1** (step 4 above), before hop 2 and
+before the local control — that is the state this transcript records.
+
 ```bash
 bd -C "$B" --sandbox export | jq -c --arg x "$X" 'select(.id==$x)'
 ```
@@ -236,7 +267,11 @@ bd -C "$B" --sandbox export | jq -c --arg x "$X" 'select(.id==$x)'
 ## An adjacent result the claim depends on: a stamp needs a newer `updated_at`
 
 Re-hopping the same row with a *new* dot and no other change does not land the
-dot, because the LWW comparison ties:
+dot, because the LWW comparison ties. **Precondition: run immediately after
+hop 2** (step 6 above), with no local write in B intervening — a local `bd
+update` in B first makes B strictly newer, and the same command then reports a
+*stale* skip (`{"created": 0, "skipped": 1, "stale_skipped_ids": [...]}`)
+rather than a tie:
 
 ```bash
 bash scripts/spike/bds0/rig.sh hop A B --dot "A:10" "$X"
@@ -322,11 +357,16 @@ provenance off them either.
 
 Surprises worth recording, observed but not diagnosed here:
 
-- `bd import`'s report prints `"created": 1` on every hop in this run,
-  including the pure tie (alongside `tie_kept_local_ids`) and the pure update
-  (alongside `"updated": 1`). The counter does not appear to mean "issues
-  created"; the `updated_issues[].changes` string ("status open → in_progress,
-  metadata") is the field that actually described what happened.
+- `bd import`'s report prints `"created": 1` on every hop in this run that the
+  import considered, including the pure tie (alongside `tie_kept_local_ids`)
+  and the pure update (alongside `"updated": 1`). The counter does not appear
+  to mean "issues created"; the `updated_issues[].changes` string ("status
+  open → in_progress, metadata") is the field that actually described what
+  happened. The one shape that does report `"created": 0` is a *stale* hop —
+  B's row strictly newer than A's — which reports
+  `{"created": 0, "skipped": 1, "stale_skipped_ids": [...]}`. So "created" is
+  really "rows the import took as candidates", and the tie/stale/updated key
+  next to it is what says the outcome.
 - `updated_issues[].changes` names `metadata` as a changed field, i.e. the
   import report *does* notice provenance moved — on stdout, not in the
   journal.
