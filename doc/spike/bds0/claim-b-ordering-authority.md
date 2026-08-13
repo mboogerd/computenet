@@ -38,10 +38,11 @@ collides with the very Dolt-commit-per-write pattern BDS4 §2 cites migration
 0055 to avoid. See "Verdict and implications" at the end; the sub-checks come
 first.
 
-Everything below was executed. The whole sequence was re-run end to end on a
-second, independently initialised rig root and produced the same outcomes
+Everything below was executed. The whole E1–E4 sequence was re-run end to end
+on a second, independently initialised rig root and produced the same outcomes
 (issue ids differ per `init` — they are `mktemp`-fresh workspaces, so
-substitute your own).
+substitute your own). The probes in "Verdict and implications" are separate
+runs on their own roots and say so in place.
 
 ## Execution order — the prose order *is* the run order, with one split
 
@@ -87,9 +88,15 @@ Order-sensitivity, stated rather than left to be discovered:
   block is the one to read, and it is self-contained from a fresh hop. Both are
   printed — the messy one is not hidden.
 
-No block in this section was measured on a separate rig root. The full-sequence
-re-run on the second root (§"Reproduction on an independent rig root") is a
-replay of all of the above, not a source of any individual transcript here.
+Every E1–E4 transcript below comes from that one linear run on that one rig
+root, with exactly three exceptions, each labelled where it appears: the
+E1c-run-first probe quoted in this list (deliberately on a fresh root — that is
+what makes it a different result); the E4-8 rounding-boundary re-measurement
+added during review; and the instrument probes inside "Verdict and
+implications", each on its own fresh root, as the safety note there states. The
+full-sequence re-run on the second root (§"Reproduction on an independent rig
+root") is a replay of the linear run, not a source of any individual transcript
+here.
 
 ## Environment, verified rather than assumed
 
