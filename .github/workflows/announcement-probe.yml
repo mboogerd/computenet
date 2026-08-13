@@ -108,11 +108,25 @@ name: Announcement probe (on-demand Linux bulk sample)
 #   - CPU, memory, page cache and disk contention arrive together. This job
 #     tests "concurrent suite load", NOT "CPU starvation" — no arm here can
 #     separate those.
-#   - The load's Gradle daemon and test JVMs consume RAM on a 2-core, ~7GB
-#     hosted runner, so the loaded arm is also the higher-heap-pressure arm.
+#   - The load's Gradle daemon and test JVMs consume RAM, so the loaded arm is
+#     also the higher-heap-pressure arm. MEASURED on run 31673273722's sampler,
+#     not assumed: this runner reports `4 cores`, MemAvailable fell from
+#     14,289MB to 10,014MB while the load ramped, and java process count went
+#     2 -> 8. (An earlier draft of this header said "2-core, ~7GB"; that is the
+#     old hosted-runner spec and is wrong for the runner these numbers came
+#     from — the contention arithmetic must use 4 cores.)
 #   - The two arms share $GRADLE_USER_HOME, so they contend on Gradle's global
 #     caches. build-test-fast has no such co-tenant; this is an interference
 #     channel the loaded arm ADDS rather than reproduces.
+#   - The load IS build-test-fast's command, and that command runs `:wire:test`
+#     (neither announcement test carries the `multi-jvm` tag that
+#     `-PexcludeMultiJvm=true` strips). So the loaded arm runs a SECOND copy of
+#     the announcement tests, in another JVM, peering over loopback while the
+#     probe peers over loopback. build-test-fast has no such concurrent
+#     co-tenant on the loopback stack — there the `:wire:` tests run one after
+#     another in a single JVM — so this too is a channel the loaded arm ADDS.
+#     A loss appearing only in the loaded arm therefore does not separate
+#     machine-level load from concurrent loopback/port co-tenancy either.
 #
 # WHAT NEITHER ARM REPRODUCES, and this bounds what a null result here can
 # mean: inside build-test-fast, WsAnnouncementStressTest runs in the SAME test
@@ -166,7 +180,7 @@ on:
         required: false
         default: "4000"
       burst_iterations:
-        description: "WsAnnouncementCatchUpBurstTest iterations (committed default is 10). 6000 x 40 measured 269.152s against the same 5-minute deadline — it fits, but with only ~11% headroom; go lower if a run comes back INCOMPLETE. 0 SKIPS the burst arm entirely, which is what you want under load=suite."
+        description: "WsAnnouncementCatchUpBurstTest iterations (committed default is 10). 6000 x 40 measured 269.152s against the same 5-minute deadline — it fits, but with only ~11% headroom; go lower if a run comes back INCOMPLETE. 0 SKIPS the burst arm entirely — the fallback if 500 still comes back INCOMPLETE under load=suite."
         required: false
         default: "6000"
       burst_refs:
@@ -174,7 +188,7 @@ on:
         required: false
         default: "40"
       load:
-        description: "Concurrency condition (computenet-dqy.52). 'none' = the probe runs essentially alone. 'suite' = a separate copy of the repo runs build-test-fast's own command on the same runner throughout. Dispatch the SAME sizes under both to get a controlled pair; keep loaded sizes small (500 stress iterations, burst 0) or the loaded arm times out and measures nothing."
+        description: "Concurrency condition (computenet-dqy.52). 'none' = the probe runs essentially alone. 'suite' = a separate copy of the repo runs build-test-fast's own command on the same runner throughout. Dispatch the SAME sizes under both to get a controlled pair; keep loaded sizes small (start at 500 stress / 500 burst, and drop to burst_iterations=0 if the burst arm comes back INCOMPLETE) or the loaded arm times out and measures nothing."
         required: false
         type: choice
         default: "none"
