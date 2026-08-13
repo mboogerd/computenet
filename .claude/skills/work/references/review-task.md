@@ -113,8 +113,37 @@ matters — a flake hunt, a repetition loop — do not pass `-q`: it keeps the
 detail off the console and it does not reach the Gradle daemon log either, and
 the JUnit XML is the only place the suppressed exception and pre-interrupt
 thread dump live. The next iteration overwrites `<module>/build/test-results`,
-so the one occurrence you waited for is the one you lose. Archive before
-re-running:
+so the one occurrence you waited for is the one you lose.
+
+**Don't hand-roll the loop either — it is committed.** `scripts/flake-loop/`
+drives the JUnit Platform in-process over a package selector: one iteration
+costs seconds instead of Gradle's ~40s, and every *failing* iteration gets its
+own append-only file under `<out>/failures/` with the full stack trace, which
+is the overwrite problem solved rather than worked around. `--expect-tests N`
+is required and it refuses to start without it, so a sample where nothing
+*ran* cannot be read as a sample where nothing *failed*.
+
+```bash
+./gradlew -q --no-configuration-cache :wire:testClasses
+CP=$(./gradlew -q --no-configuration-cache \
+       -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
+       :wire:printTestClasspath | grep -v '^WARNING' | tr '\n' ':')
+java -cp "$CP" scripts/flake-loop/SuiteLoop.java --package civictech.wire \
+  --runs 260 --out build/flake-loop --label local --expect-tests 15
+```
+
+Substitute your module, package, and expected test count; quote the final
+`SUMMARY` line (it carries the sample size, the failing-iteration count, and
+`unexpectedTestCountIterations`, which must be 0 or the sample is not what it
+claims). `scripts/flake-loop/run-linux-loop.sh` runs the same instrument in a
+JDK-21 container, with defaults shaped for `:wire`.
+
+This supersedes the `gradlew`-in-a-loop below for any suite selectable as a
+JUnit package. Keep the Gradle loop only where the harness cannot express the
+sample — a flake that needs a **fresh JVM per iteration** (SuiteLoop reuses
+one JVM, and the rates differ: the same macOS flake measured 0.83% fresh-JVM
+against 0.26% in-process), or a suite that is not JUnit-on-a-classpath
+(`:concord`, the npm UI suites). Then archive before re-running:
 
 ```bash
 archive=$(mktemp -d)

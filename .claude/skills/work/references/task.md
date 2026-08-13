@@ -86,11 +86,13 @@ than restarting. That's the whole reason the worktree is preserved.
      `--rerun` per test task; use `--rerun-tasks` for a repo-wide run.
 
    **Hunting a rare failure, don't destroy the occurrence you waited for.**
-   Told to "run it 100 times": do not pass `-q` — the detail reaches neither
-   the console nor the Gradle daemon log, and the JUnit XML is the only place
-   it lives — and copy `<module>/build/test-results` aside on a failing
-   iteration before the next one overwrites it. The archiving loop is in
-   [review-task.md](review-task.md) §2; use it rather than inventing one.
+   Told to "run it 100 times": don't hand-roll the loop and don't pass `-q`.
+   `scripts/flake-loop/` is the committed harness — it runs the suite
+   in-process over a package selector and writes one evidence file per
+   *failing* iteration, so the occurrence you waited for survives the next
+   run overwriting `<module>/build/test-results`. Invocation, the `SUMMARY`
+   fields to quote, and the two cases where a Gradle loop is still the right
+   instrument are in [review-task.md](review-task.md) §2.
 6. Commit on your branch, then push it. Your worktree has its own index, so
    ordinary staging is safe here:
    ```bash

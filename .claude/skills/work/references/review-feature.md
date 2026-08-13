@@ -51,6 +51,48 @@ Look for what task-level review structurally cannot see:
 
 ## 3. Prove the feature's tests actually ran
 
+**First, settle whether any suite applies — by proving it, not asserting it.**
+A markdown-only feature has no suite to run, but "docs-only" is a claim about
+the diff and needs the diff as its evidence:
+
+```bash
+gh pr diff --name-only <pr-url>    # or: git diff --name-only origin/main...HEAD
+```
+
+Paste that list into your verdict. It is docs-only only if **every** path is
+prose that nothing consumes at build time — `.claude/skills/**`, `doc/**`
+*except* `doc/spec/**`, `backlog/**`, `bugs/**`, a top-level `*.md`. That is
+an allowlist: a path it does not name is not docs-only, whatever its
+extension (`.github/**`, `gradle/**`, `concord/schema/*.md`, `demo/*/ui/**`,
+`inspect/ui/**`). Not compiled is not the same as not verified, so three
+things disqualify a diff even though they look like docs:
+**the whole of `doc/spec/**` and `concord/corpus/*.yaml`**, which
+`./gradlew :concord:check` reads as inputs to two fatal gates —
+`concordanceGate` (a dangling `covers:` id or an orphan scenario) and
+`docLints` (an unresolved `cell.<pkg>.<Type>` pointer, a bad Status header),
+plus the generated `doc/spec/CONCORDANCE.md`; any other `.md` or resource
+that is a build input; and any mix of docs with compiled source, even one
+file. Measured 2026-08-12: appending one sentence naming a nonexistent
+package to `doc/spec/00-foundations/03-glossary.md` — no corpus, no
+`CONCORDANCE.md`, no source — failed `:concord:docLints` with
+`[FATAL] Unresolved package pointer`. In all three the whole diff falls
+through to the normal §3/§4 route — run the suite that covers the changed
+input and quote its accounting.
+
+If it *is* docs-only, say so with the file list as the evidence, then state
+the limit instead of skipping the question: **green required checks on such a
+diff evidence exactly one thing — the branch does not break the build.** They
+compile and test no changed module (they cache and skip), so they are
+evidence of nothing about the content, and citing them as if they were is the
+failure this paragraph exists to prevent. You still quote their names and
+conclusions per §4, labelled as what they are.
+
+The content's evidence is then the reading in §2 plus execution of whatever
+the diff itself makes checkable: run the commands the new text tells an agent
+to run, resolve every path and id it cites, and run the greps its acceptance
+criteria name — quoting the output. A verdict that reports no such artifact
+has reviewed nothing.
+
 The module suites the tasks ran individually may not cover their
 interaction. Run the affected module tests, and the repo-wide gate if the
 feature touched anything cross-cutting — then prove the run happened.
@@ -98,8 +140,10 @@ unchanged when a seam is what you're testing.
 
 ## 4. Your run is on macOS; the required checks are not
 
-Run `uname -sm` and put its output in your report. This repo is developed on
-darwin; every required check (`build-test-fast`, `build-test-serial`,
+Run `uname -sm` and put its output in your report. (For a diff proven
+docs-only in §3 there is no platform-dependent behaviour to measure: skip to
+the `gh pr checks` read below, and report its conclusions with §3's limit
+attached.) This repo is developed on darwin; every required check (`build-test-fast`, `build-test-serial`,
 `concord-full`, `ui-test`, `agora-ui-test`) runs on `ubuntu-latest`. For most
 diffs that gap is invisible; for anything touching sockets, ports, filesystem
 semantics, path handling, or process spawning it is exactly where the defect
