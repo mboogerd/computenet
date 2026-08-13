@@ -87,8 +87,16 @@ Order sensitivity, stated rather than left to be discovered:
   leave a closed issue behind in A, which is why the unfiltered hop in step 7
   reports more created rows than the sub-checks alone created.
 
-No block in this document was measured on a separate rig root except the
-reproduction run, which says so explicitly and re-ran the *entire* sequence.
+8. **Added during review, on a third rig root:** the B→A resurrection probe in
+   the verdict section — C4d's sequence continued by one hop in the opposite
+   direction. It is self-contained (`init`, create `Z`, hop A→B, `bd delete Z`,
+   unfiltered hop A→B, hop B→A) and depends on nothing in steps 1–7, which is
+   why it is a separate root rather than an eighth step of the main run.
+
+Two blocks were measured on a rig root other than root 1, and both say so where
+they appear: the reproduction run (which re-ran the *entire* sequence on root 2)
+and the verdict-subsection B→A probe (root 3, step 8 above). Every other
+transcript below is from root 1, in the printed order.
 
 ## Environment, verified rather than assumed
 
