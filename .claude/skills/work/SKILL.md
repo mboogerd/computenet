@@ -391,6 +391,12 @@ Either way, attach the worktree the same way, then bring it up to date:
 ```bash
 .claude/skills/work/scripts/ensure-worktree.sh \
   "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
+
+# Verify the worktree actually holds the branch's remote work before using it.
+git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null \
+  && git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
+  && echo "OK: worktree contains origin/feature/<feature-id>"
+
 git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
 git -C <worktree> merge origin/main -m "Merge main into feature/<feature-id>"
 git -C <worktree> push -u origin feature/<feature-id>
@@ -405,10 +411,35 @@ keeps the reviewer looking at integrated code. Conflicts here are yours to
 resolve; re-run the affected module suite afterwards, since a hand-resolved
 merge is code nobody reviewed.
 
+**Compare HEAD against the remote branch, not against nothing.** The check
+above is the one that matters on a resumed feature: the branch exists on
+origin and carries the PR's commits, and a worktree that does not contain
+them looks perfectly clean while having silently orphaned reviewed work — the
+`merge origin/main` right below it is then a no-op and the `push` failure
+reads like an unrelated remote hiccup (computenet-aeg). If the fetch succeeds
+and the `merge-base` check does **not** print OK, stop: the worktree is on the
+right branch at the wrong commit. Do not proceed into 5b. `git fetch`
+failing because origin has no such branch is the normal first-run case and
+means there is nothing to compare against.
+
 The script is idempotent and verifies the branch, so resume and first-run
-take the same path. Use the feature id as the branch name rather than a
-model-chosen slug: a fresh slug on retry is exactly what spawns a duplicate
-branch and a second PR.
+take the same path. It resolves the branch in this order: an already-attached
+worktree is left alone; a local branch is attached; a **remote-only** branch is
+attached tracking `origin/<branch>` **at the remote tip**; and only when the
+branch exists neither locally nor on origin is it created from the base ref.
+Where both exist it fast-forwards a local branch that is strictly behind,
+keeps a local branch that is strictly ahead (unpushed work), and **fails
+loudly on divergence** rather than picking a side. Use the feature id as the
+branch name rather than a model-chosen slug: a fresh slug on retry is exactly
+what spawns a duplicate branch and a second PR.
+
+Those states are covered by `scripts/ensure-worktree.test.sh`, which builds
+throwaway repos with a real origin in a temp dir and touches nothing live.
+Run it after any change to the script:
+
+```bash
+.claude/skills/work/scripts/ensure-worktree.test.sh    # expect "8 passed, 0 failed"
+```
 
 ### 5b. Break down, then batch tasks
 
