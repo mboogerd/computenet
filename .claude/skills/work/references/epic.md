@@ -32,7 +32,8 @@ not re-derive it.
 
 ```bash
 command -v <tool>            # a tool the item assumes is installed
-ifconfig | grep <range>      # a network the item assumes is reachable
+ifconfig | grep 100.64       # a network: grep an ADDRESS PREFIX, not a CIDR —
+                             # interfaces render 100.x.y.z, so 100.64.0.0/10 never matches
 ls <path>                    # a host artifact the item assumes exists
 curl -sS -o /dev/null -w '%{http_code}' <url>   # a service it assumes is up
 ```
