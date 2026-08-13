@@ -28,8 +28,15 @@ part is ≥ `.500` **rounds up** into the next second and overwrites the local
 row, while the same import reports `tie_kept_local_ids` for it — the report says
 the local row was kept and the local row was not kept.
 
-The verdict, the BDS1/BDS4 implications and the alternative-instrument design
-are deliberately **not** in this section; see the placeholder at the end.
+Verdict in one line: **claim (b) is answered yes-with-an-unacceptable-cost** —
+`--allow-stale` does deliver ordering authority, but only at whole-bundle
+granularity and with the loss report switched off, so the epic's conditional
+fires and the replication write path needs a narrower instrument. One is
+**verified on the rig**: a per-row `--allow-stale` invocation, preceded by a
+writer-side pre-flight against B's own export. Its cost is measured, and it
+collides with the very Dolt-commit-per-write pattern BDS4 §2 cites migration
+0055 to avoid. See "Verdict and implications" at the end; the sub-checks come
+first.
 
 Everything below was executed. The whole sequence was re-run end to end on a
 second, independently initialised rig root and produced the same outcomes
@@ -768,7 +775,423 @@ Explicitly **not tested** in this section, and therefore not claimed either way:
 
 ## Verdict and implications
 
-<!-- PLACEHOLDER — owned by the sibling task (computenet-8kj.3 follow-up).
-     Do not fill in from this section: the verdict, the pass/fail roll-up, the
-     BDS1/BDS4 implications and the narrower-instrument design are that task's,
-     not this one's. -->
+Everything asserted below traces to a transcript in this section, to a
+transcript in `claim-a-echo-suppression.md`, or to a probe transcript printed
+in this subsection. Where a proposal was not measured, it says so in its own
+heading.
+
+### Pass/fail, per sub-check
+
+| Sub-check | Result | What was actually established |
+|---|---|---|
+| **E1 baseline** — the three unflagged outcomes | **PASS** | All three reproduced on demand: strictly-newer overwrites (`updated: 1`), equal `updated_at` keeps local (`tie_kept_local_ids`), older is skipped (`stale_skipped_ids`). The documented rule holds — subject to E4. |
+| **E2 imposition** — does `--allow-stale` impose the dot-order winner? | **PASS** | Total, on the decided definition: after the flagged import B's stored `title`, `description`, `status` and `metadata.cn_dot` all equal the incoming row. The authority claim (b) asks for exists. |
+| **E3 clobber** — does it destroy never-gossiped newer local edits, and at what granularity? | **The claim's premise fails: it clobbers, per run** | `Z`'s never-gossiped local edit was destroyed, and so was bystander `W`'s — a row the sender never intended to change. The flag is a **per-import-run** switch with **no per-row form** (`bd import --help` offers only `--allow-stale`, `--dedup`, `--dry-run`, `-i`). |
+| **E4 same-second** — how one-second resolution adjudicates | **PASS, with an independent defect found** | Sub-second parts that round to the same second tie, as documented. Sub-second parts ≥ `.500` **round half-up across the second boundary and overwrite**, while the same import reports `tie_kept_local_ids`. Boundary measured at exactly `.500` (`.4999` keeps local; `.5`, `.500`, `.501` all clobber). |
+
+So the claim as the epic poses it — "test whether `--allow-stale` lets the
+dot-order winner be imposed, and what it costs" — is answered in both halves:
+**it can be imposed (E2), and the cost is that the instrument cannot be aimed
+(E3).**
+
+### What `--allow-stale` actually costs, stated once
+
+Four costs, each measured above, in descending order of how much they
+constrain a replication write path:
+
+1. **No aim.** The unit of "force this" is the *bundle*, not the row. A single
+   bundle containing one row the OR-map says must win and twenty rows it says
+   nothing about will impose all twenty-one. Bystander `W` is the proof.
+2. **No loss report.** Under the flag the report drops `updated`,
+   `updated_issues` and `stale_skipped_ids` and prints
+   `{"created": N, "skipped": 0}` — indistinguishable from a clean create-only
+   import. The one flag that can destroy newer local state is the one that
+   stops naming what it destroyed. A caller cannot detect the damage from the
+   output, and the destroyed value survives only in B's Dolt history.
+3. **The store's clock regresses.** The stored `updated_at` becomes the
+   *incoming* one, so imposing an older row moves the row's clock backwards
+   (E2: `16:56:19Z` → `16:26:19Z`; E3: `Z` from `15:58:29Z` to `15:53:00Z`).
+   Every later LWW comparison on that row is against the regressed value, so
+   one imposition silently widens the window in which a *third* party's stale
+   write will also win.
+4. **`updated_at` is not trustworthy even unflagged.** E4's rounding defect is
+   independent of the flag: a same-second write with `≥ .500` sub-second
+   precision clobbers a local row on the plain path and the report calls it a
+   tie. So "don't use `--allow-stale` and you are safe" is false.
+
+Cross-referencing claim (a) rather than re-deriving: claim (a) found that a new
+`cn_dot` cannot be stamped onto an already-replicated row on its own, because
+the import ties. **This section refines that**: the E2 stamp-only variant shows
+`--allow-stale` *does* land a bare re-stamp — but the flagged tie leaves
+`updated_at` untouched, so the stamped write advances no clock and is invisible
+to every subsequent LWW comparison. Claim (a)'s conclusion survives in the form
+that matters (a marking pass cannot be made *ordering-visible*), and the
+`created`-counter meaning claim (a) established (`created` counts candidate
+rows; the outcome is in the tie/stale/updated key beside it) reproduced here
+unchanged.
+
+### The epic's conditional: **triggered**
+
+Epic `computenet-8kj` §1(b) hard-codes it: "does it also clobber genuinely
+newer *local* edits that were never gossiped? **If it does, the replication
+write path needs a narrower instrument than `--allow-stale` and this spike must
+say so.**"
+
+It does — measured in E3, on two separate rows, one of which the sender never
+intended to touch, and reproduced on a second independent rig root. So this
+section says so:
+
+> **The BDS0/BDS4 replication write path must not use bare
+> `bd import --allow-stale` over a multi-row bundle.** The instrument it needs
+> is one whose blast radius is exactly the set of rows the OR-map adjudicated,
+> and which reports what it overwrote.
+
+What follows names and sketches the candidates, per the feature's out-of-scope
+clause. **Designing the instrument is not this section's job** and is not done
+here.
+
+### The narrower instrument
+
+Marked **VERIFIED ON THE RIG** or **PROPOSED, UNTESTED** — the distinction is
+the point, and it is the discipline claim (a)'s verdict was accepted for.
+
+#### Instrument 1 — writer-side pre-flight + one `--allow-stale` invocation per row. **VERIFIED ON THE RIG.**
+
+The observation that makes it work: `--allow-stale`'s granularity is the
+*bundle*, and the writer controls the bundle. Narrowing the bundle to one row
+narrows the blast radius to one row.
+
+Measured on a fresh rig root (`tmp.bTRFAYvsaz`), reusing E3's exact scenario —
+`Z` the intended target with a never-gossiped newer local edit, `Y` a
+legitimately newer row, `W` the bystander with its own never-gossiped local
+edit. B before:
+
+```json
+{"id":"bdsa-i2l","title":"P clobber target Z","description":"B local edit on Z, never exported","updated_at":"2026-08-13T16:20:54Z","metadata":{"cn_dot":"A:p-seed"}}
+{"id":"bdsa-u4u","title":"P unrelated newer Y","description":null,"updated_at":"2026-08-13T16:20:49Z","metadata":{"cn_dot":"A:p-seed"}}
+{"id":"bdsa-104","title":"P bystander W","description":"B local edit on bystander W, never exported","updated_at":"2026-08-13T16:20:54Z","metadata":{"cn_dot":"A:p-seed"}}
+```
+
+Step 1 — the whole bundle **unflagged**, which applies everything LWW already
+agrees with and *names the rest*:
+
+```bash
+build | bd -C "$B" --sandbox import - --json
+```
+
+```json
+{"created": 1, "ids": ["bdsa-u4u"], "schema_version": 1, "skipped": 2, "source": "stdin",
+ "stale_skipped_ids": ["bdsa-104", "bdsa-i2l"],
+ "updated": 1, "updated_issues": [{"changes": "title, metadata", "id": "bdsa-u4u"}]}
+```
+
+Step 2 — **one** flagged invocation, carrying only the row the OR-map says must
+win:
+
+```bash
+build | jq -c --arg z "$Z" 'select(.id==$z)' | bd -C "$B" --sandbox import - --json --allow-stale
+```
+
+```json
+{"created": 1, "ids": ["bdsa-i2l"], "schema_version": 1, "skipped": 0, "source": "stdin"}
+```
+
+B after:
+
+```json
+{"id":"bdsa-i2l","title":"P clobber target Z","description":"A stale description (T+5)","updated_at":"2026-08-13T15:53:00Z","metadata":{"cn_dot":"A:9"}}
+{"id":"bdsa-u4u","title":"P unrelated newer Y (updated by A)","description":null,"updated_at":"2026-08-13T16:58:00Z","metadata":{"cn_dot":"A:11"}}
+{"id":"bdsa-104","title":"P bystander W","description":"B local edit on bystander W, never exported","updated_at":"2026-08-13T16:20:54Z","metadata":{"cn_dot":"A:p-seed"}}
+```
+
+**`Z` imposed as intended, `Y` delivered, and `W`'s never-gossiped local edit
+survives.** That is the exact E3 outcome with the collateral damage removed,
+and the only change is the shape of the invocation. The `stale_skipped_ids`
+list from step 1 is also the *inventory* of rows on which the writer now has to
+consult the OR-map — the information the flagged path refuses to print is
+available from the unflagged pass over the same bundle.
+
+**Verified pre-flight, independent of the report.** The writer can compute the
+adjudication itself before importing anything, from B's own export — it does not
+have to trust or provoke the import report. Measured on rig root
+`tmp.Ipl4pAbSzs`:
+
+```bash
+bd -C "$B" --sandbox export | jq -c 'select(._type=="issue")|{id,updated_at,metadata}' > b-state.jsonl
+jq -c -s --slurpfile local b-state.jsonl '
+  ($local|map({key:.id,value:.})|from_entries) as $L
+  | map({id:.id, incoming:.updated_at, local:($L[.id].updated_at // null),
+         verdict: (if $L[.id]==null then "create"
+                   elif .updated_at > $L[.id].updated_at then "would-overwrite"
+                   elif .updated_at == $L[.id].updated_at then "would-tie"
+                   else "would-be-skipped-stale" end)})' bundle.jsonl
+```
+
+```json
+[{"id":"bdsa-ypz","incoming":"2026-08-13T15:53:00Z","local":"2026-08-13T16:22:10Z","verdict":"would-be-skipped-stale"},
+ {"id":"bdsa-ddo","incoming":"2026-08-13T15:53:00Z","local":"2026-08-13T16:22:09Z","verdict":"would-be-skipped-stale"}]
+```
+
+Both rows correctly predicted, and both were in fact skipped by the real
+unflagged import. This is the seam adjacent to claim (a)'s **Seam 3**
+(writer-side suppression): the same process runs the import, so it can also
+decide the import.
+
+**The measured costs, none of them argued away:**
+
+- **One process and one Dolt commit per forced row.** Measured on rig root
+  `tmp.GwXRrGYqeL`, six stale rows against six never-gossiped local edits, each
+  path run from equivalent fresh state:
+
+  ```
+  6 x single-row --allow-stale : 4.458s ; dolt commits added: 6
+  one bundle of 6 --allow-stale: 0.958s ; dolt commits added: 1
+  ```
+
+  ≈ 0.74 s and one commit per row, versus ≈ 0.16 s and one-sixth of a commit
+  per row for the bundle. The instrument is linear in *rows*, not in bundles.
+  This is the load-bearing cost and it is a BDS4 constraint, not a performance
+  footnote — see the BDS4 implications below.
+- **The flagged step still reports nothing.** Measured (same rig root): a
+  single-row `--allow-stale` import that overwrote a strictly newer local edit
+  (`"B local edit Z round 2"` at `16:22:18Z`, replaced by `"A stale Z"` at
+  `15:53:00Z`) reported `{"created": 1, "ids": ["bdsa-ddo"], "skipped": 0}` and
+  nothing else. Narrowing the bundle narrows the *damage*, not the *silence* —
+  the writer knows what it overwrote only because it chose the row.
+- **The pre-flight is inherently racy.** Between reading B's export and running
+  the import, a local `bd update` can land. This section did not race a local
+  write against an import (already listed as untested above), so the size of
+  that window is unmeasured.
+- **The rounding defect is not fixed by this instrument.** It applies to the
+  unflagged step 1 as much as to any other plain import.
+
+#### Instrument 2 — forge the outbound `updated_at` so plain LWW agrees with dot order. **PARTLY VERIFIED, and not recommended.**
+
+**Verified:** the mechanism works and needs no flag at all. E1a landed an
+overwrite purely by forging `updated_at` an hour into the future, and the
+importer accepted a timestamp ahead of its own wall clock
+(`now(UTC)=2026-08-13T15:57:32Z`) without complaint. Every experiment in this
+section is itself a demonstration that the outbound row's `updated_at` fully
+controls the adjudication.
+
+**Verified costs, and they are severe:**
+
+- It **falsifies the timestamp**. `updated_at` stops being when the issue
+  changed and becomes an encoding of dot order. Every human and every other
+  tool reading the workspace — `bd list`, `bd ready`, the `/work` skill, a
+  person answering "when did this change" — reads the lie.
+- It **collides with E4** in both directions. Whole-second storage means dot
+  order has to be encoded in units of one second; and any forged value whose
+  sub-second part is ≥ `.500` silently rounds into the next second, which
+  corrupts the encoding at exactly the granularity it needs.
+- It is a **one-way ratchet**. To always win, forged values must always
+  increase, so the workspace's clock runs ahead of real time permanently —
+  which is the same hazard as the fast-clock peer recorded in the surprises
+  above, deliberately induced.
+
+Recorded so it is not re-proposed as the cheap option: it is cheap, it works,
+and it destroys the meaning of a field the rest of beads depends on.
+
+#### Instrument 3 — a `bd`-side row-level ordering override. **PROPOSED, UNTESTED.**
+
+The shape the measurements point at, since the outside-in options all trade
+something real: an upstream beads change giving `bd import` row-level
+authority, e.g.
+
+- a per-row `"allow_stale": true` key honoured in the import JSONL, or an
+  `--allow-stale-ids <id,...>` scope flag, so one invocation can carry a
+  bundle while forcing only the adjudicated rows — this removes Instrument 1's
+  commit-per-row cost, which is its only serious defect; and
+- an import report that names overwritten rows **under** `--allow-stale`
+  (`updated_issues` already carries a field-level `changes` string on the
+  unflagged path; the flagged path just stops emitting it). This is the
+  smallest possible fix to cost 2 and is additive.
+
+Nothing here tested either. Both are strictly larger than a ComputeNet-side
+change and neither is required for BDS4 to proceed, because Instrument 1 is
+verified and sufficient — they are the way to *lower its cost*, not to make it
+possible. Whether to attempt them upstream is `computenet-8kj.6`'s call.
+
+#### Insufficient, recorded so it is not re-proposed
+
+- **`bd import --dry-run` as a pre-flight staleness probe.** It does not
+  adjudicate. Measured (rig root `tmp.bTRFAYvsaz`), on the bundle whose real
+  unflagged import reported `stale_skipped_ids: ["bdsa-104","bdsa-i2l"]`:
+
+  ```bash
+  build | bd -C "$B" --sandbox import - --json --dry-run
+  build | bd -C "$B" --sandbox import - --json --dry-run --allow-stale
+  ```
+
+  ```json
+  {"created": 3, "dry_run": true, "schema_version": 1, "skipped": 0, "source": "stdin"}
+  {"created": 3, "dry_run": true, "schema_version": 1, "skipped": 0, "source": "stdin"}
+  ```
+
+  Both forms report the same thing, both report `skipped: 0`, and neither names
+  a stale row. B was verified unchanged after both, so the flag is safe — it is
+  just uninformative. It reports what the bundle *contains*, not what the
+  import would *do*. (This refines the "explicitly not tested" list above,
+  which listed `--dry-run` as untested; it is now tested, alone and combined,
+  and it is not the pre-flight.) The verified pre-flight is the writer-side
+  comparison against B's export shown under Instrument 1.
+- **Reading the flagged import report to learn what was destroyed.** Measured
+  three times over (E3 bundle, single-row P5, and the E2 imposition): the
+  flagged report never names an overwritten row.
+- **A separate "mark as replicated" pass under the flag.** The E2 stamp-only
+  variant lands the new `cn_dot` but leaves `updated_at` untouched, so the mark
+  is invisible to every later LWW comparison. It cannot be used to make a row
+  ordering-safe after the fact.
+
+### Implications for BDS1 (`computenet-dqj`)
+
+Named, not adjudicated — adjudication belongs to `computenet-8kj.6`.
+
+1. **BDS1's core is untouched by claim (b), and that is worth stating plainly.**
+   BDS1 is a read-only, single-node projector: "there is no echo problem
+   because ComputeNet never writes into the map", and its checkpoint is a
+   per-replica journal `seq`, not a timestamp. Nothing measured here disturbs
+   either. Claim (b) is a *write-path* finding; claim (a) is the one that hits
+   BDS1's feed.
+2. **BDS1 must not adopt `updated_at` as an ordering key anywhere.** E4 makes
+   it unsound at the resolution BDS1 would need, and E2/E3 make it
+   non-monotonic once BDS4 exists (an imposed row's `updated_at` moves
+   backwards). BDS1's design already uses dot order, so this is a constraint to
+   record, not a change to make.
+3. **BDS1's equality test needs a caveat once write-back exists.** Its test is
+   "mirror state equals `bd export` of the same workspace" driven by scripted
+   local `bd` mutations. On that path the test is sound. Run the same test on a
+   workspace whose writes arrive by `bd import --allow-stale` and the mirror's
+   ordering and the store's `updated_at` are no longer two views of one fact —
+   a row can be older in the store than the mirror says it is. This is the same
+   shape of gap claim (a) found in BDS1's test plan, arriving from the other
+   side.
+4. **Re-baseline from `bd export` is unaffected and remains reliable.** Export
+   emits whole seconds and preserves `metadata` (claim (a) sub-check (iii)), so
+   nothing here degrades the truncation-recovery path.
+
+### Implications for BDS4 (`computenet-6wc`)
+
+1. **BDS4 §1's open question is now closed, against `--allow-stale`.** Its text
+   says: "BDS0 establishes whether `--allow-stale` is the right instrument or
+   whether it over-reaches by clobbering un-gossiped local edits; follow its
+   finding." The finding: **it over-reaches.** BDS4 must specify the write path
+   as *unflagged bundle import for rows LWW already agrees with, plus one
+   `--allow-stale` invocation per row the OR-map adjudicated against the local
+   clock* (Instrument 1, verified), and must not specify a flagged bulk import.
+2. **The new constraint BDS4 did not anticipate: this reintroduces
+   commit-per-write on the content plane.** BDS4 §2 quotes migration 0055 to
+   argue that heartbeats-as-row-updates meant "a Dolt commit per heartbeat …
+   the dominant source of unbounded reachable history and of the constant write
+   traffic that starves large catch-up merges" — and takes that as the reason
+   the lease plane must leave beads. Measured here: the narrow instrument costs
+   **one Dolt commit per forced row** (6 rows → 6 commits, versus 1 for the
+   bundle). Content replication is far lower-frequency than heartbeats, so this
+   is not the same order of hazard — but it is the same *mechanism*, on the
+   plane BDS4 keeps inside beads, and BDS4 should size it rather than inherit
+   it silently. Two mitigations are visible and **neither was tested**:
+   `--dolt-auto-commit batch` (flagged as a risk in claim (a)'s Seam 1 for the
+   opposite reason — it coarsens the change feed), and Instrument 3's
+   `--allow-stale-ids` scope, which would collapse N invocations back to one.
+3. **BDS4 cannot use the import report as its write acknowledgment.** The
+   flagged report names nothing it overwrote, and the unflagged report actively
+   lies on the E4 rounding path (`tie_kept_local_ids` for a row it overwrote).
+   Any "did my replicated write land?" check must be a read-back, not a report
+   parse. This compounds claim (a)'s finding that imported updates journal
+   nothing: neither the report nor the journal is a reliable acknowledgment,
+   and the surviving verified confirmation surface is the Dolt commit graph
+   (claim (a) Seam 1) or a plain `bd show`/`bd export` read-back.
+4. **Local edits destroyed by a replicated write are recoverable only from Dolt
+   history.** E3's clobbered description exists nowhere in bd's output. If
+   BDS4 wants a "your local edit lost to a peer" signal — which the
+   compare-and-abort discipline in §2 suggests it should want on the content
+   plane too — it must capture the prior value itself, in the pre-flight, before
+   the import. The pre-flight already reads it (Instrument 1's `b-state.jsonl`).
+5. **`updated_at` stops being a clock under BDS4 and starts being a
+   replication artifact.** Imposed rows move it backwards. Anything that reads
+   it as "when did this change" — a human, `bd list` ordering, the `/work`
+   skill's staleness heuristics, `bv --robot-alerts`' stale-issue detection —
+   is reading a value BDS4 rewrote for ordering reasons. BDS4 should state this
+   as an accepted consequence or reject it, the same way it accepts partition
+   as a property rather than a defect.
+6. **A same-second clobber can happen with no flag at all.** E4's `≥ .500`
+   rounding means BDS4's *unflagged* step-1 import can destroy a local edit and
+   report a tie. Since BDS4 replicates from real peer writes, whose
+   `updated_at` values it does not control, this is reachable in production and
+   not just under forging. It is also the one finding here that is a plain
+   **beads defect** rather than a design tension, and it is worth reporting
+   upstream independently of whether the BDS line proceeds.
+7. **Untouched by claim (b):** the lease plane (§2) never goes through
+   `bd import` at all, and the two §3 hazards (epic breakdown, auto-merge) turn
+   on `bd create` idempotency and lease re-checks, not on import ordering.
+   Hard deletes remain out of scope; whether tombstones adjudicate the same way
+   is claim (c)'s.
+
+### Recommendation carried to `computenet-8kj.6`
+
+Claim (b) is **not** a blocker for the BDS line, and it is **not** a clean pass
+either. The narrow reading — "can the OR-map's clock-free decision be imposed
+on the local store?" — is answered **yes**. The wide reading — "is
+`--allow-stale` the instrument for it?" — is answered **no**, and the epic's
+conditional therefore fires. A verified replacement exists that needs no beads
+change (Instrument 1), so BDS4 can be written against a measured seam rather
+than an assumed one; what `8kj.6` has to weigh is whether one Dolt commit per
+replicated row is acceptable at BDS4's expected write rate, and whether the E4
+rounding defect should be fixed upstream before the line proceeds. Those two
+judgments, and the overall go/re-scope, are `8kj.6`'s and are deliberately not
+made here.
+
+### What would overturn this verdict
+
+Each is a single command away, and any one changes the conclusion:
+
+- **A per-row or per-id staleness scope in a later bd.** `bd import --help` is
+  the whole check. It would retire Instrument 1's commit-per-row cost and make
+  the "narrower instrument" clause satisfiable inside one invocation.
+- **`--allow-stale` reporting `updated_issues`/`stale_skipped_ids` in a later
+  bd.** Re-run the E3 flagged import and read the report. That removes cost 2
+  outright and makes the flag auditable, though not aimable.
+- **A fix to the `≥ .500` round-half-up, or a report that reads the
+  post-rounding value.** Re-run the E4-8 ladder on `S`. Either fix makes the
+  unflagged path honest again and removes BDS4 implication 6.
+- **Sub-second `updated_at` actually stored.** `bd show` and `bd export` are
+  the check. That would make Instrument 2 (forged outbound timestamps)
+  materially less bad, since dot order could be encoded below the second.
+- **A clock sanity check rejecting future `updated_at` on import.** Re-run
+  E1a. It would kill the forging technique this whole section is built on
+  (every transcript here would need re-deriving) and would also close the
+  fast-clock-peer hazard.
+- **`bd import` under a non-default `--dolt-auto-commit` policy collapsing the
+  per-row invocations into one commit.** Untested here; it would remove
+  Instrument 1's only serious cost, and is the single most valuable follow-up
+  measurement.
+- **A local write racing an import.** The help text claims a local update
+  landing mid-import is preserved. Nothing here raced one. If that guard also
+  fires under `--allow-stale`, the clobber window is narrower than E3 suggests;
+  if it does not, it is wider.
+
+### What did not work, in this subsection
+
+- **`bd import --dry-run` as a staleness pre-flight.** Reports
+  `{"created": 3, "dry_run": true, "skipped": 0}` with no `stale_skipped_ids`,
+  identically with and without `--allow-stale`, on a bundle whose real
+  unflagged import skipped two rows as stale. It reports bundle contents, not
+  adjudication. (This is new measurement; the section above listed `--dry-run`
+  as untested.)
+- **Getting a loss report out of any `--allow-stale` invocation, however
+  narrow.** A single-row flagged import that destroyed a strictly newer local
+  edit still reported only `{"created": 1, "skipped": 0}`.
+- **Comparing commit counts between the bundle path and the per-row path on a
+  workspace that had already received the bundle.** The rows were then
+  byte-identical, the re-import was a no-op, and Dolt added **zero** commits —
+  a plausible-looking `0 vs 1` that means nothing. The measurement was redone
+  from equivalent fresh state on both paths (`6 vs 1`), and the confounded
+  first attempt is recorded here so the number is not re-derived wrongly.
+
+Safety, restated for the probes in this subsection: all of them ran against
+fresh `mktemp -d` rig roots (`tmp.bTRFAYvsaz`, `tmp.Ipl4pAbSzs`,
+`tmp.GwXRrGYqeL`) via `bd -C <ws> --sandbox` and `rig.sh`. Nothing read or
+wrote the repository's live `.beads`. Unlike the E1–E4 transcripts above, these
+instrument probes were each measured on **one** rig root and were not re-run on
+a second — stated so the reproduction claim in
+§"Reproduction on an independent rig root" is not read as covering them.
