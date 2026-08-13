@@ -241,6 +241,30 @@ object Peering {
         val peer: PeerId? = null,
         /** Deny-by-default admission (M8.3): peers accepted at this boundary; null = open. */
         val allow: Set<PeerId>? = null,
+        /**
+         * **Test-only seam** (computenet-dqy.45), null on every production path
+         * and never set by kernel, `:wire` or any demo. [announceTo] invokes it
+         * once per announcer, *between* installing the `onLocalPublish` hook and
+         * running the `localRefs()` catch-up sweep — i.e. with the
+         * register-then-sweep window held open.
+         *
+         * It exists because that window is otherwise unreachable from a test.
+         * A peer's `announceTo` is gated on a socket round trip (the peer's
+         * hello), while a local publish is an in-memory enqueue, so any publish
+         * a test can time against *connect* has already been installed by the
+         * time the sweep reads `localRefs()`. Measured, before this seam
+         * existed: deleting the sweep lost 40/40 refs of
+         * `WsAnnouncementCatchUpBurstTest`'s burst, both halves — nothing at all
+         * travelled the hook, so the ordering argument `announceTo` rests on had
+         * no measured bound.
+         *
+         * A test releases its racing publishes from here; their installation
+         * then runs concurrently with the sweep, which is the race the handover
+         * claims to be safe under. It changes no behaviour when null, and
+         * `announceTo`'s real ordering is untouched — the seam is a notification
+         * *inside* the existing window, not a reordering of it.
+         */
+        val onCatchUpWindowOpen: (() -> Unit)? = null,
     ) {
         fun admits(peer: PeerId?): Boolean = allow == null || peer in allow
     }
@@ -481,6 +505,7 @@ object Peering {
         val registration = side.registry.onLocalPublish { announce.published(it) }
         val unpublishRegistration = side.registry.onLocalUnpublish { announce.unpublished(it) }
         val topologyRegistration = side.registry.onLocalTopology(announce::linked, announce::unlinked)
+        side.onCatchUpWindowOpen?.invoke() // test-only seam; null everywhere else
         // catch-up for pre-peering spawns
         side.registry.localRefs().forEach { ref -> catchUp("published $ref") { announce.published(ref) } }
         side.registry.localLinks().forEach { link -> catchUp("linked ${link.id}") { announce.linked(link) } }
