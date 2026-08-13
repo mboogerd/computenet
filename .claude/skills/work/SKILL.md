@@ -768,32 +768,50 @@ PR ready (5e) is a normal event, and when it lands the feature reviewer is
 usually **still running** in that feature worktree: it hands back its verdict
 and then keeps going for a while on bead bookkeeping and follow-up checks.
 Return the PR to draft (`gh pr ready --undo <pr-url>`) so it cannot merge,
-then pick one of these — never dispatch into a worktree whose agent has not
-reported:
+then pick one of these — never dispatch a second agent into a worktree whose
+agent, dispatched *this session*, has not reported:
 
 - **Wait for the reviewer's notification, then dispatch into its worktree.**
   This is the default and it is nearly always right: the PR is back in draft
   and cannot merge, so waiting costs nothing but the wait. Measured
   2026-08-12 on PR #58, the report arrived about 30 minutes later.
 - **Only if you cannot wait, give the fix its own worktree on the same
-  branch**, and never the occupied one:
+  branch**, and never the occupied one. **Do the `SendMessage` first, and wait
+  for the reviewer's answer, before you create the worktree** — the ordering
+  below is what makes this safe, not the `--force`:
   ```bash
+  # 1. SendMessage the still-running reviewer FIRST:
+  #    "Push everything you have on feature/<feature-id> now, then make no
+  #     further commits in <feature-worktree>; a fix agent is joining this
+  #     branch in <feature-id>-fix. Reply when you have pushed."
+  # 2. Only after it replies:
   git worktree add --force "$PWD/../computenet-worktrees/<feature-id>-fix" feature/<feature-id>
   ```
   `--force` is required — git otherwise refuses a branch that is already
-  checked out — and it is doing exactly what it says: **two worktrees now
-  share one branch ref**, so a commit in either moves the other's HEAD under
-  it. That buys separation of *files*, not of *commits*. So: tell the fix
-  agent to commit and push promptly; **tell the still-running reviewer it is
-  no longer alone on the branch** (`SendMessage` to it, naming the fix
-  worktree and branch — [review-feature.md](references/review-feature.md) §5
-  assumes exclusivity by default and would read a rejected push as a remote
-  hiccup); and **do not mark the PR ready again until both agents have
-  reported**. Marking it ready while an agent is still working is what
-  stranded a substantive repair commit through PR #58's squash
-  (computenet-zqf) — the AGENTS.md hazard, "the squash captures only what was
-  on the branch at that instant, and the rest is stranded". Remove the extra
-  worktree at Finalize with the rest.
+  checked out — and what it buys is separation of *files*, not of *commits*:
+  **two worktrees now share one branch ref**, and the second worktree's index
+  and working tree do **not** follow when the first commits. Measured
+  2026-08-13 in a throwaway repo, running exactly the two-agent sequence this
+  bullet describes: after the fix agent committed and pushed, the reviewer's
+  `git status --short` reported `M src.txt` for a file it had never touched,
+  its working copy still held the pre-fix content, and its own
+  `git commit -am` (which is what
+  [review-feature.md](references/review-feature.md) §5 tells it to run)
+  committed that stale content as a descendant — **silently reverting the fix,
+  and pushing clean**. There is no non-fast-forward rejection to catch this:
+  the ref is shared locally, so the reverting commit is a legitimate
+  fast-forward. That is why the reviewer must stop committing before the
+  second worktree exists; a warning it receives afterwards arrives too late.
+  Then: tell the fix agent to commit and push promptly, and **do not mark the
+  PR ready again until both agents have reported**. Marking it ready while an
+  agent is still working is what stranded a substantive repair commit through
+  PR #58's squash (computenet-zqf) — the AGENTS.md hazard, "the squash
+  captures only what was on the branch at that instant, and the rest is
+  stranded". Remove the extra worktree at Finalize with the rest —
+  expecting that a shared ref leaves both worktrees looking dirty for files
+  neither has edited, which Finalize's gate 2 cannot tell apart from real
+  unsaved work, so it will keep both and report them. That is the safe
+  direction: leave them and say so in the summary.
 
 The one thing that is never an option is dispatching a second agent into a
 worktree an agent is still working in.
