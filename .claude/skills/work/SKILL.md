@@ -557,7 +557,7 @@ Recording it locally is enough for that ordering to do its job: a retry on
 this machine reads the local DB and finds the branch. It reaches the other
 machine at Finalize's push.
 
-Either way, attach the worktree the same way, then bring it up to date:
+Either way, attach the worktree the same way:
 
 ```bash
 .claude/skills/work/scripts/ensure-worktree.sh \
@@ -625,7 +625,8 @@ keeps the reviewer looking at integrated code. Conflicts here are yours to
 resolve; re-run the affected module suite afterwards, since a hand-resolved
 merge is code nobody reviewed.
 
-The script is idempotent, so resume and first-run take the same path: it
+`ensure-worktree.sh` is idempotent, so resume and first-run take the same
+path: it
 leaves an attached worktree alone, attaches local branches, tracks
 remote-only branches **at the remote tip**, fast-forwards a strictly-behind
 local branch, keeps a strictly-ahead one (unpushed work), and **fails

@@ -160,9 +160,9 @@ What to consume, per test run:
   session cannot tell them apart:
 
   ```bash
-  echo "<the call site you mutated, and what you removed>" > <your-worktree>/.mutation-in-progress
+  echo "<the call site you mutated, and what you removed>" > <task-worktree>/.mutation-in-progress
   # ... mutate, re-run, watch the named test FAIL, revert ...
-  rm <your-worktree>/.mutation-in-progress
+  rm <task-worktree>/.mutation-in-progress
   ```
 
   It is gitignored, so it can never be committed. Never commit while it
