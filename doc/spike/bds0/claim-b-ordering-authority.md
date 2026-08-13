@@ -1192,6 +1192,33 @@ Safety, restated for the probes in this subsection: all of them ran against
 fresh `mktemp -d` rig roots (`tmp.bTRFAYvsaz`, `tmp.Ipl4pAbSzs`,
 `tmp.GwXRrGYqeL`) via `bd -C <ws> --sandbox` and `rig.sh`. Nothing read or
 wrote the repository's live `.beads`. Unlike the E1–E4 transcripts above, these
-instrument probes were each measured on **one** rig root and were not re-run on
-a second — stated so the reproduction claim in
-§"Reproduction on an independent rig root" is not read as covering them.
+instrument probes were each measured on **one** rig root at authoring time —
+stated so the reproduction claim in §"Reproduction on an independent rig root"
+is not read as covering them.
+
+**Re-run during review** on three further fresh `mktemp -d` roots
+(`tmp.axz0Hql8ja`, `tmp.sJxZABlslH`, `tmp.fZtbwAkBAw`), independently of the
+authoring run, on darwin/arm64 with bd 1.1.2:
+
+- **Instrument 1 reproduces exactly.** Same E3 scenario, new ids
+  (`Z=bdsa-f2m`, `Y=bdsa-1kb`, `W=bdsa-aru`). Step 1 unflagged:
+  `{"created":1,"ids":["bdsa-1kb"],"skipped":2,"stale_skipped_ids":["bdsa-aru","bdsa-f2m"],"updated":1}`.
+  Step 2, single flagged row `Z`: `{"created":1,"ids":["bdsa-f2m"],"skipped":0}`
+  and nothing else. B after: `Z` imposed (`"A stale description (T+5)"`,
+  `updated_at` regressed to `15:53:00Z`, `cn_dot=A:9`), `Y` delivered, and
+  **`W`'s never-gossiped local edit intact** at `cn_dot=A:p-seed`.
+- **The writer-side pre-flight reproduces**, run as printed above: it predicted
+  `would-be-skipped-stale` for both probe rows and the real unflagged import
+  then skipped exactly those two.
+- **The commit-per-forced-row cost reproduces**, measured independently on two
+  fresh roots from equivalent state (`dolt log --oneline` count before/after,
+  six rows forced on each path): per-row `added: 6` commits in `3.792s`, bundle
+  `added: 1` commit in `0.517s`, both with all six rows forced. The commit
+  counts match the authoring run exactly; the wall-clock figures are lower on
+  a less loaded machine, so treat `6 vs 1` as the finding and the seconds as
+  indicative.
+- **The `--dry-run` finding reproduces**: `{"created":3,"dry_run":true,"skipped":0}`
+  identically with and without `--allow-stale`, on a bundle whose real unflagged
+  import then reported `stale_skipped_ids` for two rows; B was unchanged after
+  both dry runs.
+- **`bd import --help`'s flag list is unchanged** from the four quoted in E3.
