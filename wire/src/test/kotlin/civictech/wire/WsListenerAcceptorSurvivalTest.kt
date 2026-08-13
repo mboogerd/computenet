@@ -73,12 +73,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * The other half of b23f7a8 — `acceptLoop`'s `finally` reporting through
  * `reportAcceptorStopped` when the loop itself exits with the listening channel
- * still open — has no seam reachable from outside the class: the accept
- * selector is a local, and `server.accept()` cannot be made to throw on demand
- * without a test hook in production code. That path is reviewed by reading, not
- * by this test. It is also the one place where the diagnosis is stderr-only:
- * unlike computenet-dqy.39's loss, an acceptor that stopped has no programmatic
- * seam an operator's health check could poll.
+ * still open — is not covered here: the accept selector is a local, and
+ * `server.accept()` cannot be made to throw on demand. `WsListenerAcceptorStopSeamTest`
+ * covers it (computenet-dqy.56), by composing this file's factory injection with
+ * an exception that throws while `onError` renders it, so the *report* of a
+ * dropped connection carries the failure out of the loop. That bead also gave
+ * the diagnosis the programmatic seam it lacked — `WsListener.acceptorStopped`,
+ * shaped after computenet-dqy.39's `listeningSocketLoss` — so an operator's
+ * health check no longer has to scrape stderr to learn the acceptor stopped.
  */
 class WsListenerAcceptorSurvivalTest {
 
