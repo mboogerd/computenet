@@ -1127,6 +1127,8 @@ Build the candidate pool from `bd ready --json`: ready **features and tasks
 parented to other epics**, plus unparented bugs and chores. Drop from it:
 
 - anything with the `human` label (this exclusion holds on every route);
+- anything labeled `skill-friction` — friction is remediated on its own
+  lane (step 7), never by a session running under the skill it would edit;
 - anything with `parked_at` within 6h;
 - **anything that is review or verification of output this session
   produced** — warm context is exactly what makes self-approval likely, and
