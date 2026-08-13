@@ -3,11 +3,9 @@ package civictech.wire
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.wire.Peering
-import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
-import io.kotest.matchers.ints.shouldBeLessThan
+import io.kotest.matchers.longs.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
-import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledOnOs
 import org.junit.jupiter.api.condition.OS
@@ -138,6 +136,33 @@ import java.net.Socket
  * accepting it takes that listener off the air permanently — and macOS is the
  * development platform.
  *
+ * ## REPAIRED by computenet-dqy.37, and this test is now inverted
+ *
+ * Everything above is the mechanism as it stood. `WsTransport.WsListener` now
+ * vendors 1.6.0's accept path in
+ * `WsListener.acceptWithoutBlamingTheListener`, reached from the one
+ * non-private seam on the selector path (`protected onConnect(SelectionKey)`,
+ * which `doAccept` calls with the server's own acceptable key *before* it
+ * accepts). It performs the accept itself, configures the socket inside its
+ * own `try/catch`, and on failure closes **that** channel and counts it on
+ * `WsListener.rejectedAccepts` — leaving the listening channel alone. The
+ * selector loop's last-resort `handleIOException(serverKey, null, ex)` is
+ * therefore never reached from the accept prologue.
+ *
+ * So the assertions below are inverted, as this bead's TEST clause required
+ * rather than deleting the file: **the listener still accepts after 200
+ * deliberate resets**, and nothing was reported lost. The third assertion —
+ * `rejectedAccepts >= 1` — is what stops the inversion being vacuous: it
+ * proves the storm really did drive `setTcpNoDelay` to throw on a reset victim
+ * (the exact stimulus that used to unbind the port) and that the vendored
+ * `catch` is what swallowed it. Without it, "the listener survived" would also
+ * be satisfied by a storm that never reproduced the mechanism at all — which
+ * is precisely how the first version of this test passed on `ubuntu-latest`.
+ *
+ * The macOS scoping stays for the same reason it was added: on Linux the
+ * inverted assertion already passed before the repair, so the file still
+ * guards nothing on the CI runners, and `rejectedAccepts` would be 0 there.
+ *
  * ## java-websocket reports it nowhere; since computenet-dqy.39 the transport does
  *
  * `handleIOException` only `log.trace()`s, `onError` is never called (that is
@@ -192,17 +217,10 @@ import java.net.Socket
  * registration must be a `SelChImpl` of the same provider, so `accept()` cannot
  * be wrapped.
  *
- * So the test still asserts **the defect**: the listening socket dies inside 200
- * deliberate resets. What computenet-dqy.39 added is the second half — that the
- * death is now *announced* instead of silent. Read the two halves together: a
- * listener that is gone and says so is exactly as broken as a listener that is
- * gone and says nothing; it is only cheaper to diagnose.
- *
- * **When the transport is fixed, invert the first half of this test** — assert
- * that the listener still accepts after the reset storm, and that no loss was
- * reported — rather than deleting it. Note that on Linux the inverted assertion
- * *already* passes, for the reason above, so the inverted test would need to
- * stay macOS-scoped to mean anything either.
+ * It asserted **the defect** until computenet-dqy.37; it now asserts the
+ * repair, on the same stimulus and with the same 200-reset bound, so the
+ * before/after pair is a like-for-like comparison rather than two different
+ * experiments. See "REPAIRED by computenet-dqy.37" above.
  *
  * Measured on macOS 26.6 / JDK 21 (the toolchain), 15 trials: the listening
  * socket is gone after **1-3** resets, 15/15. It is not a rare race when the
@@ -277,23 +295,13 @@ class WsListenerAcceptRstTest {
         }
 
     /**
-     * The watchdog computenet-dqy.39 added *polls* the listening channel, so its
-     * report follows the loss rather than coinciding with it — and the loss is
-     * observed here by a probe that can return the instant the port refuses.
-     * Bounded well above the poll interval so this waits for the report rather
-     * than for a timeout; `null` means nothing was ever reported, which is the
-     * failure this test exists to catch.
+     * The watchdog computenet-dqy.39 added *polls* the listening channel
+     * ([WsTransport.WsListener.WATCHDOG_POLL_MS]), so a report follows a loss
+     * rather than coinciding with it. Now that the listener is expected to
+     * survive, this gives the watchdog several poll intervals to contradict
+     * that expectation before the test believes it.
      */
-    private fun awaitReport(
-        listener: WsTransport.WsListener,
-    ): WsTransport.WsListener.ListeningSocketLostException? {
-        val deadline = System.currentTimeMillis() + 10_000
-        while (System.currentTimeMillis() < deadline) {
-            listener.listeningSocketLoss?.let { return it }
-            Thread.sleep(20)
-        }
-        return null
-    }
+    private fun settleWatchdog() = Thread.sleep(5 * WsTransport.WsListener.WATCHDOG_POLL_MS)
 
     @Test
     @EnabledOnOs(
@@ -309,22 +317,22 @@ class WsListenerAcceptRstTest {
             "failure signature has ever appeared on CI, it has a different cause. See the class " +
             "KDoc, section 'Platform scope'.",
     )
-    fun `a reset that races the accept closes the whole listening socket, and the watchdog reports it`() {
+    fun `a reset that races the accept costs that connection only, and the listener keeps accepting`() {
         val listener = WsTransport.listen(0, side())
         val port = listener.port
         val reported = ByteArrayOutputStream()
         val realErr = System.err
         try {
-            accepts(port) shouldBe true // the stimulus needs a live listener to kill
+            accepts(port) shouldBe true // the stimulus needs a live listener
 
             // `WsListener.onError` is the transport's only reporting seam and it
-            // writes to stderr, so capturing stderr is how "an operator is told"
-            // becomes an assertion rather than a claim.
+            // writes to stderr, so capturing stderr is how "nothing was reported
+            // lost" becomes an assertion rather than a claim.
             System.setErr(PrintStream(reported, true))
             var deadAfter = -1
-            // Generously bounded: measured at 1-3, so 200 cannot be a false
-            // positive — and a listener that survived all 200 would mean the
-            // mechanism no longer holds, which is what should flip this test.
+            // The same stimulus and the same bound as the pre-repair version of
+            // this test, so the two are comparable: measured 15/15 at 1-3 resets
+            // before computenet-dqy.37, so any survival past 200 is the repair.
             for (attempt in 1..200) {
                 resetAgainst(port)
                 if (!accepts(port)) {
@@ -332,29 +340,29 @@ class WsListenerAcceptRstTest {
                     break
                 }
             }
-            val loss = if (deadAfter >= 1) awaitReport(listener) else null
+            settleWatchdog()
+            val loss = listener.listeningSocketLoss
+            val rejected = listener.rejectedAccepts
             System.setErr(realErr)
 
-            // UNCHANGED, and deliberately so: computenet-dqy.39 is diagnosability
-            // only. The listening socket is still lost at the same rate; the
-            // repair is computenet-dqy.37.
-            deadAfter shouldBeGreaterThanOrEqual 1
-            deadAfter shouldBeLessThan 200
+            // INVERTED by computenet-dqy.37 (was: `deadAfter shouldBeGreaterThanOrEqual 1`).
+            // -1 is "never stopped accepting"; any other value names the reset
+            // that took the port down.
+            deadAfter shouldBe -1
+            accepts(port) shouldBe true
 
-            // The other half, inverted by computenet-dqy.39: the loss used to be
-            // reported NOWHERE, so the only symptom left anywhere was a distant
-            // test's bounded await expiring against a listener that had been deaf
-            // for 30 seconds. Now it names itself, on both seams a caller has —
-            // the programmatic one an operator's health check can poll, and
-            // `onError`'s stderr line an operator reads.
-            loss shouldNotBe null
-            loss?.message.orEmpty() shouldContain "listening socket lost"
-            val stderr = reported.toString()
-            stderr shouldContain "[WsListener]"
-            stderr shouldContain "listening socket lost"
-            // the diagnosis has to name the *cause*, not merely announce a death
-            stderr shouldContain "doAccept"
-            stderr shouldContain "computenet-dqy.37"
+            // Non-vacuity, and the load-bearing assertion of this file: the
+            // storm really did make `setTcpNoDelay` throw on a reset victim —
+            // the exact stimulus that used to unbind the listening socket — and
+            // the vendored accept caught it and charged it to that connection.
+            // Without this, a storm that reproduced nothing would also pass.
+            rejected shouldBeGreaterThanOrEqual 1L
+
+            // Nothing was lost, so computenet-dqy.39's watchdog has nothing to
+            // say, on either seam: the programmatic one an operator's health
+            // check polls, and `onError`'s stderr line.
+            loss shouldBe null
+            reported.toString() shouldNotContain "listening socket lost"
         } finally {
             System.setErr(realErr)
             runCatching { listener.stop(1_000) }
