@@ -60,7 +60,8 @@ guessing one here cost a reviewer 8 runs):
    say so (`run <id> is still in progress; logs will be available when it is
    complete`) rather than printing nothing, but that is one line where you
    expected thousands — do not read it as an empty log. Poll
-   `gh run view <run-id> --json jobs` step conclusions instead.
+   `gh run view <run-id> --json jobs -R mboogerd/computenet` step conclusions
+   instead (`--json` resolves the repo from `cwd` exactly like `--log`).
 2. **Proof the diff does not touch that test's module**:
    ```bash
    gh pr diff <pr-url> --name-only
