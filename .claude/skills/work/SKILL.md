@@ -221,10 +221,15 @@ while the session runs, and to nothing afterwards. If a released epic is
 still the most important thing, the selection below picks it straight back
 up; if priorities moved since last session, the new top epic wins.
 
-Take the highest-priority unclaimed epic:
+Take the highest-priority unclaimed epic — **skipping `computenet-wpvy`,
+the SDLC epic**. That epic and its children belong exclusively to the SDLC
+orchestrator lane (`.claude/skills/remediate-friction/SKILL.md` today, a
+reactive orchestrator eventually) and are never /work's to claim, **on any
+route** — not here, not as a cross-epic blocker (5f route 3), not as
+continuation work (5f route 4):
 
 ```bash
-bd ready --type=epic --limit 1 --json     # read the id
+bd ready --type=epic --json               # take the first id that is NOT computenet-wpvy
 bd update <id> --claim                    # claim that id specifically
 bd update <id> --add-label=owner:$BEADS_ACTOR
 bd update <id> --set-metadata skill_version=$(git hash-object .claude/skills/work/SKILL.md)
@@ -1127,8 +1132,9 @@ Build the candidate pool from `bd ready --json`: ready **features and tasks
 parented to other epics**, plus unparented bugs and chores. Drop from it:
 
 - anything with the `human` label (this exclusion holds on every route);
-- anything labeled `skill-friction` — friction is remediated on its own
-  lane (step 7), never by a session running under the skill it would edit;
+- anything parented to the SDLC epic `computenet-wpvy` or labeled
+  `skill-friction` — process work belongs to the SDLC orchestrator lane
+  (step 7), never to a session running under the skill it would edit;
 - anything with `parked_at` within 6h;
 - **anything that is review or verification of output this session
   produced** — warm context is exactly what makes self-approval likely, and
