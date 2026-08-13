@@ -434,9 +434,11 @@ Agent({
   description: "Break down epic <epic>",
   model: "fable",
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/epic.md — from YOUR OWN
-worktree, never the main checkout, whose local branch is stale — and follow it
-to break epic ${epic} into features. Run bd with -C <main-checkout>. It is already claimed and labeled — skip both.
+  prompt: `You have no worktree, so read the reference from the REMOTE,
+never the main checkout's working tree — its local branch is stale:
+  git -C <main-checkout> show origin/main:.claude/skills/work/references/epic.md
+Follow it to break epic ${epic} into features. Run bd with
+-C <main-checkout>. It is already claimed and labeled — skip both.
 Report the feature ids created.`
 })
 ```
@@ -555,6 +557,28 @@ Recording it locally is enough for that ordering to do its job: a retry on
 this machine reads the local DB and finds the branch. It reaches the other
 machine at Finalize's push.
 
+Either way, attach the worktree the same way, then bring it up to date:
+
+```bash
+.claude/skills/work/scripts/ensure-worktree.sh \
+  "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
+
+# Verify the worktree actually holds the branch's remote work before using it.
+if git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null; then
+  git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
+    && echo "OK: worktree contains origin/feature/<feature-id>" \
+    || echo "STOP: on the branch at the wrong commit — origin/feature/<feature-id> is not in HEAD"
+else
+  echo "OK: origin has no feature/<feature-id> yet (first run, nothing to compare)"
+fi
+```
+
+**Read the verification line it prints, and only that line.** `STOP` means
+the worktree is on the right branch at the wrong commit — proceeding
+silently orphans reviewed work while looking perfectly clean
+(computenet-aeg); do not enter 5b. Either `OK` is fine; the second is the
+first-run case, where origin has no such branch yet.
+
 **A dirty worktree you inherited may be a half-applied MUTATION, and
 committing it would break production code.** This repo routinely verifies a
 pin by mutation — delete an argument at the production call site, confirm the
@@ -584,21 +608,9 @@ git -C <worktree> diff
 The marker is what makes this recoverable *without* reading; the reading rules
 are the fallback for worktrees predating it.
 
-Either way, attach the worktree the same way, then bring it up to date:
+Only once it is classified, bring the worktree up to date:
 
 ```bash
-.claude/skills/work/scripts/ensure-worktree.sh \
-  "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
-
-# Verify the worktree actually holds the branch's remote work before using it.
-if git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null; then
-  git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
-    && echo "OK: worktree contains origin/feature/<feature-id>" \
-    || echo "STOP: on the branch at the wrong commit — origin/feature/<feature-id> is not in HEAD"
-else
-  echo "OK: origin has no feature/<feature-id> yet (first run, nothing to compare)"
-fi
-
 git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
 git -C <worktree> merge origin/main -m "Merge main into feature/<feature-id>"
 git -C <worktree> push -u origin feature/<feature-id>
@@ -612,12 +624,6 @@ review has already passed. Paying it down here keeps each merge small and
 keeps the reviewer looking at integrated code. Conflicts here are yours to
 resolve; re-run the affected module suite afterwards, since a hand-resolved
 merge is code nobody reviewed.
-
-**Read the verification line it prints, and only that line.** `STOP` means
-the worktree is on the right branch at the wrong commit — proceeding
-silently orphans reviewed work while looking perfectly clean
-(computenet-aeg); do not enter 5b. Either `OK` is fine; the second is the
-first-run case, where origin has no such branch yet.
 
 The script is idempotent, so resume and first-run take the same path: it
 leaves an attached worktree alone, attaches local branches, tracks
@@ -644,9 +650,11 @@ Agent({
   description: "Break down feature <id>",
   model: "fable",
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/feature.md — from YOUR OWN
-worktree, never the main checkout, whose local branch is stale — and follow it
-to break feature ${id} into tasks. Run bd with -C <main-checkout>. It is already claimed — skip claiming.
+  prompt: `You have no worktree, so read the reference from the REMOTE,
+never the main checkout's working tree — its local branch is stale:
+  git -C <main-checkout> show origin/main:.claude/skills/work/references/feature.md
+Follow it to break feature ${id} into tasks. Run bd with
+-C <main-checkout>. It is already claimed — skip claiming.
 Report the task ids created.`
 })
 ```

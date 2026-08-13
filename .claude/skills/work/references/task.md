@@ -82,9 +82,9 @@ than restarting. That's the whole reason the worktree is preserved.
    mutation is a silently broken production change:
 
    ```bash
-   echo "<the call site you mutated, and what you removed>" > .mutation-in-progress
+   echo "<the call site you mutated, and what you removed>" > <your-worktree>/.mutation-in-progress
    # ... apply the mutation, run the test, watch it FAIL, restore the code ...
-   rm .mutation-in-progress
+   rm <your-worktree>/.mutation-in-progress
    ```
 
    Never commit the marker, and never commit while it exists.
