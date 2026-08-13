@@ -23,7 +23,7 @@ guessing one here cost a reviewer 8 runs):
    gh run view <run-id> --log-failed -R mboogerd/computenet | tail -60
 
    # capturing the whole log: run FROM THE REPO, redirect OUT to the scratchpad
-   gh run view <run-id> --log -R mboogerd/computenet > <scratchpad>/<run-id>.log
+   gh run view <run-id> --log -R mboogerd/computenet > "$SCRATCH/<run-id>.log"
    ```
    Quote the `FAILED` line. A red check whose log you have not read is
    unattributed, full stop.
@@ -50,7 +50,7 @@ guessing one here cost a reviewer 8 runs):
    6,359 lines are source):
 
    ```bash
-   grep 'MARKER' <scratchpad>/<run-id>.log | grep -vF '^[[36;1m'   # real output only
+   grep 'MARKER' "$SCRATCH/<run-id>.log" | grep -vF '^[[36;1m'   # real output only
    ```
 
    Each line is `<job>\t<step name>\t<timestamp> <content>`, so filtering by
