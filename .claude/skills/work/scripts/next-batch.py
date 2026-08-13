@@ -38,9 +38,42 @@ def bd(*args):
 
 
 def claim_of(task):
-    """Files a task expects to touch. Empty set means 'unknown', not 'none'."""
+    """Files a task expects to touch. Empty set means 'unknown', not 'none'.
+
+    Paths are normalised (no leading "./", no trailing "/") so that containment
+    below compares like with like.
+    """
     raw = (task.get("metadata") or {}).get("files") or ""
-    return {p.strip() for p in raw.split(",") if p.strip()}
+    return {_norm(p) for p in raw.split(",") if p.strip()}
+
+
+def _norm(path):
+    """Repo-relative form with no leading './' and no trailing '/'."""
+    p = path.strip().strip("/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def overlaps(files, taken):
+    """Claims that collide with `files` — by containment, not string equality.
+
+    A directory claim and a file inside it are the same surface: two agents
+    handed 'wire/src/test/kotlin/civictech/wire' and
+    'wire/src/test/kotlin/civictech/wire/WsConnectRaceTest.kt' edit the same file
+    on sibling branches, which is exactly the merge conflict this batching rule
+    exists to prevent. A plain set intersection reports them disjoint because the
+    strings differ (computenet-9eb). Containment is checked in BOTH directions,
+    since either claim may be the broader one. Inputs are normalised here too,
+    so the function is safe for a caller that did not go through claim_of().
+    """
+    hits = set()
+    for f in {_norm(x) for x in files}:
+        for t in {_norm(x) for x in taken}:
+            # "." is the whole repo: it contains every claim, including itself.
+            if "." in (f, t) or f == t or f.startswith(t + "/") or t.startswith(f + "/"):
+                hits.add(t)
+    return hits
 
 
 def main():
@@ -88,9 +121,10 @@ def main():
             skipped.extend({"id": t["id"], "reason": "deferred behind unclaimed-files task"}
                            for t, _ in candidates if t["id"] != tid and t["id"] not in already)
             break
-        if files & taken:
+        collisions = overlaps(files, taken)
+        if collisions:
             skipped.append({"id": tid,
-                            "reason": "overlaps " + ",".join(sorted(files & taken))})
+                            "reason": "overlaps " + ",".join(sorted(collisions))})
             continue
         taken |= files
         batch.append(_entry(task, resumed, sorted(files)))
