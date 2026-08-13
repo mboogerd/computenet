@@ -96,13 +96,13 @@ than restarting. That's the whole reason the worktree is preserved.
    ```bash
    bd comment <id> "Prescribed measurement does not fit a task slot: <N> runs x <per-run cost> = <total>. Ran <what was affordable> instead, which bounds <quantity> at <figure> and cannot discriminate <the question>. The full sample needs its own item."
    ```
-6. Implement the smallest coherent change that satisfies the task.
+5. Implement the smallest coherent change that satisfies the task.
    - Hit a fork that clears the [ask-human.md](ask-human.md) bar (ambiguous,
      expensive, risky, hard to revert)? Park it instead of guessing, then
      report and finish.
    - Need a file outside your claim? **Stop and report it** rather than
      expanding silently.
-5. Verify per AGENTS.md's "Verification" section — narrowest relevant test
+6. Verify per AGENTS.md's "Verification" section — narrowest relevant test
    first, then the affected module's suite. Don't report success on an
    untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
    replays cached results, so a green build is not evidence a test executed.
@@ -166,12 +166,12 @@ than restarting. That's the whole reason the worktree is preserved.
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
 10. Report: the task id, the outcome, and the files you **actually** touched,
-   not just the ones you claimed. Drift is how the orchestrator fixes
-   scheduling for later batches.
+    not just the ones you claimed. Drift is how the orchestrator fixes
+    scheduling for later batches.
 
-   Add a **friction** line for anything that made you slower or forced a
-   guess: an underspecified task, a wrong `files` claim, a command in these
-   instructions that didn't work, a step that didn't cover your case. Don't
-   file it yourself — the orchestrator logs it centrally so recurrences are
-   visible (SKILL.md step 7). Nothing to report is a fine answer; inventing
-   one is not.
+    Add a **friction** line for anything that made you slower or forced a
+    guess: an underspecified task, a wrong `files` claim, a command in these
+    instructions that didn't work, a step that didn't cover your case. Don't
+    file it yourself — the orchestrator logs it centrally so recurrences are
+    visible (SKILL.md step 7). Nothing to report is a fine answer; inventing
+    one is not.
