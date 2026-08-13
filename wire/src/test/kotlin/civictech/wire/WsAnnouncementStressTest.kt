@@ -148,13 +148,13 @@ class WsAnnouncementStressTest {
                     val connection = WsTransport.connect(URI("ws://localhost:${listener.port}"), client.side)
                     try {
                         awaits++
-                        observe(i, "catch-up", early.ref, client.registry, server.registry, captured, failures, latencies)
+                        observe(i, "catch-up", early.ref, client.registry, server.registry, connection, listener, captured, failures, latencies)
                         // live shape: published after connect returned, while the
                         // hello exchange may still be in flight
                         val late = CollectingCell()
                         server.host.managementInlet.call.spawn(late)
                         awaits++
-                        observe(i, "live", late.ref, client.registry, server.registry, captured, failures, latencies)
+                        observe(i, "live", late.ref, client.registry, server.registry, connection, listener, captured, failures, latencies)
                     } finally {
                         connection.shutdown()
                         runCatching { listener.stop(1000) }
@@ -175,6 +175,8 @@ class WsAnnouncementStressTest {
             ref: CellRef,
             registry: LocationRegistry,
             server: LocationRegistry,
+            connection: WsTransport.WsConnection,
+            listener: WsTransport.WsListener,
             captured: ByteArrayOutputStream,
             failures: MutableList<Failure>,
             latencies: MutableList<Long>,
@@ -191,7 +193,7 @@ class WsAnnouncementStressTest {
             while (!arrived() && System.currentTimeMillis() - start < LOST_AFTER_MS) Thread.sleep(10)
             val elapsed = System.currentTimeMillis() - start
             val late = if (arrived()) elapsed else null
-            failures += Failure(iteration, shape, late, diagnose(ref, registry, server, captured))
+            failures += Failure(iteration, shape, late, diagnose(ref, registry, server, connection, listener, captured))
         }
 
         /**
@@ -229,6 +231,8 @@ class WsAnnouncementStressTest {
             ref: CellRef,
             registry: LocationRegistry,
             server: LocationRegistry,
+            connection: WsTransport.WsConnection,
+            listener: WsTransport.WsListener,
             captured: ByteArrayOutputStream,
         ): String = buildString {
             appendLine("  awaited ref: $ref")
@@ -239,6 +243,18 @@ class WsAnnouncementStressTest {
             appendLine("  client remoteRefs: ${registry.remoteRefs()}")
             appendLine("  client localRefs: ${registry.localRefs()}")
             appendLine("  parked for awaited ref: ${registry.parkedFor(ref).size}")
+            // computenet-dqy.40: the two drops on this path that write nothing
+            // to stderr, so "stderr: <silent>" no longer means "nothing was
+            // dropped". Established by execution in
+            // WsAnnouncementSilenceInventoryTest: every other failure here —
+            // a throw out of onText (which truncates the catch-up sweep), a
+            // failing publish hook, an unknown cell or port, the scheduler
+            // backstop — does reach stderr, so these two plus "the delivery
+            // never ran" are what a silent loss can be.
+            appendLine(
+                "  silent drops: client preHello=${connection.preHelloDrops} gate=${connection.refusedAnnouncements}" +
+                    " / listener preHello=${listener.preHelloDrops} gate=${listener.refusedAnnouncements}",
+            )
             registry.localRefs().forEach { local ->
                 appendLine("  parked for client-local $local: ${registry.parkedFor(local).size}")
             }
