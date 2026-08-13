@@ -134,13 +134,85 @@ name: Announcement probe (on-demand Linux bulk sample)
 #     A loss appearing only in the loaded arm therefore does not separate
 #     machine-level load from concurrent loopback/port co-tenancy either.
 #
-# WHAT NEITHER ARM REPRODUCES, and this bounds what a null result here can
-# mean: inside build-test-fast, WsAnnouncementStressTest runs in the SAME test
-# JVM as every other `:wire:` test, after them, with their heap churn, their
-# sockets and their threads. Both arms of this job run the probe alone in a
+# WHAT NEITHER `load` ARM REPRODUCES, and this bounds what a null result there
+# can mean: inside build-test-fast, WsAnnouncementStressTest runs in the SAME
+# test JVM as every other `:wire:` test, after them, with their heap churn,
+# their sockets and their threads. Both `load` arms run the probe alone in a
 # freshly filtered `:wire:test`. If the loss lives in that in-JVM co-tenancy,
-# both arms read clean and this experiment refutes nothing about it — it only
-# rules out (or in) the machine-level load.
+# both read clean and the load experiment refutes nothing about it — it only
+# rules out (or in) the machine-level load. It ruled it OUT
+# (computenet-dqy.52: 3,000 loaded awaits, 0 losses, against ~13.3 expected at
+# the build-test-fast rate of 2/450, P(0)=1.6e-6), which leaves the in-JVM
+# condition as the surviving candidate — and `cotenancy` below is the arm for
+# it (computenet-dqy.53).
+#
+# THE SECOND AXIS: `cotenancy` (computenet-dqy.53). A SEPARATE knob from `load`,
+# deliberately, because they ask different questions and the bead that added
+# this one says so explicitly: `load` puts a second PROCESS on the machine;
+# `cotenancy` is about the interior of ONE test JVM. Stretching `load` to cover
+# both would have made every future dispatch's condition ambiguous.
+#
+#   cotenancy=filtered   (default, and what every run before 2026-08-13 did)
+#     ./gradlew :wire:test --tests '*WsAnnouncementStressTest*' --rerun -D...
+#     The probe is the only test class in the JVM.
+#
+#   cotenancy=suite-jvm
+#     ./gradlew :wire:test --rerun -PexcludeMultiJvm=true -Dwire.stress.iterations=N
+#     The WHOLE `:wire:` suite, one test JVM, exactly the shape build-test-fast
+#     gives the probe — which is the condition under which the 2/450 losses were
+#     harvested (computenet-dqy.47).
+#
+# Why that command reproduces the condition rather than approximating it:
+#   - `:wire` has 14 test classes, far under `forkEvery(80)`, and
+#     `maxParallelForks` is raised for `:kernel` ONLY, so the whole `:wire:`
+#     suite runs in ONE JVM, sequentially. That is a property of
+#     `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`, not of this workflow.
+#   - `-PexcludeMultiJvm=true` is build-test-fast's own flag. No `:wire:` test
+#     carries `@Tag("multi-jvm")` today, so it selects the same set either way;
+#     it is passed for fidelity, so the two commands cannot drift apart.
+#   - The burst knobs are NOT forwarded in this mode. Under `cotenancy=suite-jvm`
+#     `WsAnnouncementCatchUpBurstTest` runs as a co-tenant at its COMMITTED
+#     default (10 x 40), which is what it runs at inside build-test-fast. Raising
+#     it would change the co-tenant JVM into something build-test-fast never has,
+#     and would also spend the wall-clock budget. `burst_iterations` must be `0`
+#     in this mode for the same reason: the separate filtered burst arm answers a
+#     different question and only adds minutes here.
+#   - `--rerun` still applies, and the executed-size assertion still applies: the
+#     report script filters the JUnit XML by class, so the 13 sibling classes'
+#     testcases are ignored for the numerator and denominator.
+#
+# WHAT `cotenancy=suite-jvm` STILL DOES NOT REPRODUCE, stated so no null result
+# here is read as bigger than it is: build-test-fast runs `build check` over
+# EVERY module, so its `:wire:test` shares a runner with other modules' compile
+# and test tasks (Gradle `org.gradle.parallel=true`), and its `:wire:test` runs
+# at the committed `wire.stress.iterations=25` rather than a raised one. This arm
+# reproduces the ONE JVM's interior — sibling classes, their threads, their
+# sockets, their heap churn, in their order — not the whole lane.
+#
+# ORDER IS NOT ASSUMED, IT IS RECORDED. "After them" is an observation about
+# build-test-fast, not something this workflow can pin: JUnit's default class
+# order is neither alphabetical nor configured here. So the co-tenancy evidence
+# step reads the per-class JUnit XML timestamps back and prints the roster and
+# where the stress class actually fell in it. If it lands first, the run still
+# measured a shared JVM but not the "after them" shape, and the roster is what
+# says which happened — the same role `loadavg.log` plays for `load=suite`.
+#
+# A SIBLING FAILURE IS NOT AN ANNOUNCEMENT LOSS EITHER. In this mode the Gradle
+# exit status covers 14 classes, and `:wire:` has a flake history of its own. The
+# report script already keys the numerator to WsAnnouncementStressTest's own
+# testcase, so a sibling failure leaves the stress arm CLEAN and countable while
+# the run goes red. The Conclude step says exactly that rather than implying the
+# probe invocation was unusable.
+#
+# SIZING IT (computenet-dqy.53). The cost is NOT the loaded arm's 1.4-1.6x —
+# that figure is about a competing process and does not transfer. What this arm
+# adds to the stress testcase's own 5-minute budget is whatever the sibling
+# classes do to the JVM it runs in; the sibling classes' own wall time is charged
+# to THEIR methods, not to the probe's. Unknown until measured, so the size step
+# refuses `cotenancy=suite-jvm` above 1000 stress iterations, the same
+# conservative ceiling `load=suite` got, and the first dispatch is the
+# measurement. MEASURED, ubuntu-latest, `cotenancy=suite-jvm`, stress 500:
+# see the ledger comments on computenet-dqy.40 for the run ids and wall times.
 #
 # SIZE THE LOADED ARM TO FINISH. An INCOMPLETE arm teaches nothing (see the
 # timeout note above), and load makes every iteration slower, so the loaded
@@ -207,6 +279,14 @@ on:
         options:
           - none
           - suite
+      cotenancy:
+        description: "In-JVM condition (computenet-dqy.53). 'filtered' = the probe is the only test class in the test JVM (what every run before 2026-08-13 did). 'suite-jvm' = the whole ':wire:' suite runs in ONE test JVM with the probe, build-test-fast's own shape, which is where the 2/450 losses were harvested. This is a DIFFERENT axis from 'load' (that one adds a second process; this one is one JVM's interior) — the two may not be combined, and 'suite-jvm' requires burst_iterations=0."
+        required: false
+        type: choice
+        default: "filtered"
+        options:
+          - filtered
+          - suite-jvm
 
 # No `cancel-in-progress`: a superseded run of a multi-hour measurement is
 # wasted compute, and two concurrent dispatches are two independent samples,
@@ -244,6 +324,7 @@ jobs:
           BURST: ${{ inputs.burst_iterations }}
           REFS: ${{ inputs.burst_refs }}
           LOAD: ${{ inputs.load }}
+          COTENANCY: ${{ inputs.cotenancy }}
         run: |
           set -euo pipefail
           for v in "$STRESS" "$BURST" "$REFS"; do
@@ -269,6 +350,23 @@ jobs:
               exit 1
             fi
           fi
+          # THE TWO CONDITION AXES ARE NOT COMBINABLE (computenet-dqy.53). A run
+          # that is both loaded and co-tenant measures a condition nothing in the
+          # comparison chain shares, and a loss in it would separate neither.
+          if [ "$COTENANCY" = "suite-jvm" ]; then
+            if [ "$LOAD" != "none" ]; then
+              echo "::error::cotenancy=suite-jvm with load=$LOAD: refused. These are two different experiments — load=suite adds a second PROCESS to the machine (computenet-dqy.52, already answered: null), cotenancy=suite-jvm is about the interior of ONE test JVM (computenet-dqy.53). Combining them yields a condition no other sample shares. Dispatch one axis at a time."
+              exit 1
+            fi
+            if [ "$BURST" != "0" ]; then
+              echo "::error::cotenancy=suite-jvm with burst_iterations=$BURST: refused. In this mode WsAnnouncementCatchUpBurstTest already runs as a CO-TENANT inside the suite invocation, at its committed default — the shape build-test-fast has. A separate filtered burst arm answers a different question and only spends minutes. Pass burst_iterations=0."
+              exit 1
+            fi
+            if [ "$STRESS" -gt 1000 ]; then
+              echo "::error::cotenancy=suite-jvm with stress_iterations=$STRESS: refused. The sibling classes' effect on the probe's own 5-minute per-test budget is UNMEASURED (the loaded arm's 1.4-1.6x is about a competing process and does not transfer), and an arm that trips the timeout produces NO sample (computenet-dqy.12). Ceiling 1000; dispatch 500 first and read the wall time."
+              exit 1
+            fi
+          fi
           awaits=$((STRESS * 2))
           refs=$((BURST * REFS))
           {
@@ -277,6 +375,7 @@ jobs:
             echo "| knob | value | derived |"
             echo "| --- | --- | --- |"
             echo "| load (concurrency condition) | $LOAD | $([ "$LOAD" = suite ] && echo 'build check runs alongside the probe' || echo 'probe runs essentially alone') |"
+            echo "| cotenancy (in-JVM condition) | $COTENANCY | $([ "$COTENANCY" = suite-jvm ] && echo 'whole :wire: suite shares one test JVM with the probe' || echo 'probe is the only class in the test JVM') |"
             echo "| wire.stress.iterations | $STRESS | $awaits announcement awaits |"
             echo "| wire.burst.iterations | $BURST | $([ "$BURST" -eq 0 ] && echo 'burst arm SKIPPED' || echo "$refs announced refs") |"
             echo "| wire.burst.refs | $REFS | |"
@@ -386,15 +485,34 @@ jobs:
       - name: Stress probe (announcement path, catch-up + live shapes)
         env:
           STRESS: ${{ inputs.stress_iterations }}
+          COTENANCY: ${{ inputs.cotenancy }}
         run: |
           set -uo pipefail
           set +e
-          ./gradlew :wire:test --tests '*WsAnnouncementStressTest*' --rerun \
-            "-Dwire.stress.iterations=$STRESS"
+          if [ "$COTENANCY" = "suite-jvm" ]; then
+            # THE CO-TENANT ARM (computenet-dqy.53). No `--tests` filter: the
+            # whole `:wire:` suite in one test JVM, which is the shape
+            # build-test-fast gives the probe. `-PexcludeMultiJvm=true` is
+            # build-test-fast's own flag, kept so the two commands cannot drift.
+            # Only the stress key is forwarded — the burst test runs here as a
+            # co-tenant at its committed default, as it does in the fast lane.
+            ./gradlew :wire:test --rerun -PexcludeMultiJvm=true \
+              "-Dwire.stress.iterations=$STRESS"
+          else
+            ./gradlew :wire:test --tests '*WsAnnouncementStressTest*' --rerun \
+              "-Dwire.stress.iterations=$STRESS"
+          fi
           echo "STRESS_STATUS=$?" >> "$GITHUB_ENV"
           set -e
           mkdir -p probe-evidence/stress
           cp -a wire/build/test-results/test/. probe-evidence/stress/
+
+      # Evidence that the co-tenancy was REAL and in which order it happened,
+      # the counterpart of `loadavg.log` for `load=suite`. Without it, "the
+      # suite shared the JVM" is an assertion about a Gradle command line.
+      - name: Co-tenancy roster
+        if: ${{ !cancelled() && inputs.cotenancy == 'suite-jvm' }}
+        run: python3 .github/scripts/announcement_probe_cotenancy.py probe-evidence/stress WsAnnouncementStressTest
 
       - name: Stress probe - full report
         if: ${{ !cancelled() }}
@@ -403,7 +521,7 @@ jobs:
           PROBE_LOSSES_KEY: STRESS_LOSSES
           PROBE_UNITS_KEY: STRESS_UNITS
           PROBE_EXPECTED_UNITS: ${{ env.STRESS_AWAITS }}
-        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/stress "stress, load=${{ inputs.load }} (${{ inputs.stress_iterations }} iterations)" WsAnnouncementStressTest
+        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/stress "stress, load=${{ inputs.load }}, cotenancy=${{ inputs.cotenancy }} (${{ inputs.stress_iterations }} iterations)" WsAnnouncementStressTest
 
       - name: Catch-up burst probe
         if: ${{ !cancelled() && inputs.burst_iterations != '0' }}
@@ -427,7 +545,7 @@ jobs:
           PROBE_LOSSES_KEY: BURST_LOSSES
           PROBE_UNITS_KEY: BURST_UNITS
           PROBE_EXPECTED_UNITS: ${{ inputs.burst_iterations }}
-        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/burst "burst, load=${{ inputs.load }} (${{ inputs.burst_iterations }} iterations x ${{ inputs.burst_refs }} refs)" WsAnnouncementCatchUpBurstTest
+        run: python3 .github/scripts/announcement_probe_report.py probe-evidence/burst "burst, load=${{ inputs.load }}, cotenancy=${{ inputs.cotenancy }} (${{ inputs.burst_iterations }} iterations x ${{ inputs.burst_refs }} refs)" WsAnnouncementCatchUpBurstTest
 
       # The load must outlive both arms and nothing else. Killing the process
       # group (not just the loop) matters: the loop's Gradle child would
@@ -497,6 +615,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           LOAD: ${{ inputs.load }}
+          COTENANCY: ${{ inputs.cotenancy }}
           BURST_REQUESTED: ${{ inputs.burst_iterations }}
         run: |
           set -uo pipefail
@@ -509,19 +628,20 @@ jobs:
           # having to reconstruct which run had which sizes. `unknown` is not a
           # zero: an incomplete or unrecognised arm contributes to no rate at
           # all — not to the numerator and not to the denominator.
+          cond="load=$LOAD, cotenancy=$COTENANCY"
           {
-            echo "### Ledger — condition \`load=$LOAD\`"
+            echo "### Ledger — condition \`$cond\`"
             echo ""
             echo "| arm | condition | losses (numerator) | sample (denominator) | outcome |"
             echo "| --- | --- | --- | --- | --- |"
-            echo "| stress | load=$LOAD | ${STRESS_LOSSES:-unknown} | ${STRESS_UNITS:-unknown} awaits | ${STRESS_OUTCOME:-missing} |"
+            echo "| stress | $cond | ${STRESS_LOSSES:-unknown} | ${STRESS_UNITS:-unknown} awaits | ${STRESS_OUTCOME:-missing} |"
             if [ "$BURST_REQUESTED" = "0" ]; then
-              echo "| burst | load=$LOAD | — | — | SKIPPED (burst_iterations=0) |"
+              echo "| burst | $cond | — | — | SKIPPED (burst_iterations=0) |"
             else
-              echo "| burst | load=$LOAD | ${BURST_LOSSES:-unknown} | ${BURST_UNITS:-unknown} iterations | ${BURST_OUTCOME:-missing} |"
+              echo "| burst | $cond | ${BURST_LOSSES:-unknown} | ${BURST_UNITS:-unknown} iterations | ${BURST_OUTCOME:-missing} |"
             fi
             echo ""
-            echo "This is ONE condition. The comparison computenet-dqy.52 asks for needs the other dispatch, same sizes, other \`load\` value."
+            echo "This is ONE condition, on ONE axis. Each comparison needs the matching dispatch at the SAME sizes with the other value of that axis: \`load\` for computenet-dqy.52 (answered: null), \`cotenancy\` for computenet-dqy.53."
             echo ""
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -532,6 +652,15 @@ jobs:
               clean)
                 if [ "$status" = "0" ]; then
                   echo "$arm: CLEAN — a real sample completed and lost nothing."
+                elif [ "$arm" = "stress probe" ] && [ "$COTENANCY" = "suite-jvm" ]; then
+                  # In this mode the exit status covers all 14 `:wire:` classes
+                  # (computenet-dqy.53). The probe's own testcase executed and
+                  # reported no loss, so its numerator and denominator STAND;
+                  # what failed was a co-tenant. Still red — a `:wire:` failure
+                  # is not something this job should swallow — but the ledger row
+                  # above is countable and must not be discarded.
+                  echo "::error::$arm: the stress testcase is CLEAN and its sample COUNTS, but the suite invocation exited $status — a SIBLING :wire: class failed. That is not an announcement loss and not a reason to drop this arm's row from the ledger. Read the co-tenancy roster and the Gradle log above for which class it was."
+                  rc=1
                 else
                   echo "::error::$arm: the probe invocation failed for a reason outside the testcase (exit $status) — read the log above"
                   rc=1
@@ -560,7 +689,7 @@ jobs:
             esac
           }
           verdict "stress probe" "${STRESS_OUTCOME:-}" "${STRESS_STATUS:-1}" \
-            "measured 39.9ms/iteration on ubuntu-latest unloaded; ceiling ~7000, default 4000. Under load=suite the per-iteration cost is higher by an unmeasured factor — halve it."
+            "measured 39.9ms/iteration on ubuntu-latest unloaded; ceiling ~7000, default 4000. Under load=suite or cotenancy=suite-jvm the per-iteration cost is higher by an unmeasured factor — halve it."
           if [ "$BURST_REQUESTED" = "0" ]; then
             echo "burst probe: SKIPPED by request (burst_iterations=0). It contributes no sample and no verdict."
           else
@@ -569,10 +698,10 @@ jobs:
           fi
           if [ "$rc" = "0" ]; then
             if [ "$BURST_REQUESTED" = "0" ]; then
-              echo "Probe green under load=$LOAD: ${STRESS_AWAITS:-?} announcement awaits, 0 losses (burst arm skipped)." \
+              echo "Probe green under $cond: ${STRESS_AWAITS:-?} announcement awaits, 0 losses (burst arm skipped)." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             else
-              echo "Both probes green under load=$LOAD: ${STRESS_AWAITS:-?} announcement awaits and ${BURST_REFS_TOTAL:-?} announced refs, 0 losses." \
+              echo "Both probes green under $cond: ${STRESS_AWAITS:-?} announcement awaits and ${BURST_REFS_TOTAL:-?} announced refs, 0 losses." \
                 | tee -a "$GITHUB_STEP_SUMMARY"
             fi
           fi
