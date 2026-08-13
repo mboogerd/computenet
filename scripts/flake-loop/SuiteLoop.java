@@ -37,7 +37,7 @@
 // Output: one progress line per iteration on stdout, a `failures/` file per failing
 // iteration, and a final SUMMARY line with the sample size and failure count.
 //
-// Reading the SUMMARY, because two of its fields are easy to misread:
+// Reading the SUMMARY, because three of its fields are easy to misread:
 //   failingTests                  every failure, whatever it was. This is the field
 //                                 that answers "did the suite stay green".
 //   collectorAnnouncedSignature   ONLY computenet-dqy.34's message ("... collector
@@ -45,10 +45,16 @@
 //                                 does not match it and scores 0 — so a run can have
 //                                 failingTests=1 collectorAnnouncedSignature=0 and
 //                                 still be an announcement loss.
+//   expectedTests                 the baseline the run actually checked against — the
+//                                 --expect-tests value, or the count iteration 1
+//                                 derived. Read it: unexpectedTestCountIterations=0
+//                                 only says the sample agreed with ITSELF, so a run
+//                                 whose iteration 1 was truncated (a class that failed
+//                                 to initialise every time, a filtered selector) scores
+//                                 0 against a baseline that is too low. This field is
+//                                 how that shows up in the one line people quote.
 //   unexpectedTestCountIterations iterations whose executed test count differed from
-//                                 the expected count (the --expect-tests value, or
-//                                 iteration 1's own count when it was omitted).
-//                                 Anything but 0 means the sample is not what it
+//                                 expectedTests. Anything but 0 means the sample is not what it
 //                                 claims to be (a class that failed to initialise, a
 //                                 selector that stopped matching), so a zero-failure
 //                                 result from a run with a nonzero count here proves
@@ -225,8 +231,9 @@ public final class SuiteLoop {
         long elapsed = Duration.between(started, Instant.now()).toSeconds();
         String summary = String.format(
                 "SUMMARY label=%s runs=%d failingIterations=%d failingTests=%d collectorAnnouncedSignature=%d"
-                        + " unexpectedTestCountIterations=%d elapsedSeconds=%d",
-                label, runs, totalFailingIterations, totalFailingTests, signatureMatches, shortIterations, elapsed);
+                        + " expectedTests=%d unexpectedTestCountIterations=%d elapsedSeconds=%d",
+                label, runs, totalFailingIterations, totalFailingTests, signatureMatches,
+                expectTests, shortIterations, elapsed);
         System.out.println(summary);
         logBuf.append(summary).append('\n');
         Files.writeString(log, logBuf.toString(), StandardCharsets.UTF_8);
