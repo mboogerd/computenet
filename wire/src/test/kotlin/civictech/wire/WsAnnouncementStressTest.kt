@@ -569,11 +569,17 @@ class WsAnnouncementStressTest {
             }
             // computenet-hdq: the depth parkedFor cannot see — work the bridge
             // host accepted whose dispatch task has not run. Per cell and total,
-            // both sides.
+            // both sides. One snapshot per host, summed here rather than read
+            // twice: stagedWorkTotal() takes its own snapshot, so calling both
+            // accessors on a host with traffic still moving could print a total
+            // that does not add up to the map beside it — in the one artifact a
+            // future post-mortem has to be able to take literally.
+            val clientStaged = clientBridge.stagedWorkDepth()
+            val serverStaged = serverBridge.stagedWorkDepth()
             appendLine(
-                "  staged (accepted, not yet dispatched): client bridge total=${clientBridge.stagedWorkTotal()}" +
-                    " ${clientBridge.stagedWorkDepth()} / server bridge total=${serverBridge.stagedWorkTotal()}" +
-                    " ${serverBridge.stagedWorkDepth()}",
+                "  staged (accepted, not yet dispatched): client bridge total=${clientStaged.values.sum()}" +
+                    " $clientStaged / server bridge total=${serverStaged.values.sum()}" +
+                    " $serverStaged",
             )
             val threads = Thread.getAllStackTraces().keys
                 .filter { it.isAlive }
