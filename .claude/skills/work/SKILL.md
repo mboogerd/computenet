@@ -227,7 +227,13 @@ Take the highest-priority unclaimed epic:
 bd ready --type=epic --limit 1 --json     # read the id
 bd update <id> --claim                    # claim that id specifically
 bd update <id> --add-label=owner:$BEADS_ACTOR
+bd update <id> --set-metadata skill_version=$(git hash-object .claude/skills/work/SKILL.md)
 ```
+
+That last line records **which revision of this skill the session ran
+under**. Friction items filed in step 7 carry it, so a fix is attributable
+to the revision that produced the report, and a report against a superseded
+revision can be re-validated instead of silently carried forward.
 
 **Before committing to an epic that was already broken down, check it has
 workable surface.** An epic whose remaining ready items all carry the
@@ -1301,10 +1307,17 @@ bd search "<a few distinctive words>" --json      # look for it first
 ```
 
 Found one → comment on it with this session's instance (what you were doing,
-what happened, what it cost). Not found → create it:
+what happened, what it cost). Not found → create it, **parented to the
+standing friction epic** `computenet-mfaw` — that epic is `defer`-ed so no
+work session ever selects it, and parenting keeps friction out of 5f's
+continuation pool; a separate remediation lane
+(`.claude/skills/remediate-friction/SKILL.md`) drains it by id:
 
 ```bash
+SKILL_V=$(bd show <epic> --json | jq -r '.[0].metadata.skill_version')   # recorded at claim (step 3)
 bd create --type=chore --priority=3 --label=skill-friction \
+  --parent=computenet-mfaw \
+  --metadata "{\"skill_version\":\"$SKILL_V\"}" \
   --title="work skill: <the friction in one line>" \
   --description="<what the skill says, what actually happened, what you did instead, what it cost>" \
   --acceptance="<what would have to change in the skill for this not to recur>"
@@ -1317,10 +1330,11 @@ lost-transcript problem this step exists to solve.
 Write it for someone editing `SKILL.md` next week with none of your context:
 name the step, quote the instruction, say what actually happened.
 
-Review the accumulated log with:
+Review the accumulated log — open count and per-item comment totals — with
+one command:
 
 ```bash
-bd list --label=skill-friction --status=open --json
+bd list --parent=computenet-mfaw --status=open --json
 ```
 
 Comment count is the signal. One report is an anecdote; the same issue
