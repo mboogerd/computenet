@@ -64,12 +64,14 @@ def overlaps(files, taken):
     on sibling branches, which is exactly the merge conflict this batching rule
     exists to prevent. A plain set intersection reports them disjoint because the
     strings differ (computenet-9eb). Containment is checked in BOTH directions,
-    since either claim may be the broader one.
+    since either claim may be the broader one. Inputs are normalised here too,
+    so the function is safe for a caller that did not go through claim_of().
     """
     hits = set()
-    for f in files:
-        for t in taken:
-            if f == t or f.startswith(t + "/") or t.startswith(f + "/"):
+    for f in {_norm(x) for x in files}:
+        for t in {_norm(x) for x in taken}:
+            # "." is the whole repo: it contains every claim, including itself.
+            if "." in (f, t) or f == t or f.startswith(t + "/") or t.startswith(f + "/"):
                 hits.add(t)
     return hits
 

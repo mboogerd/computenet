@@ -23,7 +23,9 @@ cases = [
     ({"wire/src/main"}, {"wire/src/test"}, False, "sibling directories"),
     ({"wire/src/testkit/X.kt"}, {"wire/src/test"}, False,
      "prefix match that is not a path boundary"),
-    ({nb._norm("./" + DIR + "/")}, {DIR}, True, "normalised ./dir/ form"),
+    ({"./" + DIR + "/"}, {DIR}, True, "overlaps() normalises its own inputs"),
+    ({"."}, {DIR}, True, "whole-repo claim contains everything"),
+    ({DIR}, {"./"}, True, "whole-repo claim on the taken side"),
 ]
 
 failed = 0
