@@ -1,6 +1,6 @@
 ---
 name: sync-report
-description: Reports what the unattended `work` runs did since you last looked, and what they now need from you. Reads the checkpoint, diffs PRs, beads, Linear and main against it, and returns one ranked list — per pending PR, the exact question you have to answer — then stops and waits. Use when the user says "what happened since last time", "sync me up", "give me a report", "catch me up", "where are we", or asks what the overnight/concurrent runs left behind.
+description: Reports what the unattended `work` runs did since you last looked, and what they now need from you. Reads the checkpoint, diffs PRs, beads and main against it, and returns one ranked list — per pending PR, the exact question you have to answer — then stops and waits. Use when the user says "what happened since last time", "sync me up", "give me a report", "catch me up", "where are we", or asks what the overnight/concurrent runs left behind.
 ---
 
 # /sync-report
@@ -46,13 +46,10 @@ bd human list
 bd list --status=in_progress --json
 ```
 
-Plus, if `LINEAR_API_KEY` is set, the Computenet project
-(`7122a2bb-1f79-46e5-9fc5-d250a1d0565c`) via the GraphQL API — issues whose
-`updatedAt` is after the checkpoint. Not set, or the call fails → say
-"Linear: not reachable" in one line and carry on. Linear is a mirror; nothing
-in this report depends on it.
+Linear is no longer in use (decided 2026-08-13) — do not query it, and do not
+report on it.
 
-Everything else is joined on the branch name: `work` names branches
+Everything is joined on the branch name: `work` names branches
 `feature/<bead-id>` and `task/<bead-id>`, so a PR's `headRefName` *is* its
 bead id. Use `bd show <id> --json` (`.metadata.pr`, `.metadata.review`) only
 for the handful of items you actually report on — not for all 190.
@@ -131,8 +128,8 @@ Rules that keep it tight:
   (ids) — close on your say-so."
 - No status tables, no per-item summaries of what the PR does. The user wrote
   the epics; they need the delta and the question, not a recap.
-- Anything you could not check (Linear down, a PR whose checks are still
-  running) gets one honest line. Do not silently omit it.
+- Anything you could not check (a PR whose checks are still running, an
+  unreachable service) gets one honest line. Do not silently omit it.
 
 Close the report with the questions restated as a numbered list in the same
 order — so the user can answer "1: yes, 2: skip, 3: …".
