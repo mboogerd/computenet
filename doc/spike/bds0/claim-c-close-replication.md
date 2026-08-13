@@ -797,10 +797,11 @@ Surprises worth recording, observed but not diagnosed here:
 
 Everything asserted below traces to a transcript in this section, to a
 transcript in `claim-a-echo-suppression.md` or `claim-b-ordering-authority.md`,
-or is explicitly marked as an inference. **This subsection ran no new probes**
-— the sub-checks above were sufficient — so where a statement reaches past what
+or is explicitly marked as an inference. Where a statement reaches past what
 was measured, it says so in its own words and names the single command that
-would settle it.
+would settle it. **One verdict-subsection probe was run** — the B→A
+resurrection hop, added during review on a fresh `rig.sh init` root and pasted
+below; the four sub-checks above answered every other verdict sentence.
 
 **Verdict in one line: claim (c) passes as posed on the three legs that
 matter — a peer's close replicates with no new `bd` surface, and the
@@ -893,13 +894,67 @@ exactly C1a's create shape. The deletion survives only until the next inbound
 hop touches that row.
 
 Labelling that honestly: **the A→B direction is VERIFIED** (C4d's unfiltered
-hop, twice, on two independent rig roots — B kept `Z`). **The B→A resurrection
-is an INFERENCE, not measured.** It follows directly from C1a, where a row
-absent from the destination was created by import with its fields intact, and
-from C4d, where B's copy of `Z` remained a perfectly ordinary exportable row.
-It is one command from being measured — `rig.sh hop B A --dot "B:1" "$Z"` after
-the delete, then `bd -C "$A" --sandbox show "$Z"` — and that command should be
-run before BDS4 writes anything that depends on the answer.
+hop, twice, on two independent rig roots — B kept `Z`). The B→A resurrection
+was drafted here as an INFERENCE from C1a and C4d; it was then **measured
+during review** and is now **VERIFIED ON THE RIG** — the transcript is the
+next subsection. Both halves of the anti-durability statement are therefore
+observations, not predictions.
+
+##### Verdict-subsection probe — B→A resurrects a hard-deleted row
+
+Run during review of this task on a third, independent `rig.sh init` root
+(`bd version 1.1.2 (Homebrew)`, Darwin arm64), against a mktemp rig only. The
+sequence is C4d's, continued by one further hop in the opposite direction:
+
+```bash
+Z=$(bd -C "$A" --sandbox create "REVIEW: hard-deleted in A after replication" \
+    --type task --silent)                                  # bdsa-1d0
+sleep 1
+bash scripts/spike/bds0/rig.sh hop A B --dot "A:1" "$Z"    # B's copy: open
+bd -C "$A" --sandbox delete "$Z" --force
+bd -C "$A" --sandbox export | grep -c "$Z"                 # 0
+bd -C "$A" --sandbox show "$Z"
+```
+
+```
+✓ Deleted bdsa-1d0
+  Removed 0 dependency link(s)
+  Updated text references in 0 issue(s)
+0
+Error fetching bdsa-1d0: no issue found matching "bdsa-1d0"
+```
+
+C4d's A→B leg reproduces — a full unfiltered hop of everything A holds leaves
+B's copy alive and untouched:
+
+```bash
+bash scripts/spike/bds0/rig.sh hop A B --dot "A:2"
+bd -C "$B" --sandbox show "$Z" --json | jq -c '.[0]|{id,status,title}'
+```
+
+```json
+{"created":3,"updated":null,"skipped":0,"tie":0,"stale":0}
+{"id":"bdsa-1d0","status":"open","title":"REVIEW: hard-deleted in A after replication"}
+```
+
+(The first line is the reshaped report summary, as in C4d.) Then the one hop
+that was previously only inferred — B back into A, naming just `Z`:
+
+```bash
+bash scripts/spike/bds0/rig.sh hop B A --dot "B:1" "$Z"
+bd -C "$A" --sandbox show "$Z" --json | jq -c '.[0]|{id,status,title,created_at,updated_at}'
+```
+
+```json
+{"created": 1, "ids": ["bdsa-1d0"], "schema_version": 1, "skipped": 0, "source": "stdin"}
+{"id":"bdsa-1d0","status":"open","title":"REVIEW: hard-deleted in A after replication","created_at":"2026-08-13T17:26:00Z","updated_at":"2026-08-13T17:26:00Z"}
+```
+
+The hard-deleted row is back in A, under its original id, with `created_at`
+and `updated_at` from before the delete — `bd import` reports it as an
+ordinary `created`, indistinguishable from C1a's create shape, because from
+the import path's point of view that is exactly what it is. The delete
+survived one hop in each direction and then undid itself.
 
 So: **close is the removal interface**, not as a convenience but as the only
 removal signal that has a representation on the wire at all. C1 verifies it
@@ -1102,16 +1157,19 @@ Each is a single command away, and any one changes a conclusion above:
   entire check; today it offers only `--allow-stale`, `--dedup`, `--dry-run`
   and `-i`, which is why "guards off on this path" is a property rather than a
   setting.
-- **A B→A hop failing to resurrect a hard-deleted row.** The one inference in
-  this verdict that is not measured; `rig.sh hop B A` after `bd delete` settles
-  it either way.
+- **A B→A hop failing to resurrect a hard-deleted row.** Now measured (the
+  verdict-subsection probe above): re-run `rig.sh hop B A` after `bd delete`
+  and read `bd show` in A. A row that does *not* come back reverses the
+  anti-durability finding.
 
 ### What did not work, in this subsection
 
-- **No new probe was run.** The four sub-checks answered every verdict
-  sentence, so nothing here is a fresh measurement; the honest cost is that the
-  two forward-looking claims — B→A resurrection, and BDS1's re-baseline being
-  the only deletion-aware path — are labelled inferences and remain unmeasured.
+- **Exactly one new probe was run** (the B→A resurrection hop, added during
+  review), because the four sub-checks answered every other verdict sentence.
+  The residual cost is that the remaining forward-looking claims — BDS1's
+  re-baseline being the only deletion-aware path, and reopen replicating as an
+  ordinary update (BDS4 implication 8) — are labelled inferences and remain
+  unmeasured.
 - **The epic's §2 "propose the alternative seam" rule could not be applied
   cleanly.** It is written for a *failed* claim, and claim (c) did not fail: a
   premise inside a passing sub-check was falsified instead. The deletion seams
