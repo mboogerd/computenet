@@ -65,6 +65,31 @@ the item you just read and decided to work. Select with `bd ready ...
   locally at 5c is still open in the other machine's view until Finalize
   pushes. That is fine precisely because the other machine has no business
   inside your claimed epic — the epic-level claim is what it respects.
+- **…except on 5f routes 3–4, which are exactly the other machine having
+  business inside your epic.** A *child* claim is a local write; an *epic*
+  claim is always pushed at acquisition. So a session picking up a
+  cross-epic blocker or continuation item re-verifies against pulled state,
+  where your locally-claimed child still reads as unclaimed, and claims it.
+
+  **Worked example, 2026-08-13 — computenet-f8tf.** MacBoo claimed epic
+  `computenet-dqy`, claimed its child `computenet-dqy.40`, and dispatched an
+  implementer; that claim was local by design. At 02:30Z it shipped PR #79,
+  the instrument half. At 03:07Z PR #83 — **another session** — merged
+  "Stop one failed send from abandoning the rest of the catch-up sweep
+  (computenet-dqy.40)", force-updating the shared remote branch and landing a
+  kernel fix. Both changes touched the same lines of `Peering.kt`'s catch-up
+  sweep. Cost: one hand-resolved conflict on an already-certified branch, one
+  re-review, and a verdict invalidated after the fact. Neither session did
+  anything wrong by the written skill, and neither existing safeguard could
+  fire — step 3's concurrent-run check queries *epics* `in_progress` for this
+  actor, and the other session did not hold this epic.
+
+  The check that does work is on the **parent epic**, which is visible
+  (SKILL.md 5b): before claiming an item under an epic you do not hold, read
+  that epic's assignee and skip the item if the other machine has it. And if
+  a sibling PR turns up touching your own item's files, that is a collision —
+  stop working the item and park a question, per the section below. Do not
+  pick a winner: the losing side may hold committed, pushed, unreviewed work.
 
 ## What a collision looks like when it surfaces
 
@@ -95,7 +120,17 @@ Every bracket fails loudly; none retries silently:
 - **An acquisition push is rejected** → pull, re-verify the target is still
   yours to take, retry once. Still failing → stop and report; an unpushed
   acquisition is exactly the window the bracket exists to close.
-- **The Finalize publication push fails** → say so at the top of the session
-  summary and ask for a human to run `scripts/beads-nightly-sync.sh` —
-  nothing is scheduled to do it (`doc/ops/beads-sync-runbook.md` §5). Never
-  swallow it: unpublished state is local-only and dies with this machine.
+- **The Finalize publication push is rejected non-fast-forward** → that is
+  the *expected* outcome of two machines running slots concurrently, not an
+  incident. Recover inline: `bd dolt pull && bd dolt push`, then verify your
+  own closes, parks and comments survived the merge (SKILL.md step 6).
+  Escalate only if the pull reports a real merge conflict, or the second push
+  also fails.
+- **The Finalize publication push fails for any other reason** → say so at
+  the top of the session summary. Do not reach for
+  `scripts/beads-nightly-sync.sh`: it is the same two commands with logging
+  and no conflict resolution, nothing is scheduled to run it
+  (`doc/ops/beads-sync-runbook.md` §5), and an unattended session has had the
+  wrapper refused by the permission classifier while both commands inside it
+  ran. Never swallow it: unpublished state is local-only and dies with this
+  machine.
