@@ -431,6 +431,31 @@ open class ManagedHost(
     )
 
     /**
+     * Depth of work this host **accepted and staged** but has not dispatched yet,
+     * per cell (computenet-hdq). Purely an observability seam: it reads
+     * [civictech.cell.control.AttentionScheduler.stagedDepths] and changes
+     * nothing about when or whether work runs.
+     *
+     * It exists because "a delivery that never ran" was the one silent outcome on
+     * the announcement path with no instrument. [LocationRegistry.parkedFor] —
+     * the depth every announcement diagnostic prints — counts invocations parked
+     * *before* a host accepted them; an invocation past [enqueueHostedInvocation]
+     * is parked nowhere it can see. Both hops behind a peering socket (the bridge
+     * ingress decode and the registry mirror delivery) go through this staging, so
+     * a stalled hop and an announcement that was never sent used to read
+     * identically: zero everywhere, stderr silent.
+     *
+     * Counts only — never the staged [civictech.cell.proxy.HostedPortInvocation]s
+     * — so this cannot be used to drain, reorder or re-own staged work, and no
+     * `Owned`/`Leased` payload is reachable through it. Per host, not per subtree:
+     * child hosts have their own.
+     */
+    fun stagedWorkDepth(): Map<CellRef, Int> = attentionScheduler.stagedDepths()
+
+    /** Total of [stagedWorkDepth], summed from a single snapshot. */
+    fun stagedWorkTotal(): Int = stagedWorkDepth().values.sum()
+
+    /**
      * WAL/journal/checkpoint/frontier durability (M10.1/M10.2, G-59) —
      * extracted to [HostDurability] (RS-8.2). Shares [journalSelector] (the
      * SAME lambda instance this host also uses for its own two

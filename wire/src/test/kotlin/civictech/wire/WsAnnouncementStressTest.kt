@@ -382,13 +382,21 @@ class WsAnnouncementStressTest {
                     val inject = i in injectFailuresAt
                     try {
                         awaits++
-                        observe(i, "catch-up", early.ref, client.registry, server.registry, connection, listener, captured, failures, latencies, sink, inject)
+                        observe(
+                            i, "catch-up", early.ref, client.registry, server.registry,
+                            client.bridgeHost, server.bridgeHost,
+                            connection, listener, captured, failures, latencies, sink, inject,
+                        )
                         // live shape: published after connect returned, while the
                         // hello exchange may still be in flight
                         val late = CollectingCell()
                         server.host.managementInlet.call.spawn(late)
                         awaits++
-                        observe(i, "live", late.ref, client.registry, server.registry, connection, listener, captured, failures, latencies, sink, inject)
+                        observe(
+                            i, "live", late.ref, client.registry, server.registry,
+                            client.bridgeHost, server.bridgeHost,
+                            connection, listener, captured, failures, latencies, sink, inject,
+                        )
                     } finally {
                         connection.shutdown()
                         runCatching { listener.stop(1000) }
@@ -432,6 +440,8 @@ class WsAnnouncementStressTest {
             ref: CellRef,
             registry: LocationRegistry,
             server: LocationRegistry,
+            clientBridge: ManagedHost,
+            serverBridge: ManagedHost,
             connection: WsTransport.WsConnection,
             listener: WsTransport.WsListener,
             captured: ByteArrayOutputStream,
@@ -463,7 +473,7 @@ class WsAnnouncementStressTest {
                 iteration = iteration,
                 shape = if (inject) "$shape injected" else shape,
                 arrivedAfterMs = late,
-                diagnostics = diagnose(ref, registry, server, connection, listener, captured),
+                diagnostics = diagnose(ref, registry, server, clientBridge, serverBridge, connection, listener, captured),
                 injected = inject,
             )
             failures += failure
@@ -509,11 +519,24 @@ class WsAnnouncementStressTest {
          *   local refs, never under the announced ref. So the old report's
          *   "parked for awaited ref: 0" ruled out nothing at all; the per-local-
          *   ref park depths below are where a stalled hop is visible.
+         * - **Did the delivery run at all?** (computenet-hdq.) Every park depth
+         *   above is [LocationRegistry.parkedFor], which counts invocations
+         *   parked *before* a host accepted them. An invocation a bridge host
+         *   accepted — past `enqueueHostedInvocation`, staged in the attention
+         *   scheduler — but never dispatched is parked nowhere any of those
+         *   lines can see, and writes nothing to stderr, so it read exactly like
+         *   an announcement that was never sent: zero everywhere, `<silent>`.
+         *   The `staged` line below is that third outcome's instrument, taken on
+         *   both bridge hosts because both hops behind the socket stage on the
+         *   client's. It is a *depth*, not an attribution: a non-zero reading
+         *   says work was accepted and had not run when the report was taken.
          */
         private fun diagnose(
             ref: CellRef,
             registry: LocationRegistry,
             server: LocationRegistry,
+            clientBridge: ManagedHost,
+            serverBridge: ManagedHost,
             connection: WsTransport.WsConnection,
             listener: WsTransport.WsListener,
             captured: ByteArrayOutputStream,
@@ -544,6 +567,14 @@ class WsAnnouncementStressTest {
             server.localRefs().forEach { local ->
                 appendLine("  parked for server-local $local: ${server.parkedFor(local).size}")
             }
+            // computenet-hdq: the depth parkedFor cannot see — work the bridge
+            // host accepted whose dispatch task has not run. Per cell and total,
+            // both sides.
+            appendLine(
+                "  staged (accepted, not yet dispatched): client bridge total=${clientBridge.stagedWorkTotal()}" +
+                    " ${clientBridge.stagedWorkDepth()} / server bridge total=${serverBridge.stagedWorkTotal()}" +
+                    " ${serverBridge.stagedWorkDepth()}",
+            )
             val threads = Thread.getAllStackTraces().keys
                 .filter { it.isAlive }
                 .groupingBy { it.name.replace(Regex("[0-9a-f-]{8,}"), "*") }
