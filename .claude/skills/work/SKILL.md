@@ -270,7 +270,8 @@ That epic id is `<epic>` below. **One epic *claim* per session.** The claim
 is what a concurrent run on this machine uses to tell a live session from a
 crash, so never hold two epic claims. But the rule limits *claims*, not
 work: when the epic's queue goes dry with budget left, 5f says exactly what
-you may still pick up (a cross-epic blocker, unparented ready work) — going
+you may still pick up (a cross-epic blocker, or continuation items from
+other epics' ready features and tasks) — going
 idle for hours because the epic dried up early is a failure mode, not
 compliance.
 
@@ -1108,14 +1109,55 @@ cross-epic dependency is a permanent stall: no session on this epic can ever
 unblock it, and the one-claim rule is about *epic* claims, which this does
 not add.
 
-**4. The epic is dry but real budget remains (before T-90m)** → you may take
-**unparented ready work**: bugs and chores with no epic parent
-(`bd ready --json`, filter out anything with a parent or the `human` label,
-claim the specific id). Each is its own worktree/branch/PR like a feature.
-Never claim a second *epic* — that is the line the concurrent-run check
-depends on. If the epic went dry because everything left is human-gated or
-cross-epic blocked, also park the epic per step 3's `bd defer` route so the
-next session doesn't resume a dead queue.
+**4. The epic is dry but real budget remains (before T-90m)** → top up with
+**continuation work**, claimed by specific id. Route 3 already established
+that claiming an *item* inside another epic adds no epic claim; this route
+uses the same move at scale. Never claim a second *epic* — that is the line
+the concurrent-run check (step 3) depends on. If the epic went dry because
+everything left is human-gated or cross-epic blocked, also park the epic per
+step 3's `bd defer` route so the next session doesn't resume a dead queue.
+
+Build the candidate pool from `bd ready --json`: ready **features and tasks
+parented to other epics**, plus unparented bugs and chores. Drop from it:
+
+- anything with the `human` label (this exclusion holds on every route);
+- anything with `parked_at` within 6h;
+- **anything that is review or verification of output this session
+  produced** — warm context is exactly what makes self-approval likely, and
+  this is the one place the affinity ordering below argues for the wrong
+  thing, so it's excluded outright, whatever its score;
+- anything whose `metadata.files` overlaps a claim already `in_progress`
+  (`bd list --status=in_progress --json`) — an ordering that seeks file
+  overlap also seeks collisions, so check first and skip the collider.
+
+Order what survives:
+
+1. direct dependents of items this session completed;
+2. file-surface overlap with this session's changed-file set — computed from
+   paths actually changed on branches this session pushed
+   (`git diff --name-only origin/main...<branch>`), never from titles or
+   labels;
+3. unparented ready bugs and chores;
+4. general ready order.
+
+Ties within a tier break by the next criterion down: an item that is both a
+direct dependent *and* overlaps the changed-file set outranks a dependent
+that doesn't, and so on.
+
+**Admit a candidate only if its estimate fits the remaining budget with
+margin.** Remaining budget comes from the step-2 monitor's notifications;
+the estimate is the item's 45–60m sizing from breakdown (5b). Margin
+defaults to 15 minutes; `WORK_CONTINUATION_MARGIN_MIN` overrides it. Never
+admit on elapsed fraction alone — that converts idle time into half-finished
+branches at slot end, which is worse than idling. The T-90m gate above still
+applies on top.
+
+Work the admitted item by its shape: a feature via 5a, a task via its parent
+feature's flow (5b's claim/metadata/worktree/dispatch, branched from that
+feature's branch), an unparented bug or chore as its own worktree/branch/PR
+like a feature. Every shape records the standard `branch`/`worktree`
+metadata, so an overrun leaves resumable state a later session picks up
+through the normal resume queries — never a stranded branch.
 
 **5. Nothing can progress → Finalize**, closing the epic only when it
 actually has children and every one is closed:
@@ -1149,6 +1191,17 @@ open (`bd update <epic> --status=open`) — the claim binds it to *this
 session*, not to this machine, and the next session on either machine must
 select by priority, not by leftover assignee. The owner label stays as
 provenance.
+
+**Record slot utilisation on the epic** — 5f route 4's open question
+(top-up vs batch-upfront vs epic resizing) gets settled with this data, so
+every session writes it:
+
+```bash
+bd comment <epic> "utilisation: worked <N>m of <slot>m allocated; continuation items: <ids, or none>"
+```
+
+Worked minutes run from session start to entering Finalize; allocated is the
+slot the routine named (default 300).
 
 Do the friction log (step 7) **before** the push below, so its beads items go
 out with everything else.
