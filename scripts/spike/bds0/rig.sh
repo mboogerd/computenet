@@ -23,6 +23,9 @@
 #   rig.sh journal <WS> <issue-id>
 #                     Print workspace <WS>'s journal (Dolt `events` table)
 #                     rows for <issue-id>, as JSON, ordered by created_at.
+#                     <WS> is a workspace name resolved under
+#                     $BDS0_RIG_ROOT (same convention as `hop`), or an
+#                     explicit path to a workspace directory.
 #                     bd 1.1.2 has no `bd events` command and `bd sql` is
 #                     not supported in embedded mode, so this reads the
 #                     workspace's embedded Dolt database directly with the
@@ -112,6 +115,7 @@ cmd_hop() {
 
   local dot=""
   local allow_stale=0
+  local ids_json='[]'
   local -a ids=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -144,12 +148,10 @@ cmd_hop() {
   # metadata key already present on it.
   local jq_filter
   if [[ ${#ids[@]} -gt 0 ]]; then
-    local ids_json
     ids_json=$(printf '%s\n' "${ids[@]}" | jq -R . | jq -s .)
     jq_filter='select(.id as $i | $ids | index($i)) | .metadata = ((.metadata // {}) + {cn_dot: $dot})'
   else
     jq_filter='.metadata = ((.metadata // {}) + {cn_dot: $dot})'
-    ids_json='[]'
   fi
 
   local delta_file="$BDS0_RIG_ROOT/last-hop.jsonl"
@@ -167,6 +169,9 @@ cmd_hop() {
 
 # cmd_journal <WS> <issue-id> -> print the journal (Dolt `events` table)
 # rows for <issue-id> in workspace <WS>, as JSON, ordered by created_at.
+# <WS> follows the same convention as `hop`: a workspace name (A, B) is
+# resolved under $BDS0_RIG_ROOT; anything that is already a directory is
+# used as an explicit workspace path.
 # Locates the embedded Dolt directory by globbing
 # <ws>/.beads/embeddeddolt/*/ rather than hardcoding the workspace's issue
 # prefix, since that prefix varies per workspace (bdsa, bdsb, ...).
@@ -175,6 +180,23 @@ cmd_journal() {
   if [[ -z "$ws" || -z "$issue_id" ]]; then
     echo "usage: $0 journal <WS> <issue-id>" >&2
     exit 1
+  fi
+
+  # Accept a workspace name (the `hop` convention) as well as a path. A
+  # bare name only resolves once BDS0_RIG_ROOT is set, so say that rather
+  # than failing later with a confusing "no embedded Dolt database" error.
+  if [[ ! -d "$ws" ]]; then
+    if [[ -z "${BDS0_RIG_ROOT:-}" ]]; then
+      echo "error: '$ws' is not a workspace directory and BDS0_RIG_ROOT is not" \
+        "set, so it cannot be resolved as a workspace name (run 'rig.sh init'" \
+        "and source its output)" >&2
+      exit 1
+    fi
+    ws=$(bd_ws "$BDS0_RIG_ROOT" "$ws")
+    if [[ ! -d "$ws" ]]; then
+      echo "error: no workspace '${1}' under \$BDS0_RIG_ROOT ($BDS0_RIG_ROOT)" >&2
+      exit 1
+    fi
   fi
 
   if ! command -v dolt >/dev/null 2>&1; then
@@ -230,15 +252,29 @@ cmd_smoke() {
   echo "== rig.sh smoke: hop A B --dot 'A:1' $seed_id ==" >&2
   cmd_hop A B --dot 'A:1' "$seed_id" >&2
 
-  echo "== rig.sh smoke: verify $seed_id exists in B ==" >&2
-  if ! bd_ws_run "$ws_b" show "$seed_id" --json >/dev/null; then
+  echo "== rig.sh smoke: verify $seed_id exists in B, stamped ==" >&2
+  local landed
+  if ! landed=$(bd_ws_run "$ws_b" show "$seed_id" --json); then
     echo "smoke FAILED: $seed_id does not exist in workspace B after hop" >&2
     exit 1
   fi
 
+  # `bd show --json` yields an array; normalise so the assertion below does
+  # not depend on that shape. The stamp is what makes the hop a
+  # *replication* hop rather than a plain import, so assert it landed.
+  local landed_dot
+  landed_dot=$(echo "$landed" \
+    | jq -r 'if type == "array" then .[0] else . end | .metadata.cn_dot // "<absent>"')
+  if [[ "$landed_dot" != "A:1" ]]; then
+    echo "smoke FAILED: expected metadata.cn_dot 'A:1' on $seed_id in B, got '$landed_dot'" >&2
+    exit 1
+  fi
+
+  # Use the workspace-name form here, not the path, so the smoke exercises
+  # the invocation the README documents.
   echo "== rig.sh smoke: journal B $seed_id ==" >&2
   local journal_output
-  journal_output=$(cmd_journal "$ws_b" "$seed_id")
+  journal_output=$(cmd_journal B "$seed_id")
   echo "$journal_output"
 
   local event_count

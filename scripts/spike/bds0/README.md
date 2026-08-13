@@ -37,6 +37,31 @@ seeded issue from A into B (`hop`), and prints that issue's journal in B
 (`journal`). It asserts the issue landed in B and that its journal has at
 least one event, and exits nonzero on any failure.
 
+## The loop a claim feature runs
+
+`smoke` is the one-command check that the rig works. A claim feature drives
+the same four steps itself, mutating A with `bd` directly between them:
+
+```bash
+eval "$(bash scripts/spike/bds0/rig.sh init)"          # sets BDS0_RIG_ROOT
+A="$BDS0_RIG_ROOT/A"
+
+X=$(bd -C "$A" --sandbox list --json | jq -r '.[0].id')
+bd -C "$A" --sandbox update "$X" --title "edited in A"  # mutate in A
+
+bash scripts/spike/bds0/rig.sh hop A B --dot "A:7" "$X" # export, stamp, import
+bash scripts/spike/bds0/rig.sh journal B "$X"           # read B's journal
+```
+
+Every `bd` call against a rig workspace — the rig's own and yours — must go
+through `bd -C <workspace> --sandbox`. That is what keeps the run off this
+repository's live `.beads`.
+
+Note that `bd import` only overwrites on a strictly newer `updated_at` at
+one-second resolution (epic claim (b)), so a mutate-then-hop in the same
+second can land as a tie and keep B's copy. Give the mutation a second, or
+pass `--allow-stale`, when a hop is expected to overwrite.
+
 ## Subcommands
 
 ### `rig.sh init`
@@ -74,7 +99,9 @@ for post-mortem inspection.
 ### `rig.sh journal <WS> <issue-id>`
 
 Prints workspace `<WS>`'s journal records for `<issue-id>` as JSON, ordered
-by `created_at`.
+by `created_at`. `<WS>` is a workspace name resolved under `$BDS0_RIG_ROOT`
+(the same convention `hop` uses, so `rig.sh journal B <id>` works after
+sourcing `init`'s output), or an explicit path to a workspace directory.
 
 The installed `bd` (1.1.2) has no `bd events` command, and `bd sql` fails
 with `'bd sql' is not yet supported in embedded mode`. The journal surface
