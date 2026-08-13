@@ -287,6 +287,16 @@ object WsTransport {
         private val preHelloDropCount = AtomicLong()
         val preHelloDrops: Long get() = preHelloDropCount.get()
 
+        /**
+         * Announcements this connection instance's mirror refused at a shut
+         * gate (computenet-dqy.40) — see [RegistryMirrorCell.refusedAnnouncements].
+         *
+         * Reads the *current* instance only, which is the whole point: a
+         * superseded mirror's refusals belong to the connection that was
+         * fenced off, and a diagnosis asks what the live connection is doing.
+         */
+        val refusedAnnouncements: Long get() = mirror?.refusedAnnouncements ?: 0L
+
         /** The current announcement hook — replaced on every (re)hello so reconnects don't leak stale announcers (M10.3). */
         @Volatile
         private var announcement: AutoCloseable? = null
@@ -473,6 +483,24 @@ object WsTransport {
         private val started = CountDownLatch(1)
 
         /**
+         * The two silent drops on this listener's announcement path, summed
+         * over its live sessions (computenet-dqy.40): binary frames refused
+         * before an admitted hello ([Session.preHelloDrops]) and announcements
+         * refused at a shut mirror gate ([Session.refusedAnnouncements]).
+         *
+         * Neither writes anything to `System.err` — measured, see
+         * `WsAnnouncementSilenceInventoryTest` — so a lost announcement whose
+         * only recorded symptom is silence cannot be attributed without them.
+         * Live sessions only: a closed connection's Session is removed in
+         * [onClose], so a count taken after a disconnect is a count of what is
+         * still connected.
+         */
+        val preHelloDrops: Long get() = sessions.values.sumOf { it.preHelloDrops }
+
+        /** @see preHelloDrops */
+        val refusedAnnouncements: Long get() = sessions.values.sumOf { it.refusedAnnouncements }
+
+        /**
          * Set before any deliberate shutdown reaches the library, so the
          * watchdog never mistakes a close we asked for for a loss.
          *
@@ -610,6 +638,18 @@ object WsTransport {
     ) : WebSocketClient(uri) {
 
         private val session = Session(side, { send(it) }, { shutdown() })
+
+        /**
+         * The two silent drops on this dialer's announcement path
+         * (computenet-dqy.40) — see [WsListener.preHelloDrops] for why they are
+         * worth reading. A client keeps one Session across every reconnect, so
+         * [preHelloDrops] accumulates over the connection's whole life while
+         * [refusedAnnouncements] reports the *current* instance's mirror only.
+         */
+        val preHelloDrops: Long get() = session.preHelloDrops
+
+        /** @see preHelloDrops */
+        val refusedAnnouncements: Long get() = session.refusedAnnouncements
 
         /**
          * False once [shutdown] is called (M10.3). Together with an interrupt of the
