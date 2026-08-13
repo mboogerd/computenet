@@ -25,6 +25,30 @@ than restarting. That's the whole reason the worktree is preserved.
    they cite. Follow AGENTS.md's "Start every task here" — the cited spec
    text is the authority, not this file. Note `metadata.files`: your
    boundary.
+
+   **When two clauses of the same bead conflict, the acceptance criteria
+   win.** Acceptance criteria are checkable; Implement/design prose describes
+   *how* and is advisory, which makes it the clause most likely to be wrong —
+   it can describe a mechanism no codebase ever had. computenet-lxq
+   prescribed expressing a bind as a structural seam, while its criterion
+   demanded the pin be mutation-killed (deleting the bind argument at the
+   production call site must fail a test). A test asserting what
+   `bindAddressFor(port)` *returns* stays green when the call site stops
+   calling it, so the two cannot both be satisfied. Note that this is
+   detectable by reading the bead alone — re-verifying the prescription
+   against the code would not catch it.
+
+   **If you diverge, say so on the bead**, naming which clause you could not
+   satisfy and why:
+
+   ```bash
+   bd comment <id> "Diverged from the Implement clause: <what it prescribes>. It cannot satisfy <the criterion, verbatim>, because <mechanism>. Implemented instead: <what you did>, which the criterion checks by <how>."
+   ```
+
+   The branch this rule closes is the silent one: an implementer that follows
+   Implement prose literally produces a change that passes review-by-reading
+   and fails the criterion it was written to satisfy — which is how a vacuous
+   test lands (computenet-dqy.36, computenet-qaz).
 2. Check dependencies (`bd show <id>` lists blockers). If something it
    depends on isn't actually done, that's a data problem in beads, not
    something to route around — park it ([ask-human.md](ask-human.md))
@@ -60,13 +84,25 @@ than restarting. That's the whole reason the worktree is preserved.
    ```
 
    Then derive the real one and report both.
-4. Implement the smallest coherent change that satisfies the task.
+4. **Size any measurement the task prescribes before you run it.** N runs x
+   the per-run cost is a number you can compute in a minute; a dispatch slot
+   is ~45-60 minutes. If the prescribed sample does not fit, **say so on the
+   bead and report it** — do not substitute a cheaper sample and present its
+   result as the answer. An affordable measurement standing in for an
+   unaffordable one produces a number that looks like a finding and is not
+   (computenet-dqy.37: 0/260 in-process runs bounds the rate at 1.15%, which
+   does not exclude even the unrepaired rate the item was testing).
+
+   ```bash
+   bd comment <id> "Prescribed measurement does not fit a task slot: <N> runs x <per-run cost> = <total>. Ran <what was affordable> instead, which bounds <quantity> at <figure> and cannot discriminate <the question>. The full sample needs its own item."
+   ```
+5. Implement the smallest coherent change that satisfies the task.
    - Hit a fork that clears the [ask-human.md](ask-human.md) bar (ambiguous,
      expensive, risky, hard to revert)? Park it instead of guessing, then
      report and finish.
    - Need a file outside your claim? **Stop and report it** rather than
      expanding silently.
-5. Verify per AGENTS.md's "Verification" section — narrowest relevant test
+6. Verify per AGENTS.md's "Verification" section — narrowest relevant test
    first, then the affected module's suite. Don't report success on an
    untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
    replays cached results, so a green build is not evidence a test executed.
@@ -93,13 +129,21 @@ than restarting. That's the whole reason the worktree is preserved.
    run overwriting `<module>/build/test-results`. Invocation, the `SUMMARY`
    fields to quote, and the two cases where a Gradle loop is still the right
    instrument are in [review-task.md](review-task.md) §2.
-6. Commit on your branch, then push it. Your worktree has its own index, so
+7. Commit on your branch, then push it. Your worktree has its own index, so
    ordinary staging is safe here:
    ```bash
    git -C <your-worktree> add <your paths>
    git -C <your-worktree> commit -m "<what changed and why>"
    git -C <your-worktree> push -u origin <your-branch>
    ```
+   **This is a gate, not a formality: reporting a task done with an
+   uncommitted deliverable is an error.** Every downstream step reads the
+   branch, so a finished file that was never committed is indistinguishable
+   from no work at all — computenet-8kj.4.1 reported complete with a 788-line
+   document living only in the working tree, on a branch byte-identical to
+   `origin/main`. Run `git -C <your-worktree> status --short` before you
+   report, and expect it empty.
+
    Push even when the task is unfinished — an unpushed branch exists only on
    this machine, so the work is invisible and gets redone if anything else
    picks the task up.
@@ -107,10 +151,10 @@ than restarting. That's the whole reason the worktree is preserved.
    Push **your own branch only**. Never merge into the feature branch, push
    it, or touch its PR: the orchestrator merges after review and serializes
    it so concurrent merges don't race.
-7. If implementation reveals genuine new follow-up work, create it as a
+8. If implementation reveals genuine new follow-up work, create it as a
    beads item (`bd create --parent=<feature-id>`) with its own `model` and
    `files` metadata — don't fold unrelated scope into this task.
-8. Finish:
+9. Finish:
    ```bash
    bd comment <id> "<what landed, and if unfinished, exactly what's left>"
    ```
@@ -121,13 +165,13 @@ than restarting. That's the whole reason the worktree is preserved.
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
-9. Report: the task id, the outcome, and the files you **actually** touched,
-   not just the ones you claimed. Drift is how the orchestrator fixes
-   scheduling for later batches.
+10. Report: the task id, the outcome, and the files you **actually** touched,
+    not just the ones you claimed. Drift is how the orchestrator fixes
+    scheduling for later batches.
 
-   Add a **friction** line for anything that made you slower or forced a
-   guess: an underspecified task, a wrong `files` claim, a command in these
-   instructions that didn't work, a step that didn't cover your case. Don't
-   file it yourself — the orchestrator logs it centrally so recurrences are
-   visible (SKILL.md step 7). Nothing to report is a fine answer; inventing
-   one is not.
+    Add a **friction** line for anything that made you slower or forced a
+    guess: an underspecified task, a wrong `files` claim, a command in these
+    instructions that didn't work, a step that didn't cover your case. Don't
+    file it yourself — the orchestrator logs it centrally so recurrences are
+    visible (SKILL.md step 7). Nothing to report is a fine answer; inventing
+    one is not.

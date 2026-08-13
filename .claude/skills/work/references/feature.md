@@ -10,6 +10,36 @@ bd list --parent=<id> --all --json
 
 Create only what's missing.
 
+## Verify the load-bearing premises first
+
+An item can assert its own infrastructure. "Over the existing Headscale
+tailnet that is reachability and encryption for free" is a *premise*, not a
+requirement, and the breakdown inherits it into every child it writes.
+Epic computenet-o97 did exactly that: two of five features were written on top
+of that sentence, and there is no tailnet on this machine — no
+tailscale/headscale binary, no `100.64.0.0/10` address on any interface,
+nothing in the repo mentioning it. One `ifconfig` would have caught it, before
+~40 minutes of breakdown across two agents.
+
+So before you decompose: **list the item's load-bearing environmental
+premises — a host, a network, a service, a credential, a tool on `PATH`, a
+platform behaviour — and verify each with a concrete command.** Put the
+command and its output in the item's comment thread, so the next reader does
+not re-derive it.
+
+```bash
+command -v <tool>            # a tool the item assumes is installed
+ifconfig | grep 100.64       # a network: grep an ADDRESS PREFIX, not a CIDR —
+                             # interfaces render 100.x.y.z, so 100.64.0.0/10 never matches
+ls <path>                    # a host artifact the item assumes exists
+curl -sS -o /dev/null -w '%{http_code}' <url>   # a service it assumes is up
+```
+
+**If a premise is false, park the item** ([ask-human.md](ask-human.md)) rather
+than producing children that inherit it. Deferring the question into a child
+task as a "discovery step" is not verification — it is the same unverified
+assumption, one level further from anyone who could notice.
+
 ## Break it down
 
 Read the feature (`bd show <id>`), its parent epic, and every spec section
@@ -32,6 +62,23 @@ by exactly one task, and none left unowned.
 Size by **read-surface**: how much an agent must read and hold to be
 correct, not diff size. A fresh agent with no access to your context should
 be able to read the task and do the work — roughly an hour of it.
+
+**A clause that prescribes a measurement must state its per-run cost**, so
+the sizing above can be applied to it. "Re-measure at >= 240 fresh-JVM runs"
+is not sizeable until someone writes down that a fresh-JVM run costs ~40s,
+i.e. ~2.7h — well past a task slot. Multiply N x cost yourself and split the
+task, or file the large sample as its own item, rather than handing an
+implementer a number it cannot afford.
+
+This shape fails more quietly than an oversized implementation clause. An
+implementation task that is too big produces visibly unfinished code; a
+measurement task that is too big produces **a number**, which looks like an
+answer. Measured on computenet-dqy.37: the clause named one instrument
+(in-process, baseline 0.26%) and a sample size belonging to a different
+experiment (fresh-JVM, baseline 0.83%); the implementer spent 993s on the
+affordable one and correctly reported that 0/260 bounds the rate at 1.15% —
+which does not exclude even the unrepaired rate. The failure mode to close is
+**an affordable measurement silently standing in for an unaffordable one**.
 
 ```bash
 bd create --type=task --parent=<feature-id> --validate \

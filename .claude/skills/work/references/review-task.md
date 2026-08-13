@@ -21,6 +21,23 @@ git -C <task-worktree> diff origin/<feature-branch>...HEAD
 what it decided, what it deliberately left — usually lives only there. Read
 both before the diff.
 
+**An empty diff is not proof of no work — check the worktree first.**
+
+```bash
+git -C <task-worktree> status --short
+```
+
+A finished deliverable can exist only as an uncommitted working-tree file:
+computenet-8kj.4.1 was reported complete with a 788-line document that was
+never committed, on a branch byte-identical to `origin/main`. Every
+downstream step reads that as nothing — the merge merges nothing, and a
+reviewer diffing `origin/<feature-branch>...HEAD` sees an empty diff and can
+reasonably fail the task for having produced nothing. If `status` is not
+empty, **say so and name the files**: the work exists and the defect is that
+it was not committed ([task.md](task.md) makes commit-and-push the required
+final step), which is a different verdict from "produced nothing". Do not
+commit it for the implementer without saying you did.
+
 **Diff against the fetched remote base, never a local ref.** A task worktree's
 `main` is whatever the machine last fetched, and its copy of the feature
 branch can be behind the merges the orchestrator has already made. Both
@@ -56,6 +73,33 @@ Check:
   this task: say that rather than passing it on vibes.
 
 ## 2. Prove the tests ran
+
+**First settle which standard applies.** Everything in this section is
+Gradle-shaped, and a task whose deliverable is a *written finding* — a
+measurement, a spike, a documented experiment, a runbook — has no suite to
+cache-prove. It is not therefore unreviewable, and it is not exempt:
+
+> **For an empirical or documentation deliverable, the standard is
+> independent re-execution.** Take the commands, queries and sequences the
+> document records, run them yourself, and compare what you observe against
+> what it claims. A verdict that only *read* the document has reviewed
+> nothing.
+
+That is not hypothetical rigor. On epic computenet-8kj re-running is what
+caught every real defect: a factually wrong order-sensitivity assertion,
+transcripts that were not replayable in the order printed, and a finished
+deliverable left uncommitted. Four reviewers on that epic each derived this
+standard from the orchestrator's dispatch prompt rather than from this file,
+which worked only because the orchestrator happened to say it every time.
+
+**Tolerance on transcripts.** Real `bd` output is pretty-printed and carries
+warning preambles; documents paste one-line JSON. Reformatting, eliding a
+preamble, and truncating a long array with an explicit ellipsis are **not**
+defects. What is a defect: a changed value, a changed ordering that the
+document's own argument depends on, an invented field, or output presented as
+verbatim that cannot be reproduced by running the stated command.
+
+Then, for anything with a suite:
 
 `BUILD SUCCESSFUL` is not evidence that a test executed. Gradle replays cached
 results for unchanged inputs, and a cached green build is indistinguishable
