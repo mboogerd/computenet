@@ -163,7 +163,8 @@ name: Announcement probe (on-demand Linux bulk sample)
 #     harvested (computenet-dqy.47).
 #
 # Why that command reproduces the condition rather than approximating it:
-#   - `:wire` has 14 test classes, far under `forkEvery(80)`, and
+#   - `:wire` has 13 test classes (counted from run 31686209748's own
+#     roster, not from the source tree), far under `forkEvery(80)`, and
 #     `maxParallelForks` is raised for `:kernel` ONLY, so the whole `:wire:`
 #     suite runs in ONE JVM, sequentially. That is a property of
 #     `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`, not of this workflow.
@@ -198,7 +199,7 @@ name: Announcement probe (on-demand Linux bulk sample)
 # says which happened — the same role `loadavg.log` plays for `load=suite`.
 #
 # A SIBLING FAILURE IS NOT AN ANNOUNCEMENT LOSS EITHER. In this mode the Gradle
-# exit status covers 14 classes, and `:wire:` has a flake history of its own. The
+# exit status covers all 13 classes, and `:wire:` has a flake history of its own. The
 # report script already keys the numerator to WsAnnouncementStressTest's own
 # testcase, so a sibling failure leaves the stress arm CLEAN and countable while
 # the run goes red. The Conclude step says exactly that rather than implying the
@@ -362,8 +363,8 @@ jobs:
               echo "::error::cotenancy=suite-jvm with burst_iterations=$BURST: refused. In this mode WsAnnouncementCatchUpBurstTest already runs as a CO-TENANT inside the suite invocation, at its committed default — the shape build-test-fast has. A separate filtered burst arm answers a different question and only spends minutes. Pass burst_iterations=0."
               exit 1
             fi
-            if [ "$STRESS" -gt 1000 ]; then
-              echo "::error::cotenancy=suite-jvm with stress_iterations=$STRESS: refused. The sibling classes' effect on the probe's own 5-minute per-test budget is UNMEASURED (the loaded arm's 1.4-1.6x is about a competing process and does not transfer), and an arm that trips the timeout produces NO sample (computenet-dqy.12). Ceiling 1000; dispatch 500 first and read the wall time."
+            if [ "$STRESS" -gt 4000 ]; then
+              echo "::error::cotenancy=suite-jvm with stress_iterations=$STRESS: refused. MEASURED on run 31686209748: 500 iterations cost the probe 18.978s in the shared JVM, i.e. 38.0ms/iteration — indistinguishable from the 38.5ms it costs alone, so the siblings cost the probe's own 5-minute budget nothing detectable. The ceiling is therefore the same as the filtered one, kept at this job's default rather than the ~7000 the arithmetic allows, so that a slower runner cannot turn a large dispatch into NO sample (computenet-dqy.12). Ceiling 4000; dispatch again for a bigger sample."
               exit 1
             fi
           fi
