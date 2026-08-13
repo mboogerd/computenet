@@ -101,9 +101,12 @@ public final class SuiteLoop {
     // says it will not fire on.
     //
     // computenet-dqy.34's signature is a specific AssertionFailedError shape,
-    // not a word that can appear anywhere in a report: testkit's AwaitUntil
-    // throws exactly `"timed out awaiting: " + what`, and every await site that
-    // is part of dqy.34's family names `what` starting with "collector
+    // not a word that can appear anywhere in a report: every await helper on
+    // this path throws exactly `"timed out awaiting: " + what` — testkit's
+    // AwaitUntil (one function, one overload, one throw) and the six private
+    // copies of that same line the civictech.wire tests each carry — and every
+    // await site that is part of dqy.34's family names `what` starting with
+    // "collector
     // announced" — "collector announced" itself (WsPeerIdentityTest,
     // WsReconnectSmokeTest, WsReconnectLoopBoundTest, WsReconnectRefusedTest),
     // "collector announced to client" (WsTransportSmokeTest,
@@ -117,6 +120,15 @@ public final class SuiteLoop {
     // line. A prefix check on the top-level message is therefore a positive,
     // specific match on dqy.34's signature rather than a substring test that
     // happens to also match whatever quotes the same word.
+    //
+    // Deliberately NOT counted, so the narrowing is not later mistaken for a
+    // miss: civictech.wire has three further announcement awaits whose labels
+    // are not dqy.34's signature — "writer announced to the listener" and
+    // "re-announced after reconnect" (WsPeerIdentityTest), "re-announced after
+    // the peer returned" (WsReconnectLoopBoundTest). The old substring test
+    // scored all three; this scores them 0, because the field answers "was it
+    // dqy.34's recorded signature", not "was it dqy.34's mechanism". A failure
+    // on one of those still shows in failingTests and in failures/.
     static boolean matchesCollectorAnnouncedSignature(String msg) {
         return msg != null && msg.startsWith("timed out awaiting: collector announced");
     }

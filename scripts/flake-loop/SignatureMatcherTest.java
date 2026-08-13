@@ -16,11 +16,15 @@
 // failing case(s) otherwise.
 public final class SignatureMatcherTest {
 
-    // The exact retained artifact quoted verbatim in a 2026-08-13 comment on
+    // The retained artifact recorded in a 2026-08-13 comment on
     // computenet-dqy.40 ("RETAINED OCCURRENCE"), captured from
     // build/flake-loop-rv-checks/failures/flag-5-iter-1.txt during a real container
     // run. This is a genuine WsAnnouncementStressTest catch-up-loss failure message —
-    // the shape the counter must NOT match.
+    // the shape the counter must NOT match. It is the bead comment's rendering of
+    // that artifact, so it has lost the two leading spaces diagnose() writes on each
+    // diagnostic line and stops after "silent drops:"; neither changes what this test
+    // decides (a re-indented, untruncated copy scores the same under both the matcher
+    // and the old contains("announced") predicate).
     private static final String DQY40_SHAPE_MESSAGE = """
             announcement path: 1 failure(s) in 50 awaits over 25 iterations
             arrival latency ms: p50=26 p99=44 max=103
@@ -39,8 +43,8 @@ public final class SignatureMatcherTest {
     public static void main(String[] args) {
         int failures = 0;
 
-        // computenet-dqy.34's own signature (testkit's AwaitUntil.await("collector
-        // announced")): must score 1.
+        // computenet-dqy.34's own signature (the wire tests' await("collector
+        // announced"), same message shape as testkit's AwaitUntil): must score 1.
         failures += expect(true,
                 "timed out awaiting: collector announced",
                 "dqy.34 exact signature");
