@@ -493,7 +493,8 @@ the one that journals nothing):
 
 ```bash
 cd "$B/.beads/embeddeddolt"/*/
-dolt sql -r json -q "select to_id, diff_type, from_metadata, to_metadata, to_commit
+dolt sql -r json -q "select to_id, diff_type, from_metadata, to_metadata, to_commit,
+                            from_updated_at, to_updated_at
                      from dolt_diff_issues
                      where to_commit in ('h493b8g7...','5ol7rs8t...')"
 ```
@@ -558,14 +559,17 @@ Risks to record, none of them measured away here:
 
 **Verified:** `bd history <id> --json` *does* surface imported updates that
 `events` misses — after the two hops above it returns two entries, one per
-import commit, each with the issue as of that commit:
+import commit, each with the issue as of that commit (fields below are the
+`.Issue` object of each entry, abridged):
 
 ```json
 {"CommitHash":"5ol7rs8t...","status":"in_progress","updated_at":"2026-08-13T15:29:20Z","metadata":null}
 {"CommitHash":"h493b8g7...","status":"open","updated_at":"2026-08-13T15:29:00Z","metadata":null}
 ```
 
-**Verified:** `metadata` is `null` in that projection while the underlying
+**Verified:** `metadata` is `null` in that projection — the key is in fact
+absent from the emitted `Issue` object, so any consumer reads it as null and
+cannot tell "no metadata" from "metadata not projected" — while the underlying
 commit *does* hold it — `select metadata from issues as of 'h493b8g7...'`
 returns `{"cn_dot":"A:7"}`, and the later commit returns `{"cn_dot":"A:8"}`.
 So bd's own history view drops provenance that its storage retains.
