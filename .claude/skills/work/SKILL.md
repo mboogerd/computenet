@@ -271,9 +271,10 @@ the top P0 pick and `bd update computenet-dqy --claim` answered
 **Take it over — do not read the refusal as "someone is working it".** That
 reading silently skips the highest-priority epic in the queue in favour of a
 lower one, which is the expensive mistake here. An assignee on an `open` epic
-is *provenance*, not a live claim; step 3's 15-minute `updated_at` check
-above — **not** `--claim` — is what protects against a genuinely live
-concurrent run, so run that check and then take it:
+is *provenance*, not a live claim. Note that the `in_progress` query above is
+filtered to `$BEADS_ACTOR` and so can never see the *other* machine; what
+protects against a genuinely live concurrent run here is reading the target
+epic's own `updated_at`:
 
 ```bash
 bd show <id> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
@@ -281,11 +282,22 @@ bd show <id> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
 bd update <id> --assignee=$BEADS_ACTOR --status=in_progress
 ```
 
+**The takeover replaces the `--claim` line and nothing else.** Go back and run
+the remaining three — `--add-label=owner:`, `--set-metadata skill_version`,
+and `bd dolt push`. **A takeover is an acquisition, so it needs the same
+push**, and this is the path where forgetting it costs most: a cross-machine
+handoff that stays local leaves the epic reading `open` with a stale assignee
+on the remote all session, so the other machine runs this very check, reaches
+the same "not live" conclusion, and takes the epic too. That is the
+computenet-kg7 double-claim it is meant to prevent, and it would also defeat
+5b's parent-epic check (computenet-f8tf), which can only work if an epic
+claim is remotely true.
+
 If the epic is `in_progress` rather than `open`, that is a different case and
 `--claim`'s refusal is correct: it is either this machine's crash leftover
 (released above) or the other machine's live run.
 
-That last line records **which revision of this skill the session ran
+The `skill_version` line records **which revision of this skill the session ran
 under**. Friction items filed in step 7 carry it, so a fix is attributable
 to the revision that produced the report, and a report against a superseded
 revision can be re-validated instead of silently carried forward.
@@ -621,12 +633,29 @@ So on routes 3–4, before claiming an item that lives under **someone else's
 epic**, check the *epic*, which is visible — an epic claim is always pushed
 at acquisition, a child claim is not:
 
+`bd show --json` carries **no parent field** — parentage is not on the row,
+and a dotted id is not a reliable proxy (`computenet-f8tf` is a child of
+`computenet-wpvy`). Resolve it the way that works, by membership: `bd list
+--parent` is transitive, so one pass over the epics finds the ancestor at any
+depth, including a task whose immediate parent is a feature.
+
 ```bash
-bd show <the item's parent epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
+epic_of() {
+  for e in $(bd list --type=epic --json | jq -r '.[].id'); do
+    bd list --parent="$e" --all --json \
+      | jq -e --arg i "$1" 'any(.[]; .id==$i)' >/dev/null && { echo "$e"; return; }
+  done
+  echo "(unparented)"
+}
+epic_of <candidate-id>
+bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
 ```
 
 Claimed by the other machine → its children are being worked whatever they
-say; take the next candidate. And if you later find a sibling PR touching
+say; take the next candidate. The assignee reads as JSON `null` when clear,
+not `""`. **`(unparented)` needs no check and is not a gap**: an unparented
+bug or chore can never be somebody's locally-claimed child, so any competing
+claim on it is itself an acquisition and is therefore already pushed. And if you later find a sibling PR touching
 your own item's files, treat it as the collision it is: stop working that
 item and park a question — do not pick a winner, since the losing side may
 hold committed, pushed, unreviewed work.
@@ -1044,20 +1073,43 @@ schedule, so if the other one pushed *anything* at any point during a
 multi-hour session, this push is behind by construction. Recover inline — it
 is not a conflict and needs no judgement:
 
+**Read the push's output; do not trust its exit code.** `bd dolt push` has
+been observed to exit **0** while printing a rejection, so `&&`, `$?` and a
+bare `| tail -1` all report a failed push as success — which is precisely how
+a session reports itself clean with nothing published:
+
 ```bash
 # Error 1105: ! [rejected]  main -> main (non-fast-forward)
-bd dolt pull && bd dolt push
-
-# then verify YOUR OWN writes survived the merge — name them, don't assume:
-bd list --parent=<epic> --all --json      # the closes and metadata you made
-bd comments <epic> --json > "$SCRATCH/epic-comments.json"
+bd dolt pull  2>&1 | grep -iE "complete|conflict|error"
+bd dolt push  2>&1 | grep -iE "complete|rejected|error"
 ```
 
-Check the closes, parks, new beads and comments this session wrote are
-actually there. Escalate to a human **only** if the pull reports a real merge
-conflict (`merge conflicts ... require operator resolution` — computenet-gq0,
-resolved through the `dolt` CLI per `doc/ops/beads-sync-runbook.md` §3.3) or
-the second push also fails.
+Give the push room to finish: after a conflict resolution it has been
+measured at **over 120 seconds**, which silently blows a default shell
+timeout (`doc/ops/beads-sync-runbook.md` §3.3).
+
+Then verify **your own** writes survived the merge — name them, don't assume,
+and note that a session's writes are usually not all under one epic:
+
+```bash
+bd list --parent=<epic> --all --json                    # closes and metadata here
+bd list --parent=computenet-wpvy --all --json           # step 7's friction beads
+bd show <id> --json                                     # each acquisition outside the epic
+bd comments <id> --json > "$SCRATCH/c-<id>.json"        # per bead you commented on
+```
+
+**If a write is missing, that is an escalation, not a note.** Dolt's own
+conflict policy is last-write-wins on `updated_at`
+(`doc/ops/beads-sync-runbook.md` §3.3), so a silently reconciled row is lost
+at the *pull* and already published by the time you notice. Do not re-apply
+it blind — say exactly which write vanished, at the top of the summary, and
+park it for a human.
+
+Escalate to a human **also** if the pull reports a real merge conflict
+(`merge conflicts ... require operator resolution` — computenet-gq0, resolved
+through the `dolt` CLI per §3.3) or the second push also fails. The
+*rejection* needs no judgement; whether the *merge* does is what the pull
+tells you.
 
 Do not reach for `scripts/beads-nightly-sync.sh` as the recovery: it is those
 same two commands with logging and no conflict resolution, **nothing is
