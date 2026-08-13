@@ -20,10 +20,48 @@ guessing one here cost a reviewer 8 runs):
    from the check's one-line summary:
    ```bash
    gh pr checks <pr-url>                        # which check failed, and its run url
-   gh run view <run-id> --log-failed | tail -60
+   gh run view <run-id> --log-failed -R mboogerd/computenet | tail -60
+
+   # capturing the whole log: run FROM THE REPO, redirect OUT to the scratchpad
+   gh run view <run-id> --log -R mboogerd/computenet > "$SCRATCH/<run-id>.log"
    ```
    Quote the `FAILED` line. A red check whose log you have not read is
    unattributed, full stop.
+
+   **`gh` resolves the repo from `cwd`, not from the output path.** Running
+   this *from* the scratchpad — the right place to put a 6,000-line log —
+   fails with `failed to determine base repo: ... not a git repository`, which
+   does not name `cwd` as the cause. `-R mboogerd/computenet` is the fix that
+   makes `cwd` stop mattering; the `-R` above is why every command in this
+   file carries it.
+
+   **`--log` echoes the workflow's own `run:` source, so a grep for a marker
+   the workflow prints will match whether or not that branch ever executed.**
+   This fails quietly and in the dangerous direction: you conclude the marker
+   fired. Measured on run `31728734234`, a **green** 6,359-line CI log — the
+   strings `no :wire: JUnit XML in wire/build/test-results/test` and
+   `multi-jvm-tagged tests outside the serial lane's scoped modules` each have
+   exactly **one** hit, and in both cases that hit is the echoed source of a
+   failure branch that never ran.
+
+   Separate source from output by the marker `gh` puts on every echoed source
+   line — the **literal two characters `^[` followed by `[36;1m`**, not an ESC
+   byte, so a filter written as `\x1b` or `\033` matches nothing (28 of those
+   6,359 lines are source):
+
+   ```bash
+   grep 'MARKER' "$SCRATCH/<run-id>.log" | grep -vF '^[[36;1m'   # real output only
+   ```
+
+   Each line is `<job>\t<step name>\t<timestamp> <content>`, so filtering by
+   step name works too. Read the hit, never just its count.
+
+   **`--log` yields no log lines while a run is still in progress.** It does
+   say so (`run <id> is still in progress; logs will be available when it is
+   complete`) rather than printing nothing, but that is one line where you
+   expected thousands — do not read it as an empty log. Poll
+   `gh run view <run-id> --json jobs -R mboogerd/computenet` step conclusions
+   instead (`--json` resolves the repo from `cwd` exactly like `--log`).
 2. **Proof the diff does not touch that test's module**:
    ```bash
    gh pr diff <pr-url> --name-only
@@ -62,8 +100,28 @@ guessing one here cost a reviewer 8 runs):
 With all four in hand and no standing instruction against it:
 
 ```bash
-gh run rerun <run-id> --failed
+gh run rerun <run-id> --failed -R mboogerd/computenet
 ```
+
+**If that command is refused rather than failing**, the route does not
+dead-end here. An unattended session has seen it come back
+`Permission for this action was denied by the Claude Code auto mode
+classifier` (2026-08-13, PR #84) — a *refusal*, which is not the same as
+GitHub answering `cannot be rerun; This workflow run cannot be retried`, and
+not universal: the same command runs in an interactive session. On a refusal,
+do not manufacture a push to trigger a fresh run on a branch that is
+genuinely finished — an empty commit is a lie about the branch. Instead:
+
+- **Park the PR as blocked-on-infrastructure**, exactly as the "stays red"
+  case below prescribes — leave the PR as it is, leave the feature
+  `in_progress` (keeping any `review=passed`), set `parked_at`, and comment
+  the four artifacts you produced.
+- **Name the blocked command verbatim in the session summary**, the way
+  SKILL.md step 6 already requires for a blocked `bd dolt push` — that is the
+  only way an allowlist ever gets the entry it needs.
+
+A refused re-run is a session that could not finish the route, not a session
+that may ship on a red check. The rule below is unchanged by it.
 
 **At most two re-runs.** A third red is not a flake; it is a failure you
 have now reproduced three times, and it goes back to being red work under
