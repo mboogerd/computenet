@@ -23,8 +23,14 @@ The method, and why each check is here (computenet-dqy.47, computenet-dqy.58):
     SHA rather than assumed, because a branch is free to change it.
   * A `TimeoutException` is not a loss (computenet-dqy.12). A non-timeout failure
     carrying no positively-recognised `announcement path: N failure(s) in M
-    awaits` line is `unrecognised` and counts into NO numerator
-    (computenet-dqy.54). Only the report line yields a numerator.
+    awaits` line is `unrecognised` (computenet-dqy.54). Only the report line
+    yields a numerator, so such a run enters NO numerator -- and it enters no
+    DENOMINATOR either. The test throws its report only at the end of the loop,
+    so a failure without one means the loop did not finish: how many of the
+    `DEFAULT_ITERATIONS x 2` awaits actually ran is unknown, and whether one was
+    lost is unknown too. Crediting it with a full run of awaits and zero losses
+    would bias the rate DOWN, which is the direction that manufactures a null.
+    It is reported as its own excluded category so it stays visible.
 
 POSITIVE CONTROL. Run with `--since 2026-08-13T02:06:45Z` (the merge of 38bbd71,
 the two-sided instrument) and the first 1h53m of output must reproduce
@@ -76,12 +82,23 @@ def gh_json(path: str, jq: str | None = None) -> object:
     return json.loads(sh(cmd) or "null")
 
 
+RUN_LIST_LIMIT = 400
+
+
 def runs_since(since: str) -> list[dict]:
     raw = sh([
-        "gh", "run", "list", "--workflow", WORKFLOW, "--limit", "400",
+        "gh", "run", "list", "--workflow", WORKFLOW, "--limit", str(RUN_LIST_LIMIT),
         "--json", "databaseId,headSha,headBranch,event,status,conclusion,createdAt",
     ])
-    runs = [r for r in json.loads(raw) if r["createdAt"] > since]
+    all_runs = json.loads(raw)
+    runs = [r for r in all_runs if r["createdAt"] > since]
+    # A truncated listing silently drops runs from the DENOMINATOR, which is a
+    # wrong rate with no symptom. Refuse rather than under-report.
+    if len(all_runs) >= RUN_LIST_LIMIT and len(runs) == len(all_runs):
+        raise SystemExit(
+            f"gh run list returned {len(all_runs)} runs (the --limit) and ALL of them are "
+            f"after {since}: the window may be truncated. Raise RUN_LIST_LIMIT and re-run."
+        )
     return sorted(runs, key=lambda r: r["createdAt"])
 
 
@@ -153,7 +170,7 @@ def harvest(since: str) -> dict:
                         losses = sum(x["failures"] for x in a["reports"])
                         a["verdict"] = f"counted: {losses} loss(es) reported"
                     elif "FAILED" in a["stress_lifecycle"]:
-                        a["verdict"] = "counted: stress FAILED with no recognised report -> unrecognised, no numerator"
+                        a["verdict"] = "excluded: stress FAILED with no recognised report -> unrecognised, awaits unknown"
                     else:
                         a["verdict"] = "counted: 0 losses"
                 rec["attempts"].append(a)
