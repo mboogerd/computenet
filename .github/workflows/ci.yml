@@ -118,6 +118,59 @@ jobs:
       - name: Fail on unexpected untracked files
         run: test -z "$(git status --porcelain -uall -- doc '*/src')"
 
+      # THE `:wire:` ROSTER, PUBLISHED ON GREEN TOO (computenet-dqy.55).
+      #
+      # The announcement-loss chain (computenet-dqy.40 / .52 / .53) now has
+      # ~30,000 zero-loss awaits across three probe conditions against this
+      # lane's own harvest of 2 losses in 450 awaits. Every probe arm to date
+      # dispatches a `:wire:test` of its own; what none of them has been able to
+      # check is whether THIS lane gives `WsAnnouncementStressTest` the same
+      # co-tenants in the same order. The dispatched co-tenant arm measured it
+      # as class 3 of 13 (computenet-dqy.53, run 31686209748) and review of
+      # PR #90 reproduced that locally on darwin — but never on the fast lane
+      # itself, because the diagnostic upload below fires only on
+      # `failure() || cancelled()` and a green fast lane therefore publishes
+      # nothing.
+      #
+      # This step is deliberately NARROW where that one is broad: `:wire:` only,
+      # XML only, and it runs on green. That is the whole difference in cost —
+      # 13 small files instead of every module's results — and it is what makes
+      # the ordering comparable run to run instead of only when something broke.
+      #
+      # It reuses the probe's own roster script rather than re-deriving the
+      # order here, so the fast lane's roster and the probe's are produced by
+      # the same code and cannot disagree by accident. The script never fails a
+      # run on the strength of a roster (see its docstring); the one case it
+      # exits non-zero on is "no XML at all", which here means `:wire:test` did
+      # not run, so the guard below owns that case and reports it without
+      # reddening a lane whose own build already succeeded or already failed for
+      # its own reasons. The guard tests for the XML itself, not for the
+      # directory: Gradle can leave `test-results/test` behind holding only
+      # `binary/` (a test JVM that died before writing a report, a run that was
+      # interrupted), and a directory-only check would hand the script an empty
+      # directory, take its exit 1, and turn a required check red over a
+      # diagnostic. This step must never be the reason build-test-fast fails.
+      - name: "Publish the fast lane's :wire: class order"
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          if ls wire/build/test-results/test/TEST-*.xml >/dev/null 2>&1; then
+            python3 .github/scripts/announcement_probe_cotenancy.py \
+              wire/build/test-results/test WsAnnouncementStressTest
+          else
+            echo "no :wire: JUnit XML in wire/build/test-results/test — :wire:test did not run in this build" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "Upload :wire: test results (class order, published on success)"
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wire-test-results-fast
+          path: wire/build/test-results/test/*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
       # Gradle writes the profile report when the build finishes, pass or fail;
       # `!cancelled()` keeps it for failed runs too, where attribution matters
       # most. `ignore` covers a run killed before the report exists.

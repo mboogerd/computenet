@@ -236,6 +236,30 @@ name: Announcement probe (on-demand Linux bulk sample)
 # over the same class set, which is a reason to expect the same order, not a
 # measurement of it.
 #
+# THE THIRD AXIS: `lane` (computenet-dqy.55). Both paragraphs above end at the
+# same wall — "this arm reproduces the JVM's interior, not the whole lane", and
+# "whether build-test-fast orders them the same way is NOT verified" — and
+# `lane=build-check` is the arm that goes through it. It runs build-test-fast's
+# own command, `build check -PexcludeMultiJvm=true -x :kernel:test`, repeated
+# `lane_passes` times, forwarding NO -D so the probe runs at the committed
+# `wire.stress.iterations=25`: the exact invocation, the exact size, the exact
+# Gradle worker configuration the 2/450 harvest came from. It is the only arm
+# for which "the same as build-test-fast" is a description rather than an
+# approximation, and it prints the roster per pass, which settles the ordering
+# question from the lane side.
+#
+# Its denominator is small per pass — 50 awaits — and that is inherent: raising
+# it would stop being the lane. Power comes from passes, not from size, and the
+# arithmetic is in the `lane_passes` input description. It is the one arm whose
+# result is directly comparable to 2/450, because it is 2/450's own condition.
+#
+# `ci.yml` settles the same ordering question from the other side, and the two
+# are deliberately redundant: this arm proves what the command produces on a
+# runner it controls, and ci.yml's success-path `:wire:` XML upload
+# (computenet-dqy.55) proves what the REAL fast lane produced on a run nobody
+# staged. Both use `announcement_probe_cotenancy.py`, so a disagreement between
+# them is a fact about the runs and not about two different renderings.
+#
 # SIZE THE LOADED ARM TO FINISH. An INCOMPLETE arm teaches nothing (see the
 # timeout note above), and load makes every iteration slower, so the loaded
 # ceiling is BELOW the isolated 39.9ms/iteration figure by an amount nobody has
@@ -302,17 +326,37 @@ on:
           - none
           - suite
       cotenancy:
-        description: "In-JVM condition (computenet-dqy.53). 'filtered' = the probe is the only test class in the test JVM (what every run before 2026-08-13 did). 'suite-jvm' = the whole ':wire:' suite runs in ONE test JVM with the probe, build-test-fast's own shape, which is where the 2/450 losses were harvested. This is a DIFFERENT axis from 'load' (that one adds a second process; this one is one JVM's interior) — the two may not be combined, and 'suite-jvm' requires burst_iterations=0."
+        description: "In-JVM condition (computenet-dqy.53). 'filtered' = the probe is the only test class in the test JVM (what every run before 2026-08-13 did). 'suite-jvm' = the whole ':wire:' suite runs in ONE test JVM with the probe, build-test-fast's own shape, which is where the 2/450 losses were harvested. This is a DIFFERENT axis from 'load' (that one adds a second process; this one is one JVM's interior). Since computenet-dqy.55 the two MAY be combined — each having come back null alone, their conjunction is the next untested condition — but 'suite-jvm' still requires burst_iterations=0."
         required: false
         type: choice
         default: "filtered"
         options:
           - filtered
           - suite-jvm
+      lane:
+        description: "Invocation condition (computenet-dqy.55). 'task' = this job dispatches a ':wire:test' of its own, which is what every arm before 2026-08-13 did. 'build-check' = it runs build-test-fast's WHOLE command ('build check -PexcludeMultiJvm=true -x :kernel:test') lane_passes times, at the COMMITTED wire.stress.iterations=25 with no -D forwarding — the only arm that reproduces the invocation the 2/450 losses were actually harvested in. 'build-check' ignores none of the size knobs quietly: it REFUSES any dispatch whose knobs it would not honour."
+        required: false
+        type: choice
+        default: "task"
+        options:
+          - task
+          - build-check
+      lane_passes:
+        description: "lane=build-check only: how many times to run build-test-fast's command. Each pass yields 50 announcement awaits (25 committed iterations x 2). MEASURED cost: build-test-fast's own job ran 158-171s wall on ubuntu-latest (runs 31688056778 / 31688930547 / 31690041537), of which ~40s is checkout/JDK/Gradle setup this job pays once — so budget ~2-2.5 min per pass. 12 passes = 600 awaits in ~30 min. At the fast lane's own harvested rate of 2/450 awaits, 600 awaits expects ~2.7 losses and misses them entirely with probability ~7%; 450 awaits (9 passes) is the exact denominator of the harvest itself."
+        required: false
+        default: "12"
 
 # No `cancel-in-progress`: a superseded run of a multi-hour measurement is
 # wasted compute, and two concurrent dispatches are two independent samples,
 # which is a legitimate thing to want.
+#
+# THEY ARE INDEPENDENT SAMPLES, NOT CONCURRENT ONES. The group is per-ref, so a
+# second dispatch on the SAME ref does not run alongside the first — it sits
+# `pending` until the first finishes. Observed 2026-08-13: runs 31691243326 and
+# 31691272219 were dispatched 23 seconds apart on `feature/computenet-dqy.55`
+# and the second waited ~19 minutes (first ended 10:47:55Z, second's first step
+# ran 10:48:12Z). Budget wall time as the SUM of the dispatches, or dispatch
+# from two different refs if they must overlap.
 concurrency:
   group: announcement-probe-${{ github.ref }}
   cancel-in-progress: false
@@ -347,9 +391,11 @@ jobs:
           REFS: ${{ inputs.burst_refs }}
           LOAD: ${{ inputs.load }}
           COTENANCY: ${{ inputs.cotenancy }}
+          LANE: ${{ inputs.lane }}
+          PASSES: ${{ inputs.lane_passes }}
         run: |
           set -euo pipefail
-          for v in "$STRESS" "$BURST" "$REFS"; do
+          for v in "$STRESS" "$BURST" "$REFS" "$PASSES"; do
             case "$v" in
               ''|*[!0-9]*) echo "::error::inputs must be non-negative integers; got '$v'"; exit 1 ;;
             esac
@@ -372,14 +418,34 @@ jobs:
               exit 1
             fi
           fi
-          # THE TWO CONDITION AXES ARE NOT COMBINABLE (computenet-dqy.53). A run
-          # that is both loaded and co-tenant measures a condition nothing in the
-          # comparison chain shares, and a loss in it would separate neither.
+          # THE TWO AXES MAY NOW BE COMBINED (computenet-dqy.55), and the reason
+          # the refusal is gone matters as much as the combination.
+          #
+          # computenet-dqy.53 refused `load=suite` together with
+          # `cotenancy=suite-jvm` on the grounds that a run which is both
+          # measures a condition nothing in the comparison chain shares, so a
+          # loss in it would separate neither axis. That was the right rule
+          # while either axis might still have been the answer: with both
+          # untested, the conjunction cannot attribute.
+          #
+          # Both have since come back NULL — load at 3,000 awaits
+          # (computenet-dqy.52) and co-tenancy at 7,000 (computenet-dqy.53) —
+          # and the attribution argument inverts. There is nothing left for the
+          # conjunction to be confounded WITH: if a loss appears only when both
+          # are on, the finding is precisely that neither alone is the
+          # condition and their interaction is, which is a different and now
+          # reachable claim. And if it too comes back null, the two-axis
+          # hypothesis is what the null closes out.
+          #
+          # It is still ONE cell of a 2x2, not a substitute for either margin,
+          # and the ledger below labels it as such.
           if [ "$COTENANCY" = "suite-jvm" ]; then
-            if [ "$LOAD" != "none" ]; then
-              echo "::error::cotenancy=suite-jvm with load=$LOAD: refused. These are two different experiments — load=suite adds a second PROCESS to the machine (computenet-dqy.52, already answered: null), cotenancy=suite-jvm is about the interior of ONE test JVM (computenet-dqy.53). Combining them yields a condition no other sample shares. Dispatch one axis at a time."
-              exit 1
-            fi
+            # The stress ceiling for the combined cell is the LOADED one, not
+            # the co-tenant one: 38.0ms/iteration measured in the shared JVM
+            # (run 31686209748) times the 1.4-1.6x slowdown the loaded arm
+            # measured is ~61ms/iteration, so 1000 iterations is ~61s against
+            # the 5-minute per-test deadline. The `load=suite` block above
+            # already caps STRESS at 1000, and that cap governs here.
             if [ "$BURST" != "0" ]; then
               echo "::error::cotenancy=suite-jvm with burst_iterations=$BURST: refused. In this mode WsAnnouncementCatchUpBurstTest already runs as a CO-TENANT inside the suite invocation, at its committed default — the shape build-test-fast has. A separate filtered burst arm answers a different question and only spends minutes. Pass burst_iterations=0."
               exit 1
@@ -389,13 +455,48 @@ jobs:
               exit 1
             fi
           fi
+          # THE LANE ARM HONOURS NO SIZE KNOB (computenet-dqy.55). It runs
+          # build-test-fast's command verbatim, and that command forwards no
+          # -D: the probe runs at the committed DEFAULT_ITERATIONS=25, which is
+          # the whole point — it is the size the 2/450 harvest was collected at.
+          # So rather than silently ignore the knobs (the exact trap this job's
+          # header was written about: "a small sample wearing a large sample's
+          # label"), refuse any dispatch whose knobs would be ignored. The
+          # dispatcher has to type 25, and the ledger's denominator is then a
+          # number somebody stated rather than one the workflow assumed.
+          if [ "$LANE" = "build-check" ]; then
+            [ "$PASSES" -gt 0 ] || { echo "::error::lane=build-check with lane_passes=$PASSES: refused. A lane arm with no passes measures nothing."; exit 1; }
+            if [ "$STRESS" != "25" ]; then
+              echo "::error::lane=build-check with stress_iterations=$STRESS: refused. This arm runs 'build check' exactly as ci.yml does, and that command forwards no -Dwire.stress.iterations, so the probe runs at its committed default of 25 whatever is passed here. Pass stress_iterations=25 to state the size this arm actually samples."
+              exit 1
+            fi
+            if [ "$BURST" != "0" ]; then
+              echo "::error::lane=build-check with burst_iterations=$BURST: refused. WsAnnouncementCatchUpBurstTest runs inside 'check' at ITS committed default; a separately dispatched burst arm would not be part of the lane condition. Pass burst_iterations=0."
+              exit 1
+            fi
+            if [ "$COTENANCY" != "filtered" ] || [ "$LOAD" != "none" ]; then
+              echo "::error::lane=build-check with cotenancy=$COTENANCY load=$LOAD: refused. The lane arm's JVM shape and machine load are properties OF the lane — 'build check' under org.gradle.parallel=true already puts the whole ':wire:' suite in one test JVM and other modules' tasks on the same runner. Setting either knob would layer a second, different condition on top of the one being reproduced. Pass load=none cotenancy=filtered; the summary below records what the lane itself supplies."
+              exit 1
+            fi
+            # A pass costs ~2-2.5 min (build-test-fast measured 158-171s
+            # including ~40s of setup this job pays once), against this job's
+            # 350-minute timeout. The bound is generous; it exists so a typo'd
+            # three-digit pass count fails in two seconds rather than burning
+            # an afternoon of runner time.
+            if [ "$PASSES" -gt 60 ]; then
+              echo "::error::lane=build-check with lane_passes=$PASSES: refused. At ~2.5 min/pass that is over 2.5 hours; ceiling 60. Dispatch again for a bigger sample — two dispatches of 30 are two independent samples and this workflow does not cancel them against each other. They do not run at the same time, though: the concurrency group is per-ref, so a second dispatch on this ref QUEUES behind the first (observed 2026-08-13: ~19 minutes pending). Budget the wall time as their sum."
+              exit 1
+            fi
+          fi
           awaits=$((STRESS * 2))
           refs=$((BURST * REFS))
+          lane_awaits=$((PASSES * 50))
           {
             echo "## Announcement probe — requested sample"
             echo ""
             echo "| knob | value | derived |"
             echo "| --- | --- | --- |"
+            echo "| lane (invocation condition) | $LANE | $([ "$LANE" = build-check ] && echo "build-test-fast's whole command, $PASSES pass(es) = $lane_awaits awaits at the committed size" || echo 'a dedicated :wire:test dispatched by this job') |"
             echo "| load (concurrency condition) | $LOAD | $([ "$LOAD" = suite ] && echo 'build check runs alongside the probe' || echo 'probe runs essentially alone') |"
             echo "| cotenancy (in-JVM condition) | $COTENANCY | $([ "$COTENANCY" = suite-jvm ] && echo 'whole :wire: suite shares one test JVM with the probe' || echo 'probe is the only class in the test JVM') |"
             echo "| wire.stress.iterations | $STRESS | $awaits announcement awaits |"
@@ -405,6 +506,7 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           echo "STRESS_AWAITS=$awaits" >> "$GITHUB_ENV"
           echo "BURST_REFS_TOTAL=$refs" >> "$GITHUB_ENV"
+          echo "LANE_AWAITS=$lane_awaits" >> "$GITHUB_ENV"
 
       # PREFLIGHT. Poison each forwarded key in turn with a non-numeric value
       # and require the probe to die on `Integer.parseInt`. A run where the
@@ -415,7 +517,13 @@ jobs:
       # --rerun -Dwire.burst.iterations=NOT_A_NUMBER` exits 1 with
       # `java.lang.NumberFormatException: For input string: "NOT_A_NUMBER"` at
       # WsAnnouncementCatchUpBurstTest.kt:151.
+      #
+      # SKIPPED for `lane=build-check`, and that is not a shortcut: that arm
+      # forwards no -D at all — its whole claim is that it runs at the
+      # committed default — so there is no forwarding to re-prove, and the size
+      # step above refuses any dispatch that asked for a different size.
       - name: Preflight - prove each -D reaches the test JVM
+        if: ${{ inputs.lane == 'task' }}
         run: |
           set -uo pipefail
           poison() {
@@ -448,7 +556,7 @@ jobs:
       # that produced runs 31669727862 / 31669883848 / 31670959177 and remains
       # comparable with them.
       - name: Start the concurrent suite load
-        if: ${{ inputs.load == 'suite' }}
+        if: ${{ inputs.load == 'suite' && inputs.lane == 'task' }}
         run: |
           set -euo pipefail
           echo "runner: $(nproc) cores"; free -m
@@ -504,7 +612,116 @@ jobs:
           echo "== loadavg after 60s of warm-up =="
           tail -5 loadavg.log
 
+      # ---------------- the lane arm (computenet-dqy.55) ----------------
+      # THE CONDITION NO OTHER ARM REPRODUCES. Every arm above dispatches a
+      # ':wire:test' of its own. build-test-fast does not: it runs `build check`
+      # over EVERY module under org.gradle.parallel=true, so ':wire:test' shares
+      # a runner with other modules' compile and test tasks, gets Gradle's own
+      # worker scheduling rather than a single task's, and runs the probe at the
+      # COMMITTED wire.stress.iterations=25. That is the invocation the 2 losses
+      # in 450 awaits were harvested from, and ~30,000 zero-loss awaits across
+      # three dispatched conditions have not touched it.
+      #
+      # The command is build-test-fast's, character for character, minus
+      # `--profile` (a reporting flag). `--rerun-tasks` from pass 2 on, for the
+      # same reason the load loop uses it: without it a second pass is an
+      # up-to-date no-op that adds a pass to the denominator and no awaits to
+      # the sample. Pass 1 runs without it so the first pass is exactly the
+      # fast lane's own cold-clone invocation.
+      #
+      # Each pass's ':wire:' XML is harvested BEFORE the next pass overwrites
+      # it, and each pass is classified by the same report script every other
+      # arm uses — so an incomplete or unrecognised pass contributes neither
+      # numerator nor denominator here either (computenet-dqy.12 / .54), rather
+      # than being averaged into a rate.
+      #
+      # It also prints the roster per pass. That settles, from the lane's own
+      # invocation, the ordering question computenet-dqy.53 left open: the
+      # dispatched co-tenant arm put WsAnnouncementStressTest at class 3 of 13,
+      # and until ci.yml started publishing its XML on success (this bead's
+      # other half) nothing said whether the fast lane agrees.
+      - name: Lane arm - build-test-fast's own command, repeated
+        if: ${{ inputs.lane == 'build-check' }}
+        env:
+          PASSES: ${{ inputs.lane_passes }}
+        run: |
+          set -uo pipefail
+          total_losses=0
+          total_awaits=0
+          usable=0
+          unusable=0
+          outcomes=""
+          for pass in $(seq 1 "$PASSES"); do
+            echo "===== lane pass $pass/$PASSES starting $(date -Is) ====="
+            rerun=""
+            [ "$pass" -gt 1 ] && rerun="--rerun-tasks"
+            set +e
+            # shellcheck disable=SC2086
+            ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test $rerun
+            status=$?
+            set -e
+            echo "===== lane pass $pass exit=$status $(date -Is) ====="
+            dest="probe-evidence/lane/pass-$pass"
+            mkdir -p "$dest"
+            cp -a wire/build/test-results/test/. "$dest/" 2>/dev/null || true
+
+            echo "--- pass $pass roster ---"
+            python3 .github/scripts/announcement_probe_cotenancy.py "$dest" WsAnnouncementStressTest || true
+
+            # Point the report script's GITHUB_ENV at a per-pass file: its
+            # numerator/denominator publishing is per-arm by design, and this
+            # arm is many arms. The real $GITHUB_ENV gets the aggregate below.
+            envfile="$dest/counts.env"
+            : > "$envfile"
+            set +e
+            GITHUB_ENV="$envfile" \
+            PROBE_OUTCOME_KEY=PASS_OUTCOME PROBE_LOSSES_KEY=PASS_LOSSES \
+            PROBE_UNITS_KEY=PASS_UNITS PROBE_EXPECTED_UNITS=50 \
+              python3 .github/scripts/announcement_probe_report.py "$dest" \
+                "lane pass $pass/$PASSES (build check, committed size)" WsAnnouncementStressTest
+            set -e
+            outcome=$(sed -n 's/^PASS_OUTCOME=//p' "$envfile" | tail -1)
+            losses=$(sed -n 's/^PASS_LOSSES=//p' "$envfile" | tail -1)
+            units=$(sed -n 's/^PASS_UNITS=//p' "$envfile" | tail -1)
+            outcome=${outcome:-missing}
+            outcomes="$outcomes $pass:$outcome"
+            case "$outcome" in
+              clean|loss)
+                total_losses=$((total_losses + ${losses:-0}))
+                total_awaits=$((total_awaits + ${units:-0}))
+                usable=$((usable + 1))
+                ;;
+              *)
+                # incomplete / unrecognised / vacuous / missing: NO sample.
+                unusable=$((unusable + 1))
+                ;;
+            esac
+            echo "pass $pass: outcome=$outcome losses=${losses:-?} awaits=${units:-?} (running total $total_losses/$total_awaits over $usable usable pass(es))"
+          done
+          echo "LANE_LOSSES=$total_losses" >> "$GITHUB_ENV"
+          echo "LANE_UNITS=$total_awaits" >> "$GITHUB_ENV"
+          echo "LANE_USABLE=$usable" >> "$GITHUB_ENV"
+          echo "LANE_UNUSABLE=$unusable" >> "$GITHUB_ENV"
+          if [ "$usable" -eq 0 ]; then
+            echo "LANE_OUTCOME=vacuous" >> "$GITHUB_ENV"
+          elif [ "$total_losses" -gt 0 ]; then
+            echo "LANE_OUTCOME=loss" >> "$GITHUB_ENV"
+          elif [ "$unusable" -gt 0 ]; then
+            echo "LANE_OUTCOME=partial" >> "$GITHUB_ENV"
+          else
+            echo "LANE_OUTCOME=clean" >> "$GITHUB_ENV"
+          fi
+          {
+            echo "### Lane arm — per-pass outcomes"
+            echo ""
+            echo "\`$outcomes\`"
+            echo ""
+            echo "Usable passes: $usable; unusable (no sample): $unusable. Aggregate $total_losses loss(es) in $total_awaits awaits."
+            echo ""
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Stress probe (announcement path, catch-up + live shapes)
+        if: ${{ inputs.lane == 'task' }}
         env:
           STRESS: ${{ inputs.stress_iterations }}
           COTENANCY: ${{ inputs.cotenancy }}
@@ -533,11 +750,11 @@ jobs:
       # the counterpart of `loadavg.log` for `load=suite`. Without it, "the
       # suite shared the JVM" is an assertion about a Gradle command line.
       - name: Co-tenancy roster
-        if: ${{ !cancelled() && inputs.cotenancy == 'suite-jvm' }}
+        if: ${{ !cancelled() && inputs.lane == 'task' && inputs.cotenancy == 'suite-jvm' }}
         run: python3 .github/scripts/announcement_probe_cotenancy.py probe-evidence/stress WsAnnouncementStressTest
 
       - name: Stress probe - full report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.lane == 'task' }}
         env:
           PROBE_OUTCOME_KEY: STRESS_OUTCOME
           PROBE_LOSSES_KEY: STRESS_LOSSES
@@ -546,7 +763,7 @@ jobs:
         run: python3 .github/scripts/announcement_probe_report.py probe-evidence/stress "stress, load=${{ inputs.load }}, cotenancy=${{ inputs.cotenancy }} (${{ inputs.stress_iterations }} iterations)" WsAnnouncementStressTest
 
       - name: Catch-up burst probe
-        if: ${{ !cancelled() && inputs.burst_iterations != '0' }}
+        if: ${{ !cancelled() && inputs.lane == 'task' && inputs.burst_iterations != '0' }}
         env:
           BURST: ${{ inputs.burst_iterations }}
           REFS: ${{ inputs.burst_refs }}
@@ -561,7 +778,7 @@ jobs:
           cp -a wire/build/test-results/test/. probe-evidence/burst/
 
       - name: Catch-up burst probe - full report
-        if: ${{ !cancelled() && inputs.burst_iterations != '0' }}
+        if: ${{ !cancelled() && inputs.lane == 'task' && inputs.burst_iterations != '0' }}
         env:
           PROBE_OUTCOME_KEY: BURST_OUTCOME
           PROBE_LOSSES_KEY: BURST_LOSSES
@@ -574,7 +791,7 @@ jobs:
       # otherwise keep the runner busy through the upload steps and, worse,
       # could still be running if a future arm is added below.
       - name: Stop the concurrent suite load
-        if: ${{ !cancelled() && inputs.load == 'suite' }}
+        if: ${{ !cancelled() && inputs.lane == 'task' && inputs.load == 'suite' }}
         run: |
           set -uo pipefail
           touch "$RUNNER_TEMP/probe-done"
@@ -639,8 +856,55 @@ jobs:
           LOAD: ${{ inputs.load }}
           COTENANCY: ${{ inputs.cotenancy }}
           BURST_REQUESTED: ${{ inputs.burst_iterations }}
+          LANE: ${{ inputs.lane }}
+          PASSES: ${{ inputs.lane_passes }}
         run: |
           set -uo pipefail
+
+          # THE LANE ARM'S OWN LEDGER (computenet-dqy.55). Its row is not
+          # comparable to a dispatched arm's by size — it is comparable by
+          # CONDITION, which is the point: this is the only row collected in the
+          # invocation the 2/450 harvest came from. `usable`/`unusable` are
+          # reported because the denominator here is a sum over passes and a
+          # reader must be able to see how many passes were thrown away rather
+          # than averaged in (computenet-dqy.12 / .54).
+          if [ "$LANE" = "build-check" ]; then
+            cond="lane=build-check (build-test-fast's command, committed size), $PASSES pass(es) requested"
+            {
+              echo "### Ledger — condition \`$cond\`"
+              echo ""
+              echo "| arm | condition | losses (numerator) | sample (denominator) | outcome |"
+              echo "| --- | --- | --- | --- | --- |"
+              echo "| lane | $cond | ${LANE_LOSSES:-unknown} | ${LANE_UNITS:-unknown} awaits over ${LANE_USABLE:-unknown} usable pass(es) | ${LANE_OUTCOME:-missing} |"
+              echo "| stress | — | — | — | SKIPPED (lane arm owns the invocation) |"
+              echo "| burst | — | — | — | SKIPPED (runs inside \`check\` as a co-tenant at its committed size) |"
+              echo ""
+              echo "Unusable passes (contributing NO numerator and NO denominator): ${LANE_UNUSABLE:-unknown}."
+              echo ""
+              echo "This condition is not on the \`load\` or \`cotenancy\` axes — it is the invocation itself. Compare it against build-test-fast's own harvest (2 losses in 450 awaits), not against a dispatched arm's size."
+              echo ""
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            case "${LANE_OUTCOME:-missing}" in
+              clean)
+                echo "lane arm: CLEAN — ${LANE_UNITS:-?} awaits in build-test-fast's own invocation, 0 losses." \
+                  | tee -a "$GITHUB_STEP_SUMMARY"
+                exit 0
+                ;;
+              partial)
+                echo "::error::lane arm: ${LANE_LOSSES:-0} losses in ${LANE_UNITS:-?} awaits, but ${LANE_UNUSABLE:-?} pass(es) produced NO sample and were excluded. The countable rows above stand; read the per-pass outcomes for what was dropped and why."
+                exit 1
+                ;;
+              loss)
+                echo "::error::lane arm: ANNOUNCEMENT LOST — ${LANE_LOSSES:-?} in ${LANE_UNITS:-?} awaits, in the invocation build-test-fast actually uses. This is an occurrence; record it verbatim on computenet-dqy.40 with this run id."
+                exit 1
+                ;;
+              *)
+                echo "::error::lane arm: NO USABLE PASS (outcome='${LANE_OUTCOME:-missing}') — this run measured nothing."
+                exit 1
+                ;;
+            esac
+          fi
+
           echo "stress exit=${STRESS_STATUS:-missing} outcome=${STRESS_OUTCOME:-missing}"
           echo "burst  exit=${BURST_STATUS:-missing} outcome=${BURST_OUTCOME:-missing}"
 
