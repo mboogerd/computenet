@@ -633,29 +633,58 @@ So on routes 3–4, before claiming an item that lives under **someone else's
 epic**, check the *epic*, which is visible — an epic claim is always pushed
 at acquisition, a child claim is not:
 
-`bd show --json` carries **no parent field** — parentage is not on the row,
-and a dotted id is not a reliable proxy (`computenet-f8tf` is a child of
-`computenet-wpvy`). Resolve it the way that works, by membership: `bd list
---parent` is transitive, so one pass over the epics finds the ancestor at any
-depth, including a task whose immediate parent is a feature.
+**Resolving the epic takes a walk, and two things about `bd` make the obvious
+routes wrong.** A bead's *effective* parent is `.parent` when set, otherwise
+the dotted-id prefix, and each overrides the other in a different case:
+
+- **`.parent` is omitted from `bd show --json` when unset**, so one sample
+  where it is missing does not mean the field does not exist —
+  `computenet-dqy.40` has no `parent` key at all, while `computenet-f8tf` has
+  `parent=computenet-wpvy`.
+- **A dotted id alone is not a proxy either**, in both directions:
+  `computenet-f8tf` is a child of `computenet-wpvy` with no dot, and
+  `computenet-oxv.6` has an explicit `parent=computenet-oxv.3` that
+  *overrides* its `computenet-oxv` prefix.
+- **`bd list --parent` is not transitive.** Verified: `--parent=computenet-oxv
+  --all` returns the seven direct children and *not* `computenet-oxv.6`, whose
+  parent is the feature `computenet-oxv.3`. So a membership scan over the
+  epics silently answers "unparented" for exactly the grandchildren this check
+  exists to protect.
 
 ```bash
-epic_of() {
-  for e in $(bd list --type=epic --json | jq -r '.[].id'); do
-    bd list --parent="$e" --all --json \
-      | jq -e --arg i "$1" 'any(.[]; .id==$i)' >/dev/null && { echo "$e"; return; }
+epic_of() {                       # effective parent = .parent, else dotted prefix
+  local id="$1" row p n=0
+  row=$(bd show "$id" --json 2>/dev/null | jq -r '.[0].id // empty' 2>/dev/null)
+  [ -z "$row" ] && { echo "(no such id: $id)"; return 1; }
+  while [ $n -lt 12 ]; do n=$((n+1))
+    row=$(bd show "$id" --json 2>/dev/null)
+    if [ "$(printf '%s' "$row" | jq -r '.[0].issue_type // empty')" = epic ]; then
+      echo "$id"; return
+    fi
+    p=$(printf '%s' "$row" | jq -r '.[0].parent // empty')
+    [ -z "$p" ] && case "$id" in *.*) p="${id%.*}";; esac
+    [ -z "$p" ] && { echo "(unparented)"; return; }
+    id="$p"
   done
-  echo "(unparented)"
+  echo "(cycle?)"
 }
 epic_of <candidate-id>
 bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
 ```
 
+Verified on seven shapes at ~3s each: `dqy.40`→`dqy`, `f8tf`→`wpvy`,
+`wpvy.6`→`wpvy`, `oxv.6`→`oxv` (via a feature), `0ja`→`oxv` (via a feature),
+an epic resolving to itself, and a nonexistent id reporting
+`(no such id: …)` rather than `(unparented)` — **a typo must never present as
+"no check needed"**.
+
 Claimed by the other machine → its children are being worked whatever they
 say; take the next candidate. The assignee reads as JSON `null` when clear,
-not `""`. **`(unparented)` needs no check and is not a gap**: an unparented
-bug or chore can never be somebody's locally-claimed child, so any competing
-claim on it is itself an acquisition and is therefore already pushed. And if you later find a sibling PR touching
+not `""`. **A genuine `(unparented)` needs no check and is not a
+gap**: an unparented bug or chore can never be somebody's locally-claimed
+child, so any competing claim on it is itself an acquisition and is therefore
+already pushed. `(no such id: …)` is a different answer entirely — fix the id
+and re-run; never read it as "unparented, carry on". And if you later find a sibling PR touching
 your own item's files, treat it as the collision it is: stop working that
 item and park a question — do not pick a winner, since the losing side may
 hold committed, pushed, unreviewed work.
