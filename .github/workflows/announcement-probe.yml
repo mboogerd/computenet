@@ -72,10 +72,16 @@ name: Announcement probe (on-demand Linux bulk sample)
 # A TIMED-OUT ARM IS NOT AN OCCURRENCE. computenet-dqy.12 established for this
 # repo that a JUnit 5m TimeoutException proves neither a failure of the code
 # under test nor an in-JVM block. The report script therefore classifies each
-# arm as clean / incomplete / loss and hands the verdict to the Conclude step
-# through $STRESS_OUTCOME / $BURST_OUTCOME, so the job's own conclusion says
-# which happened and an unfinished sample can never be read as a lost
-# announcement.
+# arm as clean / incomplete / loss / unrecognised and hands the verdict to the
+# Conclude step through $STRESS_OUTCOME / $BURST_OUTCOME, so the job's own
+# conclusion says which happened and an unfinished sample can never be read as
+# a lost announcement.
+#
+# NOR IS A FAILURE FROM OUTSIDE THE ANNOUNCEMENT PATH (computenet-dqy.54). A
+# loss is recognised positively, by the probe's own report line; a non-timeout
+# failure carrying no such line is `unrecognised` — red, and counted into no
+# rate — rather than an occurrence. This matters most for `load=suite` below,
+# which is by construction the arm most likely to die of heap or disk pressure.
 #
 # THE ONE CONTROLLED COMPARISON THIS JOB CAN MAKE (computenet-dqy.52). The
 # strongest lead on computenet-dqy.40 is a rate difference: 2 losses in 450
@@ -477,6 +483,16 @@ jobs:
       # not from an exit status, because a Gradle exit status cannot tell the two
       # apart. Both still redden the run: an unfinished sample is a wasted
       # dispatch and must not pass quietly either.
+      #
+      # FOUR, ACTUALLY (computenet-dqy.54). The same reasoning has a mirror
+      # image: the report script used to call ANY non-timeout failure a loss, so
+      # an OutOfMemoryError — the failure shape the `load=suite` arm is by
+      # construction most likely to produce — printed the ANNOUNCEMENT LOST
+      # error below and invited an infrastructure death onto computenet-dqy.40
+      # as an occurrence. A loss is now recognised POSITIVELY, by the probe's
+      # own report line, and a non-timeout failure without one is
+      # `unrecognised`. That arm reddens the run like the other unusable ones
+      # and contributes no numerator and no denominator to the ledger.
       - name: Conclude
         if: ${{ !cancelled() }}
         env:
@@ -491,7 +507,8 @@ jobs:
           # denominator kept apart and labelled with the condition they were
           # collected under, so two dispatches can be compared without anyone
           # having to reconstruct which run had which sizes. `unknown` is not a
-          # zero: an incomplete arm contributes to no rate at all.
+          # zero: an incomplete or unrecognised arm contributes to no rate at
+          # all — not to the numerator and not to the denominator.
           {
             echo "### Ledger — condition \`load=$LOAD\`"
             echo ""
@@ -526,6 +543,10 @@ jobs:
                 ;;
               incomplete)
                 echo "::error::$arm: SAMPLE DID NOT COMPLETE — the requested size did not fit the build's 5-minute per-test JUnit timeout, so NO sample was produced. This is NOT an announcement loss (computenet-dqy.12) and must not be recorded as one. Re-dispatch smaller: $hint"
+                rc=1
+                ;;
+              unrecognised)
+                echo "::error::$arm: FAILED OUTSIDE THE ANNOUNCEMENT PATH — the failure record carries neither the per-test JUnit timeout nor a probe report line, so it is NOT an announcement loss (computenet-dqy.54) and must not be recorded on computenet-dqy.40. Both probes always render their own report line when they lose one; its absence is positive evidence this came from elsewhere (infrastructure, the JVM, or the build — an OutOfMemoryError under load=suite is the expected shape). NO sample was produced: this arm contributes no numerator and no denominator. Read the full failure text above and re-dispatch."
                 rc=1
                 ;;
               vacuous)
