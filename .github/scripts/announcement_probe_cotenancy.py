@@ -30,7 +30,7 @@ is nothing to describe at all (no XML), which the report script also catches.
 TIMESTAMP CAVEAT, stated because it bounds what the ordering means: Gradle
 writes one TEST-<class>.xml per class with a second-resolution `timestamp`, so
 two classes that start inside the same second tie, and the tie is broken here by
-name for stability. That is enough to say where the probe fell among 14 classes;
+name for stability. That is enough to say where the probe fell among 13 classes;
 it is not enough to reconstruct a fine-grained interleaving, and nothing should
 be built on it that needs one.
 

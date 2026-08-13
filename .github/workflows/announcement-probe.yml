@@ -209,10 +209,11 @@ name: Announcement probe (on-demand Linux bulk sample)
 # that figure is about a competing process and does not transfer. What this arm
 # adds to the stress testcase's own 5-minute budget is whatever the sibling
 # classes do to the JVM it runs in; the sibling classes' own wall time is charged
-# to THEIR methods, not to the probe's. Unknown until measured, so the size step
-# refuses `cotenancy=suite-jvm` above 1000 stress iterations, the same
-# conservative ceiling `load=suite` got, and the first dispatch is the
-# measurement. MEASURED, ubuntu-latest, `cotenancy=suite-jvm`, three dispatches
+# to THEIR methods, not to the probe's. That was unknown until measured, so the
+# size step STARTED at 1000 stress iterations, the same conservative ceiling
+# `load=suite` got, and the first dispatch was the measurement. It is now 4000 —
+# read the size step, which is the authority; this paragraph says why.
+# MEASURED, ubuntu-latest, `cotenancy=suite-jvm`, three dispatches
 # on 2026-08-13, each an independent sample:
 #
 #   run 31686209748  stress  500  ->  CLEAN, probe wall time 18.978s, 1,000 awaits
@@ -674,7 +675,7 @@ jobs:
                 if [ "$status" = "0" ]; then
                   echo "$arm: CLEAN — a real sample completed and lost nothing."
                 elif [ "$arm" = "stress probe" ] && [ "$COTENANCY" = "suite-jvm" ]; then
-                  # In this mode the exit status covers all 14 `:wire:` classes
+                  # In this mode the exit status covers all 13 `:wire:` classes
                   # (computenet-dqy.53). The probe's own testcase executed and
                   # reported no loss, so its numerator and denominator STAND;
                   # what failed was a co-tenant. Still red — a `:wire:` failure
@@ -710,7 +711,7 @@ jobs:
             esac
           }
           verdict "stress probe" "${STRESS_OUTCOME:-}" "${STRESS_STATUS:-1}" \
-            "measured 39.9ms/iteration on ubuntu-latest unloaded; ceiling ~7000, default 4000. Under load=suite or cotenancy=suite-jvm the per-iteration cost is higher by an unmeasured factor — halve it."
+            "measured 39.9ms/iteration on ubuntu-latest unloaded; ceiling ~7000, default 4000. Under load=suite the per-iteration cost is higher by an unmeasured factor — halve it. Under cotenancy=suite-jvm it is NOT: measured 37.2-40.1ms/iteration over runs 31686209748/31686456879/31686485278, indistinguishable from unloaded, so the filtered sizing applies unchanged."
           if [ "$BURST_REQUESTED" = "0" ]; then
             echo "burst probe: SKIPPED by request (burst_iterations=0). It contributes no sample and no verdict."
           else
