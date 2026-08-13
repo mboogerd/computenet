@@ -22,7 +22,11 @@
 #   OUT     evidence directory (default <repo>/build/flake-loop).
 #   CP      pre-resolved test runtime classpath; set it to skip the Gradle calls
 #           when launching several containers in parallel from one shell.
-#   EXPECT_TESTS  tests expected to execute per iteration (default 14, see below).
+#   EXPECT_TESTS  tests expected to execute per iteration. Optional (computenet-dqy.56):
+#           SuiteLoop derives this from iteration 1's own executed-test count when it
+#           isn't set, so there is nothing here to go stale as civictech.wire gains
+#           tests. Set it only to pin a known value, e.g. to compare this run's count
+#           against another platform's in the same report.
 #
 # THE HOST CONTROL ARM. A Linux zero is only worth something next to a positive
 # control on a platform where the flake does fire, so run this alongside it — same
@@ -32,10 +36,12 @@
 #          -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
 #          :wire:printTestClasspath | grep -v '^WARNING' | tr '\n' ':')
 #   java -cp "$CP" scripts/flake-loop/SuiteLoop.java --package civictech.wire \
-#     --runs 260 --out build/flake-loop-macos --label macos-control --expect-tests 15
+#     --runs 260 --out build/flake-loop-macos --label macos-control
 #
-# (15, not 14: WsListenerAcceptRstTest runs on macOS.) That is how the 2026-08-12
-# control below was produced.
+# (Leave --expect-tests off: SuiteLoop derives it from this run's own iteration 1,
+# so the Linux and macOS baselines never need hand-syncing — they differ by one
+# test anyway, since WsListenerAcceptRstTest is @EnabledOnOs(MAC). The 2026-08-12
+# control below predates that and passed --expect-tests 15 explicitly.)
 #
 # WHAT IT MEASURED, 2026-08-12 (computenet-dqy.38). 780 Linux suite runs
 # (3 containers x 260, groovy:4.0-jdk21, Linux aarch64, JDK 21.0.11) against a
@@ -61,10 +67,11 @@ set -euo pipefail
 RUNS="${1:-400}"
 LABEL="${2:-linux}"
 IMAGE="${IMAGE:-groovy:4.0-jdk21}"
-# :wire executes 14 tests on Linux — WsListenerAcceptRstTest is @EnabledOnOs(MAC) and is
-# the one skip. Declaring it makes any iteration that ran a different number say so, so a
-# "0 failures" result cannot quietly mean "0 tests reached". Bump it when :wire gains a test.
-EXPECT_TESTS="${EXPECT_TESTS:-14}"
+# Left unset by default: SuiteLoop derives the expected count from iteration 1's own
+# executed-test count when --expect-tests is omitted (computenet-dqy.56), so a "0
+# failures" result still can't quietly mean "0 tests reached" without a literal here
+# that goes stale every time :wire gains a test. Set EXPECT_TESTS to pin a value.
+EXPECT_TESTS="${EXPECT_TESTS:-}"
 
 command -v docker >/dev/null || { echo "docker is required and is not on PATH" >&2; exit 1; }
 
@@ -91,6 +98,11 @@ if [[ -z "$CP" ]]; then
   exit 1
 fi
 
+EXPECT_ARGS=()
+if [[ -n "$EXPECT_TESTS" ]]; then
+  EXPECT_ARGS=(--expect-tests "$EXPECT_TESTS")
+fi
+
 echo "== running $RUNS iterations of the civictech.wire suite in $IMAGE =="
 # Only the dependency cache is mounted, not all of $GRADLE_HOME: gradle.properties there
 # can hold credentials, and the container needs nothing but the jars on $CP.
@@ -102,4 +114,4 @@ exec docker run --rm \
   "$IMAGE" \
   java -cp "$CP" "$REPO/scripts/flake-loop/SuiteLoop.java" \
     --package civictech.wire --runs "$RUNS" --out /evidence --label "$LABEL" \
-    --expect-tests "$EXPECT_TESTS"
+    "${EXPECT_ARGS[@]+"${EXPECT_ARGS[@]}"}"

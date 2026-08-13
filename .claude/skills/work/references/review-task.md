@@ -119,9 +119,13 @@ so the one occurrence you waited for is the one you lose.
 drives the JUnit Platform in-process over a package selector: one iteration
 costs seconds instead of Gradle's ~40s, and every *failing* iteration gets its
 own append-only file under `<out>/failures/` with the full stack trace, which
-is the overwrite problem solved rather than worked around. `--expect-tests N`
-is required and it refuses to start without it, so a sample where nothing
-*ran* cannot be read as a sample where nothing *failed*.
+is the overwrite problem solved rather than worked around. A sample where
+nothing *ran* cannot be read as a sample where nothing *failed*: the harness
+takes iteration 1's own executed count as the baseline for the rest of the run
+and refuses to start if that count is 0. Don't pass `--expect-tests N` unless
+you are pinning a specific figure — the number changes whenever the module
+gains a test, which is how every committed copy of it went stale
+(computenet-dqy.56).
 
 ```bash
 ./gradlew -q --no-configuration-cache :wire:testClasses
@@ -129,14 +133,16 @@ CP=$(./gradlew -q --no-configuration-cache \
        -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
        :wire:printTestClasspath | grep -v '^WARNING' | tr '\n' ':')
 java -cp "$CP" scripts/flake-loop/SuiteLoop.java --package civictech.wire \
-  --runs 260 --out build/flake-loop --label local --expect-tests 15
+  --runs 260 --out build/flake-loop --label local
 ```
 
-Substitute your module, package, and expected test count; quote the final
-`SUMMARY` line (it carries the sample size, the failing-iteration count, and
-`unexpectedTestCountIterations`, which must be 0 or the sample is not what it
-claims). `scripts/flake-loop/run-linux-loop.sh` runs the same instrument in a
-JDK-21 container, with defaults shaped for `:wire`.
+Substitute your module and package; quote the final `SUMMARY` line (it carries
+the sample size, the failing-iteration count, the baseline it checked against,
+and `unexpectedTestCountIterations`, which must be 0 or the sample is not what
+it claims). Read that baseline rather than trusting the zero — a run whose
+iteration 1 was itself truncated agrees with itself for the rest of the sample.
+`scripts/flake-loop/run-linux-loop.sh` runs the same instrument in a JDK-21
+container, with defaults shaped for `:wire`.
 
 This supersedes the `gradlew`-in-a-loop below for any suite selectable as a
 JUnit package. Keep the Gradle loop only where the harness cannot express the
