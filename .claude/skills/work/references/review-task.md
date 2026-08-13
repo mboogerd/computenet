@@ -129,7 +129,7 @@ CP=$(./gradlew -q --no-configuration-cache \
        -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
        :wire:printTestClasspath | grep -v '^WARNING' | tr '\n' ':')
 java -cp "$CP" scripts/flake-loop/SuiteLoop.java --package civictech.wire \
-  --runs 260 --out build/flake-loop --label local --expect-tests 15
+  --runs 260 --out build/flake-loop --label local --expect-tests 24
 ```
 
 Substitute your module, package, and expected test count; quote the final

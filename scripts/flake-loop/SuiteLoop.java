@@ -16,13 +16,23 @@
 // Usage:
 //   java -cp <test-runtime-classpath> SuiteLoop.java \
 //        --package civictech.wire --runs 400 --out /path/to/evidence \
-//        --expect-tests 14 [--label linux]
+//        [--label linux] [--expect-tests N]
 //
-// --expect-tests is REQUIRED, and deliberately so: without it an iteration that ran
-// no tests at all — a selector that stopped matching, a class that failed to
-// initialise — prints `tests=0 failures=0` and ends in a SUMMARY that is
-// byte-for-byte the shape of a clean sample. A measurement that cannot tell "nothing
-// failed" from "nothing ran" is unfalsifiable, so the count has to be declared.
+// --expect-tests is OPTIONAL (computenet-dqy.56). Omit it and iteration 1's own
+// executed-test count becomes the baseline every later iteration is checked
+// against, so there is no literal here to fall out of sync when civictech.wire
+// gains a test — which is exactly what happened twice in two days (#79, #83)
+// to the --expect-tests figure this harness used to hardcode.
+//
+// The protection --expect-tests existed for is preserved, not relaxed: an
+// iteration that ran no tests at all — a selector that stopped matching, a class
+// that failed to initialise — must never be read as a clean zero. So if iteration
+// 1 itself executes 0 tests, the run refuses to adopt 0 as the baseline (that
+// would make every subsequent zero-test iteration look expected) and fails
+// immediately instead. Pass --expect-tests explicitly to pin a known value — e.g.
+// to compare counts across platforms in the same report (macOS runs one more test
+// than Linux: WsListenerAcceptRstTest is @EnabledOnOs(MAC)) — or when 0 really is
+// the expected count for your selector.
 //
 // Output: one progress line per iteration on stdout, a `failures/` file per failing
 // iteration, and a final SUMMARY line with the sample size and failure count.
@@ -36,13 +46,13 @@
 //                                 failingTests=1 collectorAnnouncedSignature=0 and
 //                                 still be an announcement loss.
 //   unexpectedTestCountIterations iterations whose executed test count differed from
-//                                 --expect-tests. Anything but 0 means the sample is
-//                                 not what it claims to be (a class that failed to
-//                                 initialise, a selector that stopped matching), so a
-//                                 zero-failure result from a run with a nonzero count
-//                                 here proves nothing.
-//                                 :wire is 14 on Linux, 15 on macOS (WsListenerAcceptRstTest
-//                                 is @EnabledOnOs(MAC)).
+//                                 the expected count (the --expect-tests value, or
+//                                 iteration 1's own count when it was omitted).
+//                                 Anything but 0 means the sample is not what it
+//                                 claims to be (a class that failed to initialise, a
+//                                 selector that stopped matching), so a zero-failure
+//                                 result from a run with a nonzero count here proves
+//                                 nothing.
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
 import org.junit.platform.launcher.Launcher;
@@ -77,7 +87,7 @@ public final class SuiteLoop {
         int runs = 100;
         Path out = Path.of("suite-loop-evidence");
         String label = "run";
-        int expectTests = -1; // sentinel only — there is no default, see the check below
+        int expectTests = -1; // sentinel: no --expect-tests given yet — derived from iteration 1 below
 
         // Unknown or value-less flags are fatal on purpose: a silently ignored
         // `--run 2000` would produce a 100-iteration sample that still looks like a
@@ -95,15 +105,9 @@ public final class SuiteLoop {
             }
         }
 
-        // Same reasoning as the unknown-flag check, one step further: an omitted
-        // --expect-tests leaves the run unable to distinguish "no test failed" from
-        // "no test ran", and a zero-test iteration then reports a SUMMARY identical
-        // to a clean one. Refuse to measure without it.
-        if (expectTests < 0) {
-            throw new IllegalArgumentException(
-                    "--expect-tests N is required (:wire is 14 on Linux, 15 on macOS); "
-                            + "without it a run that executed 0 tests reports a clean zero");
-        }
+        // expectTests stays at its -1 sentinel here when --expect-tests was omitted;
+        // it is derived from iteration 1's own executed-test count once that iteration
+        // runs (see below), rather than declared up front.
 
         Path failureDir = out.resolve("failures");
         Files.createDirectories(failureDir);
@@ -154,6 +158,25 @@ public final class SuiteLoop {
             Instant t0 = Instant.now();
             launcher.execute(request);
             long ms = Duration.between(t0, Instant.now()).toMillis();
+
+            if (iteration == 1 && expectTests < 0) {
+                // No --expect-tests given: iteration 1 IS the recorded baseline every
+                // later iteration is checked against (computenet-dqy.56). A zero here
+                // must not silently become "expect 0 forever" — that would validate
+                // every subsequent zero-test iteration as normal, exactly the failure
+                // mode --expect-tests exists to catch. Fail loudly instead of adopting it.
+                if (executed.get() == 0) {
+                    throw new IllegalStateException(
+                            "iteration 1 executed 0 tests; refusing to derive an "
+                                    + "--expect-tests baseline of 0 from it, since that would "
+                                    + "make every future zero-test iteration look expected. "
+                                    + "Check --package/the classpath, or pass --expect-tests "
+                                    + "explicitly if 0 is genuinely the count you want.");
+                }
+                expectTests = executed.get();
+                System.out.printf("%s derived --expect-tests=%d from iteration 1 (none was given)%n",
+                        label, expectTests);
+            }
 
             boolean short_ = executed.get() != expectTests;
             if (short_) shortIterations++;
