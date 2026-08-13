@@ -55,7 +55,15 @@ Order-sensitivity, stated rather than left to be discovered:
 - **E1 and E2 are strictly ordered and share one row.** Each block's forged
   `updated_at` is chosen relative to what its predecessor left stored, and each
   block below prints B's stored row so the precondition is visible. Running E1c
-  before E1a, for instance, makes E1c a *create* rather than a stale skip.
+  before E1a, for instance, makes E1c an *overwrite* rather than a stale skip:
+  E1c's forged `16:26:19Z` is "older" only relative to what E1a leaves stored
+  (`16:56:19Z`), and it is still half an hour *newer* than the seed hop's `T`
+  (`15:56:19Z`), so against a fresh setup it wins. Measured on a fresh rig root
+  — the E1c command run immediately after the setup hop reported
+  `{"created":1,"skipped":0,"updated":1,"updated_issues":[{"changes":"title, metadata",...}]}`
+  and left the stored row at
+  `{"title":"E1c incoming, forged older","updated_at":"2026-08-13T16:26:19Z","metadata":{"cn_dot":"A:older"}}`.
+  It is not a create — `X` already exists in B from the setup hop.
 - **E2 leaves B's `updated_at` moved backwards** (`16:56:19Z` → `16:26:19Z`).
   Anything run after E2 against `X` inherits that.
 - **E3 and E4 are order-independent of E1/E2** because they act on issues
@@ -569,9 +577,9 @@ bd -C "$B" --sandbox export | jq -c --arg q "$Q" 'select(.id==$q) | {updated_at}
 
 — so the store keeps whole seconds only, on both the read and the export path.
 
-The next two pushes on `Q` produced a result that did not fit ("truncation"),
-so `Q` was abandoned and the question re-run in isolation on `R`. `Q`'s two
-remaining lines are printed here rather than dropped:
+The next push on `Q` produced a result that did not fit ("truncation"), so `Q`
+was abandoned and the question re-run in isolation on `R`. `Q`'s four remaining
+lines are printed here rather than dropped:
 
 ```
 incoming 2026-08-13T17:30:00.900Z  -> {"tie_kept_local_ids":["bdsa-clr"]}   stored: title changed, updated_at 2026-08-13T17:30:01Z
@@ -649,6 +657,25 @@ incoming 2026-08-13T21:00:00.500Z -> {"tie_kept_local_ids":["bdsa-rnh"]}  stored
 The boundary is exactly `.500`: round-half-up, not truncation. `.499` is a real
 tie (report and store agree); `.500` and above is a silent overwrite reported
 as a tie.
+
+Re-measured during review on an independent rig root (`S` = `bdsa-72b`), with
+extra probes on either side of the boundary and on the shorter `.5` spelling.
+Each line is driven from a fresh whole-second baseline, so the stored value
+before each probe is the baseline shown:
+
+```
+baseline 21:00:00Z; incoming 21:00:00.499Z  -> {"tie_kept_local_ids":["bdsa-72b"]}  stored unchanged: "baseline 21:00:00Z" @ 21:00:00Z
+             then;  incoming 21:00:00.500Z  -> {"tie_kept_local_ids":["bdsa-72b"]}  stored CHANGED:   "E4-8 .500"        @ 21:00:01Z
+baseline 22:00:00Z; incoming 22:00:00.501Z  -> {"tie_kept_local_ids":["bdsa-72b"]}  stored CHANGED:   "E4 .501"          @ 22:00:01Z
+baseline 23:00:00Z; incoming 23:00:00.4999Z -> {"tie_kept_local_ids":["bdsa-72b"]}  stored unchanged: "baseline 23:00:00Z" @ 23:00:00Z
+             then;  incoming 23:00:00.5Z    -> {"tie_kept_local_ids":["bdsa-72b"]}  stored CHANGED:   "E4 .5 one digit"  @ 23:00:01Z
+```
+
+`.4999` still keeps local and `.5` written with a single digit rounds up
+exactly as `.500` does, so the boundary is on the *value*, not on the number of
+fractional digits given. And the reverse direction holds under both spellings:
+re-importing the same `.5` row against the now-`23:00:01Z` stored row reported
+`{"created":0,"skipped":1,"stale_skipped_ids":["bdsa-72b"]}` and wrote nothing.
 
 ### E4 summary of what one-second resolution actually does
 
