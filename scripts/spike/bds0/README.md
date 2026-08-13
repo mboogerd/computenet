@@ -17,6 +17,12 @@ mechanics faithfully, it does not judge any claim.
 throwaway `mktemp -d` root, using `bd -C <workspace> --sandbox`, and the
 script never runs `bd` with its cwd inside the repo checkout.
 
+**Requirements.** `bd`, `jq`, and `dolt` must all be on `PATH`. All three
+are already expected in this repository's dev environment; `journal`
+additionally fails with a clear message (rather than a raw error) if
+`dolt` specifically is missing, since it is the one dependency `init` and
+`hop` don't need.
+
 ## Run it
 
 From a clean checkout, with no setup:
