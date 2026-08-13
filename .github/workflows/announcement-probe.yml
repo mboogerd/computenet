@@ -39,9 +39,12 @@ name: Announcement probe (on-demand Linux bulk sample)
 # measurement run's `-D` typo does not crash it. Poisoning it with garbage would
 # therefore prove nothing: forwarding broken and forwarding fine-but-tolerant
 # look identical (both green, both silent). So this key is proved the opposite
-# way — forward it a REAL injection value and require the induced failure, the
-# `INJECTED SYNTHETIC FAILURE` banner named in the test's own KDoc and failure
-# record. computenet-dqy.63 also found and fixed the OTHER half of this same
+# way — forward it a REAL injection value and require the induced failure: a
+# non-zero exit plus `Report.render`'s `injected synthetic failure(s)` summary
+# on the console. NOT the `INJECTED SYNTHETIC FAILURE` banner the test's KDoc
+# names — that one is written by `Failure.render` to the per-failure artifact
+# file only, and never reaches the console this preflight greps (see the step's
+# own comment below). computenet-dqy.63 also found and fixed the OTHER half of this same
 # trap: the `@Test` used to not read this property at all, so even a perfectly
 # forwarded value did nothing — the two failure modes look the same from here
 # (a silently green run), which is exactly why this preflight exists.
