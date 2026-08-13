@@ -1140,6 +1140,10 @@ Order what survives:
 3. unparented ready bugs and chores;
 4. general ready order.
 
+Ties within a tier break by the next criterion down: an item that is both a
+direct dependent *and* overlaps the changed-file set outranks a dependent
+that doesn't, and so on.
+
 **Admit a candidate only if its estimate fits the remaining budget with
 margin.** Remaining budget comes from the step-2 monitor's notifications;
 the estimate is the item's 45–60m sizing from breakdown (5b). Margin
