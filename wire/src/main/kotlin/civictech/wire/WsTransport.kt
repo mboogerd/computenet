@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -175,11 +176,24 @@ object WsTransport {
      * `WebSocketClient` can't be retried before its first successful open (a
      * `connectReadThread`/`reset()` interaction it doesn't support), so the real
      * handshake below still runs exactly once, only after the port is reachable.
+     *
+     * **What a give-up says** (computenet-dqy.41). `connectBlocking` returning
+     * false is the only signal the caller ever gets — the [WsConnection] never
+     * escapes this method — so the exception carries what that connection saw:
+     * how far the dial got ([WsConnection.dialDiagnosis]'s `readyState`) and the
+     * close code, reason and origin the client observed, or that it observed no
+     * close at all. Without it the message named the URI and nothing else, and a
+     * dial that was answered-then-dropped read exactly like one that timed out
+     * mid-handshake. Diagnostics only: the retry, the timeout and the give-up
+     * condition are unchanged, and the diagnosis is built inside `check`'s lazy
+     * message, so a successful connect never pays for it.
      */
     fun connect(uri: URI, side: Peering.Side, backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF): WsConnection {
         awaitReachable(uri, backoff)
         val connection = WsConnection(uri, side, backoff)
-        check(connection.connectBlocking(10, TimeUnit.SECONDS)) { "could not connect to $uri" }
+        check(connection.connectBlocking(10, TimeUnit.SECONDS)) {
+            "could not connect to $uri — ${connection.dialDiagnosis()}"
+        }
         return connection
     }
 
@@ -631,6 +645,49 @@ object WsTransport {
          */
         private val reconnecting = AtomicBoolean(false)
 
+        /**
+         * The first close this client saw, already rendered (computenet-dqy.41), and
+         * how many followed it.
+         *
+         * The *first* one is the one that answers "why did the dial not open?" — a
+         * later close belongs to a reconnect attempt, not to the original handshake —
+         * so this is set once and never overwritten; the counter keeps a run that
+         * closed repeatedly from reading as a single event.
+         *
+         * **This is observable by the time `connectBlocking` returns**, so
+         * [dialDiagnosis] never has to wait for it: 1.6.0's
+         * `WebSocketClient.onWebsocketClose` calls `onClose` (offset 23) *before*
+         * `connectLatch.countDown()` (offset 30), and that countDown is what releases
+         * `connectBlocking`. Re-check this against the close ordering on any upgrade —
+         * if it inverts, the diagnosis degrades to "no close observed", which is a
+         * weaker report and not a wrong one.
+         */
+        private val firstClose = AtomicReference<String?>(null)
+        private val closes = AtomicInteger()
+
+        /**
+         * How far this dial got, for a caller that has to explain a connect which
+         * never opened (computenet-dqy.41). Read-only; called only on the give-up
+         * path.
+         *
+         * `readyState` is the state at the moment of giving up, and it separates a dial
+         * that ran out its ten seconds still waiting (`NOT_YET_CONNECTED`) from one
+         * that was torn down (`CLOSING`/`CLOSED` — 1.6.0 assigns `CLOSED` *after*
+         * `onClose` returns, so either may be read here; both mean the same thing).
+         * The close code is the coarse split between a TCP-level end of either kind
+         * (**-1**, which java-websocket's client reaches from a clean EOF *and* from
+         * any non-SSL `IOException` in its read loop — so it does **not** distinguish
+         * a graceful close from a reset) and a peer that answered but refused the
+         * upgrade (**1002**, from `WebSocketImpl.decode`'s client-role rejections).
+         */
+        internal fun dialDiagnosis(): String {
+            val state = runCatching { readyState.toString() }.getOrElse { "readyState unavailable: $it" }
+            val close = firstClose.get()
+                ?: return "readyState=$state, and the client observed NO close (the dial simply never opened)"
+            val more = closes.get().let { if (it > 1) " (and $it closes in all)" else "" }
+            return "readyState=$state, first close seen by the client: $close$more"
+        }
+
         /** Deliberate close: stop reconnecting, then close the socket. */
         fun shutdown() {
             reconnect = false
@@ -646,6 +703,12 @@ object WsTransport {
         override fun onMessage(bytes: ByteBuffer) = session.onFrame(bytes)
 
         override fun onClose(code: Int, reason: String?, remote: Boolean) {
+            closes.incrementAndGet()
+            firstClose.compareAndSet(
+                null,
+                "code=$code, reason=${reason?.takeIf(String::isNotEmpty)?.let { "\"$it\"" } ?: "<none>"}, " +
+                    "closed by ${if (remote) "the peer" else "this side"}",
+            )
             session.onClose() // unpublish: senders park until the re-hello re-announces
             scheduleReconnect()
         }

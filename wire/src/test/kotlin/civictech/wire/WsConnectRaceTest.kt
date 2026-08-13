@@ -3,7 +3,9 @@ package civictech.wire
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.wire.Peering
+import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -16,6 +18,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -96,10 +99,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * anything the test asserts — the evidence is gathered after the assertion has
  * already failed.
  *
- * The one fact it cannot reach is named in [Evidence.HOW_TO_READ]: the close
- * *code* the client saw. `WsTransport.connect` throws its own
- * `IllegalStateException` and never lets the `WsConnection` out, so only
- * `connect` itself can report what `connectBlocking` saw.
+ * The one fact [Evidence] could not reach itself — the close *code* the client
+ * saw — now arrives through the failure's own cause (computenet-dqy.41):
+ * `WsTransport.connect` never lets the `WsConnection` out, so only `connect`
+ * can say what `connectBlocking` saw, and its `IllegalStateException` now says
+ * it. That exception is this test's `AssertionError` cause and is also rendered
+ * into the timeline ("the dial failed: …"), so the code is read off the report
+ * rather than off a re-run.
  */
 class WsConnectRaceTest {
 
@@ -223,6 +229,63 @@ class WsConnectRaceTest {
         }
     }
 
+    /**
+     * The other half of computenet-dqy.35's diagnosability criterion, which its file
+     * claim could not reach: what `connect` *says* when it gives up (computenet-dqy.41).
+     *
+     * The stimulus is the cheapest thing that answers a dial and then refuses to be a
+     * WebSocket: a plain [ServerSocket] that accepts and closes. It satisfies
+     * `awaitReachable`'s probe — so `connect` proceeds to the real handshake exactly as
+     * it does against a listener — and then ends the socket under it, which is the
+     * shape of the 2026-08-12 occurrence this whole line of work is about. That makes
+     * the give-up deterministic, so the message can be pinned without waiting on a race.
+     *
+     * What is pinned is *content, not prose*: that the message still names the URI, and
+     * additionally names how far the dial got and what the client saw close. Asserting
+     * only the URI is what this test exists to prevent regressing to.
+     */
+    @Test
+    fun `a give-up names the readyState and the close the client saw, not just the URI`() {
+        val client = Stack()
+        // accepts and closes, forever: the reachability probe and the real handshake
+        // are two separate connections, and both must be answered the same way
+        val thief = ServerSocket(0, BACKLOG, WsTransport.loopback(0).address)
+        val port = thief.localPort
+        val stop = AtomicBoolean(false)
+        val accepting = start("connect-giveup-thief", { if (!stop.get()) throw it }) {
+            while (!stop.get()) thief.accept().close()
+        }
+
+        val failure = try {
+            val opened = WsTransport.connect(URI("ws://localhost:$port"), client.side) { 10L }
+            opened.shutdown()
+            throw AssertionError("a socket that accepts and closes must not produce an open connection")
+        } catch (e: IllegalStateException) {
+            e
+        } finally {
+            stop.set(true)
+            runCatching { thief.close() } // unblocks the accept loop
+            accepting.interrupt()
+            // same residue as the race test above: a failed dial leaves a reconnect
+            // loop redialling this port every 10ms forever on a daemon thread
+            Thread.getAllStackTraces().keys
+                .filter { it.name == "ws-reconnect-ws://localhost:$port" }
+                .forEach(Thread::interrupt)
+        }
+
+        val message = failure.message ?: ""
+        withClue("connect's give-up message was: $message") {
+            // the URI it always named, still named
+            message shouldContain "could not connect to ws://localhost:$port"
+            // how far the dial got — a state, whatever java-websocket calls it here
+            message shouldContain Regex("readyState=[A-Z_]+")
+            // and what the client saw close: a code, a reason slot, and which side
+            message shouldContain Regex("code=-?\\d+")
+            message shouldContain "reason="
+            message shouldContain "closed by "
+        }
+    }
+
     /** A daemon worker whose failure lands in a future instead of a dead thread's stack trace. */
     private fun start(name: String, fail: (Throwable) -> Unit, body: () -> Unit): Thread =
         Thread({ runCatching(body).onFailure(fail) }, name).apply { isDaemon = true; start() }
@@ -277,10 +340,15 @@ class WsConnectRaceTest {
         }
 
         fun report(headline: String): String {
-            // Only ever reached once the assertion has already failed, so this waits
-            // on evidence rather than on success: `connectBlocking` releases its latch
-            // in `onWebsocketClose` *before* `onClose` runs, so the close that failed
-            // the dial can still be in flight. It widens no timeout the test asserts on.
+            // Only ever reached once the assertion has already failed, so this waits on
+            // evidence rather than on success. The wait is needed because this latch is
+            // counted down by the backoff callback on the thread `scheduleReconnect`
+            // spawns, not by `onClose` itself — a thread hop that can outlive the failed
+            // dial. (`onClose` itself is not late: 1.6.0's `onWebsocketClose` calls it
+            // before `connectLatch.countDown()`, which is why `connect`'s own message can
+            // report the close code without waiting — computenet-dqy.41. This comment used
+            // to claim the opposite ordering; the bytecode says otherwise.) It widens no
+            // timeout the test asserts on.
             val sawClose = closed.await(CLOSE_EVIDENCE_MILLIS, TimeUnit.MILLISECONDS)
             val serving = listener
             return buildString {
@@ -395,10 +463,12 @@ class WsConnectRaceTest {
                     "      handshake rejections -> 1002, i.e. an HTTP reply that was not an upgrade, or a\n" +
                     "      draft that refused one. (closeConnectionDueToWrongHandshake is the SERVER-role\n" +
                     "      path — it writes a 404 — and a client never reaches it.)\n" +
-                    "    * the close CODE itself is not observable from here: WsTransport.connect throws its\n" +
-                    "      own IllegalStateException and never lets the WsConnection out, so only connect()\n" +
-                    "      can say what connectBlocking saw (computenet-dqy.41 — production change, not made).\n" +
-                    "      The payoff is smaller than it looks: -1 does not separate an EOF from a reset.\n" +
+                    "    * the close CODE is NOT in this block — it rides on the AssertionError's cause and\n" +
+                    "      on the 'the dial failed: …' timeline line, because only WsTransport.connect ever\n" +
+                    "      holds the WsConnection (computenet-dqy.41). Read it there, together with the\n" +
+                    "      readyState that says how far the dial got. Weigh it as above: -1 does not separate\n" +
+                    "      an EOF from a reset, so it splits 'the socket ended' from 'the peer answered and\n" +
+                    "      refused the upgrade' (1002), and nothing finer.\n" +
                     "    * 'NEVER BOUND' or 'NOT started' is a snapshot taken when this report rendered, not\n" +
                     "      a verdict: a listener that started microseconds later still reads 'NOT started'\n" +
                     "      (observed in a forced run, 0.3ms behind). Check the timeline before concluding\n" +
