@@ -148,13 +148,13 @@ class WsAnnouncementStressTest {
                     val connection = WsTransport.connect(URI("ws://localhost:${listener.port}"), client.side)
                     try {
                         awaits++
-                        observe(i, "catch-up", early.ref, client.registry, captured, failures, latencies)
+                        observe(i, "catch-up", early.ref, client.registry, server.registry, captured, failures, latencies)
                         // live shape: published after connect returned, while the
                         // hello exchange may still be in flight
                         val late = CollectingCell()
                         server.host.managementInlet.call.spawn(late)
                         awaits++
-                        observe(i, "live", late.ref, client.registry, captured, failures, latencies)
+                        observe(i, "live", late.ref, client.registry, server.registry, captured, failures, latencies)
                     } finally {
                         connection.shutdown()
                         runCatching { listener.stop(1000) }
@@ -174,6 +174,7 @@ class WsAnnouncementStressTest {
             shape: String,
             ref: CellRef,
             registry: LocationRegistry,
+            server: LocationRegistry,
             captured: ByteArrayOutputStream,
             failures: MutableList<Failure>,
             latencies: MutableList<Long>,
@@ -190,19 +191,60 @@ class WsAnnouncementStressTest {
             while (!arrived() && System.currentTimeMillis() - start < LOST_AFTER_MS) Thread.sleep(10)
             val elapsed = System.currentTimeMillis() - start
             val late = if (arrived()) elapsed else null
-            failures += Failure(iteration, shape, late, diagnose(ref, registry, captured))
+            failures += Failure(iteration, shape, late, diagnose(ref, registry, server, captured))
         }
 
+        /**
+         * computenet-dqy.40 added the two-sided half of this report. The
+         * 2026-08-12 Linux loss was diagnosed from the client's side alone, and
+         * that left the two questions that decide where to look unanswerable:
+         *
+         * - **How much of the burst arrived?** A catch-up announces *every*
+         *   local ref, and the server's local set here is three (the collector,
+         *   plus the bridge ingress and the registry mirror the peering itself
+         *   publishes into the same registry) — measured, and the client holds
+         *   all three in a healthy iteration. The failing run held **one**, so
+         *   the event was a burst that stopped, not a single announcement that
+         *   went missing. Nothing in the old report said so; [expected] and
+         *   [announced] below say it outright.
+         *
+         *   Two limits on that reading, measured in review of computenet-dqy.40
+         *   and recorded so it is not requoted past them. **Three is the steady
+         *   state, not an invariant**: the mirror and the ingress are published
+         *   asynchronously around `announceTo`, and this report has been seen to
+         *   render `server localRefs=2` when taken at t≈0. The 2026-08-12 record
+         *   was taken 15s in, so three holds there. And **the event is not
+         *   attributable to the sweep**: the one ref that did arrive was not the
+         *   collector, so it was the mirror or the ingress — exactly the two refs
+         *   that race the sweep and may travel the `onLocalPublish` hook instead.
+         *   "A burst that stopped" is earned; "the sweep truncated" is not.
+         * - **Is it lost or parked?** An announcement stalled at either
+         *   scheduler hop behind the socket — the bridge ingress decode, then
+         *   the delivery to the registry mirror — parks under the *client's own*
+         *   local refs, never under the announced ref. So the old report's
+         *   "parked for awaited ref: 0" ruled out nothing at all; the per-local-
+         *   ref park depths below are where a stalled hop is visible.
+         */
         private fun diagnose(
             ref: CellRef,
             registry: LocationRegistry,
+            server: LocationRegistry,
             captured: ByteArrayOutputStream,
         ): String = buildString {
             appendLine("  awaited ref: $ref")
             appendLine("  client location: ${registry.location(ref)}")
+            appendLine("  awaited ref on the server: ${server.location(ref)}")
+            appendLine("  announced: server localRefs=${server.localRefs().size} -> client remoteRefs=${registry.remoteRefs().size}")
+            appendLine("  server localRefs: ${server.localRefs()}")
             appendLine("  client remoteRefs: ${registry.remoteRefs()}")
             appendLine("  client localRefs: ${registry.localRefs()}")
             appendLine("  parked for awaited ref: ${registry.parkedFor(ref).size}")
+            registry.localRefs().forEach { local ->
+                appendLine("  parked for client-local $local: ${registry.parkedFor(local).size}")
+            }
+            server.localRefs().forEach { local ->
+                appendLine("  parked for server-local $local: ${server.parkedFor(local).size}")
+            }
             val threads = Thread.getAllStackTraces().keys
                 .filter { it.isAlive }
                 .groupingBy { it.name.replace(Regex("[0-9a-f-]{8,}"), "*") }
