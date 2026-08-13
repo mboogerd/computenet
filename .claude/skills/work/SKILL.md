@@ -114,6 +114,22 @@ rules, in force throughout this file:
 - **Dispatch prompts relay artifacts, not framing.** A subagent cannot
   tell your speculation from your evidence; hand it the run id, job, and
   `FAILED` line plus "mechanism unknown, read the log".
+- **A claim about what a tool or CI platform DOES is the same kind of
+  claim.** It needs a run that shows it, or a citation to the platform's
+  documentation — otherwise write it as "I believe X; verify it". An
+  orchestrator asserted that "a `workflow_dispatch` job always runs the
+  DEFAULT BRANCH's copy of the file, so a new arm on this branch cannot be
+  dispatched until it merges", and put it in three dispatch prompts and two
+  PR bodies. It is false: `workflow_dispatch` executes the **selected ref's**
+  copy. Verified — run `31673273722` reports `event=workflow_dispatch`,
+  `headBranch=feature/computenet-dqy.52`, `headSha=1bb38c5`, and executed a
+  step that existed only on that branch. What is true, and is what the claim
+  was over-generalised from, is that the workflow must exist on the default
+  branch to be **dispatchable at all** (the earlier `HTTP 404: workflow not
+  found on the default branch`). computenet-dqy.52 shipped believing its own
+  experiment could not be run before merge, and only the reviewer trying it
+  produced the result. A one-line try-it-first is cheaper than the session it
+  costs.
 - **Code you write yourself** (conflict resolutions, unblocking fixes)
   goes to a reviewer on the same terms as task work (5c) — it is the one
   code path no dedicated reader sees.
@@ -154,6 +170,28 @@ Three notifications at 3h15m, 4h, and 4h45m — the slot is 5h, and the last
 15m is Finalize. Scale all three proportionally if the routine names a
 different slot. **Note the monitor's task id**; when you reach Finalize on
 your own, `TaskStop` it so it doesn't outlive the session.
+
+**`persistent: true` is load-bearing — do not drop it, and do not "fix" the
+snippet by adding `timeout_ms`.** Determined by test, 2026-08-13, three
+probes: omitting `timeout_ms` with `persistent: true` is **accepted**, not
+rejected, and a monitor armed that way **fired at 6 minutes**; the control
+with `persistent: false` and `timeout_ms` omitted was armed at
+`timeout 300000ms` and killed before its 6-minute line. So the 300000ms
+default is real but `persistent` genuinely overrides it, and the documented
+3600000ms *maximum* never applies here — which matters, because 1h is well
+short of a 5h slot. (This rules the snippet out as the cause of
+computenet-m5l.)
+
+**Between notifications you have no sense of elapsed time, so read the clock
+before any budget-gated decision.** "Don't poll a clock" means don't burn
+turns on it, not "you don't need to know the time" — and the T-90m/T-45m
+rules in 5f are exactly decisions that need it. One session misread its own
+elapsed time as ~3h20m at the 1h31m mark and came one step from declining to
+start a fifth feature, which would have idled ~1h45m of a 5h slot:
+
+```bash
+date -u +%H:%M    # before 5f's feature selection, and before any T-gate call
+```
 
 Act on each as it arrives, at the next decision point:
 
@@ -362,7 +400,22 @@ Empty → dispatch the breakdown, **wait for its completion notification**,
 then re-run the query. Do not fall through to step 5 while it runs — an epic
 with no children yet looks finished and would get closed.
 
-If the re-run is still empty, the breakdown produced nothing. **Try once
+**Before retrying, check whether the breakdown parked the epic on purpose.**
+`epic.md` now requires it to verify the epic's load-bearing environmental
+premises first and to park rather than produce children that inherit a false
+one — so a *correct refusal* looks exactly like a dead breakdown if you only
+count children:
+
+```bash
+bd show <epic> --json | jq -r '.[0].metadata.parked_at // "not parked"'
+bd comments <epic> --json > "$SCRATCH/epic-comments.json"   # read the park comment
+```
+
+Parked deliberately → **do not dispatch a second breakdown** and do not log it
+as friction; the agent did its job. Park the epic per this step's `bd defer`
+route and select the next one.
+
+Otherwise the breakdown produced nothing. **Try once
 more, then stop** — park a question on the epic
 ([references/ask-human.md](references/ask-human.md)) and end the session.
 Dispatching a third time is how a broken breakdown burns a whole slot, and
@@ -524,6 +577,35 @@ keeps the reviewer looking at integrated code. Conflicts here are yours to
 resolve; re-run the affected module suite afterwards, since a hand-resolved
 merge is code nobody reviewed.
 
+**A dirty worktree you inherited may be a half-applied MUTATION, and
+committing it would break production code.** This repo routinely verifies a
+pin by mutation — delete an argument at the production call site, confirm the
+test fails, restore it — and an agent killed mid-mutation leaves a worktree
+dirty in exactly the same shape as one killed mid-improvement: same files,
+same size of diff. Committing the first lands a silently broken change that a
+green local run will not catch, because the mutation is designed to make one
+specific test fail and that test may be the one nobody re-ran. Discarding the
+second throws away finished work. Classify before you act:
+
+```bash
+ls <worktree>/.mutation-in-progress 2>/dev/null && cat <worktree>/.mutation-in-progress
+git -C <worktree> status --short
+git -C <worktree> diff
+```
+
+- **`.mutation-in-progress` exists** → the previous agent was mid-mutation.
+  `git -C <worktree> checkout -- .` to restore, delete the marker, and say so.
+- **No marker, and the diff reads as deliberate and self-consistent** — the
+  KDoc updated to match, the change coherent as an improvement — → keep it,
+  and say in your report that you kept uncommitted work you did not write.
+- **No marker and you cannot tell** → do not commit and do not discard. Leave
+  it, park a question ([references/ask-human.md](references/ask-human.md)),
+  and move on. Reading the diff is the only thing that distinguishes these,
+  so budget for it rather than guessing.
+
+The marker is what makes this recoverable *without* reading; the reading rules
+are the fallback for worktrees predating it.
+
 **Read the verification line it prints, and only that line.** `STOP` means
 the worktree is on the right branch at the wrong commit — proceeding
 silently orphans reviewed work while looking perfectly clean
@@ -591,6 +673,27 @@ problem, not a one-off.
 
 Sending a feature with unfinished tasks to 5e puts half a feature in front of
 the last gate before `main`, so this distinction is not a formality.
+
+**Re-derive `metadata.files` against the bead's current decided design before
+you claim it.** The claim is set when the bead is *filed*; a design question
+answered later can move the work outside it, and nothing re-computes it at
+that point. computenet-dqy.37 claimed `wire/src/{main,test}/kotlin/civictech/
+wire` and was then decided as shapes (b)+(c), where (c) is "prepare the
+one-line upstream fix" — which necessarily produces a file outside `wire/`.
+Satisfying the bead required violating its own claim. Read the acceptance and
+design clauses against the claim; if the design reaches wider, **widen the
+claim and say so**:
+
+```bash
+bd update <task-id> --set-metadata files=<the widened list>
+bd comment <task-id> "Widened files claim before dispatch: <old> -> <new>, because <the design clause that reaches outside it>."
+```
+
+Widening before dispatch is what keeps the disjointness the batch rule
+depends on honest. The failure mode to close is an implementer having to pick
+between the file claim and the acceptance criteria with nothing covering it —
+so the dispatch template below also tells it to report and widen rather than
+choose silently.
 
 Claim each id in the batch, record its metadata, then attach its worktree:
 
@@ -708,10 +811,17 @@ Agent({
 claim another. Work ONLY in your own worktree at ${taskWorktree}, on branch
 ${taskBranch}. Do not touch the main checkout, the feature worktree, or
 another task's worktree.
-Read it: bd show ${id} --json
-Then read .claude/skills/work/references/task.md and follow it.
+Read it: bd show ${id} --json (run bd with -C <main-checkout>; only that
+checkout has the beads database)
+Then read the skill files FROM YOUR OWN WORKTREE — ${taskWorktree}/.claude/
+skills/work/references/task.md — and follow it. Do NOT read them from the
+main checkout: it is where bd lives, and its local branch is not refreshed by
+anything in this flow.
 Stay inside your metadata.files claim — sibling tasks are running on sibling
-branches and merge into the same feature branch.
+branches and merge into the same feature branch. If the bead's own design or
+acceptance clause REQUIRES a file outside the claim, do not choose between
+them silently: report it and say which file and which clause, and I will
+widen the claim.
 If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
 message. A prescribed reproduction that passes unfixed is a false lead — say
@@ -725,6 +835,20 @@ Report back: the task id, the outcome, and the files you actually touched.`
 
 Don't set `isolation: "worktree"` — you create and record the worktree
 yourself precisely so it outlives the agent and can be resumed.
+
+**`bd` lives in the main checkout; the skill files do not.** Worktrees are cut
+from `origin/main`, so an agent reading `.claude/skills/work/**` from *its own
+worktree* gets the current text — while the main checkout's local branch is
+refreshed by nothing here and drifts. Measured at the start of one session:
+the main checkout was at `2e3a160` while `origin/main` was at `0a1a56a`,
+**44 commits behind**, spanning PRs that changed `SKILL.md` and `references/`
+themselves; the `.claude/skills/remediate-friction/` directory did not exist
+in that checkout at all. The failure is selective and invisible — an agent in
+a worktree is fine, and only the ones sent to the main checkout read days-old
+instructions. So: **run `bd` with `-C <main-checkout>`, read every skill file
+from your own worktree**, and if you must read one on the main checkout, read
+it as `git show origin/main:<path>` rather than from the working tree. Say
+which in every dispatch prompt.
 
 **On batch completion** (wait for the whole batch; a staggered re-batch
 computes overlap against a moving set):
@@ -755,11 +879,18 @@ Agent({
   description: "Review task <id>",
   model: <task's metadata.model>,
   run_in_background: true,
-  prompt: `Read .claude/skills/work/references/review-task.md and follow it
-to review beads task ${id} against its own acceptance criteria.
+  prompt: `Read .claude/skills/work/references/review-task.md (from
+${taskWorktree}, not the main checkout) and follow it to review beads task
+${id} against its own acceptance criteria.
 Worktree: ${taskWorktree}  ·  Branch: ${taskBranch}
 Repair what you can within the task's scope. Report pass or fail, what you
-repaired, and — on fail — exactly what is missing.`
+repaired, and — on fail — exactly what is missing.
+If you won't finish within ~45-60 minutes, stop at a clean point and write your
+state to the bead BEFORE you stop: your verdict so far, what you have and have
+not verified, and whether you authored any commits (with their shas and
+--stat). A review stopped without that leaves the worst state available —
+reviewer-authored code on the branch that nobody has certified, and a bead
+that reads as neither pass nor fail.`
 })
 ```
 
@@ -892,9 +1023,25 @@ re-fetch is where you find out whether one of them did — do it.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,
-what you repaired, and any tasks you created.`
+what you repaired, and any tasks you created.
+If you won't finish within ~45-60 minutes, stop at a clean point and write your
+state to the bead BEFORE you stop: your verdict so far, what you have and have
+not verified, and whether you authored any commits (with their shas and
+--stat). A review stopped without that leaves the worst state available —
+reviewer-authored code on the branch that nobody has certified, and a bead
+that reads as neither pass nor fail.`
 })
 ```
+
+**A review you had to `TaskStop` is a DRAFT verdict, not an absent one.**
+Read whatever it wrote to the bead before stopping and route on that: it is
+the substantive-repair case if it authored commits, gaps if it named them,
+and a plain resume otherwise. Do not treat the feature as unreviewed — that
+loses the work already done — and do not treat it as certified. The one state
+to refuse is silence: a stopped reviewer that wrote nothing leaves an
+ambiguity the next session has to *detect*, so say so explicitly in the
+summary and leave the PR in draft. Four of five features in one session were
+fine; the fifth cost the epic its close exactly here.
 
 **The reviewer certifies; you ship.** The reviewer reports a verdict and sets
 `metadata.review=passed`, but never runs `gh pr ready` — on this repo a
@@ -908,9 +1055,24 @@ the last chance to notice that `main` moved between the verdict and the ship:
 git -C <feature-worktree> fetch origin main
 git -C <feature-worktree> log --oneline \
   $(git -C <feature-worktree> merge-base HEAD origin/main)..origin/main
+
+# the checks are only a verdict on the commit they ran against
+git -C <feature-worktree> rev-parse HEAD
+gh pr view <pr-url> --json headRefOid -q .headRefOid    # must equal the line above
 gh pr checks <pr-url>
 gh pr ready <pr-url>
 ```
+
+**A mismatch between those two shas is "checks not yet available for this
+commit", not a verdict.** The PR head can lag the pushed branch ref: measured
+2026-08-13, `git ls-remote` returned the reviewer's repair commit while the
+API (with `Cache-Control: no-cache`) still reported the previous one, and
+`gh pr checks` listed that older commit's results — for about ten minutes,
+with nothing in the output saying so. That time the skew pointed the safe way,
+a red result from an older commit. The other direction is silent: green for
+commit N while the branch is at N+1 marks a PR ready on evidence that never
+covered the code being merged, and auto-merge then lands it. Wait for the
+shas to agree and re-read the checks.
 
 Read the first two before running the third. Commits the reviewer's verdict
 does not mention landed *after* it certified: if any of them touches the same
@@ -1016,6 +1178,27 @@ Order what survives:
 Ties within a tier break by the next criterion down: an item that is both a
 direct dependent *and* overlaps the changed-file set outranks a dependent
 that doesn't, and so on.
+
+**Reconcile the item's own compute budget against the session's before you
+dispatch it, and say in the prompt which one wins.** You are the only party
+that can see both. A bead written by an earlier session can demand
+">= 2000 Linux suite runs" — many hours of a shared 10-core box — while your
+own dispatch prompt says "do NOT launch a multi-hour brute-force loop that
+will starve the machine". Both are defensible and they directly contradict,
+and nothing else in this file resolves them, so the implementer resolves it by
+judgement with no rule to appeal to: one agent burns the slot on a blind loop,
+another substitutes a cheaper sample and nobody learns the criteria went
+unmet. Read the acceptance and TEST clauses at selection, multiply the sample
+by its per-run cost, and then either:
+
+- **it fits** → dispatch normally; or
+- **it does not** → say so in the dispatch prompt in as many words ("the
+  bead's <N>-run sample does not fit this slot; run <what fits>, and file the
+  full sample as a follow-up rather than reporting the smaller one as the
+  answer"), and mark the bead so a later session can route it to a dedicated
+  slot: `bd update <id> --set-metadata compute=dedicated`.
+
+Never leave the collision for the implementer to discover.
 
 **Admit a candidate only if its estimate fits the remaining budget with
 margin.** Remaining budget comes from the step-2 monitor's notifications;

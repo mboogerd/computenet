@@ -75,6 +75,20 @@ than restarting. That's the whole reason the worktree is preserved.
    output — not the fact that the test passes afterwards — is the evidence your
    fix is a fix and not a no-op.
 
+   **Any time you deliberately break production code to prove a test catches
+   it — a mutation check — leave a marker first**, so an agent that inherits
+   your worktree after a crash can tell a live mutation from finished work.
+   The two are indistinguishable from the diff alone, and committing a
+   mutation is a silently broken production change:
+
+   ```bash
+   echo "<the call site you mutated, and what you removed>" > .mutation-in-progress
+   # ... apply the mutation, run the test, watch it FAIL, restore the code ...
+   rm .mutation-in-progress
+   ```
+
+   Never commit the marker, and never commit while it exists.
+
    **If it passes unfixed, the prescribed reproduction is wrong.** Correct it
    at the source rather than quietly substituting your own, so the next reader
    does not pay for it again:

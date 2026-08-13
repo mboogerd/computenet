@@ -62,3 +62,10 @@ __pycache__/
 
 # beads_viewer (bv) local state
 .bv/
+
+# Mutation-check marker (computenet-leg). Written by an implementer while it
+# deliberately breaks production code to prove a test catches it, and removed
+# when the code is restored. It exists so an agent inheriting a crashed
+# worktree can tell a LIVE MUTATION from finished work — committing one is a
+# silently broken production change. Never a tracked file.
+.mutation-in-progress
