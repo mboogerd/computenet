@@ -212,6 +212,61 @@ class WsAnnouncementStressTest {
         }
     }
 
+    /**
+     * computenet-ba27: the guard for the property computenet-h6a delivered — a
+     * failure is on disk *before* [observe] returns, not accumulated in memory and
+     * rendered after the loop. That property is one line of placement, and nothing
+     * failed if a refactor moved it: the fast lane's 25 iterations never fail, so
+     * they never write anything, and `:wire:test` stayed green either way. The next
+     * long measurement run is where it would have surfaced, which is the two hours
+     * this bead family has already paid once.
+     *
+     * One injected iteration makes the ordering checkable without concurrency:
+     * [stress] has returned, so every write it was going to do has happened, and if
+     * the write lived after the loop instead the artifact would still not exist.
+     * Deliberately asserts nothing about timing and never races the loop to catch
+     * absent-then-present.
+     *
+     * The last assertion is worth as much as the first. An injected record is
+     * manufactured, and this bead family has been burned by one being requoted later
+     * as evidence of the real event — so the record must be on disk *and* counted as
+     * synthetic, never as a reproduction.
+     *
+     * `@TempDir` keeps the always-triggering injection out of the shared
+     * `build/announcement-stress`, which a green fast-lane run leaves nonexistent.
+     */
+    @Test
+    fun `an observed failure is written to disk before stress returns, and is counted as injected rather than observed`(
+        @TempDir tempDir: Path,
+    ) {
+        val report = stress(iterations = 1, injectFailuresAt = setOf(0), sink = artifactSink(tempDir))
+
+        val record = tempDir.resolve("failure-000000-catch-up-injected.txt")
+        assertTrue(
+            Files.isRegularFile(record),
+            "expected the per-failure record on disk once stress() returned, found: " +
+                Files.walk(tempDir).use { it.filter(Files::isRegularFile).toList() },
+        )
+        assertEquals(
+            "INJECTED SYNTHETIC FAILURE (--inject-failure-at / -Dwire.stress.injectFailureAt): this record " +
+                "was manufactured to exercise the artifact path and is NOT an observation of a lost " +
+                "announcement. The diagnostics below are a real snapshot of a healthy iteration.",
+            Files.readString(record).lineSequence().first(),
+            "the first line of $record must be the injected-synthetic-failure banner",
+        )
+
+        val tsv = tempDir.resolve("failures.tsv")
+        assertTrue(Files.isRegularFile(tsv), "expected $tsv alongside the per-failure record")
+        val rows = Files.readAllLines(tsv).filter { it.isNotBlank() }
+        assertTrue(
+            rows.any { it.split("\t").getOrNull(3) == "injected" },
+            "expected a failures.tsv row whose fourth column is 'injected', found: $rows",
+        )
+
+        assertEquals(0, report.observedFailures, "an injected record must never be counted as a reproduction")
+        assertEquals(2, report.injectedFailures, "both shapes of the injected iteration should be recorded")
+    }
+
     companion object {
         const val DEFAULT_ITERATIONS = 25
 
