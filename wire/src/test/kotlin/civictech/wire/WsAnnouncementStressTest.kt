@@ -680,6 +680,25 @@ class WsAnnouncementStressTest {
          *   both bridge hosts because both hops behind the socket stage on the
          *   client's. It is a *depth*, not an attribution: a non-zero reading
          *   says work was accepted and had not run when the report was taken.
+         * - **Was a frame produced, and did it cross?** (computenet-dqy.68.) The
+         *   nine occurrences in run 31756952711 read **zero on all four of the
+         *   above**, and the client held a strict *prefix* of the server's
+         *   `localRefs()` order in every one of them, so a contiguous run of
+         *   announcements stopped rather than individual refs going missing.
+         *   (That order is this report's own iteration order, which equals the
+         *   sweep's send order only for refs published before `announceTo` ran —
+         *   the caveat two bullets up applies, and "the sweep truncated" is still
+         *   not earned. The statistic does not need it: its null is order-blind.)
+         *   Zero
+         *   everywhere is compatible with three truncation points and those four
+         *   lines cannot separate them: above the socket (no frame produced), at
+         *   the socket (handed to java-websocket, never delivered), or below the
+         *   peer's socket (delivered, lost before the mirror). The `frames` line
+         *   is that cut: `sent` counts frames this side handed to the transport
+         *   without the write throwing, `received` counts binary frames the peer
+         *   routed into its ingress, and the socket out-queue flag is the
+         *   `staged` depth's analogue one layer down — see
+         *   [WsTransport.Session.framesSent] and `WsAnnouncementFrameCountTest`.
          */
         private fun diagnose(
             ref: CellRef,
@@ -730,6 +749,19 @@ class WsAnnouncementStressTest {
                 "  staged (accepted, not yet dispatched): client bridge total=${clientStaged.values.sum()}" +
                     " $clientStaged / server bridge total=${serverStaged.values.sum()}" +
                     " $serverStaged",
+            )
+            // computenet-dqy.68: the fifth instrument. `staged` above says
+            // whether the CLIENT's bridge accepted work; these say whether a
+            // frame was handed to the socket at all, and whether the peer's
+            // socket delivered it — the two ends the four zero-reading
+            // instruments leave unmeasured. Healthy steady state in this shape is
+            // server sent=3 / client received=3 (the server's three local refs)
+            // and client sent=2 / listener received=2 (the client's two).
+            appendLine(
+                "  frames: server->client sent=${listener.framesSent} received=${connection.framesReceived}" +
+                    " / client->server sent=${connection.framesSent} received=${listener.framesReceived}" +
+                    "; socket out-queue non-empty: listener=${listener.socketHasBufferedData}" +
+                    " client=${connection.socketHasBufferedData}",
             )
             val threads = Thread.getAllStackTraces().keys
                 .filter { it.isAlive }
