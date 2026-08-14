@@ -277,8 +277,14 @@ jobs:
   # variable T13 diagnosed as the runner-contention cause of the repo's one
   # (failing) CI run to date. These tests fork external `java` processes and
   # wait on fixed wall-clock awaits for OS-level process startup, which is
-  # exactly what a starved 2-core runner (compounded by org.gradle.parallel=true
-  # scheduling sibling module test tasks concurrently) starves hardest.
+  # exactly what a starved runner (compounded by org.gradle.parallel=true
+  # scheduling sibling module test tasks concurrently) starves hardest. `ubuntu-latest`
+  # is the 4-vCPU/16-GB standard runner tier here, not the 2-vCPU/7-GB one, because
+  # this repo is public (`gh repo view --json isPrivate` -> false) — GitHub docs give
+  # private repos the smaller tier and public repos the larger one for the same label.
+  # buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts's `maxParallelForks` clamp and
+  # gradle.properties' daemon heap sizing are both sized against this 4/16 budget;
+  # re-check both if the tier the repo gets ever changes (e.g. going private).
   build-test-serial:
     runs-on: ubuntu-latest
     timeout-minutes: 30
