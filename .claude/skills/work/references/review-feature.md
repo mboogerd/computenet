@@ -520,6 +520,50 @@ open, and it is the epic's owner who schedules it, not you. Name the unmet
 criterion verbatim in the comment; a residual glossed as "minor follow-up" is
 how it stops existing.
 
+**If the epic is already closed, file the residual UNPARENTED plus a
+`discovered-from` edge.** Check before you file — it is one query, and the
+answer changed under a live session on 2026-08-14, when the epic was closed
+by a concurrent session while this feature was still in review:
+
+```bash
+bd show <epic-id> --json | jq -r '.[0].status'
+```
+
+`closed` → the paragraph above stops being true of it. `bd` will let you
+parent to it — verified: a new bead given `--parent=<closed epic>` lists
+under that epic and stays in `bd ready` — and that is exactly what makes the
+wrong choice silent. But a closed epic schedules nothing: nobody selects it
+at step 3, its owner label has been dropped, and the criterion would sit in a
+container no session opens again. So file the residual with no parent, and
+give it the two references that stand in for one:
+
+```bash
+RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
+  --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>. Filed UNPARENTED deliberately: parent epic <epic-id> was already closed at review time." \
+  --acceptance="<the original criterion, unchanged>" \
+  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+bd dep add "$RES" <feature-id> --type=discovered-from
+bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES, UNPARENTED because <epic-id> is closed, linked discovered-from <feature-id>."
+bd update <feature-id> --set-metadata review=passed
+bd update <feature-id> --set-metadata residual=$RES
+```
+
+**The edge is the part that does the work, and parenting would not have
+substituted for it.** An unparented item is in `bd ready` like any other, so
+it is not lost; what it misses is the epic-scoped views. And
+`bv --robot-triage --graph-root <epic>` is not one of them:
+`.beads/issues.jsonl`, the export bv reads, carries **no `parent` field at
+all**, so `--graph-root` traverses *dependency edges*. Verified 2026-08-14 —
+`--graph-root computenet-dqy` returned `computenet-bybk` and
+`computenet-0her`, both unparented and both reachable only through a
+`discovered-from` edge onto `computenet-dqy.60`, while that epic's own open
+children `.70` and `.71` were absent from the subgraph entirely. A residual
+parented to a closed epic would have been just as invisible there; the edge
+is what puts it in front of the next session.
+
+Say in your report that the residual is unparented and why, so the
+orchestrator does not read it as a filing mistake.
+
 ### Draft
 
 Not good enough, or your repairs were substantive (§5). Say concretely why,

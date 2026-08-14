@@ -1506,13 +1506,26 @@ through the normal resume queries — never a stranded branch.
 actually has children and every one is closed:
 
 ```bash
-bd list --parent=<epic> --all --json      # must be non-empty
+bd show <epic> --json | jq -r '.[0].status'   # read the EPIC too, not only its children
+bd list --parent=<epic> --all --json          # must be non-empty
 ```
 
 All closed → `bd close <epic>` and drop its owner label
 (`bd update <epic> --remove-label=owner:$BEADS_ACTOR`), freeing the next
 session to take a different epic. An epic with *no* children is
 mid-breakdown, not finished — never close that.
+
+**Read the epic's own status in that first query — a closed epic with open
+children is a real state, and it does not look like one from the children
+alone.** `bd list --parent` returns the open children of a *closed* epic
+unchanged (verified 2026-08-14: `computenet-dqy` is closed and still lists
+`.70` and `.71` open and `.2` deferred), so the all-children-closed test
+reads exactly as it does mid-work and tells you nothing about the container.
+If the status comes back `closed` while you still hold the claim, this is not
+a dry epic: say so in the summary in those words — "epic `<id>` was closed
+under this session's claim; `<N>` children still open: `<ids>`" — and take it
+to step 6's already-closed branch. Do not close it again and do not reopen
+it.
 
 ## 6. Finalize
 
@@ -1544,8 +1557,50 @@ a window in which the other machine has legitimately claimed it and this
 session closes it underneath them — a stranded claim is cheap, a
 closed-out-from-under epic is not.
 
-**Release the epic claim.** If the epic didn't close above, set it back to
-open **and clear the assignee** — the claim binds it to *this session*, not
+**First: was the epic closed out from under you?** Both branches below —
+close it, or release it — assume the epic is still yours to move, and neither
+applies to an epic that came back `closed` while this session still held the
+claim. That happens: two sessions run concurrently on one machine and cannot
+tell each other apart ([references/claim-sync.md](references/claim-sync.md)),
+and on 2026-08-14 a session that claimed `computenet-dqy` at 08:10Z found it
+closed by the other session around 11:15Z with its own assignee and
+`owner:` label still on it. One query decides it, and 5f route 5 above has
+already run it:
+
+```bash
+bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
+```
+
+`closed` → **leave it closed.** Reopening fights the session that closed it,
+and `--status=open --assignee=""` on a closed epic is a reopen wearing a
+release's clothes. Drop only the ownership marker, which is provenance and
+blocks nothing:
+
+```bash
+bd update <epic> --remove-label=owner:$BEADS_ACTOR   # works on a closed
+                                                     # issue and does not
+                                                     # reopen it (verified)
+```
+
+Leave the assignee as it is: a closed epic never appears in `bd ready`, so
+step 3 cannot select it and the stale assignee keeps nobody out. Then say in
+the summary that the epic closed under this session's claim, and skip the
+release below.
+
+**In-flight children are still finished and shipped — the epic closing does
+not abandon them.** A child on a branch, in review, or awaiting a merge is
+work that exists; the closed epic changes who schedules the *next* item, not
+the status of that one. Finish the review, ship the PR, and `bd close` the
+child as usual — `bd` closes a child of a closed epic without complaint, and
+the reverse is what would be wrong: a half-reviewed branch abandoned because
+its container moved. (The 2026-08-14 session did exactly this and
+`computenet-dqy.72` shipped.) What *does* change is where a residual from
+that review goes — see
+[references/review-feature.md](references/review-feature.md) § "Ready with
+residual".
+
+**Release the epic claim.** Otherwise — the epic is still open and didn't
+close above — set it back to open **and clear the assignee** — the claim binds it to *this session*, not
 to this machine, and the next session on either machine must select by
 priority. Leaving the assignee is what makes the epic unclaimable everywhere
 else (step 3's takeover exists to repair epics released before this line did):
