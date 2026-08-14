@@ -281,6 +281,15 @@ dolt sql -q "set @@dolt_allow_commit_conflicts=1; call dolt_merge('--no-commit',
 
 # -> issues: N conflicts, all our_diff_type=modified / their_diff_type=modified
 
+# REQUIRED PRE-STEP — id collisions. A modify/modify row whose two sides carry
+# DIFFERENT titles is not one issue edited twice; it is two different issues
+# that were allocated the same id. If this prints anything, STOP: do not run
+# the UPDATE below — settle those ids first, per the note after this block.
+dolt sql -q "select c.our_id as id, c.our_title, c.their_title \
+             from dolt_conflicts_issues c \
+             where c.our_diff_type = 'modified' and c.their_diff_type = 'modified' \
+               and not (c.our_title <=> c.their_title);"
+
 # resolve last-write-wins by updated_at: take theirs where their_updated_at
 # > our_updated_at, keep ours otherwise, then clear the conflict table
 dolt sql <<'SQL'
@@ -306,6 +315,76 @@ The `SET` clause is generated per-database from `information_schema.columns`
 > pick, count the assignments against
 > `select count(*) from information_schema.columns ... and column_name<>'id'`
 > before running the `UPDATE`.
+
+> **The pre-step is not optional, and a hit is not a field-level conflict.**
+> Last-write-wins by `updated_at` reconciles *fields* of one issue. Applied to
+> two distinct issues that share an id, it overwrites one whole bead with an
+> unrelated one, clears the conflict, and reports success — a silent loss of a
+> filed issue, with nothing in the output to distinguish it from a normal
+> field-level resolution. Observed 2026-08-14: `computenet-wpvy.40` was
+> allocated independently on two machines (`child_counters` conflicts first in
+> the list, which is the mechanism), carrying two unrelated titles. The race is
+> prevented going forward — `/work` step 7 files beads unparented, so they take
+> a hash id and leave the child counter alone (computenet-wpvy.46) — but an
+> already-diverged pair of databases can still carry a collision minted before
+> that fix.
+
+**Take every id the pre-step printed as one batch**, and settle the whole
+batch in a single merge cycle, **before** the last-write-wins `UPDATE` runs at
+all. Do not loop the steps below per id: nothing is committed until the final
+`dolt commit -am`, so a second abort would discard the settles already made in
+this cycle and the procedure would never converge. (The 2026-08-14 incident had
+three colliding ids — `computenet-wpvy.40`, `.41`, `.42` — carrying six
+different beads.) The rule is that **the remote side keeps the colliding id**
+and the local side is re-filed: the remote copy is already published and may be
+referenced by other machines, while the local one is unpushed by construction.
+Never resolve a collision by deleting a row — a local `bd delete` pushes as a
+deletion of the *other* machine's issue.
+
+1. Record both sides of every printed id before touching anything:
+   ```bash
+   dolt sql -r json -q "select * from dolt_conflicts_issues \
+                        where our_id in ('<id1>','<id2>', …);" > /tmp/collisions.json
+   ```
+2. Abort the merge **once**, so `bd` runs against a clean working set:
+   ```bash
+   dolt sql -q "call dolt_merge('--abort');"
+   ```
+   Whether `bd create` tolerates a working set that is mid-merge with
+   unresolved conflicts and `dolt_allow_commit_conflicts` set has **not** been
+   established; aborting first, re-filing, then re-merging is the safe order,
+   not a measured fact.
+3. Re-file the LOCAL side of **each** collision under a fresh id, all of them
+   now while the working set is clean: `bd create` it unparented, so it takes a
+   hash id and leaves the child counter alone, then
+   `bd update <new-id> --parent <parent>` to re-parent it. That is how
+   `computenet-szdd` was split out of the `.40` collision.
+4. Re-run the merge **once** (the `dolt fetch` and `dolt_merge('--no-commit', …)`
+   lines above). Every colliding id conflicts again — the working-set rows still
+   hold the local content — so settle them all in this one cycle by taking
+   theirs unconditionally, using the same generated `SET` clause and no
+   `updated_at` predicate (the remote wins by the rule above, not by recency):
+   ```sql
+   set @@dolt_allow_commit_conflicts = 1;
+   UPDATE issues i JOIN dolt_conflicts_issues c ON i.id = c.our_id
+   SET <generated from information_schema.columns>
+   WHERE c.our_id in ('<id1>','<id2>', …);
+   DELETE FROM dolt_conflicts_issues WHERE our_id in ('<id1>','<id2>', …);
+   ```
+5. Re-run the pre-step query. It must now return zero rows — the re-filed beads
+   are new, unconflicted rows, and every colliding row's two sides agree. If it
+   still prints something, an id was missed in step 4's list: extend the list
+   and repeat step 4 in this same merge cycle. Do **not** abort, and do **not**
+   proceed while it is non-empty. Once it is empty, run the last-write-wins
+   `UPDATE` over what remains.
+
+The gate on `our_diff_type` / `their_diff_type` keeps the pre-step to
+modify/modify rows, which is the shape a collision takes. Without it a
+delete/modify row would also match — `their_title` is NULL there — and be
+mislabelled a collision; that is one side deleting an issue the other edited,
+a different problem, and equally not something to resolve before it is
+understood.
+
 After resolution, verify with `bd dolt pull` (expect `Pull complete.`) then
 `bd dolt push` (expect `Push complete.`). Note: a `bd dolt push` following a
 conflict resolution has been observed to take **over 120 seconds** (blowing a

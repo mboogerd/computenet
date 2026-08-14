@@ -88,6 +88,10 @@ the `dolt` CLI directly against the embedded DB's git-backed repo at
 `our_diff_type=modified` / `their_diff_type=modified`); resolution was
 last-write-wins by `updated_at`. Exact command sequence used:
 
+> This is the 2026-08-12 transcript, kept verbatim. **Do not run it as the
+> procedure** — `doc/ops/beads-sync-runbook.md` §3.3 is the live recipe, and it
+> carries a REQUIRED id-collision pre-step this transcript predates.
+
 ```bash
 cd .beads/embeddeddolt/computenet
 dolt config --local --add user.name 'Merlijn Boogerd'      # merge needs an identity
