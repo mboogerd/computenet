@@ -3,6 +3,7 @@ package civictech.cell.port
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.protocol.ProtocolSupport
 import io.kotest.matchers.shouldBe
@@ -94,6 +95,12 @@ import java.util.UUID
  *   load-bearing. Post-fix this arm no longer bisects anything (arms 1 and 2
  *   are collected without it); it stays as the guard that an explicit release
  *   is still correct and still eager.
+ * - [a live owner's ports survive collection] and
+ *   [a live owner's delegate-declared and generated ports survive collection]
+ *   — the *anchor* invariant the weak port values rest on, once per declaration
+ *   style (explicit `registerPort`, `by input()`, `@CellBase`-generated). These
+ *   are the arms that would go red if a port were ever registered without the
+ *   owner holding it, which is the failure mode weak values buy the fix.
  *
  * Every builder below is a **separate method** that returns only a
  * [WeakReference], and must stay one. A named local in a test method's own frame
@@ -149,6 +156,11 @@ class PortRegistryRetentionTest {
         }
     }
 
+    /** The delegate declaration style — registered from `provideDelegate`, held by the `$delegate` field. */
+    class DelegateCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet by input<Consumer<String>>()
+    }
+
     /** The control: same shape, but the implementation captures nothing. */
     class DetachedCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>())
@@ -194,6 +206,33 @@ class PortRegistryRetentionTest {
         collect()
         PortRegistry.of(cell)["inlet"] shouldBeSameInstanceAs cell.inlet
         PortRegistry.of(cell).names() shouldBe setOf("inlet")
+    }
+
+    /**
+     * The same anchor invariant for the *other two* declaration styles, which
+     * anchor by different mechanisms and so are not covered by the arm above:
+     *
+     * - `by input()` / `by output()` register from
+     *   [PortDelegateProvider.provideDelegate] and the port is held by the
+     *   returned `ReadOnlyProperty` closure, i.e. by the owner's `$delegate`
+     *   field — not by a port-typed property at all.
+     * - a `@CellBase`-generated base class declares `override val <name> =
+     *   registerPort(...)`; generated descriptors are authoritative runtime
+     *   metadata (AGENTS.md), so the generator emitting anything other than a
+     *   property initializer would silently unanchor every generated port.
+     *   [SetCell] carries both: `inlet`/`outlet` from `SetCellBase`, and
+     *   `deltaInlet` hand-written on the subclass.
+     */
+    @Test
+    fun `a live owner's delegate-declared and generated ports survive collection`() {
+        val delegate = DelegateCell()
+        val generated = SetCell<String>()
+        collect()
+        PortRegistry.of(delegate)["inlet"] shouldBeSameInstanceAs delegate.inlet
+        PortRegistry.of(delegate).names() shouldBe setOf("inlet")
+        PortRegistry.of(generated)["inlet"] shouldBeSameInstanceAs generated.inlet
+        PortRegistry.of(generated)["outlet"] shouldBeSameInstanceAs generated.outlet
+        PortRegistry.of(generated)["deltaInlet"] shouldBeSameInstanceAs generated.deltaInlet
     }
 
     @Test
