@@ -918,6 +918,50 @@ between the file claim and the acceptance criteria with nothing covering it —
 so the dispatch template below also tells it to report and widen rather than
 choose silently.
 
+**Restate in the prompt any cross-bead write the bead's own criteria demand —
+naming the ids and the action.** Read the acceptance criteria at claim time
+for any clause that reaches onto *another* bead, and put it in the dispatch
+prompt in as many words. Authorization that lives only inside the bead is
+authorization the **policy check cannot see**: it reads the prompt. On
+`computenet-dqy.72` the last criterion was "The three instance beads
+(computenet-dqy.2, computenet-dqy.71, computenet-m5z9) are NOT closed by
+this; each gets a comment saying its next occurrence will now be a fast
+attributable failure." The agent did exactly that, the harness raised
+"External System Writes — the subagent posted status comments to three
+pre-existing tracker items … without explicit user direction naming that
+cross-posting", and the orchestrator then spent real time reading three
+comment threads to adjudicate an action it had itself commissioned —
+concluding, at first, that the agent had overstepped. That conclusion reached
+a session report and a bead before the reviewer corrected it. The prompt made
+it worse than silent: it named those same three ids for the *opposite*
+purpose (do not close them), which reads as a prohibition on touching them at
+all. An agent there cannot win — obeying the criterion trips the warning,
+ignoring it fails the item.
+
+So write the authorization where both the check and the agent look. That
+string is `crossBeadWrites` in the templates below — write it once:
+
+```
+Its acceptance criteria require you to comment on computenet-dqy.2,
+computenet-dqy.71 and computenet-m5z9 — pre-existing beads you are not
+assigned. That cross-post is authorized: post the comment on each. Do not
+change their status, priority, assignee or parent.
+```
+
+**Carry the same string into the reviewers' prompts (5c and 5e), unchanged.**
+The reviewer is the party that would otherwise read a commissioned write as
+an overstep — which is the cost that actually landed here — so it needs the
+authorization for the same reason the agent does. `none` is the normal value
+and says something real: no cross-bead write is authorized on this item.
+
+**And keep the reserved actions yours.** `references/task.md` scopes a
+dispatched agent to its own bead and the items it creates; closing,
+re-prioritising, reassigning, re-parenting or claiming any *other* bead is
+the orchestrator's, and a criterion demanding one of those is not delegated
+by restating it. Do that write yourself, after the merge, and say so in the
+prompt — "`<id>` is closed by me, not by you; report when your change makes
+it true" — so the agent neither performs it nor reads the criterion as unmet.
+
 Claim each id in the batch, record its metadata, then attach its worktree:
 
 ```bash
@@ -1011,7 +1055,40 @@ an epic resolving to itself, and a nonexistent id reporting
 
 Claimed by the other machine → its children are being worked whatever they
 say; take the next candidate. The assignee reads as JSON `null` when clear,
-not `""`. **A genuine `(unparented)` needs no check and is not a
+not `""`.
+
+**On a `closed` epic, read `updated_at` before you read the assignee — it
+decides whether that assignee is a live claim or provenance.** A closed epic
+is never *selected* again, and step 6's already-closed branch deliberately
+leaves its assignee in place as the record of who held it, so the marker is
+permanent. Reading it as "claimed by the other machine" would skip every open
+child under that epic forever. But closing does not evict the session that
+claimed the epic while it was open: that session stays inside it, finishing
+in-flight children, until its own Finalize (step 6 says so explicitly, and
+`computenet-dqy` was closed at 10:19:34Z while its claimant was still working
+`computenet-dqy.72` to a shipped PR). Inside that window its child claims are
+still local and your re-verify would read them as unclaimed — which is the
+`computenet-dqy.40` double-claim in
+[references/claim-sync.md](references/claim-sync.md), not a hypothetical.
+
+So use step 3's staleness idiom, which exists for exactly this:
+
+```bash
+bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
+# closed AND updated_at older than 15 minutes -> assignee is provenance;
+#   evaluate the candidate normally, whatever it says
+# closed within the last 15 minutes -> the closing session may still be
+#   finishing children; take the next candidate
+# not closed, other machine's assignee -> a live claim; take the next candidate
+```
+
+The stale case is the one in the tracker today: `computenet-dqy` is `closed`
+with `assignee=Anva@A0030` and `owner:MacBoo` and hours old, while
+`computenet-dqy.70` and `.71` are open and in `bd ready`, and
+`epic_of(computenet-dqy.70)` resolves to `computenet-dqy` through the dotted
+prefix — so they evaluate normally.
+
+**A genuine `(unparented)` needs no check and is not a
 gap**: an unparented bug or chore can never be somebody's locally-claimed
 child, so any competing claim on it is itself an acquisition and is therefore
 already pushed. Only that answer is safe to act on. **`(no such id: …)` and
@@ -1047,6 +1124,9 @@ branches and merge into the same feature branch. If the bead's own design or
 acceptance clause REQUIRES a file outside the claim, do not choose between
 them silently: report it and say which file and which clause, and I will
 widen the claim.
+Tracker writes: ${crossBeadWrites or "none authorized — write only to this
+bead and to items you create."} Whatever that line says, never close,
+re-prioritise, reassign, re-parent or claim any bead other than your own.
 If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
 message. A prescribed reproduction that passes unfixed is a false lead — say
@@ -1109,6 +1189,10 @@ Agent({
 ${taskWorktree}, not the main checkout) and follow it to review beads task
 ${id} against its own acceptance criteria.
 Worktree: ${taskWorktree}  ·  Branch: ${taskBranch}
+Cross-bead writes authorized on this item: ${crossBeadWrites or "none"}.
+That is the same line the implementer was given: treat what it names as
+commissioned work rather than scope creep, and anything beyond it as
+unauthorized.
 Repair what you can within the task's scope. Report pass or fail, what you
 repaired, and — on fail — exactly what is missing.
 If you won't finish within ~45-60 minutes, stop at a clean point and write your
@@ -1243,6 +1327,9 @@ Agent({
 ${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
+Cross-bead writes authorized on this feature and its tasks:
+${crossBeadWrites or "none"}. Treat what it names as commissioned work rather
+than scope creep, and anything beyond it as unauthorized.
 origin/main as of dispatch: ${mainSha}; landed since this branch forked:
 ${logOutput or "nothing"}.
 Open PRs that may merge under you while you review: ${prList}. Section 6's
@@ -1506,13 +1593,26 @@ through the normal resume queries — never a stranded branch.
 actually has children and every one is closed:
 
 ```bash
-bd list --parent=<epic> --all --json      # must be non-empty
+bd show <epic> --json | jq -r '.[0].status'   # read the EPIC too, not only its children
+bd list --parent=<epic> --all --json          # must be non-empty
 ```
 
 All closed → `bd close <epic>` and drop its owner label
 (`bd update <epic> --remove-label=owner:$BEADS_ACTOR`), freeing the next
 session to take a different epic. An epic with *no* children is
 mid-breakdown, not finished — never close that.
+
+**Read the epic's own status in that first query — a closed epic with open
+children is a real state, and it does not look like one from the children
+alone.** `bd list --parent` returns the open children of a *closed* epic
+unchanged (verified 2026-08-14: `computenet-dqy` is closed and still lists
+`.70` and `.71` open and `.2` deferred), so the all-children-closed test
+reads exactly as it does mid-work and tells you nothing about the container.
+If the status comes back `closed` while you still hold the claim, this is not
+a dry epic: say so in the summary in those words — "epic `<id>` was closed
+under this session's claim; `<N>` children still open: `<ids>`" — and take it
+to step 6's already-closed branch. Do not close it again and do not reopen
+it.
 
 ## 6. Finalize
 
@@ -1544,8 +1644,63 @@ a window in which the other machine has legitimately claimed it and this
 session closes it underneath them — a stranded claim is cheap, a
 closed-out-from-under epic is not.
 
-**Release the epic claim.** If the epic didn't close above, set it back to
-open **and clear the assignee** — the claim binds it to *this session*, not
+**First: was the epic closed out from under you?** Both branches below —
+close it, or release it — assume the epic is still yours to move, and neither
+applies to an epic that came back `closed` while this session still held the
+claim. That happens: two sessions run concurrently on one machine and cannot
+tell each other apart ([references/claim-sync.md](references/claim-sync.md)),
+and on 2026-08-14 a session that claimed `computenet-dqy` at 08:10Z found it
+closed by the other session around 11:15Z with its own assignee and
+`owner:` label still on it. One query decides it, and 5f route 5 above has
+already run it:
+
+```bash
+bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
+```
+
+`closed` → **leave it closed.** Reopening fights the session that closed it,
+and `--status=open --assignee=""` on a closed epic is a reopen wearing a
+release's clothes. Drop only the ownership marker, which is provenance and
+blocks nothing:
+
+```bash
+bd update <epic> --remove-label=owner:$BEADS_ACTOR
+bd show <epic> --json | jq -r '.[0].status'          # confirm: still closed
+```
+
+Read that second line rather than assuming it. `--remove-label` is an
+ordinary field update and should not move the status, but this branch exists
+precisely because the epic must stay closed — if it comes back anything but
+`closed`, say so at the top of the summary instead of correcting it with a
+second write. **A reopened epic is not inert**: it carries a stale assignee on
+`open`, which is precisely step 3's takeover shape once its `updated_at` ages
+past 15 minutes, so that summary line is the only thing between it and a
+second session re-working an epic that is done.
+
+Leave the assignee as it is: it is the record of who held the epic when it
+was closed, and clearing it would erase the only trace of the collision. That
+is safe **because 5f's routes-3/4 parent-epic check branches on status and
+age before it reads the assignee** — on an epic closed more than 15 minutes
+ago the assignee is provenance there, not a live claim, so open children under
+it stay selectable. Three sites state that rule — this one, 5f's check, and
+[references/claim-sync.md](references/claim-sync.md) § "What it does not
+guarantee" — and they are one decision; do not change one without the others. Then say in the summary that
+the epic closed under this session's claim, and skip the release below.
+
+**In-flight children are still finished and shipped — the epic closing does
+not abandon them.** A child on a branch, in review, or awaiting a merge is
+work that exists; the closed epic changes who schedules the *next* item, not
+the status of that one. Finish the review, ship the PR, and `bd close` the
+child as usual — `bd` closes a child of a closed epic without complaint, and
+the reverse is what would be wrong: a half-reviewed branch abandoned because
+its container moved. (The 2026-08-14 session did exactly this and
+`computenet-dqy.72` shipped.) What *does* change is where a residual from
+that review goes — see
+[references/review-feature.md](references/review-feature.md) § "Ready with
+residual".
+
+**Release the epic claim.** Otherwise — the epic is still open and didn't
+close above — set it back to open **and clear the assignee** — the claim binds it to *this session*, not
 to this machine, and the next session on either machine must select by
 priority. Leaving the assignee is what makes the epic unclaimable everywhere
 else (step 3's takeover exists to repair epics released before this line did):

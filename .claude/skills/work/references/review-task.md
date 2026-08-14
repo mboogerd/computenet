@@ -8,6 +8,18 @@ Gaps between tasks, and criteria that live at the feature level, belong to
 the feature review ([review-feature.md](review-feature.md)). Don't reach for
 them here, and don't expand the task's scope to close them.
 
+**Your tracker writes are scoped the same way.** Write to **the bead under
+review and to items you create** — nothing else. Closing, re-prioritising,
+reassigning, re-parenting or claiming any other bead is the orchestrator's.
+That cuts both ways when you judge the diff: if the implementer wrote to
+another bead, check the task's acceptance criteria and the cross-bead line in
+its dispatch before calling it scope creep — a criterion can commission a
+comment on named sibling beads, and on computenet-dqy.72 exactly that
+happened and was briefly read as an overstep (computenet-szdd). Criterion-
+prescribed writes are commissioned work. A close or a priority change on
+another bead is not, whatever prescribed it: report it rather than repairing
+it.
+
 ## 1. The standard, then the diff
 
 ```bash
@@ -368,6 +380,18 @@ Fail it only when the approach is wrong at the design level, or repair would
 rewrite most of the diff. If the task turns out to be underspecified or the
 right call is genuinely ambiguous, apply the
 [ask-human.md](ask-human.md) bar rather than inventing an answer.
+
+**Real work you found that is outside this task becomes a bead, and where it
+is parented is a check, not a habit.** Read the epic's status first
+(`bd show <epic-id> --json | jq -r '.[0].status'`): open → file it under the
+epic, which is what schedules it. **Closed** — which happens, because a
+concurrent session can close an epic while its child is still in review — →
+file it **unparented with a `discovered-from` edge onto the item you were
+reviewing**, and say in your report that it is unparented and why. Do not
+improvise the choice, and do not read "`bd` let me parent it there" as an
+answer — it does, and the child stays visible; what a closed epic no longer
+does is get *selected*. The reasoning and the exact commands are in
+[review-feature.md](review-feature.md) § "Ready with residual".
 
 ## When the diff under review edits `.claude/skills/work/`
 
