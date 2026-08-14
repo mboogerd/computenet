@@ -1294,8 +1294,25 @@ children sat open while the lane reported itself drained
 (computenet-wpvy.37). But `skill-friction` items also exist **outside** the
 epic (unparented bugs, children of other WSK epics), and those propose edits
 to `.claude/skills/work/` just the same. So `/work` skips **either**: under
-`computenet-wpvy`, *or* labeled `skill-friction`. The lane that drains them
-scopes by parentage; the lane that must avoid them checks both.
+`computenet-wpvy`, *or* labeled `skill-friction`.
+
+**With one stated exemption, at the epic level.** That two-part test governs
+**items**, on routes 3 and 4. Two *epics* — `computenet-k9d` (WSK1) and
+`computenet-ait` (WSK3) — carry `skill-friction` themselves, and step 3's
+selection does **not** exclude them, because whether the WSK epics belong to
+`/work` or to this lane is the open question in `computenet-wpvy.44`. A
+session may select one; it says so in the summary. Once it holds that epic,
+5a/5b work its children as owned territory, and routes 3 and 4 do not apply —
+they govern items *outside* what you own.
+
+That exemption is load-bearing rather than untidy: **27 open
+`skill-friction` items are parented to those two epics, and none of them is
+reachable by the remediation lane**, which scopes by parentage under
+`computenet-wpvy` (measured 2026-08-14: 27 items, 0 visible to the lane's
+selection, 0 counted by its gate). Excluding the WSK epics here as well would
+leave all 27 in no lane at all. The remediation lane drains
+`computenet-wpvy`'s own children; the WSK epics remain `/work`'s until .44
+says otherwise.
 
 `--parent` is **not transitive**, so a grandchild does not appear under the
 epic's own listing. Use the ancestor walk from 5b — the one that resolves a
@@ -1336,7 +1353,7 @@ building on it, and continue down this list.
 epic** → claim and work **that specific blocking item** (task or feature, via
 5a/5b as appropriate), not the other epic itself. **Unless that item is under
 `computenet-wpvy` OR labeled `skill-friction`** — the same two-part test route
-4 applies, and for the same reason: ~20 open `skill-friction` items are
+4 applies, and for the same reason: 27 open `skill-friction` items are
 parented to `computenet-k9d` and `computenet-ait` rather than to the SDLC
 epic, and each proposes edits to `.claude/skills/work/`. See "The SDLC
 exclusion" above; a blocker being inconvenient is not a reason to take SDLC work. Without this route a
