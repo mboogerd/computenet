@@ -661,8 +661,11 @@ so the orchestrator has no handle at all. Six such wakes in one session
 (computenet-k9d.8) — one agent's stuck wait-loop, one agent's `Monitor` that
 behaved exactly as designed and merely outlived its purpose; that pair is the
 whole evidence base, but both classes cost the same. Two traps that make loops
-stick: `pgrep -f <pattern>` inside an `until` waiter matches the waiting
-shell's **own** command line, so the condition never goes false; and
+stick: a `pgrep -f <pattern>` waiter matches any *sibling* process carrying
+that pattern in its argv — your own backgrounded poll shell among them — so
+the condition never goes false. (It does not match the waiting shell itself or
+its ancestors: measured 2026-08-14 on darwin/arm64, macOS `pgrep` excludes both
+unless given `-a`.) And
 `gh pr checks --watch` returns immediately when only `auto-merge` has reported
 on a fresh head, so it is not usable as a wait — which is why these loops get
 hand-rolled in the first place.
