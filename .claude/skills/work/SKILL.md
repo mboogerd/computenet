@@ -948,7 +948,7 @@ Otherwise ask for the next batch:
 ```
 
 It returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
-verdict}`. The batch is the set that can safely run at once: resumable tasks
+verdict, parked}`. The batch is the set that can safely run at once: resumable tasks
 first (`bd ready` can't see `in_progress` ones, so nothing else would ever
 pick them back up), then ready ones whose `files` claims don't overlap
 anything already in the batch — two branches editing one file merge into a
@@ -981,7 +981,17 @@ Those children are deliverables, not remaining work. Parking that feature
 strands finished, CI-green work in a draft PR with no feature review and no path
 to `main`, for no reason but that it succeeded. Treat the parked children as you
 would any other output — name them in the 5e handoff so the reviewer knows they
-are deferred by design, not missed. One child that is open, `in_progress`
+are deferred by design, not missed.
+
+**Do not derive that list yourself.** The same call already returns it:
+`parked` holds the ids, produced by the same predicate the verdict was decided
+by. Pass it straight into 5e's `${parkedChildren}`. Hand-writing a `bd list
+--parent <feature> --all` filter instead is a second implementation of that
+predicate, free to drift from the one that routed the feature here, and the
+reviewer would then be checking a list that does not match the verdict that
+dispatched it. Like `verdict`, `parked` is only meaningful on an empty batch —
+a non-empty batch never queries the children, so `[]` there means "not looked
+at", not "none exist". One child that is open, `in_progress`
 (including on another machine), or blocked on a real dependency edge is enough
 to hold the verdict at `blocked`.
 
@@ -1444,6 +1454,11 @@ checking something you already looked at, and when it comes back non-empty
 instead, that is a real change and not a first sighting. Paste those outputs;
 do not summarize them into a conclusion the reviewer then inherits as fact
 (§ "What you write yourself").
+
+`${parkedChildren}` is the `parked` array from the `next-batch.py` call that
+sent you here (5b) — paste those ids, do not re-derive them with a `bd list`
+filter of your own. It is empty on an `all-closed` verdict, and that is the
+literal `"none"`.
 
 ```
 Agent({
