@@ -497,12 +497,28 @@ So before falling through, ask the untyped question:
 bd ready --parent=<epic> --json      # no --type filter
 ```
 
-Non-empty while the feature queries were empty → **work these directly**, by
-5f route 4's shape rule: a *task* through its parent feature's flow (5b's
-claim/metadata/worktree/dispatch), a *bug or chore* as its own
-worktree/branch/PR exactly like a feature. Apply the same filters as
-everywhere else — skip `human`-labelled items and anything with `parked_at`
-within 6h. Only when *this* query is empty too does 5f apply.
+Non-empty while the feature queries were empty → **work these directly**.
+Route by shape, and note that route 4's wording assumes a parent feature that
+these items do not have:
+
+- **A bug or chore** → its own worktree, branch and PR, exactly like a
+  feature. Run it through 5a's flow with the item id in place of the feature
+  id.
+- **A task parented straight to the epic** → the *same* treatment, not 5b's
+  task flow. 5b cuts a task branch from its feature's branch and merges it
+  back there; with no feature there is no base to cut from and nothing to
+  merge into (computenet-9xj records exactly this). Give it its own
+  worktree/branch/PR off `origin/main` like a bug.
+
+Apply the same filters as everywhere else — skip `human`-labelled items and
+anything with `parked_at` within 6h. Only when *this* query is empty too does
+5f apply.
+
+**When that item finishes, come back here, not to 5f.** Re-run the untyped
+query and take the next one; a slot that works one direct child and then
+falls through has the same defect one level down. 5f's route 1 asks for
+another *feature*, and route 4 explicitly excludes items parented to this
+epic, so neither will bring you back.
 
 Take the first result **not recently parked** (`metadata.parked_at` within
 6h) **and not carrying the `human` label** — `bd ready` returns human-gated
@@ -581,22 +597,43 @@ PR #94 had merged: `git merge origin/main` conflicted in
 origin/main...HEAD` reported 332 insertions, all of it already on `main`.
 
 ```bash
-gh pr view <metadata.pr> --json state -q .state
+# metadata.pr may be unset even when a PR exists — a crash between creating and
+# recording it is the case 5a already warns about. Ask the branch, not the bead.
+BR=$(bd show <feature-id> --json | jq -r '.[0].metadata.branch')
+gh pr list --head "$BR" --state all --json number,state -q '.[] | "\(.number) \(.state)"'
 ```
 
 - **`MERGED`** → the branch is spent. Do **not** merge `origin/main` into it.
-  Cut a fresh one from `origin/main` and repoint the bead, keeping the id
-  derivable by suffixing `-r<n>`:
+  Cut a fresh one from `origin/main` and repoint the bead. Derive the suffix
+  from the *current* value rather than hardcoding it, or the second resume
+  re-uses the branch it just retired:
 
   ```bash
-  bd update <feature-id> --set-metadata branch=feature/<feature-id>-r2 \
-    --set-metadata worktree=$PWD/../computenet-worktrees/<feature-id>-r2
-  bd comment <feature-id> "PR <url> merged by squash; branch feature/<feature-id> is spent. Continuing on feature/<feature-id>-r2 cut from origin/main."
+  # [0-9][0-9]* not \+ — BSD sed (macOS) does not support \+ in a basic regex,
+  # and the silent failure is N="" -> always -r2, i.e. reusing the spent branch
+  N=$(printf '%s' "$BR" | sed -n 's/.*-r\([0-9][0-9]*\)$/\1/p'); N=$((${N:-1} + 1))
+  NEW="feature/<feature-id>-r$N"                 # id stays derivable: strip -r<n>
+  bd update <feature-id> --set-metadata branch="$NEW" \
+    --set-metadata worktree=$PWD/../computenet-worktrees/<feature-id>-r$N \
+    --set-metadata pr=
+  bd comment <feature-id> "PR <url> merged by squash; $BR is spent. Continuing on $NEW cut from origin/main."
   ```
+
+  **Clearing `pr=` is not optional.** 5d creates a PR *only* if `metadata.pr`
+  is unset, so leaving the merged url there means the fresh branch never gets
+  a PR, 5e dispatches a reviewer at the merged one, and Finalize reads
+  `MERGED` for work that never shipped.
 
   Leave the old local branch and its worktree alone — Finalize's sweep takes
   them, and deleting a branch whose PR merged buys nothing mid-session.
-- **`OPEN`** (or no `metadata.pr` yet) → reuse it as below.
+- **`OPEN`**, or no PR at all → reuse it as below.
+
+**From here on, everything uses `metadata.branch` — never the literal
+`feature/<feature-id>`.** That is what makes the repoint above take effect:
+attach, verify, merge, push, 5b's task base ref and 5d's `--head` all read the
+recorded value. Writing the literal name re-attaches the spent branch two
+commands after you retired it, and walks into the very conflict this check
+exists to avoid.
 
 Reused, that branch and draft PR hold real
 work, so never start over. **Otherwise** record the metadata *first* — a
@@ -613,19 +650,22 @@ Recording it locally is enough for that ordering to do its job: a retry on
 this machine reads the local DB and finds the branch. It reaches the other
 machine at Finalize's push.
 
-Either way, attach the worktree the same way:
+**All three ways** — reused, freshly recorded, or repointed after a squash —
+attach the same way, and all three read `metadata.branch`:
 
 ```bash
-.claude/skills/work/scripts/ensure-worktree.sh \
-  "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
+BR=$(bd show <feature-id> --json | jq -r '.[0].metadata.branch')
+WT=$(bd show <feature-id> --json | jq -r '.[0].metadata.worktree')
+
+.claude/skills/work/scripts/ensure-worktree.sh "$WT" "$BR" origin/main
 
 # Verify the worktree actually holds the branch's remote work before using it.
-if git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null; then
-  git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
-    && echo "OK: worktree contains origin/feature/<feature-id>" \
-    || echo "STOP: on the branch at the wrong commit — origin/feature/<feature-id> is not in HEAD"
+if git -C "$WT" fetch origin "$BR" 2>/dev/null; then
+  git -C "$WT" merge-base --is-ancestor FETCH_HEAD HEAD \
+    && echo "OK: worktree contains origin/$BR" \
+    || echo "STOP: on the branch at the wrong commit — origin/$BR is not in HEAD"
 else
-  echo "OK: origin has no feature/<feature-id> yet (first run, nothing to compare)"
+  echo "OK: origin has no $BR yet (first run, nothing to compare)"
 fi
 ```
 
@@ -667,9 +707,9 @@ are the fallback for worktrees predating it.
 Only once it is classified, bring the worktree up to date:
 
 ```bash
-git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
-git -C <worktree> merge origin/main -m "Merge main into feature/<feature-id>"
-git -C <worktree> push -u origin feature/<feature-id>
+git -C "$WT" pull --ff-only 2>/dev/null || true   # no upstream yet is fine
+git -C "$WT" merge origin/main -m "Merge main into $BR"
+git -C "$WT" push -u origin "$BR"
 ```
 
 **That `merge origin/main` is not optional on a resumed feature.** `pull` only
@@ -776,7 +816,7 @@ bd update <task-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<task-id> \
   --set-metadata branch=task/<task-id>
 .claude/skills/work/scripts/ensure-worktree.sh \
-  "$PWD/../computenet-worktrees/<task-id>" task/<task-id> feature/<feature-id>
+  "$PWD/../computenet-worktrees/<task-id>" task/<task-id> "$BR"   # $BR = the feature's metadata.branch
 ```
 
 `ensure-worktree.sh` handles every state a resumed task can be in — already
@@ -1040,7 +1080,7 @@ task branches.
 `gh pr create` on a branch that already has a PR is an error, not a no-op:
 
 ```bash
-gh pr create --draft --base main --head feature/<feature-id> \
+gh pr create --draft --base main --head "$BR" \
   --title "<feature title>" \
   --body "Delivers <feature-id>. Tasks land as reviewed commits."
 bd update <feature-id> --set-metadata pr=<url>
