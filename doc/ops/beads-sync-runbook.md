@@ -281,6 +281,14 @@ dolt sql -q "set @@dolt_allow_commit_conflicts=1; call dolt_merge('--no-commit',
 
 # -> issues: N conflicts, all our_diff_type=modified / their_diff_type=modified
 
+# REQUIRED PRE-STEP — id collisions. Any conflicting row whose two sides carry
+# DIFFERENT titles is not one issue edited twice; it is two different issues
+# that were allocated the same id. If this prints anything, STOP: do not run
+# the UPDATE below.
+dolt sql -q "select coalesce(c.our_id, c.their_id) as id, c.our_title, c.their_title \
+             from dolt_conflicts_issues c \
+             where not (c.our_title <=> c.their_title);"
+
 # resolve last-write-wins by updated_at: take theirs where their_updated_at
 # > our_updated_at, keep ours otherwise, then clear the conflict table
 dolt sql <<'SQL'
@@ -292,6 +300,26 @@ DELETE FROM dolt_conflicts_issues;
 SQL
 dolt commit -am 'Merge origin/main: resolve N issue conflicts last-write-wins by updated_at'
 ```
+
+> **The pre-step is not optional, and a hit is not resolvable here.**
+> Last-write-wins by `updated_at` reconciles *fields* of one issue. Applied to
+> two distinct issues that share an id, it overwrites one whole bead with an
+> unrelated one, clears the conflict, and reports success — a silent loss of a
+> filed issue, with nothing in the output to distinguish it from a normal
+> field-level resolution. Observed 2026-08-14: `computenet-wpvy.40` was
+> allocated independently on two machines (`child_counters` conflicts first in
+> the list, which is the mechanism), carrying two unrelated titles.
+> When the query prints rows, resolve them **before** any UPDATE, and never by
+> deleting a row — a local `bd delete` pushes as a deletion of the *other*
+> machine's issue. Instead re-file one side's content under a fresh id the way
+> `/work` step 7 now allocates them (computenet-wpvy.46): `bd create` it
+> unparented, so it takes a hash id and leaves the child counter alone, then
+> `bd update <new-id> --parent <parent>` to re-parent it. That is how
+> `computenet-szdd` was split out of the `.40` collision. Then re-run the
+> conflict query, confirm it is empty, and only then run the `UPDATE`.
+>
+> The id-allocation race is prevented going forward, but an already-diverged
+> pair of databases can still carry a collision minted before the fix.
 
 The `SET` clause is generated per-database from `information_schema.columns`
 (55 columns at the time of the 2026-08-12 incident, 53 non-key columns as of
