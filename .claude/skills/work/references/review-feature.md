@@ -635,6 +635,22 @@ this flow, so `origin/main:` is also the only reliable way to get the
 
 ## 8. Report
 
+**Your final message must state the verdict in one word — READY or DRAFT, the
+pass and the fail of §7 — plus a NOT VERIFIED section naming everything you
+did not check.** Nothing resumes you. When your turn ends the orchestrator
+gets a completion notification that looks the same whether you finished or
+not, so a result that never states a verdict can be read as approval and
+shipped uncertified — one review returned "Waiting on Arm A. I will resume
+when it completes." as its entire result after 108 tool calls. So never end a
+turn waiting: not on another arm of your own experiment, and not on a
+background job's notification — ending your turn has already fired the
+completion notification the orchestrator acts on, whatever the job does next.
+Run long commands in the foreground with a generous timeout, or poll a
+background job's output file with ordinary foreground calls. Out of room, out
+of time, or blocked, give the
+partial verdict you have and put the rest under NOT VERIFIED — an honest
+partial verdict beats stopping mid-experiment.
+
 The feature id, the verdict and why, and — as artifacts, not adjectives — the
 test counts with their executed/from-cache accounting, `uname -sm`, the
 `gh pr checks` conclusions, the re-fetch result, the `--stat` of everything
