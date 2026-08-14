@@ -1234,6 +1234,10 @@ open class ManagedHost(
     private fun unbindPortsRecursively(cell: Cell) {
         ProtocolSupport.unbind(cell)
         PortRegistry.release(cell)
+        // computenet-3u6x: the third JVM-global owner-keyed map. Spawn installs an
+        // onBandChange listener whose closure captures the cell, so the entry can
+        // reach its own key; despawn is where that stops being wanted.
+        AttentionSupport.release(cell)
         if (cell is ManagedHost) cell.cells.values.forEach { unbindPortsRecursively(it) }
     }
 
