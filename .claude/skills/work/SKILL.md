@@ -314,8 +314,12 @@ worktrees, and a concurrent session's just-merged feature worktree is clean
 on this machine delete each other's working state. Its peer
 `sweep-stale-claims.sh` buys the same protection with a 6h age cutoff; this
 one cannot, because the whole point is reconciling a merge that happened
-minutes ago. The liveness check *is* its gate, so never reorder them, and if
-that check says another run is live, stop — don't sweep first.
+minutes ago. So never reorder them, and if that check says another run is
+live, stop — don't sweep first. **It is a partial gate, not a guarantee**:
+the check only sees epics touched in the last 15 minutes, so a concurrent
+session that claimed hours ago and has been quietly closing features reads as
+not-live. Treat a surprising removal as that case rather than assuming the
+worktree was stale.
 
 One `gh` call, joined on PR number and branch name across the whole repo. It
 is deliberately **not** filtered by epic, by claim, or by
@@ -325,10 +329,11 @@ behind PRs merged 12–20h earlier with their worktrees still on disk
 (computenet-wpvy.25, measured 2026-08-14). Do not add a fourth precondition
 here — the missing precondition is always the one that matters.
 
-It closes the bead, takes its worktree off disk and deletes the local branch,
-but only when the worktree is on *this* machine and `git status --short` is
-empty; anything dirty, foreign, or merely branch-matched it **reports for you
-to judge**, and a branch match without `metadata.pr` is never closed
+It closes the bead and takes its worktree off disk — the worktree only; the
+local branch stays, deliberately — and only when that worktree is on *this*
+machine and `git status --short` is empty; anything dirty, foreign, or merely
+branch-matched it **reports for you to judge**, and a branch match without
+`metadata.pr` is never closed
 automatically (a branch can merge while its bead stays legitimately open —
 `computenet-dqy.2` is deferred to 2026-08-25 behind merged PR #27). Report
 what it closed and act on what it flagged. Its closes are local writes; they
@@ -337,7 +342,10 @@ publish at Finalize.
 **It never reports a clean sweep it did not perform.** Exit 3 means `gh` or
 `bd` was unreachable and *nothing was checked*; exit 1 means a close or a
 removal failed and those items are still adrift. Neither is "no beads behind
-a merged PR" — read the exit code and say which one you got.
+a merged PR" — read the exit code and say which one you got. After any change
+to the script, run `.claude/skills/work/scripts/sweep-merged-prs.test.sh`
+(expect "45 passed, 0 failed"); it is the only thing standing between an edit
+here and a bead closed or a worktree deleted wrongly.
 
 There is deliberately **no resume preference**: an epic is bound to a session
 while the session runs, and to nothing afterwards. If a released epic is
@@ -1521,10 +1529,11 @@ cannot. They are not lost — the next session on this machine carries them out
 on its own Finalize push — but "whenever someone next runs a slot here" is a
 poor publication guarantee when one command fixes it now.
 
-**Every PR you marked ready this session gets watched to a terminal state —
-but at the very end of Finalize, not here.** The watch is the last thing the
-session does; see "The merge watch" below. Note now which PRs it owes: every
-feature or task you ran `gh pr ready` on.
+**Every PR you marked ready this session is a candidate for the merge watch —
+which runs at the very end of Finalize, not here, and only if budget survives
+that far (often it does not; see "The merge watch" below).** Note now which
+PRs it owes: every feature or task you ran `gh pr ready` on. Whatever the
+watch does not reach, step 3's sweep reconciles on a later run.
 
 **Do not defer the epic-close decision to the watch.** Run 5f's
 all-children-closed check *here*, before the release below, on the state you
@@ -1635,7 +1644,8 @@ committing work you didn't verify.
 here, so this is the only place a worktree comes off *while the session still
 has work in flight* — the merge watch below removes one more class, the
 worktrees of PRs that merge during the watch itself, and step 3's sweep
-removes what earlier sessions stranded. Nowhere else. It runs after 5f, i.e. after the session has stopped
+removes what earlier sessions stranded. Nowhere else. It runs after 5f, i.e.
+after the session has stopped
 dispatching, and after the pushes above. Remove only what passes **both**
 gates:
 
@@ -1657,10 +1667,21 @@ git -C <worktree> status --short                 # gate 2; expect empty
 git worktree remove "$PWD/../computenet-worktrees/<id>"
 ```
 
-Remove the worktrees of **tasks merged in 5c**, of **features that closed**
-(their local branch too), and of any extra fix worktree 5c's repair path
-created. Leave unfinished features' and tasks' worktrees in place; the next
-session recomputes the same path and reattaches there (5a).
+Remove the worktrees of **tasks merged in 5c**, of **features that closed**,
+and of any extra fix worktree 5c's repair path created. Leave unfinished
+features' and tasks' worktrees in place; the next session recomputes the same
+path and reattaches there (5a).
+
+**Leave the local branch alone — do not `git branch -d` or `-D` it.** The
+gate above is `git status --short`, which says nothing about *commits*: a
+worktree can be spotless while its branch holds a commit made after the PR
+merged, and push-A-and-B, squash-merge, commit-C, crash-before-pushing is an
+ordinary crash shape. Deleting the branch takes its reflog with it and leaves
+C reachable only through `git fsck --lost-found`, which nobody runs because
+nothing said anything was lost. And because this repo squash-merges, "branch
+holds commits not in `main`" is the *normal* state, so no cheap test separates
+the landed case from the stranded one. A stale ref costs nothing; the worktree
+was the leak that mattered.
 
 **The merge watch — the last thing the session does.** Auto-merge lands a PR
 minutes after the session ends, so without this *no session ever observes its
@@ -1698,9 +1719,8 @@ gh pr view <pr-url> --json state,mergeStateStatus,statusCheckRollup   # per pend
 Per PR, on each round:
 
 - **`MERGED`** → `bd close <id>`, and remove its worktree under the two gates
-  above (agent reported, `git status --short` empty), deleting its local
-  branch with it — `git branch -D <branch>`, not `-d`, because the repo
-  squash-merges and a landed branch is never an ancestor of `main`. Drop it
+  above (agent reported, `git status --short` empty) — the worktree only,
+  leaving the local branch, for the reason given in the removal sweep. Drop it
   from the pending set. Do **not** close the epic here even if that was its
   last open child; the claim was already released above, so the epic is no
   longer this session's to close — leave it and name it in the summary.

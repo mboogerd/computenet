@@ -54,7 +54,12 @@ origin=$(git remote get-url origin 2>/dev/null) || die "no git remote 'origin' h
 slug=$(printf '%s' "$origin" \
   | sed -E 's#^git@[^:]+:#https://host/#; s#\.git$##' \
   | sed -E 's#^.*://[^/]+/##')
-[ -n "$slug" ] || die "cannot derive owner/repo from origin url: $origin"
+# `-n` alone is not enough: a local-path origin (/some/dir/computenet) leaves a
+# slug that matches no PR url, so every join comes up empty and the script
+# prints the one sentence its header swears it will never print on a failure —
+# "no beads behind a merged PR", exit 0. Demand an owner/repo shape.
+[[ $slug =~ ^[^/]+/[^/]+$ ]] \
+  || die "origin is not a github owner/repo url, so no PR can be matched: $origin"
 
 # The one network call.  number+headRefName covers both joins below.
 merged=$(gh pr list --state merged --limit "$LIMIT" --json number,headRefName) \
@@ -96,7 +101,6 @@ plan=$(jq -n \
       | select([.metadata.pr | capture($pat) | .n] as $n
                | ($n | length) > 0 and (($nums | index($n[0])) != null))
       | {id, worktree: (.metadata.worktree // "-"),
-         branch: (.metadata.branch // "-"),
          action: (if .status == "deferred" then "report" else "close" end),
          why: (if .status == "deferred"
                then "its PR merged, but the bead is deferred on purpose"
@@ -104,8 +108,7 @@ plan=$(jq -n \
   + [ $withbranch[]
       | select((.metadata.pr // "") == "")
       | select(.metadata.branch as $b | $refs | index($b))
-      | {id, worktree: (.metadata.worktree // "-"),
-         branch: (.metadata.branch // "-"), action: "report",
+      | {id, worktree: (.metadata.worktree // "-"), action: "report",
          why: "its branch merged, but the bead carries no metadata.pr"} ]
   | unique_by(.id)') || die "jq join failed"
 
@@ -117,7 +120,7 @@ fi
 
 closed=0
 failed=0
-while IFS=$'\t' read -r id action worktree branch why; do
+while IFS=$'\t' read -r id action worktree why; do
   [ -n "$id" ] || continue
   if [ "$action" = "report" ]; then
     echo "review by hand (NOT closed): $id — $why"
@@ -153,13 +156,20 @@ while IFS=$'\t' read -r id action worktree branch why; do
     echo "  not a registered worktree, left alone: $wt"
     continue
   fi
-  if [ -n "$(git -C "$wt" status --short)" ]; then
+  # `$(...)` on a failing git is empty, i.e. indistinguishable from clean —
+  # an error answering in the destructive direction, and leaking a raw
+  # `fatal:` onto stdout. Capture status and output separately.
+  if ! dirt=$(git -C "$wt" status --short 2>&1); then
+    echo "  git status failed, left in place: $wt ($dirt)" >&2
+    failed=$((failed + 1))
+    continue
+  fi
+  if [ -n "$dirt" ]; then
     echo "  DIRTY, left in place: $wt"
     continue
   fi
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "  would remove worktree: $wt"
-    [ "$branch" = "-" ] || echo "  would delete local branch: $branch"
     continue
   fi
   if git worktree remove "$wt" 2>/dev/null; then
@@ -167,21 +177,22 @@ while IFS=$'\t' read -r id action worktree branch why; do
   else
     echo "  FAILED to remove worktree: $wt" >&2
     failed=$((failed + 1))
-    continue
   fi
-  # SKILL.md's removal sweep says a closed feature's local branch comes off
-  # too. -D not -d: the repo squash-merges, so a fully-landed branch is never
-  # an ancestor of main and -d refuses it. The merge is already proven by the
-  # PR state that got us here.
-  if [ "$branch" != "-" ] && git show-ref --quiet --verify "refs/heads/$branch"; then
-    if git branch -D "$branch" >/dev/null 2>&1; then
-      echo "  deleted local branch: $branch"
-    else
-      echo "  FAILED to delete local branch: $branch" >&2
-      failed=$((failed + 1))
-    fi
-  fi
-done < <(jq -r '.[] | [.id, .action, .worktree, .branch, .why] | @tsv' <<<"$plan")
+  # THE LOCAL BRANCH IS DELIBERATELY LEFT BEHIND. An earlier revision ran
+  # `git branch -D` here and it was a data-loss path: the only gate is
+  # `git status --short`, which says nothing about COMMITS. Reproduced during
+  # review of PR #158 — a clean worktree whose branch carried one local-only
+  # commit made after the PR merged lost it completely: no ref, no reflog
+  # (deleting the branch deletes .git/logs/refs/heads/<branch> with it), the
+  # commit reachable only as a dangling object under `git fsck --lost-found`,
+  # which nobody runs because nothing said anything was lost. And the target
+  # population here is CRASHED sessions: push A and B, PR squash-merges,
+  # commit C locally, crash before pushing is an ordinary crash shape. Because
+  # the repo squash-merges, "branch holds commits not in main" is the NORMAL
+  # state, so no cheap test tells the landed case from the stranded one —
+  # which argues against deleting the branch, not for forcing it. A stale ref
+  # costs nothing; the worktree was the leak that mattered.
+done < <(jq -r '.[] | [.id, .action, .worktree, .why] | @tsv' <<<"$plan")
 
 # Closes are local writes like everything else in this flow. They reach the
 # other machine at the session's Finalize push (SKILL.md step 6); this script
