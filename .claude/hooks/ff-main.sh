@@ -44,18 +44,53 @@ if [ -n "$dirty" ]; then
   exit 0
 fi
 
-# Bound the fetch. A hook that outruns the harness timeout is killed before it
-# can print anything, and every session start on a networkless machine then
-# stalls for the full timeout — the state a laptop waking for a scheduled slot
-# is most likely to be in. Measured against a blackholed remote: unbounded took
-# ~75s, past the 60s default. macOS has no timeout(1); git's own low-speed
-# abort is the portable bound.
-fetch_err=$(GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10 \
-            git -C "$repo" fetch --quiet origin main 2>&1) || {
-  echo "ff-main: fetch did not complete — left alone. git said:"
-  printf '%s\n' "$fetch_err" | sed 's/^/  /' 
+# Bound the fetch with a watchdog. This is the wake-from-sleep case: a laptop
+# that fires a scheduled slot with no network. GIT_HTTP_LOW_SPEED_* is NOT
+# enough — it bounds transfer rate on an established connection, not the TCP
+# connect, which is where the whole delay lives. Measured against a blackholed
+# remote: low-speed vars 76s, `git -c http.connectTimeout=8` 75s (not a real
+# config key, silently ignored), `perl -e alarm ... exec` 75s. Only killing the
+# process works: 12s. macOS has no timeout(1). The low-speed vars stay because
+# they still cover a connected-but-stalled peer, and they are HTTP-only whereas
+# the watchdog also bounds SSH.
+fetch_out=$(mktemp)
+GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10 \
+  git -C "$repo" fetch --quiet origin main >"$fetch_out" 2>&1 &
+gp=$!
+( sleep 12; kill -TERM $gp 2>/dev/null; sleep 1; kill -KILL $gp 2>/dev/null ) &
+wp=$!
+wait $gp 2>/dev/null; rc=$?
+# Silence bash's "Terminated: 15" job-control notice for the watchdog itself:
+# disown it before killing, or every single run prints a scary line.
+disown $wp 2>/dev/null || true
+kill $wp 2>/dev/null
+fetch_err=$(cat "$fetch_out"); rm -f "$fetch_out"
+
+if [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; then
+  echo "ff-main: fetch exceeded 12s and was stopped — left alone (offline?)."
   exit 0
-}
+elif [ "$rc" -ne 0 ]; then
+  echo "ff-main: fetch did not complete — left alone. git said:"
+  printf '%s\n' "$fetch_err" | sed 's/^/  /'
+  exit 0
+fi
+
+# "Could not determine" must not read as "already current". Without this, an
+# unborn main or a remote.origin.fetch that never creates origin/main makes the
+# hook exit 0 in total silence — permanently useless in exactly the way it was
+# built to prevent.
+if ! git -C "$repo" rev-parse --verify --quiet origin/main >/dev/null; then
+  echo "ff-main: origin/main not present locally after fetch — left alone."
+  exit 0
+fi
+
+# ...and the local side too. On an unborn main, `rev-list main..origin/main`
+# fails and the `|| echo 0` below reads as "already current", which is the same
+# silent-and-useless exit one guard up.
+if ! git -C "$repo" rev-parse --verify --quiet main >/dev/null; then
+  echo "ff-main: local main does not exist yet (unborn) — left alone."
+  exit 0
+fi
 
 behind=$(git -C "$repo" rev-list --count main..origin/main 2>/dev/null || echo 0)
 [ "${behind:-0}" -eq 0 ] && exit 0        # already current: say nothing
@@ -75,6 +110,6 @@ if merge_err=$(git -C "$repo" merge --ff-only --quiet origin/main 2>&1); then
 else
   # A fast-forward WAS possible and still failed. Report what git said, verbatim.
   echo "ff-main: fast-forward was possible but did not apply — left alone. git said:"
-  printf '%s\n' "$merge_err" | sed 's/^/  /' 
+  printf '%s\n' "$merge_err" | sed 's/^/  /'
 fi
 exit 0
