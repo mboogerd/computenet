@@ -44,7 +44,7 @@ class InspectorFlowStreamTest {
     private val hostRef = CellRef(UUID.randomUUID())
     private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
     private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
-    private val server = InspectorServer(registry, host, port = 0).start()
+    private val server = InspectorServer(registry, host, port = 0).startUnscheduled()
     private var events: SseTap? = null
 
     @AfterEach
@@ -116,7 +116,19 @@ class InspectorFlowStreamTest {
 
         // the client goes away mid-load — the graph must not notice
         stream.close()
-        awaitUntil("the client detached") { server.attachedClients == 0 }
+        // computenet-md6w.1: a client is removed only when a *write* to its
+        // socket throws ([SseBroadcaster.Client.pump]), so "detached" is not
+        // something the server discovers on its own — something has to publish
+        // first. This used to be satisfied by whichever armed schedule fired
+        // next (the 1 Hz `"flowSample"`, or `"heartbeat"` at 15 s), which is
+        // exactly the wall-clock dependence that made this test the suite's
+        // second `:inspect:` flake: on a loaded runner no background frame
+        // landed inside the 30 s budget and it failed here (run 31774126595).
+        // Ticking inside the loop supplies the frame the detection needs.
+        awaitUntil("the client detached") {
+            server.tickAll()
+            server.attachedClients == 0
+        }
         repeat(4) { ops.add("post$it") }
         awaitUntil("post-load flowed") { source.outlet.waveState().highWater >= 9 }
         server.tickAll()
@@ -166,7 +178,7 @@ class InspectorFlowStreamTest {
             val client = HttpClient.newHttpClient()
             val body = try {
                 client.send(
-                    HttpRequest.newBuilder(URI("http://localhost:${late.start().boundPort}${InspectorServer.TOPOLOGY_PATH}"))
+                    HttpRequest.newBuilder(URI("http://localhost:${late.startUnscheduled().boundPort}${InspectorServer.TOPOLOGY_PATH}"))
                         .build(),
                     HttpResponse.BodyHandlers.ofString(),
                 ).body()

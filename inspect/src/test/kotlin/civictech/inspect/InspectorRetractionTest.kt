@@ -80,7 +80,7 @@ class InspectorRetractionTest {
             hosts = mapOf("a-host" to hostA, "a-bridge" to bridgeA),
             port = 0,
             netName = "jvm-a",
-        ).start().also { server = it }
+        ).startUnscheduled().also { server = it }
 
     private fun peer(): Peering.Loopback =
         Peering.loopback(Peering.Side(registryA, bridgeA), Peering.Side(registryB, bridgeB))

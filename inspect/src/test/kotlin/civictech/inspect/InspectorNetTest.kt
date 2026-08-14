@@ -102,7 +102,7 @@ class InspectorNetTest {
             port = 0,
             cellNames = names,
             netName = "jvm-a",
-        ).start().also { server = it }
+        ).startUnscheduled().also { server = it }
 
     /**
      * T21: no forced sweep any more. Peer arrivals, departures and mirrored

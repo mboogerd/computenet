@@ -885,18 +885,22 @@ dishonestly: the inspector (`:inspect`, delivered via the
 code relies on, specified only as prose in `97-inspector-plan/20-api-contract.md`,
 none with an EARS `[NN-SLUG-nn]` id and none with a `concord/corpus/` scenario:
 
-- topology snapshot/delta `seq` monotonicity (`20-api-contract.md:38`:
+- topology snapshot/delta `seq` monotonicity (`20-api-contract.md` § DTOs,
+  the `TopologySnapshot` DTO's `seq` field:
   `"seq": 412, // monotonic; SSE events carry seq > this`)
-- `Edge.fused` meaning (`20-api-contract.md:72`: `"fused": false // true: the
-  producing endpoint has no emission point at all` — a delegating pass-through
-  with genuinely no message to observe)
-- `flow.rates` cadence and the rate-0-omitted rule (`20-api-contract.md:176`:
-  1 Hz batch; edges with no traffic that window are omitted, never sent as
-  `rate: 0`)
-- the cold predicate (`20-api-contract.md:127`: `"lifecycle": "hot" | "cold"
-  // cold iff every member cell reports Node.lifecycle SUSPENDED`)
-- `data`-mode search bounds (`20-api-contract.md:30`: bounded — 50 cells / 2s
-  deadline / cold components skipped — and always returns a non-null `cost`,
+- `Edge.fused` meaning (`20-api-contract.md` § DTOs, the `Edge` DTO's `fused`
+  field: `"fused": false // true: the producing endpoint has no emission
+  point at all` — a delegating pass-through with genuinely no message to
+  observe)
+- `flow.rates` cadence and the rate-0-omitted rule (`20-api-contract.md`
+  § SSE events, the `flow.rates` row: 1 Hz batch; edges with no traffic that
+  window are omitted, never sent as `rate: 0`)
+- the cold predicate (`20-api-contract.md` § DTOs, the `GraphList` DTO's
+  `lifecycle` field: `"lifecycle": "hot" | "cold" // cold iff every member
+  cell reports Node.lifecycle SUSPENDED`)
+- `data`-mode search bounds (`20-api-contract.md` § Endpoints, the
+  `GET /api/inspect/search` row: bounded — 50 cells / 2s deadline / cold
+  components skipped — and always returns a non-null `cost`,
   including on a zero-hit or blank-query result)
 
 **Why this can't be checked honestly**: `civictech.concord.driver.kernel` is
