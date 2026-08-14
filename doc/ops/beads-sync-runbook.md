@@ -27,9 +27,10 @@ live session.
 ## Per-machine setup: DoltHub credentials (read before §0)
 
 The DoltHub remote requires a registered credential per machine; a machine
-without one fails every `bd dolt push` (and likely every `bd dolt pull`) it
-attempts. One-time setup on each machine that runs `bd dolt` commands against
-this repo — pull, push, or the nightly script:
+without one fails every `bd dolt push` it attempts. `bd dolt pull` is
+**not** blocked the same way — see the observation below. One-time setup on
+each machine that runs `bd dolt` commands against this repo — pull, push, or
+the nightly script:
 
 ```bash
 dolt creds new                     # generates a keypair, prints a public key
@@ -41,20 +42,51 @@ web UI — no `bd`/`dolt` CLI does this part). Until both steps are done on a
 given machine, its `bd dolt pull`/`bd dolt push` calls run against an
 unauthorized credential.
 
-**What an unauthorized machine looks like when it fails: not verified against
-a live DoltHub error in this task.** This runbook does not have a captured
-error string for an unauthorized `bd dolt push`/`pull` against DoltHub —
-producing one safely would mean deliberately running an unregistered
-credential against the live shared remote, which risks disrupting concurrent
-sessions' sync (this session's own orchestrator was mid-sync against the same
-database while this doc was written) and was out of scope for this task's
-20-30 minute budget. Treat the exact failure text as **unverified**; what is
-supported is only the mechanism above (`dolt creds new` + DoltHub credential
-registration is required per machine, and `.beads/config.yaml`'s own comment
-block says the push fails "exactly where it hurts (unattended scheduled
-runs)" when it's missing). If you hit this failure in practice, paste the
-literal error into this section so the next reader has a real string to match
-against.
+**What an unauthorized machine looks like when it fails (verified 2026-08-14,
+computenet-o97.8).** Captured from an isolated environment, never against the
+live shared database directly: `DOLT_ROOT_PATH` was pointed at a throwaway
+scratch directory so `dolt creds new` generated and activated a fresh keypair
+that was never registered on DoltHub, keeping the real credential under the
+default `~/.dolt` completely untouched. Reads against `sync.remote`
+(`https://doltremoteapi.dolthub.com/mrboo/computenet`) turned out to be
+unauthenticated regardless of credential, so `bd bootstrap` under that
+isolated root could clone the real database read-only without ever exercising
+the credential check — that clone became the throwaway local database used
+below (a fresh `bd init` database has unrelated history and fails pull/push
+with an unrelated "no common ancestor" error that has nothing to do with
+authorization, which is why a real clone was needed instead). With that
+throwaway clone as the working directory (still under the isolated
+`DOLT_ROOT_PATH`, still the unregistered key):
+
+`bd dolt pull` against `sync.remote` **succeeds** with the unregistered
+credential:
+
+```
+$ bd dolt pull
+Pulling from Dolt remote...
+Pull complete.
+```
+
+(exit 0). So the credential gate on this remote applies only to writes; an
+unauthorized machine can silently pull current state and would only discover
+it lacks access when it tries to push.
+
+`bd dolt push` (after a local-only throwaway commit made in that same
+isolated clone) fails with:
+
+```
+$ bd dolt push
+Pushing to Dolt remote...
+Error: push to origin/main: Error 1105: unknown push error; rpc error: code = PermissionDenied desc = permission denied
+```
+
+(exit 1). The underlying `dolt push` call (bypassing `bd`'s wrapper) surfaces
+the same transport detail, without `bd`'s `push to origin/main:` prefix:
+`unknown push error; rpc error: code = PermissionDenied desc = permission
+denied`. That `PermissionDenied` / `permission denied` text is the string to
+grep for in a failing sync log. This matches `.beads/config.yaml`'s own
+comment block, which says the push fails "exactly where it hurts (unattended
+scheduled runs)" when the credential is missing.
 
 ## 0. Why two per-session calls survive (a deliberate deviation)
 
