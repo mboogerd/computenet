@@ -161,13 +161,16 @@ than restarting. That's the whole reason the worktree is preserved.
    Your reviewer will demand the accounting in
    [review-task.md](review-task.md) §2 — produce it yourself, from the same
    run, using the counting snippet there:
-   - Read Gradle's `N actionable tasks: X executed, Y from cache` line — the
-     second-to-last line of the run.
+   - Read Gradle's `N actionable tasks: X executed, Y from cache` line at the
+     end of the run — measured 2026-08-14, the last line under
+     `--no-configuration-cache`, second-to-last in the default mode where
+     `Configuration cache entry reused.` follows it; `tail -3` catches both.
    - Check the *specific* test task's state line, reading it as an absence:
      this build prints `> Task :<module>:test` at the default log level, and a
      task that really executed prints **with no marker**, so grepping for
      `FROM-CACHE`/`UP-TO-DATE` returns nothing whether it ran or the log never
-     had task lines. So redirect the run to a file — `| tail -30` drops the
+     had task lines. Four states, only two marked: `FROM-CACHE`, `UP-TO-DATE`,
+     no marker (it ran), no line at all. So redirect the run to a file — `| tail -30` drops the
      line while keeping `BUILD SUCCESSFUL` (measured 2026-08-14: 88 lines
      above the end of a 178-line run), and `-q` prints no task lines, no
      task-count line and no `BUILD SUCCESSFUL` at all — then grep for the task:

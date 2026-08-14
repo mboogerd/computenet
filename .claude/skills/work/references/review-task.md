@@ -122,8 +122,12 @@ and nothing happened" are the same sentence unless you read further.
 What to consume, per test run:
 
 - **The task-count line.** Gradle prints
-  `N actionable tasks: X executed, Y from cache` (or `up-to-date`) as the
-  second-to-last line. `gh pr checks` reports a conclusion and a duration with
+  `N actionable tasks: X executed, Y from cache` (or `up-to-date`) at the end
+  of the run — measured 2026-08-14 in this worktree, it is the **last** line
+  under `--no-configuration-cache` and the second-to-last in the default mode,
+  where `Configuration cache entry reused.` follows it. `tail -3` catches it
+  in both; don't hard-code a line offset.
+  `gh pr checks` reports a conclusion and a duration with
   no cache information at all, so a green required check on a diff that
   touches no compiled input is evidence of nothing.
 - **The per-task state line — read it as an *absence*, and keep the log that
@@ -132,8 +136,9 @@ What to consume, per test run:
   executed prints with no marker at all.** So `grep FROM-CACHE` / `grep
   UP-TO-DATE` returns nothing both when the task ran and when the build never
   printed task lines, and those two are the opposite conclusion. Grep for the
-  *task*, then look at what follows it. Measured 2026-08-14 in this worktree,
-  three consecutive invocations of the same command:
+  *task*, then look at what follows it — there are four states an agent can
+  see, and only two of them carry a marker. Measured 2026-08-14 in this
+  worktree, four invocations of the same command:
 
   ```bash
   # Capture the whole run. Never `| tail -N` (see below), never -q.
@@ -146,6 +151,14 @@ What to consume, per test run:
   | 1, cold | `> Task :kernel:test` (no marker) | `26 actionable tasks: 8 executed, 3 from cache, 15 up-to-date` |
   | 2, repeat | `> Task :kernel:test UP-TO-DATE` | `17 actionable tasks: 17 up-to-date` |
   | 3, `--rerun` | `> Task :kernel:test` (no marker) | `26 actionable tasks: 1 executed, 25 up-to-date` |
+  | 4, outputs deleted, cache hit | `> Task :kernel:test FROM-CACHE` | `17 actionable tasks: 2 from cache, 15 up-to-date` |
+
+  The fourth state is **no line at all** — the task was never in the graph, or
+  the log lost it. That is the one the marker grep cannot distinguish from a
+  real execution, and it is why you grep for the task rather than the marker.
+  (Run 4 was provoked with `rm -rf kernel/build/test-results/test
+  kernel/build/classes/kotlin/test`; `org.gradle.caching=true` in
+  `gradle.properties` is what makes `FROM-CACHE` reachable at all.)
 
   Two habits destroy that line, and both leave the *aggregate* line intact so
   the run still looks verifiable:

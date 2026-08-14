@@ -220,12 +220,17 @@ and nothing happened" are the same sentence unless you read further.
 Per suite you run, consume and **quote in your verdict**:
 
 - **The task-count line** — Gradle's `N actionable tasks: X executed, Y from
-  cache` (or `up-to-date`), the second-to-last line of the run.
+  cache` (or `up-to-date`), at the end of the run — measured 2026-08-14, the
+  last line under `--no-configuration-cache`, second-to-last in the default
+  mode where `Configuration cache entry reused.` follows it. `tail -3` catches
+  both.
 - **The per-task state line**, read as an *absence*. This build does print
   `> Task :<module>:test` at the default log level, but **a task that really
   executed prints with no marker**, so grepping for `FROM-CACHE`/`UP-TO-DATE`
   returns nothing both when the task ran and when the log never carried task
-  lines. Grep for the task and look at what follows it — and keep a log that
+  lines. Grep for the task and look at what follows it — four states, only two
+  marked: `FROM-CACHE`, `UP-TO-DATE`, no marker (it ran), and no line at all
+  (never in the graph, or the log lost it) — and keep a log that
   still has it: measured 2026-08-14, `| tail -30` drops it (the line sat 88
   lines above the end of a 178-line `./gradlew testClasses`) and `-q` prints
   no task lines, no task-count line and no `BUILD SUCCESSFUL` at all. Details
