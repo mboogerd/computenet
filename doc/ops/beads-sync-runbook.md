@@ -1,15 +1,60 @@
 # Beads Dolt sync runbook — nightly/manual job, residual risk, recovery
 
 Task: computenet-o97.5.2. Feature: computenet-o97.5. Epic: computenet-o97 (TRK1).
+Updated by computenet-o97.7 (2026-08-14) to correct the remote topology below.
 
 This runbook is the doc/ops counterpart to the skill-side change in
 computenet-o97.5.1 (`.claude/skills/work/**`): per-session `bd dolt pull`/`push`
 calls are cut down to two sites (session-start pull, Finalize push); durability
 against a machine lost mid-session moves to this nightly/manual job plus the
-periodic `.beads/backup` snapshots. Durability still rests on `refs/dolt/data`
-on the git remote (`sync.remote` in `.beads/config.yaml`) — nothing here
-changes the mechanism, only how often the round-trip runs outside a live
-session.
+periodic `.beads/backup` snapshots.
+
+**Durability rests on a native Dolt remote hosted on DoltHub** — `sync.remote`
+in `.beads/config.yaml`, currently
+`https://doltremoteapi.dolthub.com/mrboo/computenet`. This is a change from
+this runbook's original text (PR #63, computenet-o97.5.2): sync used to run
+over `refs/dolt/data` on the GitHub remote, piggybacking the same repo. PR #64
+("Sync beads over DoltHub and drop cross-session epic stickiness", merged
+2026-08-12) moved it to DoltHub because the database outgrew the `refs/dolt/data`
+path on GitHub and its pushes started failing outright. `.beads/config.yaml`
+and `scripts/beads-nightly-sync.sh` were updated in that PR; this runbook was
+not, until now. Everywhere below that used to say "the git remote" or
+`refs/dolt/data` now means the DoltHub remote instead — the mechanism (two
+per-session calls, a nightly/manual catch-up job, `.beads/backup` for local
+recovery) is otherwise unchanged, only how often the round-trip runs outside a
+live session.
+
+## Per-machine setup: DoltHub credentials (read before §0)
+
+The DoltHub remote requires a registered credential per machine; a machine
+without one fails every `bd dolt push` (and likely every `bd dolt pull`) it
+attempts. One-time setup on each machine that runs `bd dolt` commands against
+this repo — pull, push, or the nightly script:
+
+```bash
+dolt creds new                     # generates a keypair, prints a public key
+```
+
+Then register the printed public key at
+<https://www.dolthub.com/settings/credentials> (a human step in the DoltHub
+web UI — no `bd`/`dolt` CLI does this part). Until both steps are done on a
+given machine, its `bd dolt pull`/`bd dolt push` calls run against an
+unauthorized credential.
+
+**What an unauthorized machine looks like when it fails: not verified against
+a live DoltHub error in this task.** This runbook does not have a captured
+error string for an unauthorized `bd dolt push`/`pull` against DoltHub —
+producing one safely would mean deliberately running an unregistered
+credential against the live shared remote, which risks disrupting concurrent
+sessions' sync (this session's own orchestrator was mid-sync against the same
+database while this doc was written) and was out of scope for this task's
+20-30 minute budget. Treat the exact failure text as **unverified**; what is
+supported is only the mechanism above (`dolt creds new` + DoltHub credential
+registration is required per machine, and `.beads/config.yaml`'s own comment
+block says the push fails "exactly where it hurts (unattended scheduled
+runs)" when it's missing). If you hit this failure in practice, paste the
+literal error into this section so the next reader has a real string to match
+against.
 
 ## 0. Why two per-session calls survive (a deliberate deviation)
 
@@ -72,7 +117,7 @@ working convention, not a fence. Skill-side statement of the same policy:
 ## 1. The job: invocation path
 
 - **Script**: `scripts/beads-nightly-sync.sh` (repo root). Runs `bd dolt pull`
-  then `bd dolt push` against `refs/dolt/data`, in that order, from the repo
+  then `bd dolt push` against the DoltHub remote (`sync.remote` in `.beads/config.yaml`), in that order, from the repo
   root it resolves relative to its own location.
 - **Trigger**: left as a **manual runbook step** by this task — no
   launchd/cron entry is installed by this change. To install one, a human
@@ -106,6 +151,16 @@ not re-measured here per this task's instructions. Its raw per-call numbers:
 |---|---|---|
 | `bd dolt pull` | 33.56s | 34.09s |
 | `bd dolt push` | 48.86s | 33.84s |
+
+**These numbers predate PR #64's move to the DoltHub remote (§ above) and are
+retained as history, not a current measurement** — see the staleness notice
+at the top of `doc/ops/beads-sync-cost.md`. A single 2026-08-14 sample against
+the current DoltHub remote (also recorded there) put one `bd dolt pull` at
+9.90s, well under this table's pull figures; that single sample is not a
+substitute for a full re-run of this section's model and none is claimed
+here. The per-session recomputation below is retained as-is because it is
+the number `.claude/skills/work/SKILL.md`'s own design (computenet-o97.5.1)
+was justified against, not because it is asserted current:
 
 With the skill cut down (computenet-o97.5.1) to exactly one pull (session
 start) and one push (Finalize) per session, the per-session cost recomputes
@@ -144,7 +199,7 @@ The window is bounded by:
   Finalize and the ones a human runs by hand. Installing §8's schedule is
   what turns this term into ~24h.
 
-Because durability still rests on `refs/dolt/data`, nothing on the OTHER
+Because durability still rests on the DoltHub remote, nothing on the OTHER
 machine or on the remote is at risk — only the lost machine's own unpushed
 local state.
 
@@ -171,7 +226,7 @@ local state.
 
 ### 3.3 Conflict-resolution sequence (both sides diverged)
 
-If reconciling a recovered/lost machine's state against `refs/dolt/data`
+If reconciling a recovered/lost machine's state against the DoltHub remote
 surfaces a genuine two-sided conflict (both the remote and the local copy
 mutated the same issue since they last agreed), `bd dolt pull` aborts with:
 
@@ -272,16 +327,52 @@ bound it at all.)
 
 ## 5. Known-callers inventory
 
-Everything that invokes `bd dolt pull`/`bd dolt push`, once computenet-o97.5.1
-lands:
+**Re-derived against current main (computenet-o97.7, 2026-08-14), not edited
+in place from the earlier version of this table.** Derivation command, run
+from the repo root:
+
+```bash
+grep -rnE 'bd dolt (pull|push)|dolt creds|dolthub\.com|refs/dolt/data|beads-nightly-sync\.sh' \
+  --include='*.md' --include='*.sh' --include='*.yml' --include='*.yaml' -- .
+```
+
+followed by reading every hit in context to classify it as an actual
+invocation site, a doc reference/mention, or an explicit non-caller. Hits
+inside `doc/ops/beads-sync-runbook.md` and `doc/ops/beads-sync-cost.md`
+themselves are excluded from the table below (self-references). `.github/`
+and `.claude/hooks/` were checked separately and contain zero `bd dolt`
+references — nothing in CI or a hook invokes sync.
 
 | Caller | Op | When |
 |---|---|---|
-| `.claude/skills/work/SKILL.md` step 3 | pull | Once, at session start |
-| `.claude/skills/work/SKILL.md` Finalize | push | Once, at session end |
-| `AGENTS.md` / `CLAUDE.md` Session Completion (team-maintainer path) | push | Once, at end of a Beads workflow that is not a `/work` session |
+| `.claude/skills/work/SKILL.md` step 3 (`bd dolt pull`) | pull | Once, at session start |
+| `.claude/skills/work/SKILL.md` acquisition brackets (epic claim, item claim in another epic, SDLC-epic filing, stale-claim steal — several sites, e.g. lines ~287, ~1271–1272, ~1344–1347, ~1374, ~1568) | pull + push | Per acquisition, at the moment it happens (computenet-wpvy.3 policy, §0.1) |
+| `.claude/skills/work/SKILL.md` Finalize (`bd dolt push`, ~line 1426, with a recovery pull+push pair at ~1446–1447 if it's rejected non-fast-forward) | push | Once, at session end — the publication push |
+| `.claude/skills/work/references/claim-sync.md` | pull + push | Not a separate invocation site — states the same acquisition-bracket and Finalize-recovery policy that `SKILL.md` implements; listed because it documents the pattern independently |
+| `.claude/skills/remediate-friction/SKILL.md` (pull at start ~line 57; acquisition push ~79–84; closing push ~145) | pull + push | Once at session start, then bracketed around each friction item claimed/filed, then once at session close — same acquisition-brackets-writes policy as `/work`, on its own separate lane |
+| `AGENTS.md` / `CLAUDE.md` Session Completion, "Team-maintainer opt-in only" step (`bd dolt push`) | push | Once, at end of a Beads workflow that is not a `/work` or `/remediate-friction` session, and only under the team-maintainer profile |
+| `AGENTS.md` "Dolt sync of issue state is not remote sync" (prose, not a distinct call site) | pull + push | Describes the same `/work` orchestrator calls above as "routine... as part of the session flow" — not an additional caller, listed so this table doesn't look incomplete next to it |
 | `scripts/beads-nightly-sync.sh` (this job, §1) | pull + push | **Not scheduled anywhere today** — manual invocation only, until a human installs a schedule per §8 |
-| Humans, by hand | pull and/or push | Ad hoc — e.g. after resolving a conflict (§3.3), or before/after direct `bd` use outside a `/work` session |
+| Humans, by hand | pull and/or push | Ad hoc — e.g. after resolving a conflict (§3.3), or before/after direct `bd` use outside a `/work`/`/remediate-friction` session |
+
+**Explicit non-callers, worth naming because they mention `bd dolt push` in
+passing and could be mistaken for invocation sites**:
+
+- `.claude/skills/work/references/review-feature.md` ("Don't run `bd dolt
+  push`" — issue-state sync is the orchestrator's job, not the feature
+  reviewer's; the reviewer's `bd` writes stay local).
+- `.claude/skills/work/references/red-check-attribution.md` — references a
+  blocked `bd dolt push` from SKILL.md step 6, doesn't invoke one itself.
+- `.beads/README.md` — beads' own generic boilerplate quick-start doc (not
+  written for this repo); it lists `bd dolt push`/`pull` as example commands,
+  not as something this repo's tooling runs.
+
+**Changes since the pre-DoltHub version of this table**: the
+`.claude/skills/remediate-friction/SKILL.md` row, the `claim-sync.md` row, and
+the `AGENTS.md` "Dolt sync... not remote sync" row are new — none appear in
+the version of this table shipped in PR #63; `remediate-friction` in
+particular did not exist yet. Every row that did exist before is still
+accurate; nothing in the old table names a caller that has since disappeared.
 
 **Nothing in this repo runs the job automatically.** No launchd plist, cron
 entry, CI workflow or hook invokes `scripts/beads-nightly-sync.sh`; the word
