@@ -161,11 +161,26 @@ than restarting. That's the whole reason the worktree is preserved.
    Your reviewer will demand the accounting in
    [review-task.md](review-task.md) §2 — produce it yourself, from the same
    run, using the counting snippet there:
-   - Read Gradle's `N actionable tasks: X executed, Y from cache` line, and
-     confirm the *specific* test task you care about is not `FROM-CACHE` or
-     `UP-TO-DATE` in the run's task output.
-   - Quote test counts read from the JUnit XML rather than the build result.
-     An unquantified "suite green" is not a verification record: nobody
+   - Read Gradle's `N actionable tasks: X executed, Y from cache` line — the
+     second-to-last line of the run.
+   - Check the *specific* test task's state line, reading it as an absence:
+     this build prints `> Task :<module>:test` at the default log level, and a
+     task that really executed prints **with no marker**, so grepping for
+     `FROM-CACHE`/`UP-TO-DATE` returns nothing whether it ran or the log never
+     had task lines. So redirect the run to a file — `| tail -30` drops the
+     line while keeping `BUILD SUCCESSFUL` (measured 2026-08-14: 88 lines
+     above the end of a 178-line run), and `-q` prints no task lines, no
+     task-count line and no `BUILD SUCCESSFUL` at all — then grep for the task:
+
+     ```bash
+     ./gradlew :kernel:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
+     grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
+     ```
+   - Quote test counts *and the newest timestamp* read from the JUnit XML
+     rather than the build result — the timestamp is what separates a run from
+     a replay (measured 2026-08-14: a cached repeat run left `newest`
+     unchanged with identical counts and a green build; `--rerun` advanced
+     it). An unquantified "suite green" is not a verification record: nobody
      re-runs your tests, so your report *is* the evidence the next session
      trusts.
    - `--rerun` binds to the task it follows, not to the command line

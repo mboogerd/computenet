@@ -54,12 +54,22 @@ echo "${JAVA_HOME:-<unset>}"
 ```
 
 Measured 2026-08-13 on computenet-dqy.46: every measured number in the item
-reproduced exactly, and the only false statement was the environment — no
-JDK 26 exists on this host (`/usr/libexec/java_home -V` tops out at JBR
-25.0.2, `JAVA_HOME` unset, and `buildSrc`'s `jvmToolchain(21)` governs
-Gradle-launched JVMs but not a manual `java -cp` run). The comparison bound
-had been taken on JDK 21.0.11, so two same-size figures came from different
-runtimes.
+reproduced exactly, and the only false statement was the environment — the
+run claimed a JDK the machine could not show, while the comparison bound had
+been taken on JDK 21.0.11, so two same-size figures came from different
+runtimes. `buildSrc`'s `jvmToolchain(21)` governs Gradle-launched JVMs but
+not a manual `java -cp` run, which is why the claim mattered.
+
+**Run those three commands; do not carry their answers in this file.** They
+are shell- and session-dependent and have already disagreed. Two readings of
+*this same host*: 2026-08-14 from a `/work` session, `/usr/libexec/java_home
+-V` listed 9 JVMs topping out at JBR 25.0.2, `JAVA_HOME` **unset**, and
+`~/.gradle/jdks/` held only `CACHEDIR.TAG` (no provisioned toolchain);
+2026-08-14 from another session on the same machine, `java_home -V` failed
+outright with "Unable to locate a Java Runtime" while `JAVA_HOME` pointed at
+Homebrew OpenJDK 26.0.1. Both are true reports of different shells. So check
+the diff's environment claim against a reading *you* just took, quote it, and
+treat any environment fact written down here or in a bead as expired.
 
 **Validating a workflow change** has one command that works on this host —
 there is no `actionlint` here and `pip3 install pyyaml` is PEP-668 blocked, so
@@ -80,7 +90,7 @@ implying the workflow is fully validated. (Host quirk that costs a retry:
 
 1. Establish the standard — criteria and tasks from the bead
 2. Read the actual diff — against freshly fetched origin/main
-3. Prove the feature's tests actually ran — no FROM-CACHE evidence
+3. Prove the feature's tests actually ran — not replayed from cache
 4. Your run is on macOS; the required checks are not
 5. Repair by default — up to a bound (authorship limit + `review:` commits)
 6. Re-fetch immediately before you certify
@@ -210,10 +220,29 @@ and nothing happened" are the same sentence unless you read further.
 Per suite you run, consume and **quote in your verdict**:
 
 - **The task-count line** — Gradle's `N actionable tasks: X executed, Y from
-  cache` (or `up-to-date`) — and confirm the *specific* test task you care
-  about is not marked `FROM-CACHE` or `UP-TO-DATE` in the run's task output.
+  cache` (or `up-to-date`), the second-to-last line of the run.
+- **The per-task state line**, read as an *absence*. This build does print
+  `> Task :<module>:test` at the default log level, but **a task that really
+  executed prints with no marker**, so grepping for `FROM-CACHE`/`UP-TO-DATE`
+  returns nothing both when the task ran and when the log never carried task
+  lines. Grep for the task and look at what follows it — and keep a log that
+  still has it: measured 2026-08-14, `| tail -30` drops it (the line sat 88
+  lines above the end of a 178-line `./gradlew testClasses`) and `-q` prints
+  no task lines, no task-count line and no `BUILD SUCCESSFUL` at all. Details
+  and the three-run measurement are in [review-task.md](review-task.md) §2.
+
+  ```bash
+  ./gradlew :kernel:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
+  grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
+  ```
+
+  With only a truncated log, don't claim this check — use the task-count line
+  plus the XML timestamp below, or `--rerun`.
 - **The JUnit XML counts and timestamp**, which prove the results are from
-  *this* run, not the last one:
+  *this* run, not the last one. Measured 2026-08-14: a cached repeat run left
+  `newest` at the previous run's `12:40:26.685Z` with identical counts and a
+  green build; `--rerun` advanced it to `12:40:45.016Z`. The timestamp, not
+  the count, is what separates a run from a replay:
 
   ```bash
   python3 -c '
