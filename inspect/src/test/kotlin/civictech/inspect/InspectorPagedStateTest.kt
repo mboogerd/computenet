@@ -13,6 +13,7 @@ import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.host.lookup
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
@@ -60,13 +61,23 @@ class InspectorPagedStateTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private var server: InspectorServer? = null
     private lateinit var probe: HttpProbe
 
     @AfterEach
     fun tearDown() {
         server?.close()
+        if (::probe.isInitialized) probe.close()
+        hostScheduler.shutdown()
     }
 
     // ------------------------------------------------------------ the pages
