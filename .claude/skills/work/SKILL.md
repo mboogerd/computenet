@@ -172,6 +172,26 @@ Three notifications at 3h15m, 4h, and 4h45m — the slot is 5h, and the last
 different slot. **Note the monitor's task id**; when you reach Finalize on
 your own, `TaskStop` it so it doesn't outlive the session.
 
+**This is the only persistent monitor. Every other one is a bounded watch,
+and re-arming replaces.** A PR/CI watch loops a fixed count
+(`for i in $(seq 1 N)`) and exits on a terminal state, so it dies with the
+thing it watches; keep at most one alive at a time. When a watch times out
+and you want another, `TaskStop` the old one and let the stop land *before*
+arming the replacement — otherwise you stack pollers nobody reads. (One
+session stacked four and had to stop three; a later one ran eleven bounded
+watches with no trouble, so this is hygiene, not a known breaking point.)
+
+**A failed `gh` call is not a reading of the world.** When the local machine
+runs out of sockets, `gh` fails with
+`dial tcp 140.82.121.5:443: connect: can't assign requested address` — that
+says nothing about the PR. The idiom `gh ... 2>/dev/null || echo "?"` folds
+that into a sentinel, and anything downstream that greps for red checks then
+reads the failure as *nothing red*: a green manufactured by a broken socket,
+the same class of false pass as the `FROM-CACHE` trap. So every wait loop and
+every check must separate **"the query failed"** from **"the condition is not
+met"** — print the error text and treat the round as no reading at all, never
+as a negative one.
+
 **`persistent: true` is load-bearing — do not drop it, and do not "fix" the
 snippet by adding `timeout_ms`.** Determined by test, 2026-08-13, three
 probes: omitting `timeout_ms` with `persistent: true` is **accepted**, not
@@ -1591,7 +1611,12 @@ gh pr view <pr-url> --json state,mergeStateStatus
 ```
 
 Poll every 60s **in the foreground**, and give up after 30 attempts or on the
-T-45m notification, whichever comes first. Do not background an unbounded
+T-45m notification, whichever comes first. 60s is a floor, not a target —
+don't tighten it, and count it against any watch monitor already hitting the
+same endpoints: your foreground polling and the monitors you armed compete
+for the same local sockets (step 2). If the `gh` call itself fails, that is
+**not** a `state` reading — print the error and retry the round; a failed
+query is neither `OPEN` nor progress. Do not background an unbounded
 `until` loop: a PR sitting on a red required check stays `OPEN` indefinitely
 and would burn the rest of the slot in silence. Each poll, if
 `mergeStateStatus` is `DIRTY` or `BEHIND`, resolve it per 5e — waiting on a
