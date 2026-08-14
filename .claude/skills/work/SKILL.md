@@ -1382,9 +1382,11 @@ Nothing resumes a stopped agent, and agent-completed is not task-reviewed — a
 result skimmed as done here merges unreviewed code. If it does not say pass or
 fail, `SendMessage` that same agent (its context is intact) to finish and
 state a verdict plus a NOT VERIFIED section, and to run long commands in the
-foreground rather than end a turn waiting on a notification. 5e's rule covers
-the review *you* stopped with `TaskStop`; this is the harder one, where the
-agent stopped itself and the notification reads as success.
+foreground rather than end a turn waiting on a notification. 5e carries this
+same self-stopped check over its own verdict token, so what divides the two is
+the stake and not the failure: a task misread as reviewed here is merged into a
+feature branch that still has the feature review downstream of it, while 5e's
+check guards `gh pr ready`, with nothing after it.
 
 **Merge the passes yourself, one at a time.** Reviewers must not merge:
 concurrent merges into one feature branch race each other. Close the task
