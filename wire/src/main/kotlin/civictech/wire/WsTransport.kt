@@ -350,6 +350,46 @@ object WsTransport {
          * thread, so a write demand that is lost leaves the frame queued with
          * `send` having returned normally — [framesSent] counts it, the peer
          * never sees it, and nothing anywhere throws.
+         *
+         * THE READING CAME BACK, and it is unanimous. Run 31770947583 (500
+         * fresh-JVM ubuntu `:wire` iterations at 3dd7e0e) reproduced this bead's
+         * signature nine times, and all nine read **case 2**:
+         *
+         * ```
+         * frames: server->client sent=3 received=K / client->server sent=2 received=2;
+         *         socket out-queue non-empty: listener=true client=false
+         * ```
+         *
+         * with K = 0 (x3), 1 (x2), 2 (x4), equal in every one of the nine to the
+         * client's `remoteRefs` count. So the announcer produced every frame
+         * (kills case 1), every frame that arrived was applied (kills case 3),
+         * and the missing ones are still sitting in the LISTENER's out-queue 15
+         * seconds later while the reverse direction delivers 2/2 on the same
+         * connection — they were never written to the wire.
+         *
+         * The lost write demand is java-websocket 1.6.0's, and the race is
+         * readable in its source. `WebSocketImpl.write` does
+         * `outQueue.add(buf); wsl.onWriteDemand(this)` on the CALLING thread;
+         * `WebSocketServer.onWriteDemand` sets `interestOps(OP_READ|OP_WRITE)`
+         * and wakes the selector; the selector thread's `doWrite` does
+         * `if (batch(conn, channel) && key.isValid()) key.interestOps(OP_READ)`.
+         * A sender that enqueues and arms OP_WRITE in the window after `batch`
+         * drained the queue and returned true, but before `doWrite` clears the
+         * interest, loses: the frame stays in `outQueue`, nothing ever registers
+         * write interest for it again, the `wakeup` only releases a `select`
+         * with nothing to write, and the connection stays open and fully
+         * READABLE. Everything queued afterwards stays queued too — exactly the
+         * contiguous-tail shape, cut at whichever announcement lost the race.
+         *
+         * It is one-directional by construction, and the artifacts agree:
+         * `WebSocketClient.onWriteDemand` is `// nothing to do` because the
+         * dialer writes from a dedicated thread blocking on `outQueue.take()`,
+         * so the dialer cannot lose a demand. All nineteen observed occurrences
+         * (nine here, nine on run 31756952711, one local) lose server->client.
+         *
+         * Naming this was computenet-dqy.68's job; repairing it is a separate
+         * bead — re-arm write interest while the out-queue is non-empty, or take
+         * the listener off java-websocket's selector write path.
          */
         private val framesSentCount = AtomicLong()
         val framesSent: Long get() = framesSentCount.get()

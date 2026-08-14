@@ -38,6 +38,11 @@ import java.nio.ByteBuffer
  *   looks like: `send` returns normally, the out-queue keeps the frame, nothing
  *   throws anywhere) leaves `framesSent` counting and the peer's
  *   `framesReceived` at zero, which is the reading the three cases differ on.
+ *
+ * Run 31770947583 then took that reading at nine REAL occurrences and all nine
+ * read case 2 — `sent=3 received=K<3` with the listener's out-queue still
+ * non-empty 15s later. [WsTransport.Session.framesSent] carries the full
+ * reading and the java-websocket race it names.
  */
 class WsAnnouncementFrameCountTest {
 
@@ -87,6 +92,18 @@ class WsAnnouncementFrameCountTest {
             // 0/200 on darwin/arm64, but a slower runner is exactly where that
             // window opens, and the property under test is convergence, not the
             // scheduling that reaches it.
+            //
+            // That is not a guess. WITHOUT this wait, ubuntu-latest reddened
+            // this test in 163 of 500 fresh-JVM `:wire` iterations (run
+            // 31770947583 at 3dd7e0e — 103 on the s->c assertion, 60 on the
+            // reverse one, every one of them lag-by-one or lag-by-two). WITH
+            // it, 0 of 100 on the same runner over the same 30-test suite (run
+            // 31775175399 at 58d4e13); at the old 32.6% rate 0/100 has
+            // probability ~1e-17, so the window is closed rather than
+            // unluckily missed. The one way this assertion can still fail is
+            // the real defect — a listener out-queue that never drains, see
+            // [WsTransport.Session.framesSent] — measured at 9 in 12,500
+            // peerings, and that is a failure this test SHOULD report.
             val settle = System.currentTimeMillis() + 15_000
             while (
                 (listener.framesSent != connection.framesReceived ||
