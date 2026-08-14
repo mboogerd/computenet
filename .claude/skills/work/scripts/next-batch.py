@@ -159,7 +159,12 @@ def capacity_limit(cores):
     arms measured. Sixteen cores is the only machine measured, so LANE_CORES
     is pinned by one point (16/3) and corroborated by an unmeasured one; it
     errs conservatively on the smaller box, where 3 is the only configuration
-    ever recorded and it was the catastrophe. The 2x line is itself a chosen
+    ever recorded and it went both ways: computenet-avs logs N=3 on 10 cores
+    three times — load 14.75 with memory comfortable, a whole session green
+    with no contention failure, and the load-112 catastrophe. The cap is set
+    against the worst of those three, not against a uniform result, so on the
+    10-core record alone `cores/5` is tighter than the evidence compels. The
+    2x line is itself a chosen
     round number — the actual headroom in the bounded waits is unmeasured, and
     2x is defended by being far from the ~90x that produced the damage, not by
     a measurement of when a wait first trips. What would settle it: the same
