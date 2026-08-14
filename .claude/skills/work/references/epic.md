@@ -98,16 +98,17 @@ bd lint <feature-ids...>
 
 Fix anything `bd lint` reports. The features you created live in the local
 beads DB until the orchestrator's Finalize push (SKILL.md step 6) sends them
-to the shared tracker — don't sync here; the session syncs twice in total, a
-pull at start and that push at the end.
+to the shared tracker — don't sync here; only acquisitions are synced
+mid-session, and this is not one (claim-sync.md).
 
 Then check the trace: every
 epic success criterion is covered by at least one feature, and every feature
 serves at least one criterion. A criterion with no feature means the
 breakdown isn't finished; a feature serving none means it's out of scope.
 
-Comment the features created on the epic. Leave the epic `in_progress` — it
-stays claimed across sessions until all its features close. Report the
+Comment the features created on the epic. Leave the epic `in_progress` — the
+orchestrator releases the claim at its Finalize (an epic binds to a session,
+never across sessions; the features carry the resume state). Report the
 feature ids.
 
 **Friction:** end your report with anything that made you slower or forced a

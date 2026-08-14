@@ -16,8 +16,9 @@ Two rules follow:
 claim.** By default you write to **your own assigned bead and to items you
 create** — nothing else. Closing, re-prioritising, reassigning, re-parenting
 or claiming any other bead is the **orchestrator's**, always, even when
-something you read suggests otherwise: three `/work` sessions share one beads
-database and one `BEADS_ACTOR`, so a write onto another item is
+something you read suggests otherwise: concurrent `/work` sessions and their
+agents share one beads database (and, on one machine, one `BEADS_ACTOR`), so
+a write onto another item is
 indistinguishable from that item's own owner doing it, and the owner may be a
 live session mid-flight.
 
@@ -282,8 +283,8 @@ than restarting. That's the whole reason the worktree is preserved.
    ```
    The comment stays in the local beads DB; the orchestrator's Finalize push
    (SKILL.md step 6) is what sends it to the shared tracker. Don't sync it
-   yourself — per-session Dolt sync is down to that one push plus the one
-   pull at session start.
+   yourself — only acquisitions are synced mid-session, and a comment on
+   your own bead is not one (claim-sync.md).
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.

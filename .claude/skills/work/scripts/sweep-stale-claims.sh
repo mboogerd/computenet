@@ -7,6 +7,11 @@
 # explicitly (Finalize, or step-3 startup for a crashed run), and a feature
 # claim is the resume marker consumed under the epic claim (5a).
 #
+# skill-friction items are also excluded: their claim is ROUTING (which
+# machine's orchestrator lane drains the item — SKILL.md step 7), not a
+# work-in-progress marker, so releasing it silently undoes the exclusivity the
+# step-7 push established.
+#
 # Usage: sweep-stale-claims.sh [--hours N] [--dry-run]
 #   --hours  age past which a claim counts as abandoned (default 6, comfortably
 #            longer than one slot, so a live run's items are never taken)
@@ -30,7 +35,9 @@ cutoff=$(( $(date +%s) - HOURS * 3600 ))
 aged=$(bd list --status=in_progress --assignee="$BEADS_ACTOR" \
           --exclude-type=epic,feature --limit 0 --json 2>/dev/null \
         | jq -c --argjson cutoff "$cutoff" '
-            [.[] | select((.updated_at | fromdateiso8601) < $cutoff)]' || echo '[]')
+            [.[] | select((.updated_at | fromdateiso8601) < $cutoff)
+                 | select(((.labels // []) | index("skill-friction")) | not)]' \
+        || echo '[]')
 
 # An item with review=passed or a pending ship decision is WAITING, not
 # abandoned: releasing it to open puts reviewed work back in bd ready as if
