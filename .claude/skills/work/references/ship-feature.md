@@ -132,7 +132,9 @@ certification. Do not send it to 5b — there is no implementation work — and
 do not park it. Dispatch a reader for the reviewer's own commits — into the
 same feature worktree, so only once the first reviewer's completion
 notification has arrived, not merely once its verdict comment is readable
-("One worktree, one live agent", SKILL.md step 5):
+("One worktree, one live agent", SKILL.md step 5). If that reviewer belongs
+to an earlier session, its agent died with that session and its notification
+will never arrive here, so do not wait for one:
 
 ```
 Agent({
