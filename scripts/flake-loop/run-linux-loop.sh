@@ -75,7 +75,9 @@
 # worktree, and both produced a real iteration report -- 30 tests, 0 failures,
 # mount preflight passing in both. The ClassNotFoundException is instead fully
 # explained by zsh's `:r` history modifier mangling a hand-typed
-# `-v "$REPO:$REPO:ro"` into a mount at `${REPO}o`; see worktree-mount.sh for the
+# `-v "$REPO:$REPO:ro"` into a mount at `${REPO:r}o` (the modifier strips an
+# extension first, so a $REPO ending in `-dqy.40` mounts at `-dqyo`), which
+# reproduces yj6's recorded output exactly; see worktree-mount.sh for the
 # shell-by-shell demonstration. Use `-v "${REPO}:${REPO}:ro"` in ad-hoc probes.
 # The enclosing-checkout mount is kept as harmless belt-and-braces; the preflight
 # below is the real guard, and it fires for an empty mount from any cause.
@@ -155,9 +157,11 @@ worktree (.claude/worktrees/<id>) and a sibling one
      removable disk).
   3. If you hit this while reproducing by hand rather than through this
      script: you did not type -v "\$REPO:\$REPO:ro" at a ZSH prompt. zsh
-     reads the ":r" as a history modifier and silently mounts \${REPO}o
-     instead, which is indistinguishable from an empty mount. Always brace
-     it: -v "\${REPO}:\${REPO}:ro".
+     reads the ":r" as a history modifier -- strip extension, then a
+     literal "o" -- and silently mounts \${REPO:r}o instead, which is
+     indistinguishable from an empty mount. A \$REPO ending in "-dqy.40"
+     lands at "-dqyo", so do not just grep for \$REPO with an "o" on the
+     end. Always brace it: -v "\${REPO}:\${REPO}:ro".
 EOF
   exit 1
 fi

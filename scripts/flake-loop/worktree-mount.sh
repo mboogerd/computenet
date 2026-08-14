@@ -18,10 +18,20 @@
 # following a parameter expansion is a history modifier (strip extension):
 #
 #   bash: "$M:$M:ro" -> /path/computenet:/path/computenet:ro  (mounts at $M)
-#   zsh : "$M:$M:ro" -> /path/computenet:/path/computeneto    (mounts at $Mo)
+#   zsh : "$M:$M:ro" -> /path/computenet:/path/computeneto    (mounts at ${M:r}o)
+#
+# The modifier strips an extension FIRST, so the mangled target is `${M:r}o`,
+# not `${M}o` -- and worktree ids here routinely carry a dot. yj6's own $REPO
+# ended in `computenet-dqy.40`, which mounts at `computenet-dqyo`. That also
+# explains yj6's verbatim probe: `-v "$REPO:$REPO:ro" -w "$REPO" ... sh -c
+# "pwd; ls -a"` printed only `.` and `..` because `-w` carries no modifier, so
+# docker created the unmounted workdir empty. Re-run 2026-08-14 under each
+# shell against a sibling worktree ending in `.65`: zsh printed `.` and `..`
+# only, bash printed the full tree. (yj6's "mitigation worked" command spelled
+# both paths out literally, with no `$REPO` to modify, which is why it worked.)
 #
 # So an ad-hoc `docker run -v "$REPO:$REPO:ro" ...` typed at a zsh prompt
-# bind-mounts a directory one character to the SIDE of $REPO; $REPO itself is
+# bind-mounts a directory to the SIDE of $REPO; $REPO itself is
 # then absent in the container, and a classpath rooted under it raises
 # ClassNotFoundException -- the whole gotcha, end to end. Confirmed by running
 # the identical command under each shell against a nested worktree: bash exit
