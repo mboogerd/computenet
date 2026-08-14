@@ -14,6 +14,8 @@ import civictech.concord.oracle.Fx.list
 import civictech.concord.oracle.Fx.s
 import civictech.concord.oracle.Fx.scenario
 import civictech.concord.schema.ConnectStep
+import civictech.concord.schema.DespawnStep
+import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.FinalView
 import civictech.concord.schema.IncrementalEqualsBatch
@@ -24,6 +26,9 @@ import civictech.concord.schema.ObservationsMonotone
 import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
+import civictech.concord.schema.RestartStep
+import civictech.concord.schema.RestoreStep
+import civictech.concord.schema.SnapshotStep
 import civictech.concord.schema.ViewsConverge
 import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.value.Value
@@ -455,6 +460,365 @@ class ChecksTest {
         )
         fail(r)
         (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * computenet-61w.1, the **vacuous** half: a diamond. `srcA` is a set-source
+     * linked straight into the sink, so the one-hop derivation resolves `{k1}` — but
+     * `mid` is *also* a direct upstream, and what it contributes is a
+     * *transformation* of `srcA`'s adds that this derivation cannot name. The
+     * "apply on an in-cone cell that is not a direct upstream" rule never fires (no
+     * apply targets `mid` at all), so a key `mid` should have driven and did not is
+     * in neither the derived set nor the log, and passes over. Checking every direct
+     * upstream's declared `type:` is what refuses it.
+     */
+    @Test
+    fun `effect-count without a key refuses a diamond whose second upstream transforms the feed`() {
+        val scen = scenario(
+            cells = listOf(cell("srcA", "set-source"), cell("mid", "set-view"), cell("sink", "effect-sink")),
+            links = listOf(link("srcA", "sink"), link("srcA", "mid"), link("mid", "sink")),
+            script = listOf(apply("srcA", "add", s("k1"))),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * The over-strict half of the same missing `type:` check (computenet-61w.1): a
+     * `map` directly upstream re-keys, so the script's adds are not the keys the
+     * sink was fed. The author must get the "cannot be derived" refusal — which
+     * tells them to name keys — rather than a per-key "expected 1 but observed 0"
+     * that reads like a runtime defect.
+     */
+    @Test
+    fun `effect-count without a key refuses when a direct upstream re-keys the feed`() {
+        val scen = scenario(
+            cells = listOf(cell("m", "map", fn = "inc"), cell("sink", "effect-sink")),
+            links = listOf(link("m", "sink")),
+            script = listOf(apply("m", "add", i(1)), apply("m", "add", i(2))),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("2", i(2)), Effect("3", i(3))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * The sink's declared type is checked too: only `effect-sink` has the
+     * one-effect-per-added-element contract the derivation models.
+     */
+    @Test
+    fun `effect-count without a key refuses when the named sink is not an effect-sink`() {
+        val scen = scenario(
+            cells = listOf(cell("src", "set-source"), cell("v", "set-view")),
+            links = listOf(link("src", "v")),
+            script = listOf(apply("src", "add", s("k1"))),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "v", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("v" to listOf(Effect("k1", s("k1"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * add → remove → re-add drives **two** effects (the element is newly added
+     * twice; `EffectSinkCell` fires per delivered add), and the unkeyed form asserts
+     * one uniform count for every derived key, so it cannot express "k1 twice, the
+     * rest once". computenet-61w.1 permits either refusing or expecting 2; refusing
+     * is the choice, because expecting 2 would mean expecting 2 of *every* key.
+     */
+    @Test
+    fun `effect-count without a key refuses an add, remove and re-add of the same element`() {
+        val scen = scenario(
+            cells = listOf(cell("src", "set-source"), cell("sink", "effect-sink")),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("src", "add", s("k1")),
+                apply("src", "remove", s("k1")),
+                apply("src", "add", s("k1")),
+            ),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(
+                FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1")), Effect("k1", s("k1"))))),
+                scen,
+            ),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * A second **vacuous** shape, measured for computenet-61w.1: `restore` was not in
+     * the refusal list although `restart` was. A restore re-materializes the cell's
+     * contents from a blob captured elsewhere, so it can feed the sink an element no
+     * apply on a direct upstream ever named — `k1` here comes from `seed`, which is
+     * outside the sink's cone and therefore skipped. The derived set is `{k2}`, the
+     * lost `k1` is absent from both it and the log, and the check passed. Refusing on
+     * a restore anywhere in the cone closes it.
+     */
+    @Test
+    fun `effect-count without a key refuses when a cone cell is restored from a snapshot`() {
+        val scen = scenario(
+            cells = listOf(cell("seed", "set-source"), cell("src", "set-source"), cell("sink", "effect-sink")),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("seed", "add", s("k1")),
+                apply("src", "add", s("k2")),
+                SnapshotStep(on = "seed", alias = "sd"),
+                RestoreStep(on = "src", from = "sd"),
+            ),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k2", s("k2"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * The asymmetry's other side, kept deliberately: a `snapshot` is a pure read of
+     * the cell it names, so it cannot change which elements reached the sink. Two of
+     * the six `15-durability` scenarios snapshot a direct upstream mid-script
+     * (`DUR-SRCID-02`, `DUR-ATOMIC-01`), and they must keep resolving.
+     */
+    @Test
+    fun `effect-count without a key still resolves across a snapshot of a direct upstream`() {
+        val scen = scenario(
+            cells = listOf(cell("src", "set-source"), cell("sink", "effect-sink")),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("src", "add", s("k1")),
+                SnapshotStep(on = "src", alias = "ck"),
+                apply("src", "add", s("k2")),
+            ),
+        )
+        pass(
+            Checks.effectCount(
+                EffectCount(sink = "sink", exactly = 1),
+                FakeContext(
+                    FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1")), Effect("k2", s("k2"))))),
+                    scen,
+                ),
+            ),
+        )
+    }
+
+    // --- expectedEffectKeys: the derivation itself (computenet-61w.1) --------
+
+    /**
+     * The checks above read the derivation through `effectCount`, which can only
+     * report *that* it refused. These read it directly — `expectedEffectKeys` is
+     * `internal` for exactly this — because the two rounds of this bug were both a
+     * key set that *resolved* when it should not have, and a black-box pass cannot
+     * tell "resolved and the log happened to match" from "resolved correctly". Each
+     * row states the shape and the set it may claim, `null` being the refusal.
+     */
+    private fun derived(scen: civictech.concord.schema.Scenario, sink: String = "sink") =
+        Checks.expectedEffectKeys(scen, sink)
+
+    private val src = cell("src", "set-source")
+    private val jsrc = cell("src", "journal-set-source")
+    private val esink = cell("sink", "effect-sink")
+
+    @Test
+    fun `expectedEffectKeys resolves the corpus shape, set-source and journal-set-source alike`() {
+        // DUR-REPLAY-01's effect arm (set-source) and DUR-SRCID/ATOMIC's (journal),
+        // including the mid-script snapshot and the out-of-cone despawn of `ctl`.
+        listOf(src, jsrc).forEach { source ->
+            val scen = scenario(
+                cells = listOf(source, esink, cell("ctl", "journal")),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    apply("src", "add", s("k2")),
+                    SnapshotStep(on = "src", alias = "ck"),
+                    apply("src", "add", s("k3")),
+                    DespawnStep(on = "ctl"),
+                    apply("src", "add", s("k4")),
+                ),
+            )
+            derived(scen) shouldBe setOf("k1", "k2", "k3", "k4")
+        }
+    }
+
+    @Test
+    fun `expectedEffectKeys refuses every shape whose fed keys it cannot name`() {
+        val shapes: List<Pair<String, civictech.concord.schema.Scenario>> = listOf(
+            "the diamond: a second direct upstream transforms the feed" to scenario(
+                cells = listOf(src, cell("mid", "set-view"), esink),
+                links = listOf(link("src", "sink"), link("src", "mid"), link("mid", "sink")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "a direct upstream that re-keys (map)" to scenario(
+                cells = listOf(cell("m", "map", fn = "inc"), esink),
+                links = listOf(link("m", "sink")),
+                script = listOf(apply("m", "add", i(1))),
+            ),
+            "a direct upstream that drops elements (filter)" to scenario(
+                cells = listOf(cell("f", "filter", fn = "even"), esink),
+                links = listOf(link("f", "sink")),
+                script = listOf(apply("f", "add", i(1))),
+            ),
+            "a direct upstream that re-announces on recovery (rebaseline-source)" to scenario(
+                cells = listOf(cell("rb", "rebaseline-source"), esink),
+                links = listOf(link("rb", "sink")),
+                script = listOf(apply("rb", "add", s("k1"))),
+            ),
+            "the named sink is not an effect-sink" to scenario(
+                cells = listOf(src, cell("sink", "set-view")),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "the sink is not declared at all" to scenario(
+                cells = listOf(src),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "a self-link makes the sink its own upstream" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink"), link("sink", "sink")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "the same feeder is linked in twice, so each add is delivered twice" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink"), link("src", "sink", inlet = "other")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "a direct upstream is itself fed, so its emissions are not its own adds" to scenario(
+                cells = listOf(src, cell("up", "set-source"), esink),
+                links = listOf(link("src", "sink"), link("up", "src")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "a cycle re-adds the source's own elements to it" to scenario(
+                cells = listOf(src, cell("mid", "set-view"), esink),
+                links = listOf(link("src", "sink"), link("src", "mid"), link("mid", "src")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "the same element added twice fires twice for one key" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1")), apply("src", "add", s("k1"))),
+            ),
+            "add, remove and re-add fires twice for one key" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    apply("src", "remove", s("k1")),
+                    apply("src", "add", s("k1")),
+                ),
+            ),
+            "a times multiplier fires once per add" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1"), times = 3)),
+            ),
+            "an add with no value" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", null)),
+            ),
+            "an op outside a set-source's vocabulary" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1")), apply("src", "put", s("k2"))),
+            ),
+            "a restore re-materializes a cone cell from elsewhere" to scenario(
+                cells = listOf(cell("seed", "set-source"), src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("seed", "add", s("k1")),
+                    apply("src", "add", s("k2")),
+                    SnapshotStep(on = "seed", alias = "sd"),
+                    RestoreStep(on = "src", from = "sd"),
+                ),
+            ),
+            "a restart re-baselines a cone cell" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1")), RestartStep(on = "src")),
+            ),
+            "a despawn stops a cone cell's traffic" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1")), DespawnStep(on = "src")),
+            ),
+            "a mid-script connect into the sink" to scenario(
+                cells = listOf(src, cell("srcB", "set-source"), esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1")), ConnectStep(from = "srcB", to = "sink")),
+            ),
+            "a mid-script disconnect from the sink" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1")), DisconnectStep(from = "src", to = "sink")),
+            ),
+            "the script fed the sink's upstreams nothing at all" to scenario(
+                cells = listOf(src, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "remove", s("k1"))),
+            ),
+            "nothing links into the sink" to scenario(
+                cells = listOf(src, esink),
+                links = emptyList(),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+        )
+        // Collected rather than fail-fast on purpose: when a refusal rule is removed
+        // this names *every* shape that starts resolving again, which is what makes
+        // the rules individually mutation-checkable.
+        val resolved = shapes.filter { (_, scen) -> derived(scen) != null }.map { (why, _) -> why }
+        resolved shouldBe emptyList()
+    }
+
+    /**
+     * The resolving neighbours of those refusals, so the gate is not passing by
+     * refusing everything: a `remove` of an element added earlier, several distinct
+     * elements over two direct set-sources, and applies on cells with no path to the
+     * sink (which the derivation may ignore, since they cannot feed it).
+     */
+    @Test
+    fun `expectedEffectKeys resolves the shapes it can name`() {
+        val addThenRemove = scenario(
+            cells = listOf(src, esink),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("src", "add", s("k1")),
+                apply("src", "add", s("k2")),
+                apply("src", "remove", s("k1")),
+            ),
+        )
+        derived(addThenRemove) shouldBe setOf("k1", "k2")
+
+        val twoFeeders = scenario(
+            cells = listOf(src, cell("srcB", "journal-set-source"), esink),
+            links = listOf(link("src", "sink"), link("srcB", "sink")),
+            script = listOf(apply("src", "add", s("k1")), apply("srcB", "add", s("k2"))),
+        )
+        derived(twoFeeders) shouldBe setOf("k1", "k2")
+
+        val disjointSubgraph = scenario(
+            cells = listOf(src, esink, cell("other", "set-source"), cell("ov", "set-view")),
+            links = listOf(link("src", "sink"), link("other", "ov")),
+            script = listOf(
+                apply("other", "add", s("x")),
+                apply("src", "add", s("k1")),
+                RestoreStep(on = "ov", from = "snap"),
+                RestartStep(on = "other"),
+            ),
+        )
+        derived(disjointSubgraph) shouldBe setOf("k1")
     }
 
     // --- wave-plane-unchanged / pages-equal-view (V1C-CONCORD) ---------------

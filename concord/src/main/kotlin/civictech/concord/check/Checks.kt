@@ -23,6 +23,7 @@ import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
+import civictech.concord.schema.RestoreStep
 import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.ViewsConverge
@@ -344,6 +345,18 @@ object Checks {
     }
 
     /**
+     * The cell-catalog types whose whole output is the elements the script `add`ed to
+     * them, one delta per add — the only feeders [expectedEffectKeys] can name the
+     * keys of. `journal-set-source` is the durable binding of the same `SetCell`
+     * (`KernelDriverDur`); `rebaseline-source` is deliberately absent, since it
+     * re-announces under a fresh emission epoch and may legitimately re-drive a sink.
+     */
+    private val SET_SOURCE_TYPES = setOf("set-source", "journal-set-source")
+
+    /** The only sink type whose contract is "one effect per added element, keyed by it". */
+    private const val EFFECT_SINK_TYPE = "effect-sink"
+
+    /**
      * The keys an unkeyed [effectCount] on [sink] must find in its effect log: the
      * rendered elements of every `add` the script applied to a source the graph
      * links **straight into** [sink]. `null` when the scenario does not permit the
@@ -355,35 +368,113 @@ object Checks {
      * the script harness-side is the same move [observationsWholeWaves] already
      * makes for its prefix states, and [BatchOracle] for its final fold.
      *
+     * `internal` rather than private **as a test seam**, deliberately: this
+     * derivation was got wrong twice in a row (computenet-61w's original cut and its
+     * review repair), both times in the direction of *resolving* a key set that was
+     * not sound, and both times the hole was found only by a throwaway reflective
+     * probe against the private form. `ChecksTest` pins the resolve/refuse decision
+     * and the derived set per graph shape directly, so the next shape is a committed
+     * assertion instead of a probe someone has to think to write (computenet-61w.1).
+     *
+     * ## What it claims, and why it may
+     *
      * The derivation is deliberately narrow — it claims a key set only for the shape
-     * the `dur` corpus actually drives (a set-source linked directly to an
-     * `effect-sink`, whose every added element is one effect keyed by the element
-     * itself; see `KernelDriverDur.EffectSinkCell`). It gives up — `null`, not a
-     * partial set — when anything could make the script's adds a poor model of what
-     * reached the sink. Everything it gives up on is expressed against [sink]'s whole
-     * upstream **cone** (every cell that transitively reaches it), not just the direct
-     * hop, because a *partly* derivable key set is the vacuous pass all over again: a
-     * key fed in through an intermediate is not in the derived set, so an element that
-     * fired zero times on that path is absent from the union and passes over. So:
+     * the `dur` corpus actually drives: **every** cell the graph links straight into
+     * [sink] is a set-source variant ([SET_SOURCE_TYPES]) whose scripted `add`s are
+     * its only input, and [sink] is an [EFFECT_SINK_TYPE], whose contract is one
+     * effect per delivered added element, keyed by the element (see
+     * `KernelDriverDur.EffectSinkCell`, and `SetCell.add`, which mints a fresh
+     * add-tag and propagates a delta on *every* add). Under those conditions the
+     * derived set is **complete**: nothing can reach [sink] that is not a scripted
+     * add on one of its direct upstreams. That is one step rather than an induction
+     * over the cone, because the shape gate leaves the cone exactly `{sink} ∪
+     * upstream`. Stated exhaustively over the `Step` hierarchy's nine verbs plus the
+     * declared graph — because a summary of this argument is what was wrong twice —
+     * an element can enter a direct upstream only through an `add` on it (the derived
+     * set), a declared link into it, a mid-script `connect` into it, a `restore` of
+     * it, or a `restart` of it, and every route but the first is a refusal below. The
+     * other five verbs cannot introduce one: `remove`, `quiesce`, `snapshot` and
+     * `read-state` do not feed a cell, `disconnect` only removes an edge, and a
+     * `despawn` only stops traffic (and refuses anyway).
+     *
+     * One route is outside the scenario language: a **replicated** upstream merging a
+     * peer's delta (`SetCell.applyRemote`), which no `add` in the script names. No
+     * `type:`/`replica-of` combination reaches it under the kernel driver — an
+     * `effect-sink` binds only on the reserved durable host, and `KernelDriver.spawn`
+     * short-circuits every durable-host cell *before* its `replica-of` branch ("a
+     * durable cell is never also a dist replica") — so there is nothing to refuse
+     * today. A driver that did honour `replica-of` on a durable cell would reopen the
+     * hole, and the fix is to add `replica-of` to the shape gate, not to re-derive
+     * this paragraph.
+     *
+     * It gives up — `null`, not a partial set — when anything could make the
+     * script's adds a poor model of what reached [sink]. A *partly* derivable key
+     * set is the vacuous pass all over again: a key fed in on a path this function
+     * cannot name is absent from the derived set, so an element that fired zero
+     * times there is absent from the union too and passes over. So the shape gate:
      * - nothing links into [sink] in the declared graph;
+     * - [sink]'s declared `type:` is not `effect-sink`, so "one effect per added
+     *   element, keyed by the element" is not its contract;
+     * - any direct upstream's declared `type:` is not a set-source variant — a `map`
+     *   re-keys, a `filter` drops, a join pairs, a view folds, so its output is a
+     *   *transformation* of adds this one-hop derivation cannot name. This is the
+     *   check that refuses the **diamond** (`srcA → sink`, `srcA → mid`, `mid →
+     *   sink`): `mid` is a direct upstream that no `apply` targets, so the in-cone
+     *   rules below never fire on it, yet the keys it should have driven are
+     *   unnameable (computenet-61w.1);
+     * - any direct upstream is itself fed by a declared link, so elements it emits
+     *   need not be the ones the script added to it (and a cycle back into it can
+     *   re-add them);
+     * - the same feeder is linked into [sink] more than once, so each add is
+     *   delivered more than once.
+     *
+     * Everything else it gives up on is expressed against [sink]'s whole upstream
+     * **cone** (every cell that transitively reaches it), not just the direct hop,
+     * for the same completeness reason:
      * - the topology into the cone moves mid-script (`connect`/`disconnect` whose `to`
      *   is in it), so which adds reached [sink] depends on when;
-     * - any cell in the cone is `despawn`ed (its traffic legitimately stops) or
+     * - any cell in the cone is `despawn`ed (its traffic legitimately stops),
      *   `restart`ed (a re-baseline re-announces, so an element may legitimately fire
-     *   again);
+     *   again), or `restore`d (it is re-materialized from a blob that need not be its
+     *   own, so it can emit an element no `add` on a direct upstream ever named —
+     *   measured as a second vacuous shape in computenet-61w.1);
      * - an `apply` targets a cell that is in the cone but *not* a direct upstream, so
-     *   it feeds [sink] through an intermediate this one-hop derivation does not
-     *   model (a `map` re-keys, a `filter` drops, a join pairs);
-     * - a direct upstream takes an op outside a set-source's `add`/`remove` vocabulary.
+     *   it feeds [sink] through an intermediate this derivation does not model;
+     * - a direct upstream takes an op outside a set-source's `add`/`remove`
+     *   vocabulary, or an `add` with no value;
+     * - a direct upstream `add`s an element **already added** on some direct
+     *   upstream, or `add`s with a `times:` multiplier. Both drive one effect *per
+     *   add* (`SetCell.add` propagates unconditionally; a re-add after a `remove`
+     *   likewise), and the unkeyed form asserts one uniform count for every derived
+     *   key — so it cannot express "k1 twice, the rest once". computenet-61w.1 allows
+     *   refusing or expecting 2 for the add/remove/re-add case; refusing is the
+     *   choice, because "expects 2" is unavoidably "expects 2 of *every* key".
+     *
+     * `snapshot` is deliberately **not** a refusal, and that asymmetry with
+     * `restart`/`restore` is the point: a snapshot is a pure read of the cell it
+     * names and cannot change which elements reached [sink], while a restart or a
+     * restore re-materializes state and can. Two of the six `15-durability`
+     * scenarios snapshot a direct upstream mid-script (`DUR-SRCID-02`,
+     * `DUR-ATOMIC-01`) and must keep resolving. Recorded in
+     * `concord/schema/scenario.md` too, since it is a corpus-authoring rule.
      *
      * `remove` contributes nothing either way: the effect fired when the element was
-     * *added*, and retracting it afterwards neither drives a new one nor unmakes the
-     * one already recorded.
+     * *added*, `EffectSinkCell` reads only a delta's adds, and retracting an element
+     * afterwards neither drives a new effect nor unmakes the one already recorded.
      */
-    private fun expectedEffectKeys(scenario: Scenario, sink: String): Set<String>? {
+    internal fun expectedEffectKeys(scenario: Scenario, sink: String): Set<String>? {
+        val types = scenario.graph?.cells.orEmpty().associate { it.id to it.type }
+        if (types[sink] != EFFECT_SINK_TYPE) return null
         val links = scenario.graph?.links.orEmpty()
-        val upstream = links.filter { it.to == sink }.map { it.from }.toSet()
+        val inbound = links.filter { it.to == sink }
+        val upstream = inbound.map { it.from }.toSet()
         if (upstream.isEmpty()) return null
+        // The shape gate: one link each, from cells whose only input is their own
+        // scripted adds. Without it the derivation names a *transformation*'s output
+        // it cannot compute, which is the vacuous pass this check exists to remove.
+        if (inbound.size != upstream.size) return null
+        if (upstream.any { types[it] !in SET_SOURCE_TYPES }) return null
+        if (upstream.any { u -> links.any { it.to == u } }) return null
         // [sink] plus every cell that transitively reaches it. Refusing across the
         // whole cone rather than the direct hop is what stops a *partial* derivation:
         // an add on an indirect feeder is not a key this function can name, and
@@ -397,11 +488,17 @@ object Checks {
                 is DisconnectStep -> if (step.to in cone) return null
                 is DespawnStep -> if (step.on in cone) return null
                 is RestartStep -> if (step.on in cone) return null
+                is RestoreStep -> if (step.on in cone) return null
                 is ApplyStep -> {
                     if (step.on !in cone) continue
                     if (step.on !in upstream) return null
                     when (step.op) {
-                        "add" -> keys += Values.render(step.value ?: return null)
+                        // `keys.add` returning false is a repeat add of the same
+                        // element: a second effect for one key, which one uniform
+                        // `exactly:` cannot state.
+                        "add" -> if ((step.times ?: 1) != 1 || !keys.add(Values.render(step.value ?: return null))) {
+                            return null
+                        }
                         "remove" -> Unit
                         else -> return null
                     }
