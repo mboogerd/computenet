@@ -237,6 +237,7 @@ object WsTransport {
         private val side: Peering.Side,
         send: (ByteArray) -> Unit,
         private val refuse: () -> Unit,
+        private val socketBuffered: () -> Boolean = { false },
     ) {
         val egress = BridgeEgressCell()
 
@@ -307,11 +308,56 @@ object WsTransport {
         @Volatile
         private var announcement: AutoCloseable? = null
 
+        /**
+         * computenet-dqy.68's fifth instrument: the announcement channel's two
+         * ends, counted where the previous four could not see.
+         *
+         * The nine occurrences in run 31756952711 read zero on *every* existing
+         * instrument — nothing parked, nothing staged on either bridge host, no
+         * pre-hello drop, no gate refusal, `stderr <silent>` — while the client
+         * held a strict PREFIX of the announcing side's `localRefs()` order, i.e.
+         * a contiguous tail of the announcement stream simply stopped. Zero
+         * everywhere is compatible with three different truncation points and the
+         * artifacts cannot separate them:
+         *
+         * 1. **above the socket** — the sweep, the proxy hop, or the bridge
+         *    host's dispatch of [egress] stopped producing frames;
+         * 2. **at the socket** — frames were handed to java-websocket and never
+         *    reached the peer's `onMessage`;
+         * 3. **below the peer's socket** — frames arrived at [onFrame] and were
+         *    lost between the bridge ingress and the registry mirror.
+         *
+         * [framesSent] is incremented once per frame this side handed to the
+         * transport *without the write throwing*; [framesReceived] once per
+         * binary frame this side routed into its ingress. Together they cut the
+         * three apart with no attribution and no reasoning: in the stress probe's
+         * shape a healthy iteration is server `framesSent=3` / client
+         * `framesReceived=3`, so `sent=3 received=2` is case 2, `sent=2` is case 1,
+         * and `sent=3 received=3` with an empty mirror is case 3.
+         *
+         * [socketBuffered] is the same question one layer lower and is the
+         * socket-level analogue of the `staged` depth: java-websocket accepts a
+         * frame into its per-connection out-queue and writes it from another
+         * thread, so a write demand that is lost leaves the frame queued with
+         * `send` having returned normally — [framesSent] counts it, the peer
+         * never sees it, and nothing anywhere throws.
+         */
+        private val framesSentCount = AtomicLong()
+        val framesSent: Long get() = framesSentCount.get()
+
+        /** @see framesSent */
+        private val framesReceivedCount = AtomicLong()
+        val framesReceived: Long get() = framesReceivedCount.get()
+
+        /** @see framesSent */
+        val socketHasBufferedData: Boolean get() = socketBuffered()
+
         init {
             egress.outlet.subscribe(Use.fixed(object : Propagate<ByteArray> {
-                override fun propagate(value: ByteArray) =
+                override fun propagate(value: ByteArray) {
                     try {
                         send(value)
+                        framesSentCount.incrementAndGet()
                     } catch (e: Exception) {
                         // dead socket noticed before the close event (M10.4):
                         // unpublish now so later sends take the park fast path,
@@ -320,6 +366,7 @@ object WsTransport {
                         side.registry.unpublishRemotes(via = egress)
                         throw IntakeClosedException(egress.ref)
                     }
+                }
             }, PortRef.generate()))
         }
 
@@ -383,7 +430,15 @@ object WsTransport {
             // before an admitted hello have nowhere to go and drop (T05
             // finding 7: now counted via preHelloDropCount)
             val current = ingress
-            if (current != null) current.propagate(bytes) else preHelloDropCount.incrementAndGet()
+            if (current != null) {
+                // computenet-dqy.68: counted BEFORE the hop it hands to, so the
+                // reading means "this side's socket delivered it", never "the
+                // bridge accepted it" — that is what `staged` is for.
+                framesReceivedCount.incrementAndGet()
+                current.propagate(bytes)
+            } else {
+                preHelloDropCount.incrementAndGet()
+            }
         }
 
         fun onClose() {
@@ -523,6 +578,18 @@ object WsTransport {
 
         /** @see preHelloDrops */
         val refusedAnnouncements: Long get() = sessions.values.sumOf { it.refusedAnnouncements }
+
+        /**
+         * The announcement channel's two ends on this listener's live sessions
+         * (computenet-dqy.68) — see [Session.framesSent] for what they cut apart.
+         */
+        val framesSent: Long get() = sessions.values.sumOf { it.framesSent }
+
+        /** @see framesSent */
+        val framesReceived: Long get() = sessions.values.sumOf { it.framesReceived }
+
+        /** @see framesSent */
+        val socketHasBufferedData: Boolean get() = sessions.values.any { it.socketHasBufferedData }
 
         /**
          * Set before any deliberate shutdown reaches the library, so the
@@ -893,7 +960,7 @@ object WsTransport {
         }
 
         override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
-            val session = Session(side, { conn.send(it) }, { conn.close() })
+            val session = Session(side, { conn.send(it) }, { conn.close() }, { conn.hasBufferedData() })
             sessions[conn] = session
             conn.send(session.hello())
         }
@@ -958,7 +1025,7 @@ object WsTransport {
         private val backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
     ) : WebSocketClient(uri) {
 
-        private val session = Session(side, { send(it) }, { shutdown() })
+        private val session = Session(side, { send(it) }, { shutdown() }, { hasBufferedData() })
 
         /**
          * The two silent drops on this dialer's announcement path
@@ -971,6 +1038,18 @@ object WsTransport {
 
         /** @see preHelloDrops */
         val refusedAnnouncements: Long get() = session.refusedAnnouncements
+
+        /**
+         * The announcement channel's two ends on this dialer (computenet-dqy.68)
+         * — see [Session.framesSent] for what they cut apart.
+         */
+        val framesSent: Long get() = session.framesSent
+
+        /** @see framesSent */
+        val framesReceived: Long get() = session.framesReceived
+
+        /** @see framesSent */
+        val socketHasBufferedData: Boolean get() = session.socketHasBufferedData
 
         /**
          * False once [shutdown] is called (M10.3). Together with an interrupt of the
