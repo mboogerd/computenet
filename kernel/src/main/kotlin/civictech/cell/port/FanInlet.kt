@@ -9,6 +9,7 @@ import civictech.cell.link.LinkRole
 import civictech.cell.link.LinkSupport
 import civictech.cell.link.handshake
 import civictech.cell.protocol.EdgeEvent
+import civictech.cell.protocol.ProtocolAnchored
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.proxy.Buffering
@@ -65,7 +66,15 @@ class FanInlet<Api : Any>(
      * to every existing inlet, no behavior change for non-opting graphs.
      */
     val singleWriter: Boolean = false
-) : Use<Api>, Serve<Api>, Linked, DerivedPortRef {
+) : Use<Api>, Serve<Api>, Linked, DerivedPortRef, ProtocolAnchored {
+
+    /**
+     * computenet-7iyy: this inlet anchors its own [ProtocolSupport], because the
+     * handler [onEdgeEvent] installs captures `this` — a globally-rooted support
+     * would pin the inlet, and through its served implementation the owning
+     * cell. Storage only; [ProtocolSupport.of] is the accessor.
+     */
+    override var protocolSupport: ProtocolSupport? = null
 
     // PN-1: fresh random at construction, reassigned once at stamp time to the
     // (ownerRef, name)-derived ref when this inlet is registered on a Cell.
