@@ -270,7 +270,10 @@ So:
   gh pr checks <pr-url>
   ```
 
-  Quote each required check's name and conclusion in your verdict. Two traps:
+  Quote each required check's name and conclusion in your verdict — and quote
+  them for the **PR's current head**. If §6's re-fetch makes you merge
+  `origin/main`, that merge moves the head and this reading goes stale; §6
+  says how to re-take it. Two traps:
   a green check on a diff that touches no compiled input is evidence of
   nothing (it too can be cache and skip), so say which checks actually
   exercised the changed modules; and a check still `pending` is not a pass —
@@ -411,6 +414,24 @@ git -C <worktree> log --oneline $(git -C <worktree> merge-base HEAD origin/main)
   numbers — the old ones no longer describe the code being merged), and quote
   the shas that landed. If one of them touches the same subsystem as this
   feature, re-read the diff too, not just the tests.
+
+**That merge creates a new head, so it invalidates the `gh pr checks` reading
+§4 requires you to quote.** Every required check you read belongs to the
+*previous* head; at the moment you are asked to quote them they describe a
+commit that is no longer the PR's. Quoting the pre-merge green certifies a
+commit that was never tested. So the ordering is not optional:
+
+```bash
+git -C <worktree> push                                   # publish the merge
+gh pr view <pr-url> --json headRefOid -q .headRefOid     # must equal your HEAD
+git -C <worktree> rev-parse HEAD
+gh pr checks <pr-url>                                    # re-read on the NEW head
+```
+
+**Budget for the wait.** A fresh Linux run is roughly 3–5 minutes, and two
+reviewers in one session each spent it rediscovering this. Plan it rather than
+discovering it; a `pending` check is not a pass, so if you cannot wait, certify
+draft and say the checks were still running on the post-merge head.
 
 Quote the shas or the "unchanged" line in the verdict. A verdict with no
 re-fetch line is a verdict against a base that may no longer exist.
