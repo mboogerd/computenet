@@ -1367,6 +1367,19 @@ mid-breakdown, not finished — never close that.
 
 ## 6. Finalize
 
+**If this session is ending abnormally — budget exhausted, an unrecoverable
+error, an interrupt — run the publication push FIRST and skip the rest.**
+
+```bash
+bd dolt push  2>&1 | grep -iE "complete|rejected|error"
+```
+
+One command, ~34s. Everything else in Finalize is bookkeeping a later session
+can reconstruct from the tracker; unpushed local commits are the one thing it
+cannot. They are not lost — the next session on this machine carries them out
+on its own Finalize push — but "whenever someone next runs a slot here" is a
+poor publication guarantee when one command fixes it now.
+
 **Re-check every feature you marked ready this session** — one of them has
 probably merged while you were working elsewhere, and closing it here saves
 the next session a round trip:
