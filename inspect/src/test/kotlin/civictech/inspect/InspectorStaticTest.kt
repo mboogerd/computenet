@@ -1,7 +1,9 @@
 package civictech.inspect
 
+import civictech.cell.CellRef
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.testkit.HttpProbe
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.AfterEach
@@ -10,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.net.Socket
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
 
 /**
  * V0-BE (b): `InspectorServer` serving `inspect/ui`'s built `dist/` directly,
@@ -22,18 +25,29 @@ import java.nio.file.Path
 class InspectorStaticTest {
 
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private var server: InspectorServer? = null
+    private var probe: HttpProbe? = null
 
     @AfterEach
     fun tearDown() {
+        probe?.close()
         server?.close()
+        hostScheduler.shutdown()
     }
 
     private fun serve(uiDist: Path): HttpProbe {
         val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, uiDist = uiDist).start()
         server = started
-        return HttpProbe("http://localhost:${started.boundPort}")
+        return HttpProbe("http://localhost:${started.boundPort}").also { probe = it }
     }
 
     private fun fixtureDist(dir: Path): Path {

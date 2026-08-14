@@ -4,9 +4,12 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -18,7 +21,15 @@ import java.util.concurrent.atomic.AtomicLong
 class ObservationsIdleTest {
 
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val now = AtomicLong(1_000_000L)
     private val summaries = mutableListOf<CellRef>()
 
@@ -27,6 +38,11 @@ class ObservationsIdleTest {
         onSummary = { summary -> synchronized(summaries) { summaries += summary.ref } },
         clock = now::get,
     )
+
+    @AfterEach
+    fun tearDown() {
+        hostScheduler.shutdown()
+    }
 
     private fun set(): SetCell<String> = SetCell<String>().also { host.managementInlet.call.spawn(it) }
 

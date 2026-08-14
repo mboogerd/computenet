@@ -3,17 +3,19 @@ package civictech.cell.port
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.data.SetCell
 import civictech.cell.host.ManagedHost
 import civictech.cell.protocol.ProtocolSupport
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.types.shouldBeSameInstanceAs
 import org.junit.jupiter.api.Test
 import java.lang.ref.WeakReference
 import java.util.UUID
 
 /**
- * **computenet-uo75: `PortRegistry.registries` is what retains a dropped cell
- * graph, and nothing releases a top-level owner's entry.**
+ * **computenet-uo75 / computenet-w5sm: `PortRegistry.registries` was what
+ * retained a dropped cell graph. It no longer does, and this is the regression
+ * test that says so by execution.**
  *
  * `PortRegistry.registries` is a JVM-global `WeakHashMap<owner, PortRegistry>`.
  * A `WeakHashMap` reclaims an entry only when its *key* stops being strongly
@@ -62,18 +64,22 @@ import java.util.UUID
  *
  * ## What each arm here decides
  *
- * - [a dropped ManagedHost is not collectable] — the defect, by execution. No
+ * - [a dropped ManagedHost IS collectable] — the fix, by execution. No
  *   transport, no sockets, no test scaffolding holds the host; dropping it and
- *   collecting does not clear a `WeakReference` to it.
- * - [a dropped cell whose port implementation closes over it is not collectable]
+ *   collecting clears a `WeakReference` to it. Before computenet-w5sm this arm
+ *   read `shouldNotBe null` and passed: that was the defect.
+ * - [a dropped cell whose port implementation closes over it IS collectable]
  *   — the same thing at the smallest possible scale: one cell, one port, one
- *   served implementation that reads a field of the cell.
+ *   served implementation that reads a field of the cell. Also flipped by
+ *   computenet-w5sm.
  * - [a dropped cell whose port implementation does not close over it IS
- *   collectable] — the control that makes the mechanism specific. The identical
- *   cell shape whose served implementation captures nothing is reclaimed, so the
- *   map is not retaining its keys by being a registry; it retains exactly the
- *   owners its own values can reach. Measured: the two cells differ only in
- *   whether the object expression touches a property of the cell.
+ *   collectable] — the control that made the mechanism specific. The identical
+ *   cell shape whose served implementation captures nothing was reclaimed even
+ *   before the fix, so the map was not retaining its keys by being a registry;
+ *   it retained exactly the owners its own values could reach. Measured: the
+ *   two cells differ only in whether the object expression touches a property
+ *   of the cell. It is kept because it is what makes arm 2's flip a statement
+ *   about the capture edge rather than about maps in general.
  * - [releasing the PortRegistry entry is what makes it collectable] — the
  *   bisect. The *same* host and the *same* self-referencing cell, with
  *   `PortRegistry.release(owner)` (and `ProtocolSupport.unbind`, the pair
@@ -85,27 +91,50 @@ import java.util.UUID
  *   and `unbind` is a no-op for them, because `ProtocolSupport.registries` holds
  *   no entry for these ports at all (nothing here calls `ProtocolSupport.of`;
  *   `FanInlet` acquires it lazily in `onEdgeEvent`). `unbind` is kept in the
- *   arm because it is what despawn actually does, not because it is load-bearing.
+ *   arm because it is what despawn actually does, not because it is
+ *   load-bearing. Post-fix this arm no longer bisects anything (arms 1 and 2
+ *   are collected without it); it stays as the guard that an explicit release
+ *   is still correct and still eager.
+ * - [a live owner's ports survive collection] and
+ *   [a live owner's delegate-declared and generated ports survive collection]
+ *   — the *anchor* invariant the weak port values rest on, once per declaration
+ *   style (explicit `registerPort`, `by input()`, `@CellBase`-generated). These
+ *   are the arms that would go red if a port were ever registered without the
+ *   owner holding it, which is the failure mode weak values buy the fix.
  *
  * Every builder below is a **separate method** that returns only a
  * [WeakReference], and must stay one. A named local in a test method's own frame
  * — including inside an inlined `run { }` — keeps its object reachable for the
- * whole method, which silently turns every `shouldNotBe null` here into a pass.
- * That is not hypothetical: it is what the first revision of the review's own
- * perturbation probes did.
+ * whole method. While arms 1 and 2 asserted the leak (`shouldNotBe null`) that
+ * silently turned them into passes — the first revision of the review's own
+ * perturbation probes did exactly that. Now that they assert collectability it
+ * would turn them into spurious *failures* instead, which is the friendlier
+ * direction, but the discipline is unchanged.
  *
- * The first arm asserts the leak, so **it is a characterization test, and the
- * fix flips it**: whoever makes a dropped owner collectable on its own changes
- * `shouldNotBe null` to `shouldBe null` there and deletes this paragraph. It is
- * written this way rather than as a red test because a red required check
- * cannot land, and the mechanism is worth pinning now — see computenet-uo75 for
- * why the fix (instance-scoped registries, T02's marker) was not taken here.
+ * ## The fix these arms pin (computenet-w5sm)
  *
- * Nothing in `civictech.cell` exposes a release for a *top-level* owner:
- * `PortRegistry.release` is `internal`, and `ManagedHost` has no close/shutdown
- * that calls it. A host process that constructs and drops `ManagedHost`s leaks
- * every one of them and everything they hosted, so this is a product defect and
- * not a stress-harness one.
+ * `PortRegistry` holds its ports through a `WeakReference` — it is an index,
+ * not an owner — so the map's value can no longer reach its own key. Nothing
+ * else changed: no public API, no `Port` implementation, no call site. The
+ * anchor that keeps a live owner's ports alive is the owner itself, which is
+ * the registration contract already (`registerPort`: "the name must match the
+ * property it is assigned to"). Name entries are never removed, so `names()`
+ * and `register`'s duplicate check are unaffected.
+ *
+ * That matters because nothing in `civictech.cell` exposes a release for a
+ * *top-level* owner: `PortRegistry.release` is `internal`, and `ManagedHost`
+ * has no close/shutdown that calls it. Before the fix a host process that
+ * constructed and dropped `ManagedHost`s leaked every one of them and
+ * everything they hosted, with no way for a caller outside `:kernel` to
+ * prevent it — a product defect, not a stress-harness one.
+ *
+ * Measured on the same harness the leak was measured on
+ * (`WsAnnouncementStressTestKt`, `-Xmx4g`, JDK 25 macOS aarch64): before, the
+ * run stopped at its 80%-retained heap ceiling at iteration 15878 = 211
+ * KB/iteration; after, 20000 iterations complete with `heapRetained=0.5%`. JFR
+ * old-object sampling with `path-to-gc-roots=true` at iteration 5000 attributed
+ * 4019 of 4077 sampled objects (230 MB of 232 MB) to `PortRegistry.registries`
+ * before, and 0 of 219 after.
  */
 class PortRegistryRetentionTest {
 
@@ -127,6 +156,11 @@ class PortRegistryRetentionTest {
         }
     }
 
+    /** The delegate declaration style — registered from `provideDelegate`, held by the `$delegate` field. */
+    class DelegateCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val inlet by input<Consumer<String>>()
+    }
+
     /** The control: same shape, but the implementation captures nothing. */
     class DetachedCell(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
         val inlet = registerPort("inlet", FanInlet.create<Consumer<String>>())
@@ -139,17 +173,17 @@ class PortRegistryRetentionTest {
     }
 
     @Test
-    fun `a dropped ManagedHost is not collectable`() {
+    fun `a dropped ManagedHost IS collectable`() {
         val host = droppedHost()
         collect()
-        host.get() shouldNotBe null
+        host.get() shouldBe null
     }
 
     @Test
-    fun `a dropped cell whose port implementation closes over it is not collectable`() {
+    fun `a dropped cell whose port implementation closes over it IS collectable`() {
         val cell = droppedSelfServing()
         collect()
-        cell.get() shouldNotBe null
+        cell.get() shouldBe null
     }
 
     @Test
@@ -157,6 +191,48 @@ class PortRegistryRetentionTest {
         val cell = droppedDetached()
         collect()
         cell.get() shouldBe null
+    }
+
+    /**
+     * The anchor invariant that computenet-w5sm's weak port values rely on: a
+     * **live** owner's ports survive collection, because the owner holds them.
+     * `cell` is a named local here on purpose — that is exactly the strong
+     * reference under test, and it is the one shape in this file where a frame
+     * local is correct rather than a bug.
+     */
+    @Test
+    fun `a live owner's ports survive collection`() {
+        val cell = SelfServingCell()
+        collect()
+        PortRegistry.of(cell)["inlet"] shouldBeSameInstanceAs cell.inlet
+        PortRegistry.of(cell).names() shouldBe setOf("inlet")
+    }
+
+    /**
+     * The same anchor invariant for the *other two* declaration styles, which
+     * anchor by different mechanisms and so are not covered by the arm above:
+     *
+     * - `by input()` / `by output()` register from
+     *   [PortDelegateProvider.provideDelegate] and the port is held by the
+     *   returned `ReadOnlyProperty` closure, i.e. by the owner's `$delegate`
+     *   field — not by a port-typed property at all.
+     * - a `@CellBase`-generated base class declares `override val <name> =
+     *   registerPort(...)`; generated descriptors are authoritative runtime
+     *   metadata (AGENTS.md), so the generator emitting anything other than a
+     *   property initializer would silently unanchor every generated port.
+     *   [SetCell] carries both: `inlet`/`outlet` from `SetCellBase`, and
+     *   `deltaInlet` hand-written on the subclass.
+     */
+    @Test
+    fun `a live owner's delegate-declared and generated ports survive collection`() {
+        val delegate = DelegateCell()
+        val generated = SetCell<String>()
+        collect()
+        PortRegistry.of(delegate)["inlet"] shouldBeSameInstanceAs delegate.inlet
+        PortRegistry.of(delegate).names() shouldBe setOf("inlet")
+        PortRegistry.of(generated)["inlet"] shouldBeSameInstanceAs generated.inlet
+        PortRegistry.of(generated)["outlet"] shouldBeSameInstanceAs generated.outlet
+        PortRegistry.of(generated)["deltaInlet"] shouldBeSameInstanceAs generated.deltaInlet
     }
 
     @Test

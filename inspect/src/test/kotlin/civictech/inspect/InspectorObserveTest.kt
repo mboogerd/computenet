@@ -9,6 +9,7 @@ import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.host.lookup
 import civictech.cell.observe.View
 import civictech.cell.observe.observe
@@ -42,7 +43,15 @@ class InspectorObserveTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(java.util.UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
     private var tap: SseTap? = null
@@ -51,6 +60,8 @@ class InspectorObserveTest {
     fun tearDown() {
         tap?.close()
         server.close()
+        probe.close()
+        hostScheduler.shutdown()
     }
 
     private fun observePath(ref: CellRef) = "${InspectorServer.CELL_PATH}/${InspectorServer.encodeRef(ref)}/observe"
@@ -484,7 +495,14 @@ class InspectorObserveTest {
 
     private inner class SseTap(url: String) : AutoCloseable {
         private val frames = LinkedBlockingQueue<Frame>()
-        private val reader: CompletableFuture<Void> = HttpClient.newHttpClient()
+
+        /**
+         * Held so [close] can release it (computenet-4vh): one client per
+         * `listen()`, i.e. per test method, each with its own selector thread and
+         * executor pool; cancelling [reader] alone left all of that alive.
+         */
+        private val client: HttpClient = HttpClient.newHttpClient()
+        private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->
                 response.body().forEach { line ->
@@ -516,8 +534,15 @@ class InspectorObserveTest {
             return frames.filter { it.kind == kind }.map { it.payload }
         }
 
+        /**
+         * `shutdownNow()`, never `close()`: this client is deliberately parked on
+         * an SSE response that never ends, so `close()` — which awaits
+         * termination of in-flight exchanges — would turn this teardown into the
+         * unbounded wait the suite is being audited for.
+         */
         override fun close() {
             reader.cancel(true)
+            client.shutdownNow()
         }
     }
 

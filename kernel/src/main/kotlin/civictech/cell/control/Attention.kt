@@ -163,7 +163,27 @@ fun interface AttentionAggregator {
  * ponytail: ports registered after [of] don't participate; all current cells
  * register ports at construction.
  */
-class AttentionSupport private constructor(private val owner: Any) {
+class AttentionSupport private constructor(owner: Any) {
+
+    /**
+     * computenet-3u6x (leak fix): the owner is held **weakly**, and the
+     * constructor parameter is deliberately not stored in a strong field.
+     * [registries] is a `WeakHashMap` keyed on the owner; a `WeakHashMap`
+     * reclaims an entry only when its key stops being strongly reachable and it
+     * holds its values strongly, so `private val owner: Any` — a direct strong
+     * path value → key — made **every** entry, and every cell
+     * [AttentionSupport.of] was ever called on, immortal for the JVM lifetime
+     * together with everything it reached. Unconditionally so: unlike
+     * `PortRegistry.registries` (computenet-w5sm) and `ProtocolSupport.registries`
+     * (PN-9), whose cycles need the owner's served implementation to capture the
+     * owner, this one had no escape and no eviction path at all.
+     *
+     * A cleared referent means the cell is dead, so every read below bails and
+     * the support goes inert — the same shape as `ProtocolSupport.ownerRef`
+     * (PN-9). A live cell is always strongly held by its host, so nothing that
+     * matters is lost.
+     */
+    private val ownerRef = java.lang.ref.WeakReference(owner)
 
     /** Aggregation strategy; assigning one re-evaluates the band immediately. */
     @Volatile
@@ -296,20 +316,42 @@ class AttentionSupport private constructor(private val owner: Any) {
         }
     }
 
+    /** No-op once the owner has been collected (computenet-3u6x): a dead cell has no ports to walk. */
     private inline fun forEachLinkedPort(action: (Linked) -> Unit) {
-        val ports = PortRegistry.of(owner)
+        val ports = PortRegistry.of(ownerRef.get() ?: return)
         ports.names().forEach { name ->
             (ports[name] as? Linked)?.let(action)
         }
     }
 
     companion object {
-        // ponytail: JVM-global weak map, same pattern as PortRegistry
+        // ponytail: JVM-global weak map, same pattern as PortRegistry.
+        // Safe as a WeakHashMap only because the value holds its key weakly
+        // (see [ownerRef]); a strong owner field made every entry immortal
+        // (computenet-3u6x).
         private val registries = Collections.synchronizedMap(WeakHashMap<Any, AttentionSupport>())
 
         fun of(owner: Any): AttentionSupport =
             synchronized(registries) {
                 registries.getOrPut(owner) { AttentionSupport(owner).also { it.wire() } }
             }
+
+        /**
+         * Drop [owner]'s entry (computenet-3u6x), the counterpart of
+         * `PortRegistry.release` / `ProtocolSupport.unbind` that this map lacked
+         * entirely; [civictech.cell.host.ManagedHost] calls it on despawn.
+         *
+         * Since [ownerRef] this is not the only thing standing between a dropped
+         * cell and collection — a dropped owner is collectable whether or not
+         * anyone calls this. It still earns its keep for a *hosted* cell, whose
+         * entry can be reached from its own key by a listener registered
+         * elsewhere: `ManagedHost` spawn installs an `onBandChange` listener
+         * whose closure captures the cell, which is again a value → key path.
+         * Evicting on despawn cuts it at the moment the host stops owning the
+         * cell, instead of leaving it to the JVM lifetime.
+         */
+        internal fun release(owner: Any) {
+            synchronized(registries) { registries.remove(owner) }
+        }
     }
 }

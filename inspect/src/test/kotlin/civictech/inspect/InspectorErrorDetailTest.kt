@@ -17,6 +17,7 @@ import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SupervisionPolicy
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.host.lookup
 import civictech.cell.port.FanInlet
 import civictech.cell.port.PortRef
@@ -53,7 +54,15 @@ class InspectorErrorDetailTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
 
@@ -66,6 +75,8 @@ class InspectorErrorDetailTest {
     @AfterEach
     fun tearDown() {
         server.close()
+        probe.close()
+        hostScheduler.shutdown()
     }
 
     private fun rawErrors(): String = probe.state(InspectorServer.ERRORS_PATH)

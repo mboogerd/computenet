@@ -1,12 +1,15 @@
 package civictech.inspect
 
+import civictech.cell.CellRef
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.demo.shell.DemoShell
 import com.sun.net.httpserver.HttpServer
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.io.IOException
@@ -15,6 +18,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
+import java.util.UUID
 
 /**
  * T19 acceptance — the inspector's socket is loopback-only.
@@ -55,7 +59,20 @@ import java.net.Socket
 class InspectorBindTest {
 
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
+
+    @AfterEach
+    fun tearDown() {
+        hostScheduler.shutdown()
+    }
 
     @Test
     fun `the inspector is reachable on loopback`() {

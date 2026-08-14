@@ -1,8 +1,10 @@
 package civictech.inspect
 
+import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
@@ -15,6 +17,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.LinkedBlockingQueue
 
@@ -28,7 +31,15 @@ class InspectorEventsTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val server = InspectorServer(registry, host, port = 0).start()
     private var tap: SseTap? = null
 
@@ -36,6 +47,7 @@ class InspectorEventsTest {
     fun tearDown() {
         tap?.close()
         server.close()
+        hostScheduler.shutdown()
     }
 
     private fun listen(): SseTap {
@@ -95,14 +107,18 @@ class InspectorEventsTest {
         host.managementInlet.call.spawn(before)
 
         val events = listen()
-        val snapshot = json.decodeFromString<TopologySnapshot>(
-            HttpClient.newHttpClient().send(
+        val client = HttpClient.newHttpClient()
+        val body = try {
+            client.send(
                 HttpRequest.newBuilder(
                     URI("http://localhost:${server.boundPort}${InspectorServer.TOPOLOGY_PATH}")
                 ).build(),
                 HttpResponse.BodyHandlers.ofString(),
             ).body()
-        )
+        } finally {
+            client.shutdownNow()
+        }
+        val snapshot = json.decodeFromString<TopologySnapshot>(body)
         snapshot.nodes.size shouldBe 1
 
         val after = SetCell<String>()
@@ -122,7 +138,14 @@ class InspectorEventsTest {
     /** A live `text/event-stream` reader collecting `data:` frames off the wire. */
     private inner class SseTap(url: String) : AutoCloseable {
         private val frames = LinkedBlockingQueue<Frame>()
-        private val reader: CompletableFuture<Void> = HttpClient.newHttpClient()
+
+        /**
+         * Held so [close] can release it (computenet-4vh): one client per
+         * `listen()`, i.e. per test method, each with its own selector thread and
+         * executor pool; cancelling [reader] alone left all of that alive.
+         */
+        private val client: HttpClient = HttpClient.newHttpClient()
+        private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->
                 response.body().forEach { line ->
@@ -143,8 +166,15 @@ class InspectorEventsTest {
             return frames.toList()
         }
 
+        /**
+         * `shutdownNow()`, never `close()`: this client is deliberately parked on
+         * an SSE response that never ends, so `close()` — which awaits
+         * termination of in-flight exchanges — would turn this teardown into the
+         * unbounded wait the suite is being audited for.
+         */
         override fun close() {
             reader.cancel(true)
+            client.shutdownNow()
         }
     }
 
