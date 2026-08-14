@@ -296,8 +296,25 @@ jobs:
           # killed, and an invocation that has not produced one within its limit
           # is killed too. The SUMMARY line — not the exit status — is what says
           # whether the chunk measured anything. Killing on SUMMARY is not a
-          # shortcut past a real result: SuiteLoop writes that line last, after
-          # its final `Files.writeString` of the log.
+          # shortcut past a real result: SuiteLoop computes the SUMMARY from
+          # counters it has already finished accumulating, after its last
+          # iteration and after every per-failure evidence file has been
+          # written (`Files.writeString(evidence, ...)` happens inside the
+          # iteration loop). The line is also flushed before the kill can land,
+          # since `System.out` is autoflush and the poll only fires once the
+          # line is already present in the console file.
+          #
+          # ONE THING THE KILL CAN TRUNCATE, stated because the console is what
+          # everything downstream reads and the `.log` is not: SuiteLoop's
+          # order at the end is `System.out.println(summary)` and only THEN its
+          # final `Files.writeString(log, ...)` (SuiteLoop.java, end of main).
+          # So a chunk killed the instant its SUMMARY appears can lose the tail
+          # of `$OUT/<label>.log`, which is otherwise only rewritten every 25
+          # iterations. Nothing depends on it: pooling reads
+          # `chunk-*.console`, per-failure evidence is written eagerly inside
+          # the loop, and the console holds every line the log would have. The
+          # uploaded `.log` is a convenience copy and may be short by a few
+          # lines at the very end of a chunk.
           run_chunk() {  # $1 = label, $2 = runs, $3.. = extra args
             local label="$1" runs="$2"; shift 2
             local console="$OUT/$label.console"
