@@ -11,7 +11,15 @@ finish.
 
 Usage: next-batch.py <feature-id> [--actor NAME]
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
-              "skipped": [{id, reason}], "verdict": str, "parked": [id]}
+              "skipped": [{id, reason}], "verdict": str, "parked": [id],
+              "capacity": {"cores": int, "max_parallel": int}}
+
+The batch is bounded on two axes, not one. Disjoint `files` claims prove it
+will not merge into a conflict; `capacity_limit()` bounds how many of those
+agents this machine can actually run without their Gradle builds starving each
+other into wall-clock timeouts (computenet-k9d.2). `capacity` reports the
+machine's core count and the cap that was applied, so the caller can quote a
+number it did not have to guess.
 
 `verdict` explains an *empty* batch, which the caller cannot infer from
 `batch`/`skipped` alone and must not guess: "all-closed" (feature is ready for
@@ -87,6 +95,88 @@ def overlaps(files, taken):
     return hits
 
 
+# Cores one dispatched agent needs to itself. See capacity_limit().
+LANE_CORES = 5
+
+
+def capacity_limit(cores):
+    """How many agents may be dispatched at once on a machine with `cores` cores.
+
+    Disjoint `files` claims prove a batch will not merge into a conflict. They
+    say nothing about whether the machine can *run* it: every task in this repo
+    drives Gradle, and a batch of eight provably-disjoint items contends for
+    cores, the Gradle cache locks and the Kotlin daemon's memory
+    (computenet-k9d.2). That is not merely slow. The timeouts it produces land
+    on bounded waits — `awaitUntil`/`awaitDrained` raise `AssertionFailedError`
+    on a starved host — and those same suites are already filed as intermittent,
+    so contention noise is indistinguishable from the flakes those epics exist
+    to characterise. The parallelism corrupts the evidence.
+
+    So the cap is a second axis on the batch, and it is expressed **per core**,
+    because the two machines running this skill have different core counts and
+    a bare integer measured on one is wrong on the other.
+
+    MEASURED, 2026-08-14, on the 16-core machine (`sysctl -n hw.ncpu` = 16),
+    otherwise idle, no other agent dispatched. N cold worktrees each running
+    `./gradlew :wire:test --rerun` concurrently against a primed shared build
+    cache (every run: `BUILD SUCCESSFUL`, `24 actionable tasks: 10 executed,
+    14 from cache`), Kotlin and Gradle daemons killed between arms:
+
+        N=1   20.5s                                     1.00x
+        N=2   24.7s, 25.4s                              1.22x
+        N=3   34.0s, 34.8s, 35.0s                       1.70x
+        N=6   89.9s 93.1s 95.6s 96.6s 97.2s 97.8s      4.4x-4.8x
+
+    The criterion is per-run inflation, not throughput: a bounded wait sized on
+    a quiet box is what breaks. Under 2x it holds; the recorded catastrophes are
+    ~90x, not 2x. On 16 cores the largest arm that stayed under 2x was 3.
+
+    Load average is deliberately NOT the instrument. Over a ~25s workload the
+    1-minute average is still climbing when the build ends and still decaying
+    when the next arm starts (N=3's pre-arm reading was 17.31, inherited from
+    N=2), so it lags in both directions. Wall clock per run is measured
+    directly.
+
+    WHY cores/5 AND NOT cores/3. `cores/3` was the value floated in
+    computenet-avs's thread, and this bead's own evidence contradicts it: on the
+    10-core machine `cores/3` is 3, and three concurrent implementers is the
+    configuration recorded there as catastrophic — load 112, one
+    `:wire:test --rerun` inflating from 6-10s to 14m30s, roughly 90x. The same
+    thread records "2 on a 10-core machine looked survivable, 3 did not".
+    `cores/5` reproduces both anchors: 2 on 10 cores (the recorded survivable
+    value) and 3 on 16 cores (the largest arm measured under 2x here). The
+    arithmetic agrees to within a rounding step — 10/2 = 5.0, 16/3 = 5.3 — so
+    a Gradle lane in this repo costs about five cores, not the one core a raw
+    agent count implies and not the three `cores/3` assumes.
+
+    Floor of 1: a batch is never emptied by the cap, which would turn "ok" into
+    a verdict the caller routes on. One agent always runs.
+    """
+    return max(1, cores // LANE_CORES)
+
+
+def cap_batch(batch, skipped, cap):
+    """Trim a file-disjoint batch to what the machine can run, in place order.
+
+    Order is load-bearing, and it is the order main() already built: resumable
+    tasks first. A resumed task holds a worktree and a branch with commits on
+    it; deferring it behind a fresh one leaves that work stranded for another
+    round. So the trim always falls on the newly-ready tail.
+
+    The trimmed items are reported in `skipped` with a reason naming the cap,
+    not dropped silently — the caller has to be able to tell "held back for
+    capacity" (dispatch it next round, nothing is wrong) from "overlaps"
+    (a claim problem) or "human-gated" (a decision).
+    """
+    if cap >= len(batch):
+        return batch, skipped
+    held = batch[cap:]
+    skipped = skipped + [
+        {"id": e["id"], "reason": f"over machine capacity (max {cap} at once)"}
+        for e in held]
+    return batch[:cap], skipped
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit("usage: next-batch.py <feature-id> [--actor NAME]")
@@ -140,9 +230,15 @@ def main():
         taken |= files
         batch.append(_entry(task, resumed, sorted(files)))
 
+    cores = os.cpu_count() or 1
+    cap = capacity_limit(cores)
+    batch, skipped = cap_batch(batch, skipped, cap)
+
     verdict, parked = _assess(feature, batch)
     print(json.dumps({"batch": batch, "skipped": skipped,
-                      "verdict": verdict, "parked": parked}, indent=2))
+                      "verdict": verdict, "parked": parked,
+                      "capacity": {"cores": cores, "max_parallel": cap}},
+                     indent=2))
 
 
 def _assess(feature, batch):

@@ -137,6 +137,85 @@ for children, _, what in agreement_cases:
         print(f"FAIL: parked-residue agreement ({what}) — "
               f"expected {unfinished!r}, got {got!r}")
 
-total = len(cases) + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
+# --- capacity_limit(): the second axis on the batch (computenet-k9d.2) ------
+# Measured on a 16-core machine: 1 agent 20.5s, 2 agents 24.7/25.4s (1.22x),
+# 3 agents 34.0/34.8/35.0s (1.70x), 6 agents past the knee. The rule is
+# per-core because the two machines running this skill differ (10 and 16).
+
+capacity_cases = [
+    # (cores, expected cap, what)
+    (16, 3, "this machine: 16 cores, largest arm measured under 2x inflation"),
+    (10, 2, "the machine the disaster was recorded on — 2 survivable, 3 not"),
+    (10, 2, "cores/3 would say 3 here, which is the load-112 configuration"),
+    (5, 1, "a small box still gets one agent"),
+    (1, 1, "never zero: an empty batch would change the verdict"),
+    (2, 1, "floor holds below one lane's worth of cores"),
+    (32, 6, "scales up with the machine rather than saturating at a constant"),
+]
+
+capacity_limit = getattr(nb, "capacity_limit", None)
+for cores, expected, what in capacity_cases:
+    if capacity_limit is None:
+        failed += 1
+        print(f"FAIL: {what} — next-batch.py has no capacity_limit()")
+        continue
+    got = capacity_limit(cores)
+    if got != expected:
+        failed += 1
+        print(f"FAIL: {what} — capacity_limit({cores}) expected {expected}, got {got}")
+
+
+# --- cap_batch(): trimming falls on the newly-ready tail, and is reported ---
+
+def entry(id, resumed=False):
+    return {"id": id, "resumed": resumed}
+
+
+R1, R2 = entry("r1", resumed=True), entry("r2", resumed=True)
+N1, N2, N3 = entry("n1"), entry("n2"), entry("n3")
+
+cap_cases = [
+    # (batch, skipped, cap, expected batch ids, expected skipped ids, what)
+    ([N1, N2], [], 3, ["n1", "n2"], [], "batch under the cap is untouched"),
+    ([N1, N2, N3], [], 3, ["n1", "n2", "n3"], [], "batch exactly at the cap"),
+    ([N1, N2, N3], [], 2, ["n1", "n2"], ["n3"], "the tail is held back"),
+    ([R1, R2, N1], [], 2, ["r1", "r2"], ["n1"],
+     "resumable tasks survive the trim — they hold worktrees with commits"),
+    ([N1, N2], [{"id": "x", "reason": "human-gated"}], 1, ["n1"], ["x", "n2"],
+     "capacity skips are appended to the existing skip list, not replacing it"),
+    ([N1, N2, N3], [], 1, ["n1"], ["n2", "n3"],
+     "a cap of 1 still yields a non-empty batch, so the verdict stays 'ok'"),
+]
+
+cap_batch = getattr(nb, "cap_batch", None)
+for batch_in, skipped_in, cap, want_batch, want_skipped, what in cap_cases:
+    if cap_batch is None:
+        failed += 1
+        print(f"FAIL: {what} — next-batch.py has no cap_batch()")
+        continue
+    got_batch, got_skipped = cap_batch(list(batch_in), list(skipped_in), cap)
+    got_b = [e["id"] for e in got_batch]
+    got_s = [e["id"] for e in got_skipped]
+    if got_b != want_batch or got_s != want_skipped:
+        failed += 1
+        print(f"FAIL: {what} — expected batch={want_batch!r} skipped={want_skipped!r}, "
+              f"got batch={got_b!r} skipped={got_s!r}")
+
+# A held-back item must say WHY in terms the caller can act on: "hold it for
+# the next round" is a different instruction from "its claim overlaps" or "a
+# human reserved it", and an unreasoned skip reads as the latter two.
+if cap_batch is not None:
+    _, reasons = cap_batch([N1, N2], [], 1)
+    if len(reasons) != 1 or "capacity" not in reasons[0].get("reason", ""):
+        failed += 1
+        print(f"FAIL: a capacity skip must name capacity in its reason — got {reasons!r}")
+    capacity_reason_cases = 1
+else:
+    failed += 1
+    capacity_reason_cases = 1
+    print("FAIL: capacity skip reason — next-batch.py has no cap_batch()")
+
+total = (len(cases) + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
+         + len(capacity_cases) + len(cap_cases) + capacity_reason_cases)
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
