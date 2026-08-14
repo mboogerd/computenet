@@ -117,11 +117,12 @@ working convention, not a fence. Skill-side statement of the same policy:
 ## 1. The job: invocation path
 
 - **Script**: `scripts/beads-nightly-sync.sh` (repo root). Runs `bd dolt pull`
-  then `bd dolt push` against the DoltHub remote (`sync.remote` in `.beads/config.yaml`), in that order, from the repo
-  root it resolves relative to its own location.
+  then `bd dolt push` against the DoltHub remote (`sync.remote` in
+  `.beads/config.yaml`), in that order, from the repo root it resolves
+  relative to its own location.
 - **Trigger**: left as a **manual runbook step** by this task — no
   launchd/cron entry is installed by this change. To install one, a human
-  runs the exact commands in [§4](#4-installing-a-schedule-machine-side-step)
+  runs the exact commands in [§8](#8-installing-a-schedule-machine-side-step)
   on each machine that should run it unattended. Until installed, run the
   script by hand:
   ```bash
@@ -363,6 +364,9 @@ passing and could be mistaken for invocation sites**:
   reviewer's; the reviewer's `bd` writes stay local).
 - `.claude/skills/work/references/red-check-attribution.md` — references a
   blocked `bd dolt push` from SKILL.md step 6, doesn't invoke one itself.
+- `.beads/config.yaml` — the configuration the callers above read
+  (`sync.remote`, plus the credential comment block quoted in the per-machine
+  setup section); it declares the remote, it never invokes a sync.
 - `.beads/README.md` — beads' own generic boilerplate quick-start doc (not
   written for this repo); it lists `bd dolt push`/`pull` as example commands,
   not as something this repo's tooling runs.
