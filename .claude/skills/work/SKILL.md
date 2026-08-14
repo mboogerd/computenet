@@ -1516,6 +1516,26 @@ ambiguity the next session has to *detect*, so say so explicitly in the
 summary and leave the PR in draft. Four of five features in one session were
 fine; the fifth cost the epic its close exactly here.
 
+**Before you act on the result, find the word READY or DRAFT in it.**
+[review-feature.md](references/review-feature.md) §8 requires the final message
+to state one of those two in one word, plus a NOT VERIFIED section — so this is
+a literal token test, not a judgement call. The paragraph above is the case
+where *you* ended the review and therefore know the verdict is missing; this is
+the one where the reviewer ended its own turn and the completion notification
+arrives reading exactly like success. If neither word is there, `SendMessage`
+that same agent — its context is intact — to state its verdict and what it did
+not verify, and run nothing below until it does. 5c has this check one level
+down; the stake here is higher. A task misread as reviewed still has this
+feature review downstream of it, while `gh pr ready` is the last gate before
+auto-merge lands the diff on `main` with nothing after it.
+
+**`metadata.review=passed` does not settle it; the report does.** The marker is
+written at [review-feature.md](references/review-feature.md) §7, before §8's
+report exists, so a bead reading passed under a verdict-less final message is a
+disagreement between the two, not a tiebreak in favour of shipping. Route it
+back the same way. Getting this wrong in the trusting direction merges
+uncertified code; getting it wrong in the other costs one `SendMessage`.
+
 **The reviewer certifies; you ship.** The reviewer reports a verdict and sets
 `metadata.review=passed`, but never runs `gh pr ready` — on this repo a
 ready PR merges itself, so a reviewer marking its own certification ready is
