@@ -183,7 +183,7 @@ def is_human_park(task):
 def classify(children):
     """Verdict for an empty batch, from the feature's children alone.
 
-    Split out from _verdict() so it is testable without a beads database.
+    Split out from _assess() so it is testable without a beads database.
 
     "blocked" used to swallow the case that matters most: a feature whose tasks
     are all closed and reviewed, whose only open children are follow-up beads
