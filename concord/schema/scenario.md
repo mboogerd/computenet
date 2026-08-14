@@ -294,13 +294,40 @@ executable evaluators in `civictech.concord.check` (§1.4).
 | observations-monotone | `{type: observations-monotone, view: v, order?: ...}` | stream never regresses under the order |
 | replicas-converge | `{type: replicas-converge, logical: shared}` | all live replicas of the logical id hold equal folds (dist) |
 | no-dead-letters | `{type: no-dead-letters}` | zero dead letters across all hosts |
-| effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) |
+| effect-count | `{type: effect-count, sink: s, key?: k, exactly: 1}` | effectful sink acted exactly N times per key (dur) — unkeyed, per key the script *fed* it (see below) |
 | observations-whole-waves | `{type: observations-whole-waves, view: v, source: a}` | every observation equals the source's fold at some whole op prefix (no torn fork-join) |
 | wave-plane-unchanged | `{type: wave-plane-unchanged, cell: s}` | every `read-state` walk on `s` left `s`'s wave plane exactly where it found it |
 | pages-equal-view | `{type: pages-equal-view, cell: s, view: v}` | every `read-state` walk on `s` was stamped, non-duplicating, and unions to `v`'s fold |
 
 Inline construction-time expectations use `expect:` on the `connect`/`disconnect`
 step, not a check entry.
+
+### `effect-count`: what the unkeyed form quantifies over
+
+An unkeyed `effect-count` asserts the count for **every key the script fed the
+sink**, not merely every key the sink's log happens to contain. The two differ in
+exactly one direction and it is the load-bearing one: an element that fired *zero*
+times is absent from a grouping of the log, so quantifying over the log alone
+passes over it vacuously — the check would see double-fires and be blind to silent
+effect **loss**, which `24-DUR-04`/`24-DUR-05` regressions land on just as often
+(computenet-61w; demonstrated on a first cut of `DUR-SRCID-02`, which passed with
+the mechanism it was written to pin disabled).
+
+The expected key set is derived from the scenario: the elements of every `add` the
+script applied to a source the graph links **straight into** the sink (`remove`
+contributes nothing — the effect fired at the `add`, and retracting the element
+neither drives a new one nor unmakes the recorded one). The derivation is narrow on
+purpose, and where it does not hold the unkeyed form **fails with a message asking
+you to name the keys** rather than silently weakening to the log-only reading:
+nothing links into the sink; the topology into it moves mid-script
+(`connect`/`disconnect`); the sink or an upstream is `despawn`ed or `restart`ed; or
+an upstream takes an op outside `add`/`remove`. `exactly: 0` needs no derivation —
+it asserts the log is empty.
+
+A keyed `effect-count` is unconditional and always available: `{type: effect-count,
+sink: s, key: k4, exactly: 1}` fails with `observed 0` when `k4` never fired. Use it
+for any sink shape the derivation gives up on, and for the specific elements a
+scenario's narrative singles out.
 
 ### What a conforming driver must observe (the two read-side checks)
 

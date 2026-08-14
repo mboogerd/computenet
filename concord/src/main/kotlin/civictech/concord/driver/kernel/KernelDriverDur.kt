@@ -495,6 +495,17 @@ private interface DeltaSink {
  * behind it — so across a crash+journal-replay each `(sourceId, counter)` fires
  * exactly once. The dedup key the [Effect] carries is the element itself, so
  * `effect-count(sink, exactly: 1)` reads "each element acted on exactly once".
+ *
+ * That last sentence was an over-claim until computenet-61w: the unkeyed evaluator
+ * grouped the effect log and quantified over the keys this sink had *produced*, so
+ * an element that fired **zero** times was absent from the grouping and passed
+ * vacuously — it actually read "each element acted on *at all* was acted on once".
+ * The evaluator now derives the expected key set from the scenario (the `add`s the
+ * script applied to whatever the graph links straight into the sink) and unions it
+ * with the produced one, which is what makes the sentence true. That derivation
+ * models *this* class's contract — one effect per newly-added element, keyed by the
+ * element — so changing the key here, firing per removal, or filtering deliveries
+ * would change what `Checks.expectedEffectKeys` is entitled to assume.
  */
 internal class EffectSinkCell(
     override val ref: CellRef,

@@ -9,6 +9,9 @@ import civictech.concord.oracle.OracleUnsupported
 import civictech.concord.oracle.Values
 import civictech.concord.schema.ApplyStep
 import civictech.concord.schema.Check
+import civictech.concord.schema.ConnectStep
+import civictech.concord.schema.DespawnStep
+import civictech.concord.schema.DisconnectStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.FinalView
 import civictech.concord.schema.IncrementalEqualsBatch
@@ -19,6 +22,7 @@ import civictech.concord.schema.ObservationsMonotone
 import civictech.concord.schema.ObservationsWholeWaves
 import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
+import civictech.concord.schema.RestartStep
 import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.ViewsConverge
@@ -282,15 +286,54 @@ object Checks {
 
     /**
      * An effectful sink acted exactly N times per key. When [EffectCount.key] is
-     * given, only that key is asserted; otherwise every distinct key the sink
-     * produced must have exactly the stated count.
+     * given, only that key is asserted.
+     *
+     * **The unkeyed form quantifies over the keys the scenario *fed* the sink, not
+     * the keys the sink happened to produce** (computenet-61w). Grouping the
+     * effect log alone is only half a check: an element that fired **zero** times
+     * is simply absent from the grouping, so the assertion passes vacuously over
+     * it. That made the unkeyed form able to see double-fires and blind to silent
+     * effect *loss* — and several durability requirements (`24-DUR-04`/
+     * `24-DUR-05`) regress on either side, a "restore the outlet identity but
+     * forget its counter high-water" fix producing exactly the loss direction. It
+     * was demonstrated: a first cut of `DUR-SRCID-02` with only the unkeyed check
+     * **passed** with `HostDurability.restoreOutletWave` disabled, the mechanism it
+     * was written to pin. So the expected key set is derived from the scenario
+     * ([expectedEffectKeys]) and unioned with the produced one, which turns
+     * "absent" into "observed 0, expected N" by construction.
+     *
+     * Two deliberate boundaries:
+     * - When the expected set **cannot** be derived, the unkeyed form *refuses*
+     *   rather than falling back to the produced-keys grouping — the same refusal
+     *   [nothingObserved], [wavePlaneUnchanged] and [pagesEqualView] already make:
+     *   "the check had nothing to look at" must never read as "the property held".
+     *   The author names the keys instead.
+     * - `exactly: 0` needs no derivation: "the sink acted on nothing" is a
+     *   statement about the log itself, and any key present in it fails.
+     *
+     * Still *not* asserted unkeyed: a key the sink produced that the scenario never
+     * fed it, at the stated count, passes (effect *fabrication* is a third
+     * direction, outside this check's "exactly N per key" reading).
      */
     fun effectCount(check: EffectCount, ctx: CheckContext): CheckResult {
         val effects = ctx.driver.effectLog(check.sink)
         val byKey: Map<String?, Int> = effects.groupingBy { it.key }.eachCount()
-        val relevant = if (check.key != null) mapOf(check.key to (byKey[check.key] ?: 0)) else byKey
-        if (relevant.isEmpty() && check.exactly != 0) {
-            return CheckResult.Failed("effect-count(${check.sink}): expected ${check.exactly} per key but the sink produced no effects")
+        val relevant: Map<String?, Int> = when {
+            check.key != null -> mapOf(check.key to (byKey[check.key] ?: 0))
+            check.exactly == 0 -> byKey
+            else -> {
+                val expected = expectedEffectKeys(ctx.scenario, check.sink)
+                    ?: return CheckResult.Failed(
+                        "effect-count(${check.sink}): the keys this sink was fed cannot be derived from the " +
+                            "scenario, so an unkeyed count would assert only over the keys the sink happened to " +
+                            "produce — which is blind to an element that fired zero times (it is absent from the " +
+                            "grouping, so it passes vacuously). Name the keys explicitly (`key: …`), one check per " +
+                            "key, or feed the sink from a scripted set-source linked straight into it.",
+                    )
+                val keys = LinkedHashSet<String?>(expected)
+                keys += byKey.keys
+                keys.associateWith { byKey[it] ?: 0 }
+            }
         }
         for ((key, count) in relevant) {
             if (count != check.exactly) {
@@ -298,6 +341,61 @@ object Checks {
             }
         }
         return CheckResult.Passed
+    }
+
+    /**
+     * The keys an unkeyed [effectCount] on [sink] must find in its effect log: the
+     * rendered elements of every `add` the script applied to a source the graph
+     * links **straight into** [sink]. `null` when the scenario does not permit the
+     * derivation, which [effectCount] reports rather than silently weakening.
+     *
+     * Derived from the scenario rather than asked of the driver because the neutral
+     * [Driver] SPI has no "which elements did you feed this sink" verb, and adding
+     * one would put harness bookkeeping into the per-implementation surface. Folding
+     * the script harness-side is the same move [observationsWholeWaves] already
+     * makes for its prefix states, and [BatchOracle] for its final fold.
+     *
+     * The derivation is deliberately narrow — it claims a key set only for the shape
+     * the `dur` corpus actually drives (a set-source linked directly to an
+     * `effect-sink`, whose every added element is one effect keyed by the element
+     * itself; see `KernelDriverDur.EffectSinkCell`). It gives up — `null`, not a
+     * partial set — when anything could make the script's adds a poor model of what
+     * reached the sink:
+     * - nothing links into [sink] in the declared graph;
+     * - the topology into [sink] moves mid-script (`connect`/`disconnect`), so which
+     *   adds reached it depends on when;
+     * - [sink] or an upstream is `despawn`ed (its traffic legitimately stops) or
+     *   `restart`ed (a re-baseline re-announces, so an element may legitimately fire
+     *   again);
+     * - an upstream takes an op outside a set-source's `add`/`remove` vocabulary.
+     *
+     * `remove` contributes nothing either way: the effect fired when the element was
+     * *added*, and retracting it afterwards neither drives a new one nor unmakes the
+     * one already recorded.
+     */
+    private fun expectedEffectKeys(scenario: Scenario, sink: String): Set<String>? {
+        val upstream = scenario.graph?.links.orEmpty().filter { it.to == sink }.map { it.from }.toSet()
+        if (upstream.isEmpty()) return null
+        val involved = upstream + sink
+        val keys = LinkedHashSet<String>()
+        for (step in scenario.script) {
+            when (step) {
+                is ConnectStep -> if (step.to == sink) return null
+                is DisconnectStep -> if (step.to == sink) return null
+                is DespawnStep -> if (step.on in involved) return null
+                is RestartStep -> if (step.on in involved) return null
+                is ApplyStep -> {
+                    if (step.on !in upstream) continue
+                    when (step.op) {
+                        "add" -> keys += Values.render(step.value ?: return null)
+                        "remove" -> Unit
+                        else -> return null
+                    }
+                }
+                else -> Unit
+            }
+        }
+        return keys.ifEmpty { null }
     }
 
     /**
