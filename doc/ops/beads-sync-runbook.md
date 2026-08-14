@@ -81,7 +81,7 @@ Error: push to origin/main: Error 1105: unknown push error; rpc error: code = Pe
 ```
 
 (exit 1). The underlying `dolt push` call (bypassing `bd`'s wrapper) surfaces
-the same root cause with a bit more of the transport detail:
+the same transport detail, without `bd`'s `push to origin/main:` prefix:
 `unknown push error; rpc error: code = PermissionDenied desc = permission
 denied`. That `PermissionDenied` / `permission denied` text is the string to
 grep for in a failing sync log. This matches `.beads/config.yaml`'s own
