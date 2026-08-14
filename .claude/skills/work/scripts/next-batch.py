@@ -15,6 +15,8 @@ Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
 
 `verdict` explains an *empty* batch, which the caller cannot infer from
 `batch`/`skipped` alone and must not guess: "all-closed" (feature is ready for
+review), "parked-residue" (every task that is not closed is a human park, so
+the feature is finished and its residue is a deliverable — also ready for
 review), "blocked" (tasks remain but none can run), "no-tasks" (the breakdown
 produced nothing). It is "ok" whenever the batch is non-empty.
 
@@ -141,10 +143,57 @@ def _verdict(feature, batch):
     # for a finished feature and send it round the breakdown again.
     children = [t for t in bd("list", "--parent", feature, "--all")
                 if t.get("issue_type") not in ("epic", "feature")]
+    return classify(children)
+
+
+def is_human_park(task):
+    """Is this child an `ask-human.md` park rather than remaining work?
+
+    That park is `--status=blocked --add-label=human --assignee=human`. We
+    require `blocked` — that is the load-bearing half, the thing that says the
+    item cannot proceed on its own — plus EITHER human marker, because items
+    parked before all three flags settled carry only one of them and keying on
+    all three would silently under-match them back into "blocked".
+
+    The cost of accepting either marker: a child blocked by a real dependency
+    edge that inherited the `human` label from a parked parent (`bd create`
+    inherits labels — see ask-human.md) reads as a park here. See classify()
+    for what stops that becoming damage.
+    """
+    if task.get("status") != "blocked":
+        return False
+    return task.get("assignee") == "human" or "human" in (task.get("labels") or [])
+
+
+def classify(children):
+    """Verdict for an empty batch, from the feature's children alone.
+
+    Split out from _verdict() so it is testable without a beads database.
+
+    "blocked" used to swallow the case that matters most: a feature whose tasks
+    are all closed and reviewed, whose only open children are follow-up beads
+    its own implementation filed and parked for a human (computenet-eic,
+    observed on computenet-yh6.1.3). Parking that feature strands finished,
+    CI-green work in a draft PR with no path to main. Those children are
+    deliverables, not remaining work, so the feature is ready for review —
+    "parked-residue", distinct from "all-closed" so the caller can still see
+    that residue exists.
+
+    A child that is open, in_progress (including on another machine), or
+    blocked on a real dependency keeps the verdict at "blocked": one genuinely
+    unmet child is enough. The residual false positive is the inherited-label
+    case in is_human_park(); it is bounded because "parked-residue" routes to
+    the 5e feature review, which re-reads the acceptance criteria against the
+    diff and can return a draft verdict that sends the feature back to 5b — it
+    does not merge anything on its own.
+    """
     if not children:
         return "no-tasks"
-    if all(t.get("status") == "closed" for t in children):
+    unfinished = [t for t in children if t.get("status") != "closed"]
+    if not unfinished:
         return "all-closed"
+    if all(is_human_park(t) for t in unfinished):
+        return "parked-residue"
     return "blocked"
 
 
