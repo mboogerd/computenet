@@ -918,6 +918,43 @@ between the file claim and the acceptance criteria with nothing covering it —
 so the dispatch template below also tells it to report and widen rather than
 choose silently.
 
+**Restate in the prompt any cross-bead write the bead's own criteria demand —
+naming the ids and the action.** Read the acceptance criteria at claim time
+for any clause that reaches onto *another* bead, and put it in the dispatch
+prompt in as many words. Authorization that lives only inside the bead is
+authorization the **policy check cannot see**: it reads the prompt. On
+`computenet-dqy.72` the last criterion was "The three instance beads
+(computenet-dqy.2, computenet-dqy.71, computenet-m5z9) are NOT closed by
+this; each gets a comment saying its next occurrence will now be a fast
+attributable failure." The agent did exactly that, the harness raised
+"External System Writes — the subagent posted status comments to three
+pre-existing tracker items … without explicit user direction naming that
+cross-posting", and the orchestrator then spent real time reading three
+comment threads to adjudicate an action it had itself commissioned —
+concluding, at first, that the agent had overstepped. That conclusion reached
+a session report and a bead before the reviewer corrected it. The prompt made
+it worse than silent: it named those same three ids for the *opposite*
+purpose (do not close them), which reads as a prohibition on touching them at
+all. An agent there cannot win — obeying the criterion trips the warning,
+ignoring it fails the item.
+
+So write the authorization where both the check and the agent look:
+
+```
+Its acceptance criteria require you to comment on computenet-dqy.2,
+computenet-dqy.71 and computenet-m5z9 — pre-existing beads you are not
+assigned. That cross-post is authorized: post the comment on each. Do not
+change their status, priority, assignee or parent.
+```
+
+**And keep the reserved actions yours.** `references/task.md` scopes a
+dispatched agent to its own bead and the items it creates; closing,
+re-prioritising, reassigning, re-parenting or claiming any *other* bead is
+the orchestrator's, and a criterion demanding one of those is not delegated
+by restating it. Do that write yourself, after the merge, and say so in the
+prompt — "`<id>` is closed by me, not by you; report when your change makes
+it true" — so the agent neither performs it nor reads the criterion as unmet.
+
 Claim each id in the batch, record its metadata, then attach its worktree:
 
 ```bash
@@ -1047,6 +1084,9 @@ branches and merge into the same feature branch. If the bead's own design or
 acceptance clause REQUIRES a file outside the claim, do not choose between
 them silently: report it and say which file and which clause, and I will
 widen the claim.
+Tracker writes: ${crossBeadWrites || "none authorized — write only to this
+bead and to items you create."} Whatever that line says, never close,
+re-prioritise, reassign, re-parent or claim any bead other than your own.
 If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
 message. A prescribed reproduction that passes unfixed is a false lead — say
@@ -1109,6 +1149,9 @@ Agent({
 ${taskWorktree}, not the main checkout) and follow it to review beads task
 ${id} against its own acceptance criteria.
 Worktree: ${taskWorktree}  ·  Branch: ${taskBranch}
+Cross-bead writes authorized on this item: ${crossBeadWrites || "none"} —
+that is the same line the implementer was given, so writes it names are
+commissioned work, not scope creep.
 Repair what you can within the task's scope. Report pass or fail, what you
 repaired, and — on fail — exactly what is missing.
 If you won't finish within ~45-60 minutes, stop at a clean point and write your
@@ -1243,6 +1286,9 @@ Agent({
 ${worktree}, never the main checkout, whose local branch is stale — and follow
 it to review feature ${id} against its own acceptance criteria.
 Worktree: ${worktree}  ·  Branch: ${branch}  ·  PR: ${pr}
+Cross-bead writes authorized on this feature and its tasks:
+${crossBeadWrites || "none"} — writes that line names are commissioned work,
+not scope creep.
 origin/main as of dispatch: ${mainSha}; landed since this branch forked:
 ${logOutput or "nothing"}.
 Open PRs that may merge under you while you review: ${prList}. Section 6's

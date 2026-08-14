@@ -588,6 +588,16 @@ than half a feature parked on a branch.
 
 ### In every case
 
+**Write to the feature under review and to items you create — nothing else.**
+Closing, re-prioritising, reassigning, re-parenting or claiming any other
+bead is the orchestrator's, and the tasks under this feature are other beads.
+Apply the same rule when you judge the diff: an implementer's write onto a
+bead it was not assigned is *commissioned* work if the item's acceptance
+criteria or the cross-bead line in its dispatch prescribe it — on
+computenet-dqy.72 three criterion-prescribed comments were briefly read as an
+overstep and cost an adjudication (computenet-szdd). Check both before
+calling it scope creep, and report a mismatch instead of undoing the write.
+
 **Don't run `bd dolt push`** — issue-state sync to the remote is the
 orchestrator's job (it serializes pushes across concurrent agents); your
 local `bd` writes are enough. That comment and metadata stay in the local

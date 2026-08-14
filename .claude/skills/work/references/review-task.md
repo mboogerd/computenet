@@ -8,6 +8,18 @@ Gaps between tasks, and criteria that live at the feature level, belong to
 the feature review ([review-feature.md](review-feature.md)). Don't reach for
 them here, and don't expand the task's scope to close them.
 
+**Your tracker writes are scoped the same way.** Write to **the bead under
+review and to items you create** — nothing else. Closing, re-prioritising,
+reassigning, re-parenting or claiming any other bead is the orchestrator's.
+That cuts both ways when you judge the diff: if the implementer wrote to
+another bead, check the task's acceptance criteria and the cross-bead line in
+its dispatch before calling it scope creep — a criterion can commission a
+comment on named sibling beads, and on computenet-dqy.72 exactly that
+happened and was briefly read as an overstep (computenet-szdd). Criterion-
+prescribed writes are commissioned work. A close or a priority change on
+another bead is not, whatever prescribed it: report it rather than repairing
+it.
+
 ## 1. The standard, then the diff
 
 ```bash

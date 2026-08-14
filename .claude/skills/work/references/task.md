@@ -12,6 +12,30 @@ Two rules follow:
 - **Work only in your own worktree.** Never the main checkout, the feature
   worktree, or another task's.
 
+**Your tracker writes have a scope too, and it is narrower than your file
+claim.** By default you write to **your own assigned bead and to items you
+create** — nothing else. Closing, re-prioritising, reassigning, re-parenting
+or claiming any other bead is the **orchestrator's**, always, even when
+something you read suggests otherwise: three `/work` sessions share one beads
+database and one `BEADS_ACTOR`, so a write onto another item is
+indistinguishable from that item's own owner doing it, and the owner may be a
+live session mid-flight.
+
+Two cases reach past that line, and they route differently:
+
+- **Your dispatch prompt names a cross-bead write** ("post a comment on
+  `<ids>`") → it is authorized; do it, and name it in your report.
+- **Your bead's acceptance criteria demand one and the prompt is silent** →
+  the authorization got split, which is a known defect in the dispatch and
+  not your mistake (computenet-szdd). If the criterion asks for a **comment**,
+  post it — a comment is additive and changes nobody's state — and quote the
+  clause verbatim in your report, so an orchestrator reading a policy warning
+  finds the authorization instead of adjudicating you. If it asks for a
+  **close, priority, assignee or parent change** on another bead, do **not**
+  perform it: say in your report which bead, which action, and which clause
+  requires it, and leave it for the orchestrator. Either way the item is not
+  failed by this — reporting the split is a complete answer to that clause.
+
 **You may be a resumed task.** If the worktree already has commits, an
 earlier session started this and stopped at a clean point — read the beads
 comments for what's done and what's left, and continue from there rather
