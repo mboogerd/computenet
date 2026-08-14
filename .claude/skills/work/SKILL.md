@@ -547,7 +547,7 @@ agent into a worktree, and before you remove one, ask the same question: has
 the agent you dispatched into it reported back?
 
 - **You never dispatched an agent into it this session** (a first run, or a
-  worktree resumed from an earlier session via `metadata.worktree`, 5a) →
+  worktree resumed from an earlier session, which 5a recomputes) →
   nobody is live in it and it is yours to use. An earlier session's agent
   died with that session and its notification will **never** arrive here, so
   do not wait for one. This is the normal resume case; it must not stall.
@@ -660,8 +660,8 @@ machine at Finalize's push.
 attach the same way, and all three read `metadata.branch`:
 
 ```bash
-# Read the two recorded values and substitute them literally below. Do NOT
-# assign them to shell variables: each fenced block is a separate Bash call
+# Read the recorded branch and substitute it literally below; the worktree is
+# recomputed, not read. Do NOT assign either to a shell variable: each fenced block is a separate Bash call
 # and shell state does not survive between calls — an empty "$BR" reaches
 # ensure-worktree.sh's ${3:-origin/main} as "unset" and silently cuts from
 # origin/main, and git -C "" silently operates on the MAIN CHECKOUT.
@@ -1503,7 +1503,7 @@ git worktree remove "$PWD/../computenet-worktrees/<id>"
 Remove the worktrees of **tasks merged in 5c**, of **features that closed**
 (their local branch too), and of any extra fix worktree 5c's repair path
 created. Leave unfinished features' and tasks' worktrees in place; the next
-session reuses them via `metadata.worktree`.
+session recomputes the same path and reattaches there (5a).
 
 Then `TaskStop` the budget monitor.
 
