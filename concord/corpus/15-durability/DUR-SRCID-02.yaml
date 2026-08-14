@@ -53,15 +53,19 @@ script:
   - {type: apply, on: source, op: add, value: k4}
   - {type: quiesce}
 checks:
-  # each element the sink DID act on, acted on exactly once — the double-fire
-  # direction (a replayed re-emission the restored frontier could not match)
+  # k1..k4 each acted on exactly once — BOTH directions. The double-fire one (a
+  # replayed re-emission the restored frontier could not match) and, since
+  # computenet-61w, the silent-effect-LOSS one: the unkeyed form quantifies over
+  # the keys the script FED the sink, so an element that fired zero times reads
+  # "observed 0, expected 1" instead of being absent from the grouping and passing
+  # vacuously.
   - {type: effect-count, sink: sink, exactly: 1}
-  # the silent-effect-LOSS direction, which the unkeyed form above cannot see:
-  # it asserts over the keys the sink produced, so an element that fired zero
-  # times is simply absent from the grouping and passes vacuously. Naming the
-  # keys explicitly turns "absent" into "observed 0, expected 1" — k3 is the
-  # journal tail (suppressed on replay, but it must have fired pre-crash) and k4
-  # is the live post-recovery add a forgotten counter high-water would eat.
+  # Kept keyed and explicit for the two elements this scenario's narrative singles
+  # out: k3 is the journal tail (suppressed on replay, but it must have fired
+  # pre-crash) and k4 is the live post-recovery add a forgotten counter high-water
+  # would eat. These were the workaround for the blindness above and are now the
+  # local statement of intent — they were what caught it: with restoreOutletWave
+  # disabled, `effect-count(sink, key=k4): expected 1 but observed 0`.
   - {type: effect-count, sink: sink, key: k3, exactly: 1}
   - {type: effect-count, sink: sink, key: k4, exactly: 1}
   - {type: no-dead-letters}

@@ -47,12 +47,15 @@ script:
   - {type: apply, on: source, op: add, value: k3}
   - {type: quiesce}
 checks:
-  # k1,k2 fired pre-crash and were NOT re-fired on replay (24-DUR-05 suppression)
+  # k1,k2,k3 each fired exactly once: the pre-crash pair was NOT re-fired on replay
+  # (24-DUR-05 suppression) and none of the three was suppressed to zero. Since
+  # computenet-61w the unkeyed form quantifies over the keys the script FED the
+  # sink — k1,k2,k3 — not merely the ones its log contains, so it sees both the
+  # double-fire and the effect-LOSS direction.
   - {type: effect-count, sink: sink, exactly: 1}
-  # k3 fired post-recovery live. This has to name the key: the unkeyed form above
-  # asserts over the keys the sink PRODUCED, so an element suppressed to zero
-  # firings is absent from the grouping and passes vacuously — it can only see
-  # the double-fire direction, never the effect-LOSS direction this scenario's
-  # narrative also claims (BS-21's counter-continuation observable).
+  # Kept keyed and explicit for k3, the post-recovery live add: it is the element
+  # this scenario's narrative singles out (BS-21's counter-continuation
+  # observable), and a keyed count says so at the point of the assertion rather
+  # than leaving it to the derivation above.
   - {type: effect-count, sink: sink, key: k3, exactly: 1}
   - {type: no-dead-letters}
