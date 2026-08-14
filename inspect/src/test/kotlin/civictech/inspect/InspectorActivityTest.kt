@@ -60,7 +60,13 @@ import java.util.concurrent.TimeUnit
  *
  * Determinism: every wait is [awaitUntil] on an observable kernel fact, and the
  * two poll-driven things (restart detection, the coalesced `graphs.changed`)
- * are driven by [InspectorServer.tickAll] rather than by wall clock. Where a
+ * are driven by [InspectorServer.tickAll] rather than by wall clock — which is
+ * true because every server here is built with
+ * [InspectorServer.startUnscheduled], so no `Tick` is ever armed and `tickAll()`
+ * is genuinely its only driver (computenet-md6w: under plain `start()` the 1 Hz
+ * `"graphsChanged"` schedule races these assertions, and a 2.5 s stall after the
+ * suspend below turns `countOfKind(GRAPHS_CHANGED) shouldBe 0` into
+ * `expected:<0> but was:<1>`). Where a
  * *negative* has to be asserted, a second management call on the same host acts
  * as the barrier — management runs on one scheduler queue in submission order,
  * so once the second call's effect is visible the first call's notification has
@@ -90,7 +96,7 @@ class InspectorActivityTest {
         attention = AttentionPolicy(),
     )
 
-    private val server = InspectorServer(registry, mapOf("h" to host, "attentive" to attentive), port = 0).start()
+    private val server = InspectorServer(registry, mapOf("h" to host, "attentive" to attentive), port = 0).startUnscheduled()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
     private var tap: SseTap? = null
 
@@ -372,7 +378,7 @@ class InspectorActivityTest {
                 released.await(30, TimeUnit.SECONDS)
             }
         }
-        val inspector = InspectorServer(registry, mapOf("own" to own), port = 0).start()
+        val inspector = InspectorServer(registry, mapOf("own" to own), port = 0).startUnscheduled()
         try {
             val a = spawn(own, A)
             awaitUntil("in the view") { inspector.knowsNow(a) }
