@@ -197,17 +197,31 @@ class WsAnnouncementSilenceInventoryTest {
         mirror.detach()
         stack.registry.location(announced) shouldBe null // detach retracts what it installed
 
-        val captured = ByteArrayOutputStream()
-        val realErr = System.err
-        System.setErr(PrintStream(captured, true))
-        try {
+        // The capture is scoped to this thread, and the neighbour write below
+        // is why (computenet-dqy.67). `System.err` is process-wide: a plain
+        // `System.setErr(PrintStream(ByteArrayOutputStream()))` here asserted
+        // that *no thread in the JVM* wrote anything, which is not what this
+        // item is about and is not something this test can hold anyone to —
+        // `WsTransport.WsConnection.onError` prints `[WsConnection] <exception>`
+        // on every failed dial, and a superseded dialer's `ws-reconnect-*` loop
+        // keeps dialing forever, outliving the test that made it. That bled in
+        // at 8/200 in-process suite iterations on darwin/arm64, rising with JVM
+        // age. The line the neighbour prints here is verbatim the one that was
+        // observed doing it; it is what this assertion must ignore. The drop
+        // path itself is a synchronous call on this thread, so scoping the
+        // capture loses nothing the mirror could have said.
+        val captured = stderrWrittenByThisThread {
+            val neighbour = Thread(
+                { System.err.println("[WsConnection] java.net.ConnectException: Connection refused") },
+                "ws-reconnect-stand-in",
+            )
+            neighbour.start()
+            neighbour.join()
             repeat(4) { mirror.inlet.call.published(CellRef(UUID.randomUUID())) }
-        } finally {
-            System.setErr(realErr)
         }
 
         stack.registry.remoteRefs() shouldBe emptySet()
-        captured.toString() shouldBe "" // the silence this item is about
+        captured shouldBe "" // the silence this item is about
         mirror.refusedAnnouncements shouldBe 4L
     }
 
