@@ -387,9 +387,11 @@ object WsTransport {
          * so the dialer cannot lose a demand. All nineteen observed occurrences
          * (nine here, nine on run 31756952711, one local) lose server->client.
          *
-         * Naming this was computenet-dqy.68's job; repairing it is a separate
-         * bead — re-arm write interest while the out-queue is non-empty, or take
-         * the listener off java-websocket's selector write path.
+         * Naming this was computenet-dqy.68's job. computenet-dqy.69 repaired it
+         * by re-arming the lost demand — see [WsListener.watchStalledWrites] for
+         * the detection and why it is exact, and
+         * [WsListener.rearmedWriteDemands] for the instrument that says whether
+         * it has had to fire.
          */
         private val framesSentCount = AtomicLong()
         val framesSent: Long get() = framesSentCount.get()
@@ -641,6 +643,24 @@ object WsTransport {
         val socketHasBufferedData: Boolean get() = sessions.values.any { it.socketHasBufferedData }
 
         /**
+         * How many times [watchStalledWrites] re-issued a write demand that
+         * java-websocket 1.6.0 had lost (computenet-dqy.69). Monotonic and
+         * per-listener.
+         *
+         * Expected 0 on a healthy run: the race is measured at 9 in 12,500
+         * ubuntu peerings, so this reads non-zero only when the defect actually
+         * fired — which makes it the instrument that says the repair *works*
+         * rather than that it is merely present. Every increment is also
+         * announced on `System.err` with the literal token
+         * `computenet-dqy.69 re-armed`; that line is the evidence interface the
+         * acceptance measurement greps out of CI chunk consoles, so its wording
+         * is fixed. See [rearm].
+         */
+        val rearmedWriteDemands: Long get() = rearmedWriteDemandCount.get()
+
+        private val rearmedWriteDemandCount = AtomicLong()
+
+        /**
          * Set before any deliberate shutdown reaches the library, so the
          * watchdog never mistakes a close we asked for for a loss.
          *
@@ -697,6 +717,7 @@ object WsTransport {
             started.countDown()
             takeOverAccepting()
             watchListeningSocket(port)
+            watchStalledWrites(port)
         }
 
         /**
@@ -985,6 +1006,128 @@ object WsTransport {
             }.apply { isDaemon = true; name = "ws-listener-watchdog-$boundPort" }.start()
         }
 
+        /**
+         * **The repair (computenet-dqy.69): re-issue a write demand that
+         * java-websocket 1.6.0 lost.**
+         *
+         * The defect is a race entirely inside the library, on the listener side
+         * only — [Session.framesSent] carries the full reading that named it and
+         * the measured rate (9 in 12,500 ubuntu peerings; 1.8% per fresh-JVM
+         * `:wire` suite run). In one line: `WebSocketImpl.write` does
+         * `outQueue.add(buf); wsl.onWriteDemand(this)` on the *calling* thread,
+         * `WebSocketServer.onWriteDemand` arms `OP_READ|OP_WRITE` and wakes the
+         * selector, and the selector thread's `doWrite` does
+         * `if (batch(conn, ch) && key.isValid()) key.interestOps(OP_READ)`. A
+         * sender that arms `OP_WRITE` after `batch` drained the queue and
+         * returned true, but before `doWrite` clears the interest, is clobbered:
+         * the frame stays in `outQueue`, nothing registers write interest for it
+         * again, and the connection stays open and fully READABLE. Everything
+         * queued afterwards stays queued, so the peer sees a contiguous PREFIX
+         * of the announcement stream and an await for a later ref simply
+         * expires.
+         *
+         * ## Why the detection is exact rather than heuristic
+         *
+         * A connection is stalled iff it **has buffered data and its selection
+         * key does not hold `OP_WRITE`**. That conjunction is precisely the
+         * post-clobber state, and it cannot be confused with a slow-but-draining
+         * queue, which holds `OP_WRITE` for as long as it has anything left to
+         * write. So this is not a timeout, a liveness guess, or a rate
+         * threshold: it reads the two variables the race leaves inconsistent.
+         *
+         * There is exactly one benign way to observe that conjunction — inside
+         * `WebSocketImpl.write`, between `outQueue.add` and the `onWriteDemand`
+         * that arms the interest. That window is a handful of instructions on
+         * one thread, so requiring the state to persist across **two
+         * consecutive polls** excludes it without weakening the detection: a
+         * real clobber is permanent and every poll sees it.
+         *
+         * ## Why re-arming is safe
+         *
+         * The re-arm is the library's own demand, re-issued: `onWriteDemand` is
+         * `public final` on [WebSocketServer] and does exactly `interestOps` +
+         * `wakeup`. It touches no queue, so no frame can be dropped, parked,
+         * reordered or written twice, and it is idempotent — re-arming a
+         * connection that is already armed or concurrently draining is a no-op
+         * plus a spurious wakeup. Cross-thread `interestOps` on that selector is
+         * already normal here (see [takeOverAccepting]'s third cost note; the
+         * library's own `onWriteDemand` does it from worker threads).
+         *
+         * Deliberately NOT done: arming `OP_WRITE` on every poll. That would
+         * busy-wake the selector for every live connection forever. Interest is
+         * touched only for a connection observed persistently stalled, which on
+         * a healthy run is never — hence [rearmedWriteDemands] reading 0.
+         *
+         * A fire is counted *after* the demand has been re-issued, so the
+         * counter means "a re-arm happened", and announced on `System.err`
+         * carrying the token `computenet-dqy.69 re-armed`. See [rearm].
+         *
+         * The dialer needs none of this: `WebSocketClient.onWriteDemand` is
+         * `// nothing to do` because it writes from a dedicated thread blocking
+         * on `outQueue.take()`, which is why all nineteen observed occurrences
+         * lose server->client.
+         */
+        private fun watchStalledWrites(boundPort: Int) {
+            Thread {
+                // Owned by this thread alone, so a plain Set is right: the
+                // previous poll's suspects, minus any that fired, which is what
+                // "two consecutive polls" means.
+                var suspects: Set<WebSocket> = emptySet()
+                while (!stopRequested) {
+                    val stalled = sessions.keys.filterTo(HashSet()) { writeStalled(it) }
+                    val confirmed = stalled.intersect(suspects)
+                    confirmed.forEach { rearm(it, boundPort) }
+                    // A fired connection starts over rather than staying a
+                    // suspect: if the re-arm did not take, it needs two fresh
+                    // polls to fire again, which bounds the announcement to one
+                    // line per two polls per connection instead of one per poll.
+                    suspects = stalled - confirmed
+                    try {
+                        Thread.sleep(STALLED_WRITE_POLL_MS)
+                    } catch (_: InterruptedException) {
+                        return@Thread
+                    }
+                }
+            }.apply { isDaemon = true; name = "ws-listener-write-rearm-$boundPort" }.start()
+        }
+
+        /** @see watchStalledWrites */
+        private fun writeStalled(conn: WebSocket): Boolean {
+            if (!conn.hasBufferedData()) return false
+            val key = (conn as? WebSocketImpl)?.selectionKey ?: return false
+            // `interestOps` throws CancelledKeyException on a key cancelled
+            // between the validity check and the read; a connection on its way
+            // out is not a stall, and the close path owns it.
+            return runCatching {
+                key.isValid && (key.interestOps() and SelectionKey.OP_WRITE) == 0
+            }.getOrDefault(false)
+        }
+
+        /**
+         * Re-issue the lost demand, then count and announce it.
+         *
+         * That order is deliberate: [rearmedWriteDemands] and the stderr line
+         * are the sibling measurement task's evidence that the repair FIRED on a
+         * genuine stall, so neither may claim a re-arm that did not happen.
+         * `onWriteDemand` swallows `CancelledKeyException` itself (clearing the
+         * queue of a connection whose key is gone) but reaches `selector.wakeup`,
+         * which throws if the listener's selector has closed underneath a
+         * shutdown — hence the guard and the silence when [stopRequested].
+         *
+         * The message wording is an interface. `computenet-dqy.69 re-armed` is
+         * grepped out of CI chunk consoles by the acceptance measurement; do not
+         * rename it.
+         */
+        private fun rearm(conn: WebSocket, boundPort: Int) {
+            val armed = runCatching { onWriteDemand(conn) }.isSuccess
+            if (!armed) return
+            val fired = rearmedWriteDemandCount.incrementAndGet()
+            System.err.println(
+                "[WsTransport] computenet-dqy.69 re-armed a stalled write on port $boundPort " +
+                    "(rearmedWriteDemands=$fired)",
+            )
+        }
+
         private fun reportListeningSocketLost(boundPort: Int) {
             if (stopRequested) return // a stop that landed while this poll was in flight
             val lost = ListeningSocketLostException(
@@ -1065,6 +1208,15 @@ object WsTransport {
              * bound: accepts themselves arrive as selector wakeups.
              */
             const val ACCEPT_SELECT_MS = 200L
+
+            /**
+             * How often [watchStalledWrites] looks, and therefore half the
+             * worst-case re-arm latency (a stall must survive two consecutive
+             * polls). 400ms worst case sits two orders of magnitude inside the
+             * 10-30s awaits the defect otherwise expires, and each poll is one
+             * `outQueue.isEmpty()` plus one `interestOps()` per live session.
+             */
+            const val STALLED_WRITE_POLL_MS = 200L
         }
     }
 

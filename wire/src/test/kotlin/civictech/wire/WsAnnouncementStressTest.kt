@@ -763,6 +763,13 @@ class WsAnnouncementStressTest {
                     "; socket out-queue non-empty: listener=${listener.socketHasBufferedData}" +
                     " client=${connection.socketHasBufferedData}",
             )
+            // computenet-dqy.69: the repair for the reading above, and whether it
+            // fired. `listener=true` on the out-queue line with 0 here is a
+            // stranded frame the re-arm watchdog did NOT catch; non-zero says it
+            // caught one, and is also announced on stderr with the token
+            // `computenet-dqy.69 re-armed` — see
+            // [WsTransport.WsListener.rearmedWriteDemands].
+            appendLine("  write demands re-armed: listener=${listener.rearmedWriteDemands}")
             val threads = Thread.getAllStackTraces().keys
                 .filter { it.isAlive }
                 .groupingBy { it.name.replace(Regex("[0-9a-f-]{8,}"), "*") }
