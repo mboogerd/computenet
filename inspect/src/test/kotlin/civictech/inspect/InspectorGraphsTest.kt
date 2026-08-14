@@ -321,6 +321,17 @@ class InspectorGraphsTest {
         // is looking at: the flip-flop M5-COLD's report reproduced. An
         // instrument is not a subject.
         val (x, y) = pair(X_HIGH, Y_HIGH)
+        // The pair itself moved the partition, so a `graphs.changed` is owed for
+        // it — emitted by whichever `"graphsChanged"` tick runs first, the 1 Hz
+        // scheduled one or the explicit `tickAll()` below (computenet-rzq0).
+        // Settle that debt *before* the tap attaches, or the zeroes below hold
+        // only for as long as the setup's own announcement is still in flight:
+        // the count is read on this thread and the frame arrives on the
+        // reader's, so a test slow enough to lose that race fails on a frame it
+        // was never asserting about. Same move the merge and idle-partition
+        // tests above make, except they baseline the count instead — here the
+        // point of the assertion is that the number is absolutely zero.
+        server.tickAll()
         val events = listen()
         val before = snapshot(null)
         before.nodes.map { it.ref }.toSet() shouldBe setOf(encoded(x), encoded(y))
@@ -345,6 +356,7 @@ class InspectorGraphsTest {
 
         // nothing was announced either: no node/link deltas, no graphs.changed
         server.tickAll()
+        events.drained(1)
         events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
         events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
         events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0
@@ -352,8 +364,12 @@ class InspectorGraphsTest {
         probe.delete("${InspectorServer.CELL_PATH}/${encoded(x)}/observe").statusCode() shouldBe 204
         awaitUntil("observation sink despawned") { registry.localRefs().size == 2 }
         snapshot(null).nodes.map { it.ref }.toSet() shouldBe before.nodes.map { it.ref }.toSet()
+        // releasing a sink emits topology deltas for anything that is not an
+        // instrument, so this second absence needs the same barrier as the first
+        events.drained(2)
         events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
         events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
+        events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0
     }
 
     // -------------------------------------------------------------- fixtures
@@ -411,6 +427,27 @@ class InspectorGraphsTest {
             }
 
         fun countOfKind(kind: String): Int = kinds.count { it == kind }
+
+        /**
+         * A read barrier for the *absence* assertions (computenet-rzq0). Frames
+         * are delivered on [reader]'s own thread, so counting a kind straight
+         * after the tick that could have emitted it asserts nothing: a frame
+         * still in flight reads as a frame never sent, and the test passes for
+         * the wrong reason until a loaded machine slows the count down enough
+         * to see it.
+         *
+         * [InspectorServer.tickAll] runs `"heartbeat"` first and
+         * `"graphsChanged"` last, and one SSE stream delivers in order — so
+         * once the *next* tick's heartbeat has been read, everything the
+         * previous tick emitted has been read too. [ticksSoFar] is how many
+         * `tickAll()` calls this tap has already been attached for — ticks that
+         * ran before it attached delivered their heartbeat to nobody and so do
+         * not count.
+         */
+        fun drained(ticksSoFar: Int) {
+            server.tickAll()
+            awaitKind(Event.HEARTBEAT, ticksSoFar + 1)
+        }
 
         fun awaitKind(kind: String, count: Int) =
             awaitUntil("$count '$kind' frames (saw ${countOfKind(kind)})", timeoutMs = 10_000) {
