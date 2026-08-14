@@ -23,6 +23,7 @@ import java.net.http.HttpResponse
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * M4 — the multi-graph navigator's backend: connected components over the
@@ -321,6 +322,17 @@ class InspectorGraphsTest {
         // is looking at: the flip-flop M5-COLD's report reproduced. An
         // instrument is not a subject.
         val (x, y) = pair(X_HIGH, Y_HIGH)
+        // The pair itself moved the partition, so a `graphs.changed` is owed for
+        // it — emitted by whichever `"graphsChanged"` tick runs first, the 1 Hz
+        // scheduled one or the explicit `tickAll()` below (computenet-rzq0).
+        // Settle that debt *before* the tap attaches, or the zeroes below hold
+        // only for as long as the setup's own announcement is still in flight:
+        // the count is read on this thread and the frame arrives on the
+        // reader's, so a test slow enough to lose that race fails on a frame it
+        // was never asserting about. Same move the merge and idle-partition
+        // tests above make, except they baseline the count instead — here the
+        // point of the assertion is that the number is absolutely zero.
+        server.tickAll()
         val events = listen()
         val before = snapshot(null)
         before.nodes.map { it.ref }.toSet() shouldBe setOf(encoded(x), encoded(y))
@@ -345,6 +357,7 @@ class InspectorGraphsTest {
 
         // nothing was announced either: no node/link deltas, no graphs.changed
         server.tickAll()
+        events.drained()
         events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
         events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
         events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0
@@ -352,8 +365,14 @@ class InspectorGraphsTest {
         probe.delete("${InspectorServer.CELL_PATH}/${encoded(x)}/observe").statusCode() shouldBe 204
         awaitUntil("observation sink despawned") { registry.localRefs().size == 2 }
         snapshot(null).nodes.map { it.ref }.toSet() shouldBe before.nodes.map { it.ref }.toSet()
+        // releasing a sink emits topology deltas for anything that is not an
+        // instrument, so this second absence needs the same barrier as the first
+        // — and its own tick, since only a tick can produce a `graphs.changed`
+        server.tickAll()
+        events.drained()
         events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
         events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
+        events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0
     }
 
     // -------------------------------------------------------------- fixtures
@@ -394,6 +413,9 @@ class InspectorGraphsTest {
     private inner class SseTap(url: String) : AutoCloseable {
         private val kinds = LinkedBlockingQueue<String>()
 
+        /** The highest `Event.seq` this reader has actually delivered — see [drained]. */
+        private val readSeq = AtomicLong(-1)
+
         /**
          * Held so [close] can release it (computenet-4vh): one client per
          * `listen()`, i.e. per test method, each with its own selector thread and
@@ -405,12 +427,38 @@ class InspectorGraphsTest {
             .thenAccept { response ->
                 response.body().forEach { line ->
                     if (line.startsWith(DATA)) {
-                        kinds += json.decodeFromString<Event>(line.removePrefix(DATA)).kind
+                        val event = json.decodeFromString<Event>(line.removePrefix(DATA))
+                        kinds += event.kind
+                        readSeq.accumulateAndGet(event.seq, ::maxOf)
                     }
                 }
             }
 
         fun countOfKind(kind: String): Int = kinds.count { it == kind }
+
+        /**
+         * A read barrier for the *absence* assertions (computenet-rzq0). Frames
+         * are delivered on [reader]'s own thread, so counting a kind straight
+         * after the tick that could have emitted it asserts nothing: a frame
+         * still in flight reads as a frame never sent, and the test passes for
+         * the wrong reason until a loaded machine slows the count down enough
+         * to see it.
+         *
+         * Barriered on [Event.seq] rather than on a frame count, so that a
+         * *scheduled* tick cannot satisfy it. `seq` advances on every emitted
+         * event and a snapshot reports the current value, so once this reader
+         * has delivered a frame at or past the server's post-tick `seq`, every
+         * frame emitted up to that tick has been counted — whoever emitted it.
+         * A heartbeat carries the current `seq` without advancing it, and
+         * `tickAll()` always emits one, so the barrier always has a frame to
+         * ride even when the tick announced nothing.
+         */
+        fun drained() {
+            val target = snapshot(null).seq
+            awaitUntil("sse reader at seq $target (read ${readSeq.get()})", timeoutMs = 10_000) {
+                readSeq.get() >= target
+            }
+        }
 
         fun awaitKind(kind: String, count: Int) =
             awaitUntil("$count '$kind' frames (saw ${countOfKind(kind)})", timeoutMs = 10_000) {
