@@ -84,6 +84,41 @@ object Protocols {
 }
 
 /**
+ * A port that anchors its own [ProtocolSupport] instead of leaving it in
+ * `ProtocolSupport.registries` (computenet-7iyy). Implemented by the
+ * hosted-cell ports — `FanInlet`, `FanOutlet`, `FeedbackInlet`, which are the
+ * kernel's only [civictech.cell.link.Linked] port classes: these are the ports
+ * a [civictech.cell.Cell] owns, so they are the ports whose retention retains a
+ * cell. (`FanInlet`/`FanOutlet` also implement
+ * [civictech.cell.port.DerivedPortRef]; `FeedbackInlet` does not, so the two
+ * sets are close but not equal.)
+ *
+ * **Why the slot has to exist.** `ProtocolSupport` holds caller-supplied
+ * handler closures, and a closure captures whatever its call site captures —
+ * for `FanInlet.onEdgeEvent`, the inlet itself. A JVM-global `WeakHashMap`
+ * holds its values strongly, so such a value reaches its own key and the entry
+ * (with the port, and through the port's served implementation the owning cell)
+ * is immortal, reclaimable only by an explicit `unbind` that a dropped-without-
+ * despawn owner never reaches.
+ *
+ * Weakening the map's value — computenet-w5sm's resolution for `PortRegistry` —
+ * does not transfer, because it rests on an anchor `ProtocolSupport` did not
+ * have: there, the *owner* holds its ports, so weak values in the registry lose
+ * nothing. Nothing held a port's `ProtocolSupport`, so a weak value would let a
+ * live port's handlers vanish at the next collection. This interface is that
+ * missing anchor: the port holds its support, the owner holds the port
+ * (`registerPort`'s contract), and no global root holds either.
+ *
+ * Implementations only declare the field; [ProtocolSupport.of] and
+ * [ProtocolSupport.unbind] are the only readers and writers, both under the
+ * `registries` monitor.
+ */
+internal interface ProtocolAnchored {
+    /** Storage only — go through [ProtocolSupport.of]. */
+    var protocolSupport: ProtocolSupport?
+}
+
+/**
  * Per-port generic-protocol sub-channels (G-13 minimal): one handler per
  * [ProtocolId], sharing the port's existing links and requiring no
  * cell-specific logic — no per-message cost beyond one map lookup (P2).
@@ -96,15 +131,18 @@ object Protocols {
  * threaded production host. Endpoint objects are in-process only — generic
  * protocols do not cross the wire yet (bridged links have null endpoints).
  */
-// PN-9 (leak fix): the constructor param is NOT stored, and [ownerRef] is weak.
-// [registries] is a WeakHashMap keyed on the port; a stored `port` field, or a
-// strong `owner` ref (owner → its ports = the keys), would pin every port's
+// PN-9 (leak fix): no `port` field is stored, and [ownerRef] is weak. A stored
+// `port`, or a strong `owner` ref (owner → its ports), would pin every port's
 // ProtocolSupport and its handler closures for the JVM lifetime — hosted cells
-// then never collect, so the whole suite's ports accumulate in one test JVM. The
-// `port` field was dead (never read); a GC'd owner means the cell is dead, so
-// relay correctly stops (a live cell is always strongly held by its host). PN-9's
-// extra per-inlet policy state made this latent leak exceed the default test heap.
-class ProtocolSupport private constructor(port: Port) {
+// then never collect, so the whole suite's ports accumulate in one test JVM. A
+// GC'd owner means the cell is dead, so relay correctly stops (a live cell is
+// always strongly held by its host).
+//
+// computenet-7iyy closed the edge PN-9 could not: [handlers]/[relays] hold
+// caller-supplied closures, which routinely capture the port they were
+// registered on, so a globally-rooted support pins its port anyway. See
+// [ProtocolAnchored] and [of].
+class ProtocolSupport private constructor() {
     private val handlers = mutableMapOf<ProtocolId, (Link, Any) -> Unit>()
     private val relays = mutableMapOf<ProtocolId, (Any) -> Boolean>()
     @Volatile private var ownerRef: java.lang.ref.WeakReference<Any>? = null
@@ -175,15 +213,41 @@ class ProtocolSupport private constructor(port: Port) {
     fun handles(id: ProtocolId): Boolean = id in handlers
 
     companion object {
-        // ponytail: JVM-global weak map, same pattern as PortRegistry
+        /**
+         * Fallback storage for ports that carry no [ProtocolAnchored] slot —
+         * `Use.fixed` endpoints, test doubles, anything outside the hosted-cell
+         * port classes. Such a port is not owned by a cell, so pinning it pins
+         * only itself.
+         *
+         * It is deliberately *not* the general store any more (computenet-7iyy):
+         * a JVM-global `WeakHashMap<Port, ProtocolSupport>` holds its values
+         * strongly and reclaims an entry only when its key stops being strongly
+         * reachable, so every entry whose value can reach its own key is
+         * immortal — and the handler closures in a value reach their port
+         * routinely (`FanInlet.onEdgeEvent` captures the inlet). See
+         * [ProtocolAnchored].
+         */
         private val registries = Collections.synchronizedMap(WeakHashMap<Port, ProtocolSupport>())
 
-        // T04 finding 3: getOrPut on a synchronizedMap is two monitor
-        // acquisitions (get, then put), not atomic — a racing constructor can
-        // discard the first instance (and the Saturation relay/ownerRef it
-        // carries). Explicit synchronized(registries) matches Attention.kt's
-        // existing correct form (control/Attention.kt companion `of`).
-        fun of(port: Port): ProtocolSupport = synchronized(registries) { registries.getOrPut(port) { ProtocolSupport(port) } }
+        /**
+         * The port's support, created on first use. An anchored port keeps it in
+         * its own field, so it lives exactly as long as the port and never
+         * enters [registries]; anything else falls back to the global map.
+         *
+         * T04 finding 3: getOrPut on a synchronizedMap is two monitor
+         * acquisitions (get, then put), not atomic — a racing constructor can
+         * discard the first instance (and the Saturation relay/ownerRef it
+         * carries). Explicit synchronized(registries) matches Attention.kt's
+         * existing correct form (control/Attention.kt companion `of`), and the
+         * anchored branch shares the same monitor so it is equally atomic.
+         */
+        fun of(port: Port): ProtocolSupport = synchronized(registries) {
+            if (port is ProtocolAnchored) {
+                port.protocolSupport ?: ProtocolSupport().also { port.protocolSupport = it }
+            } else {
+                registries.getOrPut(port) { ProtocolSupport() }
+            }
+        }
 
         /** Associates every currently registered port with its owning cell. */
         fun bind(owner: Any) {
@@ -193,14 +257,25 @@ class ProtocolSupport private constructor(port: Port) {
         }
 
         /**
-         * PN-9 (leak bound): drop a despawned cell's ports from [registries]. The
-         * map's values (handler closures) reference their port keys, so a bare
-         * WeakHashMap never reclaims them; explicit eviction on teardown keeps
-         * retention proportional to live cells rather than every cell ever hosted.
+         * Drop a despawned cell's protocol state — its anchored slots and its
+         * [registries] entries alike.
+         *
+         * Since computenet-7iyy this is an *eagerness* optimization, not a leak
+         * bound: an anchored port's support dies with the port, which dies with
+         * its owner, so a dropped cell is collectable whether or not anyone
+         * calls this. It stays because despawn means the handlers are finished
+         * *now*, while the port object may outlive the despawn (a caller still
+         * holding the cell) and must not keep serving protocol traffic.
          */
         fun unbind(owner: Any) {
             val ports = PortRegistry.of(owner)
-            ports.names().forEach { name -> ports[name]?.let { registries.remove(it) } }
+            ports.names().forEach { name ->
+                ports[name]?.let { port ->
+                    synchronized(registries) {
+                        if (port is ProtocolAnchored) port.protocolSupport = null else registries.remove(port)
+                    }
+                }
+            }
         }
 
         private fun send(link: Link, id: ProtocolId, traversal: ProtocolTraversal, upstream: Boolean) {

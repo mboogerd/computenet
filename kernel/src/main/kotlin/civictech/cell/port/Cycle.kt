@@ -10,6 +10,8 @@ import civictech.cell.link.Linked
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkSupport
 import civictech.cell.link.handshake
+import civictech.cell.protocol.ProtocolAnchored
+import civictech.cell.protocol.ProtocolSupport
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -78,7 +80,15 @@ class FeedbackInlet<D : Any>(
      */
     val payloadType: Class<*>? = null,
     private val onLap: (D) -> Unit,
-) : Use<Consumer<D>>, Linked {
+) : Use<Consumer<D>>, Linked, ProtocolAnchored {
+
+    /**
+     * computenet-7iyy: a cell-owned port anchors its own [ProtocolSupport]
+     * rather than leaving it in a JVM-global map that would pin the port and,
+     * through [onLap], the cell. See [ProtocolAnchored]; [ProtocolSupport.of]
+     * is the accessor.
+     */
+    override var protocolSupport: ProtocolSupport? = null
 
     override val linking = LinkSupport()
 

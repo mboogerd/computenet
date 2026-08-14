@@ -479,6 +479,52 @@ Otherwise take the first unblocked one:
 bd ready --parent=<epic> --type=feature --limit 1 --json
 ```
 
+**An epic can have no feature layer at all, and that is not a defect.** Some
+epics are worked as bugs, tasks and chores parented *directly* to the epic —
+computenet-dqy is 69 children of which exactly one is a feature, and that one
+is closed, which is how both machines have worked it for many sessions. On
+such an epic both feature queries return empty while real work is sitting
+ready, and the literal reading below would send it to 5f and then Finalize
+having done nothing. Reproduced 2026-08-14: `bd ready --parent=computenet-dqy
+--type=feature` → 0, `bd list --parent --type=feature --status=in_progress`
+→ 0, while step 3's own workable-surface check (`bd ready --parent=<epic>`,
+no type filter) → 2. **Step 3 admits the epic on a query step 5 cannot see**,
+and that disagreement is the defect.
+
+So before falling through, ask the untyped question:
+
+```bash
+bd ready --parent=<epic> --json      # no --type filter
+```
+
+Non-empty while the feature queries were empty → **work these directly**.
+Route by shape, and note that route 4's wording assumes a parent feature that
+these items do not have:
+
+- **A bug or chore** → its own worktree, branch and PR, exactly like a
+  feature. Run it through 5a's flow with the item id in place of the feature
+  id.
+- **A task parented straight to the epic** → the *same* treatment, not 5b's
+  task flow. 5b cuts a task branch from its feature's branch and merges it
+  back there; with no feature there is no base to cut from and nothing to
+  merge into (computenet-9xj records exactly this). Give it its own
+  worktree/branch/PR off `origin/main` like a bug.
+
+Apply the same filters as everywhere else — skip `human`-labelled items and
+anything with `parked_at` within 6h. Only when *this* query is empty too does
+5f apply.
+
+**When that item finishes, come back here, not to 5f.** Re-run the untyped
+query and take the next one; a slot that works one direct child and then
+falls through has the same defect one level down. 5f's route 1 asks for
+another *feature*, and route 4 explicitly excludes items parented to this
+epic, so neither will bring you back.
+
+**After the T-90m notification, stop taking new ones** — the same guard 5f
+route 1 carries, and for the same reason: an item you cannot review and merge
+before the slot ends leaves a stranded branch. Finish the one you are on and
+go to 5f.
+
 Take the first result **not recently parked** (`metadata.parked_at` within
 6h) **and not carrying the `human` label** — `bd ready` returns human-gated
 decision beads as if they were workable, and dispatching one hands an agent a
@@ -501,7 +547,7 @@ agent into a worktree, and before you remove one, ask the same question: has
 the agent you dispatched into it reported back?
 
 - **You never dispatched an agent into it this session** (a first run, or a
-  worktree resumed from an earlier session via `metadata.worktree`, 5a) →
+  worktree resumed from an earlier session, which 5a recomputes) →
   nobody is live in it and it is yours to use. An earlier session's agent
   died with that session and its notification will **never** arrive here, so
   do not wait for one. This is the normal resume case; it must not stall.
@@ -542,7 +588,60 @@ worktree. Ignore a foreign `metadata.worktree` path; the commands below
 recompute a local one, and `ensure-worktree.sh` rebuilds from the remote
 branch.
 
-**`metadata.branch` exists** → reuse it; that branch and draft PR hold real
+**`metadata.branch` exists** → **check whether its PR already merged before
+you reuse it.** This repo squash-merges (the ruleset requires linear history),
+and a squash puts the branch's content on `main` under a *new* commit sharing
+no ancestry with the branch. So a fully-landed branch reads as simultaneously
+"already in main" and "N commits ahead", and 5a's `merge origin/main` below
+hands you a conflict whose only correct resolution is *discard both sides,
+this is already landed* — which is exactly what "Conflicts here are yours to
+resolve" does not suggest. Resolving it as a real conflict re-lands reviewed
+content as a fresh diff. Measured 2026-08-13 on computenet-dqy.55, whose
+PR #94 had merged: `git merge origin/main` conflicted in
+`.github/workflows/announcement-probe.yml`, and `git diff --stat
+origin/main...HEAD` reported 332 insertions, all of it already on `main`.
+
+```bash
+# metadata.pr may be unset even when a PR exists — a crash between creating and
+# recording it is the case 5a already warns about. Ask the branch, not the bead.
+bd show <feature-id> --json | jq -r '.[0].metadata.branch'      # = <branch> below
+gh pr list --head <branch> --state all --json number,state -q '.[] | "\(.number) \(.state)"'
+```
+
+- **`MERGED`** → the branch is spent. Do **not** merge `origin/main` into it.
+  Cut a fresh one from `origin/main` and repoint the bead. Derive the suffix
+  from the *current* value rather than hardcoding it, or the second resume
+  re-uses the branch it just retired:
+
+  ```bash
+  # [0-9][0-9]* not \+ — BSD sed (macOS) does not support \+ in a basic regex,
+  # and the silent failure is N="" -> always -r2, i.e. reusing the spent branch
+  BR=<branch>        # paste the recorded value; do NOT rely on a variable
+  N=$(printf '%s' "$BR" | sed -n 's/.*-r\([0-9][0-9]*\)$/\1/p'); N=$((${N:-1} + 1))
+  NEW="feature/<feature-id>-r$N"                 # id stays derivable: strip -r<n>
+  bd update <feature-id> --set-metadata branch="$NEW" \
+    --set-metadata worktree=$PWD/../computenet-worktrees/<feature-id>-r$N \
+    --set-metadata pr=
+  bd comment <feature-id> "PR <url> merged by squash; <branch> is spent. Continuing on $NEW cut from origin/main."
+  ```
+
+  **Clearing `pr=` is not optional.** 5d creates a PR *only* if `metadata.pr`
+  is unset, so leaving the merged url there means the fresh branch never gets
+  a PR, 5e dispatches a reviewer at the merged one, and Finalize reads
+  `MERGED` for work that never shipped.
+
+  Leave the old local branch and its worktree alone — Finalize's sweep takes
+  them, and deleting a branch whose PR merged buys nothing mid-session.
+- **`OPEN`**, or no PR at all → reuse it as below.
+
+**From here on, everything uses `metadata.branch` — never the literal
+`feature/<feature-id>`.** That is what makes the repoint above take effect:
+attach, verify, merge, push, 5b's task base ref and 5d's `--head` all read the
+recorded value. Writing the literal name re-attaches the spent branch two
+commands after you retired it, and walks into the very conflict this check
+exists to avoid.
+
+Reused, that branch and draft PR hold real
 work, so never start over. **Otherwise** record the metadata *first* — a
 crash between recording and creating leaves an unrecorded branch, and the
 retry then builds a second branch and a second PR for the same feature:
@@ -557,19 +656,30 @@ Recording it locally is enough for that ordering to do its job: a retry on
 this machine reads the local DB and finds the branch. It reaches the other
 machine at Finalize's push.
 
-Either way, attach the worktree the same way:
+**All three ways** — reused, freshly recorded, or repointed after a squash —
+attach the same way, and all three read `metadata.branch`:
 
 ```bash
-.claude/skills/work/scripts/ensure-worktree.sh \
-  "$PWD/../computenet-worktrees/<feature-id>" feature/<feature-id> origin/main
+# Read the recorded branch and substitute it literally below; the worktree is
+# recomputed, not read. Do NOT assign either to a shell variable: each fenced block is a separate Bash call
+# and shell state does not survive between calls — an empty "$BR" reaches
+# ensure-worktree.sh's ${3:-origin/main} as "unset" and silently cuts from
+# origin/main, and git -C "" silently operates on the MAIN CHECKOUT.
+bd show <feature-id> --json | jq -r '.[0].metadata.branch'      # = <branch>
+# <worktree> = $PWD/../computenet-worktrees/$(basename <branch>) — RECOMPUTED
+# locally. Never metadata.worktree: it may be the other machine's path, and on
+# this queue it is (computenet-dqy.65/.69 both record /Users/MerlijnB/...),
+# which makes ensure-worktree.sh die on "mkdir: Permission denied".
+
+.claude/skills/work/scripts/ensure-worktree.sh <worktree> <branch> origin/main
 
 # Verify the worktree actually holds the branch's remote work before using it.
-if git -C <worktree> fetch origin feature/<feature-id> 2>/dev/null; then
+if git -C <worktree> fetch origin <branch> 2>/dev/null; then
   git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
-    && echo "OK: worktree contains origin/feature/<feature-id>" \
-    || echo "STOP: on the branch at the wrong commit — origin/feature/<feature-id> is not in HEAD"
+    && echo "OK: worktree contains origin/<branch>" \
+    || echo "STOP: on the branch at the wrong commit — origin/<branch> is not in HEAD"
 else
-  echo "OK: origin has no feature/<feature-id> yet (first run, nothing to compare)"
+  echo "OK: origin has no <branch> yet (first run, nothing to compare)"
 fi
 ```
 
@@ -612,8 +722,8 @@ Only once it is classified, bring the worktree up to date:
 
 ```bash
 git -C <worktree> pull --ff-only 2>/dev/null || true   # no upstream yet is fine
-git -C <worktree> merge origin/main -m "Merge main into feature/<feature-id>"
-git -C <worktree> push -u origin feature/<feature-id>
+git -C <worktree> merge origin/main -m "Merge main into <branch>"
+git -C <worktree> push -u origin <branch>
 ```
 
 **That `merge origin/main` is not optional on a resumed feature.** `pull` only
@@ -720,7 +830,9 @@ bd update <task-id> \
   --set-metadata worktree=$PWD/../computenet-worktrees/<task-id> \
   --set-metadata branch=task/<task-id>
 .claude/skills/work/scripts/ensure-worktree.sh \
-  "$PWD/../computenet-worktrees/<task-id>" task/<task-id> feature/<feature-id>
+  "$PWD/../computenet-worktrees/<task-id>" task/<task-id> <feature-branch>
+# <feature-branch> is the feature's recorded metadata.branch — re-read it here
+# (5a), never a variable: an empty 3rd arg silently becomes origin/main.
 ```
 
 `ensure-worktree.sh` handles every state a resumed task can be in — already
@@ -984,7 +1096,7 @@ task branches.
 `gh pr create` on a branch that already has a PR is an error, not a no-op:
 
 ```bash
-gh pr create --draft --base main --head feature/<feature-id> \
+gh pr create --draft --base main --head <branch> \
   --title "<feature title>" \
   --body "Delivers <feature-id>. Tasks land as reviewed commits."
 bd update <feature-id> --set-metadata pr=<url>
@@ -1075,7 +1187,8 @@ git -C <feature-worktree> fetch origin main
 git -C <feature-worktree> log --oneline \
   $(git -C <feature-worktree> merge-base HEAD origin/main)..origin/main
 
-# the checks are only a verdict on the commit they ran against
+# the checks are only a verdict on the commit they ran against — and the
+# reviewer's own §6 merge of origin/main will have moved the head
 git -C <feature-worktree> rev-parse HEAD
 gh pr view <pr-url> --json headRefOid -q .headRefOid    # must equal the line above
 gh pr checks <pr-url>
@@ -1254,6 +1367,19 @@ mid-breakdown, not finished — never close that.
 
 ## 6. Finalize
 
+**If this session is ending abnormally — budget exhausted, an unrecoverable
+error, an interrupt — run the publication push FIRST and skip the rest.**
+
+```bash
+bd dolt push  2>&1 | grep -iE "complete|rejected|error"
+```
+
+One command, ~34s. Everything else in Finalize is bookkeeping a later session
+can reconstruct from the tracker; unpushed local commits are the one thing it
+cannot. They are not lost — the next session on this machine carries them out
+on its own Finalize push — but "whenever someone next runs a slot here" is a
+poor publication guarantee when one command fixes it now.
+
 **Re-check every feature you marked ready this session** — one of them has
 probably merged while you were working elsewhere, and closing it here saves
 the next session a round trip:
@@ -1390,7 +1516,7 @@ git worktree remove "$PWD/../computenet-worktrees/<id>"
 Remove the worktrees of **tasks merged in 5c**, of **features that closed**
 (their local branch too), and of any extra fix worktree 5c's repair path
 created. Leave unfinished features' and tasks' worktrees in place; the next
-session reuses them via `metadata.worktree`.
+session recomputes the same path and reattaches there (5a).
 
 Then `TaskStop` the budget monitor.
 

@@ -55,6 +55,11 @@ script:
 checks:
   # dview accepted {alpha,beta,gamma,delta}; equals the batch oracle over dsource's ops
   - {type: incremental-equals-batch, view: dview}
-  # k1,k2 fired pre-crash and were NOT re-fired on replay; k3 fired post-recovery — each exactly once
+  # k1,k2 fired pre-crash and were NOT re-fired on replay; k3 fired post-recovery — each
+  # exactly once. Since computenet-61w the unkeyed form quantifies over the keys the script
+  # FED esink (the adds on esource, the only cell linked into it: k1,k2,k3), not merely the
+  # ones its log contains — so this covers the silent-effect-LOSS direction too: an element
+  # suppressed to zero firings reads "observed 0, expected 1" instead of being absent from
+  # the grouping and passing vacuously.
   - {type: effect-count, sink: esink, exactly: 1}
   - {type: no-dead-letters}

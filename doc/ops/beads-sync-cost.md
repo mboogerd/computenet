@@ -9,6 +9,46 @@ origin (`https://github.com/mboogerd/computenet.git`, embedded Dolt mode,
 premise (a ~10 minute round-trip that makes per-session sync too expensive)
 is real.
 
+**Staleness notice (computenet-o97.7, 2026-08-14).** Every number below was
+measured against the old `refs/dolt/data` ref on the GitHub remote
+(`https://github.com/mboogerd/computenet.git`). PR #64 (merged 2026-08-12,
+after this report's own measurements) moved `sync.remote` to a native Dolt
+remote on DoltHub (`https://doltremoteapi.dolthub.com/mrboo/computenet`)
+because the database had outgrown the `refs/dolt/data` path and its pushes
+had started failing outright — so the numbers below no longer describe the
+path in current use, and the specific GitHub-remote failure mode they
+document (the `merge conflicts in issues require operator resolution` abort)
+is a property of that old path, not necessarily of DoltHub.
+
+This task took one fresh data point against the *current* DoltHub remote
+rather than leaving the doc silently stale, sized to fit inside a single
+measurement (not a full re-run of the six-call protocol below, which this
+task's slot did not have room for, and which risked colliding with this
+session's own orchestrator, also syncing against the same database
+concurrently — see the instruction to prefer measuring pull and not loop):
+
+```
+$ cd /Users/merlijn/Documents/local-projects/computenet
+$ time bd dolt pull
+Pulling from Dolt remote...
+Pull complete.
+bd dolt pull  1.13s user 0.38s system 15% cpu 9.904 total
+```
+
+**One `bd dolt pull` against DoltHub: 9.90s wall time**, 2026-08-14, no
+concurrent `bd dolt` operation observed to be running against the same
+database at that moment. That is markedly faster than this report's own
+pull numbers below (mean 33.56s, median 34.09s against the old GitHub
+remote) — consistent with DoltHub being a purpose-built Dolt remote host
+rather than a ref on a GitHub git remote, though a single sample cannot
+establish a distribution and this is not a claim that push behaves the same
+way. **The rest of this document — the raw timed runs, the per-session
+model, and the GO verdict — is retained as history of the old path and
+should not be read as a current measurement of the DoltHub remote.** If a
+full re-measurement against DoltHub is needed (e.g. to re-derive the
+per-session cost model in `doc/ops/beads-sync-runbook.md` §2), that is
+follow-up work sized as its own task, not something this task's slot fits.
+
 ## Decision rule (pre-registered, before any numbers below)
 
 **GO** (the problem is real, TRK1 proceeds) **iff** the measured per-session

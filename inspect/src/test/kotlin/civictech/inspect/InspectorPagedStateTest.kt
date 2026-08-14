@@ -557,6 +557,85 @@ class InspectorPagedStateTest {
     }
 
     /**
+     * computenet-y5z — the same refusal, but **mid-walk**, which is where its
+     * second half becomes observable.
+     *
+     * The test above drives page 1 with no cursor at all, so it pins only that a
+     * failed reconciliation serves no page. `PagedState.read` promises more than
+     * that on this arm: the cursor the request carried is put back under the
+     * **same** id, exactly as on a bounded-wait miss. That half is normative —
+     * `20-api-contract.md` says of `page.cursor` that a request answered
+     * `unanswered` leaves the cursor it carried resumable — and with no cursored
+     * request reaching the reconciliation, deleting the restore left the suite
+     * green.
+     *
+     * So: walk to page 2, swallow the *re-read* the byte budget forces there,
+     * and assert the same four things the bounded-wait-miss test asserts —
+     * unanswered, no page, the same id answers 200 with the next page, and the
+     * walk is whole and duplicate-free through the miss.
+     */
+    @Test
+    fun `a reconciliation that cannot complete mid-walk leaves the cursor resumable`() {
+        val wide = "w".repeat(2_000)
+        val elements = (0 until 100).map { "$it-$wide" }
+        val cell = set(*elements.toTypedArray())
+        val serving = started()
+
+        // page 1 is itself reconciled and served, so the walk is genuinely
+        // mid-flight when the miss lands: the request below carries a cursor
+        val first = state(cell.ref, limit = 100)
+        first.kind shouldBe CellState.PAGE
+        val cursor = first.page!!.cursor!!
+
+        // on the cursored request the first read lands and the reconciliation
+        // re-read is swallowed, so the render can never complete
+        val delegate = serving.reads
+        val abandoned = CompletableFuture<civictech.cell.StateReadResult>()
+        val reads = AtomicLong()
+        serving.reads = BoundedReadSource { ref, request ->
+            if (reads.getAndIncrement() == 1L) abandoned else delegate.readState(ref, request)
+        }
+
+        // stateOnce' shape, not [pageOf]: this request *is* the miss, and the
+        // client-shaped retry would consume the very id under test
+        val missed: CellState =
+            json.decodeFromString(probe.state(statePath(cell.ref) + "?cursor=$cursor&limit=100"))
+
+        // (a) unreadable is unanswered, and (b) there is no page object at all —
+        // the entries the cursor would have advanced past are not served short
+        missed.kind shouldBe CellState.UNAVAILABLE
+        missed.unreadable shouldBe CellState.UNANSWERED
+        missed.page shouldBe null
+        // the reconciliation really was the read that was swallowed
+        reads.get() shouldBe 2L
+        abandoned.isCancelled shouldBe true
+
+        // (c) the SAME id — not a fresh walk — answers 200 with the next page.
+        // A 410 here is what deleting the restore in `read`'s reconciliation arm
+        // produces, and the status is asserted on every attempt because that is
+        // the promise: re-sending an id a request answered `unanswered` with is
+        // always sound, however many times the deadline is missed.
+        serving.reads = delegate
+        var attempts = 0
+        var resumed: CellState
+        while (true) {
+            val response = probe.get(statePath(cell.ref) + "?cursor=$cursor&limit=100")
+            response.statusCode() shouldBe 200
+            resumed = json.decodeFromString(response.body())
+            attempts += 1
+            if (resumed.unreadable != CellState.UNANSWERED || attempts > UNANSWERED_RETRIES) break
+        }
+        resumed.kind shouldBe CellState.PAGE
+        rowsOf(resumed).size shouldBe resumed.page!!.entries
+
+        // (d) …and the walk is still whole and duplicate-free through the miss
+        val seen = (listOf(first, resumed) + resume(cell.ref, resumed, limit = 100))
+            .flatMap { elementsOf(it) }
+        seen.toSet().size shouldBe seen.size
+        seen.toSet() shouldBe elements.toSet()
+    }
+
+    /**
      * The marker's existing meaning, unchanged: `$truncated` *inside* a rendered
      * entry means one value was abbreviated, never that entries went missing.
      */
