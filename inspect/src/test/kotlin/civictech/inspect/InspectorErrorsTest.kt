@@ -61,7 +61,7 @@ class InspectorErrorsTest {
     private val hostRef = CellRef(UUID.randomUUID())
     private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
     private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
-    private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
+    private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).startUnscheduled()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
     private var tap: SseTap? = null
 

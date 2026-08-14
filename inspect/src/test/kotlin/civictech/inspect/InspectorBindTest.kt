@@ -76,7 +76,7 @@ class InspectorBindTest {
 
     @Test
     fun `the inspector is reachable on loopback`() {
-        InspectorServer(registry, setOf(host), port = 0).start().use { server ->
+        InspectorServer(registry, setOf(host), port = 0).startUnscheduled().use { server ->
             Socket().use { it.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), server.boundPort), TIMEOUT_MS) }
         }
     }
@@ -109,7 +109,7 @@ class InspectorBindTest {
             "no interface on this host answers an inbound connect to its own address even for a " +
                 "wildcard-bound server, so this probe cannot distinguish a wildcard bind from a loopback one",
         )
-        InspectorServer(registry, setOf(host), port = 0).start().use { server ->
+        InspectorServer(registry, setOf(host), port = 0).startUnscheduled().use { server ->
             shouldThrow<IOException> {
                 Socket().use { it.connect(InetSocketAddress(external, server.boundPort), TIMEOUT_MS) }
             }
@@ -142,7 +142,7 @@ class InspectorBindTest {
             hosts = mapOf("test-host" to host),
             port = NAMED_PORT,
             shells = recording,
-        ).start().use { }
+        ).startUnscheduled().use { }
 
         val (port, bindAddress) = asked.single()
         port shouldBe NAMED_PORT

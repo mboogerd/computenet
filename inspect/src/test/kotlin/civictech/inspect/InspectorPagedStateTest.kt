@@ -804,7 +804,7 @@ class InspectorPagedStateTest {
     }
 
     private fun started(): InspectorServer {
-        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
+        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0).startUnscheduled()
         server = started
         probe = HttpProbe("http://localhost:${started.boundPort}")
         return started

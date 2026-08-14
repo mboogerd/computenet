@@ -46,7 +46,7 @@ class InspectorTopologyTest {
     }
 
     private fun serve(names: Map<CellRef, String> = emptyMap()): HttpProbe {
-        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, cellNames = names).start()
+        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, cellNames = names).startUnscheduled()
         server = started
         return HttpProbe("http://localhost:${started.boundPort}").also { probe = it }
     }
