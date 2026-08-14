@@ -1,5 +1,6 @@
 package civictech.cell.port
 
+import java.lang.ref.WeakReference
 import java.util.*
 
 /**
@@ -9,15 +10,43 @@ import java.util.*
  *
  * The registry key is the property name — hosts resolve ports by that name, and
  * client-side proxies derive it from interface getter names.
+ *
+ * **The registry is an index, not an owner (computenet-w5sm).** It holds each
+ * [Port] through a [WeakReference], because the registry itself is the *value*
+ * of a JVM-global `WeakHashMap<owner, PortRegistry>` ([registries]). A
+ * `WeakHashMap` reclaims an entry only when its key stops being strongly
+ * reachable and it holds its values strongly, so any strong path value → key
+ * makes the entry — and its key — immortal. A strongly-held port is exactly
+ * such a path in the ordinary shape of a cell:
+ * `registries[cell] → PortRegistry → inlet → served implementation → cell`,
+ * which closes the loop and pins every owner ever constructed (measured:
+ * 61553 live registry entries and ~199 KB/iteration in
+ * `WsAnnouncementStressTest`, computenet-uo75). Weak port values cut that one
+ * edge; nothing else about the registry changes.
+ *
+ * The anchor that keeps a live owner's ports alive is the owner itself: the
+ * registration contract is that a port is assigned to a property of its owner
+ * (see [registerPort] — "the name must match the property it is assigned to"),
+ * so a port outlives the registry entry exactly as long as its owner does. A
+ * port whose registration return value is discarded and which the owner
+ * therefore does not hold is *not* anchored, and [get] may start returning null
+ * for it: registering a port nobody keeps was never meaningful (it can neither
+ * be linked nor served), and [names] still reports it, so duplicate-name
+ * detection in [register] is unaffected — name entries are never removed.
  */
 class PortRegistry {
-    private val ports = LinkedHashMap<String, Port>()
+    /**
+     * `name → weakly-held port`. Entries are never removed once created, so
+     * [names] and [register]'s duplicate check see the full registration
+     * history regardless of collection; only [get] observes a cleared referent.
+     */
+    private val ports = LinkedHashMap<String, WeakReference<Port>>()
 
     fun register(name: String, port: Port) {
-        require(ports.put(name, port) == null) { "Duplicate port name: $name" }
+        require(ports.put(name, WeakReference(port)) == null) { "Duplicate port name: $name" }
     }
 
-    operator fun get(name: String): Port? = ports[name]
+    operator fun get(name: String): Port? = ports[name]?.get()
 
     fun names(): Set<String> = ports.keys
 
@@ -34,14 +63,15 @@ class PortRegistry {
         fun of(owner: Any): PortRegistry = synchronized(registries) { registries.getOrPut(owner) { PortRegistry() } }
 
         /**
-         * T04 finding 3 (leak mitigation until instance-scoping, T02's new
-         * marker): explicit reclaim of [owner]'s registry entry, for callers
-         * that tear down a cell before it (and this weak key) would
-         * otherwise become GC-eligible on their own — e.g. a [ManagedHost]
-         * that hosted the cell is itself dropped, or despawn wants the
-         * registry (and the port objects it strongly holds) collectible
-         * immediately rather than waiting on GC to notice the weak key is
-         * unreachable.
+         * T04 finding 3: explicit reclaim of [owner]'s registry entry, for
+         * callers that tear down a cell and want its registry (and the
+         * name → port index it carries) dropped immediately rather than
+         * waiting on GC to notice the weak key is unreachable.
+         *
+         * Since computenet-w5sm this is an *eagerness* optimization only, not
+         * a leak mitigation: the map no longer reaches its own keys (see the
+         * class KDoc), so a dropped owner and everything its ports reach is
+         * collectable whether or not anyone calls this.
          */
         internal fun release(owner: Any) {
             synchronized(registries) { registries.remove(owner) }
