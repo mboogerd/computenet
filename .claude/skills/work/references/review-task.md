@@ -272,8 +272,8 @@ What to consume, per test run:
   It is gitignored, so it can never be committed. Never commit while it
   exists. SKILL.md 5a is what reads it.
 
-**A run that stalls, or dies before the tests run, is probably this skill's
-own parallelism.** Sibling task and review agents run concurrently, each in
+**A run that stalls, times out, or dies before the tests run is probably this
+skill's own parallelism.** Sibling task and review agents run concurrently, each in
 its own worktree, all driving Gradle against the same shared caches and
 daemons. Two observed symptoms: a run lost to `buildLogic.lock` after a
 4-minute wait, and a Kotlin-daemon `OutOfMemoryError` caused by daemons left
@@ -281,9 +281,11 @@ resident by a build in a *different* directory. Clear those daemons — `pkill
 -f KotlinCompileDaemon` is machine-wide and takes a sibling's in-flight
 compile with it, so fire it on that signature and not on a red build
 generally — then retry once before you read a failure as the task's. A
-failing *assertion* is never this: contention kills builds, it does not fail
-tests, and a red suite in an untouched module is more often a latent flake
-that the diff un-cached (PR #27). If you fail a task on a build result, say
+**wall-clock timeout** can be this too: `awaitUntil`/`awaitDrained` raise
+`AssertionFailedError` when a starved host makes no progress (2026-08-11:
+three suites timed out under load, passed in 78s quiet). A wrong *value* is
+never contention; a red suite in an untouched module is more often a latent
+flake the diff un-cached (PR #27). If you fail a task on a build result, say
 which attempt it was, because contention reported as a defect sends the
 implementer after something that is not there.
 

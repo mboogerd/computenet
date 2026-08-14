@@ -215,8 +215,8 @@ than restarting. That's the whole reason the worktree is preserved.
      not force the upstream tasks the named task depends on. Put one
      `--rerun` per test task; use `--rerun-tasks` for a repo-wide run.
 
-   **A build that stalls, or dies before your tests run, is probably this
-   skill's own parallelism, not a defect you introduced.** Sibling task and
+   **A build that stalls, times out, or dies before your tests run is probably
+   this skill's own parallelism, not a defect you introduced.** Sibling task and
    review agents are running right now, each in its own worktree, all driving
    Gradle against the same shared caches and daemons. Two observed symptoms:
 
@@ -226,12 +226,15 @@ than restarting. That's the whole reason the worktree is preserved.
      a build in a *different* directory. `pkill -f KotlinCompileDaemon`
      cleared it; the retry then succeeded.
 
-   Claim contention only on a signature like those two, and never on a failing
-   *assertion*: contention stalls and kills builds, it does not make a test
-   fail. A red suite in a module your diff never touched is usually the
-   opposite — your edit invalidated that module's cache, so it executed
-   instead of replaying and exposed a latent flake (PR #27, a `:testkit` edit
-   reddening `:kernel:test`).
+   Claim contention on a signature like those two, or on a **wall-clock
+   timeout**: `awaitUntil`/`awaitDrained` raise `AssertionFailedError` when a
+   starved host makes no progress, so contention does reach you as a failing
+   assertion (2026-08-11: three suites timed out under load, passed in 78s
+   once quiet). A wrong *value* is never contention — that one is yours. A red
+   suite in a module your diff never touched is usually the opposite — your
+   edit invalidated that module's cache, so it executed instead of replaying
+   and exposed a latent flake (PR #27, a `:testkit` edit reddening
+   `:kernel:test`).
 
    `pkill -f KotlinCompileDaemon` is **machine-wide**: a Kotlin daemon's
    command line carries no project path, so you cannot kill only your own, and
