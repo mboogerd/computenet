@@ -177,6 +177,44 @@ else
   bad "local ahead of remote: script exited non-zero (being ahead is not divergence)"
 fi
 
+# -------------------------- 9. base reporting: create path names the base ref
+# stdout must stay exactly the resolved path (SKILL.md and next-batch callers
+# capture it), so the base goes to stderr — assert both halves.
+co=$(sandbox basenew); wt="$co/../wt-basenew"
+err="$ROOT/basenew.err"
+if out=$(run "$co" "$wt" feature/x origin/main 2>"$err"); then
+  base=$(git -C "$co" rev-parse --short origin/main)
+  if [ "$out" = "$(cd "$(dirname "$wt")" && pwd -P)/$(basename "$wt")" ]; then
+    grep -q "base commit .*NOT a diff baseline.*: $base " "$err" \
+      && ok "base reporting (new branch): stderr names the base ref's commit, stdout is only the path" \
+      || bad "base reporting (new branch): stderr has no base line for $base: $(cat "$err")"
+  else
+    bad "base reporting (new branch): stdout was '$out', wanted only the worktree path"
+  fi
+else
+  bad "base reporting (new branch): script exited non-zero"
+fi
+
+# --------------- 10. base reporting: resumed branch reports the BASE, not HEAD
+# The trap this closes: on a branch with prior work, HEAD is a work commit, and
+# quoting a work commit as the base is what made a reviewer diff an empty range.
+co=$(sandbox baseresumed); wt="$co/../wt-baseresumed"
+tip=$(push_remote_commit "$co" feature/x "prior work on the branch")
+err="$ROOT/baseresumed.err"
+if out=$(run "$co" "$wt" feature/x origin/main 2>"$err"); then
+  want=$(git -C "$co" rev-parse --short origin/main)
+  tipshort=$(git -C "$out" rev-parse --short "$tip")
+  if grep -q "base commit .*: $want " "$err"; then
+    grep -q "base commit .*: $tipshort " "$err" \
+      && bad "base reporting (resumed): reported the work commit $tipshort as the base" \
+      || ok "base reporting (resumed): base is $want (merge-base), not the branch tip $tipshort"
+  else
+    bad "base reporting (resumed): stderr does not name base $want: $(cat "$err")"
+  fi
+else
+  bad "base reporting (resumed): script exited non-zero"
+fi
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
