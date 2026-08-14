@@ -874,6 +874,27 @@ class InspectorServer internal constructor(
         }
     }
 
+    /**
+     * Serve, but arm no scheduler — the test seam that makes [tickAll] the
+     * *only* thing that drives a [Tick] (computenet-md6w).
+     *
+     * A test built on [start] gets its `tickAll()` racing seven live
+     * `scheduleAtFixedRate` threads, two of which (`"graphsChanged"` at
+     * [GRAPHS_POLL_MS], `"flowSample"` at [FlowCollector.WINDOW_MS]) fire at
+     * 1 Hz. Any such test that outlives one poll period takes an unrequested
+     * tick, so every exact-count SSE assertion in the suite is a wall-clock
+     * race: stalling `InspectorActivityTest`'s navigator-card test for 2.5 s
+     * after its suspend turned `countOfKind(GRAPHS_CHANGED) shouldBe 0` into
+     * `expected:<0> but was:<1>`. The schedules exist to coalesce production
+     * work off the linking thread; a test that calls [tickAll] explicitly
+     * wants the coalescing seam, not the clock.
+     *
+     * Everything else [start] does still happens — the HTTP shell serves, so
+     * the bound port, the SSE stream and every registry/lifecycle hook behave
+     * exactly as in production. Only the clock is absent.
+     */
+    internal fun startUnscheduled(): InspectorServer = apply { shell.start() }
+
     fun stop() = close()
 
     override fun close() {
