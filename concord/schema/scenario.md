@@ -320,13 +320,42 @@ neither drives a new one nor unmakes the recorded one). The derivation is narrow
 purpose, and where it does not hold the unkeyed form **fails with a message asking
 you to name the keys** rather than silently weakening to the log-only reading. A
 *partial* derivation would be that same weakening, so the refusals are stated over
-the sink's whole upstream **cone** — every cell that transitively reaches it:
-nothing links into the sink; the topology into the cone moves mid-script
-(`connect`/`disconnect`); any cell in the cone is `despawn`ed or `restart`ed; an
-`apply` targets a cell in the cone that is *not* a direct upstream, so it feeds the
-sink through an intermediate that may re-key, drop or pair its elements; or a direct
-upstream takes an op outside `add`/`remove`. `exactly: 0` needs no derivation — it
-asserts the log is empty.
+the sink's whole upstream **cone** — every cell that transitively reaches it.
+
+The derivation applies to **one shape only**: every cell linked straight into the
+sink is a `set-source` or `journal-set-source` whose scripted `add`s are its only
+input, linked in once, and the sink is declared `effect-sink` (whose contract is one
+effect per delivered added element, keyed by the element). Anything else refuses:
+
+- the sink's or a direct upstream's declared **`type:`** is outside that list — a
+  `map` re-keys, a `filter` drops, a join pairs, a view folds, a `rebaseline-source`
+  re-announces, so what it puts into the sink is a *transformation* of the script's
+  adds that a one-hop derivation cannot name. This is what refuses a **diamond**
+  (`src → sink` *and* `src → mid → sink`): no `apply` targets `mid`, so the in-cone
+  rules never fire on it, yet the keys it should have driven are unnameable
+  (computenet-61w.1);
+- a direct upstream is itself fed by a link, or the same feeder is linked into the
+  sink twice, so its emissions are not one-per-scripted-add;
+- the topology into the cone moves mid-script (`connect`/`disconnect` whose `to` is
+  in the cone);
+- any cell in the cone is `despawn`ed, `restart`ed or `restore`d;
+- an `apply` targets a cell in the cone that is *not* a direct upstream;
+- a direct upstream takes an op outside `add`/`remove`, an `add` with no `value:`, an
+  `add` with `times:`, or an `add` of an element **already added** (including a
+  re-add after a `remove`). Each of those fires once *per add*, and one `exactly:`
+  states a single count for every derived key, so "twice for `k1` and once for the
+  rest" is not expressible — name the keys instead.
+
+`exactly: 0` needs no derivation — it asserts the log is empty.
+
+**`snapshot` is deliberately not a refusal, `restart` and `restore` are.** A
+`snapshot` is a pure read of the cell it names and cannot change which elements
+reached the sink, so `DUR-SRCID-02` and `DUR-ATOMIC-01` snapshot a direct upstream
+mid-script and keep resolving. A `restart` re-baselines and re-announces, and a
+`restore` re-materializes the cell from a blob that need not be its own — a restore
+can therefore feed the sink an element that no `add` on a direct upstream ever
+named, which is a vacuous pass, not merely an imprecise one (measured in
+computenet-61w.1). Both refuse anywhere in the cone.
 
 A keyed `effect-count` is unconditional and always available: `{type: effect-count,
 sink: s, key: k4, exactly: 1}` fails with `observed 0` when `k4` never fired. Use it
