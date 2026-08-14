@@ -29,7 +29,7 @@ repo=$(dirname "$common")
 
 branch=$(git -C "$repo" symbolic-ref --short HEAD 2>/dev/null || echo "")
 if [ "$branch" != "main" ]; then
-  echo "ff-main: main checkout is on '$branch', not main — left alone."
+  echo "ff-main: main checkout is on ${branch:-a detached HEAD}, not main — left alone."
   exit 0
 fi
 
@@ -44,18 +44,37 @@ if [ -n "$dirty" ]; then
   exit 0
 fi
 
-git -C "$repo" fetch --quiet origin main 2>/dev/null || {
-  echo "ff-main: fetch failed (offline?) — left alone."
+# Bound the fetch. A hook that outruns the harness timeout is killed before it
+# can print anything, and every session start on a networkless machine then
+# stalls for the full timeout — the state a laptop waking for a scheduled slot
+# is most likely to be in. Measured against a blackholed remote: unbounded took
+# ~75s, past the 60s default. macOS has no timeout(1); git's own low-speed
+# abort is the portable bound.
+fetch_err=$(GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10 \
+            git -C "$repo" fetch --quiet origin main 2>&1) || {
+  echo "ff-main: fetch did not complete — left alone. git said:"
+  printf '%s\n' "$fetch_err" | sed 's/^/  /' 
   exit 0
 }
 
 behind=$(git -C "$repo" rev-list --count main..origin/main 2>/dev/null || echo 0)
 [ "${behind:-0}" -eq 0 ] && exit 0        # already current: say nothing
 
-if git -C "$repo" merge --ff-only --quiet origin/main 2>/dev/null; then
+# Discriminate before naming a cause. A failed --ff-only means EITHER a genuine
+# divergence OR something else: an untracked file the merge would clobber, a
+# skip-worktree override, another agent holding index.lock. Asserting
+# "diverged" for all of them sends the operator after a problem that does not
+# exist and hides git's own actionable message.
+if ! git -C "$repo" merge-base --is-ancestor main origin/main 2>/dev/null; then
+  echo "ff-main: main has diverged from origin/main ($behind behind) — left alone, resolve by hand."
+  exit 0
+fi
+
+if merge_err=$(git -C "$repo" merge --ff-only --quiet origin/main 2>&1); then
   echo "ff-main: fast-forwarded main $behind commit(s) to $(git -C "$repo" rev-parse --short main)."
 else
-  # Diverged: local main has commits origin does not. Never resolve that here.
-  echo "ff-main: main has diverged from origin/main ($behind behind) — left alone, resolve by hand."
+  # A fast-forward WAS possible and still failed. Report what git said, verbatim.
+  echo "ff-main: fast-forward was possible but did not apply — left alone. git said:"
+  printf '%s\n' "$merge_err" | sed 's/^/  /' 
 fi
 exit 0

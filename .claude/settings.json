@@ -14,7 +14,8 @@
           },
           {
             "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ff-main.sh\"",
-            "type": "command"
+            "type": "command",
+            "timeout": 20
           }
         ],
         "matcher": ""

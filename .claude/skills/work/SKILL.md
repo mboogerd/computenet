@@ -227,13 +227,16 @@ but **no scheduler runs it** — never treat it as a push that will happen on
 its own; `doc/ops/beads-sync-runbook.md` §5.)
 
 **Then check you are running the current skill.** Claude Code's session
-worktrees (`.claude/worktrees/`) are branched from the **local `main` HEAD**,
-not from `origin/main`, so a session inherits whatever revision that checkout
-happened to be on — and nothing in this flow fast-forwards it. The
-`SessionStart` hook `.claude/hooks/ff-main.sh` keeps it current, but it no-ops
-whenever the main checkout has staged or modified tracked files, so a slot can
-still begin on stale text. Measured 2026-08-14: the checkout sat 44 commits
-behind at one point, spanning nine PRs to this file.
+worktrees (`.claude/worktrees/`) are branched from **whatever HEAD the
+launching checkout is on** — for the main checkout that is local `main`, and
+nothing in this flow fast-forwards it. (Older session branches were cut from
+`refs/remotes/origin/main`; the behaviour changed on 2026-08-14, so do not
+rely on either.) The `SessionStart` hook `.claude/hooks/ff-main.sh` keeps the
+checkout current, but it deliberately no-ops whenever `main` has staged or
+modified tracked files, so a slot can still begin on stale text. Measured
+2026-08-14: the checkout sat **44 commits** behind `origin/main`, **8 of them
+touching this file** and 14 touching `.claude/skills/` — and
+`.claude/skills/remediate-friction/` did not exist in it at all.
 
 ```bash
 git hash-object .claude/skills/work/SKILL.md      # what you are running
