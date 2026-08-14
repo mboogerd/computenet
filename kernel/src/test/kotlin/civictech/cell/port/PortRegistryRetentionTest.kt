@@ -25,9 +25,12 @@ import java.util.UUID
  * proxy whose handler closes over the host, so
  * `registries[host] -> PortRegistry -> managementInlet -> served proxy -> host`
  * closes the loop through the map's strong value edge. `ProtocolSupport`'s own
- * `registries` is the same hazard on a port key, and says so in its `unbind`
- * KDoc (PN-9); this test establishes that the `PortRegistry` one is real and is
- * the reference that holds a whole dropped graph.
+ * `registries` had the same hazard on a port key until computenet-7iyy, which
+ * closed it the other way round — a cell-owned port now anchors its
+ * `ProtocolSupport` in its own field and never enters that map at all (see
+ * `ProtocolSupportRetentionTest`). This test establishes that the
+ * `PortRegistry` one is real and is the reference that holds a whole dropped
+ * graph.
  *
  * ## The measurement this test is the small end of
  *

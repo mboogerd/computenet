@@ -14,6 +14,8 @@ import civictech.cell.link.LinkRole
 import civictech.cell.link.LinkSupport
 import civictech.cell.link.PortLink
 import civictech.cell.link.handshake
+import civictech.cell.protocol.ProtocolAnchored
+import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.proxy.Proxy
 import civictech.nature.ContractRegistry
 import java.util.UUID
@@ -33,7 +35,16 @@ import java.util.concurrent.atomic.AtomicLong
 class FanOutlet<Api : Any>(
     val clazz: Class<Api>,
     initialRef: PortRef = PortRef.generate()
-) : Use<Api>, Subscribe<Api>, Linked, DerivedPortRef {
+) : Use<Api>, Subscribe<Api>, Linked, DerivedPortRef, ProtocolAnchored {
+
+    /**
+     * computenet-7iyy: this outlet anchors its own [ProtocolSupport]. Outlets
+     * carry the attention, saturation-relay and state-request handlers
+     * (`AttentionSupport.wire`, `ManagedHost` spawn, `CatchUp`,
+     * `ShardCell`), whose closures capture the owning cell — a globally-rooted
+     * support would pin it. Storage only; [ProtocolSupport.of] is the accessor.
+     */
+    override var protocolSupport: ProtocolSupport? = null
 
     // PN-1: fresh random at construction, reassigned once at stamp time to the
     // (ownerRef, name)-derived ref when this outlet is registered on a Cell.
