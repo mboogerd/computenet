@@ -1,14 +1,20 @@
 ---
 name: remediate-friction
-description: Drains the skill-friction items under the SDLC epic (computenet-wpvy) on its own lane, separate from /work — picks the most-reported open friction bug or feature, re-validates it against the current skill revision, and fixes .claude/skills/work/ in a reviewed branch and PR. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated skill-friction backlog worked.
+description: Drains the skill-friction-labeled backlog — every open item carrying that label, wherever in the tracker it sits — on its own lane, separate from /work; picks the most-reported open friction bug or feature, re-validates it against the current skill revision, and fixes .claude/skills/work/ in a reviewed branch and PR. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated skill-friction backlog worked.
 ---
 
 # /remediate-friction
 
-Drains the `skill-friction`-labeled bugs and features under
-`computenet-wpvy`, the SDLC epic, by fixing `.claude/skills/work/`
-(SKILL.md, `references/`, `scripts/`). Run on demand, or reactively via the
-trigger below.
+Drains the open `skill-friction`-labeled bugs and features by fixing
+`.claude/skills/work/` (SKILL.md, `references/`, `scripts/`). Run on demand,
+or reactively via the trigger below.
+
+**The label defines this lane, not a parent epic.** New friction is *filed*
+under `computenet-wpvy`, the SDLC epic (that is /work's SKILL.md step 7, and
+it is unchanged), but items are *selected* here by `skill-friction` alone.
+The two are deliberately different: the label predates the SDLC epic, so much
+of the log hangs off the older WSK epics or off nothing at all, and a
+parent-scoped query would leave most of the backlog undrainable.
 
 ## The reactive trigger
 
@@ -42,10 +48,11 @@ like a work session to /work's concurrent-run check.
 
 **The two lines that keep the lanes apart:**
 
-- **Never claim the SDLC epic.** Address it by id and claim only its child
-  items. Because this lane never puts an epic `in_progress`, /work's
-  concurrent-run check (which lists `in_progress` epics) never sees it, and
-  no work-session epic claim is consumed.
+- **Never claim an epic.** Claim individual items only — not the SDLC epic,
+  and not whichever epic a friction item happens to hang off. Because this
+  lane never puts an epic `in_progress`, /work's concurrent-run check (which
+  lists `in_progress` epics) never sees it, and no work-session epic claim is
+  consumed.
 - **Touch only `.claude/skills/work/` and `.claude/skills/remediate-friction/`.**
   Product code is /work's lane.
 
@@ -65,15 +72,24 @@ and report.
 ## 2. Pick the most-reported item
 
 ```bash
-bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
+bd list --label=skill-friction --status=open --exclude-type=epic --json --limit 0
 ```
 
-The label filter matters: the SDLC epic also holds ordinary process
-features that belong to /work sessions, not this lane. Order by
-`comment_count` descending — comment count is recurrence, and recurrence is
-priority. Skip anything labeled `human`. Then pick by assignee — filing
-machines pre-claim items (SKILL.md step 7), and the claim decides which
-orchestrator drains what:
+No `--parent`: the label is the whole selector, and scoping to
+`computenet-wpvy` would hide the items filed before that epic existed. The
+label is also what keeps the lane clean in the other direction — the epics
+these items sit under hold plenty of ordinary work that belongs to /work
+sessions, not here. The other two flags earn their place once `--parent` is
+gone: `--exclude-type=epic` because two of the WSK epics carry the
+`skill-friction` label themselves, and claiming one would break the
+never-claim-an-epic rule above; `--limit 0` because `bd list` defaults to 50
+and the open log already sits close to that, and a silently truncated list
+would corrupt the ordering below.
+
+Order by `comment_count` descending — comment count is recurrence, and
+recurrence is priority. Skip anything labeled `human`. Then pick by assignee
+— filing machines pre-claim items (SKILL.md step 7), and the claim decides
+which orchestrator drains what:
 
 - **Assigned to `$BEADS_ACTOR`** → yours already; work it, no sync needed.
 - **Unassigned** → an acquisition: claim by id, `bd dolt push`. Push
@@ -149,5 +165,5 @@ Report: items closed (with PRs), items superseded-closed, items left open
 and why, and the one-command oversight view for the human:
 
 ```bash
-bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
+bd list --label=skill-friction --status=open --exclude-type=epic --json --limit 0
 ```
