@@ -34,6 +34,21 @@ The failure modes those rules exist to prevent: spinning on one blocked item
 until the budget dies, and guessing on an expensive fork because asking felt
 like giving up.
 
+**`bd` is the only interface to the tracker — never the `dolt` binary.**
+Sync included: `bd dolt pull` and `bd dolt push` are `bd` subcommands and are
+the correct, expected way to sync (there is no `bd sync` — bd 1.1.2 answers
+`unknown command "sync"`; `bd dolt --help` lists `push`/`pull` under "Version
+control"). What is forbidden is invoking `dolt` **directly**,
+or reading or writing `.beads/embeddeddolt/` at all: that is bd's private
+storage engine, and a half-applied merge inside it corrupts state no `bd`
+command can see. An unattended session hit a `bd dolt pull` conflict on
+2026-08-14, followed the operator recipe in `doc/ops/beads-sync-runbook.md`
+§3.3, and got as far as `dolt merge --no-commit` before the permission
+classifier stopped the resolving `UPDATE` — which was luck, because that
+recipe was the wrong one for that conflict and would have destroyed a sibling
+session's published issue (Finalize spells out why). **A failed pull or push
+is an escalation, never a reason to go under the tool.**
+
 **Two queries decide everything, and both have a trap.** `bd ready` hides
 `in_progress`, `blocked`, and `deferred` items; `bd list` hides *closed*
 ones unless you pass `--all`. Every check below uses the one it means. Don't
@@ -1481,7 +1496,9 @@ bd dolt push  2>&1 | grep -iE "complete|rejected|error"
 
 Give the push room to finish: after a conflict resolution it has been
 measured at **over 120 seconds**, which silently blows a default shell
-timeout (`doc/ops/beads-sync-runbook.md` §3.3).
+timeout (`doc/ops/beads-sync-runbook.md` §3.3 — cited here and below for what
+it *measured*; §3.3 itself is an **operator** procedure that you do not run,
+see the conflict branch below).
 
 Then verify **your own** writes survived the merge — name them, don't assume,
 and note that a session's writes are usually not all under one epic:
@@ -1501,10 +1518,34 @@ it blind — say exactly which write vanished, at the top of the summary, and
 park it for a human.
 
 Escalate to a human **also** if the pull reports a real merge conflict
-(`merge conflicts ... require operator resolution` — computenet-gq0, resolved
-through the `dolt` CLI per §3.3) or the second push also fails. The
-*rejection* needs no judgement; whether the *merge* does is what the pull
-tells you.
+(`merge conflicts ... require operator resolution` — computenet-gq0) or the
+second push also fails. The *rejection* needs no judgement; whether the
+*merge* does is what the pull tells you.
+
+**On a merge conflict, escalating IS the route — it is not the fallback after
+you try something.** `bd` has no conflict-resolution subcommand (the runbook
+says so itself), and §3.3's sequence is raw `dolt` against bd's private store,
+which you do not run (preamble). Stop syncing there and put in the summary the
+three things that let an operator resolve it without re-deriving your session:
+
+- the **verbatim** error, not a paraphrase — it names the tables;
+- **which** tables (`issues`, `dependencies` and `child_counters` are three
+  different problems, and a pull can report all three at once);
+- where `child_counters` conflicts, or two rows carry one id, the
+  **diagnosis**: the base counter, each side's value, and the colliding ids.
+
+**That last case is why nobody should reach for §3.3 reflexively.** §3.3
+resolves last-write-wins by `updated_at`, which is right for two edits to one
+issue and destructive for an **id collision** — two *different* issues minted
+under one id, where the newer write wins and the older, already-published
+issue is erased. On 2026-08-14 both machines minted a distinct
+`computenet-wpvy.43` off base counter 42 (the sibling's at 11:08, this
+machine's at 12:05; counters conflicting at ours 43, theirs 46). LWW would
+have kept the 12:05 one and silently deleted a published issue. The recorded
+precedent is the opposite (computenet-dqy.55, root cause computenet-azt):
+**the already-published id wins, and the loser's content is re-minted under a
+fresh id.** If your conflict has that shape, say so explicitly in the
+escalation — an operator applying the generic recipe to it loses data.
 
 Do not reach for `scripts/beads-nightly-sync.sh` as the recovery: it is those
 same two commands with logging and no conflict resolution, **nothing is
