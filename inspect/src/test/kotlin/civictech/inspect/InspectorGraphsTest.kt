@@ -209,6 +209,12 @@ class InspectorGraphsTest {
         val events = listen()
         val (a, _) = pair(A, B)
         server.tickAll()
+        // The setup moved the partition, so this tick emits a `graphs.changed`
+        // of its own — on the reader thread. Baselining without the barrier
+        // reads `before = 0` while that frame is still in flight, and the
+        // closing at-least-(before+1) is then satisfied by the *setup's* frame:
+        // the test passed with the emit under test deleted (computenet-bftb).
+        events.drained()
         val before = events.countOfKind(Event.GRAPHS_CHANGED)
 
         server.nameGraph(a, "skillmatch")
