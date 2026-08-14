@@ -20,8 +20,12 @@ cached via `gradle/actions/setup-gradle@v4`. Five jobs, each with a
 | `agora-ui-test` | `demo/agora/ui` typecheck + tests | 15m |
 
 Together these are `./gradlew test`'s superset — the split into fast/serial
-lanes exists because the multi-JVM tests fork real processes and starve on a
-contended 2-core runner (see `doc/remediation/AUDIT-2026-07-28.md` §W1).
+lanes exists because the multi-JVM tests fork real processes and starve when
+contended (see `doc/remediation/AUDIT-2026-07-28.md` §W1). `ubuntu-latest`
+gives this repo the 4-vCPU/16-GB standard runner tier, not the 2-vCPU/8-GB
+private-repo tier, because the repo is public; measured via
+`announcement-probe.yml`'s sampler on run 31673273722, which printed
+`runner: 4 cores` and `Mem: 15989` MB.
 
 ### `.github/workflows/auto-merge.yml` — auto-merge
 
