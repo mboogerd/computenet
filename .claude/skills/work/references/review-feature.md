@@ -169,8 +169,8 @@ Look for what task-level review structurally cannot see:
   (computenet-k9d.2, then k9d.7 immediately after — the only two instances
   seen; both times the claim sat in prose — a docstring, a skill file —
   though k9d.2's change was code, and both were found only because a reader
-  was told to look). The body is read once, at merge; the file is read by every agent
-  afterwards. Repair it under §5; it is not a wording preference. It is
+  was told to look). The body is read once, at merge; the file is read by
+  every agent afterwards. Repair it under §5; it is not a wording preference. It is
   [orchestrator-authorship.md](orchestrator-authorship.md)'s rule displaced by
   one artifact — the caveat exists and the author is honest, it is just where
   nobody who needs it will look.
