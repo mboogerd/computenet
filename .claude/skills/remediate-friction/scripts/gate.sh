@@ -4,8 +4,8 @@
 # Fired by launchd whenever .beads/issues.jsonl changes (bd rewrites it on
 # every mutation), and hourly as a fallback. Exits in milliseconds when
 # nothing is actionable — which is most firings, since the export changes on
-# every bd write anywhere. When actionable skill-friction items exist under
-# the SDLC epic, launches one headless /remediate-friction session.
+# every bd write anywhere. When actionable items exist under
+# the SDLC epic (any child, labelled or not — computenet-wpvy.37), launches one headless /remediate-friction session.
 #
 # The orchestrator's own bd writes re-fire this gate: the lock absorbs
 # firings mid-run, and after the run the filter finds nothing open. An

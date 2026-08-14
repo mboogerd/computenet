@@ -370,6 +370,14 @@ If the epic is `in_progress` rather than `open`, that is a different case and
 `--claim`'s refusal is correct: it is either this machine's crash leftover
 (released above) or the other machine's live run.
 
+**Two epics carry `skill-friction` themselves — `computenet-k9d` (WSK1) and
+`computenet-ait` (WSK3) — and this filter does not exclude them.** Deliberate,
+not an oversight: whether the WSK epics belong to `/work` or to the SDLC lane
+is the open question in `computenet-wpvy.44`, and settling it here by quietly
+widening a jq filter would decide it without anyone noticing. The exclusion's
+label half governs *items* on routes 3 and 4; the *epic*-level case waits on
+.44. If you select one of these, say so in the session summary.
+
 The `skill_version` line records **which revision of this skill the session ran
 under**. Friction items filed in step 7 carry it, so a fix is attributable
 to the revision that produced the report, and a report against a superseded
@@ -1327,8 +1335,11 @@ building on it, and continue down this list.
 **3. The epic's remaining work is blocked solely by an item in a *different*
 epic** → claim and work **that specific blocking item** (task or feature, via
 5a/5b as appropriate), not the other epic itself. **Unless that item is under
-`computenet-wpvy`** — see "The SDLC exclusion" above, which applies here as
-much as anywhere; a blocker being inconvenient is not a reason to take SDLC work. Without this route a
+`computenet-wpvy` OR labeled `skill-friction`** — the same two-part test route
+4 applies, and for the same reason: ~20 open `skill-friction` items are
+parented to `computenet-k9d` and `computenet-ait` rather than to the SDLC
+epic, and each proposes edits to `.claude/skills/work/`. See "The SDLC
+exclusion" above; a blocker being inconvenient is not a reason to take SDLC work. Without this route a
 cross-epic dependency is a permanent stall: no session on this epic can ever
 unblock it, and the one-claim rule is about *epic* claims, which this does
 not add. The item lives outside your owned territory, so the claim is an
@@ -1727,7 +1738,10 @@ not created at all. It keeps its hash id, so recovery is one command:
 
 ```bash
 bd list --status=open --label=skill-friction --json \
-  | jq -r '.[] | select(.parent == null) | "\(.id)\t\(.title)"'
+  | jq -r '.[] | select(.parent == null and .issue_type != "epic")
+                | "\(.id)\t\(.title)"'   # epics excluded: k9d and ait are
+                                           # unparented epics, and reparenting
+                                           # one on a misread moves a WSK epic
 bd update <the id> --parent=computenet-wpvy
 ```
 
