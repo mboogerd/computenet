@@ -87,6 +87,20 @@ Check:
   hasn't finished.
 - **Scope.** Changes nothing asked for, debug leftovers, unrelated
   reformatting.
+- **Caveats in the changed file, not just the paperwork.** Any limit the
+  change relies on — one workload, single trial, "not itself measured" —
+  belongs next to the claim it qualifies, in the shipped text. Check for it
+  *there* specifically: an honest bead comment and PR body are what conceal
+  its absence, because body-plus-diff then reads as a consistent story
+  (computenet-k9d.2, then k9d.7 immediately after — the only two instances
+  seen; both times the claim sat in prose — a docstring, a skill file —
+  though k9d.2's change was code, and both were found only because a reader
+  was told to look). Absent, repair it under §4; it is not a wording preference. The
+  body is read once, at merge; the file is read by every agent afterwards
+  and by whoever next wants to change the number. Same rule as
+  [orchestrator-authorship.md](orchestrator-authorship.md), displaced by one
+  artifact: the caveat exists and the author is honest, it is simply written
+  where nobody who needs it will look.
 - **The criteria themselves.** If they don't meet
   [issue-quality.md](issue-quality.md) — uncheckable, or just the title again
   — that's a breakdown defect. Where the parent feature makes the intent

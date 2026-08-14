@@ -161,6 +161,19 @@ Look for what task-level review structurally cannot see:
 - **Criteria with no owner** — a feature criterion no task claimed, so nobody implemented it.
 - **Seams** — task A's producer and task B's consumer that never got tested together, mismatched error handling or naming across the boundary, a shared type each half interpreted differently.
 - **Scope drift** — files in the diff no task claimed, or changes nothing asked for.
+- **Caveats that live only in the paperwork** — any limit the change relies on
+  ("one workload", "single trial", "not itself measured") must be in the
+  changed file, next to the claim it qualifies, not only in the bead comment
+  or the PR body. Check the shipped text specifically: an honest PR body is
+  what conceals the gap, because body-plus-diff reads as a consistent story
+  (computenet-k9d.2, then k9d.7 immediately after — the only two instances
+  seen; both times the claim sat in prose — a docstring, a skill file —
+  though k9d.2's change was code, and both were found only because a reader
+  was told to look). The body is read once, at merge; the file is read by
+  every agent afterwards. Repair it under §5; it is not a wording preference. It is
+  [orchestrator-authorship.md](orchestrator-authorship.md)'s rule displaced by
+  one artifact — the caveat exists and the author is honest, it is just where
+  nobody who needs it will look.
 
 ## 3. Prove the feature's tests actually ran
 

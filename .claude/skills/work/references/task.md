@@ -178,6 +178,14 @@ than restarting. That's the whole reason the worktree is preserved.
      report and finish.
    - Need a file outside your claim? **Stop and report it** rather than
      expanding silently.
+   - Writing a number, a bound, or a claim your evidence only partly
+     supports? **Put its limits in the file, next to it** — not only in the
+     bead comment and the PR body. Being honest in the paperwork is not
+     enough: the paperwork is read once, at merge, while the file is what
+     every later agent reads, and whoever next wants to change that number.
+     Two items stated their limits correctly everywhere except the file they
+     changed, and so shipped a stronger claim than their author believed
+     (computenet-k9d.2, then k9d.7); both cost their reviewer a repair.
 6. Verify per AGENTS.md's "Verification" section — narrowest relevant test
    first, then the affected module's suite. Don't report success on an
    untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
