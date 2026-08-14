@@ -281,32 +281,6 @@ reviewed work waiting on a ship or human call — it deliberately does *not*
 release those, so don't treat them as fresh work; the next sweep resolves
 their PR state.
 
-**Then reconcile every bead against its PR, unconditionally.** Auto-merge
-lands a PR minutes *after* the session that opened it ended, so **no session
-ever observes its own merge** — Finalize's watch (step 6) catches most of
-them, and this catches what the watch drops: crashed sessions, expired
-timeouts, and any PR whose bead no session ever revisits:
-
-```bash
-.claude/skills/work/scripts/sweep-merged-prs.sh        # --dry-run to preview
-```
-
-One `gh` call, joined on PR number and branch name across the whole repo. It
-is deliberately **not** filtered by epic, by claim, or by
-`metadata.review=passed`: three narrow, precondition-gated re-checks already
-existed and all three missed the same four features, which sat `in_progress`
-behind PRs merged 12–20h earlier with their worktrees still on disk
-(computenet-wpvy.25, measured 2026-08-14). Do not add a fourth precondition
-here — the missing precondition is always the one that matters.
-
-It closes the bead and takes its worktree off disk, but only when the
-worktree is on *this* machine and `git status --short` is empty; anything
-dirty, foreign, or merely branch-matched it **reports for you to judge**, and
-a branch match without `metadata.pr` is never closed automatically (a branch
-can merge while its bead stays legitimately open — `computenet-dqy.2` is
-deferred to 2026-08-25 behind merged PR #27). Report what it closed and act
-on what it flagged. Its closes are local writes; they publish at Finalize.
-
 Then take the epic — but first check nothing live is holding one, and free
 whatever a dead run left claimed:
 
@@ -323,6 +297,47 @@ Anything else this query returns is a crash leftover — a clean session
 releases its epic at Finalize. **Release each one** (`bd update <id>
 --status=open`, a local write like everything else here) so it competes on
 priority again instead of sticking to this machine.
+
+**Only once that check has cleared, reconcile every bead against its PR.**
+Auto-merge lands a PR minutes *after* the session that opened it ended, so
+**no session ever observes its own merge** — Finalize's watch (step 6)
+catches most of them, and this catches what the watch drops: crashed
+sessions, expired timeouts, and any PR whose bead no session ever revisits:
+
+```bash
+.claude/skills/work/scripts/sweep-merged-prs.sh        # --dry-run to preview
+```
+
+**It runs here, after the liveness check, and nowhere earlier.** It removes
+worktrees, and a concurrent session's just-merged feature worktree is clean
+*by definition* — running it before the check would let two overlapping runs
+on this machine delete each other's working state. Its peer
+`sweep-stale-claims.sh` buys the same protection with a 6h age cutoff; this
+one cannot, because the whole point is reconciling a merge that happened
+minutes ago. The liveness check *is* its gate, so never reorder them, and if
+that check says another run is live, stop — don't sweep first.
+
+One `gh` call, joined on PR number and branch name across the whole repo. It
+is deliberately **not** filtered by epic, by claim, or by
+`metadata.review=passed`: three narrow, precondition-gated re-checks already
+existed and all three missed the same four features, which sat `in_progress`
+behind PRs merged 12–20h earlier with their worktrees still on disk
+(computenet-wpvy.25, measured 2026-08-14). Do not add a fourth precondition
+here — the missing precondition is always the one that matters.
+
+It closes the bead, takes its worktree off disk and deletes the local branch,
+but only when the worktree is on *this* machine and `git status --short` is
+empty; anything dirty, foreign, or merely branch-matched it **reports for you
+to judge**, and a branch match without `metadata.pr` is never closed
+automatically (a branch can merge while its bead stays legitimately open —
+`computenet-dqy.2` is deferred to 2026-08-25 behind merged PR #27). Report
+what it closed and act on what it flagged. Its closes are local writes; they
+publish at Finalize.
+
+**It never reports a clean sweep it did not perform.** Exit 3 means `gh` or
+`bd` was unreachable and *nothing was checked*; exit 1 means a close or a
+removal failed and those items are still adrift. Neither is "no beads behind
+a merged PR" — read the exit code and say which one you got.
 
 There is deliberately **no resume preference**: an epic is bound to a session
 while the session runs, and to nothing afterwards. If a released epic is
@@ -1511,6 +1526,15 @@ but at the very end of Finalize, not here.** The watch is the last thing the
 session does; see "The merge watch" below. Note now which PRs it owes: every
 feature or task you ran `gh pr ready` on.
 
+**Do not defer the epic-close decision to the watch.** Run 5f's
+all-children-closed check *here*, before the release below, on the state you
+have now. If the watch later closes the last open child, leave the epic open
+and say so in the summary: the next session's step-3 selection picks it up
+and closes it in one query. Closing an epic *after* releasing the claim opens
+a window in which the other machine has legitimately claimed it and this
+session closes it underneath them — a stranded claim is cheap, a
+closed-out-from-under epic is not.
+
 **Release the epic claim.** If the epic didn't close above, set it back to
 open **and clear the assignee** — the claim binds it to *this session*, not
 to this machine, and the next session on either machine must select by
@@ -1607,9 +1631,11 @@ never report the session as clean without it.
 Uncommitted leftovers mean an agent died mid-edit — report rather than
 committing work you didn't verify.
 
-**The worktree removal sweep — the session's only removals.** 5c and 5e
-deliberately defer every removal to here, so this is the one place a worktree
-comes off, and it runs after 5f, i.e. after the session has stopped
+**The worktree removal sweep.** 5c and 5e deliberately defer every removal to
+here, so this is the only place a worktree comes off *while the session still
+has work in flight* — the merge watch below removes one more class, the
+worktrees of PRs that merge during the watch itself, and step 3's sweep
+removes what earlier sessions stranded. Nowhere else. It runs after 5f, i.e. after the session has stopped
 dispatching, and after the pushes above. Remove only what passes **both**
 gates:
 
@@ -1645,11 +1671,25 @@ its own failure cheaply, while the context is still live. That diagnosis is
 what the watch buys; the sweep is the backstop for when the watch doesn't
 finish.
 
-It runs **here, after everything else**, precisely because it must be able to
-find nothing and cost nothing. The rule two sections up still holds — Finalize
-is not the place to spend the remainder of the slot — so the watch is hard
-bounded: **10 poll rounds, 60s apart, 10 minutes wall-clock for the whole set
-of PRs, not per PR.** One round per minute, all still-pending PRs in it:
+**First, decide whether you can afford it at all — and usually you cannot.**
+The section above is explicit that Finalize is not the place to spend the
+remainder of the slot, and the budget agrees: step 2 allots the last **15
+minutes** to Finalize, and the watch sits after the pushes, the epic
+bookkeeping and the worktree sweep. So:
+
+```bash
+date -u +%H:%M     # against the session start the utilisation comment above already needed
+```
+
+- **`BUDGET EXPIRED` has already fired, or Finalize has run past its 15
+  minutes** → **skip the watch entirely.** Say so in one line ("watch
+  skipped, budget expired; N PRs left open: <urls>") and go straight to
+  `TaskStop`. Step 3's sweep on the next run reconciles every one of them.
+  This is the designed-for case, not a shortfall: the sweep exists precisely
+  so the watch is optional.
+- **Budget genuinely remains** → run it, hard bounded: **10 poll rounds, 60s
+  apart, 10 minutes wall-clock for the whole set of PRs, not per PR.** One
+  round per minute, all still-pending PRs in it:
 
 ```bash
 gh pr view <pr-url> --json state,mergeStateStatus,statusCheckRollup   # per pending PR
@@ -1658,15 +1698,25 @@ gh pr view <pr-url> --json state,mergeStateStatus,statusCheckRollup   # per pend
 Per PR, on each round:
 
 - **`MERGED`** → `bd close <id>`, and remove its worktree under the two gates
-  above (agent reported, `git status --short` empty). Drop it from the
-  pending set. If that was the epic's last open child, close the epic too
-  (5f's check).
+  above (agent reported, `git status --short` empty), deleting its local
+  branch with it — `git branch -D <branch>`, not `-d`, because the repo
+  squash-merges and a landed branch is never an ancestor of `main`. Drop it
+  from the pending set. Do **not** close the epic here even if that was its
+  last open child; the claim was already released above, so the epic is no
+  longer this session's to close — leave it and name it in the summary.
 - **A required check is red** → stop polling that PR and investigate **now**,
   while the context that produced it is still live:
   [references/red-check-attribution.md](references/red-check-attribution.md)
   has the route. This is the whole reason the watch exists rather than
-  leaving everything to the sweep. If the budget genuinely cannot cover the
-  investigation, say which PR and which check, in those words.
+  leaving everything to the sweep — **and it is the one branch that can
+  genuinely overrun**, since that route pulls CI logs that run to thousands
+  of lines. **Time-box it to 15 minutes per PR, and to one PR per session.**
+  At the box, stop wherever you are and write what you have — the failing
+  check, the job, and whichever of red-check-attribution.md's questions you
+  got answers to — as a comment on the bead, so the next session starts from
+  your partial attribution instead of from zero. A second red PR is named in
+  the summary, not investigated. If the budget cannot cover even the first
+  box, skip it and say which PR and which check, in those words.
 - **`DIRTY`/`BEHIND`** → resolve per 5e if budget allows; it merges on its own
   afterwards.
 - **`CLOSED`** → say so; do not close the bead.
