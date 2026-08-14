@@ -48,8 +48,8 @@
 #     interesting one: the outlet is rewound to its checkpoint-time high-water, so with
 #     k3's frame never replayed the LIVE k4 re-issues the counter k3 already spent and
 #     the restored frontier eats it as already-acted — the silent-effect-loss direction
-#     the keyed check exists for. So the golden reads the replayed tail, not just the
-#     checkpoint.
+#     the effect-count checks read, keyed or not. So the golden reads the replayed tail,
+#     not just the checkpoint.
 #   * `[24-DUR-05]` — make `HostDurability.alreadyProcessed` always return `false` (the
 #     processed-frontier stops suppressing) → 20 of 20 runs fail with
 #     "effect-count(sink, key=k3): expected 1 but observed 3": the replayed tail
