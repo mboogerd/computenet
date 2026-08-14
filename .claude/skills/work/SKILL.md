@@ -941,11 +941,15 @@ handed a path that isn't there works somewhere unintended, and one handed the
 right path at the wrong commit rewrites work that was already reviewed —
 neither would be noticed until the merge.
 
-**Read the base commit off that run; do not describe it from memory.** The
-script's last stderr line is `ensure-worktree: base commit (this branch is cut
-FROM it; it is NOT a diff baseline): <short-sha> <subject>` — that is the
-`${taskBase}` the dispatch template below quotes. Take it verbatim. If it
-scrolled away, re-observe it rather than reconstructing it:
+**Read the base commit off that run; do not describe it from memory.** Take
+`${taskBase}` from the stderr line that starts `ensure-worktree: base commit
+(this branch is cut FROM it; it is NOT a diff baseline): <short-sha>
+<subject>`, verbatim — match that prefix, do not just read the last line. On a
+**resumed** branch one further line follows it (`worktree HEAD is ahead of that
+base — prior work on the branch: <short-sha> <subject>`), and that sha is a
+*work* commit, not the base: quoting it is the exact mistake this section
+exists to stop. If the run scrolled away, re-observe the base rather than
+reconstructing it:
 
 ```bash
 git -C <task-worktree> log --oneline -1 \
