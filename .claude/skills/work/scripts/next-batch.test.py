@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Regression tests for next-batch.py: the claim-overlap rule (computenet-9eb)
-and the empty-batch verdict (computenet-eic).
+"""Regression tests for next-batch.py: the claim-overlap rule (computenet-9eb),
+the empty-batch verdict (computenet-eic), and the parked-children ids that
+verdict hands to the 5e review (computenet-k9d.4).
 
 Run: python3 .claude/skills/work/scripts/next-batch.test.py
 """
@@ -41,8 +42,8 @@ for files, taken, expected, what in cases:
 # The orchestrator routes on this string, so each of the four verdicts is
 # pinned, not just the new one.
 
-def child(status, assignee=None, labels=None):
-    return {"id": "t", "issue_type": "task", "status": status,
+def child(status, assignee=None, labels=None, id="t"):
+    return {"id": id, "issue_type": "task", "status": status,
             "assignee": assignee, "labels": labels or []}
 
 
@@ -84,6 +85,58 @@ for children, expected, what in verdict_cases:
         failed += 1
         print(f"FAIL: {what} — expected verdict={expected!r}, got {got!r}")
 
-total = len(cases) + len(verdict_cases)
+
+# --- parked_ids(): the ids behind a parked-residue verdict (computenet-k9d.4)
+# 5e's ${parkedChildren} slot is filled from this. It must agree with
+# classify() child-for-child, or the reviewer is handed a list that does not
+# match the verdict that dispatched it.
+
+parked_cases = [
+    # (children, expected ids, what)
+    ([], [], "no children at all"),
+    ([CLOSED, CLOSED], [], "every child closed — nothing to name"),
+    ([CLOSED, child("open", id="a")], [], "a plain open child is not a park"),
+    ([CLOSED, child("blocked", id="a")], [],
+     "blocked with no human marker is a real dependency block"),
+    ([child("blocked", assignee="human", labels=["human"], id="b"),
+      child("blocked", assignee="human", labels=["human"], id="a")],
+     ["a", "b"], "sorted, so the handoff string is stable"),
+    ([CLOSED, child("blocked", labels=["human"], id="a")], ["a"],
+     "park keyed on the label alone (assignee not set)"),
+    ([CLOSED, child("blocked", assignee="human", id="a")], ["a"],
+     "park keyed on the assignee alone (label not set)"),
+    # Reported even when outvoted: honest, and 5f simply does not read it.
+    ([child("blocked", assignee="human", labels=["human"], id="p"),
+      child("open", id="o")], ["p"],
+     "parks are still named when one open child holds the verdict at blocked"),
+    ([child("closed", assignee="human", labels=["human"], id="c")], [],
+     "a closed child is never remaining work, whatever its markers"),
+]
+
+parked_ids = getattr(nb, "parked_ids", None)
+for children, expected, what in parked_cases:
+    if parked_ids is None:
+        failed += 1
+        print(f"FAIL: {what} — next-batch.py has no parked_ids()")
+        continue
+    got = parked_ids(children)
+    if got != expected:
+        failed += 1
+        print(f"FAIL: {what} — expected parked={expected!r}, got {got!r}")
+
+# The two must not disagree: whenever classify() says parked-residue, the ids
+# it says that about are exactly the unfinished children, and parked_ids()
+# must return all of them. This is the invariant the second implementation
+# route (a hand-written bd query in SKILL.md) could not have held.
+agreement_cases = [c for c in verdict_cases if c[1] == "parked-residue"]
+for children, _, what in agreement_cases:
+    unfinished = sorted(t["id"] for t in children if t.get("status") != "closed")
+    got = parked_ids(children) if parked_ids else None
+    if got != unfinished:
+        failed += 1
+        print(f"FAIL: parked-residue agreement ({what}) — "
+              f"expected {unfinished!r}, got {got!r}")
+
+total = len(cases) + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

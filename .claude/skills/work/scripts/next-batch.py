@@ -11,7 +11,7 @@ finish.
 
 Usage: next-batch.py <feature-id> [--actor NAME]
 Prints JSON: {"batch": [{id, model, files, worktree, branch, resumed}],
-              "skipped": [{id, reason}], "verdict": str}
+              "skipped": [{id, reason}], "verdict": str, "parked": [id]}
 
 `verdict` explains an *empty* batch, which the caller cannot infer from
 `batch`/`skipped` alone and must not guess: "all-closed" (feature is ready for
@@ -19,6 +19,15 @@ review), "parked-residue" (every task that is not closed is a human park, so
 the feature is finished and its residue is a deliverable — also ready for
 review), "blocked" (tasks remain but none can run), "no-tasks" (the breakdown
 produced nothing). It is "ok" whenever the batch is non-empty.
+
+`parked` names the human parks behind that verdict — the ids the 5e handoff
+has to list so the reviewer knows they are deferred by design, not missed
+(computenet-k9d.4). It is emitted rather than left to the caller because the
+caller's alternative is a hand-written `bd list` filter, i.e. a second
+implementation of is_human_park() that can drift from this one. Like
+`verdict`, it is meaningful only when `batch` is empty: a non-empty batch does
+not query the children at all, so `parked` is [] there and means "not looked
+at", not "none exist".
 
 A task with no `files` claim can't be scheduled against anything, so it is only
 ever returned alone — safer than guessing a claim for it.
@@ -131,19 +140,25 @@ def main():
         taken |= files
         batch.append(_entry(task, resumed, sorted(files)))
 
+    verdict, parked = _assess(feature, batch)
     print(json.dumps({"batch": batch, "skipped": skipped,
-                      "verdict": _verdict(feature, batch)}, indent=2))
+                      "verdict": verdict, "parked": parked}, indent=2))
 
 
-def _verdict(feature, batch):
-    """Why the batch is empty. The caller routes on this, so never guess it."""
+def _assess(feature, batch):
+    """Why the batch is empty, and which children are parks behind that.
+
+    The caller routes on the verdict and hands the ids to the 5e reviewer, so
+    never guess either. One `bd list` serves both — they are two readings of
+    the same child set, and re-querying would let them disagree.
+    """
     if batch:
-        return "ok"
+        return "ok", []
     # --all: closed tasks are hidden otherwise, which would read as "no tasks"
     # for a finished feature and send it round the breakdown again.
     children = [t for t in bd("list", "--parent", feature, "--all")
                 if t.get("issue_type") not in ("epic", "feature")]
-    return classify(children)
+    return classify(children), parked_ids(children)
 
 
 def is_human_park(task):
@@ -168,7 +183,7 @@ def is_human_park(task):
 def classify(children):
     """Verdict for an empty batch, from the feature's children alone.
 
-    Split out from _verdict() so it is testable without a beads database.
+    Split out from _assess() so it is testable without a beads database.
 
     "blocked" used to swallow the case that matters most: a feature whose tasks
     are all closed and reviewed, whose only open children are follow-up beads
@@ -195,6 +210,26 @@ def classify(children):
     if all(is_human_park(t) for t in unfinished):
         return "parked-residue"
     return "blocked"
+
+
+def parked_ids(children):
+    """Ids of the unfinished children that read as `ask-human.md` parks.
+
+    Split out alongside classify() so it is testable without a beads database,
+    and so the set the 5e handoff names is produced by the SAME predicate the
+    verdict is decided by. On a "parked-residue" verdict this is exactly the
+    unfinished set; on "blocked" it is the parks that were outvoted, which is
+    honest but unused — 5f does not dispatch a reviewer.
+
+    Sorted, so the handoff string is stable across runs and two orchestrators
+    reading the same feature quote the same list. Ids are the whole payload:
+    the reviewer is told to re-check each one against the bead itself, because
+    is_human_park() cannot distinguish a park from a child that inherited the
+    `human` label from a parked parent.
+    """
+    return sorted(t.get("id") for t in children
+                  if t.get("id") and t.get("status") != "closed"
+                  and is_human_park(t))
 
 
 def _entry(task, resumed, files):
