@@ -96,7 +96,7 @@ the item you just read and decided to work. Select with `bd ready ...
   actor, and the other session did not hold this epic.
 
   The check that does work is on the **parent epic**, which is visible
-  (SKILL.md 5b): before claiming an item under an epic you do not hold, read
+  (SKILL.md 5f route 3): before claiming an item under an epic you do not hold, read
   that epic's status, `updated_at` and assignee, and skip the item if the
   other machine holds a live claim. Live means the epic is **not closed**, or
   was closed **within the last 15 minutes** — a session that claimed an epic
@@ -139,10 +139,14 @@ Every bracket fails loudly; none retries silently:
   acquisition is exactly the window the bracket exists to close.
 - **The Finalize publication push is rejected non-fast-forward** → that is
   the *expected* outcome of two machines running slots concurrently, not an
-  incident. Recover inline: `bd dolt pull && bd dolt push`, then verify your
-  own closes, parks and comments survived the merge (SKILL.md step 6).
-  Escalate only if the pull reports a real merge conflict, or the second push
-  also fails.
+  incident. Recover inline with
+  `.claude/skills/work/scripts/publish-beads.sh` — it reads the push's
+  *output*, not its exit code, because `bd dolt push` has been observed to
+  exit 0 while printing a rejection, which is how `&&`-chained recoveries
+  report a failed push as success. Then verify your own closes, parks and
+  comments survived the merge (SKILL.md step 6). Escalate only if the pull
+  reports a real merge conflict, or the second push also fails (the script
+  exits 2 for both).
 - **The Finalize publication push fails for any other reason** → say so at
   the top of the session summary. Do not reach for
   `scripts/beads-nightly-sync.sh`: it is the same two commands with logging

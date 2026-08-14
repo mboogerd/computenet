@@ -61,7 +61,8 @@ by exactly one task, and none left unowned.
 
 Size by **read-surface**: how much an agent must read and hold to be
 correct, not diff size. A fresh agent with no access to your context should
-be able to read the task and do the work — roughly an hour of it.
+be able to read the task and do the work — roughly 45–60 minutes of it (the
+orchestrator budgets on that figure).
 
 **A clause that prescribes a measurement must state its per-run cost**, so
 the sizing above can be applied to it. "Re-measure at >= 240 fresh-JVM runs"
@@ -149,11 +150,12 @@ bd lint <task-ids...>
 Fix anything `bd lint` reports, and check that every feature rule is owned by
 some task. The tasks you created live in the local beads DB until the
 orchestrator's Finalize push (SKILL.md step 6) sends them to the shared
-tracker — don't sync here; the session syncs twice in total, a pull at start
-and that push at the end.
+tracker — don't sync here; only acquisitions are synced mid-session, and
+this is not one (claim-sync.md).
 
-Comment the tasks created on the feature. Leave it `in_progress` — features
-close when their tasks do. Report the task ids.
+Comment the tasks created on the feature. Leave it `in_progress` — a feature
+closes only when its PR merges, never on task completion or a review verdict
+(review-feature.md: "Ready is not merged"). Report the task ids.
 
 **Friction:** end your report with anything that made you slower or forced a
 guess — an unusable parent item, a command here that did not work, a case these

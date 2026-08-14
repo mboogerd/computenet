@@ -117,7 +117,7 @@ genuinely finished — an empty commit is a lie about the branch. Instead:
   `in_progress` (keeping any `review=passed`), set `parked_at`, and comment
   the four artifacts you produced.
 - **Name the blocked command verbatim in the session summary**, the way
-  SKILL.md step 6 already requires for a blocked `bd dolt push` — that is the
+  SKILL.md step 7 already requires for a refused `bd comment` — that is the
   only way an allowlist ever gets the entry it needs.
 
 A refused re-run is a session that could not finish the route, not a session

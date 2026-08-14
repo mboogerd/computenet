@@ -345,7 +345,10 @@ worktree is yours alone — no other agent is committing here. SKILL.md step 5
 will not dispatch into or remove this worktree until your completion
 notification arrives. It has exactly one escape hatch — a fix for a red
 post-ready check, dispatched onto **this same branch in a separate worktree**
-while you are still running (SKILL.md 5c). It tells you *before* it does, and
+while you are still running
+(red-check-attribution.md § "Where a fix for a red check gets dispatched" —
+its default is to wait for you; the separate worktree is the
+cannot-wait variant). It tells you *before* it does, and
 what it asks of you is: push everything you have now, then **stop committing
 in this worktree** and say so. Comply — do not keep repairing.
 
@@ -516,12 +519,18 @@ disappear, are both wrong.
 Merge it, and keep the residual alive:
 
 ```bash
-bd create "<the unmet criterion, verbatim>" --type=bug --parent=<epic-id> \
+# Create UNPARENTED, then attach: a --parent create allocates the child id
+# from a per-database counter, and if the epic's holder (or the other
+# machine) files under it between syncs, two beads mint one id
+# (computenet-wpvy.45). The hash id survives the re-parent unchanged.
+RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
-  --acceptance="<the original criterion, unchanged>"
-bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as <new-id> under <epic-id>, which is what carries the unmet criterion forward."
+  --acceptance="<the original criterion, unchanged>" \
+  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+bd update "$RES" --parent=<epic-id>
+bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES under <epic-id>, which is what carries the unmet criterion forward."
 bd update <feature-id> --set-metadata review=passed
-bd update <feature-id> --set-metadata residual=<new-id>
+bd update <feature-id> --set-metadata residual=$RES
 ```
 
 `review=passed` is deliberate: an unmet criterion is not a reason to withhold

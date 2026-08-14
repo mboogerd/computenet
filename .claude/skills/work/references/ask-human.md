@@ -55,9 +55,18 @@ item created under a parked one picks up `human` and shows up in
 `bd human list` as a question nobody asked. Pass `--no-inherit-labels` when
 creating a child of a parked item.
 
-That comments the answer and closes the flag, but does **not** unblock the
-original item — a later session (or you) reopens it with
-`bd update <id> --status=open`.
+That comments the answer and **closes the item itself** — so an answered
+park is no longer findable by any `--status=blocked` query; `bd human list`
+(which shows closed flags) is where a later session finds it. Reopening it
+*is* the unpark:
+
+```bash
+bd update <id> --status=open --assignee="" --remove-label=human
+```
+
+All three, always: a leftover `assignee=human` makes the item permanently
+`--claim`-refused, and a leftover `human` label re-hides it from every
+selection filter in SKILL.md.
 
 After parking, don't wait for the answer. Report that the item is blocked
 and finish.

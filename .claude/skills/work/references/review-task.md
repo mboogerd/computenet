@@ -77,8 +77,10 @@ Check:
   *merge* into the existing metadata rather than replacing it (measured on bd
   1.1.2: `--metadata '{"k":"v"}'` upserts `k` and leaves the other keys
   standing, and `--metadata '{}'` is a no-op) — so neither flag will clear a
-  key for you. (`bd create` is the mirror image: `--metadata '{"k":"v"}'`
-  there, and no `--set-metadata` at all.)
+  key for you: clearing is `bd update <id> --unset-metadata <key>`, and
+  `--set-metadata key=` leaves an empty-string sentinel behind instead.
+  (`bd create` is the mirror image: `--metadata '{"k":"v"}'` there, and no
+  `--set-metadata` at all.)
 - **The file claim.** Files touched outside `metadata.files` are a real
   problem: sibling tasks were scheduled in parallel on the assumption that
   claim was accurate. Report every one, even if the change itself is fine.
