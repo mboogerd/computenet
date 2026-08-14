@@ -30,6 +30,11 @@ root = ARGV[0] || '.claude/skills'
 files = Dir.glob(File.join(root, '*', 'SKILL.md')).sort
 abort "no SKILL.md found under #{root}" if files.empty?
 
+# A skill directory with no SKILL.md is a broken skill, not an absence — report
+# it rather than skipping silently.
+missing = Dir.glob(File.join(root, '*')).select { |d| File.directory?(d) } -
+          files.map { |f| File.dirname(f) }
+
 failures = 0
 files.each do |f|
   skill = File.basename(File.dirname(f))
@@ -43,7 +48,10 @@ files.each do |f|
   else
     begin
       y = YAML.load(fm)
-      raise 'frontmatter is not a mapping' unless y.is_a?(Hash)
+      unless y.is_a?(Hash)
+        errs << "frontmatter is not a mapping (got #{y.class})"
+        y = {}
+      end
 
       unknown = y.keys - ALLOWED - TOLERATED
       errs << "unexpected key(s): #{unknown.join(', ')}" unless unknown.empty?
@@ -51,8 +59,13 @@ files.each do |f|
         warns << "#{k}: valid in Claude Code, outside skill-creator's allowlist"
       end
 
-      errs << "missing 'name'" unless y.key?('name')
-      errs << "missing 'description'" unless y.key?('description')
+      # key?() alone is not enough: `name:` with no value parses to nil, and
+      # the per-field checks below all skip a blank string — so a skill with
+      # an empty name and description passed clean. Require non-blank.
+      %w[name description].each do |k|
+        errs << "missing '#{k}'" unless y.key?(k)
+        errs << "'#{k}' is empty" if y.key?(k) && y[k].to_s.strip.empty?
+      end
 
       name = y['name'].to_s
       unless name.empty?
@@ -79,5 +92,10 @@ files.each do |f|
   end
 end
 
-puts "#{files.length} skill(s) checked, #{failures} failing"
+missing.each do |d|
+  failures += 1
+  puts "#{File.basename(d)}: FAIL directory has no SKILL.md"
+end
+
+puts "#{files.length + missing.length} skill(s) checked, #{failures} failing"
 exit(failures.zero? ? 0 : 1)

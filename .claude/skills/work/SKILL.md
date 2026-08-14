@@ -1271,7 +1271,7 @@ conflicts are yours to resolve and get a reviewer like any code you write.
   route it — the substantive-repair case in particular is a finished
   feature needing only an independent reader, never 5b and never a park.
 
-#### The SDLC exclusion, which applies on every route
+### The SDLC exclusion, which applies on every route
 
 **`computenet-wpvy` and everything beneath it is not `/work`'s to claim — not
 as an epic, not as a cross-epic blocker (route 3), not as continuation work
@@ -1279,10 +1279,15 @@ as an epic, not as a cross-epic blocker (route 3), not as continuation work
 under, and process work has its own lane
 (`.claude/skills/remediate-friction/SKILL.md`).
 
-**Key on parentage, not on a label.** Anything under that epic is SDLC work
-whether or not it carries `skill-friction`; the label is provenance, not the
-gate. Checking the label instead is how three unlabelled children sat open
-while the lane reported itself drained (computenet-wpvy.37).
+**Parentage is the scope rule; the label is an extra catch, not a substitute.**
+Anything under that epic is SDLC work whether or not it carries
+`skill-friction` — checking the label *instead* is how three unlabelled
+children sat open while the lane reported itself drained
+(computenet-wpvy.37). But `skill-friction` items also exist **outside** the
+epic (unparented bugs, children of other WSK epics), and those propose edits
+to `.claude/skills/work/` just the same. So `/work` skips **either**: under
+`computenet-wpvy`, *or* labeled `skill-friction`. The lane that drains them
+scopes by parentage; the lane that must avoid them checks both.
 
 `--parent` is **not transitive**, so a grandchild does not appear under the
 epic's own listing. Use the ancestor walk from 5b — the one that resolves a
@@ -1293,7 +1298,7 @@ epic_of <candidate-id>          # 5b defines it; returns the epic, or (unparente
 # -> computenet-wpvy  => SKIP, on every route
 ```
 
-## 5f. Next feature, or wait, or stop
+### 5f. Next feature, or wait, or stop
 
 Take the first of these that applies:
 
@@ -1344,8 +1349,13 @@ Build the candidate pool from `bd ready --json`: ready **features and tasks
 parented to other epics**, plus unparented bugs and chores. Drop from it:
 
 - anything with the `human` label (this exclusion holds on every route);
-- **anything under the SDLC epic `computenet-wpvy`, at any depth** — see
-  "The SDLC exclusion" above;
+- **anything under the SDLC epic `computenet-wpvy`, at any depth, OR labeled
+  `skill-friction` wherever it lives** — see "The SDLC exclusion" above. Both
+  halves are load-bearing: parentage catches the epic's own children, and the
+  label catches the ~35 open `skill-friction` items parented elsewhere
+  (unparented bugs, children of `computenet-k9d`, `computenet-ait`) which
+  *also* propose edits to `.claude/skills/work/`. Dropping either lets a
+  session edit the skill it is running under;
 - anything with `parked_at` within 6h;
 - **anything that is review or verification of output this session
   produced** — warm context is exactly what makes self-approval likely, and
@@ -1716,7 +1726,8 @@ collide, and keep their readable dotted ids — `epic.md`, `feature.md` and
 not created at all. It keeps its hash id, so recovery is one command:
 
 ```bash
-bd list --all --json | jq -r '.[] | select(.parent == null) | "\(.id)\t\(.title)"'
+bd list --status=open --label=skill-friction --json \
+  | jq -r '.[] | select(.parent == null) | "\(.id)\t\(.title)"'
 bd update <the id> --parent=computenet-wpvy
 ```
 
@@ -1743,7 +1754,7 @@ Review the accumulated log — open count and per-item comment totals — with
 one command:
 
 ```bash
-bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
+bd list --parent=computenet-wpvy --status=open --json
 ```
 
 Comment count is the signal. One report is an anecdote; the same issue

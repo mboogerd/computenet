@@ -5,8 +5,9 @@ description: Drains everything under the SDLC epic (computenet-wpvy) on its own 
 
 # /remediate-friction
 
-Drains **everything under `computenet-wpvy`, the SDLC epic** — by fixing `.claude/skills/work/`
-(SKILL.md, `references/`, `scripts/`). Run on demand, or reactively via the
+Drains **everything under `computenet-wpvy`, the SDLC epic** — by fixing `.claude/skills/`
+(`work/` above all — SKILL.md, `references/`, `scripts/` — and this lane's own
+files). Run on demand, or reactively via the
 trigger below.
 
 ## The reactive trigger
