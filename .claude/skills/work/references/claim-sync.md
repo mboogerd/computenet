@@ -16,9 +16,20 @@ rule — which dated from ~10-minute round-trips; a round-trip is now ~30s,
   *publication* that carries them off this machine.
 - **Acquisition** — claiming an epic (step 3), claiming an item in another
   epic (5f routes 3–4), filing or upvoting under the SDLC epic (step 7),
-  stealing a stale claim — is a write to a surface you don't own yet. Each
-  gets its own bracket: `bd dolt pull` → verify (still unclaimed? not a
-  duplicate?) → write → `bd dolt push`.
+  **creating a shared anchor**, stealing a stale claim — is a write to a
+  surface you don't own yet. Each gets its own bracket: `bd dolt pull` →
+  verify (still unclaimed? not a duplicate?) → write → `bd dolt push`.
+
+  **A shared anchor is any id another machine's skill references literally** —
+  an epic other sessions are told to file under, or anything named in
+  `.claude/skills/**`. Creating one is an acquisition even though you own it
+  the instant it exists, because the *other* machine cannot proceed without
+  it. This clause is not hypothetical: `computenet-wpvy` was created on
+  MacBoo at 09:56Z on 2026-08-13 as an ordinary owned-territory write, so
+  nothing pushed it. `Anva@A0030` pulled at 12:38Z and again at 13:15Z, found
+  no epic, and its step 7 died on `parent issue computenet-wpvy not found` —
+  filing five orphans instead (`computenet-9opz`). Filing *under* the anchor
+  was bracketed; *creating* it was not.
 
 The push half of the bracket is what turns a claim from a record into a
 lock: the other machine's next pull sees it and stays off. The race window
