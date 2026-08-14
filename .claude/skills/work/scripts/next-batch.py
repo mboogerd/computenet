@@ -143,11 +143,27 @@ def capacity_limit(cores):
     configuration recorded there as catastrophic — load 112, one
     `:wire:test --rerun` inflating from 6-10s to 14m30s, roughly 90x. The same
     thread records "2 on a 10-core machine looked survivable, 3 did not".
-    `cores/5` reproduces both anchors: 2 on 10 cores (the recorded survivable
-    value) and 3 on 16 cores (the largest arm measured under 2x here). The
-    arithmetic agrees to within a rounding step — 10/2 = 5.0, 16/3 = 5.3 — so
-    a Gradle lane in this repo costs about five cores, not the one core a raw
-    agent count implies and not the three `cores/3` assumes.
+    `cores/5` reproduces both anchors: 2 on 10 cores (that thread's judgement —
+    every 10-core datum in it is N=3; N=2 was never run there) and 3 on 16
+    cores (the largest arm measured under 2x here). The arithmetic agrees to
+    within a rounding step — 10/2 = 5.0, 16/3 = 5.3 — so a Gradle lane in this
+    repo costs about five cores, not the one core a raw agent count implies and
+    not the three `cores/3` assumes.
+
+    HONEST LIMITS, so a later reader does not over-trust the table above.
+    One workload (`:wire:test`, ~20s quiet, 10 of 24 tasks executed); a
+    full-lane `./gradlew build check` is heavier and would knee earlier, so
+    `cores/5` is if anything optimistic. Single trial per arm: the 1.22x at
+    N=2 is within noise of 1.0, the 1.70x and 4.4x-4.8x are not, and N=4/N=5
+    were never run — "3 is the largest arm under 2x" is a statement about the
+    arms measured. Sixteen cores is the only machine measured, so LANE_CORES
+    is pinned by one point (16/3) and corroborated by an unmeasured one; it
+    errs conservatively on the smaller box, where 3 is the only configuration
+    ever recorded and it was the catastrophe. The 2x line is itself a chosen
+    round number — the actual headroom in the bounded waits is unmeasured, and
+    2x is defended by being far from the ~90x that produced the damage, not by
+    a measurement of when a wait first trips. What would settle it: the same
+    arms with `./gradlew build check` on both machines, three repeats each.
 
     Floor of 1: a batch is never emptied by the cap, which would turn "ok" into
     a verdict the caller routes on. One agent always runs.
@@ -161,7 +177,9 @@ def cap_batch(batch, skipped, cap):
     Order is load-bearing, and it is the order main() already built: resumable
     tasks first. A resumed task holds a worktree and a branch with commits on
     it; deferring it behind a fresh one leaves that work stranded for another
-    round. So the trim always falls on the newly-ready tail.
+    round. So the trim falls on the newly-ready tail first. A resumable is
+    held back only when the resumables alone exceed the cap — never in favour
+    of a fresh task — and it keeps its worktree and branch either way.
 
     The trimmed items are reported in `skipped` with a reason naming the cap,
     not dropped silently — the caller has to be able to tell "held back for

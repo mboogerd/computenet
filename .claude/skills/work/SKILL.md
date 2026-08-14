@@ -971,20 +971,22 @@ is gathering (computenet-k9d.2).
 `capacity: {cores, max_parallel}`, where `max_parallel = max(1, cores // 5)`.
 Anything trimmed appears in `skipped` with reason `over machine capacity`;
 that is a *hold*, not a problem — dispatch those next round, don't comment on
-them and don't re-derive the claim. The trim falls on the newly-ready tail,
-never on a resumable task, so a worktree with commits in it is never stranded
-behind a fresh one.
+them and don't re-derive the claim. The trim falls on the newly-ready tail
+first, so a worktree with commits in it is never stranded behind a fresh one;
+a resumable waits a round only when the resumables alone exceed the cap.
 
 **Do not raise the cap by hand.** It is per-core because the machines running
 this skill differ (10 and 16 cores), and the divisor is measured, not picked:
 on the 16-core box, one agent running `./gradlew :wire:test --rerun` took
 20.5s, two took 24.7/25.4s (1.22x), three took 34.0/34.8/35.0s (1.70x), six
-took 89.9–97.8s (4.4–4.8x). Three is the largest arm under 2x there. On the
-10-core box the thread that filed this recorded 2 as survivable and 3 as
-catastrophic — load 112, one `:wire:test --rerun` inflating from 6-10s to
-14m30s. `cores/5` reproduces both anchors; the `cores/3` that was first
-floated yields exactly that catastrophic 3 on a 10-core box. See
-`capacity_limit()` in the script for the full derivation.
+took 89.9–97.8s (4.4–4.8x). Three is the largest arm *measured* under 2x
+there; N=4 and N=5 were never run. On the 10-core box the thread that filed
+this recorded 3 as catastrophic — load 112, one `:wire:test --rerun` inflating
+from 6-10s to 14m30s — and judged 2 survivable without ever running it, so
+`cores/5` rests on one measured point and one judgement. Raising it needs a
+measurement, not a guess; the `cores/3` that was first floated yields exactly
+that catastrophic 3 on a 10-core box. See `capacity_limit()` in the script for
+the derivation and its stated limits.
 
 A batch entry with an empty `model` means the breakdown omitted it. Dispatch
 it at `sonnet`, comment on the task that the field was missing, and log it as
