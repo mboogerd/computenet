@@ -966,11 +966,24 @@ problem, not a one-off.
 | `verdict` | Meaning | Do |
 |---|---|---|
 | `all-closed` | every task under this feature is closed | **5e** (feature review) |
-| `blocked` | tasks remain, all blocked or parked | set `parked_at`, go to **5f** |
+| `parked-residue` | every task not closed is an `ask-human.md` park (`blocked` + `human`); the feature's own work is done | **5e** (feature review) |
+| `blocked` | work remains that this session can't start — open, in flight elsewhere, or blocked on a real dependency | set `parked_at`, go to **5f** |
 | `no-tasks` | the feature has no tasks at all | breakdown died — treat as the empty case above |
 
 Sending a feature with unfinished tasks to 5e puts half a feature in front of
 the last gate before `main`, so this distinction is not a formality.
+
+`parked-residue` exists because the two halves of the old `blocked` route
+opposite ways (computenet-eic, observed on computenet-yh6.1.3): a feature whose
+tasks were all reviewed, merged and closed, and whose only open children were
+follow-up beads *its own implementation* filed and parked as human questions.
+Those children are deliverables, not remaining work. Parking that feature
+strands finished, CI-green work in a draft PR with no feature review and no path
+to `main`, for no reason but that it succeeded. Treat the parked children as you
+would any other output — name them in the 5e handoff so the reviewer knows they
+are deferred by design, not missed. One child that is open, `in_progress`
+(including on another machine), or blocked on a real dependency edge is enough
+to hold the verdict at `blocked`.
 
 **Re-derive `metadata.files` against the bead's current decided design before
 you claim it.** The claim is set when the bead is *filed*; a design question
@@ -1448,6 +1461,10 @@ origin/main as of dispatch: ${mainSha}; landed since this branch forked:
 ${logOutput or "nothing"}.
 Open PRs that may merge under you while you review: ${prList}. Section 6's
 re-fetch is where you find out whether one of them did — do it.
+Children left open as ask-human.md parks, deferred by design rather than
+missed (5b's `parked-residue`): ${parkedChildren or "none"}. Confirm each is
+really a park and not a child blocked on a real dependency that inherited the
+`human` label from its parent; a real block means work remains.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,
