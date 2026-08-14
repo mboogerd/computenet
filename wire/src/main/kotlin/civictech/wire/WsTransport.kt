@@ -23,6 +23,7 @@ import java.net.Socket
 import java.net.URI
 import java.net.UnknownHostException
 import java.nio.ByteBuffer
+import java.nio.channels.CancelledKeyException
 import java.nio.channels.ClosedChannelException
 import java.nio.channels.ClosedSelectorException
 import java.nio.channels.SelectionKey
@@ -387,9 +388,11 @@ object WsTransport {
          * so the dialer cannot lose a demand. All nineteen observed occurrences
          * (nine here, nine on run 31756952711, one local) lose server->client.
          *
-         * Naming this was computenet-dqy.68's job; repairing it is a separate
-         * bead — re-arm write interest while the out-queue is non-empty, or take
-         * the listener off java-websocket's selector write path.
+         * Naming this was computenet-dqy.68's job. **The repair is
+         * computenet-dqy.69 and it lives in [WsListener.sweepWriteDemand]**: the
+         * listener re-arms write interest whenever it finds a connection holding
+         * queued bytes with no `OP_WRITE` registered. These counters stay,
+         * because they are what a future occurrence would be read with.
          */
         private val framesSentCount = AtomicLong()
         val framesSent: Long get() = framesSentCount.get()
@@ -697,6 +700,156 @@ object WsTransport {
             started.countDown()
             takeOverAccepting()
             watchListeningSocket(port)
+            watchWriteDemand(port)
+        }
+
+        /**
+         * **The repair (computenet-dqy.69): how many times this listener put back
+         * a write demand java-websocket 1.6.0 had lost.**
+         *
+         * Monotonic and per-listener. Non-zero means the defect below fired on
+         * this listener and was repaired; it is not a health warning, it is the
+         * evidence the repair is load-bearing. Zero on a listener that never
+         * lost one — which is the overwhelming majority: the measured rate was
+         * 9 stalls in 12,500 ubuntu peerings (computenet-dqy.68).
+         *
+         * @see sweepWriteDemand
+         */
+        val writeDemandReArms: Long get() = writeDemandReArmCount.get()
+
+        private val writeDemandReArmCount = AtomicLong()
+
+        /**
+         * Consecutive sweeps in which a connection was seen in the lost-demand
+         * state. Keyed by connection, pruned every sweep to the connections that
+         * are still in it, so a closed or recovered connection leaves nothing
+         * behind. See [sweepWriteDemand] for why one observation is not enough.
+         */
+        private val lostDemandStreak = ConcurrentHashMap<WebSocket, Int>()
+
+        /**
+         * **The repair for computenet-dqy.69: a lost write demand is put back.**
+         *
+         * ## The defect
+         *
+         * java-websocket 1.6.0's server writes from its selector thread and
+         * accepts frames from any caller thread, and the two race over one
+         * `SelectionKey`'s interest set:
+         *
+         * ```java
+         * WebSocketImpl.write:            outQueue.add(buf); wsl.onWriteDemand(this);   // caller thread
+         * WebSocketServer.onWriteDemand:  conn.getSelectionKey().interestOps(OP_READ | OP_WRITE); selector.wakeup();
+         * WebSocketServer.doWrite:        if (batch(conn, channel) && key.isValid()) key.interestOps(OP_READ);  // selector thread
+         * ```
+         *
+         * `batch` returns true exactly when it emptied `outQueue`. A caller that
+         * enqueues and arms `OP_WRITE` in the window *after* that last
+         * `outQueue.poll()` and *before* `doWrite` clears the interest is
+         * clobbered: the frame sits in `outQueue`, no thread will ever register
+         * write interest for it again, and the `wakeup` only releases a `select`
+         * with nothing to write. The connection stays open and fully READABLE,
+         * `send` returned normally, nothing throws, and every frame queued
+         * afterwards is stranded behind the first — so the peer sees a
+         * contiguous PREFIX of the stream and an await for anything later simply
+         * expires. computenet-dqy.68 measured it at 9 occurrences in 12,500
+         * ubuntu peerings (1.8% per fresh-JVM `:wire` suite run) and all
+         * nineteen ever observed lose server->client, because
+         * `WebSocketClient.onWriteDemand` is `// nothing to do` — the dialer
+         * writes from a thread blocking on `outQueue.take()` and cannot lose a
+         * demand. That asymmetry is why only the listener carries this sweep.
+         *
+         * ## The repair
+         *
+         * The lost state is *exactly* observable, so this is a detector rather
+         * than a heuristic: `hasBufferedData()` (`!outQueue.isEmpty()`) is true
+         * while the key is valid and its interest set has no `OP_WRITE`. Nothing
+         * will drain that queue, because `OP_WRITE` is what makes the selector
+         * call `doWrite` at all. [onWriteDemand] — `public final` on
+         * `WebSocketServer`, so this is API and not vendoring — puts the demand
+         * back: `interestOps(OP_READ or OP_WRITE)` plus `selector.wakeup()`,
+         * which is byte-for-byte the demand that was clobbered.
+         *
+         * Ordinary backpressure is *not* this state and is left alone: when the
+         * socket buffer is full, `batch` returns false and `doWrite` leaves
+         * `OP_WRITE` set, so a slow peer never trips the detector however deep
+         * its queue gets.
+         *
+         * ## Why two consecutive observations
+         *
+         * There is one benign instant that looks identical: between
+         * `outQueue.add(buf)` and `wsl.onWriteDemand(this)` on the caller
+         * thread, a frame is queued and the interest is not yet armed. That
+         * window is a few instructions long, so re-arming into it would be
+         * harmless (an extra `interestOps` the selector clears on its next
+         * empty batch) — but *counting* it would inflate [writeDemandReArms],
+         * and that counter is the evidence this repair is judged on. Requiring
+         * the state to survive two sweeps [WRITE_REARM_POLL_MS] apart makes a
+         * benign reading vanishingly unlikely while bounding recovery at twice
+         * the poll, which is two orders of magnitude inside the 3s budget the
+         * awaits this strands actually have.
+         *
+         * `internal` so a test can drive one sweep deterministically instead of
+         * waiting on the poll thread.
+         */
+        internal fun sweepWriteDemand() {
+            val stillLost = HashSet<WebSocket>()
+            for (conn in connections) {
+                val impl = conn as? WebSocketImpl ?: continue
+                val key = impl.selectionKey ?: continue
+                val lost = try {
+                    impl.hasBufferedData() && key.isValid() && (key.interestOps() and SelectionKey.OP_WRITE) == 0
+                } catch (_: CancelledKeyException) {
+                    false // the connection is going away; its queue is not ours to save
+                }
+                if (!lost) continue
+                val streak = (lostDemandStreak[conn] ?: 0) + 1
+                if (streak < LOST_DEMAND_CONFIRMATIONS) {
+                    lostDemandStreak[conn] = streak
+                    stillLost += conn
+                    continue
+                }
+                // Confirmed: bytes queued, no write interest, across two sweeps.
+                lostDemandStreak.remove(conn)
+                val n = writeDemandReArmCount.incrementAndGet()
+                try {
+                    onWriteDemand(conn)
+                } catch (_: CancelledKeyException) {
+                    // 1.6.0 catches this inside onWriteDemand; belt and braces
+                }
+                // Never silent, for the same reason nothing else on this path is:
+                // this is a real defect firing, repaired. It is also the ONLY
+                // evidence a genuine occurrence leaves — the defect is rare (9 in
+                // 12,500 ubuntu peerings) and platform-skewed, so the ubuntu
+                // wire-suite sample is read by grepping for this marker. One line
+                // per occurrence; a healthy process prints none.
+                System.err.println(
+                    "[WsListener] $WRITE_REARM_MARKER: put back a write demand java-websocket lost on port $port " +
+                        "(re-arm #$n; the out-queue held bytes with no OP_WRITE across " +
+                        "$LOST_DEMAND_CONFIRMATIONS sweeps ${WRITE_REARM_POLL_MS}ms apart). " +
+                        "See WsListener.sweepWriteDemand — computenet-dqy.69.",
+                )
+            }
+            lostDemandStreak.keys.retainAll(stillLost)
+        }
+
+        /** @see sweepWriteDemand */
+        private fun watchWriteDemand(boundPort: Int) {
+            Thread {
+                while (!stopRequested) {
+                    try {
+                        sweepWriteDemand()
+                    } catch (t: Throwable) {
+                        // One bad connection must never end this sweep: a dead
+                        // re-arm thread is the defect back, silently.
+                        if (!stopRequested) System.err.println("[WsListener] write-demand sweep failed: $t")
+                    }
+                    try {
+                        Thread.sleep(WRITE_REARM_POLL_MS)
+                    } catch (_: InterruptedException) {
+                        return@Thread
+                    }
+                }
+            }.apply { isDaemon = true; name = "ws-listener-write-rearm-$boundPort" }.start()
         }
 
         /**
@@ -1023,6 +1176,7 @@ object WsTransport {
         }
 
         override fun onClose(conn: WebSocket, code: Int, reason: String?, remote: Boolean) {
+            lostDemandStreak.remove(conn)
             sessions.remove(conn)?.onClose()
         }
 
@@ -1065,6 +1219,32 @@ object WsTransport {
              * bound: accepts themselves arrive as selector wakeups.
              */
             const val ACCEPT_SELECT_MS = 200L
+
+            /**
+             * How often [WsListener.sweepWriteDemand] looks for a stranded
+             * out-queue. Recovery is bounded at
+             * [LOST_DEMAND_CONFIRMATIONS] x this — 50ms — against awaits that
+             * budget 3s and give up at 15s, so the repair is invisible in
+             * latency terms; the cost is one `isEmpty` and one `interestOps`
+             * read per live connection per tick.
+             */
+            const val WRITE_REARM_POLL_MS = 25L
+
+            /**
+             * The stderr marker one confirmed re-arm prints. Grep the ubuntu
+             * `wire-suite-sample` logs for it: on the platform the defect
+             * actually fires on, that line **is** the proof the repair fired
+             * against a genuinely stalled out-queue, and its absence over a
+             * clean 500-iteration sample is proof no announcement was stranded.
+             */
+            const val WRITE_REARM_MARKER = "LOST WRITE DEMAND RE-ARMED"
+
+            /**
+             * How many consecutive sweeps must see the lost-demand state before
+             * it is counted and re-armed — see [WsListener.sweepWriteDemand]'s
+             * "Why two consecutive observations".
+             */
+            const val LOST_DEMAND_CONFIRMATIONS = 2
         }
     }
 

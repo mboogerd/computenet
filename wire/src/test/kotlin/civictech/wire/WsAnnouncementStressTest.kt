@@ -763,6 +763,15 @@ class WsAnnouncementStressTest {
                     "; socket out-queue non-empty: listener=${listener.socketHasBufferedData}" +
                     " client=${connection.socketHasBufferedData}",
             )
+            // computenet-dqy.69: the repair's own reading. A non-empty listener
+            // out-queue above used to mean "stranded, forever"; it now means
+            // "stranded, and the sweep has up to 50ms to put the demand back".
+            // So this line is what separates the two on any future occurrence:
+            // re-arms > 0 says the defect fired here and was repaired (and a
+            // still-non-empty queue is then a NEW mechanism, not this one),
+            // re-arms = 0 with a non-empty queue says the sweep never saw the
+            // lost-demand state and the loss is somewhere else entirely.
+            appendLine("  listener write-demand re-arms (computenet-dqy.69): ${listener.writeDemandReArms}")
             val threads = Thread.getAllStackTraces().keys
                 .filter { it.isAlive }
                 .groupingBy { it.name.replace(Regex("[0-9a-f-]{8,}"), "*") }
