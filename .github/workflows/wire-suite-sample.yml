@@ -1,0 +1,474 @@
+name: Wire suite flake sample (on-demand ubuntu bulk loop)
+
+# An INSTRUMENT, not a gate (computenet-dqy.31).
+#
+# WHAT IT IS FOR. computenet-dqy's first acceptance criterion used to be "ten
+# consecutive green build-test-fast runs". That bar was withdrawn by the epic's
+# owner and replaced with ONE BULK SAMPLE: >= 500 fresh-JVM `:wire` suite
+# iterations on ubuntu-latest — the platform build-test-fast actually runs on —
+# with zero occurrences of the epic's named flake signatures. Rule of three:
+# 0/500 bounds the per-iteration rate at <= 0.6% with 95% confidence, which is
+# below computenet-dqy.34's measured 0.83% macOS fresh-JVM rate and below the
+# ~1% figure the epic opened with.
+#
+# The harness already existed (`scripts/flake-loop/SuiteLoop.java`,
+# computenet-dqy.38) but had NO CI route: before this file, `grep -rl
+# 'flake-loop\|SuiteLoop' .github/workflows/` matched nothing, and the only way
+# to run it was `scripts/flake-loop/run-linux-loop.sh`, which needs a Docker
+# daemon that cannot be started unattended on the dev host (computenet-dqy.44,
+# closed not-planned). This job is the route: the same Linux JVM, no daemon, no
+# human.
+#
+# Deliberate non-properties, copied from `announcement-probe.yml` because they
+# are the same argument:
+#
+#   - `workflow_dispatch` ONLY. No `push`, no `pull_request`, no `schedule`. It
+#     costs nothing until somebody asks for it.
+#   - NOT a required check. The protected-branch ruleset requires
+#     build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test.
+#     This job's name is not among them and must not be added: an instrument
+#     that runs the flakiest suite in the repo 500 times is the last thing that
+#     should be able to block a merge.
+#   - It does not touch `ci.yml`, so it cannot lengthen build-test-fast.
+#
+# WHAT "FRESH JVM" MEANS HERE, stated because the bead's word and the harness's
+# behaviour are not automatically the same thing. `SuiteLoop` runs its
+# iterations IN-PROCESS, driving the JUnit Platform Launcher in a loop inside
+# ONE JVM — that is what makes a few hundred samples affordable at all
+# (`./gradlew :wire:test --rerun` costs ~40s a sample, almost all of it daemon
+# and configuration overhead). So `runs_per_jvm` is the knob that decides which
+# measurement this is:
+#
+#   runs_per_jvm=1   (the default) — one JVM per iteration. This is the
+#                    fresh-JVM condition the bead asks for, and the one
+#                    comparable to computenet-dqy.34's macOS 2/240 = 0.83%.
+#   runs_per_jvm>1   — chunked. Comparable instead to dqy.34's in-process
+#                     3/1140 = 0.26% and to computenet-dqy.38's 780 container
+#                     iterations, which were 3 JVMs x 260. Cheaper per
+#                     iteration; a DIFFERENT condition, not a cheaper version
+#                     of the same one. Say which one a reported number came
+#                     from.
+#
+# THE ZERO-TESTS HOLE, and why `runs_per_jvm=1` does not silently reopen it.
+# `SuiteLoop --expect-tests` exists so that an iteration which ran NO tests — a
+# selector that stopped matching, a class that failed to initialise — can never
+# be read as a clean zero, and computenet-dqy.56 made the baseline DERIVED from
+# iteration 1 rather than hardcoded so it cannot go stale as `civictech.wire`
+# gains tests. But a derived baseline is per-JVM: at `runs_per_jvm=1` every
+# invocation would derive its own baseline from its own only iteration and
+# `unexpectedTestCountIterations` would be 0 by construction — a vacuous guard
+# wearing the name of a real one. So this job CALIBRATES once (chunk 0, no
+# `--expect-tests`, baseline derived and printed), then PINS that number into
+# every later chunk with an explicit `--expect-tests`, and additionally asserts
+# that each chunk's own reported `expectedTests` equals the pinned value. A
+# truncated iteration anywhere in the sample therefore shows up as a nonzero
+# `unexpectedTestCountIterations`, at any chunk size.
+#
+# SIZING IT. MEASURED on macOS 26.6 (aarch64, host, otherwise idle) at the
+# commit this workflow was written against:
+#
+#   java -cp <wire test runtime cp> SuiteLoop.java --package civictech.wire --runs 3
+#     -> elapsedSeconds=18 in-process (6.1s/iteration), `real 19.37` wall
+#        (so ~1.4s of JVM start + single-file-source compile per invocation),
+#        26 tests executed per iteration.
+#
+# and, running this job's own loop body (precompiled class, runs_per_jvm=1) three
+# times on the same host: 6.5s of test work + JVM start = 7s of wall clock per
+# fresh-JVM iteration.
+#
+# So a fresh-JVM iteration costs ~7s on that host. ubuntu-latest is a 4-core
+# hosted runner (measured by `announcement-probe.yml`'s own sampler on run
+# 31673273722, which also corrected an earlier "2-core" claim in that file), and
+# every cross-platform figure this repo has taken puts it slower than the dev
+# host, so budget 1.5-3x: 500 iterations projects to 88-175 minutes. GitHub's
+# per-job ceiling is 6 hours; `timeout-minutes` here is 350 and the default
+# `budget_minutes` is 300, so 500 fresh-JVM iterations fit a single job with
+# margin at 2x and still fit at 3x.
+#
+# THAT PROJECTION IS NOT TRUSTED — IT IS RE-MEASURED ON THE RUNNER. Chunk 0's
+# own wall time is used to project the whole sample before the rest is
+# collected, and the projection is printed with its arithmetic. If it does not
+# fit `budget_minutes`, the job does NOT quietly shrink the sample and report it
+# under the requested label: it collects until the deadline and then reports
+# `INCOMPLETE`, with the ACHIEVED iteration count and the rule-of-three bound
+# that count actually supports (3/n), never the requested one. A partial sample
+# is a real, smaller bound; a partial sample wearing the requested n is a lie.
+#
+# WHY A PARTIAL SAMPLE SURVIVES AT ALL HERE, unlike `announcement-probe.yml`
+# where an over-large size produces NO sample: the probes there report only at
+# the end, so a JUnit timeout throws away every iteration that ran. This
+# harness reports a SUMMARY per chunk and a progress line per iteration, and the
+# evidence directory is uploaded with `if: always()`, so whatever was collected
+# is countable.
+#
+# THE EXECUTION EVIDENCE THE BEAD REQUIRES. computenet-dqy.31's acceptance
+# demands the run prove it MEASURED rather than REPLAYED — the epic's own
+# 2026-08-12 finding that a green build-test-fast does not imply the tests ran,
+# because Gradle correctly serves `:wire:test` FROM-CACHE whenever `:wire`'s
+# inputs are unchanged. Two independent things are recorded for that:
+#
+#   1. A single `./gradlew :wire:test --rerun` on the sampled sha, with its
+#      `N actionable tasks: X executed, Y from cache` line captured verbatim and
+#      a hard assertion that `:wire:test` carries neither `FROM-CACHE` nor
+#      `UP-TO-DATE`. This is the line the acceptance criteria name.
+#   2. The pooled `unexpectedTestCountIterations` over every chunk, against the
+#      pinned baseline above. Note that the SuiteLoop sample cannot be replayed
+#      from the Gradle cache in the first place — it drives the Launcher
+#      directly over compiled classes and no Gradle task result stands between
+#      it and the tests — so (1) is evidence about the sha and the build, and
+#      (2) is the evidence about the sample itself. Neither substitutes for the
+#      other.
+#
+# OUT OF SCOPE, from the bead, and not to be crept into here: naming the
+# mechanism behind the 2026-08-12 silent Linux announcement loss (that is
+# computenet-dqy.55), and any local-container route (computenet-dqy.44, closed
+# not-planned).
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: "Total :wire suite iterations to collect. 500 is computenet-dqy.31's size: 0/500 bounds the per-iteration flake rate at <= 0.6% (rule of three, 95%), below dqy.34's measured 0.83% macOS fresh-JVM rate. Projected cost at runs_per_jvm=1 is ~7.5s/iteration on the dev host, 1.5-3x that on ubuntu-latest; the job re-measures on the runner and reports the ACHIEVED count if the budget runs out."
+        required: false
+        default: "500"
+      runs_per_jvm:
+        description: "Iterations per JVM invocation. 1 (default) is the FRESH-JVM condition the bead asks for and the one comparable to dqy.34's 2/240 macOS figure. >1 chunks the sample into fewer, longer-lived JVMs — cheaper, but a different condition (comparable to dqy.34's in-process 3/1140 and dqy.38's 3x260 containers). Whichever is used, the expected-test baseline is pinned from a calibration chunk, so the zero-tests guard stays real."
+        required: false
+        default: "1"
+      budget_minutes:
+        description: "Wall-clock budget for the sampling loop itself, excluding checkout/JDK/Gradle setup and the execution-evidence run. No new chunk is started once this is exceeded; the job then reports INCOMPLETE with the achieved count rather than shrinking the sample silently. Keep it under the job's timeout-minutes (350)."
+        required: false
+        default: "300"
+      package:
+        description: "Package selector handed to SuiteLoop. 'civictech.wire' is the suite build-test-fast's flake history belongs to and the only value computenet-dqy.31 is about."
+        required: false
+        default: "civictech.wire"
+
+# No `cancel-in-progress`, and the group is per-ref: two dispatches on the SAME
+# ref SERIALISE rather than overlap (observed on announcement-probe.yml,
+# 2026-08-13 — a second dispatch waited ~19 minutes). Budget wall time as the
+# SUM of dispatches on one ref, or dispatch from two refs if they must overlap.
+concurrency:
+  group: wire-suite-sample-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  wire-suite-sample:
+    name: Wire suite flake sample (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # Same setup as every Gradle lane in ci.yml, including the
+      # `cache-encryption-key` that lets setup-gradle save the configuration
+      # cache (computenet-aer). An unset secret degrades to
+      # no-config-cache-save rather than failing.
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: Record the requested sample
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+          RUNS_PER_JVM: ${{ inputs.runs_per_jvm }}
+          BUDGET: ${{ inputs.budget_minutes }}
+          PKG: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          for v in "$ITERATIONS" "$RUNS_PER_JVM" "$BUDGET"; do
+            case "$v" in
+              ''|*[!0-9]*) echo "::error::iterations/runs_per_jvm/budget_minutes must be non-negative integers; got '$v'"; exit 1 ;;
+            esac
+          done
+          if [ "$ITERATIONS" -lt 1 ] || [ "$RUNS_PER_JVM" -lt 1 ] || [ "$BUDGET" -lt 1 ]; then
+            echo "::error::iterations, runs_per_jvm and budget_minutes must all be >= 1"
+            exit 1
+          fi
+          case "$PKG" in
+            ''|*[!a-zA-Z0-9._]*) echo "::error::package must be a plain java package name; got '$PKG'"; exit 1 ;;
+          esac
+          {
+            echo "## Requested sample"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| sha | \`${GITHUB_SHA}\` |"
+            echo "| ref | \`${GITHUB_REF}\` |"
+            echo "| iterations | \`${ITERATIONS}\` |"
+            echo "| runs_per_jvm | \`${RUNS_PER_JVM}\` (1 = fresh JVM per iteration) |"
+            echo "| budget_minutes | \`${BUDGET}\` |"
+            echo "| package | \`${PKG}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The acceptance criteria's own execution test: `:wire:test` must be seen
+      # EXECUTING on this sha, not served from the build cache. `--rerun` makes
+      # that true by construction; the grep is what proves it, and it is the
+      # line the bead asks to have recorded.
+      - name: Execution evidence — run :wire:test once, uncached
+        run: |
+          set -euo pipefail
+          ./gradlew :wire:test --rerun -PexcludeMultiJvm=true --console=plain 2>&1 | tee /tmp/wire-test.log
+          echo "== actionable tasks line =="
+          grep -E '^[0-9]+ actionable task' /tmp/wire-test.log || echo "(no actionable-tasks line printed)"
+          if grep -E '^> Task :wire:test (FROM-CACHE|UP-TO-DATE)' /tmp/wire-test.log; then
+            echo "::error::':wire:test' was served from cache / up-to-date — the sha's suite did not execute"
+            exit 1
+          fi
+          {
+            echo ""
+            echo "## Execution evidence (\`:wire:test --rerun\`)"
+            echo ""
+            echo '```'
+            grep -E '^[0-9]+ actionable task' /tmp/wire-test.log || true
+            grep -E '^> Task :wire:test' /tmp/wire-test.log || true
+            echo '```'
+            echo ""
+            echo "\`:wire:test\` carries neither \`FROM-CACHE\` nor \`UP-TO-DATE\` (asserted, job would have failed)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve the :wire test runtime classpath
+        run: |
+          set -euo pipefail
+          ./gradlew --no-configuration-cache \
+            -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
+            :wire:testClasses -q
+          ./gradlew --no-configuration-cache \
+            -I scripts/flake-loop/print-test-classpath.init.gradle.kts \
+            :wire:printTestClasspath -q 2>/dev/null \
+            | grep -v '^WARNING' | grep -v '^$' | tr '\n' ':' | sed 's/:$//' > /tmp/wire-cp.txt
+          test -s /tmp/wire-cp.txt || { echo "::error::could not resolve the :wire test runtime classpath"; exit 1; }
+          echo "classpath entries: $(tr ':' '\n' < /tmp/wire-cp.txt | wc -l)"
+
+      # The sample itself. Chunk 0 calibrates (derives the expected-test
+      # baseline AND measures this runner's real per-iteration cost); every
+      # later chunk pins that baseline explicitly. No chunk is started once the
+      # budget is spent — the job then reports what it ACHIEVED.
+      - name: Collect the sample
+        id: sample
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+          RUNS_PER_JVM: ${{ inputs.runs_per_jvm }}
+          BUDGET: ${{ inputs.budget_minutes }}
+          PKG: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          CP="$(cat /tmp/wire-cp.txt)"
+          OUT="$GITHUB_WORKSPACE/build/flake-loop"
+          mkdir -p "$OUT"
+          DEADLINE=$(( $(date +%s) + BUDGET * 60 ))
+
+          # `java SuiteLoop.java` (single-file source mode, the form
+          # scripts/flake-loop documents) re-compiles the source on EVERY
+          # invocation — ~1-2s, invisible when a run is 3 JVMs and worth ~10
+          # minutes of the budget when it is 500. Compile once, run the class.
+          # Same class, same arguments, same behaviour.
+          CLASSES="$RUNNER_TEMP/suiteloop-classes"
+          mkdir -p "$CLASSES"
+          javac -cp "$CP" -d "$CLASSES" "$GITHUB_WORKSPACE/scripts/flake-loop/SuiteLoop.java"
+
+          # A CHUNK MUST NOT BE ABLE TO HANG THE SAMPLE, and it demonstrably can
+          # — observed while validating this workflow, on macOS, at iteration 2
+          # of a 2-iteration chunk: SuiteLoop printed its SUMMARY and `main`
+          # returned, then the JVM sat in `DestroyJavaVM` for 10+ minutes
+          # because `WsTransport$WsConnection.scheduleReconnect` had left
+          # non-daemon reconnect threads parked (jstack: WebSocketWorker-*
+          # threads WAITING on that lambda at WsTransport.kt:1107). Nothing in
+          # this loop is protected by the build's 5-minute per-test JUnit
+          # timeout either: that comes from
+          # `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts` via Gradle's Test
+          # task, and driving the Launcher directly does not see it. So each
+          # invocation gets a hard kill, and the SUMMARY line — not the exit
+          # status — decides whether the chunk produced a sample. A chunk that
+          # is killed WITH its SUMMARY written is a complete measurement whose
+          # JVM would not die; a chunk killed WITHOUT one measured nothing and
+          # is fatal, because silently continuing would drop iterations out of
+          # the denominator.
+          # So each invocation is watched rather than waited on: the moment its
+          # SUMMARY line appears the measurement is complete and the JVM is
+          # killed, and an invocation that has not produced one within its limit
+          # is killed too. The SUMMARY line — not the exit status — is what says
+          # whether the chunk measured anything. Killing on SUMMARY is not a
+          # shortcut past a real result: SuiteLoop computes the SUMMARY from
+          # counters it has already finished accumulating, after its last
+          # iteration and after every per-failure evidence file has been
+          # written (`Files.writeString(evidence, ...)` happens inside the
+          # iteration loop). The line is also flushed before the kill can land,
+          # since `System.out` is autoflush and the poll only fires once the
+          # line is already present in the console file.
+          #
+          # ONE THING THE KILL CAN TRUNCATE, stated because the console is what
+          # everything downstream reads and the `.log` is not: SuiteLoop's
+          # order at the end is `System.out.println(summary)` and only THEN its
+          # final `Files.writeString(log, ...)` (SuiteLoop.java, end of main).
+          # So a chunk killed the instant its SUMMARY appears can lose the tail
+          # of `$OUT/<label>.log`, which is otherwise only rewritten every 25
+          # iterations. Nothing depends on it: pooling reads
+          # `chunk-*.console`, per-failure evidence is written eagerly inside
+          # the loop, and the console holds every line the log would have. The
+          # uploaded `.log` is a convenience copy and may be short by a few
+          # lines at the very end of a chunk.
+          run_chunk() {  # $1 = label, $2 = runs, $3.. = extra args
+            local label="$1" runs="$2"; shift 2
+            local console="$OUT/$label.console"
+            local limit=$(( 120 + runs * 120 ))   # seconds, generous: measured ~7.5s/iteration
+            local ticks=$(( limit * 4 ))          # the poll below is 0.25s
+            : > "$console"
+            java -cp "$CP:$CLASSES" SuiteLoop \
+              --package "$PKG" --runs "$runs" --out "$OUT" --label "$label" "$@" \
+              > "$console" 2>&1 &
+            local pid=$! waited=0 summarised=no
+            while kill -0 "$pid" 2>/dev/null; do
+              if grep -q '^SUMMARY ' "$console"; then summarised=yes; kill -9 "$pid" 2>/dev/null || true; break; fi
+              if [ "$waited" -ge "$ticks" ]; then
+                echo "::error::${label} produced no SUMMARY within ${limit}s — killing it; it measured nothing"
+                kill -9 "$pid" 2>/dev/null || true
+                break
+              fi
+              sleep 0.25; waited=$(( waited + 1 ))
+            done
+            wait "$pid" 2>/dev/null || true
+            grep -q '^SUMMARY ' "$console" && summarised=yes
+            # Keep the job log readable at 500 chunks: per-iteration lines and the
+            # SUMMARY always, the whole console only when something failed. Every
+            # console is uploaded as an artifact regardless.
+            grep -E "^(SUMMARY |${label} iter=|${label} derived )" "$console" || true
+            if [ "$summarised" = no ]; then
+              echo "---- ${label} console (tail) ----"; tail -40 "$console"
+              return 1
+            fi
+            if ! grep -qE '^SUMMARY .* failingTests=0 ' "$console"; then
+              echo "---- ${label} console (a failure was recorded; full console follows) ----"
+              cat "$console"
+            fi
+            return 0
+          }
+
+          # --- chunk 0: calibration -------------------------------------------------
+          CAL_RUNS=$(( RUNS_PER_JVM < ITERATIONS ? RUNS_PER_JVM : ITERATIONS ))
+          t0=$(date +%s)
+          run_chunk chunk-000 "$CAL_RUNS" || { echo "::error::calibration chunk exited non-zero"; exit 1; }
+          t1=$(date +%s)
+          CAL_WALL=$(( t1 - t0 )); [ "$CAL_WALL" -gt 0 ] || CAL_WALL=1
+
+          EXPECT="$(grep -oE 'expectedTests=[0-9]+' "$OUT/chunk-000.console" | tail -1 | cut -d= -f2)"
+          if [ -z "${EXPECT:-}" ] || [ "$EXPECT" -lt 1 ]; then
+            echo "::error::calibration chunk did not report a usable expectedTests baseline"
+            exit 1
+          fi
+          echo "calibrated: expectedTests=$EXPECT, ${CAL_WALL}s for ${CAL_RUNS} iteration(s)"
+
+          # Projection, printed with its arithmetic so a short sample is never a surprise.
+          PER_ITER_MS=$(( CAL_WALL * 1000 / CAL_RUNS ))
+          PROJ_MIN=$(( PER_ITER_MS * ITERATIONS / 1000 / 60 ))
+          echo "PROJECTION: ${PER_ITER_MS}ms/iteration x ${ITERATIONS} iterations = ~${PROJ_MIN} minutes against a ${BUDGET}-minute budget"
+          if [ "$PROJ_MIN" -gt "$BUDGET" ]; then
+            echo "::warning::projected ~${PROJ_MIN} min exceeds the ${BUDGET} min budget — this run will report INCOMPLETE with the achieved count, not the requested one"
+          fi
+
+          DONE="$CAL_RUNS"
+          IDX=1
+          TRUNCATED=no
+          while [ "$DONE" -lt "$ITERATIONS" ]; do
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              TRUNCATED=yes
+              echo "::warning::budget of ${BUDGET} minutes reached after ${DONE} iterations; stopping"
+              break
+            fi
+            REMAIN=$(( ITERATIONS - DONE ))
+            N=$(( RUNS_PER_JVM < REMAIN ? RUNS_PER_JVM : REMAIN ))
+            LABEL="$(printf 'chunk-%03d' "$IDX")"
+            run_chunk "$LABEL" "$N" --expect-tests "$EXPECT" || { echo "::error::${LABEL} exited non-zero"; exit 1; }
+            DONE=$(( DONE + N ))
+            IDX=$(( IDX + 1 ))
+          done
+
+          # --- pool -----------------------------------------------------------------
+          cat "$OUT"/chunk-*.console | grep '^SUMMARY ' > "$OUT/summaries.txt"
+          python3 - "$OUT/summaries.txt" "$EXPECT" "$ITERATIONS" "$TRUNCATED" <<'PY' | tee "$OUT/pooled.txt"
+          import re, sys
+          path, expect, requested, truncated = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+          tot = dict(runs=0, failingIterations=0, failingTests=0,
+                     collectorAnnouncedSignature=0, unexpectedTestCountIterations=0, elapsedSeconds=0)
+          baselines = set()
+          n_chunks = 0
+          for line in open(path):
+              f = dict(re.findall(r'(\w+)=(-?\d+)', line))
+              if 'runs' not in f:
+                  continue
+              n_chunks += 1
+              for k in tot:
+                  tot[k] += int(f.get(k, 0))
+              baselines.add(int(f['expectedTests']))
+          bad_baseline = baselines != {expect}
+          print(f"POOLED chunks={n_chunks} requested={requested} achieved={tot['runs']} "
+                f"failingIterations={tot['failingIterations']} failingTests={tot['failingTests']} "
+                f"collectorAnnouncedSignature={tot['collectorAnnouncedSignature']} "
+                f"expectedTests={sorted(baselines)} "
+                f"unexpectedTestCountIterations={tot['unexpectedTestCountIterations']} "
+                f"loopSeconds={tot['elapsedSeconds']}")
+          n = tot['runs']
+          bound = (3.0 / n * 100) if n else float('inf')
+          print(f"RULE-OF-THREE 0/{n} bounds the per-iteration rate at <= {bound:.2f}% (95%) "
+                f"— valid ONLY if failingTests=0 and unexpectedTestCountIterations=0")
+          if tot['failingTests'] or bad_baseline or tot['unexpectedTestCountIterations']:
+              outcome = 'INVALID' if (bad_baseline or tot['unexpectedTestCountIterations']) else 'FLAKE'
+          elif n < requested or truncated == 'yes':
+              outcome = 'INCOMPLETE'
+          else:
+              outcome = 'CLEAN'
+          print(f"OUTCOME {outcome}")
+          PY
+
+          {
+            echo "outcome=$(grep '^OUTCOME ' "$OUT/pooled.txt" | awk '{print $2}')"
+            echo "pooled<<EOF"
+            cat "$OUT/pooled.txt"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wire-suite-sample-${{ github.run_id }}
+          path: build/flake-loop
+          if-no-files-found: warn
+
+      # The verdict is stated in one place, in the words computenet-dqy.31 will
+      # be closed (or not closed) in. An INCOMPLETE sample is NOT an occurrence
+      # and NOT a pass — the repo settled that shape in computenet-dqy.12.
+      - name: Conclude
+        if: always()
+        env:
+          OUTCOME: ${{ steps.sample.outputs.outcome }}
+          POOLED: ${{ steps.sample.outputs.pooled }}
+        run: |
+          set -euo pipefail
+          {
+            echo ""
+            echo "## Pooled result"
+            echo ""
+            echo '```'
+            echo "${POOLED:-(the sampling step did not finish; read the job log)}"
+            echo '```'
+            echo ""
+            case "${OUTCOME:-}" in
+              CLEAN) echo "**CLEAN** — the full requested sample ran, every iteration executed the pinned number of tests, and nothing failed. The rule-of-three bound above is quotable." ;;
+              FLAKE) echo "**FLAKE** — at least one iteration failed. That NAMES A DEFECT (file it under the epic) and the bound is recorded as measured, not as a pass. The per-failure evidence files are in the uploaded artifact." ;;
+              INCOMPLETE) echo "**INCOMPLETE** — the budget ran out before the requested count. Quote the ACHIEVED n and its own bound, never the requested one. Dispatch again (same ref serialises, different ref overlaps) to add an independent sample." ;;
+              INVALID) echo "**INVALID** — some iteration did not execute the pinned number of tests, so a zero-failure result here proves nothing. Read \`unexpectedTestCountIterations\` and \`expectedTests\` in the pooled line." ;;
+              *) echo "**UNRESOLVED** — the sampling step did not reach a verdict. Read the job log." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "${OUTCOME:-}" in
+            CLEAN|INCOMPLETE) exit 0 ;;
+            *) exit 1 ;;
+          esac
