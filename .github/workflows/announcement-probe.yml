@@ -32,6 +32,20 @@ name: Announcement probe (on-demand Linux bulk sample)
 # it collects a single number rather than reporting a default-size run as a bulk
 # one.
 #
+# This preflight is no longer the ONLY guard, and the split matters
+# (computenet-piur). Because this workflow is `workflow_dispatch`-only, a
+# forwarding regression used to be invisible until a human dispatched a probe —
+# measured 2026-08-14: deleting the forwarding block entirely left
+# `./gradlew :wire:test --tests '*WsAnnouncementStressTest*' --rerun
+# -Dwire.stress.injectFailureAt=1` fully green. `WireSystemPropertyForwardingTest`
+# now covers the LIST on the required `build-test-fast` lane, at no measurable
+# cost: `wire/build.gradle.kts` publishes the forwarded keys into the test JVM and
+# that test requires them to cover every `wire.*` key the `:wire` test sources
+# read. This preflight keeps covering what a same-JVM test structurally cannot —
+# that a `-D` on a Gradle COMMAND LINE actually reaches the fork — which needs a
+# nested Gradle invocation and is exactly the cost `build-test-fast` should not
+# pay. Neither guard subsumes the other.
+#
 # `wire.stress.injectFailureAt` (computenet-dqy.63) is the same trap, but its
 # preflight check cannot be "poison with garbage, expect an exception": that
 # property's own parser (`WsAnnouncementStressTest.parseInjectFailuresAt`) is
