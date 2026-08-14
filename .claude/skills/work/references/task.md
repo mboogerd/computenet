@@ -191,6 +191,22 @@ than restarting. That's the whole reason the worktree is preserved.
      not force the upstream tasks the named task depends on. Put one
      `--rerun` per test task; use `--rerun-tasks` for a repo-wide run.
 
+   **A build that stalls or dies for reasons not in your diff is probably this
+   skill's own parallelism, not a defect you introduced.** Sibling task and
+   review agents are running right now, each in its own worktree, all driving
+   Gradle against the same shared caches and daemons. Two observed symptoms:
+
+   - **A run lost to `buildLogic.lock`** — a review agent waited 4 minutes and
+     got nothing. Expect the wait, and retry once before concluding anything.
+   - **A Kotlin-daemon `OutOfMemoryError`** caused by daemons left resident by
+     a build in a *different* directory. `pkill -f KotlinCompileDaemon`
+     cleared it; the retry then succeeded.
+
+   So clear stray Kotlin daemons and retry once before you read a red build as
+   your change's, and say in your report which of the two you hit — a "the
+   suite fails" line that was really contention costs your reviewer the same
+   detour again.
+
    **Hunting a rare failure, don't destroy the occurrence you waited for.**
    Told to "run it 100 times": don't hand-roll the loop and don't pass `-q`.
    `scripts/flake-loop/` is the committed harness — it runs the suite

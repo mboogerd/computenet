@@ -260,6 +260,17 @@ What to consume, per test run:
   It is gitignored, so it can never be committed. Never commit while it
   exists. SKILL.md 5a is what reads it.
 
+**A run that stalls or dies for reasons not in the diff is probably this
+skill's own parallelism.** Sibling task and review agents run concurrently,
+each in its own worktree, all driving Gradle against the same shared caches
+and daemons. Two observed symptoms: a run lost to `buildLogic.lock` after a
+4-minute wait, and a Kotlin-daemon `OutOfMemoryError` caused by daemons left
+resident by a build in a *different* directory (cleared with `pkill -f
+KotlinCompileDaemon`). Clear stray daemons and retry once before you read a
+failure as the task's — and if you fail a task on a build result, say which
+attempt it was, because contention reported as a defect sends the implementer
+after something that is not there.
+
 **Don't destroy a rare failure's evidence.** If a run's *failure* is what
 matters — a flake hunt, a repetition loop — do not pass `-q`: it keeps the
 detail off the console and it does not reach the Gradle daemon log either, and
