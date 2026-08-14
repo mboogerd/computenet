@@ -11,6 +11,10 @@
           {
             "command": "bd prime --hook-json",
             "type": "command"
+          },
+          {
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ff-main.sh\"",
+            "type": "command"
           }
         ],
         "matcher": ""
