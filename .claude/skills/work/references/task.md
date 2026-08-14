@@ -287,7 +287,24 @@ than restarting. That's the whole reason the worktree is preserved.
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
-10. Report: the task id, the outcome, and the files you **actually** touched,
+10. **Before you report, kill every background job you started** — `TaskStop`
+    each monitor, kill each backgrounded shell, exit each poll loop. Starting
+    them is fine (waiting on CI, tailing a long run); leaving one alive is not,
+    and never end your turn waiting on one, because nothing resumes you.
+    Nothing stops it once you are gone either: every time it fires it delivers
+    another task-notification to the orchestrator carrying a stale copy of your
+    final report, and `TaskStop` on a completed agent answers "not running", so
+    the orchestrator has no handle. Six such wakes in one session
+    (computenet-k9d.8) — one stuck wait-loop, one `Monitor` that worked exactly
+    as designed and merely outlived its purpose; that pair is the whole
+    evidence base, but both classes cost the same. Two traps that make loops
+    stick: `pgrep -f <pattern>` inside an `until` waiter matches the waiting
+    shell's **own** command line, so the condition never goes false; and
+    `gh pr checks --watch` returns immediately when only `auto-merge` has
+    reported on a fresh head, so it is not usable as a wait — which is why
+    these loops get hand-rolled in the first place.
+
+    Report: the task id, the outcome, and the files you **actually** touched,
     not just the ones you claimed. Drift is how the orchestrator fixes
     scheduling for later batches.
 

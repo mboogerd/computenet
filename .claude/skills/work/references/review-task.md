@@ -436,6 +436,22 @@ foreground calls. Out of room,
 out of time, or blocked, give the partial verdict you have and put the rest
 under NOT VERIFIED — an honest partial verdict beats stopping mid-experiment.
 
+**Kill every background job you started before you send that message** —
+`TaskStop` each monitor, kill each backgrounded shell, exit each poll loop.
+Background jobs are legitimate (waiting on CI, tailing a long run); leaving one
+alive is not. Nothing stops it once you are gone: every time it fires it
+delivers another task-notification to the orchestrator carrying a stale copy of
+the verdict above, and `TaskStop` on a completed agent answers "not running",
+so the orchestrator has no handle at all. Six such wakes in one session
+(computenet-k9d.8) — one agent's stuck wait-loop, one agent's `Monitor` that
+behaved exactly as designed and merely outlived its purpose; that pair is the
+whole evidence base, but both classes cost the same. Two traps that make loops
+stick: `pgrep -f <pattern>` inside an `until` waiter matches the waiting
+shell's **own** command line, so the condition never goes false; and
+`gh pr checks --watch` returns immediately when only `auto-merge` has reported
+on a fresh head, so it is not usable as a wait — which is why these loops get
+hand-rolled in the first place.
+
 **Pass** — say what you verified, with the test counts and the executed/from-cache
 accounting behind it, and what you repaired. The orchestrator
 merges the branch; do **not** merge it yourself, and do not touch the
