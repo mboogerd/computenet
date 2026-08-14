@@ -57,6 +57,16 @@ something to fix on a task branch.
 Check:
 
 - **Each acceptance criterion**, actually met — not plausibly gestured at.
+- **Writing metadata: `--set-metadata key=value` on `bd update`.** `bd update
+  --metadata` exists too but takes a **JSON object**, so
+  `bd update <id> --metadata review=passed` fails with
+  `Error: invalid JSON in --metadata: must be valid JSON`. Use
+  `--set-metadata`, which sets one key without quoting a document. Both
+  *merge* into the existing metadata rather than replacing it (measured on bd
+  1.1.2: `--metadata '{"k":"v"}'` upserts `k` and leaves the other keys
+  standing, and `--metadata '{}'` is a no-op) — so neither flag will clear a
+  key for you. (`bd create` is the mirror image: `--metadata '{"k":"v"}'`
+  there, and no `--set-metadata` at all.)
 - **The file claim.** Files touched outside `metadata.files` are a real
   problem: sibling tasks were scheduled in parallel on the assumption that
   claim was accurate. Report every one, even if the change itself is fine.
@@ -122,19 +132,49 @@ What to consume, per test run:
   results are from *this* run:
 
   ```bash
+  # Pass one or more globs. For ONE module, 'wire/build/test-results/*/TEST-*.xml'.
+  # For a repo-wide run you must pass BOTH depths — see the warning below.
   python3 -c '
   import glob, sys
   from xml.etree import ElementTree as ET
-  t = f = e = 0; newest = ""
-  for p in glob.glob(sys.argv[1]):
-      r = ET.parse(p).getroot()
-      t += int(r.get("tests", 0)); f += int(r.get("failures", 0)); e += int(r.get("errors", 0))
-      newest = max(newest, r.get("timestamp", ""))
-  print(f"{t} tests, {f} failures, {e} errors, newest {newest}")' \
-    'wire/build/test-results/test/TEST-*.xml'
+  t = f = e = 0; newest = ""; mods = set()
+  for pat in sys.argv[1:]:
+      for p in glob.glob(pat):
+          r = ET.parse(p).getroot()
+          t += int(r.get("tests", 0)); f += int(r.get("failures", 0)); e += int(r.get("errors", 0))
+          newest = max(newest, r.get("timestamp", ""))
+          mods.add(p.split("/build/")[0])
+  print(f"{t} tests, {f} failures, {e} errors, newest {newest}")
+  print(f"{len(mods)} modules: {sorted(mods)}")' \
+    '*/build/test-results/*/TEST-*.xml' '*/*/build/test-results/*/TEST-*.xml'
   ```
 
-  Quote the numbers in your report. An unquantified "suite green" — yours or
+  **A single-depth glob silently undercounts a repo-wide run.** The eight
+  `demo/*` modules are nested one level deeper than the rest, so
+  `*/build/test-results/...` alone misses them and *says nothing about it*.
+  Measured 2026-08-14 over the main checkout's accumulated results:
+  single-depth reports **496 tests across 7 result directories**, both depths
+  report **586 across 15** — 90 tests and 8 modules (`demo/agora`,
+  `demo/backlog-triage`, `demo/exchange`, `demo/shell`, `demo/shopping`,
+  `demo/skillmatch`, `demo/slotfinder`, `demo/tiering`) omitted with no
+  visible sign. Reporting "496 tests, 0 failures" for a tree that ran 586 is a
+  number you did not measure — exactly what SKILL.md's authorship rule exists
+  to prevent. That is why the snippet prints its module list: **read it, and
+  if a module you expected is missing, your glob is wrong, not the run.**
+
+  **Read that list for strangers, too, and read `newest` against the clock.**
+  `*/build/` is a glob, not the module list: on a long-lived checkout it also
+  matches `legacy/` and `runtime/`, which AGENTS.md says are stale build
+  output with no sources — they are two of the 15 above, and `runtime`'s XML
+  was a year old when that figure was taken. The snippet prints only the
+  *newest* timestamp, so one fresh module hides fourteen stale ones. If
+  `newest` is not from minutes ago, nothing here ran; and a run you cannot
+  date is not a verification record. The npm UI suites (`inspect/ui`,
+  `demo/agora/ui`, i.e. the `ui-test` and `agora-ui-test` checks) emit no
+  JUnit XML at all and are invisible to this snippet — their absence is not a
+  wrong glob.
+
+  Quote the numbers *and the module count* in your report. An unquantified "suite green" — yours or
   the implementer's — is not a verification record, and the orchestrator never
   re-runs it: your report *is* the evidence the next session trusts.
 
