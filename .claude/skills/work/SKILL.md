@@ -1057,19 +1057,36 @@ Claimed by the other machine → its children are being worked whatever they
 say; take the next candidate. The assignee reads as JSON `null` when clear,
 not `""`.
 
-**Read the status before the assignee: on a `closed` epic the assignee is
-provenance, not a claim.** A claim on a closed epic cannot be live — nothing
-selects a closed epic, so no session is working out of it — and the assignee
-is never cleared afterwards, because step 6's already-closed branch
-deliberately leaves it (it is the record of who held the epic when it went).
-Reading it as "claimed by the other machine" would skip every open child
-under that epic *permanently*. That is live in the tracker right now:
-`computenet-dqy` is `closed` with `assignee=Anva@A0030` and `owner:MacBoo`,
-while `computenet-dqy.70` and `.71` are open and in `bd ready`, and
+**On a `closed` epic, read `updated_at` before you read the assignee — it
+decides whether that assignee is a live claim or provenance.** A closed epic
+is never *selected* again, and step 6's already-closed branch deliberately
+leaves its assignee in place as the record of who held it, so the marker is
+permanent. Reading it as "claimed by the other machine" would skip every open
+child under that epic forever. But closing does not evict the session that
+claimed the epic while it was open: that session stays inside it, finishing
+in-flight children, until its own Finalize (step 6 says so explicitly, and
+`computenet-dqy` was closed at 10:19:34Z while its claimant was still working
+`computenet-dqy.72` to a shipped PR). Inside that window its child claims are
+still local and your re-verify would read them as unclaimed — which is the
+`computenet-dqy.40` double-claim in
+[references/claim-sync.md](references/claim-sync.md), not a hypothetical.
+
+So use step 3's staleness idiom, which exists for exactly this:
+
+```bash
+bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
+# closed AND updated_at older than 15 minutes -> assignee is provenance;
+#   evaluate the candidate normally, whatever it says
+# closed within the last 15 minutes -> the closing session may still be
+#   finishing children; take the next candidate
+# not closed, other machine's assignee -> a live claim; take the next candidate
+```
+
+The stale case is the one in the tracker today: `computenet-dqy` is `closed`
+with `assignee=Anva@A0030` and `owner:MacBoo` and hours old, while
+`computenet-dqy.70` and `.71` are open and in `bd ready`, and
 `epic_of(computenet-dqy.70)` resolves to `computenet-dqy` through the dotted
-prefix. So: `closed` → **evaluate the candidate normally**, whatever the
-assignee says. Only an epic that is *not* closed and carries another
-machine's assignee is a live claim.
+prefix — so they evaluate normally.
 
 **A genuine `(unparented)` needs no check and is not a
 gap**: an unparented bug or chore can never be somebody's locally-claimed
@@ -1655,14 +1672,19 @@ Read that second line rather than assuming it. `--remove-label` is an
 ordinary field update and should not move the status, but this branch exists
 precisely because the epic must stay closed — if it comes back anything but
 `closed`, say so at the top of the summary instead of correcting it with a
-second write.
+second write. **A reopened epic is not inert**: it carries a stale assignee on
+`open`, which is precisely step 3's takeover shape once its `updated_at` ages
+past 15 minutes, so that summary line is the only thing between it and a
+second session re-working an epic that is done.
 
 Leave the assignee as it is: it is the record of who held the epic when it
 was closed, and clearing it would erase the only trace of the collision. That
-is safe **because 5f's routes-3/4 parent-epic check reads the status before
-the assignee** — a closed epic's assignee is provenance there, not a live
-claim, so open children under it stay selectable. Those two sites are one
-decision; do not change one without the other. Then say in the summary that
+is safe **because 5f's routes-3/4 parent-epic check branches on status and
+age before it reads the assignee** — on an epic closed more than 15 minutes
+ago the assignee is provenance there, not a live claim, so open children under
+it stay selectable. Three sites state that rule — this one, 5f's check, and
+[references/claim-sync.md](references/claim-sync.md) § "What it does not
+guarantee" — and they are one decision; do not change one without the others. Then say in the summary that
 the epic closed under this session's claim, and skip the release below.
 
 **In-flight children are still finished and shipped — the epic closing does
