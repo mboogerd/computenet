@@ -153,10 +153,25 @@ Typical commands:
 ./gradlew test
 ```
 
+A filtered invocation like `--tests 'fully.qualified.TestName'` can print
+`BUILD SUCCESSFUL` while running zero tests: Gradle's up-to-date checking
+treats an unchanged test task as `UP-TO-DATE` and skips it, so a rerun of the
+exact command above that produced real JUnit output can complete in under a
+second with no test output at all — indistinguishable from a pass at a
+glance. When you need proof a test actually executed (reviews, verifying a
+fix is not a no-op), add `--rerun` to the specific test task:
+`./gradlew :kernel:test --tests 'fully.qualified.TestName' --rerun`.
+`--rerun` binds to the task immediately preceding it, not to the whole
+command line, and does not force upstream tasks the named task depends on;
+use `--rerun-tasks` for a repo-wide run.
+
 Before declaring completion:
 
 - Add focused tests named by the work item, including its failure/recovery case.
 - Run affected module tests and the repository-wide `./gradlew test` gate.
+- Confirm the test task you care about executed rather than being reported
+  `UP-TO-DATE` or `FROM-CACHE` — read Gradle's `N actionable tasks: X
+  executed, Y from cache` line and, if in doubt, rerun with `--rerun`.
 - Check that no generated/build output or unrelated files entered the diff.
 - Review the diff against every sentence of the work item's `Implement`, `Depends`,
   exclusion, and `Test` clauses.

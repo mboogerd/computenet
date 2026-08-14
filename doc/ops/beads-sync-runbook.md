@@ -206,7 +206,18 @@ dolt commit -am 'Merge origin/main: resolve N issue conflicts last-write-wins by
 ```
 
 The `SET` clause is generated per-database from `information_schema.columns`
-(55 columns at the time of the 2026-08-12 incident) rather than typed by hand.
+(55 columns at the time of the 2026-08-12 incident, 53 non-key columns as of
+2026-08-14) rather than typed by hand.
+
+> **Do not generate it with SQL `group_concat()`.** Measured 2026-08-14: it
+> silently truncates at `group_concat_max_len` (1024 bytes by default),
+> yielding a clause that assigned **25 of 53 columns with no error anywhere** —
+> a resolution that restores under half of every conflicting row and reports
+> success. Either raise `group_concat_max_len` first and assert the column
+> count, or emit one row per column and join them outside SQL. Whichever you
+> pick, count the assignments against
+> `select count(*) from information_schema.columns ... and column_name<>'id'`
+> before running the `UPDATE`.
 After resolution, verify with `bd dolt pull` (expect `Pull complete.`) then
 `bd dolt push` (expect `Push complete.`). Note: a `bd dolt push` following a
 conflict resolution has been observed to take **over 120 seconds** (blowing a
