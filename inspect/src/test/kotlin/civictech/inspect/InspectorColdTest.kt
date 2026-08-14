@@ -449,7 +449,7 @@ class InspectorColdTest {
     }
 
     private fun started(): InspectorServer {
-        val started = InspectorServer(registry, mapOf("h" to host, "other" to other), port = 0).start()
+        val started = InspectorServer(registry, mapOf("h" to host, "other" to other), port = 0).startUnscheduled()
         server = started
         probe = HttpProbe("http://localhost:${started.boundPort}")
         return started

@@ -40,7 +40,7 @@ class InspectorEventsTest {
     private val hostRef = CellRef(UUID.randomUUID())
     private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
     private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
-    private val server = InspectorServer(registry, host, port = 0).start()
+    private val server = InspectorServer(registry, host, port = 0).startUnscheduled()
     private var tap: SseTap? = null
 
     @AfterEach

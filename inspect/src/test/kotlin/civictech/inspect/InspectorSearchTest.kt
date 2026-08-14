@@ -238,7 +238,7 @@ class InspectorSearchTest {
 
     /** Starts the server against whatever is already spawned; call after building the graph. */
     private fun started(names: Map<CellRef, String> = emptyMap()): InspectorServer {
-        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, cellNames = names).start()
+        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, cellNames = names).startUnscheduled()
         server = started
         probe = HttpProbe("http://localhost:${started.boundPort}")
         return started

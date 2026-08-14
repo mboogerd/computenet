@@ -45,7 +45,7 @@ class InspectorStaticTest {
     }
 
     private fun serve(uiDist: Path): HttpProbe {
-        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, uiDist = uiDist).start()
+        val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, uiDist = uiDist).startUnscheduled()
         server = started
         return HttpProbe("http://localhost:${started.boundPort}").also { probe = it }
     }

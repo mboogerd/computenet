@@ -52,6 +52,23 @@ class InspectorObserveTest {
     private val hostRef = CellRef(java.util.UUID.randomUUID())
     private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
     private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
+    /**
+     * **Deliberately [InspectorServer.start], not [InspectorServer.startUnscheduled]**
+     * (computenet-md6w.1). Every other `:inspect:` test class moved onto the
+     * unscheduled seam so `tickAll()` is the only thing that drives a `Tick`;
+     * this class is the one exception, because
+     * `an effective change is announced within one window, and the state read on
+     * it is fresh` asserts the *freshness guarantee itself* — that the armed
+     * `"stateSummary"` schedule announces a change with no test-side tick at all.
+     * Unscheduling this server would leave that test waiting on a window that
+     * can never arrive, i.e. would turn its guarantee into a vacuous timeout.
+     *
+     * The cost is the race computenet-md6w describes: exact-count assertions in
+     * this class run against a live 1 Hz clock. They are written to tolerate it —
+     * `awaitKind(kind, n)` waits for *at least* n and the one exact-absence
+     * assertion (`releasing publishes a trailing summary…`) counts from a
+     * baseline taken after the release rather than from zero.
+     */
     private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
     private var tap: SseTap? = null

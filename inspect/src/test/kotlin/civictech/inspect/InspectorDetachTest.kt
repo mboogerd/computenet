@@ -77,7 +77,7 @@ class InspectorDetachTest {
             registry = registryA,
             hosts = mapOf("a-host" to hostA, "a-bridge" to bridgeA),
             port = 0,
-        ).start()
+        ).startUnscheduled()
         Peering.loopback(Peering.Side(registryA, bridgeA), Peering.Side(registryB, bridgeB))
         awaitUntil("the inspector adopted the peer's cell") { server.knowsNow(theirs.ref) }
         awaitUntil("the inspector adopted its own cells") { server.knowsNow(mine.ref) && server.knowsNow(alsoMine.ref) }
