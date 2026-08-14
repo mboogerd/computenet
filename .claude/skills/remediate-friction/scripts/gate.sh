@@ -4,8 +4,8 @@
 # Fired by launchd whenever .beads/issues.jsonl changes (bd rewrites it on
 # every mutation), and hourly as a fallback. Exits in milliseconds when
 # nothing is actionable — which is most firings, since the export changes on
-# every bd write anywhere. When actionable skill-friction items exist under
-# the SDLC epic, launches one headless /remediate-friction session.
+# every bd write anywhere. When actionable items exist under
+# the SDLC epic (any child, labelled or not — computenet-wpvy.37), launches one headless /remediate-friction session.
 #
 # The orchestrator's own bd writes re-fire this gate: the lock absorbs
 # firings mid-run, and after the run the filter finds nothing open. An
@@ -23,10 +23,14 @@ SDLC_EPIC="computenet-wpvy"
 
 cd "$REPO"
 
-# Actionable = skill-friction under the SDLC epic, not human-gated, and
+# Actionable = anything under the SDLC epic, not human-gated, and
 # either open+unclaimed or claimed by this machine (open or in_progress —
 # an in_progress item of ours with no live run is a crashed drain to resume).
-count="$(bd list --parent="$SDLC_EPIC" --label=skill-friction --json 2>/dev/null |
+# NO --label filter: scope is parentage (computenet-wpvy.37). Gating on
+# skill-friction here made the lane refuse to fire while unlabelled children
+# sat open — measured 2026-08-14, 8 labelled vs 15 actual, with wpvy.25/.26/.39
+# invisible to this count. The label is provenance, not a gate.
+count="$(bd list --parent="$SDLC_EPIC" --json 2>/dev/null |
   jq --arg me "$BEADS_ACTOR" '[ .[]
     | select(((.labels // []) | index("human")) == null)
     | select(

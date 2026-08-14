@@ -1,13 +1,13 @@
 ---
 name: remediate-friction
-description: Drains the skill-friction items under the SDLC epic (computenet-wpvy) on its own lane, separate from /work — picks the most-reported open friction bug or feature, re-validates it against the current skill revision, and fixes .claude/skills/work/ in a reviewed branch and PR. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated skill-friction backlog worked.
+description: Drains everything under the SDLC epic (computenet-wpvy) on its own lane, separate from /work — picks the most-reported open item, re-validates it against the current skill revision, and fixes .claude/skills/ in a reviewed branch and PR. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated SDLC backlog worked.
 ---
 
 # /remediate-friction
 
-Drains the `skill-friction`-labeled bugs and features under
-`computenet-wpvy`, the SDLC epic, by fixing `.claude/skills/work/`
-(SKILL.md, `references/`, `scripts/`). Run on demand, or reactively via the
+Drains **everything under `computenet-wpvy`, the SDLC epic** — by fixing `.claude/skills/`
+(`work/` above all — SKILL.md, `references/`, `scripts/` — and this lane's own
+files). Run on demand, or reactively via the
 trigger below.
 
 ## The reactive trigger
@@ -65,11 +65,22 @@ and report.
 ## 2. Pick the most-reported item
 
 ```bash
-bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
+bd list --parent=computenet-wpvy --status=open --json
 ```
 
-The label filter matters: the SDLC epic also holds ordinary process
-features that belong to /work sessions, not this lane. Order by
+**Scope is parentage, not the `skill-friction` label.** Anything under this
+epic is SDLC work and belongs to this lane. The label is provenance — step 7
+of `work` applies it to what a session files at runtime — and it is *not* a
+gate. There is no second lane for an unlabelled child to belong to: `/work`
+is excluded from this epic entirely, on every route (`work`'s "The SDLC
+exclusion").
+
+Filtering on the label is how three unlabelled children — `wpvy.25`, `.26`,
+`.27` — sat open on 2026-08-14 while this lane reported the log drained.
+
+`--parent` is not transitive, so this listing shows direct children only. If
+the epic ever grows a feature layer, walk descendants with `epic_of` from
+`work`'s 5b rather than assuming one level. Order by
 `comment_count` descending — comment count is recurrence, and recurrence is
 priority. Skip anything labeled `human`. Then pick by assignee — filing
 machines pre-claim items (SKILL.md step 7), and the claim decides which
@@ -119,6 +130,23 @@ One item per branch, from `origin/main`:
   "$PWD/../computenet-worktrees/<id>" friction/<id> origin/main
 ```
 
+**Before you commit, run the skill validator.** The lane edits skills
+constantly, which is how they drift from what a skill is expected to be
+(computenet-wpvy.38):
+
+```bash
+ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
+```
+
+It checks every skill under `.claude/skills/` against Anthropic's
+skill-creator structural criteria — frontmatter parses, keys are known, name
+is kebab-case and <=64 chars, description <=1024 chars with no angle brackets
+— and exits non-zero on any failure. Expect `4 skill(s) checked, 0 failing`.
+It deliberately does **not** run skill-creator's behavioural eval
+(`run_eval.py` and the grader agents): that spawns with-skill and baseline
+runs over authored test cases and takes hours, so it belongs on a cadence or
+on demand, never as a per-change gate.
+
 Make the smallest change to the skill files that stops the friction
 recurring — the item's `--acceptance` says what that is. Quote the item id
 and the target skill revision hash in the commit message and PR body, so
@@ -149,5 +177,5 @@ Report: items closed (with PRs), items superseded-closed, items left open
 and why, and the one-command oversight view for the human:
 
 ```bash
-bd list --parent=computenet-wpvy --label=skill-friction --status=open --json
+bd list --parent=computenet-wpvy --status=open --json
 ```
