@@ -15,6 +15,7 @@ import civictech.cell.observe.View
 import civictech.cell.observe.observe
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
+import civictech.testkit.boundedHttpClient
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -518,7 +519,7 @@ class InspectorObserveTest {
          * `listen()`, i.e. per test method, each with its own selector thread and
          * executor pool; cancelling [reader] alone left all of that alive.
          */
-        private val client: HttpClient = HttpClient.newHttpClient()
+        private val client: HttpClient = boundedHttpClient()
         private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->

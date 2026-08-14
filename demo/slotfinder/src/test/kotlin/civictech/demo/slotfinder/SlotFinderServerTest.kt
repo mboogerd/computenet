@@ -1,6 +1,8 @@
 package civictech.demo.slotfinder
 
 import civictech.testkit.HttpProbe
+import civictech.testkit.bounded
+import civictech.testkit.boundedHttpClient
 import org.junit.jupiter.api.Test
 import java.net.URI
 import java.net.http.HttpClient
@@ -56,9 +58,9 @@ class SlotFinderServerTest {
             val base = "http://localhost:${app.boundPort}"
             HttpProbe(base).post("action=add&user=alice&day=Mon&hour=10")
 
-            val client = HttpClient.newHttpClient()
+            val client = boundedHttpClient()
             val events = client.send(
-                HttpRequest.newBuilder(URI("$base/events")).build(),
+                HttpRequest.newBuilder(URI("$base/events")).bounded().build(),
                 HttpResponse.BodyHandlers.ofInputStream(),
             )
             assertEquals(200, events.statusCode())

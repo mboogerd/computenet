@@ -1,6 +1,8 @@
 package civictech.agora
 
 import civictech.testkit.HttpProbe
+import civictech.testkit.bounded
+import civictech.testkit.boundedHttpClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonObject
@@ -116,9 +118,9 @@ class AgoraServerTest {
             probe.awaitCredences { it.getValue(a) > 0.35 }
 
             // SSE delivers state
-            val client = HttpClient.newHttpClient()
+            val client = boundedHttpClient()
             val events = client.send(
-                HttpRequest.newBuilder(URI("$base/events")).build(),
+                HttpRequest.newBuilder(URI("$base/events")).bounded().build(),
                 HttpResponse.BodyHandlers.ofInputStream(),
             )
             assertEquals(200, events.statusCode())

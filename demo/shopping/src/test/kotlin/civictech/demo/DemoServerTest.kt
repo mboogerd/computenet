@@ -1,6 +1,8 @@
 package civictech.demo
 
 import civictech.testkit.HttpProbe
+import civictech.testkit.bounded
+import civictech.testkit.boundedHttpClient
 import org.junit.jupiter.api.Test
 import java.net.URI
 import java.net.http.HttpClient
@@ -15,14 +17,14 @@ class DemoServerTest {
     fun `an op lands in the SSE state stream`() {
         val app = DemoApp(port = 0).start()
         try {
-            val client = HttpClient.newHttpClient()
+            val client = boundedHttpClient()
             val base = "http://localhost:${app.boundPort}"
             val probe = HttpProbe(base)
 
             assertEquals(200, probe.post("user=tester&action=add&item=apples"))
 
             val events = client.send(
-                HttpRequest.newBuilder(URI("$base/events")).build(),
+                HttpRequest.newBuilder(URI("$base/events")).bounded().build(),
                 HttpResponse.BodyHandlers.ofInputStream(),
             )
             assertEquals(200, events.statusCode())
@@ -46,7 +48,7 @@ class DemoServerTest {
     fun `the wanted view is items intersect votes`() {
         val app = DemoApp(port = 0).start()
         try {
-            val client = HttpClient.newHttpClient()
+            val client = boundedHttpClient()
             val base = "http://localhost:${app.boundPort}"
             val probe = HttpProbe(base)
             fun op(action: String, item: String) = probe.post("user=tester&action=$action&item=$item")
@@ -59,7 +61,7 @@ class DemoServerTest {
             fun wantedOf(line: String) = wanted.find(line)?.groupValues?.get(1).orEmpty()
             fun await(pred: (String) -> Boolean, why: String) {
                 val events = client.send(
-                    HttpRequest.newBuilder(URI("$base/events")).build(),
+                    HttpRequest.newBuilder(URI("$base/events")).bounded().build(),
                     HttpResponse.BodyHandlers.ofInputStream(),
                 )
                 val deadline = System.currentTimeMillis() + 5_000

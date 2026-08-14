@@ -8,6 +8,8 @@ import civictech.cell.host.ManagedHost
 import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.testkit.awaitUntil
+import civictech.testkit.bounded
+import civictech.testkit.boundedHttpClient
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
@@ -57,10 +59,10 @@ class InspectorFlowStreamTest {
     private fun spawnSet(): SetCell<String> = SetCell<String>().also { host.managementInlet.call.spawn(it) }
 
     private fun get(path: String): String {
-        val client = HttpClient.newHttpClient()
+        val client = boundedHttpClient()
         try {
             return client.send(
-                HttpRequest.newBuilder(URI("http://localhost:${server.boundPort}$path")).build(),
+                HttpRequest.newBuilder(URI("http://localhost:${server.boundPort}$path")).bounded().build(),
                 HttpResponse.BodyHandlers.ofString(),
             ).body()
         } finally {
@@ -175,10 +177,11 @@ class InspectorFlowStreamTest {
         // later sees appear
         InspectorServer(registry, host, port = 0).use { late ->
             late.tappedOutlets shouldBe setOf(source.outlet.ref)
-            val client = HttpClient.newHttpClient()
+            val client = boundedHttpClient()
             val body = try {
                 client.send(
                     HttpRequest.newBuilder(URI("http://localhost:${late.startUnscheduled().boundPort}${InspectorServer.TOPOLOGY_PATH}"))
+                        .bounded()
                         .build(),
                     HttpResponse.BodyHandlers.ofString(),
                 ).body()
@@ -220,7 +223,7 @@ class InspectorFlowStreamTest {
          * `listen()`, i.e. per test method, each with its own selector thread and
          * executor pool; cancelling [reader] alone left all of that alive.
          */
-        private val client: HttpClient = HttpClient.newHttpClient()
+        private val client: HttpClient = boundedHttpClient()
         private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->
