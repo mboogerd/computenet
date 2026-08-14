@@ -50,18 +50,27 @@ fi
 # connect, which is where the whole delay lives. Measured against a blackholed
 # remote: low-speed vars 76s, `git -c http.connectTimeout=8` 75s (not a real
 # config key, silently ignored), `perl -e alarm ... exec` 75s. Only killing the
-# process works: 12s. macOS has no timeout(1). The low-speed vars stay because
+# process works. macOS has no timeout(1). The low-speed vars stay because
 # they still cover a connected-but-stalled peer, and they are HTTP-only whereas
 # the watchdog also bounds SSH.
 #
-# FUSE = 12s, deliberately, against a 30s harness timeout. Measured under 16
-# concurrent busy loops against a fast local remote (computenet-wpvy.39): an
-# 8s fuse cut 2 of 3 HEALTHY fetches; 15s cut 1 of 3. Tightening the fuse
-# spends the margin against load instead of buying anything — the offline case
-# it exists for is bounded either way, and ~18s of slack to the harness
-# timeout is what keeps a slow-but-fine fetch from being cut. So the fuse stays
-# at 12s and the misclassification is fixed at the classification site below,
-# which is what actually made the message wrong.
+# FUSE, and why 15. Only two fuse lengths have ever been measured, under 16
+# concurrent busy loops against a fast local remote (computenet-wpvy.39):
+#
+#   8s  -> 2 of 3 HEALTHY fetches cut
+#   15s -> 1 of 3 HEALTHY fetches cut
+#
+# 12s was never measured; it was a midpoint picked in PR #144 when the fuse was
+# walked back from 8s. Cutting a healthy fetch is the failure this fuse trades
+# against, and 15s is the better of the two points actually measured, so the
+# fuse moves to the measured value rather than staying on the inherited guess.
+#
+# The budget allows it. The SessionStart hook's harness timeout is 30s; worst
+# case here is the fuse plus the 1s TERM->KILL grace, so 16s, leaving 14s. The
+# cost is 3s more before a genuinely offline laptop gives up, once per session
+# start — cheap against a wrongly cut fetch, which skips a fast-forward and is
+# exactly what saturation produces.
+fuse=15
 
 # One private directory per invocation, holding both the captured fetch output
 # and the watchdog's kill flag. `mktemp -d` is what makes the flag path unique:
@@ -95,13 +104,13 @@ set +m
 # the parent's `wait` can never return and read an absent flag for a kill that
 # has already been decided.
 #
-# `sleep 12 || exit 0` is the other half, and it is not decoration. On the
+# `sleep "$fuse" || exit 0` is the other half, and it is not decoration. On the
 # HEALTHY path the parent tears this watchdog down with `pkill -P` (below),
-# which kills the sleep — and a bare `sleep 12;` would then simply fall through
-# to the next command and write the flag, making every successful fetch report
-# as a timeout. Guarding on the sleep's own status distinguishes "the fuse
-# burned down" from "we were dismissed", independently of teardown ordering.
-( trap - EXIT; sleep 12 || exit 0
+# which kills the sleep — and a bare `sleep "$fuse";` would then simply fall
+# through to the next command and write the flag, making every successful fetch
+# report as a timeout. Guarding on the sleep's own status distinguishes "the
+# fuse burned down" from "we were dismissed", independently of teardown order.
+( trap - EXIT; sleep "$fuse" || exit 0
   : >"$killed_flag"; kill -TERM -$gp 2>/dev/null; sleep 1; kill -KILL -$gp 2>/dev/null ) >/dev/null 2>&1 &
 wp=$!
 wait $gp 2>/dev/null; rc=$?
@@ -114,12 +123,20 @@ disown $wp 2>/dev/null || true
 kill $wp 2>/dev/null
 fetch_err=$(cat "$fetch_out" 2>/dev/null || true)
 
-if [ -e "$killed_flag" ]; then
+# BOTH conditions, and the rc one is not redundant. The watchdog can fire in the
+# window between git's SUCCESSFUL exit and the parent's teardown below, so the
+# flag alone would report a timeout for a fetch that finished — skipping the
+# fast-forward this hook exists to do, and saying something false about it while
+# doing so. rc == 0 is the one status that is unambiguous: git only exits 0 when
+# it completed, whatever we signalled afterwards. So a zero rc always wins and
+# the fast-forward proceeds; the flag arbitrates only among the failures, which
+# is the ambiguity it was introduced to resolve.
+if [ -e "$killed_flag" ] && [ "$rc" -ne 0 ]; then
   # WE cut it. Whatever git printed on the way down is an artifact of our own
   # signal — "died of signal 15", "possible repository corruption on the remote
   # side" — and repeating it would hand the operator a scary diagnosis we
   # manufactured. Under load this is often a HEALTHY fetch that was merely slow.
-  echo "ff-main: fetch exceeded 12s and was stopped — left alone (offline or heavily loaded?)."
+  echo "ff-main: fetch exceeded ${fuse}s and was stopped — left alone (offline or heavily loaded?)."
   exit 0
 elif [ "$rc" -ne 0 ]; then
   # git failed on its own account. This text is genuinely git's.
