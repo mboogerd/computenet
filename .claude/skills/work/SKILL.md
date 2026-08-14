@@ -1441,6 +1441,10 @@ origin/main as of dispatch: ${mainSha}; landed since this branch forked:
 ${logOutput or "nothing"}.
 Open PRs that may merge under you while you review: ${prList}. Section 6's
 re-fetch is where you find out whether one of them did — do it.
+Children left open as ask-human.md parks, deferred by design rather than
+missed (5b's `parked-residue`): ${parkedChildren or "none"}. Confirm each is
+really a park and not a child blocked on a real dependency that inherited the
+`human` label from its parent; a real block means work remains.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,
