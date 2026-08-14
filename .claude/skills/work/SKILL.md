@@ -572,6 +572,61 @@ Every selection below skips a feature whose `parked_at` is **within the last
 letting a stale one be retried. Clear it (`--set-metadata parked_at=`) when a
 feature does progress again.
 
+**Re-triage the epic's human-parked items — once, on the first pass through
+step 5, before any selection query below.** Step 4's distinction applies:
+these are `ask-human.md`'s parks (`blocked` + `human` label + `assignee=human`
++ a `QUESTION:` comment), *not* `parked_at`. Nothing else in this skill ever
+reads one again — `bd ready` drops them by status, and `bd blocked` lists only
+items blocked by an open **dependency edge**, which a hand-set status has
+none of. So they rot after their blocker is gone (computenet-6i1: one epic
+held 4 parked items, 3 of them finishable, against 2 ready ones):
+
+```bash
+bd list --parent=<epic> --status=blocked --json | jq -r '.[] | "\(.id)\t\(.title)"'
+```
+
+`--parent` is **one level deep** (measured 2026-08-14: a task parked under a
+feature is absent from the epic's list, present in the feature's), and
+`ask-human.md` parks the *narrowest* stuck item — usually that task. So run it
+once per epic and once per feature id under it.
+
+**Once per session, not per loop.** Parks appear mid-session only by your own
+hand, and a `bd comments` read per parked item on every trip through step 5
+is exactly the cost that gets an instruction skipped. Do it, note the result,
+don't re-run it.
+
+For each id, read the `QUESTION:` comment — and read it the only way that
+works, since `bd show --json` carries `comment_count` and never bodies:
+
+```bash
+bd comments <id> --json > "$SCRATCH/parked-<id>.json"   # then read the FILE
+```
+
+A good park names its blocker *and* its unblocking condition, so this is one
+read and a yes/no. **Unpark only on observable evidence that the condition is
+met**:
+
+- a human answered in the comment thread — the strongest signal, and the only
+  one that settles a park whose condition was a *decision*. `bd human respond`
+  is how it lands, and it also **closes** the item, so an answered park sits
+  in `closed` and the query above cannot see it: `bd human list` (which shows
+  closed ones) is where you find it, and reopening it is exactly the unpark;
+- the named PR is merged, the named bead is closed, the named secret/setting
+  now exists — check it, don't assume;
+- the item was superseded → `bd close` it with the reason, don't work it.
+
+Nothing else licenses an unpark. Elapsed time, the question reading stale, or
+your own view that the answer is obvious are **not** evidence: it was parked
+precisely because an unattended session may not make that call. Unclear →
+leave it parked. Unpark with `bd update <id> --status=open` (ask-human.md);
+drop a leftover `human` label too (`--remove-label=human`), or the filters
+below will skip it again. Then it flows into the ordinary queries.
+
+The 6h `parked_at` window above does **not** apply here — that governs this
+session's own feature-level parks, to stop it retrying them immediately.
+These are cross-session and human-gated, often days old, and are re-triaged
+on age-independent evidence.
+
 A resumed feature carrying `metadata.review=passed` was already reviewed and
 marked ready last session; it just hadn't merged yet. Re-check its PR
 (`gh pr view <pr> --json state -q .state`) — `MERGED` → `bd close` it and
@@ -1005,6 +1060,40 @@ handed a path that isn't there works somewhere unintended, and one handed the
 right path at the wrong commit rewrites work that was already reviewed —
 neither would be noticed until the merge.
 
+**Read the base commit off that run; do not describe it from memory.** Take
+`${taskBase}` from the stderr line that starts `ensure-worktree: base commit
+(this branch is cut FROM it; it is NOT a diff baseline): <short-sha>
+<subject>`, verbatim — match that prefix, do not just read the last line. On a
+**resumed** branch one further line follows it (`worktree HEAD is ahead of that
+base — prior work on the branch: <short-sha> <subject>`), and that sha is a
+*work* commit, not the base: quoting it is the exact mistake this section
+exists to stop. If the run scrolled away, re-observe the base rather than
+reconstructing it:
+
+```bash
+git -C <task-worktree> log --oneline -1 \
+  "$(git -C <task-worktree> merge-base <feature-branch> HEAD)"
+```
+
+Two things this closes, both of which have happened:
+
+- **Reasoning from the order you picked the features gets it wrong.** A
+  dispatch once told an agent "your branch is cut from a feature branch based
+  on main BEFORE that merge, so you will not see it" — false; the feature
+  worktree had been created *after* the fetch and already contained the merge.
+  The agent was told that production code sitting in its own worktree was
+  absent, which invites re-implementing it (computenet-88v).
+- **`log --oneline -1` alone is not the base on a resumed branch.** There HEAD
+  is the last *work* commit; the base is the merge-base, which is why the
+  script reports that and not HEAD. A work commit quoted as a base was read by
+  a reviewer as its diff baseline, and `git diff <that>...HEAD` came back empty
+  — one careless step from certifying a branch as changing nothing.
+
+Say what the sha *is*, every time. A bare commit id in prose reads equally well
+as a branch head, a work commit or a review baseline, and the reader picks the
+wrong one silently. The base also goes stale after dispatch — that is 5e's
+pre-ship re-fetch, not this line's job.
+
 These claims are not re-synced first, and don't need to be: the tasks are
 children of an epic this machine claimed at step 3, so the other machine has
 no reason to be in here. What the local state *can* be stale about is the
@@ -1133,6 +1222,11 @@ Agent({
 claim another. Work ONLY in your own worktree at ${taskWorktree}, on branch
 ${taskBranch}. Do not touch the main checkout, the feature worktree, or
 another task's worktree.
+Your branch's BASE COMMIT, observed at dispatch — the commit the branch was
+cut from, NOT a diff baseline: ${taskBase}. Anything merged into main before
+it is already in your worktree; check with git rather than assuming either
+way. To diff your own work, use git merge-base <feature-branch> HEAD,
+computed inside your worktree.
 Read it: bd show ${id} --json (run bd with -C <main-checkout>; only that
 checkout has the beads database)
 Then read the skill files FROM YOUR OWN WORKTREE — ${taskWorktree}/.claude/
