@@ -530,12 +530,14 @@ bd show <epic-id> --json | jq -r '.[0].status'
 ```
 
 `closed` → the paragraph above stops being true of it. `bd` will let you
-parent to it — verified: a new bead given `--parent=<closed epic>` lists
-under that epic and stays in `bd ready` — and that is exactly what makes the
-wrong choice silent. But a closed epic schedules nothing: nobody selects it
-at step 3, its owner label has been dropped, and the criterion would sit in a
-container no session opens again. So file the residual with no parent, and
-give it the two references that stand in for one:
+parent to it, and the child stays perfectly visible — `computenet-dqy.37` is
+closed and its child `computenet-dqy.37.2` is open, in `bd ready`, and
+returned by `bv --robot-triage --graph-root computenet-dqy.37`. **That
+visibility is exactly what makes the wrong choice silent.** The reason not to
+parent there is the scheduling one: a closed epic schedules nothing. Nobody
+selects it at step 3, its owner label has been dropped, and the criterion
+would sit in a container no session opens again. So file the residual with no
+parent, and give it the two references that stand in for one:
 
 ```bash
 RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
@@ -548,18 +550,15 @@ bd update <feature-id> --set-metadata review=passed
 bd update <feature-id> --set-metadata residual=$RES
 ```
 
-**The edge is the part that does the work, and parenting would not have
-substituted for it.** An unparented item is in `bd ready` like any other, so
-it is not lost; what it misses is the epic-scoped views. And
-`bv --robot-triage --graph-root <epic>` is not one of them:
-`.beads/issues.jsonl`, the export bv reads, carries **no `parent` field at
-all**, so `--graph-root` traverses *dependency edges*. Verified 2026-08-14 —
-`--graph-root computenet-dqy` returned `computenet-bybk` and
-`computenet-0her`, both unparented and both reachable only through a
-`discovered-from` edge onto `computenet-dqy.60`, while that epic's own open
-children `.70` and `.71` were absent from the subgraph entirely. A residual
-parented to a closed epic would have been just as invisible there; the edge
-is what puts it in front of the next session.
+**The edge is what replaces the parent, so do not skip it.** An unparented
+item is in `bd ready` like any other, so it is not lost — what it loses is
+every *epic-scoped* view, and with no parent there is nothing tying it to the
+work it came out of. The `discovered-from` edge restores that: it is a real
+graph edge, so `bv --robot-triage --graph-root` traverses it the same way it
+traverses parentage, which is how `computenet-bybk` and `computenet-0her`
+reach `--graph-root computenet-dqy` while being unparented — their only link
+is a `discovered-from` onto `computenet-dqy.60`. Without the edge the
+residual is reachable only by a whole-tracker query nobody runs on purpose.
 
 Say in your report that the residual is unparented and why, so the
 orchestrator does not read it as a filing mistake.

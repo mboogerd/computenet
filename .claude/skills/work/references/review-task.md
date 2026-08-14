@@ -373,10 +373,10 @@ epic, which is what schedules it. **Closed** — which happens, because a
 concurrent session can close an epic while its child is still in review — →
 file it **unparented with a `discovered-from` edge onto the item you were
 reviewing**, and say in your report that it is unparented and why. Do not
-improvise the choice, and do not parent to the closed epic because `bd`
-allows it: the full reasoning, the verification behind it, and the exact
-commands are in [review-feature.md](review-feature.md) § "Ready with
-residual".
+improvise the choice, and do not read "`bd` let me parent it there" as an
+answer — it does, and the child stays visible; what a closed epic no longer
+does is get *selected*. The reasoning and the exact commands are in
+[review-feature.md](review-feature.md) § "Ready with residual".
 
 ## When the diff under review edits `.claude/skills/work/`
 
