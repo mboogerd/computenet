@@ -54,20 +54,35 @@ fi
 # they still cover a connected-but-stalled peer, and they are HTTP-only whereas
 # the watchdog also bounds SSH.
 fetch_out=$(mktemp)
+# `set -m` puts the fetch in its own process group, so the watchdog can signal
+# the WHOLE group. Without it, kill reaches `git fetch` but not the
+# `git-remote-https` child it spawned, which then survives the hook until
+# curl's own ~75s connect timeout.
+set -m
 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=10 \
   git -C "$repo" fetch --quiet origin main >"$fetch_out" 2>&1 &
 gp=$!
-( sleep 12; kill -TERM $gp 2>/dev/null; sleep 1; kill -KILL $gp 2>/dev/null ) &
+set +m
+# The redirect on this subshell is LOAD-BEARING, not tidiness. Without it the
+# watchdog's `sleep` inherits and holds stdout open; to a terminal or a file
+# that is invisible, but to a PIPE — which is how the harness captures hook
+# output — the reader blocks until the sleep expires. Measured: every session
+# start, including the healthy nothing-to-do case, cost 13s piped and <1s to a
+# file. That is a far larger aggregate cost than the offline case it bounds.
+( sleep 8; kill -TERM -$gp 2>/dev/null; sleep 1; kill -KILL -$gp 2>/dev/null ) >/dev/null 2>&1 &
 wp=$!
 wait $gp 2>/dev/null; rc=$?
-# Silence bash's "Terminated: 15" job-control notice for the watchdog itself:
-# disown it before killing, or every single run prints a scary line.
+pkill -P $wp 2>/dev/null        # the watchdog's own sleep children
+# disown BEFORE kill, or bash prints "Terminated: 15" to ITS stderr on every
+# run — the subshell's own redirect cannot suppress that, it is the parent
+# reporting a killed job. Both are needed: the redirect for the pipe block,
+# this for the noise.
 disown $wp 2>/dev/null || true
 kill $wp 2>/dev/null
 fetch_err=$(cat "$fetch_out"); rm -f "$fetch_out"
 
 if [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; then
-  echo "ff-main: fetch exceeded 12s and was stopped — left alone (offline?)."
+  echo "ff-main: fetch exceeded 8s and was stopped — left alone (offline?)."
   exit 0
 elif [ "$rc" -ne 0 ]; then
   echo "ff-main: fetch did not complete — left alone. git said:"
