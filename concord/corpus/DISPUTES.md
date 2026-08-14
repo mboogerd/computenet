@@ -505,6 +505,17 @@ Two scenarios pass the 20-run sweep under `-Pconcord.profiles=core,dur`:
   log stayed at its pre-crash size across replay, then advanced only for the
   post-recovery key. `incremental-equals-batch(dview)` recovers the data view
   through its own snapshot/restore (the checkpoint half of durable recovery).
+  *Amended (computenet-61w).* As written, that "honestly exercised" argument held
+  only for the **double-fire** direction: the unkeyed evaluator grouped the effect
+  log and quantified over the keys the sink had *produced*, so an element that fired
+  **zero** times was absent from the grouping and passed vacuously. The instrumented
+  evidence above is a statement about the log's size, which is exactly the half that
+  was checked. The evaluator now derives the expected key set from the scenario (the
+  adds on the source linked into the sink) and unions it with the produced one, so
+  `effect-count(esink, exactly: 1)` covers the effect-**loss** direction here too —
+  `DUR-REPLAY-01` passes the sweep unchanged under the strengthened reading, which
+  is itself the evidence that k1/k2/k3 each really do fire once rather than merely
+  not-twice.
 - `DUR-SNAPTAIL-01` (`24-DUR-02/03`) — checkpoint + journal-tail replay of a
   journaled source→view equals an uninterrupted twin (`views-converge`).
 
@@ -550,7 +561,10 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   crash, journal replay — asserting both directions: `effect-count(sink, exactly: 1)` over
   the pre-crash pair (the double-fire this entry named) and a keyed
   `effect-count(sink, key: k3, exactly: 1)` for the post-recovery element (ruling out silent
-  effect loss, which an unkeyed check alone cannot see). `DUR-SRCID-02` repeats the same
+  effect loss, which an unkeyed check alone could not see when these were authored — see the
+  computenet-61w amendment above; the keyed checks remain, now as the local statement of which
+  elements the narrative singles out rather than as the only way to see loss at all).
+  `DUR-SRCID-02` repeats the same
   construction across a checkpoint, where the epoch must survive via the checkpoint's
   `RECORD_OUTLET_WAVE` records (not `CheckpointRecord`, which carries only `state` and
   `frontier`) rather than by replaying frames compaction removed. Both discriminate

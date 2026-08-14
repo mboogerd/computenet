@@ -63,16 +63,24 @@
 # (3/1140). 0/780 vs 1/260 is Fisher p = 0.25: these two samples do not establish
 # that Linux is cleaner, they only bound it.
 #
-# GIT-WORKTREE MOUNT GOTCHA (computenet-yj6). Every agent lane in this repo runs
-# from a git worktree (.claude/worktrees/... or a sibling under
-# ../computenet-worktrees/...), so REPO below is routinely a linked worktree, not
-# the main checkout. Under Docker Desktop on macOS, `-v "$REPO:$REPO:ro"` can come
-# up EMPTY in that case; the container then reports a ClassNotFoundException that
-# reads like a classpath bug and is not one -- see worktree-mount.sh for the
-# mitigation (also mount the enclosing checkout) and its limits (a SIBLING
-# worktree isn't covered by that mitigation, since it isn't nested under the main
-# checkout). The preflight below catches that remaining case explicitly instead of
-# letting it surface as a classpath error.
+# GIT-WORKTREE MOUNT GOTCHA (computenet-yj6), AND WHAT IT ACTUALLY WAS
+# (computenet-m3iy, 2026-08-14). Every agent lane in this repo runs from a git
+# worktree (.claude/worktrees/... or a sibling under ../computenet-worktrees/...),
+# so REPO below is routinely a linked worktree, not the main checkout. yj6 recorded
+# that `-v "$REPO:$REPO:ro"` comes up EMPTY in that case under Docker Desktop on
+# macOS, surfacing as a ClassNotFoundException that reads like a classpath bug.
+#
+# That does not reproduce. This script was run end to end on Docker Desktop
+# server 29.6.1 (linux/aarch64) from a nested worktree AND from a sibling
+# worktree, and both produced a real iteration report -- 30 tests, 0 failures,
+# mount preflight passing in both. The ClassNotFoundException is instead fully
+# explained by zsh's `:r` history modifier mangling a hand-typed
+# `-v "$REPO:$REPO:ro"` into a mount at `${REPO:r}o` (the modifier strips an
+# extension first, so a $REPO ending in `-dqy.40` mounts at `-dqyo`), which
+# reproduces yj6's recorded output exactly; see worktree-mount.sh for the
+# shell-by-shell demonstration. Use `-v "${REPO}:${REPO}:ro"` in ad-hoc probes.
+# The enclosing-checkout mount is kept as harmless belt-and-braces; the preflight
+# below is the real guard, and it fires for an empty mount from any cause.
 set -euo pipefail
 
 RUNS="${1:-400}"
@@ -131,15 +139,29 @@ if ! docker run --rm -v "$REPO:$REPO:ro" "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"
   cat >&2 <<EOF
 error: $REPO came up empty (or missing settings.gradle.kts) inside $IMAGE.
 
-This is the git-worktree mount gotcha (computenet-yj6), not a classpath
-problem: Docker Desktop's file sharing can come up empty for
-"-v \$REPO:\$REPO:ro" when \$REPO is a linked git worktree. This run already
-tried mounting the enclosing checkout automatically${ENCLOSING_CHECKOUT:+" ($ENCLOSING_CHECKOUT)"}; if it still
-fails, \$REPO is likely a SIBLING of its main checkout (e.g.
-../computenet-worktrees/<id>) rather than nested under it, which that
-mitigation cannot reach. There is no known automatic fix for that layout --
-rerun from the main checkout itself, or mount \$REPO's actual enclosing
-directory manually with a modified -v argument.
+This is a MOUNT problem, not a classpath problem: the classpath is fine, the
+container just cannot see \$REPO.${ENCLOSING_CHECKOUT:+ Its enclosing checkout
+($ENCLOSING_CHECKOUT) was mounted as well, and did not help.}
+
+Being a linked git worktree is NOT by itself a cause, despite what
+computenet-yj6 recorded: on 2026-08-14 (computenet-m3iy) both a nested
+worktree (.claude/worktrees/<id>) and a sibling one
+(../computenet-worktrees/<id>) mounted and ran correctly on Docker Desktop
+29.6.1. So check, in order:
+
+  1. Docker Desktop's file-sharing list covers \$REPO's real path
+     (Settings > Resources > File sharing), including whatever a symlink in
+     it resolves to. Confirm with:
+       docker run --rm -v "\${REPO}:\${REPO}:ro" $IMAGE ls "\${REPO}"
+  2. \$REPO is not on a volume Docker Desktop cannot share (network mount,
+     removable disk).
+  3. If you hit this while reproducing by hand rather than through this
+     script: you did not type -v "\$REPO:\$REPO:ro" at a ZSH prompt. zsh
+     reads the ":r" as a history modifier -- strip extension, then a
+     literal "o" -- and silently mounts \${REPO:r}o instead, which is
+     indistinguishable from an empty mount. A \$REPO ending in "-dqy.40"
+     lands at "-dqyo", so do not just grep for \$REPO with an "o" on the
+     end. Always brace it: -v "\${REPO}:\${REPO}:ro".
 EOF
   exit 1
 fi

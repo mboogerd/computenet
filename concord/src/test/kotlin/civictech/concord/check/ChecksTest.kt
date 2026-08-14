@@ -13,6 +13,7 @@ import civictech.concord.oracle.Fx.link
 import civictech.concord.oracle.Fx.list
 import civictech.concord.oracle.Fx.s
 import civictech.concord.oracle.Fx.scenario
+import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.FinalView
 import civictech.concord.schema.IncrementalEqualsBatch
@@ -287,19 +288,25 @@ class ChecksTest {
 
     // --- effect-count -------------------------------------------------------
 
+    /** A source directly linked into an effect sink, fed k1/k2/k3 — the DUR corpus shape. */
+    private val effectScenario = scenario(
+        cells = listOf(cell("src", "set-source"), cell("sink", "effect-sink")),
+        links = listOf(link("src", "sink")),
+        script = listOf(
+            apply("src", "add", s("k1")),
+            apply("src", "add", s("k2")),
+            apply("src", "add", s("k3")),
+        ),
+    )
+
+    private fun effectCtx(vararg keys: String) = FakeContext(
+        FakeDriver(effects = mapOf("sink" to keys.map { Effect(it, s(it)) })),
+        effectScenario,
+    )
+
     @Test
     fun `effect-count holds when each key fired exactly N times`() {
-        val ctx = FakeContext(
-            FakeDriver(
-                effects = mapOf(
-                    "sink" to listOf(
-                        Effect("k1", i(1)), Effect("k2", i(2)),
-                    ),
-                ),
-            ),
-            scenario(emptyList(), emptyList()),
-        )
-        pass(Checks.effectCount(EffectCount(sink = "sink", exactly = 1), ctx))
+        pass(Checks.effectCount(EffectCount(sink = "sink", exactly = 1), effectCtx("k1", "k2", "k3")))
     }
 
     @Test
@@ -315,6 +322,139 @@ class ChecksTest {
             scenario(emptyList(), emptyList()),
         )
         fail(Checks.effectCount(EffectCount(sink = "sink", key = "k1", exactly = 1), ctx))
+    }
+
+    /**
+     * computenet-61w: the unkeyed form must see silent effect **loss**, not only
+     * double-fires. The sink's log is missing `k3` entirely — an element the
+     * script fed to its upstream source that fired zero times. Grouping only the
+     * keys the sink *produced* leaves `k3` absent from the grouping, so the
+     * pre-fix evaluator passed this vacuously.
+     */
+    @Test
+    fun `effect-count without a key fails when a scripted element never fired`() {
+        val r = Checks.effectCount(EffectCount(sink = "sink", exactly = 1), effectCtx("k1", "k2"))
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "key=k3"
+        r.message shouldContain "observed 0"
+    }
+
+    /** Losing *every* effect is the same failure, not the "produced nothing" special case. */
+    @Test
+    fun `effect-count without a key fails when the sink fired for nothing at all`() {
+        val r = Checks.effectCount(EffectCount(sink = "sink", exactly = 1), effectCtx())
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "expected 1 but observed 0"
+    }
+
+    /** The double-fire direction the pre-fix form already caught is still caught. */
+    @Test
+    fun `effect-count without a key still fails on a double-fired key`() {
+        fail(Checks.effectCount(EffectCount(sink = "sink", exactly = 1), effectCtx("k1", "k2", "k3", "k3")))
+    }
+
+    /** `remove` drives no new effect, so it adds no expectation and cancels none. */
+    @Test
+    fun `effect-count without a key expects a key that was added and later removed`() {
+        val scen = scenario(
+            cells = listOf(cell("src", "set-source"), cell("sink", "effect-sink")),
+            links = listOf(link("src", "sink")),
+            script = listOf(apply("src", "add", s("k1")), apply("src", "remove", s("k1"))),
+        )
+        pass(
+            Checks.effectCount(
+                EffectCount(sink = "sink", exactly = 1),
+                FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))), scen),
+            ),
+        )
+    }
+
+    /**
+     * When the expected key set cannot be derived from the scenario, the unkeyed
+     * form refuses rather than falling back to the vacuous produced-keys grouping
+     * — "the check had nothing to look at" must never read as "the property held"
+     * (computenet-61w; same doctrine as [Checks] `nothingObserved`).
+     */
+    @Test
+    fun `effect-count without a key refuses when the scenario names no scripted upstream`() {
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(
+                FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))),
+                scenario(emptyList(), emptyList()),
+            ),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /** `exactly: 0` needs no derivation: the assertion is that the log is empty. */
+    @Test
+    fun `effect-count without a key and exactly zero asserts an empty effect log`() {
+        pass(
+            Checks.effectCount(
+                EffectCount(sink = "sink", exactly = 0),
+                FakeContext(FakeDriver(), scenario(emptyList(), emptyList())),
+            ),
+        )
+        fail(
+            Checks.effectCount(
+                EffectCount(sink = "sink", exactly = 0),
+                FakeContext(
+                    FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))),
+                    scenario(emptyList(), emptyList()),
+                ),
+            ),
+        )
+    }
+
+    /**
+     * A *partial* derivation is the vacuous pass again (review of computenet-61w).
+     * `srcA` feeds the sink directly, so the derivation resolves; `srcB` feeds it
+     * **through** `mid`, so its adds are not keys this derivation can name. Deriving
+     * `{k1}` and unioning the log would pass while `k9` fired zero times, so the
+     * refusal is stated over the sink's whole upstream cone, not the direct hop.
+     */
+    @Test
+    fun `effect-count without a key refuses when a feed reaches the sink through an intermediate`() {
+        val scen = scenario(
+            cells = listOf(
+                cell("srcA", "set-source"), cell("srcB", "set-source"),
+                cell("mid", "set-view"), cell("sink", "effect-sink"),
+            ),
+            links = listOf(link("srcA", "sink"), link("srcB", "mid"), link("mid", "sink")),
+            script = listOf(apply("srcA", "add", s("k1")), apply("srcB", "add", s("k9"))),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * The same partiality reached by topology instead of by graph shape: the
+     * `connect` targets an *upstream* rather than the sink, so a rule keyed on the
+     * sink alone would let `srcB`'s adds go unnamed (review of computenet-61w).
+     */
+    @Test
+    fun `effect-count without a key refuses when a mid-script connect feeds an upstream`() {
+        val scen = scenario(
+            cells = listOf(cell("srcA", "set-source"), cell("srcB", "set-source"), cell("sink", "effect-sink")),
+            links = listOf(link("srcA", "sink")),
+            script = listOf(
+                apply("srcA", "add", s("k1")),
+                ConnectStep(from = "srcB", to = "srcA"),
+                apply("srcB", "add", s("k9")),
+            ),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
     }
 
     // --- wave-plane-unchanged / pages-equal-view (V1C-CONCORD) ---------------

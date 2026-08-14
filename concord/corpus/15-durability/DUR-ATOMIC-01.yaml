@@ -16,9 +16,10 @@
 #     removed from the WAL — k1/k2 are in no surviving frame, only in the checkpoint
 #     blob — so the view no longer holds the full fold. `final-view` catches that.
 #   * a frontier restored BEHIND the state point stops suppressing the replayed tail,
-#     so k3's re-emission re-drives the sink. The KEYED `effect-count` for k3 catches
-#     that (see the check comments: the unkeyed form is vacuous in the effect-LOSS
-#     direction, the discipline `DUR-SRCID-01`/`-02` established).
+#     so k3's re-emission re-drives the sink. The `effect-count` for k3 catches that.
+#     (The keyed form is kept at the point of the assertion; since computenet-61w the
+#     unkeyed form is no longer vacuous in the effect-LOSS direction either — it
+#     quantifies over the keys the script fed the sink, not only the ones it logged.)
 #
 # The single-record atomicity is what makes both directions impossible at once: there
 # is no window in which one has been restored and the other has not.
@@ -47,8 +48,8 @@
 #     interesting one: the outlet is rewound to its checkpoint-time high-water, so with
 #     k3's frame never replayed the LIVE k4 re-issues the counter k3 already spent and
 #     the restored frontier eats it as already-acted — the silent-effect-loss direction
-#     the keyed check exists for. So the golden reads the replayed tail, not just the
-#     checkpoint.
+#     the effect-count checks read, keyed or not. So the golden reads the replayed tail,
+#     not just the checkpoint.
 #   * `[24-DUR-05]` — make `HostDurability.alreadyProcessed` always return `false` (the
 #     processed-frontier stops suppressing) → 20 of 20 runs fail with
 #     "effect-count(sink, key=k3): expected 1 but observed 3": the replayed tail
@@ -141,15 +142,17 @@ checks:
   # the Stateful half of the checkpoint: k1/k2 come back from the snapshot (their
   # frames were compacted away), k3 from the replayed tail, k4 from live traffic
   - {type: final-view, view: view, equals: [k1, k2, k3, k4]}
-  # each element the sink DID act on, acted on exactly once — the double-fire
-  # direction (a replayed re-emission the restored frontier could not match)
+  # k1..k4 each acted on exactly once — BOTH directions. The double-fire one (a
+  # replayed re-emission the restored frontier could not match) and, since
+  # computenet-61w, the silent-effect-LOSS one: the unkeyed form quantifies over the
+  # keys the script FED the sink, so an element that fired zero times reads
+  # "observed 0, expected 1" instead of being absent from the grouping and passing
+  # vacuously.
   - {type: effect-count, sink: sink, exactly: 1}
-  # the silent-effect-LOSS direction, which the unkeyed form above cannot see: it
-  # asserts over the keys the sink PRODUCED, so an element that fired zero times is
-  # simply absent from the grouping and passes vacuously. Naming the keys turns
-  # "absent" into "observed 0, expected 1". k3 is the journal tail — it must have
-  # fired pre-crash and must not re-fire on replay; k4 is the live post-recovery add
-  # a frontier restored ahead of its state point would eat.
+  # Kept keyed and explicit for the two elements this scenario's narrative singles
+  # out: k3 is the journal tail — it must have fired pre-crash and must not re-fire
+  # on replay; k4 is the live post-recovery add a frontier restored ahead of its
+  # state point would eat.
   - {type: effect-count, sink: sink, key: k3, exactly: 1}
   - {type: effect-count, sink: sink, key: k4, exactly: 1}
   - {type: no-dead-letters}
