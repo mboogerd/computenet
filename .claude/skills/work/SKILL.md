@@ -1373,6 +1373,26 @@ that reads as neither pass nor fail.`
 })
 ```
 
+**"Concurrently" is bounded by the same machine capacity 5b is, and it is one
+shared cap rather than a second one.** A reviewer drives Gradle exactly as an
+implementer does — `review-task.md` requires it to run suites and quote the
+task-count lines — so it is a lane on the same axis. Count **every dispatched
+agent running tests, reviewers and still-running implementers together**,
+against `max_parallel` — in practice reviewers, since 5b waits for the whole
+batch before you get here. Mixed lanes are what the evidence records:
+computenet-avs's 2026-08-11 measurement is "exactly THREE dispatched agents
+live on this 10-core machine (one opus reviewer running kernel tests, two opus
+implementers each expected to run :kernel:test or :concord:test)", so
+giving reviewers a cap of their own would double the load that number was
+derived from. **This is the conservative reading, not a measured one**: the
+`cores/5` arms were all implementers, nobody has measured N reviewers against
+N implementers, and a separate reviewer cap has no measurement at all. Take
+the number from the `capacity.max_parallel` that `next-batch.py` already
+returned for this feature's batch (5b) — don't recompute cores, which drifts
+from what sized the batch; if you no longer have that output, re-run the
+script. When the cap is full, **hold the reviewer and dispatch it as a lane
+frees**: waiting costs nothing, since you merge passes one at a time anyway.
+
 **Read the returned result for an actual verdict before you act on it.** The
 completion notification looks identical whether the reviewer finished or
 stopped itself mid-review: one returned "Waiting on Arm A. I will resume when
