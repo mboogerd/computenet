@@ -152,11 +152,24 @@ class LocationRegistryHooksTest {
         // edge still has a live endpoint does exactly that) must never see a
         // half-disconnected peer
         val remainingAtEachNotification = mutableListOf<Int>()
-        registry.onUnpublish { remainingAtEachNotification += registry.remoteRefs().size }
+        // BS-13: the membership index (InstanceIndex, computenet-iyi.2) drains
+        // in the same batch as `locations` — a re-entrant `replicasOf`/
+        // `instancesOf` read from inside the first listener must see the
+        // whole disconnect already applied, not a half-drained index.
+        val instancesRemainingAtEachNotification = mutableListOf<Int>()
+        val notifiedRefs = mutableListOf<CellRef>()
+        registry.onUnpublish {
+            remainingAtEachNotification += registry.remoteRefs().size
+            instancesRemainingAtEachNotification += registry.instancesOf(theirs.id).size + registry.instancesOf(alsoTheirs.id).size
+            notifiedRefs += it
+        }
 
         registry.unpublishRemotes(dying)
 
         remainingAtEachNotification shouldContainExactly listOf(0, 0)
+        instancesRemainingAtEachNotification shouldContainExactly listOf(0, 0)
+        notifiedRefs.toSet() shouldBe setOf(theirs, alsoTheirs)
+        notifiedRefs.size shouldBe 2
     }
 
     @Test
