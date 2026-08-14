@@ -428,9 +428,11 @@ looks the same whether you finished or not, so a result that never states a
 verdict can be read as approval and merged unreviewed — one review returned
 "Waiting on Arm A. I will resume when it completes." as its entire result
 after 108 tool calls. So never end a turn waiting: not on another arm of your
-own experiment, and not on a background job's notification, which wakes
-nothing. Run long commands in the foreground with a generous timeout, or poll
-a background job's output file with ordinary foreground calls. Out of room,
+own experiment, and not on a background job's notification — ending your turn
+has already fired the completion notification the orchestrator acts on,
+whatever the job does next. Run long commands in the foreground with a
+generous timeout, or poll a background job's output file with ordinary
+foreground calls. Out of room,
 out of time, or blocked, give the partial verdict you have and put the rest
 under NOT VERIFIED — an honest partial verdict beats stopping mid-experiment.
 
