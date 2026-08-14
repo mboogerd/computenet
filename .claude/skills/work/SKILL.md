@@ -565,6 +565,11 @@ held 4 parked items, 3 of them finishable, against 2 ready ones):
 bd list --parent=<epic> --status=blocked --json | jq -r '.[] | "\(.id)\t\(.title)"'
 ```
 
+`--parent` is **one level deep** (measured 2026-08-14: a task parked under a
+feature is absent from the epic's list, present in the feature's), and
+`ask-human.md` parks the *narrowest* stuck item — usually that task. So run it
+once per epic and once per feature id under it.
+
 **Once per session, not per loop.** Parks appear mid-session only by your own
 hand, and a `bd comments` read per parked item on every trip through step 5
 is exactly the cost that gets an instruction skipped. Do it, note the result,
@@ -581,9 +586,11 @@ A good park names its blocker *and* its unblocking condition, so this is one
 read and a yes/no. **Unpark only on observable evidence that the condition is
 met**:
 
-- a human answered in the comment thread (`bd human respond` lands the answer
-  there) — the strongest signal, and the only one that settles a park whose
-  condition was a *decision*;
+- a human answered in the comment thread — the strongest signal, and the only
+  one that settles a park whose condition was a *decision*. `bd human respond`
+  is how it lands, and it also **closes** the item, so an answered park sits
+  in `closed` and the query above cannot see it: `bd human list` (which shows
+  closed ones) is where you find it, and reopening it is exactly the unpark;
 - the named PR is merged, the named bead is closed, the named secret/setting
   now exists — check it, don't assume;
 - the item was superseded → `bd close` it with the reason, don't work it.
