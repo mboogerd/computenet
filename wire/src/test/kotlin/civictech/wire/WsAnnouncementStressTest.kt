@@ -683,8 +683,13 @@ class WsAnnouncementStressTest {
          * - **Was a frame produced, and did it cross?** (computenet-dqy.68.) The
          *   nine occurrences in run 31756952711 read **zero on all four of the
          *   above**, and the client held a strict *prefix* of the server's
-         *   `localRefs()` order — which is the order the catch-up sweep sends in
-         *   — so a contiguous tail of the announcement stream stopped. Zero
+         *   `localRefs()` order in every one of them, so a contiguous run of
+         *   announcements stopped rather than individual refs going missing.
+         *   (That order is this report's own iteration order, which equals the
+         *   sweep's send order only for refs published before `announceTo` ran —
+         *   the caveat two bullets up applies, and "the sweep truncated" is still
+         *   not earned. The statistic does not need it: its null is order-blind.)
+         *   Zero
          *   everywhere is compatible with three truncation points and those four
          *   lines cannot separate them: above the socket (no frame produced), at
          *   the socket (handed to java-websocket, never delivered), or below the

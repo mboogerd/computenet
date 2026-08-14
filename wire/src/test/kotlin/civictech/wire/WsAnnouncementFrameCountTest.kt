@@ -79,6 +79,22 @@ class WsAnnouncementFrameCountTest {
                 listener.framesSent >= installed,
                 "listener framesSent=${listener.framesSent} cannot be below the $installed remotes it produced",
             )
+            // Bounded wait, not an instantaneous read: the awaited Remote being
+            // installed proves only that ITS frame crossed, and `framesSent` is
+            // incremented after `send` returns, so a sibling frame in flight (or
+            // a sender preempted between the write and the increment) can leave
+            // the two ends transiently unequal in either direction. Measured
+            // 0/200 on darwin/arm64, but a slower runner is exactly where that
+            // window opens, and the property under test is convergence, not the
+            // scheduling that reaches it.
+            val settle = System.currentTimeMillis() + 15_000
+            while (
+                (listener.framesSent != connection.framesReceived ||
+                    connection.framesSent != listener.framesReceived) &&
+                System.currentTimeMillis() < settle
+            ) {
+                Thread.sleep(1)
+            }
             assertEquals(
                 listener.framesSent,
                 connection.framesReceived,

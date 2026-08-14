@@ -315,10 +315,19 @@ object WsTransport {
          * The nine occurrences in run 31756952711 read zero on *every* existing
          * instrument — nothing parked, nothing staged on either bridge host, no
          * pre-hello drop, no gate refusal, `stderr <silent>` — while the client
-         * held a strict PREFIX of the announcing side's `localRefs()` order, i.e.
-         * a contiguous tail of the announcement stream simply stopped. Zero
-         * everywhere is compatible with three different truncation points and the
-         * artifacts cannot separate them:
+         * held a strict PREFIX of the announcing side's `localRefs()` order in
+         * all nine (re-derived from the retained artifacts in review; three of
+         * the nine lost every ref and so are suffixes trivially, the other six
+         * join at p = (1/3)^5 x 1/4 ~ 1.0e-3 under an order-blind null), so
+         * whatever this is, it is ordered rather than per-ref. Read that as "a
+         * contiguous run of announcements stopped", not as "the sweep truncated":
+         * the printed order is the registry's iteration order *at report time*,
+         * and it coincides with `announceTo`'s send order only for refs already
+         * published when the sweep ran — the mirror and the ingress race it and
+         * may travel the `onLocalPublish` hook instead (see
+         * `WsAnnouncementStressTest.diagnose`). Zero everywhere is compatible
+         * with three different truncation points and the artifacts cannot
+         * separate them:
          *
          * 1. **above the socket** — the sweep, the proxy hop, or the bridge
          *    host's dispatch of [egress] stopped producing frames;
