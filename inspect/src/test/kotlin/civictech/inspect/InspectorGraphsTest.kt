@@ -23,6 +23,7 @@ import java.net.http.HttpResponse
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * M4 — the multi-graph navigator's backend: connected components over the
@@ -356,7 +357,7 @@ class InspectorGraphsTest {
 
         // nothing was announced either: no node/link deltas, no graphs.changed
         server.tickAll()
-        events.drained(1)
+        events.drained()
         events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
         events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
         events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0
@@ -366,7 +367,9 @@ class InspectorGraphsTest {
         snapshot(null).nodes.map { it.ref }.toSet() shouldBe before.nodes.map { it.ref }.toSet()
         // releasing a sink emits topology deltas for anything that is not an
         // instrument, so this second absence needs the same barrier as the first
-        events.drained(2)
+        // — and its own tick, since only a tick can produce a `graphs.changed`
+        server.tickAll()
+        events.drained()
         events.countOfKind(Event.TOPOLOGY_NODE) shouldBe 0
         events.countOfKind(Event.TOPOLOGY_LINK) shouldBe 0
         events.countOfKind(Event.GRAPHS_CHANGED) shouldBe 0
@@ -410,6 +413,9 @@ class InspectorGraphsTest {
     private inner class SseTap(url: String) : AutoCloseable {
         private val kinds = LinkedBlockingQueue<String>()
 
+        /** The highest `Event.seq` this reader has actually delivered — see [drained]. */
+        private val readSeq = AtomicLong(-1)
+
         /**
          * Held so [close] can release it (computenet-4vh): one client per
          * `listen()`, i.e. per test method, each with its own selector thread and
@@ -421,7 +427,9 @@ class InspectorGraphsTest {
             .thenAccept { response ->
                 response.body().forEach { line ->
                     if (line.startsWith(DATA)) {
-                        kinds += json.decodeFromString<Event>(line.removePrefix(DATA)).kind
+                        val event = json.decodeFromString<Event>(line.removePrefix(DATA))
+                        kinds += event.kind
+                        readSeq.accumulateAndGet(event.seq, ::maxOf)
                     }
                 }
             }
@@ -436,17 +444,20 @@ class InspectorGraphsTest {
          * the wrong reason until a loaded machine slows the count down enough
          * to see it.
          *
-         * [InspectorServer.tickAll] runs `"heartbeat"` first and
-         * `"graphsChanged"` last, and one SSE stream delivers in order — so
-         * once the *next* tick's heartbeat has been read, everything the
-         * previous tick emitted has been read too. [ticksSoFar] is how many
-         * `tickAll()` calls this tap has already been attached for — ticks that
-         * ran before it attached delivered their heartbeat to nobody and so do
-         * not count.
+         * Barriered on [Event.seq] rather than on a frame count, so that a
+         * *scheduled* tick cannot satisfy it. `seq` advances on every emitted
+         * event and a snapshot reports the current value, so once this reader
+         * has delivered a frame at or past the server's post-tick `seq`, every
+         * frame emitted up to that tick has been counted — whoever emitted it.
+         * A heartbeat carries the current `seq` without advancing it, and
+         * `tickAll()` always emits one, so the barrier always has a frame to
+         * ride even when the tick announced nothing.
          */
-        fun drained(ticksSoFar: Int) {
-            server.tickAll()
-            awaitKind(Event.HEARTBEAT, ticksSoFar + 1)
+        fun drained() {
+            val target = snapshot(null).seq
+            awaitUntil("sse reader at seq $target (read ${readSeq.get()})", timeoutMs = 10_000) {
+                readSeq.get() >= target
+            }
         }
 
         fun awaitKind(kind: String, count: Int) =
