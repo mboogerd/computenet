@@ -520,6 +520,49 @@ open, and it is the epic's owner who schedules it, not you. Name the unmet
 criterion verbatim in the comment; a residual glossed as "minor follow-up" is
 how it stops existing.
 
+**If the epic is already closed, file the residual UNPARENTED plus a
+`discovered-from` edge.** Check before you file — it is one query, and the
+answer changed under a live session on 2026-08-14, when the epic was closed
+by a concurrent session while this feature was still in review:
+
+```bash
+bd show <epic-id> --json | jq -r '.[0].status'
+```
+
+`closed` → the paragraph above stops being true of it. `bd` will let you
+parent to it, and the child stays perfectly visible — `computenet-dqy.37` is
+closed and its child `computenet-dqy.37.2` is open, in `bd ready`, and
+returned by `bv --robot-triage --graph-root computenet-dqy.37`. **That
+visibility is exactly what makes the wrong choice silent.** The reason not to
+parent there is the scheduling one: a closed epic schedules nothing. Nobody
+selects it at step 3, its owner label has been dropped, and the criterion
+would sit in a container no session opens again. So file the residual with no
+parent, and give it the two references that stand in for one:
+
+```bash
+RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
+  --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>. Filed UNPARENTED deliberately: parent epic <epic-id> was already closed at review time." \
+  --acceptance="<the original criterion, unchanged>" \
+  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+bd dep add "$RES" <feature-id> --type=discovered-from
+bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES, UNPARENTED because <epic-id> is closed, linked discovered-from <feature-id>."
+bd update <feature-id> --set-metadata review=passed
+bd update <feature-id> --set-metadata residual=$RES
+```
+
+**The edge is what replaces the parent, so do not skip it.** An unparented
+item is in `bd ready` like any other, so it is not lost — what it loses is
+every *epic-scoped* view, and with no parent there is nothing tying it to the
+work it came out of. The `discovered-from` edge restores that: it is a real
+graph edge, so `bv --robot-triage --graph-root` traverses it the same way it
+traverses parentage, which is how `computenet-bybk` and `computenet-0her`
+reach `--graph-root computenet-dqy` while being unparented — their only link
+is a `discovered-from` onto `computenet-dqy.60`. Without the edge the
+residual is reachable only by a whole-tracker query nobody runs on purpose.
+
+Say in your report that the residual is unparented and why, so the
+orchestrator does not read it as a filing mistake.
+
 ### Draft
 
 Not good enough, or your repairs were substantive (§5). Say concretely why,
@@ -543,6 +586,16 @@ Draft is a legitimate outcome, not a failure. Half a feature merged is worse
 than half a feature parked on a branch.
 
 ### In every case
+
+**Write to the feature under review and to items you create — nothing else.**
+Closing, re-prioritising, reassigning, re-parenting or claiming any other
+bead is the orchestrator's, and the tasks under this feature are other beads.
+Apply the same rule when you judge the diff: an implementer's write onto a
+bead it was not assigned is *commissioned* work if the item's acceptance
+criteria or the cross-bead line in its dispatch prescribe it — on
+computenet-dqy.72 three criterion-prescribed comments were briefly read as an
+overstep and cost an adjudication (computenet-szdd). Check both before
+calling it scope creep, and report a mismatch instead of undoing the write.
 
 **Don't run `bd dolt push`** — issue-state sync to the remote is the
 orchestrator's job (it serializes pushes across concurrent agents); your

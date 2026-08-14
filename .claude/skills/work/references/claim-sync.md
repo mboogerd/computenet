@@ -97,7 +97,13 @@ the item you just read and decided to work. Select with `bd ready ...
 
   The check that does work is on the **parent epic**, which is visible
   (SKILL.md 5b): before claiming an item under an epic you do not hold, read
-  that epic's assignee and skip the item if the other machine has it. And if
+  that epic's status, `updated_at` and assignee, and skip the item if the
+  other machine holds a live claim. Live means the epic is **not closed**, or
+  was closed **within the last 15 minutes** — a session that claimed an epic
+  while it was open stays inside it, finishing in-flight children, until its
+  own Finalize, so the closing is not the eviction. Past that window the
+  assignee on a closed epic is provenance: step 6 leaves it deliberately, and
+  treating it as a claim would skip that epic's open children forever. And if
   a sibling PR turns up touching your own item's files, that is a collision —
   stop working the item and park a question, per the section below. Do not
   pick a winner: the losing side may hold committed, pushed, unreviewed work.
