@@ -69,7 +69,7 @@ set +m
 # output — the reader blocks until the sleep expires. Measured: every session
 # start, including the healthy nothing-to-do case, cost 13s piped and <1s to a
 # file. That is a far larger aggregate cost than the offline case it bounds.
-( sleep 8; kill -TERM -$gp 2>/dev/null; sleep 1; kill -KILL -$gp 2>/dev/null ) >/dev/null 2>&1 &
+( sleep 12; kill -TERM -$gp 2>/dev/null; sleep 1; kill -KILL -$gp 2>/dev/null ) >/dev/null 2>&1 &
 wp=$!
 wait $gp 2>/dev/null; rc=$?
 pkill -P $wp 2>/dev/null        # the watchdog's own sleep children
@@ -82,9 +82,14 @@ kill $wp 2>/dev/null
 fetch_err=$(cat "$fetch_out"); rm -f "$fetch_out"
 
 if [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; then
-  echo "ff-main: fetch exceeded 8s and was stopped — left alone (offline?)."
+  echo "ff-main: fetch exceeded 12s and was stopped — left alone (offline?)."
   exit 0
 elif [ "$rc" -ne 0 ]; then
+  # NOTE: under heavy load the watchdog can cut a HEALTHY fetch, and the
+  # group-kill makes git exit with something other than 143/137 — so this
+  # branch can print git's death-by-signal text, which reads as remote
+  # corruption. Classify by a flag the watchdog writes, not by rc.
+  # computenet-wpvy.39 carries that fix.
   echo "ff-main: fetch did not complete — left alone. git said:"
   printf '%s\n' "$fetch_err" | sed 's/^/  /'
   exit 0
