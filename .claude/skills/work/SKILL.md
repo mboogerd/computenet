@@ -479,6 +479,31 @@ Otherwise take the first unblocked one:
 bd ready --parent=<epic> --type=feature --limit 1 --json
 ```
 
+**An epic can have no feature layer at all, and that is not a defect.** Some
+epics are worked as bugs, tasks and chores parented *directly* to the epic —
+computenet-dqy is 69 children of which exactly one is a feature, and that one
+is closed, which is how both machines have worked it for many sessions. On
+such an epic both feature queries return empty while real work is sitting
+ready, and the literal reading below would send it to 5f and then Finalize
+having done nothing. Reproduced 2026-08-14: `bd ready --parent=computenet-dqy
+--type=feature` → 0, `bd list --parent --type=feature --status=in_progress`
+→ 0, while step 3's own workable-surface check (`bd ready --parent=<epic>`,
+no type filter) → 2. **Step 3 admits the epic on a query step 5 cannot see**,
+and that disagreement is the defect.
+
+So before falling through, ask the untyped question:
+
+```bash
+bd ready --parent=<epic> --json      # no --type filter
+```
+
+Non-empty while the feature queries were empty → **work these directly**, by
+5f route 4's shape rule: a *task* through its parent feature's flow (5b's
+claim/metadata/worktree/dispatch), a *bug or chore* as its own
+worktree/branch/PR exactly like a feature. Apply the same filters as
+everywhere else — skip `human`-labelled items and anything with `parked_at`
+within 6h. Only when *this* query is empty too does 5f apply.
+
 Take the first result **not recently parked** (`metadata.parked_at` within
 6h) **and not carrying the `human` label** — `bd ready` returns human-gated
 decision beads as if they were workable, and dispatching one hands an agent a
@@ -542,7 +567,38 @@ worktree. Ignore a foreign `metadata.worktree` path; the commands below
 recompute a local one, and `ensure-worktree.sh` rebuilds from the remote
 branch.
 
-**`metadata.branch` exists** → reuse it; that branch and draft PR hold real
+**`metadata.branch` exists** → **check whether its PR already merged before
+you reuse it.** This repo squash-merges (the ruleset requires linear history),
+and a squash puts the branch's content on `main` under a *new* commit sharing
+no ancestry with the branch. So a fully-landed branch reads as simultaneously
+"already in main" and "N commits ahead", and 5a's `merge origin/main` below
+hands you a conflict whose only correct resolution is *discard both sides,
+this is already landed* — which is exactly what "Conflicts here are yours to
+resolve" does not suggest. Resolving it as a real conflict re-lands reviewed
+content as a fresh diff. Measured 2026-08-13 on computenet-dqy.55, whose
+PR #94 had merged: `git merge origin/main` conflicted in
+`.github/workflows/announcement-probe.yml`, and `git diff --stat
+origin/main...HEAD` reported 332 insertions, all of it already on `main`.
+
+```bash
+gh pr view <metadata.pr> --json state -q .state
+```
+
+- **`MERGED`** → the branch is spent. Do **not** merge `origin/main` into it.
+  Cut a fresh one from `origin/main` and repoint the bead, keeping the id
+  derivable by suffixing `-r<n>`:
+
+  ```bash
+  bd update <feature-id> --set-metadata branch=feature/<feature-id>-r2 \
+    --set-metadata worktree=$PWD/../computenet-worktrees/<feature-id>-r2
+  bd comment <feature-id> "PR <url> merged by squash; branch feature/<feature-id> is spent. Continuing on feature/<feature-id>-r2 cut from origin/main."
+  ```
+
+  Leave the old local branch and its worktree alone — Finalize's sweep takes
+  them, and deleting a branch whose PR merged buys nothing mid-session.
+- **`OPEN`** (or no `metadata.pr` yet) → reuse it as below.
+
+Reused, that branch and draft PR hold real
 work, so never start over. **Otherwise** record the metadata *first* — a
 crash between recording and creating leaves an unrecorded branch, and the
 retry then builds a second branch and a second PR for the same feature:
@@ -1075,7 +1131,8 @@ git -C <feature-worktree> fetch origin main
 git -C <feature-worktree> log --oneline \
   $(git -C <feature-worktree> merge-base HEAD origin/main)..origin/main
 
-# the checks are only a verdict on the commit they ran against
+# the checks are only a verdict on the commit they ran against — and the
+# reviewer's own 6 merge of origin/main will have moved the head
 git -C <feature-worktree> rev-parse HEAD
 gh pr view <pr-url> --json headRefOid -q .headRefOid    # must equal the line above
 gh pr checks <pr-url>
