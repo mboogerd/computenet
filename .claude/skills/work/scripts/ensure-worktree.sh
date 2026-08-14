@@ -28,10 +28,12 @@
 #   base-ref  only used when the branch exists neither locally nor on origin
 #             (default origin/main)
 #
-# Prints the resolved absolute path on stdout on success; narrates which state
-# it took on stderr. Exits non-zero, loudly, if the worktree can't be produced
-# on the requested branch containing the remote's commits — never fail
-# silently here.
+# Prints the resolved absolute path on stdout on success — and *only* that, so
+# callers can capture it directly; narrates which state it took on stderr, and
+# ends that narration with the branch's resolved BASE commit, which a dispatch
+# can quote rather than describing the base from memory. Exits non-zero,
+# loudly, if the worktree can't be produced on the requested branch containing
+# the remote's commits — never fail silently here.
 set -euo pipefail
 
 WORKTREE="${1:?usage: ensure-worktree.sh <path> <branch> [base-ref]}"
@@ -119,6 +121,30 @@ if [ -n "$remote_sha" ]; then
     echo "ensure-worktree: $abs does not contain origin/$BRANCH ($remote_sha) — refusing to hand it over" >&2
     exit 1
   fi
+fi
+
+# Report the branch's BASE — the commit it is cut from — as an observed fact,
+# so a dispatch can quote it instead of reconstructing it from the session's
+# ordering (computenet-88v: an orchestrator told an agent that landed code was
+# absent, having reasoned from the order it picked the features).
+#
+# Deliberately NOT the worktree's HEAD: on a *resumed* branch HEAD is the last
+# work commit, and a work commit quoted as a base is the other half of the same
+# bug — a reviewer handed one diffed against it, got an empty range, and nearly
+# reported that the branch changed nothing. `merge-base <base-ref> HEAD` is
+# right on every path: on the create path it *is* the base ref's commit, and on
+# a resumed branch it is where the branch left its base, whatever work sits on
+# top. Informational only — a base that cannot be resolved says so and never
+# fails the attach.
+base_sha=$(git -C "$abs" merge-base "$BASE" HEAD 2>/dev/null || true)
+if [ -n "$base_sha" ]; then
+  note "base commit (this branch is cut FROM it; it is NOT a diff baseline): $(git -C "$abs" log --oneline -1 "$base_sha" 2>/dev/null)"
+  head_sha=$(git -C "$abs" rev-parse HEAD)
+  if [ "$head_sha" != "$base_sha" ]; then
+    note "worktree HEAD is ahead of that base — prior work on the branch: $(git -C "$abs" log --oneline -1 HEAD 2>/dev/null)"
+  fi
+else
+  note "base commit: could not resolve '$BASE' from $abs — establish it from an observed ref before describing it to anyone"
 fi
 
 echo "$abs"

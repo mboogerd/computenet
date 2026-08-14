@@ -941,6 +941,36 @@ handed a path that isn't there works somewhere unintended, and one handed the
 right path at the wrong commit rewrites work that was already reviewed —
 neither would be noticed until the merge.
 
+**Read the base commit off that run; do not describe it from memory.** The
+script's last stderr line is `ensure-worktree: base commit (this branch is cut
+FROM it; it is NOT a diff baseline): <short-sha> <subject>` — that is the
+`${taskBase}` the dispatch template below quotes. Take it verbatim. If it
+scrolled away, re-observe it rather than reconstructing it:
+
+```bash
+git -C <task-worktree> log --oneline -1 \
+  "$(git -C <task-worktree> merge-base <feature-branch> HEAD)"
+```
+
+Two things this closes, both of which have happened:
+
+- **Reasoning from the order you picked the features gets it wrong.** A
+  dispatch once told an agent "your branch is cut from a feature branch based
+  on main BEFORE that merge, so you will not see it" — false; the feature
+  worktree had been created *after* the fetch and already contained the merge.
+  The agent was told that production code sitting in its own worktree was
+  absent, which invites re-implementing it (computenet-88v).
+- **`log --oneline -1` alone is not the base on a resumed branch.** There HEAD
+  is the last *work* commit; the base is the merge-base, which is why the
+  script reports that and not HEAD. A work commit quoted as a base was read by
+  a reviewer as its diff baseline, and `git diff <that>...HEAD` came back empty
+  — one careless step from certifying a branch as changing nothing.
+
+Say what the sha *is*, every time. A bare commit id in prose reads equally well
+as a branch head, a work commit or a review baseline, and the reader picks the
+wrong one silently. The base also goes stale after dispatch — that is 5e's
+pre-ship re-fetch, not this line's job.
+
 These claims are not re-synced first, and don't need to be: the tasks are
 children of an epic this machine claimed at step 3, so the other machine has
 no reason to be in here. What the local state *can* be stale about is the
@@ -1036,6 +1066,11 @@ Agent({
 claim another. Work ONLY in your own worktree at ${taskWorktree}, on branch
 ${taskBranch}. Do not touch the main checkout, the feature worktree, or
 another task's worktree.
+Your branch's BASE COMMIT, observed at dispatch — the commit the branch was
+cut from, NOT a diff baseline: ${taskBase}. Anything merged into main before
+it is already in your worktree; check with git rather than assuming either
+way. To diff your own work, use git merge-base <feature-branch> HEAD,
+computed inside your worktree.
 Read it: bd show ${id} --json (run bd with -C <main-checkout>; only that
 checkout has the beads database)
 Then read the skill files FROM YOUR OWN WORKTREE — ${taskWorktree}/.claude/
