@@ -386,9 +386,26 @@ object Checks {
      * `KernelDriverDur.EffectSinkCell`, and `SetCell.add`, which mints a fresh
      * add-tag and propagates a delta on *every* add). Under those conditions the
      * derived set is **complete**: nothing can reach [sink] that is not a scripted
-     * add on one of its direct upstreams, because an element enters a direct
-     * upstream only through an `add` on it, through a link into it, or through a
-     * `restore` of it — and the latter two are refusals below.
+     * add on one of its direct upstreams. That is one step rather than an induction
+     * over the cone, because the shape gate leaves the cone exactly `{sink} ∪
+     * upstream`. Stated exhaustively over the `Step` hierarchy's nine verbs plus the
+     * declared graph — because a summary of this argument is what was wrong twice —
+     * an element can enter a direct upstream only through an `add` on it (the derived
+     * set), a declared link into it, a mid-script `connect` into it, a `restore` of
+     * it, or a `restart` of it, and every route but the first is a refusal below. The
+     * other five verbs cannot introduce one: `remove`, `quiesce`, `snapshot` and
+     * `read-state` do not feed a cell, `disconnect` only removes an edge, and a
+     * `despawn` only stops traffic (and refuses anyway).
+     *
+     * One route is outside the scenario language: a **replicated** upstream merging a
+     * peer's delta (`SetCell.applyRemote`), which no `add` in the script names. No
+     * `type:`/`replica-of` combination reaches it under the kernel driver — an
+     * `effect-sink` binds only on the reserved durable host, and `KernelDriver.spawn`
+     * short-circuits every durable-host cell *before* its `replica-of` branch ("a
+     * durable cell is never also a dist replica") — so there is nothing to refuse
+     * today. A driver that did honour `replica-of` on a durable cell would reopen the
+     * hole, and the fix is to add `replica-of` to the shape gate, not to re-derive
+     * this paragraph.
      *
      * It gives up — `null`, not a partial set — when anything could make the
      * script's adds a poor model of what reached [sink]. A *partly* derivable key
