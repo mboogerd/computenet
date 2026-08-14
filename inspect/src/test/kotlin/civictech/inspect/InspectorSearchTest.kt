@@ -167,10 +167,22 @@ class InspectorSearchTest {
         Graphs.describe(GraphHealth(deadLetters = 1, parked = 11, restarts = 1)) shouldBe "1 dead · 11 parked · 1 restart"
     }
 
+    /**
+     * The emptiness has to be *declined*: `GraphHealth.restarts` folds in
+     * `Errors.snapshot().restarts`, whose only writer is `Errors.pollRestarts`,
+     * and this class runs on [InspectorServer.startUnscheduled] — so with no
+     * tick the restart axis has no reachable producer and could not fail
+     * whatever the poller did (computenet-4e4a). Two ticks: the first makes
+     * `pollRestarts` take its first-seen branch on the four spawned refs, the
+     * second compares their unchanged generations against that baseline.
+     */
     @Test
     fun `a healthy process has no problems`() {
         twoGraphs()
-        started()
+        val serving = started()
+
+        serving.tickAll()
+        serving.tickAll()
 
         search("problems", "").hits.shouldBeEmpty()
     }
