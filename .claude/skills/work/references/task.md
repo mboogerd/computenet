@@ -89,6 +89,40 @@ than restarting. That's the whole reason the worktree is preserved.
 
    Never commit the marker, and never commit while it exists.
 
+   **Choose the instrument before you spend the slot — a bug has three, and
+   step 3's local reproduction is only one of them.** For a *flake* filed on
+   CI evidence, the reproduction may be impossible not because the bead is
+   wrong but because the defect is already gone:
+
+   1. **A deterministic reproduction**, forcing the interference where the
+      mechanism allows it. Cheapest and strongest; use it whenever the
+      mechanism is reachable.
+   2. **A bounded statistical loop** (`scripts/flake-loop/`, step 6). State
+      the sizing before you start it: N runs x per-run cost against your slot,
+      and what rate a null result would actually bound.
+   3. **The CI failure archive** — the right instrument when the bead *may
+      already be fixed*:
+
+      ```bash
+      gh run list -R mboogerd/computenet --branch main --status failure --limit 50 \
+        --json databaseId,createdAt,headSha -q '.[] | "\(.createdAt) \(.databaseId) \(.headSha[0:8])"'
+      gh run view <run-id> -R mboogerd/computenet --log-failed | tail -60
+      git log --oneline --since=<the bead's filing date> -- <the paths its mechanism touches>
+      ```
+
+   **Do (3) BEFORE (2).** A bead filed weeks ago can have been fixed by
+   unrelated landed work, and a 20-minute loop cannot tell you that — only the
+   archive and the log can. computenet-pvs cost exactly that: both its
+   signatures had already been fixed, one structurally by computenet-dqy.22,
+   which deleted the throw site so the failure could no longer be reached. A
+   200-iteration loop returned 0/200 in 1199s and read like a step-3 failure
+   rather than the finding it was.
+
+   **"Already fixed by <commit>, no longer reproducible" is a successful
+   outcome of step 3, not a failure of it.** Say so on the bead, name the
+   commit that fixed it, and close it — do not manufacture a reproduction for
+   a defect that cannot fire.
+
    **If it passes unfixed, the prescribed reproduction is wrong.** Correct it
    at the source rather than quietly substituting your own, so the next reader
    does not pay for it again:
