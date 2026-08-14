@@ -106,8 +106,12 @@ than restarting. That's the whole reason the worktree is preserved.
       ```bash
       gh run list -R mboogerd/computenet --branch main --status failure --limit 50 \
         --json databaseId,createdAt,headSha -q '.[] | "\(.createdAt) \(.databaseId) \(.headSha[0:8])"'
-      gh run view <run-id> -R mboogerd/computenet --log-failed | tail -60
-      git log --oneline --since=<the bead's filing date> -- <the paths its mechanism touches>
+      # Do NOT pipe --log-failed to `tail`: the log ends in post-job cleanup.
+      # On run 31774126595 the failing test sat at line 1482 of 1907 and
+      # `tail -60` showed only "Cleaning up orphan processes".
+      gh run view RUN_ID -R mboogerd/computenet --log-failed > /tmp/lf.txt
+      grep -nE 'FAILED|tests completed|Execution failed' /tmp/lf.txt   # then read around the hit
+      git log --oneline --since=YYYY-MM-DD -- PATHS_ITS_MECHANISM_TOUCHES
       ```
 
    **Do (3) BEFORE (2).** A bead filed weeks ago can have been fixed by
