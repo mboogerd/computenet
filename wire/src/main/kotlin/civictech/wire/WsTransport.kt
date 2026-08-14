@@ -253,6 +253,16 @@ object WsTransport {
      * millisecond and no timeout is ever reached — which is what every loopback
      * caller here exercises.
      *
+     * **[backoff] is consulted once per attempt, immediately *before* that
+     * attempt's dial** — it has to be, since it supplies the dial's timeout —
+     * and the value it returns is also what the loop sleeps if that dial fails.
+     * So `backoff(0)` is now called even when the very first probe succeeds, and
+     * an invocation with `attempt == 0` says nothing about whether the port
+     * answers; only `attempt >= 1` reports a failed probe. A schedule with side
+     * effects must key on the attempt number rather than on being called at all
+     * (see `WsConnectRaceTest`). The sleeps themselves are unchanged: attempt
+     * *n*'s failure still sleeps `backoff(n)`.
+     *
      * `internal` only so [WsProbeTimeoutTest] can dial a black hole directly;
      * [connect] is the production entry.
      */
