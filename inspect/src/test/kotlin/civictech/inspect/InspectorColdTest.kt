@@ -8,6 +8,8 @@ import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
+import civictech.testkit.bounded
+import civictech.testkit.boundedHttpClient
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
@@ -478,9 +480,9 @@ class InspectorColdTest {
         val builder = HttpRequest.newBuilder(URI("http://localhost:${server!!.boundPort}${InspectorServer.GRAPH_PATH}/$graph/wake"))
             .POST(HttpRequest.BodyPublishers.ofString(""))
         if (withHeader) builder.header(InspectorServer.WAKE_HEADER, InspectorServer.WAKE_HEADER_VALUE)
-        val client = HttpClient.newHttpClient()
+        val client = boundedHttpClient()
         try {
-            return client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+            return client.send(builder.bounded().build(), HttpResponse.BodyHandlers.ofString())
         } finally {
             client.shutdownNow()
         }
@@ -506,7 +508,7 @@ class InspectorColdTest {
          * `listen()`, i.e. per test method, each with its own selector thread and
          * executor pool; cancelling [reader] alone left all of that alive.
          */
-        private val client: HttpClient = HttpClient.newHttpClient()
+        private val client: HttpClient = boundedHttpClient()
         private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->

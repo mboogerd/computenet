@@ -5,6 +5,53 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.net.http.HttpTimeoutException
+import java.time.Duration
+
+/**
+ * The bounds every `java.net.http` request issued from test or testkit code
+ * carries (computenet-dqy.72). Neither is a tuning knob: they exist so that a
+ * response which never arrives becomes a fast, attributable failure instead of a
+ * thread parked in `HttpClient.send` until JUnit's 5-minute timeout — which is
+ * how computenet-dqy.71 presented, and why its console stack named nothing but
+ * `ArrayList.forEach` (Gradle drops the suppressed `InterruptedException` that
+ * carries the blocked frame).
+ */
+object HttpBounds {
+    /**
+     * Bound on a whole synchronous exchange. The JDK arms the response timer
+     * before connection setup, so this covers connect *and* response for a
+     * `send` with a non-streaming body handler.
+     *
+     * 20s is chosen for attributability, not to make any run pass: healthy
+     * responses in these suites are loopback and sub-millisecond, and whole
+     * modules (`:inspect`, ~265 tests) finish in seconds, so 20s is orders of
+     * magnitude above any plausible GC or scheduling stall on a loaded CI box —
+     * while sitting 15x under JUnit's 300s, so exceeding it can only mean the
+     * endpoint, never the suite.
+     */
+    val REQUEST: Duration = Duration.ofSeconds(20)
+
+    /**
+     * Bound on connection establishment only. Set on *every* client, including
+     * the SSE readers, because a `text/event-stream` subscription is meant to
+     * outlive any request timeout: a `.timeout(...)` there would abort a healthy
+     * stream, so `connectTimeout` is the only bound the streaming path can
+     * honestly carry. A loopback handshake against a bound listener takes
+     * microseconds; 10s is pure headroom.
+     */
+    val CONNECT: Duration = Duration.ofSeconds(10)
+}
+
+/** An [HttpClient] whose connection phase is bounded by [HttpBounds.CONNECT]. */
+fun boundedHttpClient(): HttpClient = HttpClient.newBuilder().connectTimeout(HttpBounds.CONNECT).build()
+
+/**
+ * Bound this request by [timeout], defaulting to [HttpBounds.REQUEST]. Use on
+ * every synchronous `send`; do **not** use on an SSE subscription, which is
+ * long-lived by design (see [HttpBounds.CONNECT]).
+ */
+fun HttpRequest.Builder.bounded(timeout: Duration = HttpBounds.REQUEST): HttpRequest.Builder = timeout(timeout)
 
 /**
  * A thin client for the demos' identical HTTP shell (`POST /op`, `GET /state`,
@@ -22,9 +69,25 @@ import java.net.http.HttpResponse
  * only if and when the collector clears their weak referents. Closing is
  * therefore worth doing; not closing is not a correctness bug for any single
  * test, which is why every existing caller still compiles unchanged.
+ *
+ * **Every request this probe issues is bounded** (computenet-dqy.72). Before that
+ * fix the class only *looked* bounded: [await]'s `timeoutMs` governed the retry
+ * loop while the single `client.send` underneath it was untimed, so a send that
+ * never returned never got back to the loop and the documented 5s deadline never
+ * fired. What is guaranteed now:
+ *
+ *  - a one-shot call ([post], [get], [state], [delete], [postForm], [postJson])
+ *    fails within [HttpBounds.REQUEST] with a message naming method and URI;
+ *  - [await] returns or throws within its own `timeoutMs`, because each send is
+ *    bounded by the time *remaining* on the await deadline rather than by the
+ *    default — the advertised bound is the real one.
+ *
+ * A timeout surfaces as an [AssertionFailedError] naming the endpoint, not as a
+ * bare `HttpTimeoutException` ("request timed out"), so the failure is
+ * attributable from the console line alone.
  */
 class HttpProbe(private val baseUrl: String) : AutoCloseable {
-    private val client: HttpClient = HttpClient.newHttpClient()
+    private val client: HttpClient = boundedHttpClient()
 
     /** POST a form-urlencoded [body] to `$baseUrl$path`; returns the HTTP status code. */
     fun post(body: String, path: String = "/op"): Int = postForm(body, path).statusCode()
@@ -55,8 +118,30 @@ class HttpProbe(private val baseUrl: String) : AutoCloseable {
     fun delete(path: String): HttpResponse<String> =
         send(HttpRequest.newBuilder(URI("$baseUrl$path")).DELETE())
 
-    private fun send(builder: HttpRequest.Builder): HttpResponse<String> =
-        client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+    /**
+     * Issue [builder] bounded by [timeout], translating the JDK's
+     * [HttpTimeoutException] — whose message is the endpoint-free "request timed
+     * out" — into a failure that names what did not answer.
+     */
+    private fun send(
+        builder: HttpRequest.Builder,
+        timeout: Duration = HttpBounds.REQUEST,
+    ): HttpResponse<String> {
+        val request = builder.bounded(timeout).build()
+        return try {
+            client.send(request, HttpResponse.BodyHandlers.ofString())
+        } catch (timedOut: HttpTimeoutException) {
+            throw AssertionFailedError(
+                "HttpProbe: no response to ${request.method()} ${request.uri()} within ${timeout.toMillis()}ms. " +
+                    "The request was bounded, so this is an unresponsive endpoint — not a suite timeout.",
+                timedOut,
+            )
+        }
+    }
+
+    /** [send] without the message translation, for [await], which has its own. */
+    private fun sendRaw(builder: HttpRequest.Builder, timeout: Duration): HttpResponse<String> =
+        client.send(builder.bounded(timeout).build(), HttpResponse.BodyHandlers.ofString())
 
     /**
      * Poll [path] every 50ms until [predicate] matches the body. T12 finding 2:
@@ -64,16 +149,37 @@ class HttpProbe(private val baseUrl: String) : AutoCloseable {
      * failing — a silent pass for any caller that forgot a subsequent assert.
      * Now throws, with the last-seen body in the message, so a stalled demo
      * fails loudly at the await site instead of downstream (or not at all).
+     *
+     * computenet-dqy.72: each poll is bounded by the time *remaining* on the
+     * deadline, so [timeoutMs] bounds the whole call. Previously it bounded only
+     * this loop, and a send that never returned never reached the loop again.
      */
     fun await(timeoutMs: Long = 5_000, path: String = "/state", predicate: (String) -> Boolean): String {
         val deadline = System.currentTimeMillis() + timeoutMs
         var json = ""
-        while (System.currentTimeMillis() < deadline) {
-            json = state(path)
+        var unanswered = false
+        while (true) {
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) break
+            try {
+                json = sendRaw(HttpRequest.newBuilder(URI("$baseUrl$path")), Duration.ofMillis(remaining)).body()
+            } catch (_: HttpTimeoutException) {
+                // the poll ran out the deadline itself; the loop's message below is the right one
+                unanswered = true
+                break
+            }
             if (predicate(json)) return json
             Thread.sleep(50)
         }
-        throw AssertionFailedError("HttpProbe.await timed out after ${timeoutMs}ms on $path; last-seen body: $json")
+        val why = if (unanswered) {
+            "; the last request was still unanswered when the deadline expired (it was bounded by the remaining time, " +
+                "so this is the await bound firing, not a suite timeout)"
+        } else {
+            ""
+        }
+        throw AssertionFailedError(
+            "HttpProbe.await timed out after ${timeoutMs}ms on $baseUrl$path$why; last-seen body: $json",
+        )
     }
 
     /**

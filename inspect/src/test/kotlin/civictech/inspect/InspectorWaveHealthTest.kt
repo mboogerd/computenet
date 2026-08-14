@@ -21,6 +21,7 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
+import civictech.testkit.boundedHttpClient
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -583,7 +584,7 @@ class InspectorWaveHealthTest {
          * `listen()`, i.e. per test method, each with its own selector thread and
          * executor pool; cancelling [reader] alone left all of that alive.
          */
-        private val client: HttpClient = HttpClient.newHttpClient()
+        private val client: HttpClient = boundedHttpClient()
         private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->
