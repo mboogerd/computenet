@@ -13,6 +13,7 @@ import org.java_websocket.WebSocket
 import org.java_websocket.WebSocketImpl
 import org.java_websocket.WebSocketServerFactory
 import org.java_websocket.client.WebSocketClient
+import org.java_websocket.drafts.Draft_6455
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.handshake.ServerHandshake
 import org.java_websocket.server.WebSocketServer
@@ -204,14 +205,71 @@ object WsTransport {
         return connection
     }
 
-    private fun awaitReachable(uri: URI, backoff: (attempt: Int) -> Long) {
+    /**
+     * The floor under a probe's connect timeout (computenet-auq).
+     *
+     * Two reasons it cannot simply be `backoff(attempt)`. A schedule may return
+     * **0**, which `Socket.connect` reads as *no timeout* — precisely the defect
+     * this bounds — and every reconnect test here injects exactly that. And a
+     * legitimate loopback connect is not free: 8ms measured for a first dial on
+     * this host, so a 10ms schedule used verbatim would time out a peer that is
+     * up and answering, turning the probe into an unterminating loop. One second
+     * is the production schedule's own first interval, so nothing about
+     * [DEFAULT_RECONNECT_BACKOFF] is changed by the floor.
+     */
+    internal const val MIN_PROBE_TIMEOUT_MS = 1_000L
+
+    /**
+     * The connect timeout [WsConnection]'s own dial carries — the second untimed
+     * site the computenet-auq audit found in this file.
+     *
+     * `WebSocketClient`'s single-argument constructor leaves `connectTimeout` at
+     * **0**, and 1.6.0's `WebSocketClient.run` dials `socket.connect(addr,
+     * connectTimeout)` with it, so its socket blocks for the OS timeout on a
+     * black-holed peer exactly as the probe did. [connect]'s
+     * `connectBlocking(10, SECONDS)` bounds only the *caller's* wait, not that
+     * socket — and the reconnect loop's `reconnectBlocking()` (see
+     * [WsConnection.scheduleReconnect]) is untimed, so there the OS timeout
+     * displaced the reconnect backoff outright. Matching the existing 10s
+     * give-up keeps every bound in this file the same number; a refused or
+     * answered dial never reaches it.
+     */
+    private const val DIAL_TIMEOUT_MS = 10_000
+
+    /**
+     * Retry a bare TCP probe on [backoff] until [uri] answers.
+     *
+     * **The dial is timed** (computenet-auq). An untimed `Socket(host, port)`
+     * blocks for the *OS* connect timeout against an address that drops SYNs
+     * rather than refusing — measured 7.79/7.83/7.86s against a bound socket
+     * with a full accept queue on macOS 15 / JDK 21, and 75s+ is reachable on a
+     * real network. That does not delay the backoff schedule, it **bypasses**
+     * it: every attempt costs the OS timeout no matter what the schedule says.
+     * Deriving the timeout from the interval the schedule is about to sleep
+     * makes a dropped SYN cost one interval instead (floored by
+     * [MIN_PROBE_TIMEOUT_MS]).
+     *
+     * A *refused* connection is unaffected — a RST comes back in well under a
+     * millisecond and no timeout is ever reached — which is what every loopback
+     * caller here exercises.
+     *
+     * `internal` only so [WsProbeTimeoutTest] can dial a black hole directly;
+     * [connect] is the production entry.
+     */
+    internal fun awaitReachable(uri: URI, backoff: (attempt: Int) -> Long) {
         var attempt = 0
         while (true) {
+            val interval = backoff(attempt++)
             try {
-                Socket(uri.host, uri.port).close()
+                Socket().use { probe ->
+                    probe.connect(
+                        InetSocketAddress(uri.host, uri.port),
+                        interval.coerceAtLeast(MIN_PROBE_TIMEOUT_MS).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    )
+                }
                 return
             } catch (_: IOException) {
-                Thread.sleep(backoff(attempt++))
+                Thread.sleep(interval)
             }
         }
     }
@@ -1252,7 +1310,7 @@ object WsTransport {
         uri: URI,
         side: Peering.Side,
         private val backoff: (attempt: Int) -> Long = DEFAULT_RECONNECT_BACKOFF,
-    ) : WebSocketClient(uri) {
+    ) : WebSocketClient(uri, Draft_6455(), null, DIAL_TIMEOUT_MS) {
 
         private val session = Session(side, { send(it) }, { shutdown() }, { hasBufferedData() })
 
