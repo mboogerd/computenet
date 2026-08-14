@@ -167,8 +167,9 @@ Look for what task-level review structurally cannot see:
   or the PR body. Check the shipped text specifically: an honest PR body is
   what conceals the gap, because body-plus-diff reads as a consistent story
   (computenet-k9d.2, then k9d.7 immediately after — the only two instances
-  seen, both prose changes, both found only because a reader was told to
-  look). The body is read once, at merge; the file is read by every agent
+  seen; both times the claim sat in prose — a docstring, a skill file —
+  though k9d.2's change was code, and both were found only because a reader
+  was told to look). The body is read once, at merge; the file is read by every agent
   afterwards. Repair it under §5; it is not a wording preference. It is
   [orchestrator-authorship.md](orchestrator-authorship.md)'s rule displaced by
   one artifact — the caveat exists and the author is honest, it is just where

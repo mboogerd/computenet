@@ -93,8 +93,9 @@ Check:
   *there* specifically: an honest bead comment and PR body are what conceal
   its absence, because body-plus-diff then reads as a consistent story
   (computenet-k9d.2, then k9d.7 immediately after — the only two instances
-  seen, both prose changes, both found only because a reader was told to
-  look). Absent, repair it under §4; it is not a wording preference. The
+  seen; both times the claim sat in prose — a docstring, a skill file —
+  though k9d.2's change was code, and both were found only because a reader
+  was told to look). Absent, repair it under §4; it is not a wording preference. The
   body is read once, at merge; the file is read by every agent afterwards
   and by whoever next wants to change the number. Same rule as
   [orchestrator-authorship.md](orchestrator-authorship.md), displaced by one
