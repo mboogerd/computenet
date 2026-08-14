@@ -281,8 +281,23 @@ class InspectorErrorsTest {
 
     // ------------------------------------------------------------------ dtos
 
+    /**
+     * The zeros have to be *declined*, not merely unreachable. The class runs
+     * on [InspectorServer.startUnscheduled], so nothing polls unless a test
+     * says so: without a spawned cell and an explicit tick, `Errors.poll()`
+     * never runs, `pollRestarts` iterates an empty ref set, and the restart
+     * assertions below could not fail whatever the poller did (computenet-4e4a).
+     * So: spawn a cell, then tick twice — the first tick makes `pollRestarts`
+     * take its first-seen branch (seed the baseline, open no row), the second
+     * makes it compare an unchanged generation against that baseline.
+     */
     @Test
     fun `an idle graph reports an all-zero snapshot`() {
+        host.managementInlet.call.spawn(SetCell<String>())
+
+        server.tickAll()
+        server.tickAll()
+
         val snap = snapshot()
 
         snap.counters.deadLetters shouldBe 0L

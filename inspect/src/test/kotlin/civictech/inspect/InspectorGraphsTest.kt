@@ -32,6 +32,16 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Cell uuids are fixed rather than random so "lexicographically-min member"
  * is a fact the assertions can state, not a coin flip they have to recompute.
+ *
+ * Served [InspectorServer.startUnscheduled] (computenet-5swb): nothing here
+ * needs the wall clock. Every `graphs.changed` this class asserts is owed by
+ * something it performed itself — a partition move settled by an explicit
+ * [InspectorServer.tickAll], or an [InspectorServer.nameGraph], which emits on
+ * the calling thread without a tick at all. What the armed schedules did add
+ * was a 1 Hz `"graphsChanged"` running underneath exact-count assertions
+ * (`an idle partition announces nothing`, and the absolute zeroes in
+ * `the inspector's own observation sink never joins the component it observes`),
+ * i.e. exactly the wall-clock race the seam exists to remove.
  */
 class InspectorGraphsTest {
 
@@ -46,7 +56,7 @@ class InspectorGraphsTest {
     private val hostRef = CellRef(UUID.randomUUID())
     private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
     private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
-    private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).start()
+    private val server = InspectorServer(registry, mapOf("test-host" to host), port = 0).startUnscheduled()
     private val probe = HttpProbe("http://localhost:${server.boundPort}")
     private var tap: SseTap? = null
 
@@ -226,7 +236,7 @@ class InspectorGraphsTest {
         val secondRef = CellRef(UUID.randomUUID())
         val secondScheduler = VirtualThreadScheduler("ManagedHost-${secondRef.id}")
         val second = ManagedHost(ref = secondRef, scheduler = secondScheduler, registry = registry)
-        val moved = InspectorServer(registry, mapOf("one" to host, "two" to second), port = 0).start()
+        val moved = InspectorServer(registry, mapOf("one" to host, "two" to second), port = 0).startUnscheduled()
         try {
             val cellA = SetCell<String>(ref = CellRef(UUID.fromString(A)))
             val cellB = SetCell<String>(ref = CellRef(UUID.fromString(B)))
@@ -323,8 +333,8 @@ class InspectorGraphsTest {
         // instrument is not a subject.
         val (x, y) = pair(X_HIGH, Y_HIGH)
         // The pair itself moved the partition, so a `graphs.changed` is owed for
-        // it — emitted by whichever `"graphsChanged"` tick runs first, the 1 Hz
-        // scheduled one or the explicit `tickAll()` below (computenet-rzq0).
+        // it — and since computenet-5swb unscheduled this server, the explicit
+        // `tickAll()` below is the only thing that can pay it (computenet-rzq0).
         // Settle that debt *before* the tap attaches, or the zeroes below hold
         // only for as long as the setup's own announcement is still in flight:
         // the count is read on this thread and the frame arrives on the
@@ -452,6 +462,17 @@ class InspectorGraphsTest {
          * A heartbeat carries the current `seq` without advancing it, and
          * `tickAll()` always emits one, so the barrier always has a frame to
          * ride even when the tick announced nothing.
+         *
+         * **Still load-bearing after computenet-5swb unscheduled this server.**
+         * The race it closes is between the *test* thread reading a count and
+         * the *reader* thread delivering a frame, which no amount of
+         * disarming the scheduler removes: `tickAll()` returning means the
+         * event was emitted, not that it was received. Disarming only removes
+         * the second emitter, so the "a scheduled tick cannot satisfy it"
+         * property above is now unexercised rather than untrue — it is kept
+         * because it costs nothing and is the strictly stronger form: a frame
+         * count would resynchronise on any frame, this resynchronises only on
+         * one at or past the seq the server had after the tick under test.
          */
         fun drained() {
             val target = snapshot(null).seq
