@@ -310,7 +310,10 @@ route** — not here, not as a cross-epic blocker (5f route 3), not as
 continuation work (5f route 4):
 
 ```bash
-bd ready --type=epic --json               # take the first id that is NOT computenet-wpvy
+# Filter the SDLC epic OUT in the command, not by eye: bd ready really does
+# return computenet-wpvy, and a filter you apply while reading JSON is one you
+# can forget with nothing to catch it.
+bd ready --type=epic --json | jq '[.[] | select(.id != "computenet-wpvy")]'
 bd update <id> --claim                    # claim that id specifically
 # --claim refused with "issue already claimed by <other machine>"? See below —
 # take it over; do NOT skip to the next epic.
@@ -1268,7 +1271,29 @@ conflicts are yours to resolve and get a reviewer like any code you write.
   route it — the substantive-repair case in particular is a finished
   feature needing only an independent reader, never 5b and never a park.
 
-### 5f. Next feature, or wait, or stop
+#### The SDLC exclusion, which applies on every route
+
+**`computenet-wpvy` and everything beneath it is not `/work`'s to claim — not
+as an epic, not as a cross-epic blocker (route 3), not as continuation work
+(route 4), not ever.** A session must not edit the skill it is executing
+under, and process work has its own lane
+(`.claude/skills/remediate-friction/SKILL.md`).
+
+**Key on parentage, not on a label.** Anything under that epic is SDLC work
+whether or not it carries `skill-friction`; the label is provenance, not the
+gate. Checking the label instead is how three unlabelled children sat open
+while the lane reported itself drained (computenet-wpvy.37).
+
+`--parent` is **not transitive**, so a grandchild does not appear under the
+epic's own listing. Use the ancestor walk from 5b — the one that resolves a
+bead's effective parent (`.parent` when set, else the dotted-id prefix):
+
+```bash
+epic_of <candidate-id>          # 5b defines it; returns the epic, or (unparented)
+# -> computenet-wpvy  => SKIP, on every route
+```
+
+## 5f. Next feature, or wait, or stop
 
 Take the first of these that applies:
 
@@ -1296,7 +1321,9 @@ building on it, and continue down this list.
 
 **3. The epic's remaining work is blocked solely by an item in a *different*
 epic** → claim and work **that specific blocking item** (task or feature, via
-5a/5b as appropriate), not the other epic itself. Without this route a
+5a/5b as appropriate), not the other epic itself. **Unless that item is under
+`computenet-wpvy`** — see "The SDLC exclusion" above, which applies here as
+much as anywhere; a blocker being inconvenient is not a reason to take SDLC work. Without this route a
 cross-epic dependency is a permanent stall: no session on this epic can ever
 unblock it, and the one-claim rule is about *epic* claims, which this does
 not add. The item lives outside your owned territory, so the claim is an
@@ -1317,9 +1344,8 @@ Build the candidate pool from `bd ready --json`: ready **features and tasks
 parented to other epics**, plus unparented bugs and chores. Drop from it:
 
 - anything with the `human` label (this exclusion holds on every route);
-- anything parented to the SDLC epic `computenet-wpvy` or labeled
-  `skill-friction` — process work belongs to the SDLC orchestrator lane
-  (step 7), never to a session running under the skill it would edit;
+- **anything under the SDLC epic `computenet-wpvy`, at any depth** — see
+  "The SDLC exclusion" above;
 - anything with `parked_at` within 6h;
 - **anything that is review or verification of output this session
   produced** — warm context is exactly what makes self-approval likely, and
@@ -1641,15 +1667,66 @@ keeps friction out of 5f's continuation pool; the drain is
 `.claude/skills/remediate-friction/SKILL.md` today, a reactive orchestrator
 eventually.)
 
+**File it UNPARENTED, then re-parent.** Do not pass `--parent` on the create:
+
 ```bash
 SKILL_V=$(bd show <epic> --json | jq -r '.[0].metadata.skill_version')   # recorded at claim (step 3)
-bd create --type=<bug|feature> --priority=2 --label=skill-friction \
-  --parent=computenet-wpvy \
+
+# 1. create with NO --parent, so the id is a hash and child_counters is untouched
+NEW=$(bd create "work skill: <the friction in one line>" \
+  --type=<bug|feature> --priority=2 --label=skill-friction \
   --metadata "{\"skill_version\":\"$SKILL_V\"}" \
-  --title="work skill: <the friction in one line>" \
   --description="<what the skill says, what actually happened, what you did instead, what it cost>" \
-  --acceptance="<what would have to change in the skill for this not to recur>"
+  --acceptance="<what would have to change in the skill for this not to recur>" \
+  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW returns a list
+
+# 2. then attach it. The id does not change.
+bd update "$NEW" --parent=computenet-wpvy
 ```
+
+**Why, and why only here.** `bd create --parent=X` allocates the child id from
+`child_counters`, a **per-database** table reconciled only at sync. Two
+machines filing under the same parent between syncs both read the same
+`last_child` and both count upward, so they mint *the same ids for different
+beads*. Measured 2026-08-14: from a common ancestor at `last_child=39`, this
+machine went to 45 and the other to 42, and `computenet-wpvy.40`, `.41`, `.42`
+each named two unrelated friction items. That is a **primary-key** collision,
+not a content conflict, so `bd dolt pull` aborts naming `child_counters`, and
+the runbook's last-write-wins resolution would *destroy* three real beads.
+
+`computenet-wpvy` is the worst case precisely because this step works: both
+machines file here every slot, so the collision rate rises with the health of
+the friction loop.
+
+Verified that the unparented route avoids it entirely — the counter does not
+move, and `bd list --parent=computenet-wpvy` still finds the item:
+
+```
+counter before: 45 · unparented create -> computenet-9kmv · counter: 45
+after --parent=computenet-wpvy · counter: 45 · listed under the epic: YES
+```
+
+**This applies to a SHARED parent only.** Breakdown children created under an
+epic or feature *this session claimed* are exclusive by that claim, cannot
+collide, and keep their readable dotted ids — `epic.md`, `feature.md` and
+`task.md` are all correct as they stand. Do not spread the hash route to them.
+
+**If the two steps come apart, nothing is lost — re-attach it.** A crash, or a
+`jq` that does not match, leaves the bead created and *unparented* rather than
+not created at all. It keeps its hash id, so recovery is one command:
+
+```bash
+bd list --all --json | jq -r '.[] | select(.parent == null) | "\(.id)\t\(.title)"'
+bd update <the id> --parent=computenet-wpvy
+```
+
+(I hit exactly this while testing the snippet above: `jq -r '.[0].id // .id'`
+errors on an object — `//` catches null, not an error — so `$NEW` was empty,
+the `bd update` no-oped, and `computenet-iub5` sat unparented. The `.id` form
+above is the corrected one, and it was run verbatim before shipping.)
+
+(`bd create` inherits a parent's labels; creating unparented skips that, which
+is why the `--label=skill-friction` above is explicit rather than inherited.)
 
 Close the bracket with `bd dolt push` once every friction item is filed and
 claimed (one push for the batch, not one per item). That push is what makes
