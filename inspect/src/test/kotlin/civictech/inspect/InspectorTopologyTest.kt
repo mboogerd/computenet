@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
@@ -14,6 +15,7 @@ import io.kotest.matchers.string.shouldContain
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import java.util.UUID
 
 /**
  * `GET /api/inspect/topology` against a real in-process graph: the snapshot the
@@ -24,18 +26,29 @@ class InspectorTopologyTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private var server: InspectorServer? = null
+    private var probe: HttpProbe? = null
 
     @AfterEach
     fun tearDown() {
+        probe?.close()
         server?.close()
+        hostScheduler.shutdown()
     }
 
     private fun serve(names: Map<CellRef, String> = emptyMap()): HttpProbe {
         val started = InspectorServer(registry, mapOf("test-host" to host), port = 0, cellNames = names).start()
         server = started
-        return HttpProbe("http://localhost:${started.boundPort}")
+        return HttpProbe("http://localhost:${started.boundPort}").also { probe = it }
     }
 
     @Test
@@ -130,13 +143,18 @@ class InspectorTopologyTest {
 
     @Test
     fun `cells on a registry-less host are invisible`() {
-        val detached = ManagedHost()
-        val hidden = SetCell<String>()
-        detached.managementInlet.call.spawn(hidden)
+        val detachedScheduler = VirtualThreadScheduler("ManagedHost-detached")
+        val detached = ManagedHost(scheduler = detachedScheduler)
+        try {
+            val hidden = SetCell<String>()
+            detached.managementInlet.call.spawn(hidden)
 
-        val snapshot = json.decodeFromString<TopologySnapshot>(serve().state(InspectorServer.TOPOLOGY_PATH))
+            val snapshot = json.decodeFromString<TopologySnapshot>(serve().state(InspectorServer.TOPOLOGY_PATH))
 
-        snapshot.nodes.size shouldBe 0
-        registry.describe(hidden.ref) shouldBe null
+            snapshot.nodes.size shouldBe 0
+            registry.describe(hidden.ref) shouldBe null
+        } finally {
+            detachedScheduler.shutdown()
+        }
     }
 }

@@ -4,10 +4,13 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.wire.Peering
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import java.util.UUID
 
 /**
  * T21 — a closed inspector is *off* the registry, not merely disarmed.
@@ -26,13 +29,34 @@ import org.junit.jupiter.api.Test
  */
 class InspectorDetachTest {
 
+    /**
+     * Owned schedulers, not `ManagedHost`'s own default, purely so [tearDown]
+     * can stop them (computenet-4vh) — see `InspectorErrorsTest` for the full
+     * rationale.
+     */
     private val registryA = LocationRegistry()
-    private val hostA = ManagedHost(registry = registryA)
-    private val bridgeA = ManagedHost(registry = registryA)
+    private val hostARef = CellRef(UUID.randomUUID())
+    private val hostAScheduler = VirtualThreadScheduler("ManagedHost-${hostARef.id}")
+    private val hostA = ManagedHost(ref = hostARef, scheduler = hostAScheduler, registry = registryA)
+    private val bridgeARef = CellRef(UUID.randomUUID())
+    private val bridgeAScheduler = VirtualThreadScheduler("ManagedHost-${bridgeARef.id}")
+    private val bridgeA = ManagedHost(ref = bridgeARef, scheduler = bridgeAScheduler, registry = registryA)
 
     private val registryB = LocationRegistry()
-    private val hostB = ManagedHost(registry = registryB)
-    private val bridgeB = ManagedHost(registry = registryB)
+    private val hostBRef = CellRef(UUID.randomUUID())
+    private val hostBScheduler = VirtualThreadScheduler("ManagedHost-${hostBRef.id}")
+    private val hostB = ManagedHost(ref = hostBRef, scheduler = hostBScheduler, registry = registryB)
+    private val bridgeBRef = CellRef(UUID.randomUUID())
+    private val bridgeBScheduler = VirtualThreadScheduler("ManagedHost-${bridgeBRef.id}")
+    private val bridgeB = ManagedHost(ref = bridgeBRef, scheduler = bridgeBScheduler, registry = registryB)
+
+    @AfterEach
+    fun tearDown() {
+        hostAScheduler.shutdown()
+        bridgeAScheduler.shutdown()
+        hostBScheduler.shutdown()
+        bridgeBScheduler.shutdown()
+    }
 
     private fun encode(ref: CellRef) = "${ref.id}:${ref.instanceId}"
 

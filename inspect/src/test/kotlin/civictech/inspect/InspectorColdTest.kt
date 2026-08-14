@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
@@ -55,8 +56,18 @@ class InspectorColdTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
-    private val other = ManagedHost(registry = registry)
+
+    /**
+     * Owned schedulers, not `ManagedHost`'s own default, purely so [tearDown]
+     * can stop them (computenet-4vh) — see `InspectorErrorsTest` for the full
+     * rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
+    private val otherRef = CellRef(UUID.randomUUID())
+    private val otherScheduler = VirtualThreadScheduler("ManagedHost-${otherRef.id}")
+    private val other = ManagedHost(ref = otherRef, scheduler = otherScheduler, registry = registry)
     private var server: InspectorServer? = null
     private lateinit var probe: HttpProbe
     private var tap: SseTap? = null
@@ -65,6 +76,9 @@ class InspectorColdTest {
     fun tearDown() {
         tap?.close()
         server?.close()
+        if (::probe.isInitialized) probe.close()
+        hostScheduler.shutdown()
+        otherScheduler.shutdown()
     }
 
     // ------------------------------------------------------------- predicate
@@ -464,7 +478,12 @@ class InspectorColdTest {
         val builder = HttpRequest.newBuilder(URI("http://localhost:${server!!.boundPort}${InspectorServer.GRAPH_PATH}/$graph/wake"))
             .POST(HttpRequest.BodyPublishers.ofString(""))
         if (withHeader) builder.header(InspectorServer.WAKE_HEADER, InspectorServer.WAKE_HEADER_VALUE)
-        return HttpClient.newHttpClient().send(builder.build(), HttpResponse.BodyHandlers.ofString())
+        val client = HttpClient.newHttpClient()
+        try {
+            return client.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+        } finally {
+            client.shutdownNow()
+        }
     }
 
     private fun encoded(ref: CellRef): String = InspectorServer.encodeRef(ref)
@@ -481,7 +500,14 @@ class InspectorColdTest {
     /** A live `text/event-stream` reader, retaining each frame's kind and payload. */
     private inner class SseTap(url: String) : AutoCloseable {
         private val frames = LinkedBlockingQueue<Event>()
-        private val reader: CompletableFuture<Void> = HttpClient.newHttpClient()
+
+        /**
+         * Held so [close] can release it (computenet-4vh): one client per
+         * `listen()`, i.e. per test method, each with its own selector thread and
+         * executor pool; cancelling [reader] alone left all of that alive.
+         */
+        private val client: HttpClient = HttpClient.newHttpClient()
+        private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->
                 response.body().forEach { line ->
@@ -501,8 +527,15 @@ class InspectorColdTest {
                 countOfKind(kind) >= count
             }
 
+        /**
+         * `shutdownNow()`, never `close()`: this client is deliberately parked on
+         * an SSE response that never ends, so `close()` — which awaits
+         * termination of in-flight exchanges — would turn this teardown into the
+         * unbounded wait the suite is being audited for.
+         */
         override fun close() {
             reader.cancel(true)
+            client.shutdownNow()
         }
     }
 

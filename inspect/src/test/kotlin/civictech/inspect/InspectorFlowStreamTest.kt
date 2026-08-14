@@ -1,9 +1,11 @@
 package civictech.inspect
 
+import civictech.cell.CellRef
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.testkit.awaitUntil
 import io.kotest.matchers.collections.shouldContainExactly
@@ -17,6 +19,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.LinkedBlockingQueue
 
@@ -32,7 +35,15 @@ class InspectorFlowStreamTest {
 
     private val json = Json { ignoreUnknownKeys = false }
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val server = InspectorServer(registry, host, port = 0).start()
     private var events: SseTap? = null
 
@@ -40,14 +51,22 @@ class InspectorFlowStreamTest {
     fun tearDown() {
         events?.close()
         server.close()
+        hostScheduler.shutdown()
     }
 
     private fun spawnSet(): SetCell<String> = SetCell<String>().also { host.managementInlet.call.spawn(it) }
 
-    private fun get(path: String): String = HttpClient.newHttpClient().send(
-        HttpRequest.newBuilder(URI("http://localhost:${server.boundPort}$path")).build(),
-        HttpResponse.BodyHandlers.ofString(),
-    ).body()
+    private fun get(path: String): String {
+        val client = HttpClient.newHttpClient()
+        try {
+            return client.send(
+                HttpRequest.newBuilder(URI("http://localhost:${server.boundPort}$path")).build(),
+                HttpResponse.BodyHandlers.ofString(),
+            ).body()
+        } finally {
+            client.shutdownNow()
+        }
+    }
 
     @Test
     fun `a tapped edge is reported not fused, and its rates stream as flow rates`() {
@@ -144,13 +163,18 @@ class InspectorFlowStreamTest {
         // later sees appear
         InspectorServer(registry, host, port = 0).use { late ->
             late.tappedOutlets shouldBe setOf(source.outlet.ref)
-            json.decodeFromString<TopologySnapshot>(
-                HttpClient.newHttpClient().send(
+            val client = HttpClient.newHttpClient()
+            val body = try {
+                client.send(
                     HttpRequest.newBuilder(URI("http://localhost:${late.start().boundPort}${InspectorServer.TOPOLOGY_PATH}"))
                         .build(),
                     HttpResponse.BodyHandlers.ofString(),
                 ).body()
-            ).edges.single { it.id == link.id.toString() }.fused shouldBe false
+            } finally {
+                client.shutdownNow()
+            }
+            json.decodeFromString<TopologySnapshot>(body)
+                .edges.single { it.id == link.id.toString() }.fused shouldBe false
         }
     }
 
@@ -178,7 +202,14 @@ class InspectorFlowStreamTest {
     /** A live `text/event-stream` reader collecting `data:` frames off the wire. */
     private inner class SseTap(url: String) : AutoCloseable {
         private val frames = LinkedBlockingQueue<Frame>()
-        private val reader: CompletableFuture<Void> = HttpClient.newHttpClient()
+
+        /**
+         * Held so [close] can release it (computenet-4vh): one client per
+         * `listen()`, i.e. per test method, each with its own selector thread and
+         * executor pool; cancelling [reader] alone left all of that alive.
+         */
+        private val client: HttpClient = HttpClient.newHttpClient()
+        private val reader: CompletableFuture<Void> = client
             .sendAsync(HttpRequest.newBuilder(URI(url)).build(), HttpResponse.BodyHandlers.ofLines())
             .thenAccept { response ->
                 response.body().forEach { line ->
@@ -198,8 +229,15 @@ class InspectorFlowStreamTest {
             return frames.first { it.kind == kind }
         }
 
+        /**
+         * `shutdownNow()`, never `close()`: this client is deliberately parked on
+         * an SSE response that never ends, so `close()` — which awaits
+         * termination of in-flight exchanges — would turn this teardown into the
+         * unbounded wait the suite is being audited for.
+         */
         override fun close() {
             reader.cancel(true)
+            client.shutdownNow()
         }
     }
 

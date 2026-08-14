@@ -7,6 +7,7 @@ import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.Link
 import civictech.cell.link.LinkResult
 import civictech.cell.port.FanInlet
@@ -33,13 +34,22 @@ import java.util.concurrent.CopyOnWriteArrayList
 class InspectorFlowTest {
 
     private val registry = LocationRegistry()
-    private val host = ManagedHost(registry = registry)
+
+    /**
+     * The host's scheduler, owned here rather than left to [ManagedHost]'s own
+     * default, purely so [tearDown] can stop it (computenet-4vh) — see
+     * `InspectorErrorsTest` for the full rationale.
+     */
+    private val hostRef = CellRef(UUID.randomUUID())
+    private val hostScheduler = VirtualThreadScheduler("ManagedHost-${hostRef.id}")
+    private val host = ManagedHost(ref = hostRef, scheduler = hostScheduler, registry = registry)
     private val batches = CopyOnWriteArrayList<FlowBatch>()
     private val flow = FlowCollector(registry, onBatch = batches::add)
 
     @AfterEach
     fun tearDown() {
         flow.close()
+        hostScheduler.shutdown()
     }
 
     // ------------------------------------------------------------ scaffolding
@@ -196,20 +206,25 @@ class InspectorFlowTest {
 
     @Test
     fun `an edge whose producer this registry does not host reports fused unknown`() {
-        val detached = ManagedHost()
-        val source = SetCell<String>().also { detached.managementInlet.call.spawn(it) }
-        val sink = SetCell<String>().also { detached.managementInlet.call.spawn(it) }
-        val link = detached.managementInlet.call.connect(source.ref, "outlet", sink.ref, "deltaInlet")
-        (link is LinkResult.Connected) shouldBe true
+        val detachedScheduler = VirtualThreadScheduler("ManagedHost-detached")
+        val detached = ManagedHost(scheduler = detachedScheduler)
+        try {
+            val source = SetCell<String>().also { detached.managementInlet.call.spawn(it) }
+            val sink = SetCell<String>().also { detached.managementInlet.call.spawn(it) }
+            val link = detached.managementInlet.call.connect(source.ref, "outlet", sink.ref, "deltaInlet")
+            (link is LinkResult.Connected) shouldBe true
 
-        // the registry-less host publishes nowhere, so `locate` cannot reach it
-        flow.bind(
-            civictech.cell.host.TopologyLink(
-                (link as LinkResult.Connected).link.id,
-                source.outlet.ref,
-                sink.deltaInlet.ref,
-            )
-        ) shouldBe null
+            // the registry-less host publishes nowhere, so `locate` cannot reach it
+            flow.bind(
+                civictech.cell.host.TopologyLink(
+                    (link as LinkResult.Connected).link.id,
+                    source.outlet.ref,
+                    sink.deltaInlet.ref,
+                )
+            ) shouldBe null
+        } finally {
+            detachedScheduler.shutdown()
+        }
     }
 
     // -------------------------------------------------------------- lifecycle

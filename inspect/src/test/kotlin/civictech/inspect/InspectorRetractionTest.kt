@@ -4,6 +4,7 @@ import civictech.cell.CellRef
 import civictech.cell.data.SetCell
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
+import civictech.cell.host.VirtualThreadScheduler
 import civictech.cell.link.LinkResult
 import civictech.cell.wire.Peering
 import civictech.testkit.HttpProbe
@@ -14,6 +15,7 @@ import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import java.util.UUID
 
 /**
  * T21 — the two exclusions in `InspectorModel.retractDangling`, one test each.
@@ -40,19 +42,36 @@ class InspectorRetractionTest {
 
     private val json = Json { ignoreUnknownKeys = false }
 
+    /**
+     * Owned schedulers, not `ManagedHost`'s own default, purely so [tearDown]
+     * can stop them (computenet-4vh) — see `InspectorErrorsTest` for the full
+     * rationale.
+     */
     private val registryA = LocationRegistry()
-    private val hostA = ManagedHost(registry = registryA)
-    private val bridgeA = ManagedHost(registry = registryA)
+    private val hostARef = CellRef(UUID.randomUUID())
+    private val hostAScheduler = VirtualThreadScheduler("ManagedHost-${hostARef.id}")
+    private val hostA = ManagedHost(ref = hostARef, scheduler = hostAScheduler, registry = registryA)
+    private val bridgeARef = CellRef(UUID.randomUUID())
+    private val bridgeAScheduler = VirtualThreadScheduler("ManagedHost-${bridgeARef.id}")
+    private val bridgeA = ManagedHost(ref = bridgeARef, scheduler = bridgeAScheduler, registry = registryA)
 
     private val registryB = LocationRegistry()
-    private val hostB = ManagedHost(registry = registryB)
-    private val bridgeB = ManagedHost(registry = registryB)
+    private val hostBRef = CellRef(UUID.randomUUID())
+    private val hostBScheduler = VirtualThreadScheduler("ManagedHost-${hostBRef.id}")
+    private val hostB = ManagedHost(ref = hostBRef, scheduler = hostBScheduler, registry = registryB)
+    private val bridgeBRef = CellRef(UUID.randomUUID())
+    private val bridgeBScheduler = VirtualThreadScheduler("ManagedHost-${bridgeBRef.id}")
+    private val bridgeB = ManagedHost(ref = bridgeBRef, scheduler = bridgeBScheduler, registry = registryB)
 
     private var server: InspectorServer? = null
 
     @AfterEach
     fun tearDown() {
         server?.close()
+        hostAScheduler.shutdown()
+        bridgeAScheduler.shutdown()
+        hostBScheduler.shutdown()
+        bridgeBScheduler.shutdown()
     }
 
     private fun serve(): InspectorServer =
@@ -66,10 +85,14 @@ class InspectorRetractionTest {
     private fun peer(): Peering.Loopback =
         Peering.loopback(Peering.Side(registryA, bridgeA), Peering.Side(registryB, bridgeB))
 
-    private fun InspectorServer.snapshot(): TopologySnapshot =
-        json.decodeFromString(
-            HttpProbe("http://localhost:$boundPort").state(InspectorServer.TOPOLOGY_PATH),
-        )
+    private fun InspectorServer.snapshot(): TopologySnapshot {
+        val probe = HttpProbe("http://localhost:$boundPort")
+        return try {
+            json.decodeFromString(probe.state(InspectorServer.TOPOLOGY_PATH))
+        } finally {
+            probe.close()
+        }
+    }
 
     private fun encode(ref: CellRef) = "${ref.id}:${ref.instanceId}"
 
