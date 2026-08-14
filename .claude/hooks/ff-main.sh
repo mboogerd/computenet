@@ -53,7 +53,25 @@ fi
 # process works: 12s. macOS has no timeout(1). The low-speed vars stay because
 # they still cover a connected-but-stalled peer, and they are HTTP-only whereas
 # the watchdog also bounds SSH.
-fetch_out=$(mktemp)
+#
+# FUSE = 12s, deliberately, against a 30s harness timeout. Measured under 16
+# concurrent busy loops against a fast local remote (computenet-wpvy.39): an
+# 8s fuse cut 2 of 3 HEALTHY fetches; 15s cut 1 of 3. Tightening the fuse
+# spends the margin against load instead of buying anything — the offline case
+# it exists for is bounded either way, and ~18s of slack to the harness
+# timeout is what keeps a slow-but-fine fetch from being cut. So the fuse stays
+# at 12s and the misclassification is fixed at the classification site below,
+# which is what actually made the message wrong.
+
+# One private directory per invocation, holding both the captured fetch output
+# and the watchdog's kill flag. `mktemp -d` is what makes the flag path unique:
+# a fixed path would let a flag left behind by an earlier (or a concurrent)
+# invocation make a perfectly successful fetch report as a timeout. The trap
+# removes it on every exit path, of which this script has many.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fetch_out="$work/fetch.out"
+killed_flag="$work/killed"
 # `set -m` puts the fetch in its own process group, so the watchdog can signal
 # the WHOLE group. Without it, kill reaches `git fetch` but not the
 # `git-remote-https` child it spawned, which then survives the hook until
@@ -69,7 +87,22 @@ set +m
 # output — the reader blocks until the sleep expires. Measured: every session
 # start, including the healthy nothing-to-do case, cost 13s piped and <1s to a
 # file. That is a far larger aggregate cost than the offline case it bounds.
-( sleep 12; kill -TERM -$gp 2>/dev/null; sleep 1; kill -KILL -$gp 2>/dev/null ) >/dev/null 2>&1 &
+# The flag is written BEFORE the signal, and it is what classifies the outcome
+# below — never the exit code. A group-kill leaves git with whatever status the
+# race between its own processes produces (143 and 137 are only the tidy
+# cases), so rc cannot tell "we cut it" from "the remote is broken". The flag
+# can, because only this watchdog writes it. Ordering matters: write first, so
+# the parent's `wait` can never return and read an absent flag for a kill that
+# has already been decided.
+#
+# `sleep 12 || exit 0` is the other half, and it is not decoration. On the
+# HEALTHY path the parent tears this watchdog down with `pkill -P` (below),
+# which kills the sleep — and a bare `sleep 12;` would then simply fall through
+# to the next command and write the flag, making every successful fetch report
+# as a timeout. Guarding on the sleep's own status distinguishes "the fuse
+# burned down" from "we were dismissed", independently of teardown ordering.
+( trap - EXIT; sleep 12 || exit 0
+  : >"$killed_flag"; kill -TERM -$gp 2>/dev/null; sleep 1; kill -KILL -$gp 2>/dev/null ) >/dev/null 2>&1 &
 wp=$!
 wait $gp 2>/dev/null; rc=$?
 pkill -P $wp 2>/dev/null        # the watchdog's own sleep children
@@ -79,17 +112,17 @@ pkill -P $wp 2>/dev/null        # the watchdog's own sleep children
 # this for the noise.
 disown $wp 2>/dev/null || true
 kill $wp 2>/dev/null
-fetch_err=$(cat "$fetch_out"); rm -f "$fetch_out"
+fetch_err=$(cat "$fetch_out" 2>/dev/null || true)
 
-if [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; then
-  echo "ff-main: fetch exceeded 12s and was stopped — left alone (offline?)."
+if [ -e "$killed_flag" ]; then
+  # WE cut it. Whatever git printed on the way down is an artifact of our own
+  # signal — "died of signal 15", "possible repository corruption on the remote
+  # side" — and repeating it would hand the operator a scary diagnosis we
+  # manufactured. Under load this is often a HEALTHY fetch that was merely slow.
+  echo "ff-main: fetch exceeded 12s and was stopped — left alone (offline or heavily loaded?)."
   exit 0
 elif [ "$rc" -ne 0 ]; then
-  # NOTE: under heavy load the watchdog can cut a HEALTHY fetch, and the
-  # group-kill makes git exit with something other than 143/137 — so this
-  # branch can print git's death-by-signal text, which reads as remote
-  # corruption. Classify by a flag the watchdog writes, not by rc.
-  # computenet-wpvy.39 carries that fix.
+  # git failed on its own account. This text is genuinely git's.
   echo "ff-main: fetch did not complete — left alone. git said:"
   printf '%s\n' "$fetch_err" | sed 's/^/  /'
   exit 0
