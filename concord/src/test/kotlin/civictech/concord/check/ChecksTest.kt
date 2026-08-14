@@ -13,6 +13,7 @@ import civictech.concord.oracle.Fx.link
 import civictech.concord.oracle.Fx.list
 import civictech.concord.oracle.Fx.s
 import civictech.concord.oracle.Fx.scenario
+import civictech.concord.schema.ConnectStep
 import civictech.concord.schema.EffectCount
 import civictech.concord.schema.FinalView
 import civictech.concord.schema.IncrementalEqualsBatch
@@ -405,6 +406,55 @@ class ChecksTest {
                 ),
             ),
         )
+    }
+
+    /**
+     * A *partial* derivation is the vacuous pass again (review of computenet-61w).
+     * `srcA` feeds the sink directly, so the derivation resolves; `srcB` feeds it
+     * **through** `mid`, so its adds are not keys this derivation can name. Deriving
+     * `{k1}` and unioning the log would pass while `k9` fired zero times, so the
+     * refusal is stated over the sink's whole upstream cone, not the direct hop.
+     */
+    @Test
+    fun `effect-count without a key refuses when a feed reaches the sink through an intermediate`() {
+        val scen = scenario(
+            cells = listOf(
+                cell("srcA", "set-source"), cell("srcB", "set-source"),
+                cell("mid", "set-view"), cell("sink", "effect-sink"),
+            ),
+            links = listOf(link("srcA", "sink"), link("srcB", "mid"), link("mid", "sink")),
+            script = listOf(apply("srcA", "add", s("k1")), apply("srcB", "add", s("k9"))),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
+    /**
+     * The same partiality reached by topology instead of by graph shape: the
+     * `connect` targets an *upstream* rather than the sink, so a rule keyed on the
+     * sink alone would let `srcB`'s adds go unnamed (review of computenet-61w).
+     */
+    @Test
+    fun `effect-count without a key refuses when a mid-script connect feeds an upstream`() {
+        val scen = scenario(
+            cells = listOf(cell("srcA", "set-source"), cell("srcB", "set-source"), cell("sink", "effect-sink")),
+            links = listOf(link("srcA", "sink")),
+            script = listOf(
+                apply("srcA", "add", s("k1")),
+                ConnectStep(from = "srcB", to = "srcA"),
+                apply("srcB", "add", s("k9")),
+            ),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
     }
 
     // --- wave-plane-unchanged / pages-equal-view (V1C-CONCORD) ---------------

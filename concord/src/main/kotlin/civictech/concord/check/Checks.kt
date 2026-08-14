@@ -360,32 +360,46 @@ object Checks {
      * `effect-sink`, whose every added element is one effect keyed by the element
      * itself; see `KernelDriverDur.EffectSinkCell`). It gives up — `null`, not a
      * partial set — when anything could make the script's adds a poor model of what
-     * reached the sink:
+     * reached the sink. Everything it gives up on is expressed against [sink]'s whole
+     * upstream **cone** (every cell that transitively reaches it), not just the direct
+     * hop, because a *partly* derivable key set is the vacuous pass all over again: a
+     * key fed in through an intermediate is not in the derived set, so an element that
+     * fired zero times on that path is absent from the union and passes over. So:
      * - nothing links into [sink] in the declared graph;
-     * - the topology into [sink] moves mid-script (`connect`/`disconnect`), so which
-     *   adds reached it depends on when;
-     * - [sink] or an upstream is `despawn`ed (its traffic legitimately stops) or
+     * - the topology into the cone moves mid-script (`connect`/`disconnect` whose `to`
+     *   is in it), so which adds reached [sink] depends on when;
+     * - any cell in the cone is `despawn`ed (its traffic legitimately stops) or
      *   `restart`ed (a re-baseline re-announces, so an element may legitimately fire
      *   again);
-     * - an upstream takes an op outside a set-source's `add`/`remove` vocabulary.
+     * - an `apply` targets a cell that is in the cone but *not* a direct upstream, so
+     *   it feeds [sink] through an intermediate this one-hop derivation does not
+     *   model (a `map` re-keys, a `filter` drops, a join pairs);
+     * - a direct upstream takes an op outside a set-source's `add`/`remove` vocabulary.
      *
      * `remove` contributes nothing either way: the effect fired when the element was
      * *added*, and retracting it afterwards neither drives a new one nor unmakes the
      * one already recorded.
      */
     private fun expectedEffectKeys(scenario: Scenario, sink: String): Set<String>? {
-        val upstream = scenario.graph?.links.orEmpty().filter { it.to == sink }.map { it.from }.toSet()
+        val links = scenario.graph?.links.orEmpty()
+        val upstream = links.filter { it.to == sink }.map { it.from }.toSet()
         if (upstream.isEmpty()) return null
-        val involved = upstream + sink
+        // [sink] plus every cell that transitively reaches it. Refusing across the
+        // whole cone rather than the direct hop is what stops a *partial* derivation:
+        // an add on an indirect feeder is not a key this function can name, and
+        // omitting it silently restores the very vacuity this check exists to remove.
+        val cone = mutableSetOf(sink)
+        while (cone.addAll(links.filter { it.to in cone }.map { it.from })) Unit
         val keys = LinkedHashSet<String>()
         for (step in scenario.script) {
             when (step) {
-                is ConnectStep -> if (step.to == sink) return null
-                is DisconnectStep -> if (step.to == sink) return null
-                is DespawnStep -> if (step.on in involved) return null
-                is RestartStep -> if (step.on in involved) return null
+                is ConnectStep -> if (step.to in cone) return null
+                is DisconnectStep -> if (step.to in cone) return null
+                is DespawnStep -> if (step.on in cone) return null
+                is RestartStep -> if (step.on in cone) return null
                 is ApplyStep -> {
-                    if (step.on !in upstream) continue
+                    if (step.on !in cone) continue
+                    if (step.on !in upstream) return null
                     when (step.op) {
                         "add" -> keys += Values.render(step.value ?: return null)
                         "remove" -> Unit
