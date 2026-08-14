@@ -62,6 +62,17 @@
 # which excludes the macOS fresh-JVM 0.83% but NOT the macOS in-process 0.26%
 # (3/1140). 0/780 vs 1/260 is Fisher p = 0.25: these two samples do not establish
 # that Linux is cleaner, they only bound it.
+#
+# GIT-WORKTREE MOUNT GOTCHA (computenet-yj6). Every agent lane in this repo runs
+# from a git worktree (.claude/worktrees/... or a sibling under
+# ../computenet-worktrees/...), so REPO below is routinely a linked worktree, not
+# the main checkout. Under Docker Desktop on macOS, `-v "$REPO:$REPO:ro"` can come
+# up EMPTY in that case; the container then reports a ClassNotFoundException that
+# reads like a classpath bug and is not one -- see worktree-mount.sh for the
+# mitigation (also mount the enclosing checkout) and its limits (a SIBLING
+# worktree isn't covered by that mitigation, since it isn't nested under the main
+# checkout). The preflight below catches that remaining case explicitly instead of
+# letting it surface as a classpath error.
 set -euo pipefail
 
 RUNS="${1:-400}"
@@ -74,12 +85,23 @@ IMAGE="${IMAGE:-groovy:4.0-jdk21}"
 EXPECT_TESTS="${EXPECT_TESTS:-}"
 
 command -v docker >/dev/null || { echo "docker is required and is not on PATH" >&2; exit 1; }
+docker info >/dev/null 2>&1 || { echo "docker is on PATH but its daemon is not reachable (is Docker Desktop running?)" >&2; exit 1; }
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUT="${OUT:-$REPO/build/flake-loop}"
 GRADLE_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 
 mkdir -p "$OUT"
+
+# shellcheck source=./worktree-mount.sh
+source "$SCRIPT_DIR/worktree-mount.sh"
+EXTRA_MOUNTS=()
+ENCLOSING_CHECKOUT="$(resolve_enclosing_checkout "$REPO")"
+if [[ -n "$ENCLOSING_CHECKOUT" ]]; then
+  echo "== \$REPO ($REPO) is a linked worktree; also mounting its main checkout ($ENCLOSING_CHECKOUT) =="
+  EXTRA_MOUNTS=(-v "$ENCLOSING_CHECKOUT:$ENCLOSING_CHECKOUT:ro")
+fi
 
 if [[ -z "${CP:-}" ]]; then
   echo "== building :wire test classes on the host =="
@@ -103,11 +125,31 @@ if [[ -n "$EXPECT_TESTS" ]]; then
   EXPECT_ARGS=(--expect-tests "$EXPECT_TESTS")
 fi
 
+echo "== verifying the \$REPO mount is populated inside the container =="
+if ! docker run --rm -v "$REPO:$REPO:ro" "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}" "$IMAGE" \
+      test -f "$REPO/settings.gradle.kts"; then
+  cat >&2 <<EOF
+error: $REPO came up empty (or missing settings.gradle.kts) inside $IMAGE.
+
+This is the git-worktree mount gotcha (computenet-yj6), not a classpath
+problem: Docker Desktop's file sharing can come up empty for
+"-v \$REPO:\$REPO:ro" when \$REPO is a linked git worktree. This run already
+tried mounting the enclosing checkout automatically${ENCLOSING_CHECKOUT:+" ($ENCLOSING_CHECKOUT)"}; if it still
+fails, \$REPO is likely a SIBLING of its main checkout (e.g.
+../computenet-worktrees/<id>) rather than nested under it, which that
+mitigation cannot reach. There is no known automatic fix for that layout --
+rerun from the main checkout itself, or mount \$REPO's actual enclosing
+directory manually with a modified -v argument.
+EOF
+  exit 1
+fi
+
 echo "== running $RUNS iterations of the civictech.wire suite in $IMAGE =="
 # Only the dependency cache is mounted, not all of $GRADLE_HOME: gradle.properties there
 # can hold credentials, and the container needs nothing but the jars on $CP.
 exec docker run --rm \
   -v "$REPO:$REPO:ro" \
+  "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}" \
   -v "$GRADLE_HOME/caches:$GRADLE_HOME/caches:ro" \
   -v "$OUT:/evidence" \
   -w "$REPO" \
