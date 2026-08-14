@@ -157,19 +157,28 @@ class WsConnectRaceTest {
         val dialer = start("connect-race-dialer", { dialed.completeExceptionally(it) }) {
             // `connect` seats this callback in exactly two places, and the running
             // thread tells them apart without depending on a thread name:
-            // `awaitReachable`'s catch block runs on *this* thread, while the
+            // `awaitReachable`'s loop runs on *this* thread, while the
             // post-open reconnect loop runs on a thread `scheduleReconnect` spawns.
             // So the same callback reports both the stimulus and, on failure, the
             // fact that the dialled socket was closed rather than merely silent.
             val self = Thread.currentThread()
-            // near-zero backoff: bounded by retry scheduling, not sleep. The
-            // callback runs only after a probe has failed, which is the
-            // "listener is not up yet" stimulus this test is about.
+            // near-zero backoff: bounded by retry scheduling, not sleep.
+            //
+            // `attempt >= 1` is what makes this the stimulus (computenet-auq).
+            // Since the probe's connect timeout is derived from the schedule,
+            // `awaitReachable` consults the schedule *before* each dial rather
+            // than after each failure — so attempt 0 arrives before any probe has
+            // run and says nothing about whether the port answers. Counting the
+            // latch down on it would release the listener's bind before the first
+            // probe and silently retire the "listener is not up yet" race this
+            // test exists for, and would report a refusal that never happened.
             dialed.complete(
-                WsTransport.connect(URI("ws://localhost:$port"), client.side) {
+                WsTransport.connect(URI("ws://localhost:$port"), client.side) { attempt ->
                     if (Thread.currentThread() === self) {
-                        evidence.probeRefused()
-                        probeFailed.countDown()
+                        if (attempt >= 1) {
+                            evidence.probeRefused()
+                            probeFailed.countDown()
+                        }
                     } else {
                         evidence.dialledSocketClosed()
                     }
