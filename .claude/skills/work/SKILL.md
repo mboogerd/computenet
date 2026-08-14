@@ -552,6 +552,54 @@ Every selection below skips a feature whose `parked_at` is **within the last
 letting a stale one be retried. Clear it (`--set-metadata parked_at=`) when a
 feature does progress again.
 
+**Re-triage the epic's human-parked items — once, on the first pass through
+step 5, before any selection query below.** Step 4's distinction applies:
+these are `ask-human.md`'s parks (`blocked` + `human` label + `assignee=human`
++ a `QUESTION:` comment), *not* `parked_at`. Nothing else in this skill ever
+reads one again — `bd ready` drops them by status, and `bd blocked` lists only
+items blocked by an open **dependency edge**, which a hand-set status has
+none of. So they rot after their blocker is gone (computenet-6i1: one epic
+held 4 parked items, 3 of them finishable, against 2 ready ones):
+
+```bash
+bd list --parent=<epic> --status=blocked --json | jq -r '.[] | "\(.id)\t\(.title)"'
+```
+
+**Once per session, not per loop.** Parks appear mid-session only by your own
+hand, and a `bd comments` read per parked item on every trip through step 5
+is exactly the cost that gets an instruction skipped. Do it, note the result,
+don't re-run it.
+
+For each id, read the `QUESTION:` comment — and read it the only way that
+works, since `bd show --json` carries `comment_count` and never bodies:
+
+```bash
+bd comments <id> --json > "$SCRATCH/parked-<id>.json"   # then read the FILE
+```
+
+A good park names its blocker *and* its unblocking condition, so this is one
+read and a yes/no. **Unpark only on observable evidence that the condition is
+met**:
+
+- a human answered in the comment thread (`bd human respond` lands the answer
+  there) — the strongest signal, and the only one that settles a park whose
+  condition was a *decision*;
+- the named PR is merged, the named bead is closed, the named secret/setting
+  now exists — check it, don't assume;
+- the item was superseded → `bd close` it with the reason, don't work it.
+
+Nothing else licenses an unpark. Elapsed time, the question reading stale, or
+your own view that the answer is obvious are **not** evidence: it was parked
+precisely because an unattended session may not make that call. Unclear →
+leave it parked. Unpark with `bd update <id> --status=open` (ask-human.md);
+drop a leftover `human` label too (`--remove-label=human`), or the filters
+below will skip it again. Then it flows into the ordinary queries.
+
+The 6h `parked_at` window above does **not** apply here — that governs this
+session's own feature-level parks, to stop it retrying them immediately.
+These are cross-session and human-gated, often days old, and are re-triaged
+on age-independent evidence.
+
 A resumed feature carrying `metadata.review=passed` was already reviewed and
 marked ready last session; it just hadn't merged yet. Re-check its PR
 (`gh pr view <pr> --json state -q .state`) — `MERGED` → `bd close` it and
