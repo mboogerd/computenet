@@ -134,19 +134,28 @@ class ProtocolSupportRetentionTest {
      * strong reference to its port is exactly what is under test here, and this
      * is the one arm in the file where a frame local is correct rather than a
      * bug.
+     *
+     * The support, by contrast, is held only through a [WeakReference] minted in
+     * another frame, and that is what gives the arm its teeth: while the arm
+     * held a strong `support` local it passed against the pre-fix code, against
+     * the fix, *and* against the weak-value shape alike, so it decided nothing
+     * (measured in review, 2026-08-14). Held weakly it fails under the weak-value
+     * shape — `handles` comes back false, because the support was reachable only
+     * from the map and nothing re-registers: `FanInlet.onEdgeEvent` installs its
+     * `TopologyOrder` handler only while `edgeObservers` is still empty.
      */
     @Test
     fun `a live port's protocol handlers survive collection`() {
         val cell = SelfServingCell()
         val edges = mutableListOf<EdgeEvent>()
         cell.inlet.onEdgeEvent { _, event -> edges += event }
-        val support = ProtocolSupport.of(cell.inlet)
+        val support = weakSupportOf(cell.inlet)
 
         collect()
 
-        ProtocolSupport.of(cell.inlet) shouldBeSameInstanceAs support
-        support.handles(Protocols.TopologyOrder) shouldBe true
-        support.deliver(Protocols.TopologyOrder, fakeLink(cell.inlet.ref), EdgeOpen)
+        ProtocolSupport.of(cell.inlet).handles(Protocols.TopologyOrder) shouldBe true
+        ProtocolSupport.of(cell.inlet) shouldBeSameInstanceAs support.get()
+        ProtocolSupport.of(cell.inlet).deliver(Protocols.TopologyOrder, fakeLink(cell.inlet.ref), EdgeOpen)
         edges shouldBe listOf(EdgeOpen)
     }
 
@@ -185,6 +194,14 @@ class ProtocolSupportRetentionTest {
         if (observeEdges) cell.inlet.onEdgeEvent { _, _ -> }
         return WeakReference(cell)
     }
+
+    /**
+     * Acquires [port]'s support in a frame of its own and returns only a
+     * [WeakReference] to it — see the arm above for why holding it strongly
+     * disarms that arm.
+     */
+    private fun weakSupportOf(port: civictech.cell.port.Port): WeakReference<ProtocolSupport> =
+        WeakReference(ProtocolSupport.of(port))
 
     private fun fakeLink(to: PortRef): Link = object : Link {
         override val id: UUID = UUID.randomUUID()
