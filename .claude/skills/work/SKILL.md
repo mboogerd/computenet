@@ -665,7 +665,11 @@ attach the same way, and all three read `metadata.branch`:
 # and shell state does not survive between calls — an empty "$BR" reaches
 # ensure-worktree.sh's ${3:-origin/main} as "unset" and silently cuts from
 # origin/main, and git -C "" silently operates on the MAIN CHECKOUT.
-bd show <feature-id> --json | jq -r '.[0] | "\(.metadata.branch) \(.metadata.worktree)"'
+bd show <feature-id> --json | jq -r '.[0].metadata.branch'      # = <branch>
+# <worktree> = $PWD/../computenet-worktrees/$(basename <branch>) — RECOMPUTED
+# locally. Never metadata.worktree: it may be the other machine's path, and on
+# this queue it is (computenet-dqy.65/.69 both record /Users/MerlijnB/...),
+# which makes ensure-worktree.sh die on "mkdir: Permission denied".
 
 .claude/skills/work/scripts/ensure-worktree.sh <worktree> <branch> origin/main
 
