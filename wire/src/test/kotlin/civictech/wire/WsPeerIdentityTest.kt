@@ -78,6 +78,35 @@ class WsPeerIdentityTest {
     // so retry loops multiplied for as long as the listener was down. See
     // `WsReconnectLoopBoundTest`, which asserts the bound directly, and `WsConnection`'s
     // `reconnecting` guard, which is the fix.
+    //
+    // ## computenet-pvs, closed on evidence rather than on a further change
+    //
+    // The bead reported this test as a `build-test-fast` flake and proposed hardening the
+    // rebind. Its CI history turned out to carry TWO distinct signatures, each already
+    // answered by work that landed after the report, so nothing here needed changing:
+    //
+    //   - `AssertionFailedError: timed out awaiting: re-announced after reconnect`
+    //     (run 31278665961, 2026-08-08, against the then-5s deadline) — the dialer
+    //     starvation described above. Fixed by `WsConnection`'s `reconnecting` guard
+    //     (computenet-8ru); `WsReconnectLoopBoundTest` is the standing regression gate.
+    //   - `IllegalStateException: could not re-bind port <n> after 20 attempts`
+    //     (runs 31452734430 and 31457374208, both 2026-08-11) — thrown from this class's
+    //     own `relisten` helper. computenet-dqy.22 DELETED that helper along with the
+    //     close-then-rebind it wrapped: the port is now never unbound (`HeldPort`), so
+    //     that throw site no longer exists to be reached. This is a structural argument,
+    //     not a rate.
+    //
+    // Measured after both landed: no CI failure of this class in any `CI` run since
+    // computenet-dqy.22 merged (2026-08-12) — every `CI` failure in that window is another
+    // test — and 0 occurrences of this class in 200 in-process `civictech.wire` suite
+    // iterations on darwin/arm64 (`scripts/flake-loop`, `SUMMARY label=pvs-local runs=200
+    // failingIterations=8 failingTests=8 expectedTests=26 unexpectedTestCountIterations=0`;
+    // all eight failures were `WsAnnouncementSilenceInventoryTest`, filed as
+    // computenet-dqy.67, and none were here). 0/200 bounds this class's per-iteration rate
+    // at <= 1.5% (rule of three, 95%) on that platform only: Linux was NOT sampled, and
+    // `.github/workflows/wire-suite-sample.yml` is the instrument if an ubuntu rate is ever
+    // wanted. NOTE the bead also cited run 31278760922 as a second occurrence here — it is
+    // not one: that run failed on `InspectorPagedStateTest` and this class passed in it.
     private fun await(what: String, timeoutMs: Long = 30_000, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition()) {
