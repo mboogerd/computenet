@@ -122,12 +122,59 @@ and nothing happened" are the same sentence unless you read further.
 What to consume, per test run:
 
 - **The task-count line.** Gradle prints
-  `N actionable tasks: X executed, Y from cache` (or `up-to-date`). Read it,
-  and confirm the *specific* test task you care about is not marked
-  `FROM-CACHE` or `UP-TO-DATE` in the run's task output. `gh pr checks`
-  reports a conclusion and a duration with no cache information at all, so a
-  green required check on a diff that touches no compiled input is evidence of
-  nothing.
+  `N actionable tasks: X executed, Y from cache` (or `up-to-date`) at the end
+  of the run — measured 2026-08-14 in this worktree, it is the **last** line
+  under `--no-configuration-cache` and the second-to-last in the default mode,
+  where `Configuration cache entry reused.` follows it. `tail -3` catches it
+  in both; don't hard-code a line offset.
+  `gh pr checks` reports a conclusion and a duration with
+  no cache information at all, so a green required check on a diff that
+  touches no compiled input is evidence of nothing.
+- **The per-task state line — read it as an *absence*, and keep the log that
+  carries it.** This build *does* print `> Task :<module>:test` at the default
+  log level, but the check is not a grep for the markers: **a task that really
+  executed prints with no marker at all.** So `grep FROM-CACHE` / `grep
+  UP-TO-DATE` returns nothing both when the task ran and when the build never
+  printed task lines, and those two are the opposite conclusion. Grep for the
+  *task*, then look at what follows it — there are four states an agent can
+  see, and only two of them carry a marker. Measured 2026-08-14 in this
+  worktree, four invocations of the same command:
+
+  ```bash
+  # Capture the whole run. Never `| tail -N` (see below), never -q.
+  ./gradlew :kernel:test --tests 'civictech.cell.FifoOrderTest' > "$SCRATCH/run.log" 2>&1
+  grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
+  ```
+
+  | run | grep result | task-count line |
+  | --- | --- | --- |
+  | 1, cold | `> Task :kernel:test` (no marker) | `26 actionable tasks: 8 executed, 3 from cache, 15 up-to-date` |
+  | 2, repeat | `> Task :kernel:test UP-TO-DATE` | `17 actionable tasks: 17 up-to-date` |
+  | 3, `--rerun` | `> Task :kernel:test` (no marker) | `26 actionable tasks: 1 executed, 25 up-to-date` |
+  | 4, outputs deleted, cache hit | `> Task :kernel:test FROM-CACHE` | `17 actionable tasks: 2 from cache, 15 up-to-date` |
+
+  The fourth state is **no line at all** — the task was never in the graph, or
+  the log lost it. That is the one the marker grep cannot distinguish from a
+  real execution, and it is why you grep for the task rather than the marker.
+  (Run 4 was provoked with `rm -rf kernel/build/test-results/test
+  kernel/build/classes/kotlin/test`; `org.gradle.caching=true` in
+  `gradle.properties` is what makes `FROM-CACHE` reachable at all.)
+
+  Two habits destroy that line, and both leave the *aggregate* line intact so
+  the run still looks verifiable:
+
+  - **`| tail -N`.** Measured 2026-08-14: `./gradlew testClasses` printed 178
+    lines with `> Task :kernel:testClasses UP-TO-DATE` at line 90 — 88 lines
+    above the end, so the near-universal `| tail -30` drops it and keeps
+    `BUILD SUCCESSFUL`. Redirect to a file and grep it.
+  - **`-q`.** Measured 2026-08-14: `./gradlew -q :gen:test --tests '…'`
+    printed **zero** `Task :` lines, no task-count line, and no
+    `BUILD SUCCESSFUL` — nothing to verify from at all.
+
+  If you only have a truncated log, do not claim the per-task check. Fall back
+  to the task-count line plus the JUnit XML timestamp below, which together
+  prove the module's tests ran in *this* invocation — or re-run with `--rerun`
+  and make the question moot.
 - **The JUnit XML**, which carries the counts and a timestamp proving the
   results are from *this* run:
 
@@ -169,7 +216,12 @@ What to consume, per test run:
   was a year old when that figure was taken. The snippet prints only the
   *newest* timestamp, so one fresh module hides fourteen stale ones. If
   `newest` is not from minutes ago, nothing here ran; and a run you cannot
-  date is not a verification record. The npm UI suites (`inspect/ui`,
+  date is not a verification record. Measured 2026-08-14 across the three runs
+  above: run 1 left `newest 2026-08-14T12:40:26.685Z`, the cached run 2 left
+  that timestamp **unchanged** while still printing `BUILD SUCCESSFUL`, and
+  the `--rerun` run 3 advanced it to `2026-08-14T12:40:45.016Z`. Counts were
+  identical (`1 tests, 0 failures, 0 errors`) in all three — the timestamp,
+  not the count, is what separates a real run from a replay. The npm UI suites (`inspect/ui`,
   `demo/agora/ui`, i.e. the `ui-test` and `agora-ui-test` checks) emit no
   JUnit XML at all and are invisible to this snippet — their absence is not a
   wrong glob.
