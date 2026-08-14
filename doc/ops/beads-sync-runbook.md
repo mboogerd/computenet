@@ -329,18 +329,24 @@ The `SET` clause is generated per-database from `information_schema.columns`
 > already-diverged pair of databases can still carry a collision minted before
 > that fix.
 
-Each id the pre-step prints is settled as follows, **before** the
-last-write-wins `UPDATE` runs at all. The rule is that **the remote side keeps
-the colliding id** and the local side is re-filed: the remote copy is already
-published and may be referenced by other machines, while the local one is
-unpushed by construction. Never resolve a collision by deleting a row — a
-local `bd delete` pushes as a deletion of the *other* machine's issue.
+**Take every id the pre-step printed as one batch**, and settle the whole
+batch in a single merge cycle, **before** the last-write-wins `UPDATE` runs at
+all. Do not loop the steps below per id: nothing is committed until the final
+`dolt commit -am`, so a second abort would discard the settles already made in
+this cycle and the procedure would never converge. (The 2026-08-14 incident had
+three colliding ids — `computenet-wpvy.40`, `.41`, `.42` — carrying six
+different beads.) The rule is that **the remote side keeps the colliding id**
+and the local side is re-filed: the remote copy is already published and may be
+referenced by other machines, while the local one is unpushed by construction.
+Never resolve a collision by deleting a row — a local `bd delete` pushes as a
+deletion of the *other* machine's issue.
 
-1. Record both sides before touching anything:
+1. Record both sides of every printed id before touching anything:
    ```bash
-   dolt sql -r json -q "select * from dolt_conflicts_issues where our_id = '<id>';" > /tmp/collision-<id>.json
+   dolt sql -r json -q "select * from dolt_conflicts_issues \
+                        where our_id in ('<id1>','<id2>', …);" > /tmp/collisions.json
    ```
-2. Abort the merge, so `bd` runs against a clean working set:
+2. Abort the merge **once**, so `bd` runs against a clean working set:
    ```bash
    dolt sql -q "call dolt_merge('--abort');"
    ```
@@ -348,25 +354,29 @@ local `bd delete` pushes as a deletion of the *other* machine's issue.
    unresolved conflicts and `dolt_allow_commit_conflicts` set has **not** been
    established; aborting first, re-filing, then re-merging is the safe order,
    not a measured fact.
-3. Re-file the LOCAL side's content under a fresh id: `bd create` it
-   unparented, so it takes a hash id and leaves the child counter alone, then
+3. Re-file the LOCAL side of **each** collision under a fresh id, all of them
+   now while the working set is clean: `bd create` it unparented, so it takes a
+   hash id and leaves the child counter alone, then
    `bd update <new-id> --parent <parent>` to re-parent it. That is how
    `computenet-szdd` was split out of the `.40` collision.
-4. Re-run the merge (the `dolt fetch` and `dolt_merge('--no-commit', …)` lines
-   above). The colliding id conflicts again — the working-set row still holds
-   the local content — so settle that one row by taking theirs unconditionally,
-   using the same generated `SET` clause and no `updated_at` predicate (the
-   remote wins by the rule above, not by recency):
+4. Re-run the merge **once** (the `dolt fetch` and `dolt_merge('--no-commit', …)`
+   lines above). Every colliding id conflicts again — the working-set rows still
+   hold the local content — so settle them all in this one cycle by taking
+   theirs unconditionally, using the same generated `SET` clause and no
+   `updated_at` predicate (the remote wins by the rule above, not by recency):
    ```sql
    set @@dolt_allow_commit_conflicts = 1;
    UPDATE issues i JOIN dolt_conflicts_issues c ON i.id = c.our_id
    SET <generated from information_schema.columns>
-   WHERE c.our_id = '<id>';
-   DELETE FROM dolt_conflicts_issues WHERE our_id = '<id>';
+   WHERE c.our_id in ('<id1>','<id2>', …);
+   DELETE FROM dolt_conflicts_issues WHERE our_id in ('<id1>','<id2>', …);
    ```
-5. Re-run the pre-step query. It must now return zero rows — the re-filed bead
-   is a new, unconflicted row, and the colliding row's two sides agree. Only
-   then run the last-write-wins `UPDATE` over what remains.
+5. Re-run the pre-step query. It must now return zero rows — the re-filed beads
+   are new, unconflicted rows, and every colliding row's two sides agree. If it
+   still prints something, an id was missed in step 4's list: extend the list
+   and repeat step 4 in this same merge cycle. Do **not** abort, and do **not**
+   proceed while it is non-empty. Once it is empty, run the last-write-wins
+   `UPDATE` over what remains.
 
 The gate on `our_diff_type` / `their_diff_type` keeps the pre-step to
 modify/modify rows, which is the shape a collision takes. Without it a
