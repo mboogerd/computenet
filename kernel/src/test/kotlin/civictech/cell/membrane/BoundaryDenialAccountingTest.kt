@@ -53,14 +53,18 @@ private class AccountedMembrane(
  * `[SEC1-29]`/BS-14), realization (B): a narrow sink, not a thrown
  * `BoundaryDenied` — rationale in `civictech.cell.BoundaryDenials`' KDoc.
  *
- * These tests drive the sink **directly**, which is the point: at this task
- * the three flow-time denial sites (`MediateProxy.verifyOrDrop`,
- * `DisclosurePolicy.asDeltaFilter`, `protocolAuthority.asProtocolFilter`) and
- * seam 2 still return null / reject exactly as before, and sibling tasks
- * `computenet-usd.1.2`..`.1.5` adopt them one by one. What is asserted here is
- * the seam's contract those adoptions will inherit: sanitization is
+ * These tests drive the sink **directly** — deliberately bypassing the three
+ * flow-time call sites and seam 2 — so what is asserted here is the seam's
+ * own contract, independent of any one adopter: sanitization is
  * `DeadLetters`' spec-23-R8 rule *reused*, the per-boundary counter is
- * monotonic and test-readable, and a denial is not a cell fault.
+ * monotonic and test-readable, and a denial is not a cell fault. That
+ * independence is also why this class's own coverage was never at risk of
+ * going stale as adopters landed: unlike this doc comment, which drifted —
+ * by `computenet-usd.1.3` (the last adopter) all three flow-time sites
+ * (`MediateProxy.verifyOrDrop`, `DisclosurePolicy.asDeltaFilter`,
+ * `protocolAuthority.asProtocolFilter`) and seam 2 (`installLinkAuthority`)
+ * account every refusal; none still returns null / rejects unaccounted.
+ * `BoundaryPolicyTest` is where each adopted seam is exercised end to end.
  */
 class BoundaryDenialAccountingTest {
 

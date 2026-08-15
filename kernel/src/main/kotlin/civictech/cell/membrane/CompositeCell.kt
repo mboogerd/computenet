@@ -396,14 +396,18 @@ private fun BoundaryDenialSink.denyDisclosure(
  * and assumes nothing (93 I-28 §4.2, "Local crossings carry `LocalTrusted`
  * and every predicate is a no-op").
  *
- * [denials] is this exposure's accounting sink, threaded in and deliberately
- * **not yet consulted**: this task builds the seam only, so the `minAuth` and
- * `ratePerWindow` branches keep returning null exactly as before. Accounting
- * them (`MIN_AUTH` / per-`Principal` `RATE`) is sibling task
- * `computenet-usd.1.3`. The `ceiling` branch never becomes a denial site — a
- * clamp is not a refusal (30/34 decision 6, BS-10).
+ * [denials] is this exposure's accounting sink: the `minAuth` and
+ * `ratePerWindow` branches each account their refusal (`MIN_AUTH` / `RATE`,
+ * naming the [ProtocolId] as `subject` and the refused [Principal.Peer.id] as
+ * `principal`) before returning null, so neither is a silent drop
+ * (`[SEC1-13][SEC1-14][SEC1-16]`). Rate is counted **per-`Principal`**: the
+ * `(ProtocolId, Principal)`-keyed window count already isolates one peer's
+ * count from another's, so accounting inherits that isolation for free —
+ * throttling one principal's crossings never records against, or moves the
+ * counter for, another's (BS-11). The `ceiling` branch never becomes a denial
+ * site — a clamp is not a refusal (30/34 decision 6, BS-10): it returns a
+ * clamped message with no call into [denials] and no counter movement.
  */
-@Suppress("UNUSED_PARAMETER")
 private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
     denials: BoundaryDenialSink,
 ): (ProtocolId, Any) -> Any? {
@@ -413,12 +417,30 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
         val principal = currentPrincipal()
         if (principal == Principal.LocalTrusted) return@filter message
         val peer = principal as Principal.Peer
-        if (peer.auth < authority.minAuth) return@filter null
+        if (peer.auth < authority.minAuth) {
+            denials.denyProtocol(
+                DenialReason.MIN_AUTH,
+                id,
+                peer.id,
+                detail = "auth=${peer.auth} < minAuth=${authority.minAuth}",
+                message = message,
+            )
+            return@filter null
+        }
         authority.ratePerWindow?.let { limit ->
             val key = id to principal
             val next = (counts[key] ?: 0) + 1
             counts[key] = next
-            if (next > limit) return@filter null
+            if (next > limit) {
+                denials.denyProtocol(
+                    DenialReason.RATE,
+                    id,
+                    peer.id,
+                    detail = "count=$next > ratePerWindow=$limit",
+                    message = message,
+                )
+                return@filter null
+            }
         }
         if (id == Protocols.Attention && authority.ceiling != null && message is Attention) {
             // preserve the emitter's version: this is the same LWW update, only clamped
@@ -426,4 +448,31 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
         }
         message
     }
+}
+
+/**
+ * Accounts one refused `PORT_PROTOCOL` frame (seam 3 `protocolAuthority`) —
+ * the single call shape both the `minAuth` and `ratePerWindow` branches of
+ * [asProtocolFilter] use, so the record's fields cannot drift between them.
+ * [message] rides as the sole [BoundaryDenialSink.deny] `deniedArgs` entry —
+ * a metadata-plane frame, never an [civictech.cell.Owned]/[civictech.cell.Leased]
+ * exclusive (protocol messages are plain payloads, unlike `PORT_API`
+ * arguments; feature `computenet-usd.2`'s exclusive-discharge concerns do not
+ * apply at this seam).
+ */
+private fun BoundaryDenialSink.denyProtocol(
+    reason: DenialReason,
+    id: ProtocolId,
+    principal: PeerId,
+    detail: String,
+    message: Any,
+) {
+    deny(
+        seam = BoundarySeam.PROTOCOL_AUTHORITY,
+        reason = reason,
+        principal = principal,
+        subject = id.name,
+        detail = detail,
+        deniedArgs = listOf(message),
+    )
 }

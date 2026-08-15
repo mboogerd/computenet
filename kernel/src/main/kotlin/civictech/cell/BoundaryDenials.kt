@@ -124,7 +124,23 @@ data class BoundaryDenial(
      * refusal turned on rides in [detail].
      */
     val principal: PeerId?,
-    /** `ProtocolId.name` for a protocol refusal, `contract#method` for an API one; null where neither applies. */
+    /**
+     * What was refused, named per seam — the three seams that carry a
+     * subject at all disagree on its shape, so this is not one convention:
+     *
+     * - seam 3 `PORT_PROTOCOL` (`protocolAuthority`, `MIN_AUTH`/`RATE`):
+     *   `ProtocolId.name`.
+     * - seam 3 `PORT_API` inbound (`integrity`, [civictech.cell.membrane.MediateProxy]):
+     *   `contract#method` — the reflective `Method` is in scope at that seam.
+     * - seam 3 `PORT_API` outbound (`disclosure`,
+     *   [civictech.cell.membrane.DisclosurePolicy]): the contract's simple
+     *   name **alone**, with no method — [civictech.cell.port.FanOutlet]'s
+     *   `disclosureFilter` hot-path signature is arguments-only, and widening
+     *   it to also carry a `Method` was declined as disproportionate to an
+     *   audit field (`computenet-usd.1.4`).
+     * - seam 2 `onLink` (`linkAuthority`): always `null` — a link rejection
+     *   has no protocol/contract subject to name.
+     */
     val subject: String?,
     val reason: DenialReason,
     /** Free-text specifics for the audit trail (the observed counter, the offending `AuthLevel`, the refusing policy). */
