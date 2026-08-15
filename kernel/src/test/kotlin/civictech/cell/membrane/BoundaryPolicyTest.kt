@@ -187,9 +187,10 @@ class BoundaryPolicyTest {
     }
 
     @Test
-    fun `attention ceiling clamps an asserted level before local handling`() {
+    fun `BS-10 attention ceiling clamps an asserted level and emits no denial record or counter movement`() {
         val controller = SimulationController(seed = 12)
         val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
 
         val membrane = AttentionCeilingMembrane(ceiling = AttentionBand.LOW)
         val membraneRef = host.managementInlet.call.spawn(membrane)
@@ -206,6 +207,9 @@ class BoundaryPolicyTest {
             observed += message as Attention
         }
 
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 0L
+
         // A REMOTE consumer asserts HIGH interest upstream (CurrentPeer
         // simulates the bridge-ingress stamp, G-29 phase 1); the boundary's
         // ceiling (LOW) MUST clamp it before this outlet's own handling sees
@@ -218,12 +222,17 @@ class BoundaryPolicyTest {
         controller.runToIdle()
 
         observed shouldBe listOf(Attention(AttentionBand.LOW.level))
+        // computenet-usd.1.3: a clamp is not a denial (30/34 decision 6) — no
+        // record, no counter movement, no dead letter.
+        sink.denialCount shouldBe 0L
+        letters shouldBe emptyList()
     }
 
     @Test
-    fun `remote attention below the protocol floor is refused, not merely unclamped`() {
+    fun `remote attention below the protocol floor is refused before any handler runs, with one MIN_AUTH denial record`() {
         val controller = SimulationController(seed = 13)
         val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
 
         val organelle = SetCell<String>()
         val membrane = object : CompositeCell() {
@@ -239,6 +248,9 @@ class BoundaryPolicyTest {
             )
         }
         val membraneRef = host.managementInlet.call.spawn(membrane)
+        // RESTART, so BS-14 ("a denial is not a fault") is a real check here
+        // too, rather than a vacuous one.
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
         val collector = DeltaCollector()
         val collectorRef = host.managementInlet.call.spawn(collector)
         val link = (
@@ -258,7 +270,107 @@ class BoundaryPolicyTest {
         }
         controller.runToIdle()
 
+        // Refused before any handler runs — this exposure's own attention
+        // handler never sees it.
         observed shouldBe emptyList()
+
+        // computenet-usd.1.3: the minAuth refusal is accounted, not a silent
+        // drop ([SEC1-13][SEC1-14][SEC1-16]).
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        val letter = letters.single()
+        letter.cause shouldBe null
+        letter.description shouldContain "exposedOutlet"
+        letter.description shouldContain "remote-consumer"
+        letter.description shouldContain "MIN_AUTH"
+        letter.description shouldContain Protocols.Attention.name
+
+        // BS-14: not a fault.
+        host.supervisionAccounting().restarts shouldBe 0L
+        letter.invocation!!.invocation.context shouldBe null
+    }
+
+    @Test
+    fun `BS-11 rate refusal is accounted per-Principal - alice over the window is denied, bob is unaffected`() {
+        // computenet-usd.1.3: protocolAuthority.asProtocolFilter's
+        // ratePerWindow branch is now accounted (reason=RATE, subject the
+        // ProtocolId, principal the refused Peer.id). Rate is counted per
+        // (ProtocolId, Principal) — alice's window never touches bob's count
+        // or names him in a record ([SEC1-13][SEC1-14][SEC1-16]).
+        val controller = SimulationController(seed = 21)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val organelle = SetCell<String>()
+        val membrane = object : CompositeCell() {
+            val exposedOutlet = mediateOutlet(
+                "exposedOutlet",
+                "outlet",
+                organelle.outlet,
+                policy = BoundaryPolicy(
+                    protocolAuthority = mapOf(
+                        Protocols.Attention to ProtocolAuthority(ratePerWindow = 2),
+                    ),
+                ),
+            )
+        }
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        // RESTART, so BS-14 is a real check here too, not a vacuous one.
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+        val link = (
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+                as LinkResult.Connected
+            ).link
+
+        // Distinguish alice's/bob's delivered frames by version, since the
+        // handler itself does not see the principal.
+        val observedVersions = mutableListOf<Long>()
+        ProtocolSupport.of(membrane.exposedOutlet).handle(Protocols.Attention) { _, message ->
+            observedVersions += (message as Attention).version
+        }
+
+        val alice = PeerId("alice")
+        val bob = PeerId("bob")
+        fun sendAs(peer: PeerId, version: Long) {
+            CurrentPeer.with(peer) {
+                Protocols.sendUpstream(link, Protocols.Attention, Attention(AttentionBand.HIGH.level, version))
+            }
+        }
+
+        // alice sends k+2 = 4 frames, bob sends k = 2 — interleaved, so a
+        // shared (not per-Principal) counter would wrongly refuse bob's
+        // second frame too.
+        sendAs(alice, 1)
+        sendAs(bob, 101)
+        sendAs(alice, 2)
+        sendAs(bob, 102)
+        sendAs(alice, 3)
+        sendAs(alice, 4)
+        controller.runToIdle()
+
+        // alice's first two (at/under the window) delivered, last two
+        // refused; both of bob's delivered.
+        observedVersions.toSet() shouldBe setOf(1L, 2L, 101L, 102L)
+
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 2L
+        letters.size shouldBe 2
+        letters.forEach { letter ->
+            letter.cause shouldBe null
+            letter.description shouldContain "exposedOutlet"
+            letter.description shouldContain "alice"
+            letter.description shouldContain "RATE"
+            letter.description shouldContain Protocols.Attention.name
+            // BS-14 arm: no wave minted or advanced by reporting a refusal.
+            letter.invocation!!.invocation.context shouldBe null
+        }
+        letters.none { it.description.contains("bob") } shouldBe true
+
+        // BS-14: not a fault.
+        host.supervisionAccounting().restarts shouldBe 0L
     }
 
     @Test
