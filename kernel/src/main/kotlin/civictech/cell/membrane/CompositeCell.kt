@@ -143,6 +143,15 @@ abstract class CompositeCell(
      * ticket ships instead. Coupling gates (Symport/Antiport) are not
      * wired here (G-53, research-gated liveness) — this proxy is a
      * transparent forward only, beyond the [policy] it now evaluates.
+     *
+     * **[externalName] must be spelled exactly like the property this call's
+     * result is assigned to** (G-17, [registerPort]): KSP scans the
+     * *property name*, not this string literal, to build the cell's
+     * descriptor, while [registerPort] indexes the port under [externalName].
+     * A mismatch compiles cleanly and only surfaces at `host.spawn`, e.g.
+     * `val exposed = mediate("exposedInlet", ...)` fails with `descriptor
+     * declares ports [exposed] not found in registry [exposedInlet] —
+     * registerPort's name must equal the property name (G-17)`.
      */
     protected fun <Api : Any> mediate(
         externalName: String,
@@ -219,6 +228,12 @@ abstract class CompositeCell(
      * [FanOutlet.observe] (which is handed no payload). For those, `disclosure`
      * remains the flow-time backstop; promotion is re-authorized at its own
      * PRECHECK gate, since COMMIT is documented non-vetoing.
+     *
+     * **[externalName] must be spelled exactly like the property this call's
+     * result is assigned to** (G-17, [registerPort]) — the same trap as
+     * [mediate]'s: KSP scans the property name to build the descriptor, this
+     * registers under [externalName], and a mismatch compiles but only fails
+     * at `host.spawn` (see [mediate]'s KDoc for the exact failure message).
      */
     protected fun <Api : Any> mediateOutlet(
         externalName: String,
