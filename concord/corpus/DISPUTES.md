@@ -595,7 +595,8 @@ rather than by finding a way to dedup it — a contextless `PORT_API` invocation
 undeliverable at an `Effectful` inlet (`[24-DUR-06]`, spec 24 §Effectful), so past
 that refusal every frame the sink acts on has a `(sourceId, counter)` position and
 `[24-DUR-05]`'s antecedent is evaluable for all of them. The entry as filed is kept
-verbatim below, because two of its claims are load-bearing elsewhere (the corrected
+below — verbatim apart from its closing `**Resolves**` bullet, which is rewritten in
+place — because two of its claims are load-bearing elsewhere (the corrected
 stamping argument, and the extent of the limit) and because the *reason* the guard
 could not close it from inside is exactly why the closure had to change shape.
 
@@ -643,7 +644,10 @@ original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`
 
 ---
 
-*The entry as originally filed follows, unedited.*
+*The entry as originally filed follows, unedited — except its closing
+`**Resolves**` bullet, which is rewritten in place as `**Resolved by**` plus a
+`**Follow-up**` bullet, since a forward-looking pointer that has been resolved
+would otherwise still read as outstanding work.*
 
 `[24-DUR-05]` is written unconditionally ("IF an invocation at an `Effectful`
 inlet is at or behind that inlet's processed-frontier … THEN it SHALL be
