@@ -310,12 +310,24 @@ abstract class CompositeCell(
  * *repeated* filter evaluation (the same argument array is handed to this
  * closure once per attempt, so two suppressed attempts sanitize the same
  * wrappers twice — tolerated by the R8 rule's already-consumed branches, not
- * repaired here) is sibling feature `computenet-usd.2`'s subject.
+ * repaired here) is sibling feature `computenet-usd.2`'s subject. **The
+ * observable cost of that toleration, while it stands:** the *first*
+ * suppressed attempt is the one whose dead letter carries the frozen value;
+ * every later attempt on the same emission finds the wrapper already consumed
+ * and reports `Redacted`, so with k > 1 suppressed attempts an auditor reads
+ * one valued record and k-1 markers. That is a fidelity limit of this
+ * accounting, not of the counting — the counter still reports k.
  *
- * [subject] names the mediated outlet's contract. The `Method` is deliberately
- * absent: `disclosureFilter`'s signature is arguments-only, so this seam
- * genuinely cannot see which method emitted — the emitted delta itself travels
- * in `deniedArgs`, which is the auditable part.
+ * [subject] names the mediated outlet's contract, and **only** the contract —
+ * unlike the integrity seam ([MediateProxy]), whose record carries
+ * `Contract#method`. Not because the emitting `Method` is unknowable here: it
+ * is in scope at all three [FanOutlet] call sites. It is that
+ * [FanOutlet.disclosureFilter]'s type is arguments-only, and widening that
+ * public hot-path signature to carry a `Method` was declined as disproportionate
+ * to an audit field and outside `computenet-usd.1.4`'s file claim. The emitted
+ * delta itself travels in `deniedArgs`, which is the auditable part. Revisit
+ * alongside the exactly-once work (`computenet-usd.2`), which has to revisit
+ * how this filter is invoked in any case.
  */
 private fun DisclosurePolicy.asDeltaFilter(
     denials: BoundaryDenialSink,
