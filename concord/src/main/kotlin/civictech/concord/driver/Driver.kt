@@ -131,6 +131,45 @@ interface Driver {
      */
     fun restart(cellId: CellId)
 
+    /**
+     * Re-deliver [op] (with optional [value]) to [cellId]'s [inlet] **live**,
+     * under the explicit wave position `([source], [counter])` — a duplicate
+     * arrival of a message that inlet may already have processed (spec 24
+     * `[24-DUR-05]`'s live half; `[24-DUR-02]`'s checkpoint-frontier half).
+     *
+     * This is not [apply]. [apply] drives an op through a cell's own outlet
+     * along the graph's links, and the driver mints the next wave position for
+     * that outlet in sequence; a duplicate can therefore never be expressed
+     * that way. Here the position is **stated**, and the delivery is injected
+     * at the named inlet directly — a re-arrival of the same message rather
+     * than a second op newly driven through the topology.
+     *
+     * [source] is a scenario-local cell id, not an identifier the scenario
+     * invents: the driver resolves it to that cell's own per-source wave
+     * identity (spec 20/22 §Structural changes — wave ids are per-source
+     * monotonic counters minted by the emitting outlet) and stamps the
+     * delivery with `(that identity, counter)`. So the injected delivery
+     * carries exactly what an ordinary delivery from [source] would have
+     * carried, and no driver is asked to retain a log of prior invocations —
+     * everything the position needs is in the step.
+     *
+     * A conforming driver **fails loudly** rather than approximate this: a
+     * delivery that reaches the inlet without the stated position, or that
+     * routes through the graph instead of injecting, asserts nothing about a
+     * processed-frontier and would make a scenario built on it read as
+     * coverage it does not have. Which cells can receive one is a driver
+     * capability like any other (see [effectLog]); a target it cannot inject
+     * at is an authoring error to report, never a silently weaker delivery.
+     */
+    fun retransmit(
+        cellId: CellId,
+        inlet: String?,
+        source: CellId,
+        counter: Long,
+        op: String,
+        value: Value? = null,
+    )
+
     /** Gracefully retire [cellId], unlinking it. */
     fun despawn(cellId: CellId)
 

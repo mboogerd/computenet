@@ -48,6 +48,15 @@ class FakeDriver(
     override fun snapshot(cellId: CellId): Blob = ByteArray(0)
     override fun restore(hostId: HostId, cellId: CellId, blob: Blob) {}
     override fun restart(cellId: CellId) {}
+    override fun retransmit(
+        cellId: CellId,
+        inlet: String?,
+        source: CellId,
+        counter: Long,
+        op: String,
+        value: Value?,
+    ) {
+    }
     override fun despawn(cellId: CellId) {}
     override fun deadLetters(): List<DeadLetter> = deadLetters
     override fun effectLog(cellId: CellId): List<Effect> = effects[cellId].orEmpty()

@@ -434,6 +434,34 @@ class KernelDriver(seed: Long? = null) : Driver {
         trigger(bound.host, bound.ref)
     }
 
+    /**
+     * The kernel binding of the retransmit verb: a **durability** capability,
+     * delegated wholesale to [KernelDriverDur.retransmit].
+     *
+     * A duplicate live delivery is only observable where something decides
+     * whether to act on it twice, and in this driver that decision — the
+     * `Effectful` processed-frontier — exists on the `dur` profile alone (the
+     * same reason [effectLog] is empty on core). Rather than inject an
+     * unobserved delivery at a core cell, a core target fails loudly here: an
+     * injection nothing can assert on is exactly the scenario-shaped hole this
+     * verb was added to close.
+     */
+    override fun retransmit(
+        cellId: CellId,
+        inlet: String?,
+        source: CellId,
+        counter: Long,
+        op: String,
+        value: Value?,
+    ) {
+        if (cellId in durCells) return dur.retransmit(cellId, inlet, source, counter, op, value)
+        throw UnsupportedCatalogBinding(
+            "retransmit at '$cellId': this binding injects an explicit wave position only at a durable " +
+                "effect-boundary sink (host: dur), where a processed-frontier decides whether the duplicate " +
+                "acts again — a core cell has no such decision, so the injection would assert nothing",
+        )
+    }
+
     override fun despawn(cellId: CellId) {
         if (cellId in durCells) return dur.despawn(cellId)
         val bound = cells.remove(cellId) ?: return

@@ -1,0 +1,128 @@
+# Concord corpus scenario (KFX, `[KFX-05]`/BS-11): the LIVE half of `[24-DUR-05]`.
+#
+# `[24-DUR-05]` is written over two paths — an invocation at or behind an
+# `Effectful` inlet's processed-frontier is suppressed "whether encountered during
+# `recoverFrom` replay **or post-recovery live delivery**". Until the `retransmit`
+# verb landed (`computenet-yh6.1.3.3` froze the shape, `computenet-yh6.1.8` bound
+# it) the corpus could only express the first: every route to a duplicate went
+# through journal replay, so `DUR-REPLAY-01` / `DUR-SRCID-01` / `DUR-SRCID-02` all
+# assert the replay half and none of them the live one. The live half was carried
+# by a single kernel test (`EffectfulLiveDeliveryTest`), which means a second
+# implementation of this model could pass the whole corpus and still re-fire an
+# external effect on a post-recovery live duplicate.
+#
+# THE CONSTRUCTION. A journaled source feeds an `Effectful` sink; the host crashes
+# and recovers from its journal (whose replay is itself suppressed at the restored
+# frontier — the half already covered). Then, with recovery complete and the graph
+# quiesced, a `retransmit` injects a duplicate of k2's `(source, counter)` position
+# LIVE: not a replayed frame, not a second op driven through the topology, but the
+# same message arriving a second time at the sink's inlet.
+#
+# WHY EACH CHECK IS THE ONE THAT CATCHES ITS DIRECTION.
+#   * `effect-count(sink, key: k2, exactly: 1)` — the double-fire direction: a guard
+#     that only consults the frontier for replayed frames lets the live duplicate
+#     through and k2 acts twice.
+#   * the k3 pair (a live add past the frontier, then a `retransmit` of the position
+#     that add minted) is the converse pin: post-recovery live traffic must still
+#     reach the sink, and a LIVE delivery must itself ADVANCE the frontier. Without
+#     the advance, the second retransmit fires and k3 acts twice; with a frontier
+#     restored ahead of the state point, the live k3 never fires at all and the
+#     unkeyed check reads "observed 0, expected 1".
+#   * `no-dead-letters` states the suppression's shape, not merely its count
+#     (KFX-20): a suppressed retransmit discharges the invocation's payload and
+#     counts the suppression — it is not a failure event, so unlike a `restart` a
+#     scenario driving one may assert this (`ManagedHost.kt:848-865`).
+#
+# WHY `counter: 2` AND `counter: 3` ARE NOT GUESSES. A position *behind* the
+# frontier is suppressed exactly as one *at* it is, so an off-by-one literal would
+# still pass while duplicating a coordinate nothing ever emitted. The mapping is
+# pinned behaviourally in `RetransmitBindingTest`: after two adds, counter 2 is
+# suppressed and counter 3 FIRES — which fixes the source's high-water at 2 and so
+# names k2's own position, and k3's as the next one.
+#
+# NON-VACUITY (both perturbations were actually run against the whole corpus, and
+# these are their observed results — the evidence for the `covers:` line):
+#   * live-half discrimination — narrow the `Effectful` guard in `ManagedHost.deliver`
+#     to replayed traffic only (require `hostedInvocation.invocation.context?.baseline
+#     != null` alongside the timestamp, i.e. suppress only frames stamped by
+#     `recoverFrom`'s replay scope). This scenario fails 20 of 20 runs with
+#     "effect-count(sink, key=k2): expected 1 but observed 2 … key=k3: expected 1 but
+#     observed 2", and so does `DUR-CKPT-FRONTIER-01` (its duplicate is live too).
+#     EVERY OTHER scenario in the corpus stays green — `DUR-REPLAY-01`,
+#     `DUR-SRCID-01`, `DUR-SRCID-02` and `DUR-ATOMIC-01` included, because each of
+#     their duplicates IS a replayed one. That measures exactly what was missing:
+#     before these two files the corpus could not tell a replay-only guard from the
+#     rule `[24-DUR-05]` actually states.
+#   * whole-guard discrimination — make `HostDurability.alreadyProcessed` always
+#     return `false`: this scenario fails 20 of 20 ("key=k1: expected 1 but observed
+#     3; key=k2: … observed 4; key=k3: … observed 2"), as does the rest of the `dur`
+#     profile. The ordinary reading that the counts follow the frontier's decision
+#     rather than an accident of delivery.
+id: DUR-LIVE-01
+title: A post-recovery LIVE duplicate is suppressed by the restored frontier, and a live delivery advances it
+covers: [24-DUR-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED source feeding an Effectful sink, plus a
+    journal controller. The sink journals a processed-frontier — the last applied
+    (sourceId, counter) per inlet — which recovery restores
+  when: >
+    two elements are added and the graph quiesces, the host crashes and is rebuilt
+    from its surviving journal, and then — with recovery complete — the SAME
+    (source, counter) position one of those adds emitted is delivered again LIVE
+    (a duplicate arrival at the sink's inlet, not a replayed frame and not a new op
+    driven through the graph), followed by a live add past the frontier and a
+    duplicate of the position that live add minted
+  then: >
+    each element acted exactly once: the live duplicate at the restored frontier
+    was suppressed as already-acted by the same rule replay uses, the live add past
+    the frontier still fired, and the duplicate of ITS position was suppressed in
+    turn — so a live delivery advances the frontier as well as being judged by it.
+    No suppression dead-lettered anything: the guard discharges the payload and
+    counts the suppression rather than reporting a failure
+graph:
+  cells:
+    # the journaled source: its accepted ops tee to the WAL, and its outlet's
+    # emission epoch is restored on recovery ([24-DUR-04]), so the position a
+    # retransmit resolves from it after the crash is the pre-crash one
+    - {id: source, type: journal-set-source, host: dur}
+    # the effect boundary: one externally-recorded effect per added element
+    - {id: sink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: apply, on: source, op: add, value: k2}
+  - {type: quiesce}
+  # CRASH + journal replay. The replayed frames are suppressed at the restored
+  # frontier — the half DUR-REPLAY-01 and DUR-SRCID-01 already cover.
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  # THE LIVE DUPLICATE: k2's own (source, counter) position, injected at the sink's
+  # inlet after recovery has completed. Not a replay, and not an `apply` (which
+  # would mint the NEXT position and route through the graph).
+  - {type: retransmit, on: sink, source: source, counter: 2, op: add, value: k2}
+  - {type: quiesce}
+  # live traffic past the frontier: must still reach the sink normally
+  - {type: apply, on: source, op: add, value: k3}
+  - {type: quiesce}
+  # and the position that LIVE delivery minted must now itself be on the frontier
+  - {type: retransmit, on: sink, source: source, counter: 3, op: add, value: k3}
+  - {type: quiesce}
+checks:
+  # k1, k2, k3 each acted on exactly once. The unkeyed form quantifies over the keys
+  # the script fed the sink (the adds on `source`, its only upstream), so it reads
+  # the silent-effect-LOSS direction too — an element that fired zero times reads
+  # "observed 0, expected 1" rather than being absent from the grouping.
+  - {type: effect-count, sink: sink, exactly: 1}
+  # kept keyed and explicit for the two elements this scenario singles out: k2 is
+  # the LIVE duplicate at the restored frontier, k3 the live add whose own position
+  # is then duplicated.
+  - {type: effect-count, sink: sink, key: k2, exactly: 1}
+  - {type: effect-count, sink: sink, key: k3, exactly: 1}
+  # a suppressed retransmit discharges rather than dead-letters (KFX-20)
+  - {type: no-dead-letters}
