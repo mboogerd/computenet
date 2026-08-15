@@ -7,17 +7,22 @@ import civictech.cell.control.AttentionBand
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.host.DeadLetter
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.SupervisionPolicy
 import civictech.cell.link.CurrentPeer
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.LinkResult
 import civictech.cell.link.PeerId
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -287,5 +292,88 @@ class BoundaryPolicyTest {
         // Local (no stamped peer) requests are unaffected by the allowlist.
         host.managementInlet.call.connect(sourceRef, "outlet", membraneRef, "exposedInlet")
             .shouldBeInstanceOf<LinkResult.Connected>()
+    }
+
+    @Test
+    fun `BS-2 a denied link-authority peer lands one denial record and the BS-1 allowed twin leaves no trace`() {
+        // computenet-usd.1.5: installLinkAuthority wraps each installed
+        // LinkPolicy so a Rejected verdict is accounted (seam=LINK_AUTHORITY,
+        // principal=the refused peer, detail=the refusing policy's own
+        // rejection reason) BEFORE it is returned to the handshake — the
+        // handshake's own control flow (reject before install/register) is
+        // untouched, so a denial still leaves no half-registered port and no
+        // subscriber entry ([SEC1-08][SEC1-09][SEC1-29]).
+        val controller = SimulationController(seed = 16)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = mutableListOf<DeadLetter>()
+        host.deadLetterOutlet.subscribe(
+            Use.fixed(
+                object : Propagate<DeadLetter> {
+                    override fun propagate(value: DeadLetter) {
+                        letters += value
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+
+        val organelle = SetCell<String>()
+        val membrane = object : CompositeCell() {
+            val exposedInlet = mediate(
+                "exposedInlet",
+                "inlet",
+                organelle.inlet,
+                policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(PeerId("alice")))),
+            )
+        }
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        // RESTART, so BS-14 ("a denial is not a fault") is a real check
+        // rather than a vacuous one — were this denial misclassified as a
+        // cell failure anywhere on this path, this is the policy that would
+        // fire (mirrors BoundaryDenialAccountingTest's precedent).
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
+        val source = SetSource()
+        val sourceRef = host.managementInlet.call.spawn(source)
+        controller.runToIdle()
+
+        val sink = membrane.boundaryDenials["exposedInlet"]!!
+        sink.denialCount shouldBe 0L
+
+        // BS-2: CurrentPeer=mallory is rejected.
+        val rejected = CurrentPeer.with(PeerId("mallory")) {
+            host.managementInlet.call.connect(sourceRef, "outlet", membraneRef, "exposedInlet")
+        }
+        controller.runToIdle()
+        rejected.shouldBeInstanceOf<LinkResult.Rejected>()
+
+        // Exactly one denial record, naming mallory and the refusing policy.
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        val letter = letters.single()
+        letter.cause shouldBe null
+        letter.description shouldContain "exposedInlet"
+        letter.description shouldContain "mallory"
+        letter.description shouldContain "LINK_REFUSED"
+        letter.description shouldContain "not on the allowlist"
+
+        // No port half-registered, no subscriber entry: the rejected request
+        // never reached install()/register().
+        membrane.exposedInlet.linking.links shouldBe emptyList()
+
+        // BS-14: not a fault — no RESTART, no supervision escalation.
+        host.supervisionAccounting().restarts shouldBe 0L
+        // No wave minted or advanced: the synthesized report carries a null context.
+        letter.invocation!!.invocation.context shouldBe null
+
+        // BS-1 twin: CurrentPeer=alice links successfully, no new record, counter unchanged.
+        val connected = CurrentPeer.with(PeerId("alice")) {
+            host.managementInlet.call.connect(sourceRef, "outlet", membraneRef, "exposedInlet")
+        }
+        controller.runToIdle()
+        connected.shouldBeInstanceOf<LinkResult.Connected>()
+
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        membrane.exposedInlet.linking.links.size shouldBe 1
     }
 }

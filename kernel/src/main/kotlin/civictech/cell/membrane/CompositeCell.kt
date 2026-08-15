@@ -3,12 +3,16 @@ package civictech.cell.membrane
 import civictech.cell.BoundaryDenialAccounting
 import civictech.cell.BoundaryDenialSink
 import civictech.cell.BoundaryDenials
+import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.DenialReason
 import civictech.cell.control.Attention
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.link.LinkPolicy
 import civictech.cell.link.Linked
+import civictech.cell.link.PeerId
 import civictech.cell.port.Port
 import civictech.cell.protocol.ProtocolId
 import civictech.cell.protocol.ProtocolSupport
@@ -212,14 +216,32 @@ abstract class CompositeCell(
 
     /**
      * Installs seam 2 (`onLink`, `BoundaryPolicy.linkAuthority`) onto [port]'s
-     * link policies — first-rejection-wins, exactly as before.
+     * link policies — first-rejection-wins, exactly as before — with each
+     * installed [LinkPolicy] wrapped so a non-null
+     * [civictech.cell.link.LinkResult.Rejected] verdict is accounted through
+     * this exposure's [BoundaryDenialSink] **before** it is returned to the
+     * handshake (`[SEC1-25]`/`[SEC1-26]`, BS-2).
      *
-     * [denials] is the seam's accounting sink, resolved here and deliberately
-     * **not yet consulted**: this task builds the sink and its plumbing only,
-     * and the three flow-time sites plus this one keep their current behaviour.
-     * Wrapping each [LinkPolicy] so a rejection lands a `LINK_REFUSED` record
-     * is sibling task `computenet-usd.1.5`; the parameter exists so that change
-     * is local to this function.
+     * Accounting happens HERE, at the membrane — not in `civictech.cell.link`
+     * (`LinkSupport`/`Handshake`), which this task claims defensively only.
+     * `LinkSupport.reject` walks `policies.firstNotNullOfOrNull { it.evaluate(
+     * request) }`; wrapping each policy before it is added means the wrapper
+     * observes exactly the verdict the unwrapped policy would have produced
+     * and returns it unchanged, so first-rejection-wins, the allowed/local-
+     * request fast path (`allowPeers` on a null identity), and the "reject
+     * before any install/register runs" ordering in
+     * [civictech.cell.link.handshake] are all untouched — no half-registered
+     * port, no subscriber entry, for either the allowed or the denied case.
+     *
+     * Only **one** `linkAuthority` evaluation point exists at this seam on
+     * this branch: the target-side `support.reject(...)` call in both
+     * `handshake()` overloads (`civictech.cell.link.Handshake.kt`). Sibling
+     * feature `computenet-usd.5`'s source-side subscribe-authority evaluation
+     * (`.5.1`) and its PRECHECK promotion re-authorization (`.5.2`) live on an
+     * unmerged sibling branch and are not present here (verified against this
+     * branch's `Handshake.kt`/`LinkSupport.kt`, which declare neither) — so
+     * wrapping the policies installed by this function covers every
+     * evaluation point that exists at merge time for this task.
      *
      * The sink is resolved after the empty check, so an exposure that declares
      * no `linkAuthority` allocates nothing — default-open stays byte-for-byte
@@ -227,9 +249,22 @@ abstract class CompositeCell(
      */
     private fun installLinkAuthority(externalName: String, port: Port, policy: BoundaryPolicy) {
         if (policy.linkAuthority.isEmpty()) return
-        @Suppress("UNUSED_VARIABLE")
         val denials: BoundaryDenialSink = boundaryDenials.sinkFor(externalName)
-        (port as? Linked)?.linking?.policies?.addAll(policy.linkAuthority)
+        val accounted = policy.linkAuthority.map { linkPolicy ->
+            LinkPolicy { request ->
+                val rejected = linkPolicy.evaluate(request)
+                if (rejected != null) {
+                    denials.deny(
+                        seam = BoundarySeam.LINK_AUTHORITY,
+                        reason = DenialReason.LINK_REFUSED,
+                        principal = request.identity as? PeerId,
+                        detail = rejected.reason,
+                    )
+                }
+                rejected
+            }
+        }
+        (port as? Linked)?.linking?.policies?.addAll(accounted)
     }
 }
 
