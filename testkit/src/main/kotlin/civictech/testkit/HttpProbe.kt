@@ -37,8 +37,19 @@ object HttpBounds {
      * the SSE readers, because a `text/event-stream` subscription is meant to
      * outlive any request timeout: a `.timeout(...)` there would abort a healthy
      * stream, so `connectTimeout` is the only bound the streaming path can
-     * honestly carry. A loopback handshake against a bound listener takes
-     * microseconds; 10s is pure headroom.
+     * honestly carry *at the request level*. A loopback handshake against a bound
+     * listener takes microseconds; 10s is pure headroom.
+     *
+     * computenet-o7c3 made this rule true of the code as well as of this comment.
+     * Until then four SSE call sites (agora, shopping x2, slotfinder) called
+     * [bounded] anyway, and a request timeout is not merely wrong there — it is
+     * also useless: measured on Temurin 21.0.11, the JDK releases the response
+     * timer once `send` returns, so the bound covered the handshake and left the
+     * body read unbounded (still parked 15000ms after a 3s timeout), while on
+     * OpenJDK 26.0.1 the timer stayed armed and killed the stream mid-read with a
+     * bare `IOException: closed`. What a streaming read needs is a bound of its
+     * own, which is [awaitSseData]: it runs the whole subscription on a thread the
+     * caller joins with a deadline. No SSE call site uses [bounded] now.
      */
     val CONNECT: Duration = Duration.ofSeconds(10)
 }
@@ -48,8 +59,11 @@ fun boundedHttpClient(): HttpClient = HttpClient.newBuilder().connectTimeout(Htt
 
 /**
  * Bound this request by [timeout], defaulting to [HttpBounds.REQUEST]. Use on
- * every synchronous `send`; do **not** use on an SSE subscription, which is
- * long-lived by design (see [HttpBounds.CONNECT]).
+ * every synchronous `send` with a non-streaming body handler; do **not** use on
+ * an SSE subscription, which is long-lived by design and whose *body* read this
+ * bound does not reach anyway — use [awaitSseData] there (see
+ * [HttpBounds.CONNECT] for both halves of that, and computenet-o7c3 for the
+ * per-JDK measurement).
  */
 fun HttpRequest.Builder.bounded(timeout: Duration = HttpBounds.REQUEST): HttpRequest.Builder = timeout(timeout)
 
