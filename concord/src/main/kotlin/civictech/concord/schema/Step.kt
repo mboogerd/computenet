@@ -145,6 +145,54 @@ data class ReadStateStep(
 @SerialName("restart")
 data class RestartStep(val on: String) : Step
 
+/**
+ * Re-deliver an already-processed invocation **live** at cell [on]'s [inlet],
+ * under the explicit wave position `([source], [counter])` (KFX followup —
+ * `computenet-yh6.1.3.3` froze the shape, `computenet-yh6.1.8` bound it). Added
+ * as the deliberate between-waves schema-change ticket the seam rule requires
+ * (`concord/schema/scenario.md`, `#### retransmit`).
+ *
+ * A **duplicate delivery**, not a second op: the closed vocabulary's other
+ * verbs reach a duplicate only through `recoverFrom` journal replay, so the
+ * *live* half of `[24-DUR-05]` ("whether encountered during `recoverFrom`
+ * replay **or post-recovery live delivery**") and the checkpoint-frontier half
+ * of `[24-DUR-02]` had no corpus expression at all. This verb injects at a
+ * named inlet under a position the scenario states, bypassing the graph's
+ * routing — a re-arrival of the same message, not a new op driven through the
+ * topology.
+ *
+ * [source] names a **scenario-local cell id**, not an opaque identifier: the
+ * driver resolves it to that cell's own per-source wave identity (spec 20/22
+ * §Structural changes — wave ids are per-source monotonic counters minted by
+ * the emitting outlet), so the delivery is indistinguishable, at the receiving
+ * inlet's processed-frontier, from a genuine second arrival from that source.
+ * [counter] is the position within that source's monotonic sequence this
+ * delivery claims; naming the one an earlier [ApplyStep] from [source] already
+ * produced is what makes it a duplicate rather than a novel arrival.
+ *
+ * [op]/[value] are exactly [ApplyStep]'s fields — the payload the (re)delivery
+ * carries. There is no `times:`: each duplicate names its own position, so
+ * repeating one means another step.
+ *
+ * This is not [RestartStep] or [RestoreStep]: neither the target's state nor
+ * its checkpoint is touched and nothing is recovered — only whether the
+ * receiving inlet's processed-frontier suppresses this one delivery is at
+ * stake. Unlike a restart, a suppressed retransmit is **not** a failure event
+ * (the guard discharges the invocation's payload and counts the suppression
+ * rather than dead-lettering it), so a scenario using it may still assert
+ * `no-dead-letters`.
+ */
+@Serializable
+@SerialName("retransmit")
+data class RetransmitStep(
+    val on: String,
+    val inlet: String? = null,
+    val source: String,
+    val counter: Long,
+    val op: String,
+    @Contextual val value: Value? = null,
+) : Step
+
 /** Gracefully retire cell [on] (`despawn(cellId)`), unlinking it. */
 @Serializable
 @SerialName("despawn")

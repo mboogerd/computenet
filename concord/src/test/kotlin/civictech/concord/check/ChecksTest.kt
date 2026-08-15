@@ -28,6 +28,7 @@ import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
+import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.SnapshotStep
 import civictech.concord.schema.ViewsConverge
 import civictech.concord.schema.WavePlaneUnchanged
@@ -774,6 +775,42 @@ class ChecksTest {
                 links = emptyList(),
                 script = listOf(apply("src", "add", s("k1"))),
             ),
+            // computenet-yh6.1.8 — the retransmit verb injects a delivery straight
+            // at an inlet, so it is the one verb besides `apply` that can put an
+            // element in front of the sink. Each shape below would leave a key the
+            // derived set cannot name, which is the vacuous pass all over again.
+            "a retransmit of an element no add names" to scenario(
+                cells = listOf(jsrc, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    RetransmitStep(on = "sink", source = "src", counter = 9, op = "add", value = s("ghost")),
+                ),
+            ),
+            "a retransmit into an upstream rather than the sink itself" to scenario(
+                cells = listOf(jsrc, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    RetransmitStep(on = "src", source = "src", counter = 1, op = "add", value = s("k1")),
+                ),
+            ),
+            "a retransmit carrying an op that is not an add" to scenario(
+                cells = listOf(jsrc, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    RetransmitStep(on = "sink", source = "src", counter = 1, op = "remove", value = s("k1")),
+                ),
+            ),
+            "a retransmit with no value" to scenario(
+                cells = listOf(jsrc, esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(
+                    apply("src", "add", s("k1")),
+                    RetransmitStep(on = "sink", source = "src", counter = 1, op = "add", value = null),
+                ),
+            ),
         )
         // Collected rather than fail-fast on purpose: when a refusal rule is removed
         // this names *every* shape that starts resolving again, which is what makes
@@ -819,6 +856,34 @@ class ChecksTest {
             ),
         )
         derived(disjointSubgraph) shouldBe setOf("k1")
+
+        // computenet-yh6.1.8, DUR-LIVE-01's own shape: a retransmit re-delivering an
+        // element the scripted adds already name leaves the derived set complete —
+        // the duplicate either fires nothing (which is what the scenario asserts) or
+        // fires a second effect for a key already in the set, which the count reports.
+        // Order is irrelevant, so a duplicate scripted BEFORE the add it duplicates
+        // resolves too; what it would fire twice is a count question, not a naming one.
+        val duplicateOfAnAddedElement = scenario(
+            cells = listOf(jsrc, esink, cell("ctl", "journal")),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                apply("src", "add", s("k1")),
+                apply("src", "add", s("k2")),
+                DespawnStep(on = "ctl"),
+                RetransmitStep(on = "sink", source = "src", counter = 2, op = "add", value = s("k2")),
+            ),
+        )
+        derived(duplicateOfAnAddedElement) shouldBe setOf("k1", "k2")
+
+        val duplicateBeforeItsAdd = scenario(
+            cells = listOf(jsrc, esink),
+            links = listOf(link("src", "sink")),
+            script = listOf(
+                RetransmitStep(on = "sink", source = "src", counter = 1, op = "add", value = s("k1")),
+                apply("src", "add", s("k1")),
+            ),
+        )
+        derived(duplicateBeforeItsAdd) shouldBe setOf("k1")
     }
 
     // --- wave-plane-unchanged / pages-equal-view (V1C-CONCORD) ---------------

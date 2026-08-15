@@ -33,6 +33,7 @@ import civictech.concord.schema.ReadStateStep
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
+import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.SnapshotStep
 import civictech.concord.schema.ViewsConverge
@@ -534,6 +535,12 @@ class CorpusRunner {
                 is SnapshotStep -> snapshots[step.alias] = driver.snapshot(step.on)
                 is RestoreStep -> driver.restore(step.host ?: "", step.on, snapshots.getValue(step.from))
                 is RestartStep -> driver.restart(step.on)
+                // The duplicate-delivery verb: the step states the whole
+                // position, so the runner threads it through verbatim and keeps
+                // no memory of prior invocations (schema/scenario.md, `####
+                // retransmit`).
+                is RetransmitStep ->
+                    driver.retransmit(step.on, step.inlet, step.source, step.counter, step.op, step.value)
                 is DespawnStep -> driver.despawn(step.on)
             }
         }
