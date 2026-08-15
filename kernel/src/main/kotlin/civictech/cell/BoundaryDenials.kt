@@ -190,6 +190,13 @@ fun interface BoundaryDenialReporter {
  * `SupervisionAccounting` is deliberately **not** added — a denial is not a
  * supervision event, and the sanitized dead letter is already the host-level
  * evidence.
+ *
+ * `computenet-usd.6` added a host-wide *sum* beside that, not inside it:
+ * `ManagedHost.boundaryDenialCount()`. It exists because refusals had to be
+ * taken **out** of `deadLetterCount` (whose readers all treat that number as a
+ * fault count) once the denial rate became remote-controlled, and an operator
+ * holding only the host still needs somewhere to see them. This per-exposure
+ * counter remains the authoritative one; that is its sum.
  */
 class BoundaryDenialSink internal constructor(
     /** The `Exposure.externalName` this sink accounts for. */

@@ -400,7 +400,34 @@ open class ManagedHost(
     /** PN-12: how many `DURABLE`-manifest cells were spawned onto a null journal selector. */
     internal fun volatileDurableSpawns(): Long = volatileDurableSpawnCount.get()
 
-    /** Snapshot of this host's supervision counters (G-46). */
+    /**
+     * Refusals reported to this host by a hosted membrane's
+     * [civictech.cell.BoundaryDenialSink], summed over every boundary
+     * (computenet-usd.6).
+     *
+     * Deliberately **not** a field of [SupervisionAccounting], and deliberately
+     * not folded into its `deadLetters`: a denial is not a supervision event
+     * (`[SEC1-29]`, BS-14), and `deadLetters` is a fault count that a dozen
+     * suites read as one. `computenet-usd.1.1` put the authoritative counter on
+     * the sink, per exposure, because one host may carry many membranes whose
+     * refusals must stay distinguishable; this is the host-wide sum, for a
+     * reader that holds the host and not the membrane.
+     */
+    internal fun boundaryDenialCount(): Long = deadLetters.boundaryDenialCount
+
+    /**
+     * How many stderr lines this host's denial reporting has actually written.
+     * The metered quantity (`DeadLetters.shouldLogDenial`) — exposed so a test
+     * can assert the bound directly instead of scraping the console.
+     */
+    internal fun boundaryDenialLogLines(): Long = deadLetters.boundaryDenialLogLines
+
+    /**
+     * Snapshot of this host's supervision counters (G-46). Its `deadLetters`
+     * counts **faults only** — boundary refusals are counted on their own
+     * channel ([boundaryDenialCount]), so an assertion here reading
+     * `deadLetters` as a fault count stays correct under a boundary policy.
+     */
     fun supervisionAccounting(): SupervisionAccounting = SupervisionAccounting(
         deadLetters = deadLetters.deadLetterCount,
         parkedDrainedOnTeardown = parkedDrainedOnTeardownCount.get(),
