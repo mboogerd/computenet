@@ -187,14 +187,38 @@ abstract class CompositeCell(
      *   outlet's own attention handling sees it (30/34 decision 6:
      *   `slot.level = min(asserted, ceiling)`, fold/band-gating untouched).
      *
-     * `linkAuthority` is NOT wired here: the target-side handshake (10/13)
-     * always runs on whichever port is being linked *to*, which for a
-     * consumer subscribing to an exposed outlet is the CONSUMER's own inlet
-     * (external, outside this membrane) — the existing [handshake]/
-     * [LinkSupport] mechanism has no admission hook on the producing side
-     * beyond SPSC exclusivity. Seam 2 is fully realized by [mediate]
-     * (organelle inlet exposures), where the exposed port genuinely is the
-     * handshake target.
+     * - `linkAuthority` is producer-side **subscribe** authority: who may
+     *   subscribe to this feed at all (SEC1-12). It is installed on the
+     *   organelle outlet's own [civictech.cell.link.LinkSupport] and evaluated
+     *   by [civictech.cell.link.handshake] as the *source*-side gate.
+     *
+     * That last point was decided, not inherited (2026-08-15, option (a) of
+     * this exposure's (a)/(b) fork; recorded here because the misleading claim
+     * it replaces lived here). The earlier text said the mechanism "has no
+     * admission hook on the producing side beyond SPSC exclusivity", reasoning
+     * that the handshake always runs on the port being linked *to* — which for
+     * a consumer subscribing to an exposed outlet is the CONSUMER's own inlet,
+     * external to this membrane. The premise about the target was right; the
+     * conclusion was not. The handshake already threaded the producer as
+     * `(portOut as? Linked)?.linking` — registering the link and firing
+     * `onLinked` on it — and [FanOutlet] IS [Linked], so what was missing was
+     * one `reject()` call on that side, not a seam. It is now made, second
+     * (after the target's, so existing refusal strings are untouched) and
+     * before any install (so a refusal leaves no subscriber entry, SEC1-09).
+     * The bridged handshake needed no change at all: for the producer side it
+     * already evaluates the local port's policies, which is this outlet.
+     *
+     * Tradeoff: the gate is symmetric with the landed inlet seam
+     * (first-rejection-wins, [currentPrincipal] identity, no new type and no
+     * wire change) and default-open is preserved (an empty policy list
+     * short-circuits). What it does NOT cover is every attach path that
+     * bypasses the handshake, which stay ungated by link-time authority:
+     * [FanOutlet.subscribe] called directly (`Use.fixed` endpoints and
+     * [civictech.cell.evolve.Evolution]'s COMMIT relink), `tap(negotiated =
+     * false)` and taps whose target is not a [Linked] port, and
+     * [FanOutlet.observe] (which is handed no payload). For those, `disclosure`
+     * remains the flow-time backstop; promotion is re-authorized at its own
+     * PRECHECK gate, since COMMIT is documented non-vetoing.
      */
     protected fun <Api : Any> mediateOutlet(
         externalName: String,
@@ -205,9 +229,11 @@ abstract class CompositeCell(
         require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
         require(policy.forcesMediate) {
             "mediateOutlet($externalName) requires a flow-time predicate " +
-                "(protocolAuthority/disclosure/integrity); use flatten() for an open outlet"
+                "(protocolAuthority/disclosure/integrity); use flatten() for an outlet whose only " +
+                "authority is link-time (linkAuthority), which flatten() installs too"
         }
         val denials = boundaryDenials.sinkFor(externalName)
+        installLinkAuthority(externalName, organelleOutlet, policy)
         organelleOutlet.disclosureFilter =
             policy.disclosure.asDeltaFilter(denials, subject = organelleOutlet.clazz.simpleName)
         if (policy.protocolAuthority.isNotEmpty()) {
@@ -237,15 +263,19 @@ abstract class CompositeCell(
      * [civictech.cell.link.handshake] are all untouched — no half-registered
      * port, no subscriber entry, for either the allowed or the denied case.
      *
-     * Only **one** `linkAuthority` evaluation point exists at this seam on
-     * this branch: the target-side `support.reject(...)` call in both
-     * `handshake()` overloads (`civictech.cell.link.Handshake.kt`). Sibling
-     * feature `computenet-usd.5`'s source-side subscribe-authority evaluation
-     * (`.5.1`) and its PRECHECK promotion re-authorization (`.5.2`) live on an
-     * unmerged sibling branch and are not present here (verified against this
-     * branch's `Handshake.kt`/`LinkSupport.kt`, which declare neither) — so
-     * wrapping the policies installed by this function covers every
-     * evaluation point that exists at merge time for this task.
+     * **Three** `linkAuthority` evaluation points now exist at this seam on
+     * this branch, and wrapping at install time covers all three because each
+     * walks the very `policies` list this function populates: the target-side
+     * `support.reject(...)` in both `handshake()` overloads
+     * (`civictech.cell.link.Handshake.kt`); the source-side
+     * `sourceLinking?.reject(...)` that `computenet-usd.5.1` added for
+     * producer-side subscribe authority; and `LinkSupport.reauthorize` at
+     * `Evolution.promote`'s PRECHECK (`computenet-usd.5.2`,
+     * `Evolution.reauthorizeRebinds`). When `computenet-usd.1.5` landed on
+     * `main` only the first existed, and this KDoc said so; because the
+     * wrapper sits on the policy rather than on any call site, the other two
+     * were accounted the moment `computenet-usd.5` merged, with no change
+     * here.
      *
      * The sink is resolved after the empty check, so an exposure that declares
      * no `linkAuthority` allocates nothing — default-open stays byte-for-byte

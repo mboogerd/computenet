@@ -77,6 +77,26 @@
 # be composing an installed WaveFrontier per inlet, which cannot express one
 # frontier spanning several inlets -- the structural reason CoalescingCombineCell
 # records in its own KDoc.
+#
+# SEC1-10: evolve -> link ADDED -- Promotion.promote re-authorizes each
+# downstream rebind at PRECHECK ("promotion IS a rebind and MUST re-authorize",
+# spec 40-distribution/43-security.md §The three seams item 2; 93 I-28 §4.3
+# seam 2). Re-authorization is by construction the question link/ owns: the
+# check builds a civictech.cell.link.LinkRequest and asks the two endpoints'
+# LinkSupport.reauthorize, so a rebind is admitted on exactly the terms a fresh
+# handshake would apply. There is no zero-edge form: any expression of the
+# check inside evolve/ names LinkRequest/LinkSupport/Linked, and hiding the
+# call behind a port/ or membrane/ helper would only relocate the same question
+# away from the phase that must ask it -- PRECHECK, since the COMMIT relink
+# that follows is documented non-vetoing. No new DIRECT 2-cycle: nothing under
+# civictech.cell.link imports civictech.cell.evolve (verified by grep -- the
+# two occurrences there are KDoc [] references, which the scanner does not
+# count). And no new cycle at all: evolve's one inbound baseline edge is
+# `host -> evolve`, and the two packages were already mutually reachable
+# before this line existed (evolve -> host -> link one way, link -> nature ->
+# consistency -> host -> evolve the other), so evolve and link were already
+# inside the single non-leaf SCC G-63 records. This addition changes the
+# reachability graph not at all; it makes one existing path direct.
 cell -> link
 cell -> port
 consistency -> cell
@@ -99,6 +119,7 @@ data -> port
 data -> protocol
 evolve -> cell
 evolve -> host
+evolve -> link
 evolve -> membrane
 evolve -> port
 evolve -> proxy

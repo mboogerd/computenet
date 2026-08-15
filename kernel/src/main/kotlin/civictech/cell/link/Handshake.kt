@@ -130,8 +130,20 @@ internal fun hasDampingWitness(outlet: Port, head: FeedbackInlet<*>): Boolean {
 }
 
 /**
- * Runs the target-side handshake shared by the inlet implementations:
- * policies → cardinality (checked by the caller) → onLink → install.
+ * Runs the handshake shared by the inlet implementations:
+ * target policies → source policies → cardinality (checked by the caller) →
+ * onLink → install.
+ *
+ * **Both** endpoints' `linking.policies` are evaluated, in that order (SEC1
+ * seam 2, decided 93 I-28 §4.3): the target's first, so every refusal string a
+ * caller or test already asserts on is unchanged; then the source's, so a
+ * *producing* membrane can refuse a subscriber even though the port being
+ * linked *to* is the consumer's own inlet, outside that membrane
+ * (`CompositeCell.mediateOutlet`'s producer-side subscribe authority). Both run
+ * before `checkPayload`/nature reconciliation/`onLink`/`install`, so a refusal
+ * from either side leaves no half-registered port and no subscriber entry.
+ * A port with no declared policies short-circuits ([LinkSupport.reject] over an
+ * empty list is null), so default-open exposures are unaffected.
  */
 internal fun <Api> handshake(
     portOut: LinkTo<Api>,
@@ -143,7 +155,16 @@ internal fun <Api> handshake(
 ): LinkResult {
     val support = target.linking
     // identity rides the delivery (M8.2): bridged requests carry their peer
-    support.reject(LinkRequest(portOut.ref, targetRef, CurrentPeer.get(), role))?.let { return it }
+    val request = LinkRequest(portOut.ref, targetRef, CurrentPeer.get(), role)
+    support.reject(request)?.let { return it }
+
+    // The producing side's own admission, over the SAME request (same identity,
+    // same role): "who may subscribe to my feed" is the producer's question, and
+    // for an exposed outlet the handshake target is the consumer's inlet, so the
+    // target gate above cannot ask it. Evaluated second so target-side refusals
+    // keep priority, and before any install so a refusal is topology-invisible.
+    val sourceLinking = (portOut as? Linked)?.linking
+    sourceLinking?.reject(request)?.let { return it }
 
     // T08 finding 1: the payload-type witness — before natures/install, so a
     // structurally wrong-shaped connect never reaches onLink/install at all.
@@ -156,7 +177,6 @@ internal fun <Api> handshake(
     reconcileNatures(portOut.natures, (target as? Port)?.natures ?: NatureVector.DEFAULT)
         ?.let { return it }
 
-    val sourceLinking = (portOut as? Linked)?.linking
     val link = PortLink(portOut.ref, targetRef, portOut, target as? Port, role) { link ->
         // The close is terminal on the link's in-process protocol/data FIFO:
         // announce it while both endpoints are still reachable, then detach.
@@ -176,8 +196,12 @@ internal fun <Api> handshake(
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
             install()
-            support.register(link)
-            sourceLinking?.register(link)
+            // Both sides retain the identity this link was ESTABLISHED with, so
+            // a later rebind re-authorizes the original peer rather than
+            // whoever is ambient at rebind time ([SEC1-10]; the source side is
+            // the one promotion consults).
+            support.register(link, request.identity)
+            sourceLinking?.register(link, request.identity)
             // Only topology-interested consumers pay for edge markers.  Open
             // precedes onLinked catch-up and every subsequent data invocation.
             link.toPort?.let { port ->
@@ -222,7 +246,8 @@ internal fun handshake(
     counterpart: NatureVector = NatureVector.DEFAULT,
 ): LinkResult {
     val support = local.linking
-    support.reject(LinkRequest(from, targetRef, CurrentPeer.get(), role))?.let { return it }
+    val request = LinkRequest(from, targetRef, CurrentPeer.get(), role)
+    support.reject(request)?.let { return it }
 
     // CP-F3: the bridged edge runs the *same* pure reconcile as a local link,
     // so the verdict is location-transparent (BridgedHandshakeTest asserts
@@ -238,7 +263,9 @@ internal fun handshake(
 
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
-            support.register(link)
+            // Same establishing-identity retention as the in-process path: a
+            // bridged link's peer is exactly the identity a rebind must re-present.
+            support.register(link, request.identity)
             link.onUnlink { l ->
                 support.remove(l)
                 support.onUnlink(l)
