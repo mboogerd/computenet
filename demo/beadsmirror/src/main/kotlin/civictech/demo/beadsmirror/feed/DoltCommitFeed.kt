@@ -44,8 +44,20 @@ fun interface DiffQuery {
  *
  * This is the single-pass read half only (computenet-dqj.1.2). Checkpoint
  * persistence, resume, polling cadence and the history-truncation condition
- * belong to computenet-dqj.1.3 and drive this class through
+ * belong to computenet-dqj.1.3 ([DoltFeedPoller]) and drive this class through
  * [readFrom]/[history].
+ *
+ * KNOWN LIMITATION (flagged in computenet-dqj.1.2's review, left open by
+ * computenet-dqj.1.3 as a judgment call, not fixed here): [readFrom] always
+ * scans all of `dolt_diff_issues`/`dolt_diff_dependencies`, then filters to
+ * `afterCommit`'s unseen commits in memory — it does not narrow the SQL query
+ * itself. Called once from a cold start that is cheap; called every tick of a
+ * [DoltFeedPoller] loop, the per-poll cost is O(history), not O(new commits).
+ * Fine for the scratch/demo workspaces this module targets (measured ~0.2s
+ * per scan against a scratch DB); worth bounding — e.g. a `to_commit IN (...)`
+ * filter over the wanted commit set, or narrowing by commit height once one
+ * is known — before this feed is pointed at a workspace with real history
+ * depth.
  *
  * Access is the `dolt` CLI via [DoltSql] (a `bd sql` connection is unusable in
  * embedded mode — BDS0). All timestamps in Dolt are UTC; this reader never
