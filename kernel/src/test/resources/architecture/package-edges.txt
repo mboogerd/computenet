@@ -109,7 +109,15 @@
 # single. Accounting lives at the civictech.cell root by deliberate design (see
 # BoundaryDenials.kt's "Where this file lives, and why"), so the seam cannot be
 # moved down into a package that already has the edge without giving up the
-# reason it is there. No new cycle: proxy -> cell already exists (Proxy.kt
+# reason it is there. The one alternative that IS genuinely zero-edge, if this
+# ever needs revisiting: relocate `Proxy.discharge` itself down to
+# civictech.cell beside the Owned/Leased it switches on, and let
+# civictech.cell.proxy delegate -- proxy -> cell and port -> cell, the edges of
+# its two callers (Proxy.discharging, port/Admit), both already exist. That is
+# a deliberate relocation of a landed primitive, belonging to a ticket that
+# owns proxy/, exactly as V1C-KERNEL above says of Interest -- not this one,
+# whose file claim covers neither Proxy.kt nor port/.
+# No new cycle: proxy -> cell already exists (Proxy.kt
 # imports civictech.cell.Owned/Leased), so this closes a cell <-> proxy 2-cycle
 # exactly as cell <-> link and cell <-> port already do, and G-63's single
 # non-leaf SCC is unchanged.

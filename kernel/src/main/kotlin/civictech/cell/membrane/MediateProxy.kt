@@ -135,6 +135,22 @@ class MediateProxy<Api : Any>(
      * `payload` field can be read; what the verifier rejected is the *claim*
      * the envelope makes, not its structure. An `UNSIGNED` refusal has no
      * envelope to open for that argument, and it passes through untouched.
+     *
+     * **What this costs, stated where it happens.** Unwrapping is
+     * unconditional over readable envelopes — the decided design (this is
+     * `computenet-usd.2.1`'s "unwrapped to its payload; raw args as-is"), and
+     * it is what makes discharge cover a payload the top-level-only sanitizer
+     * would miss *inside a container* as well as a bare `Owned`/`Leased`. The
+     * price is that an **ordinary** (non-exclusive) refusal's dead letter now
+     * captures the payload where it used to capture the whole `SignedDelta`,
+     * so the envelope's peer/counter are no longer readable off the captured
+     * argument. They are not restored by [envelopeNote] either, which fires
+     * only for exclusives on purpose: the denial rate is set by whatever a
+     * remote peer chooses to send (`computenet-usd.6`, see
+     * `DeadLetters.boundaryDenial`), so the refusal path may not grow a string
+     * build per refusal for an identity the [civictech.cell.BoundaryDenial]
+     * already names as `principal`, and that `detail` already carries the
+     * counter for the one reason it discriminates on (`REPLAY`).
      */
     private fun refusedArgs(args: Array<out Any>): List<Any?> =
         args.map { (it as? SignedDelta<*>)?.payload ?: it }
@@ -142,8 +158,10 @@ class MediateProxy<Api : Any>(
     /**
      * The envelope identity that unwrapping would otherwise drop from the
      * audit trail, as a `detail` fragment — emitted only when unwrapping
-     * actually surfaced an exclusive, so an ordinary refusal's record stays
-     * exactly as it was. `null` when there is nothing to say.
+     * actually surfaced an exclusive, so an ordinary refusal's
+     * [civictech.cell.BoundaryDenial] is byte-identical to before (its
+     * *captured argument* is not — see [refusedArgs]). `null` when there is
+     * nothing to say.
      *
      * A record is a **report**, never a payload carrier
      * ([civictech.cell.BoundaryDenial]), so the peer/counter go in as text
