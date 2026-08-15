@@ -193,6 +193,14 @@ class EffectfulBaselineGuardTest {
      * outlet-wave record uses. This sink is neither `Stateful` nor holder of any
      * frontier entry, so its discharged baselines are the *only* recoverable
      * content its journal has.
+     *
+     * The retransmit AFTER the checkpoint is what makes this bite. Compaction
+     * truncates the original frame away, so a journal holding only the checkpoint
+     * blob replays nothing and would recover cleanly whether or not the discharge
+     * survived — the re-emission is observable only against a frame journaled
+     * after the reset, which is exactly what an upstream retransmit of the
+     * baseline reply produces (suppressed live by the in-memory set, journaled by
+     * the intake tee regardless).
      */
     @Test
     fun `checkpoint compaction preserves a discharged baseline (24-DUR-08)`() {
@@ -202,16 +210,24 @@ class EffectfulBaselineGuardTest {
         val logicalId = UUID.randomUUID()
         val source = UUID.randomUUID()
         val anchor = TagFrontier(mapOf(UUID.randomUUID() to 2L))
+        val context = baseline(source, 5L, anchor)
 
         var host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
         host.managementInlet.call.spawn(NotifierCell(CellRef(logicalId), world))
         controller.runToIdle()
 
-        CurrentContext.with(baseline(source, 5L, anchor)) { sinkOn(host, CellRef(logicalId)).provide(100) }
+        CurrentContext.with(context) { sinkOn(host, CellRef(logicalId)).provide(100) }
         controller.runToIdle()
         world shouldBe listOf(100)
 
         host.checkpoint(journal)
+
+        // the same catch-up position again, now journaled on the POST-checkpoint
+        // tail: suppressed live, and the compacted discharge is the only thing
+        // that will suppress it again on replay
+        CurrentContext.with(context) { sinkOn(host, CellRef(logicalId)).provide(100) }
+        controller.runToIdle()
+        world shouldBe listOf(100)
 
         host = ManagedHost(scheduler = controller.scheduler(), journal = journal)
         host.managementInlet.call.spawn(NotifierCell(CellRef(logicalId), world))
