@@ -617,12 +617,49 @@ original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`
 
 **Three residuals, stated because retiring an entry is not a licence to round up**:
 
-1. **No corpus scenario covers the externally-driven case yet.** `[24-DUR-06]`
-   enters `CONCORDANCE.md` as a `gap` row. The scenario needs the retransmit /
-   duplicate-delivery verb gated in `computenet-yh6.1.3.3` (a `concord/schema`
-   change under the single-writer contract), which was not available when this
-   landed; inventing a binding out of existing verbs was explicitly out of scope.
-   Filed as `computenet-109f` — see **Follow-up** below. KFX-17's prohibition is
+1. **No corpus scenario covers the externally-driven case** (`coverage-gap`, still
+   open — re-diagnosed 2026-08-15 on `computenet-109f`). `[24-DUR-06]` enters
+   `CONCORDANCE.md` as a `gap` row, and the `dur` profile asserts nothing about
+   it. As filed, this residual named the retransmit / duplicate-delivery verb
+   gated in `computenet-yh6.1.3.3` as the missing capability. **That verb has
+   since landed** (documented in `concord/schema/scenario.md`, bound by
+   `computenet-yh6.1.8`) **and it does not unblock this residual.** The reason is
+   structural, not incidental: a `retransmit` step *states* a wave position
+   (`{type: retransmit, on: c, source: s, counter: N, …}`), while the frame
+   `[24-DUR-06]` is about is defined by having **none** — a verb that names a
+   position cannot drive the path whose defining property is the absence of one.
+   `scenario.md`'s own `retransmit` subsection says as much ("That one this verb
+   does not resolve: a retransmit states a position"); what the retransmit verb
+   did retire is the *third* boundary below (`[24-DUR-02]`'s checkpoint
+   frontier), and the two were being conflated.
+
+   What this residual actually needs is **two further gated `concord/schema`
+   additions**, filed as `computenet-em9i`:
+
+   - a **contextless-drive step verb** — drive a named cell's `PORT_API` inlet
+     with no message context, the shape `HostedCellProxy` produces off the data
+     path. `apply` cannot: it drives an op through a cell's own outlet and the
+     driver mints the next wave position. `retransmit` cannot: it states a
+     position, and its kernel binding admits an `effect-sink` target only.
+     Reaching a contextless delivery by exploiting the fact that the *kernel*
+     binding's `apply` happens to enter a source's inlet unstamped would be an
+     accident of that binding rather than neutral semantics — another conforming
+     driver may stamp — i.e. exactly the invented binding this residual and
+     `computenet-yh6.1.3.5` both excluded;
+   - a **refusal-accounting observable**. `[24-DUR-06]` requires the refusal to
+     be *accounted*, not merely non-acting, and the check vocabulary's only
+     dead-letter surface is `no-dead-letters` (zero across all hosts) — the
+     inverse of what must be asserted here, since the refusal *is* reported as a
+     dead letter. `{type: effect-count, sink: s, exactly: 0}` states only the
+     other half (the effect did not fire) and on its own is satisfied by a silent
+     drop, which is the very failure the rule forbids.
+
+   The stamped-lane half the follow-up also wants (the same drive through an
+   `ActorIngress` lane firing exactly once across crash/replay, and once more
+   when re-delivered live) is blocked on the same absence: no verb creates an
+   actor lane. Until those land, the kernel `EffectfulInletGuardTest` carries the
+   assertions and this ledger carries the honesty — deliberately no scenario,
+   per the same rule that governed the entry as filed. KFX-17's prohibition is
    discharged either way: what it forbade was a scenario asserting the *weaker*
    rule, and there is no longer a weaker rule to assert.
 2. **The per-actor durable identity is not implemented here.** The kernel enforces
@@ -718,8 +755,11 @@ the honesty.
   position" by refusing the ones that do not, and is therefore not waiting on
   CON1. See the retirement note at the head of this entry.
 - **Follow-up**: the corpus scenario for the externally-driven `[24-DUR-05]` /
-  `[24-DUR-06]` case, gated on the `computenet-yh6.1.3.3` schema verb — filed as
-  `computenet-109f`.
+  `[24-DUR-06]` case — filed as `computenet-109f`, which established (2026-08-15)
+  that the `computenet-yh6.1.3.3` retransmit verb it was gated on cannot express
+  the case, and re-filed the real capability as `computenet-em9i` (a
+  contextless-drive step verb plus a refusal-accounting check). See residual 1
+  above for the argument.
 
 ### The third boundary (`coverage-gap`, `[24-DUR-02]`, KFX BS-12) — the checkpoint's *frontier* half asserts nothing — RETIRED by `DUR-CKPT-FRONTIER-01` (`computenet-yh6.1.8`)
 
