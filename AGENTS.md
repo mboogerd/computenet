@@ -135,6 +135,16 @@ Treat these as system-wide constraints even when a ticket touches one seam:
 - Tests should assert semantic outcomes and failure-path accounting, not internal
   scheduling timing. Use bounded waits and existing simulation controls
   (`testkit`'s `SimWorld`/`awaitUntil`).
+- Agent sessions in this repo run zsh, where `:` followed by `r`/`h`/`t`/`e`
+  (and others) right after an unbraced parameter expansion is a history
+  modifier, not literal path text — `:r` strips an extension. A hand-typed
+  same-path bind mount, `docker run -v "$REPO:$REPO:ro" ...`, expands to a
+  mount one character off from `$REPO` (the trailing `:ro` is read as `:r`
+  applied to the second `$REPO`, plus a literal `o`), so `$REPO` is absent
+  inside the container and anything rooted under it — a classpath, a script
+  path — fails in a way that looks like an unrelated bug. Brace it:
+  `-v "${REPO}:${REPO}:ro"`. See `scripts/flake-loop/run-linux-loop.sh` for a
+  worked case (computenet-yj6/computenet-m3iy).
 
 ## Verification
 
