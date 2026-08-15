@@ -100,6 +100,11 @@ deliberate, and the reasoning belongs here rather than only on the bead:
    showed the pain was *count*, not duration — 10 calls in a minimal session.
    Two calls cost ~1.1–1.4 min (§2), under the 2-minute threshold that doc
    pre-registered. Cutting the last two buys ~68s.
+
+   *(Those per-call figures are the retired `refs/dolt/data` transport. On the
+   DoltHub remote, re-measured 2026-08-15, two calls cost ~20s and cutting
+   them would buy ~20s — see §2. The argument this point makes is unaffected:
+   it got cheaper, not more expensive.)*
 2. **What those 68s would cost.** The session-start pull is the *only*
    mechanism by which a machine sees the other machine's claims. Remove it and
    two machines can take the same epic with nothing anywhere noticing until a
@@ -126,7 +131,9 @@ two remaining sites come out.
 
 Decided by the user 2026-08-13. The exactly-two count above was shaped by the
 ~10-minute-round-trip era; with the measured ~30s round-trip the constraint
-moved from cost to correctness, and the policy is now the principle **sync
+moved from cost to correctness (re-measured 2026-08-15 against DoltHub: a
+delta-carrying round-trip is **19.7s**, and a full acquisition bracket ~21s —
+§2, so the decision holds a fortiori), and the policy is now the principle **sync
 brackets acquisition, not writes; ownership makes writes free**:
 
 - **Owned territory** (items under an epic the session claimed, items it
@@ -175,38 +182,65 @@ working convention, not a fence. Skill-side statement of the same policy:
     failed — every failure branch calls `exit` with a nonzero code before
     returning.
 
-## 2. Recomputed per-session cost
+## 2. Per-session cost (DoltHub, measured 2026-08-15)
 
-Source: `doc/ops/beads-sync-cost.md` (computenet-o97.3, PR #62) — measured,
-not re-measured here per this task's instructions. Its raw per-call numbers:
+Source: `doc/ops/beads-sync-cost.md`, section "DoltHub remote — full
+re-measurement 2026-08-15" (computenet-cyd), which carries the raw readings,
+the commands, and the delta sizes. Measured on MacBoo against
+`https://doltremoteapi.dolthub.com/mrboo/computenet`, database 303M / 535
+issues, `/usr/bin/time -p`, with real deltas minted deliberately (a throwaway
+probe bead for pushes; a scratch `bd bootstrap` clone pushing from the other
+side for pulls). No-op and real-delta cost are reported separately because
+they differ by roughly 2×:
 
-| Op | Mean | Median |
-|---|---|---|
-| `bd dolt pull` | 33.56s | 34.09s |
-| `bd dolt push` | 48.86s | 33.84s |
+| Op | delta | n | median | mean | range |
+|---|---|---|---|---|---|
+| `bd dolt pull` | nothing to fetch | 5 | 3.29s | 3.33s | 2.89–3.87s |
+| `bd dolt pull` | 1 commit | 4 | 7.06s | 7.04s | 6.54–7.50s |
+| `bd dolt pull` | 7 commits | 1 | — | 8.50s | — |
+| `bd dolt push` | nothing to send (warm) | 4 | 5.97s | 5.89s | 5.56–6.06s |
+| `bd dolt push` | 1–2 commits | 5 | 12.57s | 12.64s | 12.50–12.88s |
+| `bd dolt push` | 7–9 commits | 2 | — | 13.38s | 13.16–13.59s |
 
-**These numbers predate PR #64's move to the DoltHub remote (§ above) and are
-retained as history, not a current measurement** — see the staleness notice
-at the top of `doc/ops/beads-sync-cost.md`. A single 2026-08-14 sample against
-the current DoltHub remote (also recorded there) put one `bd dolt pull` at
-9.90s, well under this table's pull figures; that single sample is not a
-substitute for a full re-run of this section's model and none is claimed
-here. The per-session recomputation below is retained as-is because it is
-the number `.claude/skills/work/SKILL.md`'s own design (computenet-o97.5.1)
-was justified against, not because it is asserted current:
+The first push of a session costs ~13.7s even with nothing to send
+(cold start); subsequent no-op pushes settle at ~6s.
 
-With the skill cut down (computenet-o97.5.1) to exactly one pull (session
-start) and one push (Finalize) per session, the per-session cost recomputes
-as:
+**Publication cadence** — one session-start pull, one Finalize push, both
+carrying real deltas in practice:
 
-- **Means**: 33.56 + 48.86 = 82.4s ≈ **1.37 min**
-- **Medians** (excluding the recorded first-push outlier): 34.09 + 33.84 =
-  67.9s ≈ **1.13 min**
+    7.04 + 12.64 = 19.7s ≈ 0.33 min
 
-Both figures are under the 2-minute threshold that `beads-sync-cost.md`
-pre-registered before any measurement was taken. This job (§1) does not add
-to that per-session figure — it runs outside a live session, on its own
-schedule.
+**One acquisition bracket** (§0.1: pull → verify with `bd show` → local
+write → push):
+
+    7.04 + ~1.4 + 12.64 ≈ 21s   (≈17s when the pull has nothing to fetch)
+
+Local `bd` writes are ~0.7–1.9s each and are the small term. A session with
+four or five acquisition brackets plus the publication push therefore spends
+roughly **1.5–2 minutes** on sync in total — still under the 2-minute
+threshold `beads-sync-cost.md` pre-registered, but no longer by the wide
+margin the old transport's numbers implied for the *reduced* shape alone.
+Note what that means for the historical verdict: applied to these numbers,
+the old report's own ten-call minimal session comes to 1.92 min, i.e. the
+pre-registered GO rule would not have fired on DoltHub. §0.1 has since
+re-founded the policy on correctness rather than cost, so nothing here
+argues for reverting it; see `beads-sync-cost.md` for the full reasoning.
+
+**Limits of these figures, carried here so they are not lost in the
+derivation.** The largest delta measured is 9 Dolt commits — cost is
+near-flat over 1→9 (under a second), but a session-sized delta of hundreds
+of commits is **unmeasured** and must not be extrapolated from this. Every
+reading is one machine, one network, one ten-minute window. Conflict
+resolution (§3.3) is unmeasured.
+
+**Old-transport figures, superseded, kept only so a reader recognises them.**
+Against `refs/dolt/data` on GitHub (2026-08-12, 95M / 251-issue database):
+pull mean 33.56s / median 34.09s, push mean 48.86s / median 33.84s, giving
+the ~1.13–1.37 min two-call figure this section used to state. That path is
+retired; do not use those numbers for anything.
+
+This job (§1) does not add to the per-session figure — it runs outside a live
+session, on its own schedule.
 
 ## 3. Residual-loss window
 
@@ -235,6 +269,31 @@ The window is bounded by:
 Because durability still rests on the DoltHub remote, nothing on the OTHER
 machine or on the remote is at risk — only the lost machine's own unpushed
 local state.
+
+**Re-derived against the 2026-08-15 DoltHub measurements (§2).** The window's
+*duration* is not a function of sync cost — it is set by the publication
+cadence and by whether §8's schedule is installed. What the cost figures fix
+is the **price of narrowing it**, and that price is now small:
+
+- **Closing the first term entirely** (push after every write rather than at
+  Finalize) costs ~12.6s per push carrying a delta. That is affordable per
+  *acquisition* — which is exactly what §0.1 already mandates — and it is
+  what shrinks the double-claim window of §4 from a session to seconds.
+  Pushing per *write* is still the wrong trade, but the reason is no longer
+  cost: it is that ~6s of every push is handshake regardless of payload
+  (`beads-sync-cost.md`), so N small pushes cost ~N× one batched push while
+  protecting nothing extra inside owned territory.
+- **Closing the second term** is one run of §1's job: a delta-carrying pull
+  plus push, **19.7s**; ~9.3s if there is nothing to move either way. At that
+  price the second term is a scheduling decision, not a cost decision — an
+  hourly schedule costs under 8 minutes of wall clock per day and bounds the
+  term at ~1h instead of ~24h. §8 still installs nightly; the numbers do not
+  forbid tighter.
+
+So the honest statement of the residual is: **the window is as wide as the
+gap between publication pushes, and nothing about the transport's cost is
+what keeps it wide.** With no schedule installed (the state today, §5) the
+second term is unbounded, and 19.7s is what it would cost to bound it.
 
 ### 3.2 What a human does about it
 
@@ -389,7 +448,30 @@ After resolution, verify with `bd dolt pull` (expect `Pull complete.`) then
 `bd dolt push` (expect `Push complete.`). Note: a `bd dolt push` following a
 conflict resolution has been observed to take **over 120 seconds** (blowing a
 default 120s shell timeout) — run it able to finish in the background if
-scripting this.
+scripting this. *(That observation is from the retired `refs/dolt/data`
+transport, 2026-08-12. The post-conflict push has **not** been re-measured on
+DoltHub — no genuine two-sided conflict arose in the 2026-08-15 measurement
+window — so it stays as a warning, not as a current figure. For scale: an
+ordinary DoltHub push carrying a delta is ~12.6s (§2), and a clean two-sided
+merge of 8 local against 89 remote commits pulled in 4.08s of merge work.)*
+
+**Check the exit code, and do not truncate the output.** `bd dolt push`
+prints one line on success (`Push complete.`) and a multi-line block on
+failure, so a caller that pipes it through `tail -n` can read a rejection as
+a pass. The commonest failure is not a conflict at all but a plain
+non-fast-forward rejection when another machine pushed first:
+
+```
+Error: push to origin/main: Error 1105: To https://doltremoteapi.dolthub.com/mrboo/computenet
+ ! [rejected]            main -> main (non-fast-forward)
+```
+
+(exit 1 on `bd` 1.1.2; `.claude/skills/work/scripts/publish-beads.sh` records
+having seen the same rejection printed with **exit 0**, which is why that
+script matches on the output rather than the status — match on the output).
+Observed 2026-08-15 with a second machine active. The fix is the ordinary
+`bd dolt pull` then `bd dolt push` pair — it merged cleanly and needed no
+part of the operator sequence above.
 
 ## 4. Two-machine double-claim collision
 
@@ -439,9 +521,9 @@ bound it at all.)
 
 ## 5. Known-callers inventory
 
-**Re-derived against current main (computenet-o97.7, 2026-08-14), not edited
-in place from the earlier version of this table.** Derivation command, run
-from the repo root:
+**Re-derived against current main (computenet-o97.7, 2026-08-14; re-run
+2026-08-15 by computenet-cyd, which added the two `scripts/` rows below).**
+Derivation command, run from the repo root:
 
 ```bash
 grep -rnE 'bd dolt (pull|push)|dolt creds|dolthub\.com|refs/dolt/data|beads-nightly-sync\.sh' \
@@ -460,6 +542,8 @@ references — nothing in CI or a hook invokes sync.
 | `.claude/skills/work/SKILL.md` step 3 (`bd dolt pull`) | pull | Once, at session start |
 | `.claude/skills/work/SKILL.md` acquisition brackets (epic claim, item claim in another epic, SDLC-epic filing, stale-claim steal — several sites, e.g. lines ~287, ~1271–1272, ~1344–1347, ~1374, ~1568) | pull + push | Per acquisition, at the moment it happens (computenet-wpvy.3 policy, §0.1) |
 | `.claude/skills/work/SKILL.md` Finalize (`bd dolt push`, ~line 1426, with a recovery pull+push pair at ~1446–1447 if it's rejected non-fast-forward) | push | Once, at session end — the publication push |
+| `.claude/skills/work/scripts/claim-epic.sh` (push at ~line 72; on rejection, pull ~75 then push again ~86) | pull + push | Per epic acquisition — the executable form of the acquisition bracket above |
+| `.claude/skills/work/scripts/publish-beads.sh` (push ~line 23; on rejection, pull ~28 then push again ~34) | pull + push | Once, at Finalize — the executable form of the publication push, with its rejection recovery |
 | `.claude/skills/work/references/claim-sync.md` | pull + push | Not a separate invocation site — states the same acquisition-bracket and Finalize-recovery policy that `SKILL.md` implements; listed because it documents the pattern independently |
 | `.claude/skills/remediate-friction/SKILL.md` (pull at start ~line 57; acquisition push ~79–84; closing push ~145) | pull + push | Once at session start, then bracketed around each friction item claimed/filed, then once at session close — same acquisition-brackets-writes policy as `/work`, on its own separate lane |
 | `AGENTS.md` / `CLAUDE.md` Session Completion, "Team-maintainer opt-in only" step (`bd dolt push`) | push | Once, at end of a Beads workflow that is not a `/work` or `/remediate-friction` session, and only under the team-maintainer profile |
@@ -488,6 +572,10 @@ the `AGENTS.md` "Dolt sync... not remote sync" row are new — none appear in
 the version of this table shipped in PR #63; `remediate-friction` in
 particular did not exist yet. Every row that did exist before is still
 accurate; nothing in the old table names a caller that has since disappeared.
+**Added 2026-08-15 (computenet-cyd)**: `claim-epic.sh` and
+`publish-beads.sh`, which did not exist when the 2026-08-14 derivation ran —
+they are the executable forms of the acquisition bracket and the publication
+push, and are now where those two syncs actually happen.
 
 **Nothing in this repo runs the job automatically.** No launchd plist, cron
 entry, CI workflow or hook invokes `scripts/beads-nightly-sync.sh`; the word
