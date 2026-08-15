@@ -53,18 +53,29 @@ class LocationRegistry {
     /**
      * Instances-by-logical-id index (PN-7 perf cliff): see [InstanceIndex]'s
      * kdoc. Maintained in lockstep with [locations] on every install/removal.
+     *
+     * `internal` (OQ-1, computenet-iyi.4): kernel main-source reads this
+     * surface directly (`registry.instances.instancesOf(...)`, etc.) instead
+     * of the compatibility delegates below. Out-of-kernel callers stay on the
+     * delegates. Not constructor-injected — the one [LocationRegistry]
+     * instance is what keeps writer and reader on the same [InstanceIndex]
+     * (KX-16).
      */
-    private val instances = InstanceIndex()
+    internal val instances = InstanceIndex()
 
     /**
      * Declare [ref]'s interest (the interest-assignment table entry,
-     * CP-D2/CP-D3) — delegates to [instances]; see [InstanceIndex.setInterest].
+     * CP-D2/CP-D3) — compatibility delegate onto [instances] for out-of-kernel
+     * callers; see [InstanceIndex.setInterest]. Kernel main-source reads
+     * [instances] directly (OQ-1, computenet-iyi.4).
      */
     fun setInterest(ref: CellRef, interest: civictech.cell.link.Interest) = instances.setInterest(ref, interest)
 
     /**
      * [ref]'s declared interest, or [civictech.cell.link.Interest.Total] when
-     * unset — delegates to [instances]; see [InstanceIndex.interestOf].
+     * unset — compatibility delegate onto [instances] for out-of-kernel
+     * callers; see [InstanceIndex.interestOf]. Kernel main-source reads
+     * [instances] directly (OQ-1, computenet-iyi.4).
      */
     fun interestOf(ref: CellRef): civictech.cell.link.Interest = instances.interestOf(ref)
 
@@ -209,11 +220,18 @@ class LocationRegistry {
     /**
      * Every published instance (ref) sharing [logicalId] — local and remote (spec
      * 42). Served off the [InstanceIndex] (PN-7): O(instances-of-one-id), not
-     * a full scan of every published ref.
+     * a full scan of every published ref. Compatibility delegate onto
+     * [instances] for out-of-kernel callers; kernel main-source reads
+     * [instances] directly (OQ-1, computenet-iyi.4).
      */
     fun instancesOf(logicalId: java.util.UUID): Set<CellRef> = instances.instancesOf(logicalId)
 
-    /** Every published ref sharing [logicalId] — replicas, local and remote (spec 42). */
+    /**
+     * Every published ref sharing [logicalId] — replicas, local and remote
+     * (spec 42). Compatibility delegate onto [instances] for out-of-kernel
+     * callers; kernel main-source reads [instances] directly (OQ-1,
+     * computenet-iyi.4).
+     */
     fun replicasOf(logicalId: java.util.UUID): Set<CellRef> = instances.replicasOf(logicalId)
 
     /**
@@ -321,8 +339,14 @@ class LocationRegistry {
      * "park the flip window", [24-PART-04], CP-D4); see [DeliveryHold] for the
      * per-ref funnel-rule contract (93 I-19). Release replays [ref]'s current
      * location through the ordinary park/replay path — not a second buffer.
+     *
+     * `internal` (OQ-1, computenet-iyi.4): kernel main-source reads this
+     * surface directly (`registry.holds.isHeld(...)`) instead of the
+     * [isHeld] compatibility delegate. Out-of-kernel callers stay on the
+     * delegate. Not constructor-injected — the one [LocationRegistry]
+     * instance keeps writer and reader on the same [DeliveryHold].
      */
-    private val holds = DeliveryHold { ref -> locations[ref]?.let { replay(ref, it) } }
+    internal val holds = DeliveryHold { ref -> locations[ref]?.let { replay(ref, it) } }
 
     /** Park [ref]'s deliveries (per-ref, funnel rule) until [release] — the flip-window buffer. */
     fun hold(ref: CellRef) {
@@ -334,6 +358,8 @@ class LocationRegistry {
      * flip-window set (spec 20/24 §Partitioned state, PN-5): a scatter-gather
      * pull leg to a migrating shard defers rather than reading torn state — the
      * consumer's per-shard `since` makes the deferred leg's later pull fresh.
+     * Compatibility delegate onto [holds] for out-of-kernel callers; kernel
+     * main-source reads [holds] directly (OQ-1, computenet-iyi.4).
      */
     fun isHeld(ref: CellRef): Boolean = holds.isHeld(ref)
 

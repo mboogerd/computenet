@@ -133,7 +133,7 @@ class PartitionedShardSet<E>(
         // in-process or over a bridge — so it lands in the shard host's WAL.
         val assign = (HostedCellProxy.create(cell.ref, registry, ShardAssign::class.java) as ShardAssign).assignInlet.call
         shards += Shard(cell, interest, route, assign)
-        registry.setInterest(cell.ref, interest)
+        registry.instances.setInterest(cell.ref, interest)
     }
 
     /**
@@ -186,7 +186,7 @@ class PartitionedShardSet<E>(
         routingEpoch++
         shards.forEachIndexed { i, shard ->
             shard.interest = newInterests[i]
-            registry.setInterest(shard.cell.ref, newInterests[i])
+            registry.instances.setInterest(shard.cell.ref, newInterests[i])
             assignShard(shard, newInterests[i], routingEpoch)
         }
         emit(ledger.asDelta(), routingEpoch)
@@ -249,7 +249,7 @@ class PartitionedShardSet<E>(
         val newInterests = checkNotNull(pendingInterests)
         shards.forEachIndexed { i, shard ->
             shard.interest = newInterests[i]
-            registry.setInterest(shard.cell.ref, newInterests[i])
+            registry.instances.setInterest(shard.cell.ref, newInterests[i])
             assignShard(shard, newInterests[i], routingEpoch)
         }
         flipping = false
@@ -322,7 +322,7 @@ class PartitionedShardSet<E>(
      *
      * Freshness is per-shard-consistent, cross-shard-arbitrary: each leg is a
      * baseline (never a wave), and legs are independent — a shard that is
-     * mid-migration ([LocationRegistry.isHeld], the funnel-hold reuse) is skipped
+     * mid-migration ([civictech.cell.host.DeliveryHold.isHeld], the funnel-hold reuse) is skipped
      * here and its leg deferred to a later pull rather than read torn.
      *
      * [sinceOf] supplies the currency to pull each instance from — the consumer's
@@ -334,7 +334,7 @@ class PartitionedShardSet<E>(
     fun pull(replyTo: PortRef, scope: Interest, sinceOf: (CellRef) -> TagFrontier?) {
         shards.forEach { shard ->
             if (!shard.interest.overlaps(scope)) return@forEach
-            if (registry.isHeld(shard.cell.ref)) return@forEach // migrating — its leg defers
+            if (registry.holds.isHeld(shard.cell.ref)) return@forEach // migrating — its leg defers
             // Fan the StateRequest over the wire (the write path's transport), not
             // a direct object read: replyTo names the requester's inlet, since is
             // this instance's retained currency, and scope rides as a @Polymorphic

@@ -54,7 +54,7 @@ data class WatermarkDelta(
      * member's *existence* rides the same transitively-gossiped, idempotent CRDT
      * as its delivered frontier, so it converges more completely than the
      * point-to-point topology announcements that feed
-     * [civictech.cell.host.LocationRegistry.instancesOf] (which mirror only
+     * [civictech.cell.host.InstanceIndex.instancesOf] (which mirror only
      * direct peers). A settling node whose companion lists a member slot its own
      * `instancesOf` view has not accounted for holds every keyed wave
      * ([civictech.cell.replication.Replication.replicaFrontier] `membershipBarrier`)

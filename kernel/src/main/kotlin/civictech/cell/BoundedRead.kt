@@ -451,7 +451,7 @@ sealed interface StateReadResult {
 
         /**
          * The authoritative instance is not this host's: the ref is held for a
-         * migration flip ([civictech.cell.host.LocationRegistry.isHeld]), or it
+         * migration flip ([civictech.cell.host.DeliveryHold.isHeld]), or it
          * left this host's `cells` and is published elsewhere. Answering from a
          * stale local object would be a lie with a timestamp on it.
          */
