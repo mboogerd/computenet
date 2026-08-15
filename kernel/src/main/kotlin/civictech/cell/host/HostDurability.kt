@@ -23,6 +23,7 @@ private const val RECORD_FRAME: Byte = 1
 private const val RECORD_CHECKPOINT: Byte = 2
 private const val RECORD_FRONTIER: Byte = 3
 private const val RECORD_OUTLET_WAVE: Byte = 4
+private const val RECORD_BASELINE: Byte = 5
 
 /**
  * T05 finding 4: [HostDurability.recoverFrom] failed on [recordIndex] of
@@ -40,6 +41,31 @@ class RecoveryIncomplete(val recordIndex: Int, val total: Int, cause: Throwable)
  * `(sourceId, counter)` for one `(cellRef, portName)`.
  */
 private data class FrontierRecord(val cellRef: CellRef, val portName: String, val timestamp: Timestamp) :
+    Serializable
+
+/**
+ * Durable record that an [civictech.cell.evolve.Effectful] inlet **discharged a baseline**
+ * frame at one exact position (`[24-DUR-08]`, spec 24 §Effectful; 93 I-24): the sink acted
+ * on a frame carrying a [civictech.cell.MessageContext.baseline], whose timestamp — by
+ * `[24-DUR-07]` — may not advance the wave-position processed-frontier ([FrontierRecord]).
+ * Without this record such a firing would have nothing to suppress its own `recoverFrom`
+ * replay, and a crash after a catch-up join would re-fire the whole catch-up.
+ *
+ * An **exact position**, not a per-source high-water like [FrontierRecord]: a high-water
+ * would suppress every live frame from that source below the baseline's counter, which is
+ * precisely the frontier pollution `[24-DUR-07]` exists to prevent. An exact set suppresses
+ * only a re-delivery of the very frame that already fired, so it is safe to consult for
+ * every frame at the inlet, baseline-marked or not. Keying on `(sourceId, counter)` rather
+ * than on the baseline's link-install anchor also avoids the anchor recurring — two shards
+ * replying with equal frontiers (`PartitionedShardSet`'s N per-shard baselines) share an
+ * anchor but never a position, since 93 I-14 Rule S1 forbids re-issuing a pair.
+ *
+ * A **separate additive record type** for the same reason as [OutletWaveRecord]: a journal
+ * written before this change contains no `RECORD_BASELINE` and replays byte-for-byte as it
+ * always did, whereas widening [CheckpointRecord] would change its computed
+ * `serialVersionUID` and make every pre-existing checkpoint blob undecodable.
+ */
+private data class BaselineDischargeRecord(val cellRef: CellRef, val portName: String, val timestamp: Timestamp) :
     Serializable
 
 /**
@@ -141,6 +167,18 @@ internal class HostDurability(
     private val processedFrontier = mutableMapOf<Pair<CellRef, String>, MutableMap<UUID, Long>>()
 
     /**
+     * Discharged baselines (`[24-DUR-08]`, spec 24 §Effectful): per
+     * [civictech.cell.evolve.Effectful] inlet `(cellRef, portName)`, the exact positions of
+     * baseline-marked frames the sink has already acted on. Durable via
+     * [BaselineDischargeRecord], and **separate from** [processedFrontier] on purpose — a
+     * baseline's timestamp is anchored at the stamped link-install event rather than at a
+     * wave position, so it must never advance a wave-position high-water. This is the
+     * sink's own journaled state that makes a baseline firing crash-consistent, with no
+     * obligation on the producer, the ingress or the catch-up protocol.
+     */
+    private val dischargedBaselines = mutableMapOf<Pair<CellRef, String>, MutableSet<Timestamp>>()
+
+    /**
      * Replay this host's [journal] (M10.1): checkpoint records restore
      * `Stateful` state directly; invocation frames re-enter through the
      * ordinary intake (decode = the same path a network frame takes — a
@@ -195,6 +233,7 @@ internal class HostDurability(
 
                             RECORD_CHECKPOINT -> restoreCheckpoint(record.copyOfRange(1, record.size))
                             RECORD_FRONTIER -> restoreFrontier(record.copyOfRange(1, record.size))
+                            RECORD_BASELINE -> restoreBaselineDischarge(record.copyOfRange(1, record.size))
                             RECORD_OUTLET_WAVE -> restoreOutletWave(record.copyOfRange(1, record.size))
                             else -> error("unknown journal record type ${record[0]}")
                         }
@@ -301,21 +340,42 @@ internal class HostDurability(
                     )
                 }
             }
+            // `[24-DUR-08]`: the discharged-baseline positions of this journal's cells
+            // survive compaction too — they are the only thing standing between a
+            // journaled catch-up baseline and a re-fire of the whole join after a crash,
+            // and unlike the processed-frontier they cannot ride [CheckpointRecord]
+            // without changing its serialVersionUID (see [BaselineDischargeRecord]).
+            // Compacted while being written: a position the processed-frontier already
+            // covers is suppressed by [alreadyProcessed] anyway, so keeping it would only
+            // grow the set. That is the same test the guard applies first, so dropping it
+            // changes no decision.
+            val baselines = ArrayList<ByteArray>()
+            dischargedBaselines.forEach { (key, positions) ->
+                if (journalSelector(key.first) !== journal) return@forEach
+                positions.removeIf { (processedFrontier[key]?.get(it.sourceId) ?: -1L) >= it.counter }
+                positions.forEach {
+                    baselines += journalRecord(RECORD_BASELINE, BaselineDischargeRecord(key.first, key.second, it))
+                }
+            }
             // PN-0b: reset() truncates the WAL down to this checkpoint blob. If
             // the journal serves cells (frames on disk) but the blob captures
-            // NOTHING recoverable — no `Stateful` snapshot and no `Effectful`
-            // processed-frontier — those frames are the cells' only recovery,
-            // and the reset would silently destroy them. Refuse instead.
-            require(state.isNotEmpty() || frontier.isNotEmpty() ||
+            // NOTHING recoverable — no `Stateful` snapshot, no `Effectful`
+            // processed-frontier and no discharged baseline — those frames are the
+            // cells' only recovery, and the reset would silently destroy them.
+            // Refuse instead. A discharged-baseline position counts as recoverable
+            // content on the same footing as a frontier entry (`[24-DUR-08]`): for a
+            // sink whose whole durable contribution is "this catch-up already fired",
+            // it is exactly what the truncated frames would otherwise be replayed for.
+            require(state.isNotEmpty() || frontier.isNotEmpty() || baselines.isNotEmpty() ||
                 cells.keys.none { journalSelector(it) === journal }) {
                 "checkpoint would truncate a journal whose selected cells contribute " +
-                    "no snapshot and no processed-frontier — frame replay is their only " +
-                    "recovery, so resetting the WAL would destroy their state"
+                    "no snapshot, no processed-frontier and no discharged baseline — frame " +
+                    "replay is their only recovery, so resetting the WAL would destroy their state"
             }
             val blob = ByteArrayOutputStream()
                 .also { ObjectOutputStream(it).use { out -> out.writeObject(CheckpointRecord(state, frontier)) } }
                 .toByteArray()
-            journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves)
+            journal.reset(listOf(byteArrayOf(RECORD_CHECKPOINT) + blob) + waves + baselines)
         }
     }
 
@@ -353,6 +413,11 @@ internal class HostDurability(
         advanceFrontier(record.cellRef, record.portName, record.timestamp)
     }
 
+    private fun restoreBaselineDischarge(blob: ByteArray) {
+        val record = ObjectInputStream(ByteArrayInputStream(blob)).readObject() as BaselineDischargeRecord
+        recordBaselineDischarge(record.cellRef, record.portName, record.timestamp)
+    }
+
     /**
      * Effectful processed-frontier (G-59, fixes C-9): true iff [timestamp]
      * (from a specific source) is at or behind the last applied counter for
@@ -377,5 +442,34 @@ internal class HostDurability(
     fun advanceAndJournalFrontier(cellRef: CellRef, portName: String, timestamp: Timestamp) {
         advanceFrontier(cellRef, portName, timestamp)
         journalSelector(cellRef)?.append(journalRecord(RECORD_FRONTIER, FrontierRecord(cellRef, portName, timestamp)))
+    }
+
+    /**
+     * `[24-DUR-08]`: true iff this exact position was already discharged as a baseline
+     * firing at this `(cellRef, portName)`. Exact, never a high-water — see
+     * [BaselineDischargeRecord] for why, and why that makes it safe to consult for every
+     * frame at the inlet rather than only for baseline-marked ones.
+     */
+    fun alreadyDischargedBaseline(cellRef: CellRef, portName: String, timestamp: Timestamp): Boolean =
+        dischargedBaselines[cellRef to portName]?.contains(timestamp) == true
+
+    /** Records a discharged baseline position in memory. Callers decide whether to also journal it. */
+    private fun recordBaselineDischarge(cellRef: CellRef, portName: String, timestamp: Timestamp) {
+        dischargedBaselines.getOrPut(cellRef to portName) { mutableSetOf() } += timestamp
+    }
+
+    /**
+     * `[24-DUR-08]`, the baseline counterpart of [advanceAndJournalFrontier]: record that
+     * this `Effectful` inlet acted on a baseline-marked frame at [timestamp], and journal
+     * that fact on the same per-cell tee (CP-C1) the frame itself rode — so `recoverFrom`
+     * meets the discharge beside the frame and does not re-fire it. The wave-position
+     * processed-frontier is deliberately NOT advanced: a baseline is anchored at the
+     * stamped link-install event, not at a wave position.
+     */
+    fun recordAndJournalBaselineDischarge(cellRef: CellRef, portName: String, timestamp: Timestamp) {
+        recordBaselineDischarge(cellRef, portName, timestamp)
+        journalSelector(cellRef)?.append(
+            journalRecord(RECORD_BASELINE, BaselineDischargeRecord(cellRef, portName, timestamp)),
+        )
     }
 }
