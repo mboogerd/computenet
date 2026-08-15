@@ -20,6 +20,17 @@ prescribed writes are commissioned work. A close or a priority change on
 another bead is not, whatever prescribed it: report it rather than repairing
 it.
 
+## Contents
+
+1. The standard, then the diff — criteria from the bead, diff against the fetched base
+2. Prove the tests ran — not replayed from cache, and not zero tests
+3. Your run is on macOS; the required checks are not
+4. Repair, don't bounce — the authorship bound and `review:` commits
+5. Report — the verdict, stated in as many words
+
+Plus: **When the diff under review edits `.claude/skills/work/`** — the extra
+reading a self-modifying change needs, before §5.
+
 ## 1. The standard, then the diff
 
 ```bash
@@ -429,6 +440,20 @@ to be broken deliberately:
   `main` told it to run a step that the very PR deletes. Do the step, note the
   contradiction in your report, and **do not record it as a defect in the
   PR** — the PR removing a step is the point of the PR, not a fault in it.
+
+- **Run the skills rubric gate.** It is the one check a skill diff has that
+  compiling and testing cannot give it, and it lives outside this flow, so
+  nothing else will run it:
+
+  ```bash
+  ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
+  ```
+
+  Run it from `main`'s copy per the rule above, against the worktree's files.
+  Failures are structural (bad frontmatter, a long reference with no
+  `## Contents`) and are defects in the PR. Notes prefixed `note:` are
+  warnings — report them, but do not fail a PR for a pre-existing one it did
+  not introduce.
 
 The reason to read from `main` rather than the worktree is not only
 circularity. The main checkout's local branch is not refreshed by anything in
