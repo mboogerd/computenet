@@ -5,6 +5,7 @@ import civictech.cell.data.OrMapCell
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffType
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * Folds the feed's [ChangeRecord]s into the mirror's issue-field OR-map
@@ -52,9 +53,24 @@ class MirrorProjector(
     private val mintedLive = mutableMapOf<MirrorKey, MutableSet<Timestamp>>()
 
     /**
+     * The held-dot registry (computenet-dqj.2.3): the cn_dot renderings of
+     * every dot this projector has itself minted, plus the cn_dot of every
+     * record it has applied. Consulted by [admits] before any minting.
+     */
+    private val heldDots = CnDotRegistry()
+
+    /**
+     * How many inbound records have been dropped whole because their
+     * `metadata.cn_dot` was already held — an observable counter so the drop
+     * is externally verifiable rather than only internally consistent.
+     */
+    var echoDropCount: Int = 0
+        private set
+
+    /**
      * Apply one record. Returns the delta injected, or `null` when the record
-     * was effective-nothing (an edge-only record, or a replay that re-minted
-     * dots the map already holds and tombstoned nothing new).
+     * was effective-nothing (an edge-only record, a dropped echo, or a replay
+     * that re-minted dots the map already holds and tombstoned nothing new).
      */
     fun apply(record: ChangeRecord): TaggedMapDelta<MirrorKey, String>? {
         // ---- pre-apply hook (computenet-dqj.2.3, cn_dot echo drop) ----------
@@ -66,6 +82,8 @@ class MirrorProjector(
         val delta = fieldDelta(record)
         if (delta != null) cell.deltaInlet.call.propagate(delta)
 
+        cnDotOf(record)?.let(heldDots::add)
+
         // ---- edge seam (computenet-dqj.2.2) ---------------------------------
         // `record.edgeDiffs` is projected into the dependency SetCell here,
         // minting from the same [minter] so edge tags share the dot source.
@@ -76,11 +94,37 @@ class MirrorProjector(
     fun applyAll(records: Iterable<ChangeRecord>) = records.forEach(::apply)
 
     /**
-     * Whether this record reaches the projection at all. Unconditionally `true`
-     * until the echo-drop registry lands (computenet-dqj.2.3).
+     * The record's `metadata.cn_dot`, or `null` when it carries none.
+     *
+     * Read from `newMetadata`; a [DiffType.REMOVED] row has no `to_` side, so
+     * its provenance is read off `oldMetadata` instead. Anything other than a
+     * JSON string is not a shape this envelope can carry, so it is treated as
+     * absent rather than coerced.
      */
-    @Suppress("UNUSED_PARAMETER", "FunctionOnlyReturningConstant")
-    private fun admits(record: ChangeRecord): Boolean = true
+    private fun cnDotOf(record: ChangeRecord): String? {
+        val source = record.newMetadata
+            ?: if (record.diffType == DiffType.REMOVED) record.oldMetadata else null
+        val element = source?.get(CN_DOT_FIELD)
+        return (element as? JsonPrimitive)?.takeIf { it.isString }?.content
+    }
+
+    /**
+     * Whether this record reaches the projection at all.
+     *
+     * A record without a `metadata.cn_dot` (the normal single-node case) is
+     * always admitted. One carrying a cn_dot this projector already holds —
+     * because it minted the dot itself, or because it applied this exact
+     * record before — is dropped whole and counted; anything else is admitted
+     * and its cn_dot is recorded as held once [apply] commits it.
+     */
+    private fun admits(record: ChangeRecord): Boolean {
+        val cnDot = cnDotOf(record) ?: return true
+        if (heldDots.holds(cnDot)) {
+            echoDropCount++
+            return false
+        }
+        return true
+    }
 
     /**
      * The record's key list, in the order whose indices [DotMinter] packs.
@@ -150,6 +194,7 @@ class MirrorProjector(
             tombstone(key)
             puts[key] = mapOf(dot to value)
             mintedLive.getOrPut(key) { LinkedHashSet() } += dot
+            heldDots.addMinted(dot)
         }
 
         when (record.diffType) {
@@ -209,3 +254,6 @@ class MirrorProjector(
     /** The live value at one key, ungated by presence — the raw map read. */
     fun rawValue(key: MirrorKey): String? = cell.value(key)
 }
+
+/** The `metadata` JSON column's provenance field (epic computenet-dqj acceptance rule 5). */
+private const val CN_DOT_FIELD: String = "cn_dot"
