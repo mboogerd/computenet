@@ -84,6 +84,31 @@ Both halves are the instruments the claim files actually verified. No third
 instrument is proposed here, and neither half is a design sketch to be
 re-derived downstream.
 
+**What "VERIFIED" does not cover.** Both instruments were measured only on
+`mktemp -d` rig roots under bd's *default* `--dolt-auto-commit` policy, and
+the claim files record these limits as unmeasured (claim (a) "Risks to
+record"; claim (b) "Explicitly not tested" and "What would overturn this
+verdict"). They qualify the table above and are the re-scope's inputs:
+
+- `dolt_diff_issues` is **not a `bd` surface** — beads declares its events
+  journal record stable for external consumers, the Dolt diff system tables
+  carry no such promise, and a beads schema change breaks a projector on them
+  silently. This is the main cost of the read half.
+- **Commit granularity is a configuration, not a guarantee.** Under
+  `--dolt-auto-commit batch` several mutations coalesce into one commit and
+  the feed coarsens; under a non-default policy the write half's per-row
+  commit cost may also change. Untested either way — claim (b) calls it the
+  single most valuable follow-up measurement.
+- **History compaction** (`bd compact`/`gc`/`flatten`) squashes the read
+  half's feed by design, and surfaces as a missing checkpoint commit rather
+  than a typed event. Untested.
+- **No watch.** The read half is polling `dolt_log`; `bd sql` is unusable in
+  embedded mode, so access is the `dolt` CLI or a Dolt SQL connection.
+- Filtering `dolt_diff_issues` by a **local-time** boundary returns an empty
+  feed rather than an error (`dolt_log`/`dolt_diff_*` timestamps are UTC), and
+  `bd history --json` is not a substitute — it reaches imported updates but
+  projects `metadata` as `null`.
+
 ### Consequences for the BDS line
 
 The epic's conditional — "IF claim (a) or claim (b) failed, THEN the finding
