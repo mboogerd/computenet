@@ -25,7 +25,12 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
 import java.util.UUID
+
+/** Refusals driven in one burst — a stand-in for a peer spamming a rate-limited protocol. */
+private const val BURST = 1024
 
 /** Minimal organelle: an inlet that swallows whatever it is given. */
 private class SinkOrganelle(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
@@ -203,6 +208,79 @@ class BoundaryDenialAccountingTest {
         // sink deliberately does NOT discharge exclusives itself — there is
         // exactly one discharge site, inside DeadLetters' R8 sanitization.
         owned.take() shouldBe "still-live"
+    }
+
+    /**
+     * computenet-usd.6: the denial rate is set by whatever a remote peer
+     * chooses to send, so the *reporting* of a refusal must not cost more than
+     * the refusal. Two bounds, asserted on one burst:
+     *
+     * - stderr is metered (`DeadLetters.shouldLogDenial`: first 8 in full, then
+     *   powers of two) — 1024 refusals write **15** lines, not 1024;
+     * - `supervisionAccounting().deadLetters` stays a **fault** count and does
+     *   not move at all, while the refusals are counted on their own channel.
+     *
+     * Both numbers are the mutation the fix is falsifiable by: against the
+     * pre-fix code — where `boundaryDenial` called `deadLetter`, which prints
+     * unconditionally and increments the fault counter — this test reads 1024
+     * and 1024.
+     */
+    @Test
+    fun `a burst of refusals is metered on stderr and never touches the fault counter`() {
+        val controller = SimulationController(seed = 9)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val membrane = AccountedMembrane()
+        host.managementInlet.call.spawn(membrane)
+        controller.runToIdle()
+
+        val sink = membrane.boundaryDenials["exposedInlet"]!!
+        val faultsBefore = host.supervisionAccounting().deadLetters
+
+        val captured = ByteArrayOutputStream()
+        val realErr = System.err
+        try {
+            System.setErr(PrintStream(captured, true))
+            repeat(BURST) {
+                sink.deny(
+                    seam = BoundarySeam.PROTOCOL_AUTHORITY,
+                    reason = DenialReason.RATE,
+                    principal = PeerId("mallory"),
+                    subject = "chat",
+                    detail = "over ratePerWindow",
+                )
+            }
+        } finally {
+            System.setErr(realErr)
+        }
+        controller.runToIdle()
+
+        // 1. every refusal is accounted, on the denial channel, at both scopes
+        sink.denialCount shouldBe BURST.toLong()
+        host.boundaryDenialCount() shouldBe BURST.toLong()
+
+        // 2. and none of it reached the fault counter — the thing a dozen
+        //    suites read as "did this host crash anything"
+        host.supervisionAccounting().deadLetters shouldBe faultsBefore
+
+        // 3. stderr is metered: 8 head lines + one per power of two in (8, 1024]
+        //    = 16, 32, 64, 128, 256, 512, 1024 -> 15 lines for 1024 refusals.
+        val expectedLines = 15L
+        host.boundaryDenialLogLines() shouldBe expectedLines
+        // and the counter is not a proxy for the print — count the real stream
+        val lines = captured.toString(Charsets.UTF_8).lines().filter { it.isNotBlank() }
+        lines.size.toLong() shouldBe expectedLines
+        lines.first() shouldContain "boundary denial #1"
+        // the last metered line carries the running total and what it stands in
+        // for, so a sample is still an audit trail and not a silent drop
+        lines.last() shouldContain "boundary denial #$BURST"
+        lines.last() shouldContain "511 since the previous line suppressed"
+
+        // 4. nothing was suppressed from the record channel: metering is the
+        //    stderr line only, so the sanitized report for every refusal still
+        //    reaches the dead-letter outlet
+        letters.size shouldBe BURST
     }
 
     @Test
