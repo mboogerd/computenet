@@ -2,9 +2,12 @@ package civictech.demo.beadsmirror.projector
 
 import civictech.cell.Timestamp
 import civictech.cell.data.OrMapCell
+import civictech.cell.data.SetCell
+import civictech.cell.data.delta.SetDelta
 import civictech.cell.data.delta.TaggedMapDelta
 import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffType
+import civictech.demo.beadsmirror.feed.EdgeDiff
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
@@ -31,15 +34,27 @@ import kotlinx.serialization.json.JsonPrimitive
  * therefore reads [MirrorKey.PRESENT] alone, and such a straggler shows up as a
  * dead field key rather than as a half-resurrected issue.
  *
- * **Scope.** Issue *fields* only. Dependency-edge projection (computenet-dqj.2.2)
- * and the `metadata.cn_dot` echo drop (computenet-dqj.2.3) extend [apply] at the
- * two seams marked in it; re-baseline (dqj.3) and HTTP serving (dqj.4) are later
- * features.
+ * **Edges share the dot source but never a key-index slot.** Dependency-edge
+ * diffs (computenet-dqj.2.2) mint from the same [minter], reusing
+ * [DotMinter.dot]'s `(position, keyIndex)` packing rather than forking it, but
+ * a record's edge tags always sit at key indices *above* every field key index
+ * that same record reserves ([edgeDelta]) — so a field put and an edge add
+ * minted by the same record never collide on one dot, even though the two
+ * live in unrelated cells and a collision would cause no cell-level harm on
+ * its own. [heldDots] is what makes that matter: it is one registry shared by
+ * both halves, and two different puts rendering to the same cn_dot would
+ * defeat "a dot identifies exactly one put".
+ *
+ * **Scope.** Issue fields and dependency edges. The `metadata.cn_dot` echo
+ * drop (computenet-dqj.2.3) gates both, before either mints anything
+ * ([admits]); re-baseline (dqj.3) and HTTP serving (dqj.4) are later features.
  */
 class MirrorProjector(
     private val minter: DotMinter,
     /** The projected map. Exposed so tests and later features can read/subscribe. */
     val cell: OrMapCell<MirrorKey, String> = OrMapCell(),
+    /** The projected dependency-edge set. Exposed so tests and later features can read/subscribe. */
+    val edges: SetCell<MirrorEdge> = SetCell(),
 ) {
 
     /**
@@ -51,6 +66,16 @@ class MirrorProjector(
      * makes replay idempotent rather than merely convergent.
      */
     private val mintedLive = mutableMapOf<MirrorKey, MutableSet<Timestamp>>()
+
+    /**
+     * [mintedLive]'s counterpart for the dependency-edge set (computenet-dqj.2.2):
+     * the add-tags this projector has minted per [MirrorEdge] and still
+     * believes live. A removal tombstones exactly these — restricted to the
+     * ones minted before the removing record, the same floor [fieldDelta]
+     * applies, and for the same reason: an unbounded cover would let one
+     * record's replay bury a *later* record's live tag (see [edgeDelta]).
+     */
+    private val mintedLiveEdges = mutableMapOf<MirrorEdge, MutableSet<Timestamp>>()
 
     /**
      * The held-dot registry (computenet-dqj.2.3): the cn_dot renderings of
@@ -82,11 +107,11 @@ class MirrorProjector(
         val delta = fieldDelta(record)
         if (delta != null) cell.deltaInlet.call.propagate(delta)
 
+        val edgeChange = edgeDelta(record)
+        if (edgeChange != null) edges.deltaInlet.call.propagate(edgeChange)
+
         cnDotOf(record)?.let(heldDots::add)
 
-        // ---- edge seam (computenet-dqj.2.2) ---------------------------------
-        // `record.edgeDiffs` is projected into the dependency SetCell here,
-        // minting from the same [minter] so edge tags share the dot source.
         return delta
     }
 
@@ -229,6 +254,82 @@ class MirrorProjector(
         return TaggedMapDelta(puts, dels)
     }
 
+    /**
+     * This record's [EdgeDiff]s, in the deterministic order [edgeDelta] packs
+     * them into key indices. Sorted on the triple itself — not on arrival
+     * order in `record.edgeDiffs`, which reflects `dolt_diff_dependencies`' own
+     * row order and is not something a replay can be relied on to reproduce.
+     */
+    private fun sortedEdgeDiffs(record: ChangeRecord): List<EdgeDiff> =
+        record.edgeDiffs.sortedWith(
+            compareBy({ it.issueId }, { it.dependsOnIssueId }, { it.type })
+        )
+
+    /**
+     * The one [SetDelta] this record's dependency-edge half contributes, or
+     * `null` when the record carries no edge diffs at all (the common case —
+     * most records are field-only).
+     *
+     * **Key indices never collide with [fieldDelta]'s.** [keysOf] gives the
+     * exact count of key indices this same record's field half reserves
+     * (`0` when the record is edge-only, since [keysOf] is a pure function of
+     * `record.fieldDiffs` regardless of `diffType`); edge tags start one past
+     * that, in [sortedEdgeDiffs] order. A record's edges therefore never mint
+     * under a dot [fieldDelta] also minted, even though the two would land in
+     * unrelated cells and a collision would cause no cell-level harm on its
+     * own — see the class doc's note on why [heldDots] makes it matter anyway.
+     *
+     * **ADD and MODIFIED both mint an add-tag.** [EdgeDiff] carries only the
+     * *current* `type` (the diff row's `to_` side; see
+     * `DoltCommitFeed.edgeDiff`), never the prior one, so a `MODIFIED` edge —
+     * the dependency's relation `type` changed while the pair of issue ids
+     * stayed the same — cannot be told apart here from a fresh `ADDED` one,
+     * and a stale `(issueId, dependsOnIssueId, oldType)` triple this projector
+     * minted earlier has no observed removal to retract it. This is a known
+     * gap in what the current envelope can express, not something silently
+     * papered over: filing a fix would mean widening [EdgeDiff] upstream
+     * (computenet-dqj.1 territory), which is out of this task's claim.
+     *
+     * **REMOVED tombstones exactly this edge's live tags minted before this
+     * record** ([tombstoneEdge]) — the same past-only bound [fieldDelta]'s
+     * `tombstone` applies, and for the identical reason: replaying a
+     * multi-record sequence must not let an earlier record's replayed removal
+     * bury a later record's replayed (re-)add.
+     */
+    private fun edgeDelta(record: ChangeRecord): SetDelta<MirrorEdge>? {
+        if (record.edgeDiffs.isEmpty()) return null
+
+        val fieldKeyCount = keysOf(record).size
+        val floor = DotMinter.counter(record.position, 0)
+        val adds = LinkedHashMap<MirrorEdge, Set<Timestamp>>()
+        val dels = LinkedHashMap<MirrorEdge, MutableSet<Timestamp>>()
+
+        fun tombstoneEdge(edge: MirrorEdge) {
+            val live = mintedLiveEdges[edge] ?: return
+            val covered = live.filterTo(LinkedHashSet()) { it.counter < floor }
+            if (covered.isNotEmpty()) dels.getOrPut(edge) { LinkedHashSet() } += covered
+            live.removeAll(covered)
+            if (live.isEmpty()) mintedLiveEdges.remove(edge)
+        }
+
+        sortedEdgeDiffs(record).forEachIndexed { i, diff ->
+            val edge = MirrorEdge(diff.issueId, diff.dependsOnIssueId, diff.type)
+            val keyIndex = fieldKeyCount + i
+            when (diff.diffType) {
+                DiffType.REMOVED -> tombstoneEdge(edge)
+                DiffType.ADDED, DiffType.MODIFIED -> {
+                    val tag = minter.dot(record.position, keyIndex)
+                    adds[edge] = setOf(tag)
+                    mintedLiveEdges.getOrPut(edge) { LinkedHashSet() } += tag
+                    heldDots.addMinted(tag)
+                }
+            }
+        }
+
+        if (adds.isEmpty() && dels.isEmpty()) return null // effective-only
+        return SetDelta(adds, dels)
+    }
+
     // ---------------------------------------------------------------------
     // reads
     // ---------------------------------------------------------------------
@@ -253,6 +354,9 @@ class MirrorProjector(
 
     /** The live value at one key, ungated by presence — the raw map read. */
     fun rawValue(key: MirrorKey): String? = cell.value(key)
+
+    /** The materialized dependency set: the workspace's current edges. */
+    fun edgeView(): Set<MirrorEdge> = edges.membership()
 }
 
 /** The `metadata` JSON column's provenance field (epic computenet-dqj acceptance rule 5). */
