@@ -457,14 +457,17 @@ object Promotion {
      * [civictech.cell.link.LinkResult.Rejected] — calling it here would let a
      * policy denial re-enter after the gate went red and surface as a COMMIT
      * infrastructure fault. So this mints the same [civictech.cell.link.PortLink]
-     * the handshake would and registers it on both sides, and does nothing that
+     * the handshake would and registers it on both sides, and adds nothing that
      * can fail: no `onLink` (the admission hook — admission was PRECHECK's),
      * and no `onLinked`/`EdgeOpen` (the catch-up hooks — a promotion's state
      * handoff is the T0/T1 transfer or the T2 re-baseline immediately above,
      * and firing catch-up on top of either would double-deliver). The unlink
      * teardown mirrors the handshake's minus the `EdgeClose` marker, which
      * would be unbalanced against an `EdgeOpen` that was deliberately never
-     * emitted.
+     * emitted. The one call here that *can* throw is `FanOutlet.subscribe`'s
+     * SPSC check (spec 23), which predates this change and is not an admission
+     * decision; it is compensated in place (see below) so that even then COMMIT
+     * sees an untouched topology rather than a half-detached one.
      *
      * The identity re-registered is [civictech.cell.link.LinkSupport.identityFor]
      * on the incumbent — the peer the link was ESTABLISHED with, the same value
@@ -481,7 +484,24 @@ object Promotion {
             target?.linking?.remove(link)
         }
         from.unsubscribe(use.ref)
-        to.subscribe(use)
+        // The one call in this function that can throw is `subscribe`'s SPSC
+        // check (spec 23), and it is pre-existing — nothing added here is a
+        // gate. But a throw would escape BEFORE the [Rebound] below reaches
+        // [promote]'s `relinked` list, so the rollback that catches it could
+        // not reverse the detach above: this rebind compensates itself, so a
+        // failed rebind is a no-op on the topology rather than a silent
+        // half-detach ("no failure path may leave a partial topology").
+        try {
+            to.subscribe(use)
+        } catch (e: Exception) {
+            @Suppress("UNCHECKED_CAST")
+            (from as FanOutlet<Any>).subscribe(use)
+            detached.forEach { link ->
+                from.linking.register(link, identity)
+                target?.linking?.register(link, identity)
+            }
+            throw e
+        }
 
         val installed = PortLink(to.ref, use.ref, to, use as? Port, LinkRole.Consume) { link ->
             to.unsubscribe(use.ref)

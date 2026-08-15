@@ -89,8 +89,11 @@ class LinkSupport {
     /**
      * The identity that established this port's link to [targetRef], or null
      * when the link was made without a stamped peer — or by a path that runs no
-     * handshake at all (a direct `FanOutlet.subscribe` / `Use.fixed` endpoint,
-     * and the relink [civictech.cell.evolve.Promotion] performs at COMMIT).
+     * handshake at all (a direct `FanOutlet.subscribe` / `Use.fixed` endpoint).
+     * The relink [civictech.cell.evolve.Promotion] performs at COMMIT runs no
+     * handshake either, but is NOT such a path: since `computenet-usd.5.5` it
+     * re-registers the identity it read here off the incumbent, so a retained
+     * identity survives arbitrarily many promotions.
      * Callers MUST treat null as "local request", exactly as [allowPeers] does:
      * absence of a retained identity is not evidence of a remote one.
      *
