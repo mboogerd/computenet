@@ -18,6 +18,7 @@ import civictech.cell.protocol.Protocols
 import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -78,6 +79,40 @@ private class AttentionCeilingMembrane(
         policy = BoundaryPolicy(
             protocolAuthority = mapOf(Protocols.Attention to ProtocolAuthority(ceiling = ceiling)),
         ),
+    )
+}
+
+/**
+ * Composite exposing one organelle outlet under producer-side subscribe
+ * authority ([SEC1-12], option (a)). [mediateOutlet] demands a flow-time
+ * predicate, so `linkAuthority` rides alongside the cheapest one that changes
+ * nothing these tests observe (an attention ceiling on a protocol nobody sends).
+ */
+private class SubscribeAuthorityMembrane(
+    val organelle: SetCell<String> = SetCell(),
+    allowed: PeerId,
+) : CompositeCell() {
+    val exposedOutlet = mediateOutlet(
+        "exposedOutlet",
+        "outlet",
+        organelle.outlet,
+        policy = BoundaryPolicy(
+            linkAuthority = listOf(allowPeers(allowed)),
+            protocolAuthority = mapOf(Protocols.Attention to ProtocolAuthority(ceiling = AttentionBand.LOW)),
+        ),
+    )
+}
+
+/** The same producer-side authority declared through [flatten] — `linkAuthority` alone never forces Mediate. */
+private class FlattenedAuthorityMembrane(
+    val organelle: SetCell<String> = SetCell(),
+    allowed: PeerId,
+) : CompositeCell() {
+    val exposedOutlet = flatten(
+        "exposedOutlet",
+        "outlet",
+        organelle.outlet,
+        policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(allowed))),
     )
 }
 
@@ -287,5 +322,121 @@ class BoundaryPolicyTest {
         // Local (no stamped peer) requests are unaffected by the allowlist.
         host.managementInlet.call.connect(sourceRef, "outlet", membraneRef, "exposedInlet")
             .shouldBeInstanceOf<LinkResult.Connected>()
+    }
+
+    @Test
+    fun `seam 2, producer-side authority refuses an unauthorized subscriber and leaves no subscriber entry`() {
+        // [SEC1-12], option (a): the handshake evaluates the SOURCE port's own
+        // `linking.policies` as well as the target's, so a producing membrane
+        // can refuse a subscriber even though the handshake TARGET is the
+        // consumer's own (external) inlet.
+        val controller = SimulationController(seed = 16)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val membrane = SubscribeAuthorityMembrane(allowed = PeerId("alice"))
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        membrane.organelle.inlet.call.add("before-anyone-subscribes")
+        controller.runToIdle()
+
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+
+        val rejected = CurrentPeer.with(PeerId("mallory")) {
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+        }.shouldBeInstanceOf<LinkResult.Rejected>()
+        // The refusing policy is named (93 I-28 §4.4 rule 1: refusals are visible).
+        rejected.reason shouldContain "mallory"
+        rejected.reason shouldContain "allowlist"
+
+        // No partially-established topology survives the refusal ([SEC1-09]
+        // pattern): no link registered on the producer, and no delivery.
+        membrane.exposedOutlet.linking.links shouldBe emptyList()
+        membrane.organelle.inlet.call.add("after-the-refusal")
+        controller.runToIdle()
+        collector.received shouldBe emptyList()
+
+        // Default-open posture is preserved: a local request (null identity)
+        // carries no peer and is not gated ([SEC1-02], spec 43).
+        host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+            .shouldBeInstanceOf<LinkResult.Connected>()
+    }
+
+    @Test
+    fun `seam 2, producer-side authority admits an allowlisted peer and traffic flows`() {
+        val controller = SimulationController(seed = 17)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val membrane = SubscribeAuthorityMembrane(allowed = PeerId("alice"))
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+
+        CurrentPeer.with(PeerId("alice")) {
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+        }.shouldBeInstanceOf<LinkResult.Connected>()
+        controller.runToIdle()
+
+        membrane.organelle.inlet.call.add("for-alice")
+        controller.runToIdle()
+
+        collector.received.flatMap { it.adds.keys } shouldBe listOf("for-alice")
+    }
+
+    @Test
+    fun `seam 2, a negotiated tap on a producer-authorized outlet is gated the same way`() {
+        // PN-10/PN-12: `tap(negotiated = true)` routes through the very same
+        // handshake with the outlet as `portOut`, so the producer-side gate
+        // covers the Observe role too.
+        val controller = SimulationController(seed = 18)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val membrane = SubscribeAuthorityMembrane(allowed = PeerId("alice"))
+        host.managementInlet.call.spawn(membrane)
+
+        val observer = DeltaCollector()
+        host.managementInlet.call.spawn(observer)
+
+        CurrentPeer.with(PeerId("mallory")) {
+            membrane.exposedOutlet.tap(observer.inlet)
+        }.shouldBeInstanceOf<LinkResult.Rejected>()
+
+        membrane.organelle.inlet.call.add("not-for-mallory")
+        controller.runToIdle()
+        observer.received shouldBe emptyList()
+
+        CurrentPeer.with(PeerId("alice")) {
+            membrane.exposedOutlet.tap(observer.inlet)
+        }.shouldBeInstanceOf<LinkResult.Connected>()
+        membrane.organelle.inlet.call.add("for-alice")
+        controller.runToIdle()
+        // Alice's admitted tap gets the `onLinked` catch-up baseline (20/21
+        // §Pull) as well as the live element — including the one added while
+        // mallory was refused. The link-time gate decides WHO attaches; it is
+        // not a redaction of what an admitted subscriber then sees (that is
+        // `disclosure`'s seam).
+        observer.received.flatMap { it.adds.keys }.toSet() shouldBe setOf("not-for-mallory", "for-alice")
+    }
+
+    @Test
+    fun `seam 2, a flattened outlet's link-time authority refuses a non-allowlisted peer`() {
+        // `flatten`'s KDoc claims "authority is link-time onLink policies only"
+        // — for an exposed OUTLET that claim is only true once the source side
+        // of the handshake is evaluated.
+        val controller = SimulationController(seed = 19)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val membrane = FlattenedAuthorityMembrane(allowed = PeerId("alice"))
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+
+        CurrentPeer.with(PeerId("mallory")) {
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+        }.shouldBeInstanceOf<LinkResult.Rejected>()
+
+        host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+            .shouldBeInstanceOf<LinkResult.Connected>()
+        controller.runToIdle()
     }
 }
