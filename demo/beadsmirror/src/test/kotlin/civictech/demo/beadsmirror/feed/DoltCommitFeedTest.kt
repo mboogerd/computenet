@@ -109,6 +109,29 @@ class DoltCommitFeedTest {
             update.fieldDiff("metadata").shouldNotBeNull()
         }
 
+        /**
+         * The `removed` branch identifies by `from_id`, because a removal row has
+         * no `to_` side at all (only `to_commit`/`to_commit_date` survive) — the
+         * one production path whose column choice differs, and the only other
+         * test of it asserts a *failure*. Probed live 2026-08-15: `bd delete`
+         * writes exactly such a row.
+         */
+        @Test
+        fun `a deleted issue arrives as a removed record identified by its from side`() {
+            val a = workspace.createIssue("Issue A")
+            val beforeDelete = DoltCommitFeed(workspace.doltRoot).readFrom().last().commitHash
+
+            workspace.run("delete", a, "--force")
+
+            val records = DoltCommitFeed(workspace.doltRoot).readFrom(afterCommit = beforeDelete)
+            val removal = records.single { it.issueId == a }
+
+            removal.diffType shouldBe DiffType.REMOVED
+            val title = removal.fieldDiff("title").shouldNotBeNull()
+            title.old?.jsonPrimitive?.content shouldBe "Issue A"
+            title.new shouldBe null
+        }
+
         @Test
         fun `a dependency edge rides the record of the issue it belongs to`() {
             val a = workspace.createIssue("Issue A")
