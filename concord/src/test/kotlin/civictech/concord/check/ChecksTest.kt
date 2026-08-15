@@ -615,6 +615,37 @@ class ChecksTest {
         )
     }
 
+    /**
+     * The vacuous shape a **replicated** direct upstream would produce
+     * (computenet-cr7g). `SetCell.applyRemote` merges a peer's delta into the
+     * upstream without any scripted `add`, so `ghost` below reaches the sink through
+     * a door the scenario language does not open. The effect log records it firing
+     * **zero** times — it is simply absent — and the derived set, built from the
+     * script, is `{k1}`: union it with the produced keys and every key counts 1, so
+     * before the guard this passed while the sink had silently lost an effect. That
+     * is the exact failure mode `effect-count`'s unkeyed form exists to remove.
+     *
+     * The shape is not reachable through the kernel driver today — an `effect-sink`
+     * is built only by `KernelDriverDur`, and `KernelDriver.spawn` routes every
+     * durable-host cell into `dur` before it reads `replica-of` — so this is a unit
+     * fixture, not a corpus scenario, and the count above is stated rather than
+     * observed. The guard is what keeps the checker honest if either fact changes.
+     */
+    @Test
+    fun `effect-count without a key refuses when a direct upstream is a dist replica`() {
+        val scen = scenario(
+            cells = listOf(cell("src", "set-source").copy(replicaOf = "shared"), cell("sink", "effect-sink")),
+            links = listOf(link("src", "sink")),
+            script = listOf(apply("src", "add", s("k1"))),
+        )
+        val r = Checks.effectCount(
+            EffectCount(sink = "sink", exactly = 1),
+            FakeContext(FakeDriver(effects = mapOf("sink" to listOf(Effect("k1", s("k1"))))), scen),
+        )
+        fail(r)
+        (r as CheckResult.Failed).message shouldContain "cannot be derived"
+    }
+
     // --- expectedEffectKeys: the derivation itself (computenet-61w.1) --------
 
     /**
@@ -700,6 +731,29 @@ class ChecksTest {
                 cells = listOf(src, cell("up", "set-source"), esink),
                 links = listOf(link("src", "sink"), link("up", "src")),
                 script = listOf(apply("src", "add", s("k1"))),
+            ),
+            // computenet-cr7g — a replicated upstream gains elements through
+            // `SetCell.applyRemote`, a feed no `add` in the script names: the derived
+            // set would omit them, so an element that fired zero times would pass
+            // vacuously. Unreachable under today's kernel driver (an `effect-sink` is
+            // built only by `KernelDriverDur`, and `KernelDriver.spawn` short-circuits
+            // durable-host cells before its `replica-of` branch), which is why this
+            // row is a unit shape rather than a corpus scenario — the refusal is what
+            // keeps it unreachable *by the checker* if a binding ever changes.
+            "a direct upstream is a dist replica, so a peer delta can feed it unnamed elements" to scenario(
+                cells = listOf(src.copy(replicaOf = "shared"), esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "a replicated journal-set-source upstream, same hole through the durable binding" to scenario(
+                cells = listOf(jsrc.copy(replicaOf = "shared"), esink),
+                links = listOf(link("src", "sink")),
+                script = listOf(apply("src", "add", s("k1"))),
+            ),
+            "one of two direct upstreams is a replica" to scenario(
+                cells = listOf(src, cell("srcB", "set-source").copy(replicaOf = "shared"), esink),
+                links = listOf(link("src", "sink"), link("srcB", "sink")),
+                script = listOf(apply("src", "add", s("k1")), apply("srcB", "add", s("k2"))),
             ),
             "a cycle re-adds the source's own elements to it" to scenario(
                 cells = listOf(src, cell("mid", "set-view"), esink),
@@ -856,6 +910,23 @@ class ChecksTest {
             ),
         )
         derived(disjointSubgraph) shouldBe setOf("k1")
+
+        // computenet-cr7g, the replica refusal's resolving neighbour: `replica-of` is
+        // read on the sink's *direct upstreams*, not scenario-wide. A dist scenario
+        // that replicates cells elsewhere in the graph (`replicas-converge`'s shape)
+        // cannot feed this sink an unnamed element, so it must keep resolving —
+        // otherwise the guard would refuse by breadth rather than by mechanism.
+        val replicaOutsideTheCone = scenario(
+            cells = listOf(
+                src,
+                esink,
+                cell("r1", "set-source").copy(replicaOf = "shared"),
+                cell("r2", "set-source").copy(replicaOf = "shared"),
+            ),
+            links = listOf(link("src", "sink")),
+            script = listOf(apply("r1", "add", s("x")), apply("src", "add", s("k1"))),
+        )
+        derived(replicaOutsideTheCone) shouldBe setOf("k1")
 
         // computenet-yh6.1.8, DUR-LIVE-01's own shape: a retransmit re-delivering an
         // element the scripted adds already name leaves the derived set complete —
