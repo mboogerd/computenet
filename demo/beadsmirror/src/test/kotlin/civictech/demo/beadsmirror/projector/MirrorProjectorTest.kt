@@ -201,6 +201,48 @@ class MirrorProjectorTest {
         run(2) shouldBe run(1)
     }
 
+    @Test
+    fun `replaying an edit sequence keeps the field the last commit wrote`() {
+        // The removal sequence above is idempotent partly by luck: it ends with
+        // everything tombstoned, so a spurious tombstone cannot be seen. Here
+        // the sequence ends LIVE, which is what catches a re-put that
+        // tombstones dots outside its own past: the earlier record's replay
+        // would bury the later record's live dot, and the later record's replay
+        // would re-mint a dot already covered — leaving no live dot at all.
+        fun run(times: Int): Map<String, Map<String, String>> {
+            val projector = projector()
+            val records = listOf(
+                issueRecord(1, "A", DiffType.ADDED, "status" to "open"),
+                issueRecord(2, "A", DiffType.MODIFIED, "status" to "closed"),
+            )
+            repeat(times) { projector.applyAll(records) }
+            return projector.view()
+        }
+
+        run(1) shouldBe mapOf("A" to mapOf("status" to json("closed")))
+        run(2) shouldBe run(1)
+    }
+
+    @Test
+    fun `replaying a clear-then-reset sequence keeps the field`() {
+        // Same hazard on the tombstone-only path: the clear at height 2 must
+        // cover the dot minted at height 1 and nothing later, or the replayed
+        // reset at height 3 re-mints a dot the replayed clear just buried.
+        fun run(times: Int): Map<String, Map<String, String>> {
+            val projector = projector()
+            val records = listOf(
+                issueRecord(1, "A", DiffType.ADDED, "status" to "open"),
+                issueRecord(2, "A", DiffType.MODIFIED, "status" to null),
+                issueRecord(3, "A", DiffType.MODIFIED, "status" to "closed"),
+            )
+            repeat(times) { projector.applyAll(records) }
+            return projector.view()
+        }
+
+        run(1) shouldBe mapOf("A" to mapOf("status" to json("closed")))
+        run(2) shouldBe run(1)
+    }
+
     // -----------------------------------------------------------------
     // rule 4 — composite keying keeps concurrent per-field edits
     // -----------------------------------------------------------------

@@ -105,25 +105,49 @@ class MirrorProjector(
         val puts = LinkedHashMap<MirrorKey, Map<Timestamp, String>>()
         val dels = LinkedHashMap<MirrorKey, MutableSet<Timestamp>>()
 
-        /** Tombstone every dot this projector holds live at [key] except [survivor]. */
-        fun tombstone(key: MirrorKey, survivor: Timestamp? = null) {
+        // Every dot this record mints has a counter at or above this floor, and
+        // every dot minted by a *strictly earlier* record is below it: the
+        // packing puts (commitHeight, ordinal) above keyIndex, so the floor is
+        // exactly the boundary between "the past" and "this record and after".
+        val floor = DotMinter.counter(record.position, 0)
+
+        /**
+         * Tombstone the dots this projector holds live at [key] that were minted
+         * **before this record** — and only those.
+         *
+         * The bound is what makes replay idempotent rather than destructive.
+         * `dels` are permanent in `TaggedMapDelta`'s merge (a covered dot can
+         * never come back live), so a tombstone this record has no business
+         * emitting is not merely redundant on a replay: it kills a value a
+         * *later* record already wrote and will re-mint under the very dot just
+         * buried. Tombstoning "everything except the dot minted now" is enough
+         * for a single record replayed twice, but re-reading a two-commit edit
+         * sequence then deletes the field — the earlier record's replay covers
+         * the later record's live dot, and the later record's own replay
+         * re-mints a dot that is already tombstoned (regression tests
+         * `replaying an edit sequence` / `replaying a clear-then-reset
+         * sequence`). Restricting the cover to the past keeps re-put atomicity
+         * exactly as strong going forward, where every live dot *is* in the
+         * past.
+         */
+        fun tombstone(key: MirrorKey) {
             val live = mintedLive[key] ?: return
-            val covered = live.filterTo(LinkedHashSet()) { it != survivor }
+            val covered = live.filterTo(LinkedHashSet()) { it.counter < floor }
             if (covered.isNotEmpty()) dels.getOrPut(key) { LinkedHashSet() } += covered
-            if (survivor == null) mintedLive.remove(key) else live.removeAll(covered)
+            live.removeAll(covered)
+            if (live.isEmpty()) mintedLive.remove(key)
         }
 
         /**
          * Put [value] at [key] with the dot its slot mints. The previously-live
          * dots die in the SAME delta (re-put atomicity, `OrMapCell`'s own rule
          * lifted here), so no observer ever sees two live values for one key.
-         * The dot being minted is excluded from that set: on a replay it *is*
-         * the live dot, and tombstoning it would turn a re-read commit into a
-         * deletion.
+         * The dot being minted is never in that set — it is not in the past —
+         * so a replay re-mints the live dot instead of burying it.
          */
         fun put(key: MirrorKey, keyIndex: Int, value: String) {
             val dot = minter.dot(record.position, keyIndex)
-            tombstone(key, survivor = dot)
+            tombstone(key)
             puts[key] = mapOf(dot to value)
             mintedLive.getOrPut(key) { LinkedHashSet() } += dot
         }
