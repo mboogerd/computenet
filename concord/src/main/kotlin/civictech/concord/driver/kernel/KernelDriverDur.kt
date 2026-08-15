@@ -2,8 +2,11 @@ package civictech.concord.driver.kernel
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
+import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
+import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
@@ -21,7 +24,9 @@ import civictech.cell.observe.ObservationSink
 import civictech.cell.observe.ObserveCell
 import civictech.cell.observe.View
 import civictech.cell.port.FanInlet
+import civictech.cell.port.FanOutlet
 import civictech.cell.port.PortRef
+import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import civictech.concord.driver.CellId
@@ -130,6 +135,12 @@ internal class KernelDriverDur(
 
         /** The lane-counting SET fan-in: its edges are real links, not intake subscriptions (see `linkEdge`). */
         private const val LANE_FAN_IN = "quorum-set"
+
+        /** The effect-boundary catalog id — the only `retransmit` target this binding admits. */
+        private const val EFFECT_SINK = "effect-sink"
+
+        /** The delta port name every durable sink registers ([DeltaSink]); `retransmit`'s default inlet. */
+        private const val DEFAULT_INLET = "inlet"
     }
 
     /** One surviving write-ahead journal, shared across crashes (it *is* "the disk"). */
@@ -384,6 +395,92 @@ internal class KernelDriverDur(
             "remove" -> ops.remove(KernelCatalog.unwrap(value))
             else -> throw UnsupportedCatalogBinding("durable source op '$op' unbound (set add/remove only)")
         }
+    }
+
+    /**
+     * The kernel binding of the `retransmit` verb (`computenet-yh6.1.8`, the
+     * driver half of the gated schema change `computenet-yh6.1.3.3` froze): a
+     * **live duplicate delivery** at [cellId]'s inlet, carrying the explicit
+     * wave position `([source], [counter])`.
+     *
+     * The construction is `EffectfulLiveDeliveryTest`'s
+     * (`kernel/src/test/kotlin/civictech/cell/durability/EffectfulLiveDeliveryTest.kt`,
+     * `[KFX-05]`) lifted into the driver: a direct [HostedCellProxy] call
+     * wrapped in `CurrentContext.with(MessageContext(...))`. [HostedCellProxy]
+     * stamps `CurrentContext.get()` into the `Invocation` it enqueues, so the
+     * frame arrives at the host intake carrying exactly the `(sourceId,
+     * counter)` a real upstream delivery would have stamped — which is what
+     * `ManagedHost`'s `Effectful` guard keys on. It rides the same intake as
+     * every other durable delivery ([wire]/[apply]), so the journal tee and the
+     * processed-frontier both see it; nothing here reaches around them.
+     *
+     * **Why the position is resolved from the live outlet.** [source]'s own
+     * `FanOutlet` is asked for its current emission epoch, so after a recovery
+     * the identity used is the *restored* one (`[24-DUR-04]`'s ref-derived id,
+     * rewound by the checkpoint's `RECORD_OUTLET_WAVE`) rather than a value the
+     * driver remembered from before the crash. A retransmit therefore claims
+     * the coordinate the source really owns at the moment it is injected.
+     *
+     * **Two deliberate refusals**, both loud:
+     *
+     * 1. **Target must be an `effect-sink`.** The injected delta carries a tag
+     *    minted from the stated wave position, because a scenario names an
+     *    element, never the tag identity the original delivery carried. For an
+     *    effect boundary that is faithful — `EffectSinkCell` reads a delta's
+     *    added *elements*, and the frontier reads the message context, neither
+     *    of which is the tag. For a tag-algebra fold it would not be: the
+     *    duplicate would arrive under a tag the original never had, and this
+     *    binding will not fabricate one and call it a re-arrival.
+     * 2. **Inlet must be the default `inlet`.** Every durable sink's delta port
+     *    is named `inlet` ([DeltaSink]); a scenario naming another one is
+     *    asking for a port this binding cannot resolve, and silently delivering
+     *    to the default would make the step's own `inlet:` a lie.
+     */
+    fun retransmit(cellId: CellId, inlet: String?, source: CellId, counter: Long, op: String, value: Value?) {
+        val target = cells[cellId]
+            ?: throw UnsupportedCatalogBinding("retransmit target '$cellId' is not a durable-host cell")
+        if (target.type != EFFECT_SINK) {
+            throw UnsupportedCatalogBinding(
+                "retransmit target '$cellId' is a '${target.type}': this binding injects a duplicate only at " +
+                    "an '$EFFECT_SINK', whose contract reads a delta's added elements and whose inlet carries " +
+                    "the processed-frontier the duplicate is decided by. A tag-algebra fold would additionally " +
+                    "need the original delivery's tag identity, which the scenario does not name",
+            )
+        }
+        val inletName = inlet ?: DEFAULT_INLET
+        if (inletName != DEFAULT_INLET) {
+            throw UnsupportedCatalogBinding(
+                "retransmit at '$cellId' names inlet '$inletName'; the durable delta port is '$DEFAULT_INLET'",
+            )
+        }
+        val producer = cells[source]
+            ?: throw UnsupportedCatalogBinding("retransmit source '$source' is not a durable-host cell")
+        val outlet = PortRegistry.of(producer.cell)["outlet"] as? FanOutlet<*>
+            ?: throw UnsupportedCatalogBinding(
+                "retransmit source '$source' (${producer.type}) registers no 'outlet' FanOutlet, so it has no " +
+                    "per-source wave identity a duplicate could carry",
+            )
+        val position = Timestamp(outlet.waveState().sourceId, counter)
+        val delta = retransmittedDelta(op, value, position)
+        val sinkInlet = (HostedCellProxy.create(target.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
+        CurrentContext.with(MessageContext(position, outlet.ref)) {
+            sinkInlet.propagate(delta)
+        }
+    }
+
+    /**
+     * The payload of a retransmitted delivery: exactly `apply`'s `op`/`value`
+     * lowered into a set delta. The add-tag is minted from the stated wave
+     * position rather than randomly, so a run is reproducible and the tag says
+     * where the duplicate claims to come from; see [retransmit] for why an
+     * effect boundary is the only target for which that is faithful.
+     */
+    private fun retransmittedDelta(op: String, value: Value?, position: Timestamp): SetDelta<Any?> = when (op) {
+        "add" -> SetDelta(adds = mapOf(KernelCatalog.unwrap(value) to setOf(position)))
+        else -> throw UnsupportedCatalogBinding(
+            "retransmit op '$op' unbound: an effect boundary acts on added elements, so 'add' is the only " +
+                "op a duplicate delivery to one can carry",
+        )
     }
 
     fun readView(cellId: CellId): Value {

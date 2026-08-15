@@ -200,7 +200,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | restart | `{type: restart, on: s}` | `restart(cell)` |
 | despawn | `{type: despawn, on: c}` | `despawn(cell)` |
 | read-state | `{type: read-state, on: s, limit: 2}` | `readState(cell, cursor, limit)`, looped to completion |
-| retransmit (proposed, not yet drivable — see below) | `{type: retransmit, on: c, inlet?: in, source: s, counter: N, op: add, value?: apple}` | `retransmit(cell, inlet, position, op, value?)` |
+| retransmit | `{type: retransmit, on: c, inlet?: in, source: s, counter: N, op: add, value?: apple}` | `retransmit(cell, inlet, source, counter, op, value?)` |
 
 - **`op`** is a neutral op verb the cell catalog defines (`add`, `remove`, `put`,
   `remove-key`, `increment`, `decrement`, …).
@@ -274,32 +274,45 @@ Sweeping `limit` across several `read-state` steps on one cell is how a scenario
 probes page-boundary behaviour; every recorded walk is checked, so one check
 entry covers the whole sweep (`24-BOUND-02`).
 
-#### `retransmit` (KFX followup, `computenet-yh6.1.3.3` — schema proposed, driver binding pending)
+#### `retransmit` (KFX followup, `computenet-yh6.1.3.3` + `computenet-yh6.1.8`)
 
-**Status.** This subsection is the scenario-language half of a gated schema
-change: approved in principle (human answer, 2026-08-10, on
-`computenet-yh6.1.3.3`) and landed here as the single-writer review of
-`concord/schema/scenario.md` itself. It freezes the verb's shape and semantics.
-It does **not** land the matching `@SerialName("retransmit")` `Step`, the
-`Driver` SPI verb, the `civictech.concord.driver.kernel` binding, or the
-`CorpusRunner` dispatch arm — those live under `concord/src/`, outside this
-ticket's file claim, and are tracked as follow-up work. **No corpus scenario
-can use this verb until they land**; until then it is documented, not
-verb-complete, and the table row above is marked accordingly.
+**Status.** Landed, both halves. The gated schema change was approved in
+principle (human answer, 2026-08-10, on `computenet-yh6.1.3.3`), and this
+subsection — which freezes the verb's shape and semantics — was the
+single-writer review of `concord/schema/scenario.md` itself. The matching
+`@SerialName("retransmit")` `Step`, the `Driver` SPI verb, the
+`civictech.concord.driver.kernel` binding and the `CorpusRunner` dispatch arm
+followed under `concord/src/` in `computenet-yh6.1.8`, per D-C12's rule that a
+step verb's seams move together or the module does not compile. Two corpus
+scenarios drive it: `DUR-LIVE-01` (the live half of `[24-DUR-05]`) and
+`DUR-CKPT-FRONTIER-01` (the checkpoint-frontier half of `[24-DUR-02]`).
 
-**What it is for.** The closed vocabulary above has no verb that re-delivers an
-already-processed invocation to a *running* host — every existing path to a
-duplicate goes through `recoverFrom` journal replay. Two requirements need
-exactly that live half, and cannot be corpus-expressed without it:
+**One driver-capability note.** Which cells can receive a duplicate is a driver
+capability like any other. The kernel binding admits an `effect-sink` target
+only: an effect boundary reads a delta's added *elements* and decides on the
+message context, both of which a `retransmit` states, whereas re-delivering to a
+tag-algebra fold would additionally need the original delivery's tag identity —
+which a scenario does not name and the binding will not fabricate. Every other
+target is a loud refusal, never a silently weaker delivery.
+
+**What it is for.** No other verb in the closed vocabulary re-delivers an
+already-processed invocation to a *running* host — every other path to a
+duplicate goes through `recoverFrom` journal replay. Two requirements needed
+exactly that live half, and could not be corpus-expressed without it:
 
 - `[24-DUR-05]` (`doc/spec/20-dataflow-semantics/24-data-cells.md:815-825`,
   BS-11/KFX-05): the `Effectful` processed-frontier guard suppresses "an
   invocation … encountered during `recoverFrom` replay **or post-recovery live
-  delivery**." Only the replay half is corpus-covered today (`DUR-REPLAY-01`);
-  the live half is proven only by a kernel test,
+  delivery**." Only the replay half was corpus-covered (`DUR-REPLAY-01`,
+  `DUR-SRCID-01`, `DUR-SRCID-02`); the live half was proven only by a kernel
+  test,
   `kernel/src/test/kotlin/civictech/cell/durability/EffectfulLiveDeliveryTest.kt`
-  (`computenet-yh6.1.3.2`). `concord/corpus/DISPUTES.md` records this as "the
-  second boundary" and names this bead as its `Resolves`.
+  (`computenet-yh6.1.3.2`). `DUR-LIVE-01` now carries it in the corpus. (Not to
+  be confused with `concord/corpus/DISPUTES.md`'s "second boundary", which is a
+  *different* `[24-DUR-05]` residual — a frame carrying no `MessageContext` at
+  all, so it has no frontier position to be judged by. That one this verb does
+  not resolve: a retransmit states a position. Its `Resolves` is
+  `computenet-yh6.1.3.5`'s crash-stable ingress identity.)
 - `[24-DUR-02]`'s checkpoint-atomicity claim, frontier half: `DUR-ATOMIC-01`'s
   perturbation sweep found that deleting `CheckpointRecord.frontier` on restore
   changes nothing observable, because compaction removes exactly the frames a
@@ -308,7 +321,12 @@ exactly that live half, and cannot be corpus-expressed without it:
   upstream that survives the crash and re-delivers a frame whose `(sourceId,
   counter)` is at or behind the checkpoint frontier — a duplicate live
   delivery, not a replay" (`concord/corpus/DISPUTES.md`, "the third boundary").
-  Filed there as this same verb's second consumer.
+  Filed there as this same verb's second consumer, and now built as
+  `DUR-CKPT-FRONTIER-01`: it checkpoints with **no journal tail after it**, so
+  the checkpoint's own frontier copy is the only thing that can suppress the
+  duplicate. Dropping `record.frontier` in `restoreCheckpoint` is a failing
+  perturbation there, and green everywhere else — which is what the third
+  boundary asked for.
 
 **Shape, and why it is the explicit-position form.** The alternative considered
 was a verb that re-sends a *remembered* prior invocation (the driver retains a

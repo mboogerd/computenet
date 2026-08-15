@@ -1,0 +1,122 @@
+# Concord corpus scenario (KFX BS-12): the CHECKPOINT-FRONTIER half of `[24-DUR-02]`
+# — the half `concord/corpus/DISPUTES.md` records as "the third boundary", asserting
+# nothing until this file.
+#
+# `CheckpointRecord` carries `state` AND `frontier`, and `[24-DUR-02]`'s atomicity
+# claim covers both. `DUR-ATOMIC-01`'s own perturbation sweep found the frontier half
+# unobservable: patch `HostDurability.restoreCheckpoint` to skip `record.frontier`
+# and the whole `dur` profile stayed green 20 of 20, and so did the entire kernel
+# `civictech.cell.durability.*` suite. That is the shape of the mechanism, not a weak
+# test — compaction removes exactly the frames whose frontier advance the checkpoint
+# absorbed, so nothing the checkpoint's frontier would suppress is ever replayed, and
+# every frame that IS replayed carries its own `RECORD_FRONTIER` record in the same
+# tail. DISPUTES names the missing construction exactly: "an upstream that survives
+# the crash and re-delivers a frame whose `(sourceId, counter)` is at or behind the
+# checkpoint frontier — a duplicate live delivery, not a replay."
+#
+# THE CONSTRUCTION, and why every element of it is load-bearing.
+# A journaled source feeds an `Effectful` sink. Two elements are added and settle, so
+# the sink's frontier stands at the source's counter 2. The `snapshot` step lowers to
+# `host.checkpoint(journal)`: the source's `Stateful` state, the sink's
+# processed-frontier and the outlet's emission epoch are captured on ONE
+# management-band pass, and the WAL is compacted down to that record. Then the host
+# crashes — with **no journal tail at all**. That absence is the whole point: with no
+# frames to replay there is no `RECORD_FRONTIER` in the tail, so the checkpoint's own
+# copy of the frontier is the ONLY thing that can suppress anything afterwards.
+# Finally a `retransmit` delivers k2's position again, live, at the sink's inlet.
+#
+#   * with `record.frontier` restored, the duplicate is at the frontier and is
+#     suppressed: k2 acted once;
+#   * with it dropped, the recovered frontier is empty, nothing suppresses the
+#     duplicate, and k2 acts a second time.
+#
+# So the frontier half of the checkpoint is boundary-observable here, and only here.
+#
+# WHY NO TAIL, WHERE `DUR-ATOMIC-01` HAS ONE. A tail would defeat the discrimination:
+# its own `RECORD_FRONTIER` records restore the frontier to a position AHEAD of the
+# checkpoint's, so the checkpoint's copy would again be dead weight and dropping it
+# would again change nothing. `DUR-ATOMIC-01` keeps the tail and covers the two halves
+# a tail makes observable (the `Stateful` snapshot and the replayed frames); this
+# scenario removes it and covers the third. The two are complements, not duplicates.
+#
+# WHY `counter: 2` IS NOT A GUESS. A position behind the frontier is suppressed
+# exactly as one at it is, so an off-by-one literal would still pass while duplicating
+# a coordinate nothing emitted. `RetransmitBindingTest` pins the mapping
+# behaviourally: after two adds, counter 2 is suppressed and counter 3 fires.
+#
+# NON-VACUITY (both perturbations were actually run against the whole corpus, and
+# these are their observed results — the evidence for the `covers:` line):
+#   * `[24-DUR-02]`, checkpoint-frontier half — skip `record.frontier` in
+#     `HostDurability.restoreCheckpoint`, keeping the `RECORD_FRONTIER` tail records
+#     (the exact perturbation DISPUTES' third-boundary entry recorded as changing
+#     nothing observable): this scenario now fails 20 of 20 runs with
+#     "effect-count(sink, key=k2): expected 1 but observed 2", while EVERY other
+#     scenario in the corpus — `DUR-ATOMIC-01` and `DUR-LIVE-01` included — stays
+#     green. The half of checkpoint atomicity that asserted nothing is asserted here,
+#     and nowhere else.
+#   * `[24-DUR-05]` — make `HostDurability.alreadyProcessed` always return `false`:
+#     fails here too, 20 of 20, with the same message. The ordinary reading that the
+#     count follows the guard's suppression decision rather than an accident of
+#     delivery.
+id: DUR-CKPT-FRONTIER-01
+title: A checkpoint's processed-frontier is restored with its state, and suppresses a live duplicate no tail covers
+covers: [24-DUR-02, 24-DUR-05]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a JOURNALED source feeding an Effectful sink, plus a
+    journal controller. One checkpoint captures the source's Stateful state, the
+    sink's processed-frontier and the outlet's emission epoch together, as a single
+    record, and compacts the write-ahead log down to it
+  when: >
+    two elements are added and the graph quiesces, the journaled cells are
+    checkpointed, and the host crashes with NO journal tail — so recovery restores
+    the checkpoint and replays no frame at all — after which the (source, counter)
+    position of the second add is delivered again LIVE at the sink's inlet
+  then: >
+    the duplicate is suppressed as already-acted and each element acted exactly
+    once. Nothing but the checkpoint's own copy of the processed-frontier could have
+    suppressed it: no replayed frame carried a frontier record, because there was no
+    tail to replay. State and frontier come back from the same instant
+graph:
+  cells:
+    # the journaled source: checkpointed together with the sink's frontier, and
+    # rewound to the outlet epoch/high-water in force at checkpoint time, so the
+    # position a retransmit resolves from it is the pre-crash one
+    - {id: source, type: journal-set-source, host: dur}
+    # the co-checkpointed Effectful arm: contributes the processed-frontier half of
+    # the very same CheckpointRecord the source's snapshot rides in
+    - {id: sink, type: effect-sink, host: dur}
+    # the crash/restart handle: despawning it crashes and recovers the durable host
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: apply, on: source, op: add, value: k2}
+  - {type: quiesce}
+  # ONE checkpoint: Stateful snapshot + processed-frontier + outlet epoch, written
+  # as a single record, and the WAL compacted down to it. Deliberately the LAST
+  # thing written — there is no tail after this point, so nothing but this record's
+  # own `frontier` field can carry the sink's frontier across the crash.
+  - {type: snapshot, on: source, as: ck}
+  # CRASH + checkpoint restore, with no frames to replay
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  # THE LIVE DUPLICATE, at a position the CHECKPOINT frontier covers and no replayed
+  # tail does: k2's own (source, counter), injected at the sink's inlet after
+  # recovery. This is the construction DISPUTES' "third boundary" names.
+  - {type: retransmit, on: sink, source: source, counter: 2, op: add, value: k2}
+  - {type: quiesce}
+checks:
+  # k1 and k2 each acted on exactly once — the unkeyed form quantifies over the keys
+  # the script fed the sink, so it reads the effect-LOSS direction too (a checkpoint
+  # frontier restored AHEAD of its state point would eat one of them).
+  - {type: effect-count, sink: sink, exactly: 1}
+  # kept keyed and explicit at the point of the assertion: k2 is the element whose
+  # position the retransmit duplicates, and the one a dropped checkpoint frontier
+  # would let fire twice.
+  - {type: effect-count, sink: sink, key: k2, exactly: 1}
+  # a suppressed retransmit discharges rather than dead-letters (KFX-20)
+  - {type: no-dead-letters}
