@@ -12,7 +12,7 @@ import java.util.UUID
  * Replica-convergence invariant harness (spec 42 + 52, decided 93 I-3,
  * closes G-45's harness half). A convergence invariant over a replicated
  * cell links to **each replica's own delta outlet** — replicas enumerated
- * via [LocationRegistry.replicasOf] — folds every replica's stream
+ * via [civictech.cell.host.InstanceIndex.replicasOf] — folds every replica's stream
  * independently, and asserts the folds agree at quiescence (52 §Replica
  * convergence). Attaching in-process needs no proxy hop: [attach] links
  * directly to a local [Replicable.outlet], exactly like the routed
@@ -21,7 +21,7 @@ import java.util.UUID
  *
  * **Departed-stream rule** (G-45's false-positive gap): a replica that
  * legitimately leaves the mesh — the gated eviction in `Replication.evict`
- * despawning it — drops out of [LocationRegistry.replicasOf] on its next
+ * despawning it — drops out of [civictech.cell.host.InstanceIndex.replicasOf] on its next
  * fold. [converged] only requires agreement among replicas **currently
  * counted as live membership**; a departed replica's frozen last fold is
  * simply excluded rather than treated as a stalled disagreement. This is
@@ -55,11 +55,11 @@ class ReplicaConvergence<D : Any, S>(
     }
 
     /** Attached replicas [registry] still counts as live membership of [logicalId]. */
-    private fun liveRefs(): Set<CellRef> = registry.replicasOf(logicalId) intersect folds.keys
+    private fun liveRefs(): Set<CellRef> = registry.instances.replicasOf(logicalId) intersect folds.keys
 
     /**
      * True once every still-live attached replica's fold agrees. A departed
-     * replica (evicted — no longer in [LocationRegistry.replicasOf]) does
+     * replica (evicted — no longer in [civictech.cell.host.InstanceIndex.replicasOf]) does
      * not have to keep agreeing with the survivors (the departed-stream
      * rule above); fewer than two live streams trivially converges.
      */

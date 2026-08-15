@@ -137,7 +137,7 @@ fun <D> restartCatchUp(leader: SingleWriterReplicable<D>, donor: SingleWriterRep
  * instance per peer, mirroring [Replication]'s shape: fold [LeaderMark]
  * announcements, apply the resulting role to every locally-spawned replica
  * of that logical id, and ship the leader's delta outlet to every follower
- * discovered via [LocationRegistry.replicasOf] / `onPublish` — reusing the
+ * discovered via [civictech.cell.host.InstanceIndex.replicasOf] / `onPublish` — reusing the
  * same membership-discovery machinery the mergeable mesh already built
  * (M7.2), just wired asymmetrically instead of into a full mesh.
  */
@@ -218,7 +218,7 @@ class SingleWriterReplication(
         localReplicas[mark.logicalId]?.forEach { local ->
             if (local.cell.ref == mark.leaderRef) {
                 local.cell.becomeLeader(mark.epoch)
-                registry.replicasOf(mark.logicalId).filter { it != mark.leaderRef }
+                registry.instances.replicasOf(mark.logicalId).filter { it != mark.leaderRef }
                     .forEach { follower -> shipTo(local.cell, follower) }
             } else {
                 local.cell.becomeFollower(mark.leaderRef, mark.epoch, registry)
@@ -243,8 +243,8 @@ class SingleWriterReplication(
         // all, so a delta cannot even reach an instance that doesn't want it.
         // Default (unset) interest is Total on both sides, so overlap is
         // always true and this is byte-identical to pre-interest shipping.
-        val targetInterest = registry.interestOf(followerRef)
-        if (!registry.interestOf(leader.ref).overlaps(targetInterest)) return
+        val targetInterest = registry.instances.interestOf(followerRef)
+        if (!registry.instances.interestOf(leader.ref).overlaps(targetInterest)) return
         val key = leader.ref to followerRef
         shipped[key]?.let { link ->
             @Suppress("UNCHECKED_CAST")

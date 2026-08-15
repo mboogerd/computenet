@@ -44,7 +44,7 @@ import java.util.*
  *  4. **`members`** (FU-2) — the grow-only set of covering-member slots that
  *     have [announceMember]ed their existence, converging membership itself
  *     faster than the point-to-point topology announcements
- *     [civictech.cell.host.LocationRegistry.instancesOf] feeds off.
+ *     [civictech.cell.host.InstanceIndex.instancesOf] feeds off.
  *
  * **The rule for a fifth lane**: don't add one here. Each lane above answers a
  * different "what do I know about this replica slot" question, and
@@ -90,7 +90,7 @@ class WatermarkCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
      * has [announceMember]ed its existence, merged over the mesh. The
      * converged-membership barrier ([civictech.cell.consistency.ReplicaQuorum.frontier])
      * holds a keyed wave while this set names a slot the settling node's
-     * [civictech.cell.host.LocationRegistry.instancesOf] view has not yet accounted for.
+     * [civictech.cell.host.InstanceIndex.instancesOf] view has not yet accounted for.
      */
     fun members(): Set<UUID> = members.toSet()
 
