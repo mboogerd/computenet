@@ -18,7 +18,7 @@ import java.util.UUID
  * Constructed from exactly what the predicate reads — a watermark-cell
  * reader, a membership reader, and an interest reader — the same three
  * injected reads [civictech.cell.replication.Replication] already had
- * (`watermarks[logicalId]`, `registry.instancesOf`, `registry.interestOf`),
+ * (`watermarks[logicalId]`, `registry.instances.instancesOf`, `registry.instances.interestOf`),
  * now passed in explicitly instead of captured from the replica-wiring
  * class's own fields. [watermarkRefOf] is the fourth read: the data-ref ->
  * watermark-ref derivation ([civictech.cell.replication.Replication.watermarkRef])
@@ -48,7 +48,7 @@ class ReplicaQuorum(
      * overlap. A `null` `key` (a consumer that extracts no origin keys) is
      * unfiltered — every member — byte-identical to pre-PN-7.
      *
-     * Membership is the [civictech.cell.host.LocationRegistry.instancesOf] fold;
+     * Membership is the [civictech.cell.host.InstanceIndex.instancesOf] fold;
      * a member's row is read at its derived [WatermarkCell.slotId]. A `closed`
      * slot (cleanly departed) stops constraining; a member whose row has not yet
      * gossiped in holds the wave (WAIT), never releases it early.
@@ -67,7 +67,7 @@ class ReplicaQuorum(
      * release).
      *
      * **FU-2 converged-membership barrier** ([membershipBarrier], default on).
-     * Membership itself ([civictech.cell.host.LocationRegistry.instancesOf]) is
+     * Membership itself ([civictech.cell.host.InstanceIndex.instancesOf]) is
      * eventually consistent: a covering member the local view has not learned of
      * *at all* is absent from the quorum above, so the wave could release before
      * that member's data for the key arrives — the unknown-joiner premature

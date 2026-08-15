@@ -1446,7 +1446,7 @@ open class ManagedHost(
         // cost nothing on any cell thread. The migration arm comes first: a held
         // ref may still be present in [cells], and reading it there would be a
         // stale answer wearing a fresh timestamp.
-        if (registry?.isHeld(ref) == true) return answered(unavailable(StateReadResult.Reason.MIGRATING))
+        if (registry?.holds?.isHeld(ref) == true) return answered(unavailable(StateReadResult.Reason.MIGRATING))
         val cell = cells[ref]
         if (cell == null) {
             // Not here. If this host's registry places the ref at all, it is

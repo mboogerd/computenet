@@ -93,7 +93,7 @@ class Replication(
      * §Delivered watermarks, E3.3 point b): derived from the data id and sharing
      * the data replica's `instanceId`, so every peer contributes a distinct,
      * replay-stable slot and the companions of one logical id find each other by
-     * [LocationRegistry.replicasOf] exactly as the data replicas do.
+     * [civictech.cell.host.InstanceIndex.replicasOf] exactly as the data replicas do.
      */
     internal fun watermarkRef(dataRef: CellRef): CellRef =
         CellRef(UUID.nameUUIDFromBytes("watermark:${dataRef.id}".toByteArray()), dataRef.instanceId)
@@ -103,13 +103,14 @@ class Replication(
      * [ReplicaQuorum] in `.consistency` — a consistency concern, same
      * package as [ReplicaFrontier] itself and its consumer `WaveFrontier` —
      * constructed from the three reads it needs, all already injected here
-     * ([watermarks], [LocationRegistry.instancesOf], [LocationRegistry.interestOf])
+     * ([watermarks], [civictech.cell.host.InstanceIndex.instancesOf],
+     * [civictech.cell.host.InstanceIndex.interestOf])
      * plus the [watermarkRef] derivation.
      */
     private val replicaQuorum = ReplicaQuorum(
         watermarkOf = { logicalId -> watermarks[logicalId] },
-        membersOf = { logicalId -> registry.instancesOf(logicalId) },
-        interestOf = { ref -> registry.interestOf(ref) },
+        membersOf = { logicalId -> registry.instances.instancesOf(logicalId) },
+        interestOf = { ref -> registry.instances.interestOf(ref) },
         watermarkRefOf = ::watermarkRef,
     )
 
@@ -188,9 +189,9 @@ class Replication(
         // SingleWriterReplicable leader fires, followers suppress) — a distinct
         // method this guard never sees, so authority-declaring cells stay admitted.
         if (cell is civictech.cell.evolve.Effectful) {
-            val interest = registry.interestOf(cell.ref)
-            val overlapsExisting = registry.replicasOf(cell.ref.id)
-                .any { it != cell.ref && interest.overlaps(registry.interestOf(it)) }
+            val interest = registry.instances.interestOf(cell.ref)
+            val overlapsExisting = registry.instances.replicasOf(cell.ref.id)
+                .any { it != cell.ref && interest.overlaps(registry.instances.interestOf(it)) }
             SingleWriterReplication.requireEffectAuthority(
                 effectful = true,
                 disjoint = !overlapsExisting,
@@ -202,7 +203,7 @@ class Replication(
         localReplicas.getOrPut(cell.ref.id) { mutableListOf() } += cell
         hostOf[cell.ref] = host
         host.managementInlet.call.spawn(cell)
-        registry.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
+        registry.instances.replicasOf(cell.ref.id).forEach { other -> maybeLink(cell, other) }
         trackDeliveries(cell, host)
     }
 
@@ -213,7 +214,7 @@ class Replication(
      * mesh (no new protocol). The companion's ref id is derived from the data
      * id (`watermark:{logicalId}`) and it borrows the data replica's
      * `instanceId`, so each peer contributes a distinct, replay-stable row and
-     * the companions of one logical id find each other by [replicasOf] exactly
+     * the companions of one logical id find each other by [civictech.cell.host.InstanceIndex.replicasOf] exactly
      * as the data replicas do. A [WatermarkCell] is not itself tracked —
      * that would recurse — its own convergence is the ordinary gossip path.
      */
@@ -246,7 +247,7 @@ class Replication(
      * or manual — is wiring the economic layer owns, G-62, out of this
      * ticket's scope).
      *
-     * **Membership-gated**: [LocationRegistry.replicasOf] already drops a
+     * **Membership-gated**: [civictech.cell.host.InstanceIndex.replicasOf] already drops a
      * partitioned peer's `Remote` location (42 §Anti-entropy), so "no
      * reachable peer" and "partitioned" are the same local observation. With
      * none reachable this replica may hold unique un-gossiped state nobody
@@ -272,7 +273,7 @@ class Replication(
      * row once this peer hosts no further replica of the logical id (PN-0c, spec
      * 40/42 §Delivered watermarks): [WatermarkCell.close] marks the row cleanly
      * departed so a downstream replica-fed frontier stops constraining reads on
-     * it. This matters because membership ([LocationRegistry.replicasOf]) is only
+     * it. This matters because membership ([civictech.cell.host.InstanceIndex.replicasOf]) is only
      * eventually consistent (the R13 caveat) — a consumer whose view still lists
      * the departed member would otherwise wait forever on a row that can never
      * advance again. The `closed` marker rides the same idempotent watermark
@@ -282,7 +283,7 @@ class Replication(
      * read the row, so closing it is unobservable to them.
      */
     fun evict(cell: Replicable<*>, host: ManagedHost, closeDepartedRow: Boolean = true): Boolean {
-        val reachablePeers = registry.replicasOf(cell.ref.id) - cell.ref
+        val reachablePeers = registry.instances.replicasOf(cell.ref.id) - cell.ref
         if (reachablePeers.isEmpty()) {
             if (partitionSuspended.add(cell.ref)) {
                 host.managementInlet.call.suspend(cell.ref)
@@ -392,7 +393,7 @@ class Replication(
         localReplicas[newRef.id]?.forEach { local ->
             maybeLink(local, newRef)
             // heal (G-45): a newly visible peer un-partitions a locally suspended replica
-            if (local.ref in partitionSuspended && (registry.replicasOf(local.ref.id) - local.ref).isNotEmpty()) {
+            if (local.ref in partitionSuspended && (registry.instances.replicasOf(local.ref.id) - local.ref).isNotEmpty()) {
                 partitionSuspended -= local.ref
                 hostOf[local.ref]?.managementInlet?.call?.resume(local.ref)
                 // PN-19: retract the recoverable Stall — the DEGRADE covering quorum
@@ -411,8 +412,8 @@ class Replication(
         // a delta cannot even reach an instance that does not want it. Default
         // is total interest on both sides, so overlap is always true here and
         // this is byte-identical to pre-interest gossip.
-        val targetInterest = registry.interestOf(other)
-        if (!registry.interestOf(local.ref).overlaps(targetInterest)) return
+        val targetInterest = registry.instances.interestOf(other)
+        if (!registry.instances.interestOf(local.ref).overlaps(targetInterest)) return
         val key = local.ref to other
         linked[key]?.let { (cell, link) ->
             // Anti-entropy on re-announce (M10.1): a re-announced replica may
