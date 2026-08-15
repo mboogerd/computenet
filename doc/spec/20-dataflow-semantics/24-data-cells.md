@@ -862,6 +862,56 @@ which admit no link to check. A refused frame has already been journaled by the
 intake tee, so replay meets it again and refuses it again — the refusal is
 idempotent, not a one-shot admission gate.
 
+**Catch-up baselines at an `Effectful` inlet** *(KFX-BASELINE resolved,
+`computenet-yh6.1.3.4`; decided 2026-08-10, with 93 I-24)*. `[24-DUR-05]` reads
+`MessageContext.timestamp` alone, and a frame may also carry a
+`MessageContext.baseline` — non-null exactly on a catch-up baseline: the I-24
+pull baseline that answers a late-joining consumer's `StateRequest`, and PN-2's
+replay stamp, which marks a replayed frame as catch-up rather than as a live
+wave. The decision is that a newly-joined `Effectful` cell **fires for the state
+it caught up to** and responds to deltas individually from then on: one rule for
+every `Effectful` cell, not a per-cell option. Suppressing instead would leave a
+late-joining notifier permanently blind to everything that existed before it
+linked, with no protocol by which it could ever learn — a silent, unrecoverable
+omission, where firing is loud and bounded (a burst proportional to existing
+state, on a path an operator chose by linking). `[24-DUR-07]` WHEN an invocation
+carrying a `MessageContext.baseline` arrives at an `Effectful` inlet, THEN the
+sink SHALL act on it, and that invocation's timestamp SHALL NOT advance the
+inlet's processed-frontier (Event-driven). The second half was never really
+open: a baseline is causally anchored at the stamped link-install event and is
+never a wave position, so advancing a wave-position high-water from it can
+subsequently suppress genuine live frames from that source whose counters sit
+below the baseline's.
+
+Those two halves together open a hole that the `Effectful` sink closes **with
+its own mechanism**: because a baseline firing advances no frontier, a journaled
+baseline frame would have nothing to suppress its own `recoverFrom` replay, and
+a crash after a catch-up join would re-fire the entire catch-up. `[24-DUR-08]`
+IF an invocation at an `Effectful` inlet is at a position that inlet has already
+discharged as a baseline firing, THEN it SHALL be suppressed — dropped as
+already-acted, its exclusive payloads discharged — rather than re-driving the
+sink, whether met during `recoverFrom` replay or post-recovery live re-delivery
+(Unwanted behavior). The discharge record is durable, is written on the same
+per-cell journal tee the frame itself rode, and survives checkpoint compaction;
+it is deliberately **the sink's own state, separate from the wave frontier**, so
+no obligation is pushed onto producers, ingress, or the catch-up protocol. It
+records an **exact position**, not a per-source high-water: a high-water would
+suppress live frames below the baseline's counter, which is exactly what
+`[24-DUR-07]` forbids, whereas an exact position can only ever match a
+re-delivery of the very frame that fired. Keying on `(sourceId, counter)` rather
+than on the baseline's link-install anchor also survives an anchor recurring —
+two shards answering with equal frontiers share an anchor but never a position,
+since 93 I-14 Rule S1 forbids re-issuing a pair.
+
+Both baseline kinds take this one branch, so replay-versus-pull never becomes an
+observable distinction at an effect boundary, and PN-2 keeps `[24-DUR-05]`
+unchanged: a replayed frame the sink already acted on live is at or behind the
+restored frontier and is suppressed, while a journal-tail frame the sink never
+acted on fires — the effect catch-up half of the rule. The residual is growth:
+the discharged-baseline set is compacted at checkpoint only against positions
+the processed-frontier already covers, so a sink that takes many catch-up
+baselines over a long life accumulates entries.
+
 The decided journal classification still diverges from the landed
 tee: 93 I-7 journals only `PORT_API` data plus topology events, while the
 shipped journal appends every intake frame (management included) and does

@@ -857,7 +857,35 @@ open class ManagedHost(
                         // and persists that identity (CON1), not here;
                         // [ActorIngress] is the kernel-side stamping seam it plugs
                         // into, and the one a direct in-process driver uses today.
-                        val timestamp = hostedInvocation.invocation.context?.timestamp
+                        //
+                        // KFX-BASELINE / `[24-DUR-07]`+`[24-DUR-08]` (93 I-24, human decision of
+                        // 2026-08-10): a frame carrying a `MessageContext.baseline`
+                        // is a catch-up baseline — an I-24 pull baseline answering a
+                        // late join, or PN-2's replay stamp. An `Effectful` inlet
+                        // ACTS on it (a newly-joined sink fires for the state it
+                        // caught up to; one rule for every `Effectful` cell, not a
+                        // per-cell option), but its timestamp NEVER advances the
+                        // processed-frontier: a baseline is causally anchored at the
+                        // stamped link-install event, not at a wave position, so
+                        // advancing a wave-position high-water from it would suppress
+                        // genuine live frames from that source sitting below it.
+                        //
+                        // That leaves a baseline firing with nothing to suppress its
+                        // own replay, so the discharge is journaled instead — in the
+                        // sink's own durable state, separately from the wave frontier
+                        // (`HostDurability.recordAndJournalBaselineDischarge`, an
+                        // EXACT position rather than a high-water). Two consequences
+                        // worth stating: the crash-consistency obligation stays inside
+                        // the sink — no producer, ingress or catch-up-protocol change
+                        // — and replay-vs-pull never becomes an observable distinction
+                        // at this effect boundary, because both baseline kinds take
+                        // the same branch. PN-2 keeps `[24-DUR-05]` exactly: a
+                        // replayed frame the sink already acted on live is at-or-behind
+                        // the restored frontier and suppressed; a journal-tail frame
+                        // fires.
+                        val context = hostedInvocation.invocation.context
+                        val timestamp = context?.timestamp
+                        val baseline = context?.baseline
                         if (cell is Effectful && timestamp == null) {
                             // Refused, not delivered. A refusal is a drop, and the
                             // same no-silent-drop rule the suppression branch obeys
@@ -880,7 +908,17 @@ open class ManagedHost(
                                 hostedInvocation,
                             )
                         } else if (cell is Effectful && timestamp != null &&
-                            hostDurability.alreadyProcessed(cellRef, hostedInvocation.portName, timestamp)
+                            (hostDurability.alreadyProcessed(cellRef, hostedInvocation.portName, timestamp) ||
+                                // `[24-DUR-08]`: or already discharged as a baseline
+                                // firing at this exact position. Consulted for every
+                                // frame, baseline-marked or not: the record is exact,
+                                // so it can only ever match a re-delivery of the very
+                                // frame that fired — never collateral live traffic
+                                // below it, which is the whole reason it is kept out
+                                // of the wave-position frontier.
+                                hostDurability.alreadyDischargedBaseline(
+                                    cellRef, hostedInvocation.portName, timestamp,
+                                ))
                         ) {
                             // Suppressed: already-acted, dropped rather than re-acted.
                             // KFX-20: a drop is not a licence to leak. The sink
@@ -923,9 +961,19 @@ open class ManagedHost(
                                 // precisely so a future path that reintroduces the
                                 // contextless case fails loudly instead of silently
                                 // reinstating the `[24-DUR-05]` hole this closed.
-                                hostDurability.advanceAndJournalFrontier(
-                                    cellRef, hostedInvocation.portName, checkNotNull(timestamp),
-                                )
+                                val position = checkNotNull(timestamp)
+                                if (baseline != null) {
+                                    // `[24-DUR-07]` / `[24-DUR-08]`: a baseline firing records its exact
+                                    // position in the sink's separate discharged-baseline
+                                    // state — never in the wave-position frontier.
+                                    hostDurability.recordAndJournalBaselineDischarge(
+                                        cellRef, hostedInvocation.portName, position,
+                                    )
+                                } else {
+                                    hostDurability.advanceAndJournalFrontier(
+                                        cellRef, hostedInvocation.portName, position,
+                                    )
+                                }
                             }
                         }
                     }
