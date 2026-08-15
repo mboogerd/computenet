@@ -20,7 +20,7 @@ import civictech.cell.host.ManagedHost
  * |---|---|---|---|
  * | [SUSPENDED] | `SupervisionPolicy.SUSPEND`, or an explicit `HostManagementApi.suspend` (spec 34, G-26) — data and ordinary-management traffic parks on the host | `ManagedHost.isSuspended` | `HostManagementApi.resume(ref)` |
  * | [DRAINED] | the whole host drained (spec 33 §Drain, G-16) — intake closed, accepted work flushed, cells deactivated and snapshotted | `ManagedHost.isDrained` | `HostManagementApi.resumeHost()` |
- * | [HELD] | delivery parked for a repartition flip window (spec 20/24, CP-D4) | `LocationRegistry.isHeld` | the migration's own `release` — **never the inspector** |
+ * | [HELD] | delivery parked for a repartition flip window (spec 20/24, CP-D4) | `DeliveryHold.isHeld` (`LocationRegistry.isHeld` delegates to it) | the migration's own `release` — **never the inspector** |
  * | [UNHOSTED] | no local location: unpublished, or mirrored from a peer (M5-NET) | `LocationRegistry.locate` returning null | not applicable |
  *
  * [HELD] is deliberately *not* cold for listing purposes. A held cell is
