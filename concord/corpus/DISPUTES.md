@@ -728,7 +728,8 @@ for is the `retransmit` step verb (`concord/schema/scenario.md`, documented by
 `computenet-yh6.1.3.3` and bound by `computenet-yh6.1.8`), and the construction
 that discriminates the checkpoint's frontier copy is a checkpoint with **no
 journal tail after it**, so that copy is the only thing left that can suppress
-the duplicate. The entry as filed is kept below verbatim, because its negative
+the duplicate. The entry as filed is kept below — verbatim apart from its closing
+`**Resolves**` bullet, which is rewritten in place — because its negative
 result — that the frontier restore was unobservable, and *why* — is the reason
 the discriminating construction has the shape it does.
 
@@ -736,8 +737,10 @@ Measured, not asserted: with `restoreCheckpoint` patched to skip
 `record.frontier`, `DUR-CKPT-FRONTIER-01` fails 20 of 20 runs
 (`effect-count(sink, key=k2): expected 1 but observed 2`) while every other
 scenario in the `core,dur` profiles stays green and the kernel
-`civictech.cell.durability.*` suite stays green at 34 tests — reproduced
-independently by the task reviewer, not only by the implementer. That is exactly
+`civictech.cell.durability.*` suite stays green at 37 tests (34 before
+`origin/main`'s `02ac610` added three `EffectfulInletGuardTest` cases; the count
+here is re-measured on the merged tree) — reproduced independently by the task
+reviewer and again by the feature reviewer, not only by the implementer. That is exactly
 the perturbation `DUR-ATOMIC-01`'s own sweep recorded as changing nothing
 observable, so the corpus has gained discriminating power it did not have. The
 frontier half of `[24-DUR-02]` is now asserted head-on.
