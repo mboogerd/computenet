@@ -84,9 +84,12 @@ abstract class CompositeCell(
      * Per-exposure denial accounting for this membrane's [BoundaryPolicy]
      * seams (spec 40/43, `[SEC1-25]`/`[SEC1-26]`; realization (B), rationale
      * in [BoundaryDenials]' KDoc). One [BoundaryDenialSink] per exposure that
-     * declares a seam; the hosting `ManagedHost` attaches the reporter that
-     * routes each refusal into its own `DeadLetters`, so sanitization (spec 23
-     * R8) is inherited rather than reimplemented here.
+     * can carry a seam — every [mediate]/[mediateOutlet] exposure (whose
+     * surface is mediated whether or not the policy currently declares a
+     * predicate) plus any [flatten] exposure that declares `linkAuthority`. A
+     * plain `flatten()` allocates none. The hosting `ManagedHost` attaches the
+     * reporter that routes each refusal into its own `DeadLetters`, so
+     * sanitization (spec 23 R8) is inherited rather than reimplemented here.
      *
      * A test reads a boundary's counter here — `boundaryDenials["<exposure>"]!!
      * .denialCount` — which is why the sinks are exposed rather than private.

@@ -222,7 +222,14 @@ class BoundaryDenials {
     fun sinkFor(exposure: String): BoundaryDenialSink =
         sinks.computeIfAbsent(exposure) { BoundaryDenialSink(it, this) }
 
-    /** The sink for [exposure] if one was ever created; null for an exposure that declares no boundary seam. */
+    /**
+     * The sink for [exposure] if one was ever created; null for an exposure
+     * that can carry no seam at all — a plain `flatten()` with no
+     * `linkAuthority`. A **mediated** exposure allocates its sink at
+     * declaration time whether or not its `BoundaryPolicy` currently declares
+     * a predicate, so this is non-null there even before any adopter consults
+     * it.
+     */
     operator fun get(exposure: String): BoundaryDenialSink? = sinks[exposure]
 
     /** Every accounted exposure name — diagnostics and tests. */
