@@ -178,7 +178,10 @@ abstract class CompositeCell(
      *
      * - `disclosure` installs [FanOutlet.disclosureFilter] — one filter over
      *   BOTH the `onLinked` catch-up unicast and the live broadcast (20/21
-     *   §Pull, decided 93 I-28: "a snapshot IS a delta").
+     *   §Pull, decided 93 I-28: "a snapshot IS a delta"), which accounts each
+     *   suppressed delivery attempt through this exposure's
+     *   [BoundaryDenialSink] (`[SEC1-25]`/`[SEC1-26]`; per-attempt counting
+     *   explained on [asDeltaFilter]).
      * - `protocolAuthority[Protocols.Attention].ceiling` clamps an asserted
      *   attention level via [ProtocolSupport.inboundFilter] before this
      *   outlet's own attention handling sees it (30/34 decision 6:
@@ -205,7 +208,8 @@ abstract class CompositeCell(
                 "(protocolAuthority/disclosure/integrity); use flatten() for an open outlet"
         }
         val denials = boundaryDenials.sinkFor(externalName)
-        organelleOutlet.disclosureFilter = policy.disclosure.asDeltaFilter(denials)
+        organelleOutlet.disclosureFilter =
+            policy.disclosure.asDeltaFilter(denials, subject = organelleOutlet.clazz.simpleName)
         if (policy.protocolAuthority.isNotEmpty()) {
             ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter(denials)
         }
@@ -275,25 +279,97 @@ abstract class CompositeCell(
  * argument, by the "one delta-carrying method" convention data-cell contracts
  * follow), suppressing the emission if the projection itself returns null.
  *
- * [denials] is this exposure's accounting sink, threaded in and deliberately
- * **not yet consulted**: this task builds the seam only, so both suppression
- * branches keep returning null exactly as before. Accounting each suppressed
- * delivery attempt (`DISCLOSURE_DENIED` / `DISCLOSURE_PROJECTED_AWAY`, live +
- * observer + `onLinked` catch-up) is sibling task `computenet-usd.1.4`.
+ * ## Counting: one denial record per suppressed delivery **attempt**
+ *
+ * Both suppression branches account through [denials] before returning null
+ * (`[SEC1-25]`/`[SEC1-26]`), so no silent drop remains here. The unit counted
+ * is the **delivery attempt**, decided by feature `computenet-usd.1` and
+ * realized structurally rather than by bookkeeping: [FanOutlet] evaluates its
+ * `disclosureFilter` once per attempted delivery — once per consumer, once per
+ * typed tap, once per payload-agnostic observer notification, and once per
+ * targeted `at()` delivery (the `onLinked` catch-up unicast / pull reply) —
+ * and this closure runs inside each of those evaluations. A boundary that
+ * suppressed N deliveries therefore reports exactly N, on all three paths:
+ *
+ * - one emission broadcast to k consumers/taps under [DisclosurePolicy.Deny]
+ *   records k denials, not one "emission suppressed" record;
+ * - an emission with no attachment at all attempts no delivery and records
+ *   nothing;
+ * - a suppressed catch-up unicast is one attempt, counted like any other.
+ *
+ * That an *emission* is thereby counted more than once is the honest reading:
+ * each suppressed attempt is a delivery some subscriber did not get, and the
+ * audit question ("what did this boundary refuse to disclose, to whom") is
+ * per-attempt. See [FanOutlet.disclosureFilter] for the evaluation contract
+ * this relies on.
+ *
+ * The refused arguments ride to the sink as `deniedArgs` and reach the fan-out
+ * only through the host's spec-23-R8 sanitization (`Owned -> Frozen`,
+ * `Leased -> ` [civictech.cell.Redacted]) — this seam adds **no discharge
+ * logic of its own** and has no second sanitizer. Exactly-once discharge under
+ * *repeated* filter evaluation (the same argument array is handed to this
+ * closure once per attempt, so two suppressed attempts sanitize the same
+ * wrappers twice — tolerated by the R8 rule's already-consumed branches, not
+ * repaired here) is sibling feature `computenet-usd.2`'s subject.
+ *
+ * [subject] names the mediated outlet's contract. The `Method` is deliberately
+ * absent: `disclosureFilter`'s signature is arguments-only, so this seam
+ * genuinely cannot see which method emitted — the emitted delta itself travels
+ * in `deniedArgs`, which is the auditable part.
  */
-@Suppress("UNUSED_PARAMETER")
 private fun DisclosurePolicy.asDeltaFilter(
     denials: BoundaryDenialSink,
+    subject: String?,
 ): (Array<out Any?>) -> Array<out Any?>? = filter@{ args ->
     when (this) {
         is DisclosurePolicy.Full -> args
-        is DisclosurePolicy.Deny -> null
+        is DisclosurePolicy.Deny -> {
+            denials.denyDisclosure(DenialReason.DISCLOSURE_DENIED, subject, "DisclosurePolicy.Deny", args)
+            null
+        }
         is DisclosurePolicy.Project -> {
             val delta = args.firstOrNull() ?: return@filter args
-            val projected = ProjectionRegistry.resolve(id).apply(delta) ?: return@filter null
+            val projected = ProjectionRegistry.resolve(id).apply(delta) ?: run {
+                denials.denyDisclosure(
+                    DenialReason.DISCLOSURE_PROJECTED_AWAY,
+                    subject,
+                    "projection '${id.name}' returned null for this delta",
+                    args,
+                )
+                return@filter null
+            }
             arrayOf(projected, *args.drop(1).toTypedArray())
         }
     }
+}
+
+/**
+ * Accounts one suppressed `PORT_API` outbound delivery attempt (seam 3
+ * disclosure) — the single call shape both suppression branches of
+ * [asDeltaFilter] use, so the record's fields cannot drift between them.
+ *
+ * The principal is the crossing's ambient one ([currentPrincipal]): the peer
+ * whose delivery was suppressed where a peer is stamped (a remote-triggered
+ * catch-up), and null — `LocalTrusted` — for an ordinary in-process broadcast,
+ * where the emitting cell has no peer in scope. Recorded honestly as such
+ * rather than guessed from the target: a `FanOutlet` attachment is a
+ * [civictech.cell.port.PortRef], and no peer identity is derivable from it at
+ * this seam.
+ */
+private fun BoundaryDenialSink.denyDisclosure(
+    reason: DenialReason,
+    subject: String?,
+    detail: String,
+    args: Array<out Any?>,
+) {
+    deny(
+        seam = BoundarySeam.DISCLOSURE,
+        reason = reason,
+        principal = (currentPrincipal() as? Principal.Peer)?.id,
+        subject = subject,
+        detail = detail,
+        deniedArgs = args.toList(),
+    )
 }
 
 /**
