@@ -190,7 +190,10 @@ abstract class CompositeCell(
      *   §Pull, decided 93 I-28: "a snapshot IS a delta"), which accounts each
      *   suppressed delivery attempt through this exposure's
      *   [BoundaryDenialSink] (`[SEC1-25]`/`[SEC1-26]`; per-attempt counting
-     *   explained on [asDeltaFilter]).
+     *   explained on [asDeltaFilter]) — plus, beside it,
+     *   [FanOutlet.onRepeatSuppression], the no-args hook that keeps that
+     *   per-attempt count intact now that the filter itself is evaluated at
+     *   most once per emission (`[SEC1-19]`, [asRepeatSuppressionHook]).
      * - `protocolAuthority[Protocols.Attention].ceiling` clamps an asserted
      *   attention level via [ProtocolSupport.inboundFilter] before this
      *   outlet's own attention handling sees it (30/34 decision 6:
@@ -249,8 +252,9 @@ abstract class CompositeCell(
         }
         val denials = boundaryDenials.sinkFor(externalName)
         installLinkAuthority(externalName, organelleOutlet, policy)
-        organelleOutlet.disclosureFilter =
-            policy.disclosure.asDeltaFilter(denials, subject = organelleOutlet.clazz.simpleName)
+        val subject = organelleOutlet.clazz.simpleName
+        organelleOutlet.disclosureFilter = policy.disclosure.asDeltaFilter(denials, subject)
+        organelleOutlet.onRepeatSuppression = policy.disclosure.asRepeatSuppressionHook(denials, subject)
         if (policy.protocolAuthority.isNotEmpty()) {
             ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter(denials)
         }
@@ -324,17 +328,22 @@ abstract class CompositeCell(
  * argument, by the "one delta-carrying method" convention data-cell contracts
  * follow), suppressing the emission if the projection itself returns null.
  *
+ * A [DisclosurePolicy.Project] transform is handed the emitted delta to
+ * **read**, never to consume: where that delta is an exclusive
+ * ([civictech.cell.Owned]/[civictech.cell.Leased]) a projection may only
+ * `borrow()` it. The single consumption the SPSC rule allocates belongs to the
+ * sole consumer's `take()`/`release()`, and taps borrow (D2, decided in
+ * `computenet-usd.2.2`; the same rule is stated at
+ * [FanOutlet.disclosureFilter], which is where a filter author lands first).
+ * This holds even though the transform now runs only once per emission —
+ * running once is what makes it *safe*, not what makes it entitled.
+ *
  * ## Counting: one denial record per suppressed delivery **attempt**
  *
  * Both suppression branches account through [denials] before returning null
  * (`[SEC1-25]`/`[SEC1-26]`), so no silent drop remains here. The unit counted
- * is the **delivery attempt**, decided by feature `computenet-usd.1` and
- * realized structurally rather than by bookkeeping: [FanOutlet] evaluates its
- * `disclosureFilter` once per attempted delivery — once per consumer, once per
- * typed tap, once per payload-agnostic observer notification, and once per
- * targeted `at()` delivery (the `onLinked` catch-up unicast / pull reply) —
- * and this closure runs inside each of those evaluations. A boundary that
- * suppressed N deliveries therefore reports exactly N, on all three paths:
+ * is the **delivery attempt**, decided by feature `computenet-usd.1`. A
+ * boundary that suppressed N deliveries reports exactly N, on all three paths:
  *
  * - one emission broadcast to k consumers/taps under [DisclosurePolicy.Deny]
  *   records k denials, not one "emission suppressed" record;
@@ -345,23 +354,27 @@ abstract class CompositeCell(
  * That an *emission* is thereby counted more than once is the honest reading:
  * each suppressed attempt is a delivery some subscriber did not get, and the
  * audit question ("what did this boundary refuse to disclose, to whom") is
- * per-attempt. See [FanOutlet.disclosureFilter] for the evaluation contract
- * this relies on.
+ * per-attempt.
+ *
+ * Counting used to be a free consequence of *evaluation*: [FanOutlet] ran this
+ * closure once per attempted delivery. Since `computenet-usd.2.2` it does not
+ * — `[SEC1-19]` requires the filter to be evaluated at most once per emission
+ * — so evaluation and accounting are split, and this closure now covers only
+ * the **first** suppressed attempt of an emission. Each further suppressed
+ * attempt is accounted by [asRepeatSuppressionHook], installed beside this
+ * filter on [FanOutlet.onRepeatSuppression]. The two together are the N.
  *
  * The refused arguments ride to the sink as `deniedArgs` and reach the fan-out
  * only through the host's spec-23-R8 sanitization (`Owned -> Frozen`,
  * `Leased -> ` [civictech.cell.Redacted]) — this seam adds **no discharge
- * logic of its own** and has no second sanitizer. Exactly-once discharge under
- * *repeated* filter evaluation (the same argument array is handed to this
- * closure once per attempt, so two suppressed attempts sanitize the same
- * wrappers twice — tolerated by the R8 rule's already-consumed branches, not
- * repaired here) is sibling feature `computenet-usd.2`'s subject. **The
- * observable cost of that toleration, while it stands:** the *first*
- * suppressed attempt is the one whose dead letter carries the frozen value;
- * every later attempt on the same emission finds the wrapper already consumed
- * and reports `Redacted`, so with k > 1 suppressed attempts an auditor reads
- * one valued record and k-1 markers. That is a fidelity limit of this
- * accounting, not of the counting — the counter still reports k.
+ * logic of its own** and has no second sanitizer. Because only this first
+ * suppression carries arguments (the repeat hook carries none), the payload is
+ * handed to that one sanitizer exactly once per emission, which is `[SEC1-20]`:
+ * an `Owned` frozen once, a `Leased` released once, its pool's outstanding
+ * count back where it started. The old fidelity limit is gone with it — an
+ * auditor reading k suppressed attempts now sees one valued record and k-1
+ * argument-less ones, rather than one valued record and k-1 `Redacted`
+ * markers produced by re-sanitizing an already-discharged wrapper.
  *
  * [subject] names the mediated outlet's contract, and **only** the contract —
  * unlike the integrity seam ([MediateProxy]), whose record carries
@@ -373,6 +386,12 @@ abstract class CompositeCell(
  * delta itself travels in `deniedArgs`, which is the auditable part. Revisit
  * alongside the exactly-once work (`computenet-usd.2`), which has to revisit
  * how this filter is invoked in any case.
+ *
+ * NB that last sentence was written before `computenet-usd.2.2`: the
+ * exactly-once work has since landed, it did revisit how this filter is
+ * invoked (at most once per emission), and it did **not** widen the signature.
+ * The reasoning above stands as recorded and the field is still contract-only;
+ * the revisit is unclaimed, not pending.
  */
 private fun DisclosurePolicy.asDeltaFilter(
     denials: BoundaryDenialSink,
@@ -385,6 +404,14 @@ private fun DisclosurePolicy.asDeltaFilter(
             null
         }
         is DisclosurePolicy.Project -> {
+            // D2 (computenet-usd.2.2): the registered transform BORROWS this
+            // delta and never consumes it. Where the delta is an exclusive, a
+            // projection reads it through `Owned.borrow()`/`Leased.borrow()`
+            // only — the one consumption SPSC allocates is the sole consumer's
+            // `take()`/`release()`, and taps borrow. Nothing here can enforce
+            // that (a Projection is an opaque `(Any) -> Any?`), which is why
+            // the rule is stated on FanOutlet.disclosureFilter, where a filter
+            // author lands, as well as here.
             val delta = args.firstOrNull() ?: return@filter args
             val projected = ProjectionRegistry.resolve(id).apply(delta) ?: run {
                 denials.denyDisclosure(
@@ -401,9 +428,75 @@ private fun DisclosurePolicy.asDeltaFilter(
 }
 
 /**
+ * [DisclosurePolicy] as a [FanOutlet.onRepeatSuppression] hook — the accounting
+ * half of the evaluation/accounting split `computenet-usd.2.2` introduced, and
+ * what keeps `computenet-usd.1`'s decided **per-attempt** denial counting exact
+ * once [FanOutlet] evaluates [asDeltaFilter] at most once per emission
+ * (`[SEC1-19]`).
+ *
+ * Invoked once per suppressed delivery attempt *after* the first of an
+ * emission, so the record it writes is deliberately the same `seam`, `reason`
+ * and `subject` the first suppression wrote — the counter must not be able to
+ * tell the k-th attempt from the first, or "N suppressed deliveries reports N"
+ * would decay into "reports 1 plus something else". Only two things differ, and
+ * both are `[SEC1-20]`:
+ *
+ * - **no arguments.** The refused payload rode to the host's spec-23-R8
+ *   sanitizer with the first suppression and has already been discharged
+ *   (`Owned -> Frozen`, `Leased` released + [civictech.cell.Redacted]);
+ *   re-sending it is exactly the double-discharge the invariant forbids. The
+ *   hook's signature takes none, so it cannot.
+ * - **the detail says so**, so an auditor reading k records can tell which one
+ *   carries the payload rather than concluding k-1 were dropped.
+ *
+ * Null for [DisclosurePolicy.Full], which suppresses nothing and therefore has
+ * no repeat to account; [FanOutlet.onRepeatSuppression] is null by default and
+ * is never consulted for a delivered attempt.
+ *
+ * The reason constant is derived from the policy rather than from the
+ * suppression that happened, and that is sound because each policy has exactly
+ * one way to suppress: [DisclosurePolicy.Deny] always denies, and
+ * [DisclosurePolicy.Project] suppresses only by projecting a delta away. A
+ * policy that gained a second suppression cause would have to widen this hook
+ * rather than reuse it.
+ */
+private fun DisclosurePolicy.asRepeatSuppressionHook(
+    denials: BoundaryDenialSink,
+    subject: String?,
+): (() -> Unit)? = when (this) {
+    is DisclosurePolicy.Full -> null
+
+    is DisclosurePolicy.Deny -> {
+        {
+            denials.denyDisclosure(
+                DenialReason.DISCLOSURE_DENIED,
+                subject,
+                "DisclosurePolicy.Deny (further suppressed attempt on the same emission; " +
+                    "the arguments were discharged with the first)",
+                emptyArray(),
+            )
+        }
+    }
+
+    is DisclosurePolicy.Project -> {
+        {
+            denials.denyDisclosure(
+                DenialReason.DISCLOSURE_PROJECTED_AWAY,
+                subject,
+                "projection '${id.name}' returned null for this delta (further suppressed attempt " +
+                    "on the same emission; the arguments were discharged with the first)",
+                emptyArray(),
+            )
+        }
+    }
+}
+
+/**
  * Accounts one suppressed `PORT_API` outbound delivery attempt (seam 3
  * disclosure) — the single call shape both suppression branches of
- * [asDeltaFilter] use, so the record's fields cannot drift between them.
+ * [asDeltaFilter] and both branches of [asRepeatSuppressionHook] use, so the
+ * record's fields cannot drift between a first suppression and a repeat of the
+ * same one (which is what makes them add up to the per-attempt count).
  *
  * The principal is the crossing's ambient one ([currentPrincipal]): the peer
  * whose delivery was suppressed where a peer is stamped (a remote-triggered

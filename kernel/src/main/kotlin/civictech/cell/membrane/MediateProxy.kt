@@ -4,6 +4,9 @@ import civictech.cell.BoundaryDenialSink
 import civictech.cell.BoundarySeam
 import civictech.cell.CurrentContext
 import civictech.cell.DenialReason
+import civictech.cell.Leased
+import civictech.cell.Owned
+import civictech.cell.dischargeRefusedArgs
 import civictech.cell.link.PeerId
 import civictech.cell.proxy.Invocation
 import java.lang.reflect.InvocationHandler
@@ -46,8 +49,35 @@ import java.util.concurrent.ConcurrentHashMap
  * what defeats a resend. Accounting never itself throws or drops (`invoke`'s
  * `null` return is unconditional on any failure branch). [denials] is null
  * when this proxy is constructed outside a membrane (tests, direct use), in
- * which case there is no exposure to account against and a refusal is simply
- * not reported anywhere.
+ * which case there is no exposure to account against and a refusal is
+ * reported nowhere — but its exclusives are still discharged (below).
+ *
+ * ## Refused exclusives, and why the envelope is opened first (BS-5, `[SEC1-23]`)
+ *
+ * A `Denied` verdict refuses the **whole** invocation, so every [Owned]/
+ * [Leased] in the argument array must be discharged exactly once — offending
+ * argument or not, raw or envelope-wrapped. Under
+ * [IntegrityPolicy.RequireSigned] every argument arrives as a [SignedDelta],
+ * so the exclusive is never a top-level argument: it is [SignedDelta.payload].
+ * The host's single spec-23-R8 sanitizer
+ * (`DeadLetters.sanitizeForDeadLetter`) inspects top-level arguments only, by
+ * design — the host is deliberately ignorant of membrane types, and the
+ * repository keeps exactly **one** sanitizer. So the unwrapping happens here,
+ * at the membrane, where [SignedDelta] is a local type: [refusedArgs] hands
+ * the sink each readable envelope's payload in place of the envelope, and the
+ * envelope identity the record would otherwise lose rides [BoundaryDenial]'s
+ * `detail` (see [envelopeNote]) rather than a live handle in the fan-out.
+ *
+ * Discharge itself stays in exactly one place per path: with a reporter
+ * attached it is the host's sanitizer (`Owned -> Frozen`, `Leased ->
+ * `Redacted`), and this class deliberately does **not** also discharge
+ * locally there — a pre-consumed `Owned` would degrade the dead letter's
+ * Frozen value to a Redacted marker. With no sink at all ([denials] null),
+ * there is no sanitizer downstream, so the refused arguments are discharged
+ * here via `civictech.cell.dischargeRefusedArgs` (consume/release only, never
+ * a second `Frozen`/`Redacted` substitution). The unattached-sink case — a
+ * sink whose membrane was never spawned — is closed at the sink itself, in
+ * [civictech.cell.BoundaryDenialSink.deny].
  */
 class MediateProxy<Api : Any>(
     private val target: Api,
@@ -65,14 +95,25 @@ class MediateProxy<Api : Any>(
                 when (val result = verifyOrDrop(arg)) {
                     is VerifyResult.Verified -> result.payload
                     is VerifyResult.Denied -> {
-                        denials?.deny(
-                            seam = BoundarySeam.INTEGRITY,
-                            reason = result.reason,
-                            principal = result.mintingPeer,
-                            subject = subject,
-                            detail = result.detail,
-                            deniedArgs = args.toList(),
-                        )
+                        // The whole invocation is refused, so every argument's
+                        // exclusive is discharged — including the ones the
+                        // RequireSigned envelope hides from the host's
+                        // top-level-only R8 sanitizer (BS-5).
+                        val refused = refusedArgs(args)
+                        if (denials == null) {
+                            dischargeRefusedArgs(refused)
+                        } else {
+                            denials.deny(
+                                seam = BoundarySeam.INTEGRITY,
+                                reason = result.reason,
+                                principal = result.mintingPeer,
+                                subject = subject,
+                                detail = listOfNotNull(result.detail, envelopeNote(args, refused))
+                                    .joinToString("; ")
+                                    .ifEmpty { null },
+                                deniedArgs = refused,
+                            )
+                        }
                         return null
                     }
                 }
@@ -82,6 +123,58 @@ class MediateProxy<Api : Any>(
         }
         val invocation = Invocation.of(method, args, CurrentContext.get())
         return invocation.withTarget(target).invoke()
+    }
+
+    /**
+     * The refused invocation's arguments as the spec-23-R8 sanitizer must see
+     * them: each **readable** [SignedDelta] replaced by its payload, every
+     * other argument as-is.
+     *
+     * "Readable" is the whole envelope population here — a `SignedDelta` whose
+     * signature or counter was rejected is still a well-formed envelope whose
+     * `payload` field can be read; what the verifier rejected is the *claim*
+     * the envelope makes, not its structure. An `UNSIGNED` refusal has no
+     * envelope to open for that argument, and it passes through untouched.
+     *
+     * **What this costs, stated where it happens.** Unwrapping is
+     * unconditional over readable envelopes — the decided design (this is
+     * `computenet-usd.2.1`'s "unwrapped to its payload; raw args as-is"), and
+     * it is what makes discharge cover a payload the top-level-only sanitizer
+     * would miss *inside a container* as well as a bare `Owned`/`Leased`. The
+     * price is that an **ordinary** (non-exclusive) refusal's dead letter now
+     * captures the payload where it used to capture the whole `SignedDelta`,
+     * so the envelope's peer/counter are no longer readable off the captured
+     * argument. They are not restored by [envelopeNote] either, which fires
+     * only for exclusives on purpose: the denial rate is set by whatever a
+     * remote peer chooses to send (`computenet-usd.6`, see
+     * `DeadLetters.boundaryDenial`), so the refusal path may not grow a string
+     * build per refusal for an identity the [civictech.cell.BoundaryDenial]
+     * already names as `principal`, and that `detail` already carries the
+     * counter for the one reason it discriminates on (`REPLAY`).
+     */
+    private fun refusedArgs(args: Array<out Any>): List<Any?> =
+        args.map { (it as? SignedDelta<*>)?.payload ?: it }
+
+    /**
+     * The envelope identity that unwrapping would otherwise drop from the
+     * audit trail, as a `detail` fragment — emitted only when unwrapping
+     * actually surfaced an exclusive, so an ordinary refusal's
+     * [civictech.cell.BoundaryDenial] is byte-identical to before (its
+     * *captured argument* is not — see [refusedArgs]). `null` when there is
+     * nothing to say.
+     *
+     * A record is a **report**, never a payload carrier
+     * ([civictech.cell.BoundaryDenial]), so the peer/counter go in as text
+     * beside the [DenialReason]; the envelope object itself never travels.
+     */
+    private fun envelopeNote(args: Array<out Any>, refused: List<Any?>): String? {
+        if (refused.none { it is Owned<*> || it is Leased<*> }) return null
+        val envelopes = args.filterIsInstance<SignedDelta<*>>()
+            .filter { it.payload is Owned<*> || it.payload is Leased<*> }
+            .map { "${it.mintingPeer.name}#${it.counter}" }
+        if (envelopes.isEmpty()) return null
+        return "exclusive payload(s) unwrapped from SignedDelta envelope(s) " +
+            "[${envelopes.joinToString(", ")}] for spec-23-R8 discharge"
     }
 
     /** The outcome of verifying one argument: the unwrapped payload, or a named, accountable refusal. */

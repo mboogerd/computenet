@@ -1,6 +1,7 @@
 package civictech.cell
 
 import civictech.cell.link.PeerId
+import civictech.cell.proxy.Proxy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -213,17 +214,49 @@ class BoundaryDenialSink internal constructor(
      * the refused arguments to the attached [BoundaryDenialReporter], if any.
      *
      * [deniedArgs] are the arguments the refused crossing carried. They may
-     * hold exclusives ([Owned]/[Leased]); they are **not** discharged here.
-     * Discharge happens exactly once, inside the host's spec-23-R8
-     * sanitization (`Owned -> freeze()`, `Leased -> release()` + [Redacted]),
-     * so this path has exactly one sanitizer and exactly one discharge site.
-     * (Exactly-once discharge across *repeated* filter evaluation — the
-     * disclosure-filter-called-twice hazard — is sibling feature
-     * `computenet-usd.2`'s, not this seam's.)
+     * hold exclusives ([Owned]/[Leased]), and this method takes **exactly one**
+     * of two mutually exclusive routes with them — never both:
      *
-     * Unattached (a membrane never spawned onto a `ManagedHost`), the counter
-     * still moves and nothing throws: accounting a denial must never itself be
-     * a failure path.
+     * - **A reporter is attached** (the membrane is hosted). The arguments are
+     *   handed on untouched, and the sole production reporter
+     *   ([attachReporter]'s caller, `ManagedHost`) discharges them exactly once
+     *   inside the host's spec-23-R8 sanitization (`Owned -> freeze()`,
+     *   `Leased -> release()` + [Redacted]) — the process's one sanitizer, and
+     *   on this path its one discharge site. Discharging here as well would be
+     *   a *double* discharge and would degrade the dead letter's `Frozen` value
+     *   to a `Redacted` marker, so this path deliberately does not. (A test
+     *   reporter that only records the [BoundaryDenial] and ignores its
+     *   arguments therefore leaves them live — that is the test's choice, made
+     *   by attaching a reporter that does not sanitize.)
+     * - **No reporter is attached** (a membrane never spawned onto a
+     *   `ManagedHost`). There is no sanitizer downstream, so the exclusives are
+     *   discharged here, by [dischargeRefusedArgs] — consume/release only, no
+     *   `Frozen`/`Redacted` substitution and therefore no second sanitizer.
+     *   `computenet-usd.1` left them live; that is a silent drop of an
+     *   exclusive payload, which the standing AGENTS.md invariant forbids on
+     *   *every* failure/suppression path, hosted or not (`computenet-usd.2.1`,
+     *   BS-5, `[SEC1-23]`). What is lost with no host is the *record*, not the
+     *   discharge.
+     *
+     * Either way the counter still moves and nothing throws: accounting a
+     * denial must never itself be a failure path, so an argument some upstream
+     * already consumed is tolerated rather than raised (see
+     * [dischargeRefusedArgs]).
+     *
+     * A caller holding exclusives inside its own envelope type must surface
+     * them before calling — `MediateProxy` unwraps `SignedDelta.payload`,
+     * because neither this sink nor the host's sanitizer knows membrane types.
+     *
+     * Exactly-once discharge across *repeated* filter evaluation — the
+     * disclosure-filter-called-twice hazard — was sibling task
+     * `computenet-usd.2.2`'s, and it **landed with this one**: a suppressed
+     * emission now evaluates its disclosure filter at most once
+     * (`civictech.cell.port.FanOutlet.disclosureFilter`), so this method is
+     * reached with the refused arguments exactly once per emission and every
+     * further suppressed attempt arrives argument-less through
+     * `FanOutlet.onRepeatSuppression`. Nothing on this seam relies on the
+     * tolerance below to make that true; the tolerance covers an upstream that
+     * consumed a wrapper before the refusal, not a second discharge of our own.
      *
      * A denial is **not a fault** (`[SEC1-29]`, BS-14): no supervision policy
      * is consulted, no escalation fires, no wave is minted or advanced, and no
@@ -239,9 +272,34 @@ class BoundaryDenialSink internal constructor(
     ): BoundaryDenial {
         val denial = BoundaryDenial(seam, exposure, principal, subject, reason, detail)
         count.incrementAndGet()
-        owner.reporter?.report(denial, deniedArgs)
+        val reporter = owner.reporter
+        if (reporter == null) dischargeRefusedArgs(deniedArgs) else reporter.report(denial, deniedArgs)
         return denial
     }
+}
+
+/**
+ * Discharges the exclusives a refusal is dropping when nothing downstream
+ * will: [Owned] consumed, [Leased] released, containers walked — the landed
+ * `Proxy.discharge` primitive (the `ManagedHost` refusal precedent, commit
+ * `02ac610`), reused rather than reimplemented.
+ *
+ * **Discharge, not sanitization.** It performs no `Owned -> Frozen` /
+ * `Leased -> Redacted` substitution and synthesizes no record: that rule
+ * (spec 23 R8, G-46) has exactly one implementation in the repository,
+ * `civictech.cell.host.DeadLetters.sanitizeForDeadLetter`, and this is
+ * deliberately not a second one. It is only ever called where no sanitizer
+ * runs at all — an unattached [BoundaryDenialSink], or a
+ * `civictech.cell.membrane.MediateProxy` built with no sink — and never
+ * alongside one.
+ *
+ * Tolerant per argument, because accounting a refusal may never itself throw
+ * ([BoundaryDenialSink.deny]'s stated contract): a wrapper an upstream already
+ * took or released has nothing left to discharge, and the remaining arguments
+ * are still discharged after it.
+ */
+internal fun dischargeRefusedArgs(deniedArgs: List<Any?>) {
+    deniedArgs.forEach { arg -> runCatching { Proxy.discharge(arg) } }
 }
 
 /**
