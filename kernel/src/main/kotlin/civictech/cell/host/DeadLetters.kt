@@ -1,10 +1,13 @@
 package civictech.cell.host
 
+import civictech.cell.BoundaryDenial
+import civictech.cell.BoundarySeam
 import civictech.cell.CellRef
 import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.cell.Redacted
 import civictech.cell.proxy.HostedPortInvocation
+import civictech.cell.proxy.Invocation
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -31,6 +34,57 @@ internal class DeadLetters(
         System.err.println("[ManagedHost ${hostRef.id}] dead letter: $description" + (cause?.let { " ($it)" } ?: ""))
         count.incrementAndGet()
         emit(DeadLetter(hostRef, cause, description, invocation?.let(::sanitizeForDeadLetter)))
+    }
+
+    /**
+     * The `BoundaryPolicy` denial-accounting entry point (spec 40/43,
+     * `[SEC1-26]`): the widening this collaborator offers so a membrane's
+     * [civictech.cell.BoundaryDenialSink] can report a refusal **through**
+     * [deadLetter] and thereby **inherit** [sanitizeForDeadLetter]'s spec-23-R8
+     * rule. That inheritance is the whole point of routing denials here: there
+     * is exactly one sanitizer in the process, and a second one — however
+     * faithful at the time it is written — is the thing this seam exists to
+     * prevent.
+     *
+     * A denial is not a fault (`[SEC1-29]`, BS-14): [cause] is null, no
+     * supervision policy is consulted (that decision belongs to
+     * [ManagedHost]'s catch around a *thrown* failure, which this path never
+     * enters), and the synthesized [Invocation] carries a **null**
+     * `MessageContext` — no wave is minted or advanced by reporting a refusal.
+     *
+     * The [Invocation] is synthetic and terminal: a dead letter is a report,
+     * never re-dispatched or replayed, so `parameterTypes` is left empty
+     * rather than fabricating a reflective signature for arguments that
+     * sanitization is about to retype (`Owned` -> `Frozen`, `Leased` ->
+     * [Redacted]).
+     */
+    internal fun boundaryDenial(cellRef: CellRef, denial: BoundaryDenial, deniedArgs: List<Any?>) {
+        val type = when (denial.seam) {
+            BoundarySeam.LINK_AUTHORITY -> HostedPortInvocation.Type.PORT_MANAGEMENT
+            BoundarySeam.PROTOCOL_AUTHORITY -> HostedPortInvocation.Type.PORT_PROTOCOL
+            BoundarySeam.DISCLOSURE, BoundarySeam.INTEGRITY -> HostedPortInvocation.Type.PORT_API
+        }
+        deadLetter(
+            cause = null,
+            description = "boundary denial at exposure '${denial.exposure}' on $cellRef: " +
+                "seam=${denial.seam}, reason=${denial.reason}, " +
+                "principal=${denial.principal?.name ?: "LocalTrusted"}, " +
+                "subject=${denial.subject ?: "-"}" +
+                (denial.detail?.let { " ($it)" } ?: "") +
+                " — refused by BoundaryPolicy (spec 40/43); a denial is not a cell fault, " +
+                "no supervision policy was consulted and no wave was minted or advanced.",
+            invocation = HostedPortInvocation(
+                cellRef = cellRef,
+                portName = denial.exposure,
+                type = type,
+                invocation = Invocation(
+                    methodName = denial.subject ?: denial.seam.name,
+                    parameterTypes = emptyList(),
+                    args = deniedArgs,
+                    context = null,
+                ),
+            ),
+        )
     }
 
     /**
