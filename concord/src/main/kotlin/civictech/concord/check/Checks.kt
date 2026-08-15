@@ -401,15 +401,29 @@ object Checks {
      * `snapshot` and `read-state` do not feed a cell, `disconnect` only removes an
      * edge, and a `despawn` only stops traffic (and refuses anyway).
      *
-     * One route is outside the scenario language: a **replicated** upstream merging a
-     * peer's delta (`SetCell.applyRemote`), which no `add` in the script names. No
-     * `type:`/`replica-of` combination reaches it under the kernel driver — an
-     * `effect-sink` binds only on the reserved durable host, and `KernelDriver.spawn`
-     * short-circuits every durable-host cell *before* its `replica-of` branch ("a
-     * durable cell is never also a dist replica") — so there is nothing to refuse
-     * today. A driver that did honour `replica-of` on a durable cell would reopen the
-     * hole, and the fix is to add `replica-of` to the shape gate, not to re-derive
-     * this paragraph.
+     * One route in would be outside the *script*: a **replicated** upstream merging a
+     * peer's delta (`SetCell.applyRemote`), which no `add` names, so its elements
+     * would be missing from the derived set and an element that fired zero times
+     * would pass over — the vacuous pass this derivation exists to remove, arriving
+     * through a door the scenario language does not open. A declared `replica-of` on
+     * a direct upstream is therefore a **refusal** in the shape gate below
+     * (computenet-cr7g).
+     *
+     * That refusal is unreachable under today's kernel driver, and deliberately kept
+     * anyway. No `type:`/`replica-of` combination can produce a replicated direct
+     * upstream of an `effect-sink`, on three facts re-verified at source 2026-08-15:
+     * an `effect-sink` is built **only** by `KernelDriverDur.build` (no other binding
+     * in the driver package names the type); an edge into it is resolved by
+     * `KernelDriverDur.connect`, which reads **both** endpoints out of the dur
+     * driver's own `cells` map, so a direct upstream that is not itself a durable-host
+     * cell raises rather than links; and `KernelDriver.spawn` short-circuits every
+     * durable-host cell into `dur` *before* reaching its `replica-of` branch ("a
+     * durable cell is never also a dist replica"), while `dur` never reads
+     * `replica-of` at all. So the gate here is a scenario-level guard, not a
+     * driver-level one: it costs one predicate, it holds for any binding, and a driver
+     * that later did honour `replica-of` on a durable cell meets a refusal instead of
+     * a silent vacuous pass. Changing any of those three is what would have reopened
+     * the hole; now it only reaches a refusal (computenet-cr7g).
      *
      * It gives up — `null`, not a partial set — when anything could make the
      * script's adds a poor model of what reached [sink]. A *partly* derivable key
@@ -429,6 +443,8 @@ object Checks {
      * - any direct upstream is itself fed by a declared link, so elements it emits
      *   need not be the ones the script added to it (and a cycle back into it can
      *   re-add them);
+     * - any direct upstream declares `replica-of`, so a peer's merged delta could add
+     *   elements no `add` on it names (the paragraph above);
      * - the same feeder is linked into [sink] more than once, so each add is
      *   delivered more than once.
      *
@@ -467,7 +483,9 @@ object Checks {
      * afterwards neither drives a new effect nor unmakes the one already recorded.
      */
     internal fun expectedEffectKeys(scenario: Scenario, sink: String): Set<String>? {
-        val types = scenario.graph?.cells.orEmpty().associate { it.id to it.type }
+        val cells = scenario.graph?.cells.orEmpty()
+        val types = cells.associate { it.id to it.type }
+        val replicated = cells.filter { it.replicaOf != null }.map { it.id }.toSet()
         if (types[sink] != EFFECT_SINK_TYPE) return null
         val links = scenario.graph?.links.orEmpty()
         val inbound = links.filter { it.to == sink }
@@ -479,6 +497,10 @@ object Checks {
         if (inbound.size != upstream.size) return null
         if (upstream.any { types[it] !in SET_SOURCE_TYPES }) return null
         if (upstream.any { u -> links.any { it.to == u } }) return null
+        // A replicated upstream can gain elements no `add` names, via a peer delta
+        // merged by `SetCell.applyRemote` — a feed outside the script entirely.
+        // Unreachable under today's kernel driver (see the KDoc), refused anyway.
+        if (upstream.any { it in replicated }) return null
         // [sink] plus every cell that transitively reaches it. Refusing across the
         // whole cone rather than the direct hop is what stops a *partial* derivation:
         // an add on an indirect feeder is not a key this function can name, and
