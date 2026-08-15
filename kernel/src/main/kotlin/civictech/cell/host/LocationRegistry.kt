@@ -21,6 +21,26 @@ import java.util.concurrent.ConcurrentHashMap
  * `InvocationSink` — in practice a bridge egress, spec 41). Remote locations
  * are learned via peer announcements (`cell.wire.Peering`); senders never
  * know which side of the wire a ref lives on.
+ *
+ * **Mandate: location + parking only (spec 33/41).** Two lanes that used to
+ * live here have been deliberately extracted and are not this class's
+ * business to reimplement or re-absorb:
+ *  - the by-logical-id membership index and the per-instance interest
+ *    assignment table (CP-D2/CP-D3/PN-7, spec 40/42 §Interest-scoped instance
+ *    sets) belong to [InstanceIndex], held at [instances];
+ *  - the repartition flip-window hold set (spec 20/24 §Partitioned state,
+ *    [24-PART-04], CP-D4, 93 I-19) belongs to [DeliveryHold], held at
+ *    [holds].
+ *
+ * [setInterest]/[interestOf]/[isHeld] and friends remain as compatibility
+ * delegates onto those two for out-of-kernel callers (kernel main-source
+ * reads [instances]/[holds] directly, OQ-1 computenet-iyi.4) — see each
+ * delegate's own KDoc. `ExtractionFenceTest` (BS-18) pins the shape: exactly
+ * one [InstanceIndex]- and one [DeliveryHold]-typed field, and no other field
+ * whose name contains `byLogicalId`, `interest`, `held` or `holds`. That
+ * second clause is a four-substring heuristic, not a judgement about names:
+ * `heldRefs` is caught, `parkedForFlip` is not (both measured 2026-08-15),
+ * so a second home under any other name survives it.
  */
 class LocationRegistry {
 
