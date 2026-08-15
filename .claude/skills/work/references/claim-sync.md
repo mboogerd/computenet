@@ -7,8 +7,10 @@ Subagents are handed ids that are already claimed and never claim their own.
 
 **Sync brackets acquisition, not writes. Ownership makes writes free.**
 (Decided 2026-08-13, computenet-wpvy.3, superseding the exactly-two-syncs
-rule — which dated from ~10-minute round-trips; a round-trip is now ~30s,
-`doc/ops/beads-sync-cost.md`.)
+rule — which dated from ~10-minute round-trips. Measured 2026-08-15 against
+the DoltHub remote: a no-op pull is ~3s, a no-op push ~6s, and a push
+carrying one write ~14s, so an acquisition bracket costs ~17s, not the ~30s
+this rule was written against. `doc/ops/beads-sync-cost.md`.)
 
 - **Owned territory** — items under the epic you claimed, items you
   claimed — is yours to write locally. Closes, parks, metadata, breakdown
@@ -77,10 +79,19 @@ the item you just read and decided to work. Select with `bd ready ...
   pushes. That is fine precisely because the other machine has no business
   inside your claimed epic — the epic-level claim is what it respects.
 - **…except on 5f routes 3–4, which are exactly the other machine having
-  business inside your epic.** A *child* claim is a local write; an *epic*
-  claim is always pushed at acquisition. So a session picking up a
-  cross-epic blocker or continuation item re-verifies against pulled state,
-  where your locally-claimed child still reads as unclaimed, and claims it.
+  business inside your epic.** A *child* claim under an **open** epic is a
+  local write; an *epic* claim is always pushed at acquisition. So a session
+  picking up a cross-epic blocker or continuation item re-verifies against
+  pulled state, where your locally-claimed child still reads as unclaimed,
+  and claims it. What protects it is the epic claim above it, which that
+  session is required to read first.
+
+  **Once the epic is closed, that protection is gone and the child claim
+  becomes an acquisition** (SKILL.md 5b, computenet-k9d.3). A closed epic
+  locks nothing, yet the session that held it keeps finishing in-flight
+  children until its own Finalize — hours, potentially. Pushing those claims
+  is one round-trip in an anomalous case, and it is what lets route 3 read
+  the candidate item's own claim instead of guessing from the parent's age.
 
   **Worked example, 2026-08-13 — computenet-f8tf.** MacBoo claimed epic
   `computenet-dqy`, claimed its child `computenet-dqy.40`, and dispatched an
@@ -103,7 +114,9 @@ the item you just read and decided to work. Select with `bd ready ...
   while it was open stays inside it, finishing in-flight children, until its
   own Finalize, so the closing is not the eviction. Past that window the
   assignee on a closed epic is provenance: step 6 leaves it deliberately, and
-  treating it as a claim would skip that epic's open children forever. And if
+  treating it as a claim would skip that epic's open children forever — so
+  the reading that decides it there is the *candidate's own* claim, which is
+  pushed for exactly this case. And if
   a sibling PR turns up touching your own item's files, that is a collision —
   stop working the item and park a question, per the section below. Do not
   pick a winner: the losing side may hold committed, pushed, unreviewed work.
