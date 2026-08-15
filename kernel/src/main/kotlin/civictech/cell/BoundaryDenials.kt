@@ -247,9 +247,16 @@ class BoundaryDenialSink internal constructor(
      * them before calling — `MediateProxy` unwraps `SignedDelta.payload`,
      * because neither this sink nor the host's sanitizer knows membrane types.
      *
-     * (Exactly-once discharge across *repeated* filter evaluation — the
-     * disclosure-filter-called-twice hazard — is sibling task
-     * `computenet-usd.2.2`'s, not this seam's.)
+     * Exactly-once discharge across *repeated* filter evaluation — the
+     * disclosure-filter-called-twice hazard — was sibling task
+     * `computenet-usd.2.2`'s, and it **landed with this one**: a suppressed
+     * emission now evaluates its disclosure filter at most once
+     * (`civictech.cell.port.FanOutlet.disclosureFilter`), so this method is
+     * reached with the refused arguments exactly once per emission and every
+     * further suppressed attempt arrives argument-less through
+     * `FanOutlet.onRepeatSuppression`. Nothing on this seam relies on the
+     * tolerance below to make that true; the tolerance covers an upstream that
+     * consumed a wrapper before the refusal, not a second discharge of our own.
      *
      * A denial is **not a fault** (`[SEC1-29]`, BS-14): no supervision policy
      * is consulted, no escalation fires, no wave is minted or advanced, and no
