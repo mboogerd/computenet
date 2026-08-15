@@ -7,7 +7,11 @@ import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.DenialReason
+import civictech.cell.Frozen
+import civictech.cell.Leased
+import civictech.cell.Owned
 import civictech.cell.Propagate
+import civictech.cell.Redacted
 import civictech.cell.host.DeadLetter
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -19,7 +23,9 @@ import civictech.cell.port.Use
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.util.UUID
 
 /**
@@ -243,5 +249,237 @@ class MediateProxyIntegrityTest {
         host.supervisionAccounting().restarts shouldBe 0L
         // No wave minted or advanced — the report rides a null MessageContext.
         letter.invocation!!.invocation.context shouldBe null
+    }
+
+    // ------------------------------------------------------------------
+    // BS-5 ([SEC1-23], [SEC1-26]): a refused invocation's exclusives are
+    // discharged exactly once — including the ones inside the envelope.
+    // ------------------------------------------------------------------
+
+    /**
+     * Organelle behind a mediated, signature-required exposure whose contract
+     * carries an exclusive. Typed `Propagate<Any>` rather than
+     * `Propagate<Owned<String>>` so the same organelle serves the `Owned` and
+     * the `Leased` case; the type argument erases either way, and what BS-5 is
+     * about is what happens *before* delivery.
+     */
+    private class ExclusiveInletOrganelle(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        val received = mutableListOf<Any>()
+        val inlet = registerPort("inlet", FanInlet.create<Propagate<Any>>())
+
+        init {
+            inlet.serve(
+                object : Propagate<Any> {
+                    override fun propagate(value: Any) {
+                        received += value
+                    }
+                },
+            )
+        }
+    }
+
+    private class SignedExclusiveMembrane(
+        val organelle: ExclusiveInletOrganelle = ExclusiveInletOrganelle(),
+    ) : CompositeCell() {
+        val exposedInlet = mediate(
+            "exposedInlet",
+            "inlet",
+            organelle.inlet,
+            BoundaryPolicy(integrity = IntegrityPolicy.RequireSigned),
+        )
+    }
+
+    private fun hostWithDeadLetters(controller: SimulationController): Pair<ManagedHost, MutableList<DeadLetter>> {
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = mutableListOf<DeadLetter>()
+        host.deadLetterOutlet.subscribe(
+            Use.fixed(
+                object : Propagate<DeadLetter> {
+                    override fun propagate(value: DeadLetter) {
+                        letters += value
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+        return host to letters
+    }
+
+    @Test
+    fun `BS-5 an integrity refusal freezes an Owned carried inside the SignedDelta envelope exactly once`() {
+        val controller = SimulationController(seed = 12)
+        val (host, letters) = hostWithDeadLetters(controller)
+
+        val membrane = SignedExclusiveMembrane()
+        host.managementInlet.call.spawn(membrane)
+        // RESTART, so "a denial is not a fault" stays a real check here too.
+        host.managementInlet.call.supervise(membrane.ref, SupervisionPolicy.RESTART)
+        controller.runToIdle()
+
+        val owned = Owned("owned-secret")
+        // BS-5's exact scenario: under RequireSigned every argument arrives
+        // enveloped, so the exclusive is NOT a top-level argument — it is
+        // SignedDelta.payload. The signature is wrong, so the crossing is
+        // refused before the organelle ever sees it.
+        propagateMethod.invoke(
+            membrane.exposedInlet.call,
+            SignedDelta(
+                payload = owned,
+                mintingPeer = peer,
+                counter = 1,
+                signature = "not-${peer.name}".toByteArray(),
+            ),
+        )
+        controller.runToIdle()
+
+        membrane.organelle.received shouldBe emptyList()
+        val sink = membrane.boundaryDenials["exposedInlet"]!!
+        sink.denialCount shouldBe 1L
+
+        letters.size shouldBe 1
+        val letter = letters.single()
+        letter.cause shouldBe null
+        letter.description shouldContain "BAD_SIGNATURE"
+
+        // [SEC1-26]: the dead-letter fan-out carries the Frozen form of the
+        // value and no live exclusive handle — not the live envelope that
+        // still holds one.
+        val captured = letter.invocation!!.invocation.args
+        captured.size shouldBe 1
+        captured.single().shouldBeInstanceOf<Frozen<*>>().value shouldBe "owned-secret"
+        captured.none { it is Owned<*> || it is Leased<*> || it is SignedDelta<*> } shouldBe true
+
+        // Exactly once, both directions: the discharge really happened on the
+        // original (a second take() is use-after-move), and it happened only
+        // once (the freeze above is the single consumption).
+        assertThrows<IllegalStateException> { owned.take() }
+
+        host.supervisionAccounting().restarts shouldBe 0L
+        letter.invocation!!.invocation.context shouldBe null
+    }
+
+    @Test
+    fun `BS-5 an integrity refusal releases a Leased carried inside the envelope exactly once, back to its pool`() {
+        val controller = SimulationController(seed = 13)
+        val (host, letters) = hostWithDeadLetters(controller)
+
+        val membrane = SignedExclusiveMembrane()
+        host.managementInlet.call.spawn(membrane)
+        controller.runToIdle()
+
+        var outstanding = 0
+        val leased = Leased("leased-secret") { outstanding -= 1 }.also { outstanding += 1 }
+        outstanding shouldBe 1
+
+        propagateMethod.invoke(
+            membrane.exposedInlet.call,
+            SignedDelta(
+                payload = leased,
+                mintingPeer = peer,
+                counter = 1,
+                signature = "not-${peer.name}".toByteArray(),
+            ),
+        )
+        controller.runToIdle()
+
+        membrane.organelle.received shouldBe emptyList()
+        membrane.boundaryDenials["exposedInlet"]!!.denialCount shouldBe 1L
+
+        val captured = letters.single().invocation!!.invocation.args
+        captured.size shouldBe 1
+        captured.single().shouldBeInstanceOf<Redacted>()
+
+        // The pool's outstanding-lease count returns to its pre-refusal value,
+        // and a second release is a double-discharge — as much a defect as a
+        // dropped one.
+        outstanding shouldBe 0
+        assertThrows<IllegalStateException> { leased.release() }
+    }
+
+    @Test
+    fun `a refusal through an unattached denial sink still discharges the enveloped exclusive and never throws`() {
+        val received = mutableListOf<Any>()
+        val target = object : Propagate<Any> {
+            override fun propagate(value: Any) {
+                received += value
+            }
+        }
+        // A membrane never spawned onto a ManagedHost: the sink counts, but no
+        // reporter — and therefore no R8 sanitizer — is behind it.
+        val sink = BoundaryDenials().sinkFor("exposedInlet")
+        val proxy = MediateProxy(target, IntegrityPolicy.RequireSigned, denials = sink)
+
+        val owned = Owned("orphan-secret")
+        proxy.invoke(
+            null,
+            propagateMethod,
+            arrayOf(SignedDelta(owned, peer, counter = 1, signature = "not-${peer.name}".toByteArray())),
+        ) shouldBe null
+
+        received shouldBe emptyList()
+        sink.denialCount shouldBe 1L
+        assertThrows<IllegalStateException> { owned.take() }
+    }
+
+    @Test
+    fun `a refusal through a proxy with no denial sink at all still discharges the enveloped exclusive`() {
+        val received = mutableListOf<Any>()
+        val target = object : Propagate<Any> {
+            override fun propagate(value: Any) {
+                received += value
+            }
+        }
+        // denials = null: constructed outside a membrane (tests, direct use).
+        // There is no exposure to account against — but there is still an
+        // exclusive that may not be silently dropped.
+        val proxy = MediateProxy(target, IntegrityPolicy.RequireSigned, denials = null)
+
+        val owned = Owned("unaccounted-secret")
+        var outstanding = 1
+        val leased = Leased("unaccounted-lease") { outstanding -= 1 }
+
+        proxy.invoke(null, propagateMethod, arrayOf("raw-delta")) shouldBe null
+        proxy.invoke(
+            null,
+            propagateMethod,
+            arrayOf(SignedDelta(owned, peer, counter = 1, signature = "not-${peer.name}".toByteArray())),
+        ) shouldBe null
+        proxy.invoke(
+            null,
+            propagateMethod,
+            arrayOf(SignedDelta(leased, peer, counter = 1, signature = "not-${peer.name}".toByteArray())),
+        ) shouldBe null
+
+        received shouldBe emptyList()
+        assertThrows<IllegalStateException> { owned.take() }
+        outstanding shouldBe 0
+        assertThrows<IllegalStateException> { leased.release() }
+    }
+
+    @Test
+    fun `an unattached discharge tolerates an argument already consumed before the refusal`() {
+        val target = object : Propagate<Any> {
+            override fun propagate(value: Any) = Unit
+        }
+        val sink = BoundaryDenials().sinkFor("exposedInlet")
+        val proxy = MediateProxy(target, IntegrityPolicy.RequireSigned, denials = sink)
+
+        val alreadyTaken = Owned("gone").also { it.take() }
+        val stillLive = Owned("live")
+
+        // Accounting a refusal must never itself be a failure path, even when
+        // a wrapper was consumed upstream: the second argument is still
+        // discharged and the counter still moves.
+        proxy.invoke(
+            null,
+            propagateMethod,
+            arrayOf(
+                SignedDelta(alreadyTaken, peer, counter = 1, signature = "not-${peer.name}".toByteArray()),
+                SignedDelta(stillLive, peer, counter = 1, signature = "not-${peer.name}".toByteArray()),
+            ),
+        ) shouldBe null
+
+        sink.denialCount shouldBe 1L
+        assertThrows<IllegalStateException> { stillLive.take() }
     }
 }

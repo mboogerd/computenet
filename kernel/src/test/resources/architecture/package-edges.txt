@@ -97,8 +97,25 @@
 # consistency -> host -> evolve the other), so evolve and link were already
 # inside the single non-leaf SCC G-63 records. This addition changes the
 # reachability graph not at all; it makes one existing path direct.
+#
+# SEC1-23: cell -> proxy ADDED -- BoundaryDenials.kt's dischargeRefusedArgs
+# (computenet-usd.2.1, BS-5) discharges the exclusives of a refusal that no
+# reporter will sanitize, and the item's acceptance criterion names the
+# primitive it must use: `Proxy.discharge` (consume/release only, the
+# ManagedHost refusal precedent 02ac610). The zero-edge alternative is a
+# six-line reimplementation of that walk beside Owned/Leased in Ownership.kt,
+# which is exactly the duplicated discharge logic the criterion forbids -- the
+# same "exactly one implementation" rule that keeps the spec-23-R8 sanitizer
+# single. Accounting lives at the civictech.cell root by deliberate design (see
+# BoundaryDenials.kt's "Where this file lives, and why"), so the seam cannot be
+# moved down into a package that already has the edge without giving up the
+# reason it is there. No new cycle: proxy -> cell already exists (Proxy.kt
+# imports civictech.cell.Owned/Leased), so this closes a cell <-> proxy 2-cycle
+# exactly as cell <-> link and cell <-> port already do, and G-63's single
+# non-leaf SCC is unchanged.
 cell -> link
 cell -> port
+cell -> proxy
 consistency -> cell
 consistency -> control
 consistency -> data
