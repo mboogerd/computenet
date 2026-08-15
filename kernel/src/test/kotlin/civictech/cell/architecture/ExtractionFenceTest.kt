@@ -20,9 +20,11 @@ import java.io.File
  * acceptable surviving shape (`instances: InstanceIndex`, `holds:
  * DeliveryHold`); `locations`, `parked`, and `topology` legitimately remain
  * on [LocationRegistry] (location + parking are its own mandate, spec 33/41).
- * Limit: beyond the typed-field assertions, the second-home check is a *name*
- * heuristic, so a raw re-implementation under an unsuggestive name (measured:
- * `parkedForFlip`) passes. It catches the likely accident, not an adversary.
+ * Limit: beyond the typed-field assertions, the second-home check matches
+ * four substrings (`byLogicalId`, `interest`, `held`, `holds`) against the
+ * field name. Measured 2026-08-15: `heldRefs` fails the test, `parkedForFlip`
+ * — a perfectly natural name for a flip-window hold set, not a disguise —
+ * passes. So a raw re-implementation under any other name survives it.
  *
  * Half 2 (import fence): [InstanceIndex]'s source imports none of
  * `ManagedHost`, `InvocationSink`, `ParkQueue`, or `InstanceSet` — the
@@ -40,9 +42,14 @@ import java.io.File
  * exists to prevent, half 3 scans the *code* of InstanceIndex.kt — comments
  * and KDoc stripped — for any word-boundary occurrence of the four names,
  * which also catches a fully-qualified reference that dodges the import line.
- * Limit: the comment stripper is textual, so a forbidden name appearing
- * inside a string literal that itself contains comment punctuation could be
- * misjudged; InstanceIndex.kt has no such literal today.
+ * Limits, both from the scan being textual. (a) A forbidden name inside a
+ * string literal that itself contains comment punctuation could be misjudged;
+ * InstanceIndex.kt has no such literal today. (b) Only the literal names are
+ * matched, so a reference reached indirectly is invisible — measured
+ * 2026-08-15: a `ManagedHost`-typed field declared via a typealias defined in
+ * a sibling file of the same package passes all three halves. Half 3 makes
+ * the *textual* claim in InstanceIndex's KDoc build-breaking; it does not
+ * prove the absence of a reference.
  */
 class ExtractionFenceTest {
 

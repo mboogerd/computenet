@@ -37,8 +37,10 @@ import java.util.concurrent.ConcurrentHashMap
  * reads [instances]/[holds] directly, OQ-1 computenet-iyi.4) — see each
  * delegate's own KDoc. `ExtractionFenceTest` (BS-18) pins the shape: exactly
  * one [InstanceIndex]- and one [DeliveryHold]-typed field, and no other field
- * whose *name* suggests a second home for either lane (a name heuristic — it
- * catches the likely accident, not a deliberately disguised one).
+ * whose name contains `byLogicalId`, `interest`, `held` or `holds`. That
+ * second clause is a four-substring heuristic, not a judgement about names:
+ * `heldRefs` is caught, `parkedForFlip` is not (both measured 2026-08-15),
+ * so a second home under any other name survives it.
  */
 class LocationRegistry {
 
