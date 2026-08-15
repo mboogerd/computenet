@@ -29,7 +29,9 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import civictech.cell.data.delta.SetDelta
 
 /** Redacts any element whose key starts with "secret" — a named, registered `Delta -> Delta` transform (P9). */
@@ -83,6 +85,45 @@ private class ExclusiveMembrane : CompositeCell() {
         "outlet",
         organelleOutlet,
         policy = BoundaryPolicy(disclosure = DisclosurePolicy.Deny),
+    )
+}
+
+/**
+ * BS-7's probe contract ([SEC1-19]): one emitted [Owned], so "the transform ran
+ * once per emission" and "the payload was consumed at most once across every
+ * path" become one test rather than two.
+ */
+interface ExclusiveFeed {
+    fun send(owned: Owned<String>)
+}
+
+/**
+ * A projection that **counts its own invocations** — BS-7 asserts that count
+ * directly rather than any scheduling timing — and that reads its delta the way
+ * D2 (`computenet-usd.2.2`) says a projection must: [Owned.borrow], never
+ * [Owned.take]. It forwards the very same wrapper, so the sole consumer's
+ * `take()` downstream is the one consumption the SPSC rule allocates.
+ */
+private val borrowCountingProjection = ProjectionId("borrow-counting-projection-test")
+
+private val borrowCountingProjectionCalls = AtomicInteger()
+
+private fun registerBorrowCountingProjection() {
+    ProjectionRegistry.register(borrowCountingProjection) { delta ->
+        borrowCountingProjectionCalls.incrementAndGet()
+        (delta as Owned<*>).borrow()
+        delta
+    }
+}
+
+/** A membrane whose only exposure is a [borrowCountingProjection]-projected outlet of [ExclusiveFeed]. */
+private class ProjectedExclusiveMembrane : CompositeCell() {
+    private val organelleOutlet = FanOutlet.create<ExclusiveFeed>()
+    val exposedOutlet = mediateOutlet(
+        "exposedOutlet",
+        "outlet",
+        organelleOutlet,
+        policy = BoundaryPolicy(disclosure = DisclosurePolicy.Project(borrowCountingProjection)),
     )
 }
 
@@ -963,6 +1004,186 @@ class BoundaryPolicyTest {
         captured[1].shouldBeInstanceOf<Redacted>()
         captured.none { it is Owned<*> || it is Leased<*> } shouldBe true
         letters.single().description shouldContain "DISCLOSURE_DENIED"
+    }
+
+    @Test
+    fun `BS-7 a Project transform runs at most once per emission across tap, observer and consumer`() {
+        // [SEC1-19], decided realization D1 (computenet-usd.2.2): FanOutlet
+        // evaluates its disclosureFilter LAZILY, at most once per emission, and
+        // shares that one verdict with every typed tap, every payload-agnostic
+        // observer and the consumer. "At most", not "exactly": zero attachments
+        // is zero evaluations.
+        //
+        // Against the unfixed code this reads 3 after one emission (once per
+        // consumer in invoke(), once per typed tap in invoke(), once per
+        // observer in notifyObserver()) — the filter was evaluated per delivery
+        // ATTEMPT.
+        registerBorrowCountingProjection()
+        borrowCountingProjectionCalls.set(0)
+        val controller = SimulationController(seed = 21)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val membrane = ProjectedExclusiveMembrane()
+        host.managementInlet.call.spawn(membrane)
+        controller.runToIdle()
+
+        // Nobody attached: no delivery is attempted, so the transform runs not
+        // at all — the lazy half of "at most once".
+        membrane.exposedOutlet.call.send(Owned("nobody-home"))
+        controller.runToIdle()
+        borrowCountingProjectionCalls.get() shouldBe 0
+
+        // Three attachments of all three shapes. A tap borrows (spec 23 §Taps);
+        // the sole consumer takes, which is the one consumption SPSC allocates.
+        val borrowed = mutableListOf<String>()
+        val taken = mutableListOf<String>()
+        var observedEmissions = 0
+        membrane.exposedOutlet.tap(
+            Use.fixed(
+                object : ExclusiveFeed {
+                    override fun send(owned: Owned<String>) {
+                        borrowed += owned.borrow().value
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+        membrane.exposedOutlet.observe(PortRef.generate()) { observedEmissions++ }
+        membrane.exposedOutlet.subscribe(
+            Use.fixed(
+                object : ExclusiveFeed {
+                    override fun send(owned: Owned<String>) {
+                        taken += owned.take()
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+
+        val payload = Owned("one")
+        membrane.exposedOutlet.call.send(payload)
+        controller.runToIdle()
+
+        // ONE invocation of the transform for that emission, with all three
+        // attached — this is the assertion that fails (3) before the fix.
+        borrowCountingProjectionCalls.get() shouldBe 1
+        // and every attachment still got its delivery: sharing the verdict is
+        // not skipping the fan-out.
+        borrowed shouldBe listOf("one")
+        taken shouldBe listOf("one")
+        observedEmissions shouldBe 1
+        // Consumed at most once across the consumer and observer paths: the
+        // consumer's take() was it, so the original is now use-after-move.
+        assertThrows<IllegalStateException> { payload.take() }
+
+        // A second emission is one further evaluation, not four: the memo is
+        // per emission and never leaks across them.
+        membrane.exposedOutlet.call.send(Owned("two"))
+        controller.runToIdle()
+        borrowCountingProjectionCalls.get() shouldBe 2
+        taken shouldBe listOf("one", "two")
+
+        // A projected (delivered) emission is no denial at all.
+        membrane.boundaryDenials["exposedOutlet"]!!.denialCount shouldBe 0L
+    }
+
+    @Test
+    fun `BS-6 a suppressed emission discharges its exclusives exactly once while still counting every attempt`() {
+        // [SEC1-20] over the D1 evaluation split. Three attachments, one
+        // suppressed emission carrying an Owned and a Leased from a counting
+        // pool:
+        //
+        //  - the denial counter still moves ONCE PER ATTEMPT (usd.1's decided
+        //    semantics, which D1 preserves through the no-args repeat hook);
+        //  - the payload reaches the single spec-23-R8 sanitizer exactly ONCE,
+        //    so the lease is released once and the pool's outstanding count
+        //    returns to its pre-emission value, and the Owned is frozen once;
+        //  - only that first record carries arguments; the repeats carry none,
+        //    which is what makes the discharge exactly-once rather than
+        //    "twice, but tolerated".
+        //
+        // Against the unfixed code the *counting* and the pool balance already
+        // pass (each attempt re-sanitizes the same wrappers, and the sanitizer
+        // swallows the already-consumed throw), but every one of the three
+        // records carries arguments — so `valued.size shouldBe 1` reads 3.
+        val controller = SimulationController(seed = 22)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val membrane = ExclusiveMembrane()
+        host.managementInlet.call.spawn(membrane)
+        controller.runToIdle()
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+
+        var outstandingLeases = 0
+        fun lease(value: String): Leased<String> {
+            outstandingLeases++
+            return Leased(value) { outstandingLeases-- }
+        }
+
+        var delivered = 0
+        var tapped = 0
+        var observedEmissions = 0
+        membrane.exposedOutlet.tap(
+            Use.fixed(
+                object : ExclusiveDrop {
+                    override fun send(owned: Owned<String>, leased: Leased<String>) {
+                        tapped++
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+        membrane.exposedOutlet.observe(PortRef.generate()) { observedEmissions++ }
+        membrane.exposedOutlet.subscribe(
+            Use.fixed(
+                object : ExclusiveDrop {
+                    override fun send(owned: Owned<String>, leased: Leased<String>) {
+                        delivered++
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+
+        val owned = Owned("owned-secret")
+        val leased = lease("leased-secret")
+        outstandingLeases shouldBe 1
+
+        membrane.exposedOutlet.call.send(owned, leased)
+        controller.runToIdle()
+
+        // Suppressed on every path — including the observer, which [SEC1-19]
+        // does not exempt: it constrains the evaluation count, not the gate.
+        delivered shouldBe 0
+        tapped shouldBe 0
+        observedEmissions shouldBe 0
+
+        // Per-attempt accounting, unweakened: three attachments, three records.
+        sink.denialCount shouldBe 3L
+        letters.size shouldBe 3
+
+        // Discharged exactly once. The pool is back where it started, and both
+        // wrappers refuse a second discharge — which is also the proof the
+        // repeats did not quietly re-run it (a second release would have thrown
+        // inside the sanitizer's runCatching and gone unseen; the pool count
+        // would not).
+        outstandingLeases shouldBe 0
+        assertThrows<IllegalStateException> { leased.release() }
+        assertThrows<IllegalStateException> { owned.take() }
+
+        // Exactly one record carried the payload to sanitization; the repeats
+        // carry no arguments at all.
+        val valued = letters.filter { it.invocation!!.invocation.args.isNotEmpty() }
+        valued.size shouldBe 1
+        val captured = valued.single().invocation!!.invocation.args
+        captured.size shouldBe 2
+        captured[0].shouldBeInstanceOf<Frozen<*>>().value shouldBe "owned-secret"
+        captured[1].shouldBeInstanceOf<Redacted>()
+        captured.none { it is Owned<*> || it is Leased<*> } shouldBe true
+        // and all three are the same denial, so an auditor counting refusals
+        // reads three refusals rather than one refusal plus two other things.
+        letters.forEach { it.description shouldContain "DISCLOSURE_DENIED" }
     }
 
     @Test

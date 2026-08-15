@@ -124,30 +124,60 @@ class FanOutlet<Api : Any>(
      * (P2/P6): only a Mediate exposure that declares a non-`Full`
      * `disclosure` policy installs a non-identity filter here.
      *
-     * **Evaluation contract — once per delivery ATTEMPT.** This outlet calls
-     * the filter once per *attempted delivery*, never once per emission:
-     * once inside [invoke] for each consumer and each contract-typed tap,
-     * once inside [notifyObserver] for each payload-agnostic observer, and
-     * once inside [at]'s targeted delivery. So one broadcast to k attachments
-     * evaluates it k times, and an emission with no attachment evaluates it
-     * not at all. That is what makes a filter which accounts its suppressions
+     * **Evaluation contract — at most once per EMISSION, lazily** (`[SEC1-19]`,
+     * decided in `computenet-usd.2`/`computenet-usd.2.2`). One broadcast
+     * evaluates this filter **at most once**, whatever the number of
+     * attachments: the first attempted delivery of an emission evaluates it,
+     * and the verdict — the rewritten argument array, or suppression — is
+     * shared unchanged by every contract-typed tap, every payload-agnostic
+     * observer and every consumer of that same emission (see
+     * [EmissionDisclosure]). "At most", not "exactly": an emission with no
+     * attachment attempts no delivery and so evaluates the filter **zero**
+     * times, and evaluation is lazy for exactly that reason. [at]'s targeted
+     * delivery ([baselineTo]'s catch-up unicast / pull reply) is its own
+     * emission frame with a single target, hence its own single evaluation.
+     *
+     * A `Project` transform therefore runs once per emitted payload rather
+     * than once per subscriber, which is what makes it safe over an exclusive
+     * argument — and a projection **must still borrow, never consume**: it may
+     * read an [civictech.cell.Owned] / [civictech.cell.Leased] argument through
+     * `borrow()` only. The single consumption SPSC allocates belongs to the
+     * sole consumer's `take()`/`release()`; taps borrow. A projection that
+     * consumed would take the payload out from under that consumer even though
+     * it now runs only once (D2, `computenet-usd.2.2`).
+     *
+     * **Accounting stays per delivery ATTEMPT, and is separate from
+     * evaluation.** A filter that accounts its suppressions
      * (`civictech.cell.membrane.BoundaryPolicy`'s `disclosure` seam, spec
-     * 40/43) report exactly one denial per suppressed attempt — a boundary
-     * that suppressed N deliveries reports N — with no per-target bookkeeping
-     * on this hot path. A filter installed here must therefore be safe to call
-     * repeatedly with the *same* argument array within one emission, and must
-     * not consume what it is handed; the one landed consequence of that
-     * repetition (a suppressing filter routing the same exclusive payload to
-     * sanitization once per attempt, so only the first suppressed attempt's
-     * dead letter carries a value and the rest report
-     * [civictech.cell.Redacted]) is tracked as `computenet-usd.2` — "exclusives
-     * discharged exactly once on every denial path; `Project` applies at most
-     * once per emission" — and is deliberately not repaired here. That item,
-     * not this contract, is what reconciles per-attempt evaluation with the
-     * at-most-once-per-emission rule for a `Project` transform.
+     * 40/43) must still report one denial per *suppressed attempt* — a
+     * boundary that suppressed N deliveries reports N — which was previously a
+     * free consequence of evaluating N times. Since it no longer is, the two
+     * are split: the one evaluation accounts the **first** suppressed attempt
+     * itself, carrying the refused arguments to sanitization exactly once, and
+     * every **further** suppressed attempt of the same emission is accounted
+     * through [onRepeatSuppression], which re-runs no transform and carries no
+     * arguments. So the counter still moves per attempt while the exclusive
+     * payload is discharged exactly once (`[SEC1-20]`).
      */
     @Volatile
-    var disclosureFilter: (Array<out Any?>) -> Array<out Any?>? = { it }
+    var disclosureFilter: (Array<out Any?>) -> Array<out Any?>? = IDENTITY_DISCLOSURE
+
+    /**
+     * Accounts one **further** suppressed delivery attempt of an emission this
+     * outlet's [disclosureFilter] already suppressed — the additive half of the
+     * evaluation/accounting split described there (`computenet-usd.2.2`).
+     *
+     * Invoked once per suppressed attempt *after* the first, and never for a
+     * delivered one. Deliberately no-args: the refused arguments rode to
+     * sanitization with the first suppression and have been discharged
+     * (`Owned -> Frozen`, `Leased -> ` [civictech.cell.Redacted]) by then, so
+     * handing them here again is precisely the double-discharge `[SEC1-20]`
+     * forbids. Null by default — an outlet with no mediated disclosure has
+     * nothing to account, and `civictech.cell.membrane.CompositeCell`'s
+     * `mediateOutlet` is the only installer.
+     */
+    @Volatile
+    var onRepeatSuppression: (() -> Unit)? = null
 
     /**
      * This outlet's current emission epoch (spec 20/22 §Source identity: a
@@ -190,15 +220,24 @@ class FanOutlet<Api : Any>(
             // — so copying one into a second list allocated a throwaway List
             // per tap/consumer set per message, on the hottest path in the
             // runtime, and bought nothing.
+            //
+            // One disclosure verdict per emission, shared by every attachment
+            // below ([SEC1-19], see [disclosureFilter]). Read the @Volatile
+            // filter ONCE here: an emission must not straddle a `mediateOutlet`
+            // install, and the loops below must not re-read it per attachment.
+            val gate = disclosureFilter.let { filter ->
+                if (filter === IDENTITY_DISCLOSURE) null
+                else EmissionDisclosure(filter, onRepeatSuppression)
+            }
             for (key in tapOrder) {
                 when (val target = taps[key]) {
-                    is TapTarget.Typed -> invoke(target.port, method, args)
-                    is TapTarget.Observer -> notifyObserver(target, args, ctx)
+                    is TapTarget.Typed -> invoke(target.port, method, args, gate)
+                    is TapTarget.Observer -> notifyObserver(target, args, ctx, gate)
                     // untapped between the order snapshot and this step
                     null -> Unit
                 }
             }
-            for (key in consumerOrder) consumers[key]?.let { target -> invoke(target, method, args) }
+            for (key in consumerOrder) consumers[key]?.let { target -> invoke(target, method, args, gate) }
         }
         null
     }
@@ -206,8 +245,16 @@ class FanOutlet<Api : Any>(
     // `Use<*>`, not `Use<Api>`: the consumer path passes a `Use<Api>` and the
     // typed-tap path a [TapTarget.Typed]'s star-projected port, and both end at
     // the same reflective `Method.invoke`, which is untyped anyway.
-    private fun invoke(target: Use<*>, method: java.lang.reflect.Method, args: Array<out Any?>?) {
-        val filtered = disclosureFilter(args ?: emptyArray()) ?: return
+    private fun invoke(
+        target: Use<*>,
+        method: java.lang.reflect.Method,
+        args: Array<out Any?>?,
+        gate: EmissionDisclosure?,
+    ) {
+        val raw = args ?: emptyArray()
+        // A null gate is the identity filter: nothing to evaluate, nothing to
+        // memoize, byte-for-byte the pre-disclosure path (P2/P6).
+        val filtered = if (gate == null) raw else (gate.verdict(raw) ?: return)
         Proxy.unwrapInvocationTarget {
             method.invoke(target.call, *filtered)
         }
@@ -227,14 +274,69 @@ class FanOutlet<Api : Any>(
      * its rewritten arguments are discarded, unread. Not an exemption: an
      * Observe-role attachment is subject to disclosure like any other, it
      * simply has nothing disclosed to it.
+     *
+     * The gate is the emission's *shared* verdict, not a fresh evaluation
+     * (`[SEC1-19]`, [disclosureFilter]): notifying an observer never re-runs a
+     * `Project` transform. It is still a delivery **attempt**, so a repeat of
+     * an already-suppressed emission is accounted through [onRepeatSuppression]
+     * — the gating semantics are unchanged, only the evaluation count is.
      */
     private fun notifyObserver(
         target: TapTarget.Observer,
         args: Array<out Any?>?,
         ctx: MessageContext,
+        gate: EmissionDisclosure?,
     ) {
-        disclosureFilter(args ?: emptyArray()) ?: return
+        if (gate != null && gate.verdict(args ?: emptyArray()) == null) return
         target.onEmit(ctx)
+    }
+
+    /**
+     * One emission's disclosure verdict, computed lazily on the first attempted
+     * delivery and shared by every later attempt of that same emission
+     * (`[SEC1-19]`, decided in `computenet-usd.2.2` — see [disclosureFilter]).
+     *
+     * Deliberately unsynchronized and allocated per emission: one emission is
+     * one dispatch step on one thread (the emitting cell's), the taps/consumers
+     * loops in [call] are that thread's, and the instance never escapes them.
+     * A `@Volatile` field or a lock here would buy nothing and cost the hottest
+     * path in the runtime. An outlet with no mediated disclosure allocates
+     * nothing at all — [call] passes a null gate for the identity filter.
+     *
+     * [suppressed] is not merely "verdict == null": that would conflate "no
+     * attempt has evaluated yet" with "evaluated, and suppressed", and the
+     * first attempt is the only one allowed to carry the refused arguments to
+     * sanitization.
+     */
+    private class EmissionDisclosure(
+        private val filter: (Array<out Any?>) -> Array<out Any?>?,
+        private val onRepeatSuppression: (() -> Unit)?,
+    ) {
+        private var evaluated = false
+        private var suppressed = false
+        private var filtered: Array<out Any?>? = null
+
+        /**
+         * This emission's verdict for one delivery attempt: the rewritten
+         * arguments, or null to suppress the attempt. The first call evaluates
+         * the filter (which accounts its own suppression, arguments and all);
+         * every later call re-reads the decision and, when it was suppression,
+         * accounts this further attempt through the no-args repeat hook.
+         */
+        fun verdict(args: Array<out Any?>): Array<out Any?>? {
+            if (!evaluated) {
+                evaluated = true
+                val result = filter(args)
+                suppressed = result == null
+                filtered = result
+                return result
+            }
+            if (suppressed) {
+                onRepeatSuppression?.invoke()
+                return null
+            }
+            return filtered
+        }
     }
 
     /**
@@ -302,6 +404,14 @@ class FanOutlet<Api : Any>(
         // disclosureFilter as broadcast [invoke] so one filter covers both
         // (spec 40/43 seam 3, 20/21 §Pull) — targeted delivery still bypasses
         // taps/consumers fan-out, unchanged.
+        //
+        // No EmissionDisclosure gate here, and none is needed: a targeted
+        // delivery IS its own emission frame with exactly one target, so the
+        // single evaluation below already satisfies the at-most-once rule
+        // ([SEC1-19]) and is also the frame's first (and only) suppressed
+        // attempt when it suppresses — arguments ride to sanitization exactly
+        // once, the repeat hook never fires. Catch-up is unregressed by
+        // computenet-usd.2.2 in both count and accounting.
         return Proxy.fromClass(clazz) { _, method, args ->
             val key = keyOf(portRef)
             // Only a contract-typed attachment can take a targeted delivery: a
@@ -483,6 +593,16 @@ class FanOutlet<Api : Any>(
          * for it, funnelled through [keyOf].
          */
         private val NULL_PORT_REF = PortRef.generate()
+
+        /**
+         * The default [disclosureFilter]: identity, and a *shared singleton* so
+         * that [call] can recognize it by reference and skip allocating an
+         * [EmissionDisclosure] per emission entirely (P2/P6 — an outlet with no
+         * mediated disclosure pays one reference comparison per emission and
+         * nothing else). A per-instance `{ it }` lambda would be a distinct
+         * object per outlet and defeat that test.
+         */
+        private val IDENTITY_DISCLOSURE: (Array<out Any?>) -> Array<out Any?>? = { it }
     }
 
     /**
