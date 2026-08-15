@@ -270,11 +270,17 @@ class MirrorProjector(
      * `null` when the record carries no edge diffs at all (the common case —
      * most records are field-only).
      *
-     * **Key indices never collide with [fieldDelta]'s.** [keysOf] gives the
-     * exact count of key indices this same record's field half reserves
-     * (`0` when the record is edge-only, since [keysOf] is a pure function of
-     * `record.fieldDiffs` regardless of `diffType`); edge tags start one past
-     * that, in [sortedEdgeDiffs] order. A record's edges therefore never mint
+     * **Key indices never collide with [fieldDelta]'s.** [keysOf] always
+     * includes the presence key, so its size is never `0` — even for an
+     * edge-only, `diffType == null` record it is `1` — but it is still an
+     * upper bound on every key index [fieldDelta] can ever mint for this
+     * record: [fieldDelta] only mints at indices `0` until `keysOf.size - 1`
+     * (and mints none at all for `REMOVED` or `diffType == null`). Edge tags
+     * start one index past that bound ([keysOf]`.size`), in [sortedEdgeDiffs]
+     * order, which is why they never land inside the range [fieldDelta] might
+     * use — occasionally one slot more conservative than strictly necessary
+     * (e.g. `MODIFIED`, which reserves index `0` for the presence key without
+     * ever minting it), never less. A record's edges therefore never mint
      * under a dot [fieldDelta] also minted, even though the two would land in
      * unrelated cells and a collision would cause no cell-level harm on its
      * own — see the class doc's note on why [heldDots] makes it matter anyway.
