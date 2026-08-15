@@ -50,7 +50,8 @@ import civictech.nature.PullService
  * What the switch would genuinely cost is one counter per link install and one
  * baseline-stamped arrival where an unstamped one arrives today; the residual
  * hazard is an `Effectful` inlet's durable processed frontier (`ManagedHost`'s
- * PORT_API branch, which tests `cell is Effectful && timestamp != null` and does
+ * PORT_API branch, which advances on every `Effectful` delivery — a contextless
+ * frame is refused there rather than delivered, `[24-DUR-06]` — and does
  * **not** test `ctx.baseline`) — the only counter observer that does not exempt
  * baselines. In-order arrival makes that benign, so it is reachable only where
  * counters can regress in a lane (the landed-RESTART defect C-12, spec 20/21).

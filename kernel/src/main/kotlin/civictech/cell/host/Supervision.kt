@@ -20,9 +20,11 @@ enum class SupervisionPolicy {
  * Per-host counters for supervision events off the happy path (G-46):
  * how many invocations were dead-lettered, how many parked (SUSPEND or
  * attention) invocations were drained into a dead letter at teardown rather
- * than silently dropped, how many RESTART cycles ran, and how many invocations
- * the `Effectful` processed-frontier suppressed as already-acted. A snapshot,
- * not a live handle — read via [ManagedHost.supervisionAccounting].
+ * than silently dropped, how many RESTART cycles ran, how many invocations
+ * the `Effectful` processed-frontier suppressed as already-acted, and how many
+ * were refused at an `Effectful` inlet for carrying no frontier position at
+ * all. A snapshot, not a live handle — read via
+ * [ManagedHost.supervisionAccounting].
  */
 data class SupervisionAccounting(
     val deadLetters: Long,
@@ -38,4 +40,19 @@ data class SupervisionAccounting(
      * one. Default-valued, so the counter is purely additive.
      */
     val effectfulSuppressionsDischarged: Long = 0,
+
+    /**
+     * KFX-16 (`[24-DUR-06]`): `PORT_API` invocations refused at an `Effectful`
+     * inlet because they carried no `MessageContext`, and so no
+     * `(sourceId, counter)` position on that inlet's processed-frontier. An
+     * `Effectful` cell is not directly manipulable by a caller that cannot
+     * supply frontier information: such a frame is **undeliverable**, reported
+     * as a dead letter and never handed to the sink. Each refusal explicitly
+     * discharges the refused invocation's exclusive payloads (`Owned.take` /
+     * `Leased.release`) before the report, so — exactly as with
+     * [effectfulSuppressionsDischarged] — this is equally the count of
+     * discharges on that path. Default-valued, so the counter is purely
+     * additive.
+     */
+    val effectfulContextlessRefusals: Long = 0,
 )
