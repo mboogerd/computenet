@@ -368,9 +368,25 @@ object Promotion {
      * handshake, which is a change to promotion's link semantics beyond this
      * refusal (computenet-usd.5.5).
      *
-     * Denial accounting (typed record, counter, sanitized dead letter, epic
-     * [SEC1-25]) is deliberately absent here: it rides the SEC1 accounting seam
-     * in its own item, and a second mechanism would have to be unpicked.
+     * **Denial accounting decision (computenet-usd.5.4).** This refusal DOES
+     * ride the SEC1 accounting seam (typed record, counter, sanitized dead
+     * letter, `[SEC1-25]`/`[SEC1-26]`) — and needed no new wiring to do it.
+     * `LinkSupport.reauthorize` is `= reject(request)` verbatim, walking the
+     * SAME `policies` list a fresh handshake would: for the candidate outlet
+     * that list already holds the `LinkPolicy` instances
+     * `CompositeCell.installLinkAuthority` wrapped when `mediateOutlet`/
+     * `flatten` installed them (`computenet-usd.1.5`), each of which accounts
+     * any non-null `Rejected` verdict through that exposure's
+     * `BoundaryDenialSink` before returning it unchanged. A rejection reached
+     * through [use]'s own `linking.reauthorize` rides the identical wrapper on
+     * the target side. So there is exactly one mechanism — the one seam 2
+     * always used — and this call site is simply another caller of it, not a
+     * second one to unpick. `LinkRequest` carries no `Owned`/`Leased` payload,
+     * so the discharge leg of that accounting is vacuously satisfied here (no
+     * exclusive is ever in flight to discharge) — see
+     * `civictech.cell.membrane.ProducerLinkDenialAccountingTest`, which pins
+     * both this and the producer-side handshake refusal and says so rather
+     * than asserting a discharge that cannot occur.
      */
     private fun reauthorizeRebinds(
         from: FanOutlet<*>,
