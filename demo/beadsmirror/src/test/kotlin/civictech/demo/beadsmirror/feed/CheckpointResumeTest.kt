@@ -311,6 +311,54 @@ class CheckpointResumeTest {
         }
 
         @Test
+        fun `a truncation condition raised inside the background loop stops it cleanly and is observable via failure`() {
+            val feed = DoltCommitFeed(
+                DiffQuery { sql ->
+                    when (sql) {
+                        DoltCommitFeed.LOG_QUERY -> listOf("c1").map { mapOf("commit_hash" to JsonPrimitive(it)) }
+                        DoltCommitFeed.ISSUE_QUERY -> emptyList()
+                        DoltCommitFeed.EDGE_QUERY -> emptyList()
+                        else -> error("unexpected query: $sql")
+                    }
+                },
+            )
+
+            withTempRunDir { runDir ->
+                val checkpoint = FeedCheckpoint(runDir)
+                checkpoint.write("not-a-real-commit")
+                // Default onCondition (throws FeedConditionException): unlike pollOnce(), which
+                // lets the caller catch it directly, the background loop has nowhere to propagate
+                // an uncaught exception to except the `failure` property — this is the path that
+                // matters for a real start()-driven poller, not just the synchronous pollOnce()
+                // calls the other tests here drive.
+                val poller = DoltFeedPoller(
+                    feed,
+                    checkpoint,
+                    Duration.ofMillis(10),
+                    onBatch = { error("must not be called") },
+                )
+
+                poller.start()
+                awaitBoundedSynthetic(Duration.ofSeconds(5)) { poller.failure != null }
+                // stop() must return promptly even though the loop already exited on its own —
+                // interrupt()/join() on an already-terminated thread must not hang.
+                poller.stop()
+
+                val failure = poller.failure
+                (failure is FeedConditionException) shouldBe true
+                (failure as FeedConditionException).condition shouldBe FeedCondition.CheckpointGone("not-a-real-commit")
+            }
+        }
+
+        private fun awaitBoundedSynthetic(timeout: Duration, condition: () -> Boolean) {
+            val deadline = System.nanoTime() + timeout.toNanos()
+            while (!condition()) {
+                check(System.nanoTime() < deadline) { "condition not met within $timeout" }
+                Thread.sleep(10)
+            }
+        }
+
+        @Test
         fun `a checkpoint round-trips through a fresh instance, simulating a restart`(@TempDir runDir: Path) {
             val first = FeedCheckpoint(runDir)
             first.write("abc123")
