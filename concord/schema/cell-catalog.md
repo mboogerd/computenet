@@ -34,7 +34,9 @@ fresh emission epoch, so it may legitimately re-drive a sink with elements no
 single scripted `add` accounts for, which the one-hop derivation cannot name. The
 sink itself must be declared `effect-sink` for the same reason — that is the only id
 whose contract is one effect per added element, keyed by the element. A refusal is a
-**failing** check telling the author to name the keys (`key:`), never a quiet pass;
+**failing** check telling the author to name the keys (`key:`), never a quiet pass.
+One unkeyed form is exempt from all of this: `exactly: 0` needs no derivation — it
+asserts the log is empty — so it never refuses whatever the graph's shape. The rest of
 the full shape gate (mid-script topology changes, `restart`/`restore` in the cone,
 repeated adds, …) is in `scenario.md` §"`effect-count`: what the unkeyed form
 quantifies over".
