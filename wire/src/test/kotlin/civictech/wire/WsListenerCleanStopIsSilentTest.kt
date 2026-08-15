@@ -49,10 +49,18 @@ class WsListenerCleanStopIsSilentTest {
 
     private fun assertClean(listener: WsTransport.WsListener, label: String) {
         // acceptLoop's finally runs on its own daemon thread, asynchronously
-        // with respect to stop() returning, so give it a margin before
-        // reading the seam — the same grace WsListenerAcceptorSurvivalTest
-        // uses for its own asynchronous residue check.
-        Thread.sleep(GRACE_MILLIS)
+        // with respect to stop() returning. Rather than a bare sleep, poll in
+        // POLL_INTERVAL_MILLIS steps up to GRACE_MILLIS, breaking out early the
+        // moment either seam is set — the same total margin
+        // WsListenerAcceptorSurvivalTest gives its own asynchronous residue
+        // check, but bounded with an early exit instead of an unconditional wait.
+        val deadline = System.currentTimeMillis() + GRACE_MILLIS
+        while (System.currentTimeMillis() < deadline &&
+            listener.acceptorStopped == null &&
+            listener.listeningSocketLoss == null
+        ) {
+            Thread.sleep(POLL_INTERVAL_MILLIS)
+        }
         withClue("$label: a clean stop must not report a spurious acceptor stop") {
             listener.acceptorStopped.shouldBeNull()
         }
@@ -104,5 +112,8 @@ class WsListenerCleanStopIsSilentTest {
     private companion object {
         /** @see assertClean */
         const val GRACE_MILLIS = 250L
+
+        /** @see assertClean */
+        const val POLL_INTERVAL_MILLIS = 10L
     }
 }
