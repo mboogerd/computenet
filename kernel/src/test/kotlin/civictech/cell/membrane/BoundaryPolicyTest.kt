@@ -964,4 +964,47 @@ class BoundaryPolicyTest {
         captured.none { it is Owned<*> || it is Leased<*> } shouldBe true
         letters.single().description shouldContain "DISCLOSURE_DENIED"
     }
+
+    @Test
+    fun `seam 2, a mediateOutlet refusal is accounted through that exposure's denial sink`() {
+        // Pins the seam where computenet-usd.5.1 (producer-side linkAuthority
+        // on a mediateOutlet exposure) meets computenet-usd.1.5 (installLink-
+        // Authority wraps each policy so a Rejected verdict is accounted).
+        // Neither side's own tests cover the combination: the four `seam 2,
+        // ...` tests above assert only the REFUSAL, and BS-2 asserts accounting
+        // only for a `mediate` inlet exposure. Measured while reviewing the
+        // merge that joined them: installing the outlet's policies WITHOUT the
+        // accounting wrapper leaves all four seam-2 tests and all five BS-*
+        // tests green while denialCount stays 0 — so this is the only assertion
+        // standing between the outlet path and silent under-accounting
+        // ([SEC1-25]/[SEC1-26]).
+        val controller = SimulationController(seed = 16)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val membrane = SubscribeAuthorityMembrane(allowed = PeerId("alice"))
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+        controller.runToIdle()
+
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 0L
+
+        CurrentPeer.with(PeerId("mallory")) {
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+        }.shouldBeInstanceOf<LinkResult.Rejected>()
+        controller.runToIdle()
+
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        letters.single().description shouldContain "mallory"
+        letters.single().description shouldContain "LINK_REFUSED"
+
+        CurrentPeer.with(PeerId("alice")) {
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+        }.shouldBeInstanceOf<LinkResult.Connected>()
+        controller.runToIdle()
+        sink.denialCount shouldBe 1L
+    }
 }

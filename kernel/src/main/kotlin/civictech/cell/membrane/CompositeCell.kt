@@ -263,15 +263,19 @@ abstract class CompositeCell(
      * [civictech.cell.link.handshake] are all untouched — no half-registered
      * port, no subscriber entry, for either the allowed or the denied case.
      *
-     * Only **one** `linkAuthority` evaluation point exists at this seam on
-     * this branch: the target-side `support.reject(...)` call in both
-     * `handshake()` overloads (`civictech.cell.link.Handshake.kt`). Sibling
-     * feature `computenet-usd.5`'s source-side subscribe-authority evaluation
-     * (`.5.1`) and its PRECHECK promotion re-authorization (`.5.2`) live on an
-     * unmerged sibling branch and are not present here (verified against this
-     * branch's `Handshake.kt`/`LinkSupport.kt`, which declare neither) — so
-     * wrapping the policies installed by this function covers every
-     * evaluation point that exists at merge time for this task.
+     * **Three** `linkAuthority` evaluation points now exist at this seam on
+     * this branch, and wrapping at install time covers all three because each
+     * walks the very `policies` list this function populates: the target-side
+     * `support.reject(...)` in both `handshake()` overloads
+     * (`civictech.cell.link.Handshake.kt`); the source-side
+     * `sourceLinking?.reject(...)` that `computenet-usd.5.1` added for
+     * producer-side subscribe authority; and `LinkSupport.reauthorize` at
+     * `Evolution.promote`'s PRECHECK (`computenet-usd.5.2`,
+     * `Evolution.reauthorizeRebinds`). When `computenet-usd.1.5` landed on
+     * `main` only the first existed, and this KDoc said so; because the
+     * wrapper sits on the policy rather than on any call site, the other two
+     * were accounted the moment `computenet-usd.5` merged, with no change
+     * here.
      *
      * The sink is resolved after the empty check, so an exposure that declares
      * no `linkAuthority` allocates nothing — default-open stays byte-for-byte
