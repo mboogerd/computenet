@@ -44,10 +44,195 @@ rather than a ref on a GitHub git remote, though a single sample cannot
 establish a distribution and this is not a claim that push behaves the same
 way. **The rest of this document — the raw timed runs, the per-session
 model, and the GO verdict — is retained as history of the old path and
-should not be read as a current measurement of the DoltHub remote.** If a
-full re-measurement against DoltHub is needed (e.g. to re-derive the
-per-session cost model in `doc/ops/beads-sync-runbook.md` §2), that is
-follow-up work sized as its own task, not something this task's slot fits.
+should not be read as a current measurement of the DoltHub remote.**
+
+**That full re-measurement has since been done: see
+[the 2026-08-15 section](#dolthub-remote--full-re-measurement-2026-08-15)
+immediately below, which is the current cost of record.** Everything after
+it (decision rule, baseline, the 2026-08-12 incident, raw timed runs,
+per-session model, verdict) is the old `refs/dolt/data` path and is kept
+only as history.
+
+## DoltHub remote — full re-measurement 2026-08-15
+
+Task: computenet-cyd. **This section is the cost of record for the current
+transport.** Everything below it measures the retired `refs/dolt/data` path.
+
+### How it was measured
+
+Machine MacBoo, shared checkout `/Users/merlijn/Documents/local-projects/computenet`,
+`sync.remote = https://doltremoteapi.dolthub.com/mrboo/computenet`, 2026-08-15
+10:48–10:58 UTC. Every timing is `/usr/bin/time -p <cmd>`, `real` line, taken
+in the foreground. Database at measurement time: `.beads` 303M
+(`embeddeddolt` 200M, `backup` 96M, `issues.jsonl` 6.8M), **535 issues** —
+roughly 3× the 95M / 251-issue database the old-transport numbers below were
+taken against, so the two are not comparable like-for-like even before the
+transport change.
+
+**Real deltas, not no-ops, and both are reported separately.** A throwaway
+probe bead `computenet-pxv9` was created solely to mint deltas, written to
+repeatedly, and **closed** when done (never `bd delete`d — a local delete
+pushes as a deletion of the other machine's issue, §3.3 of the runbook).
+Deltas *from* the remote were minted by cloning the database into a scratch
+directory with `bd bootstrap`, writing there, and pushing from the clone —
+so the shared checkout genuinely had something to fetch. The scratch clone
+was removed afterwards.
+
+Every delta size is stated. A "1-commit delta" is one `bd` auto-commit
+(one comment or one field update, i.e. one row touched); `bd` auto-commits
+per mutation, so commit count is the natural unit.
+
+### Raw readings
+
+`bd dolt pull`:
+
+| # | delta | wall |
+|---|---|---|
+| 1 | nothing to fetch | 3.87s |
+| 2 | nothing to fetch | 3.29s |
+| 3 | nothing to fetch | 3.11s |
+| 4 | nothing to fetch | 3.50s |
+| 5 | nothing to fetch | 2.89s |
+| 6 | 1 commit behind | 7.50s |
+| 7 | 1 commit behind | 6.54s |
+| 8 | 1 commit behind | 7.16s |
+| 9 | 1 commit behind | 6.96s |
+| 10 | 7 commits behind | 8.50s |
+| 11 | 7 commits behind, but `dolt fetch` already run out-of-band | 4.48s |
+| 12 | two-sided: 8 local vs 89 remote commits, fetch already run out-of-band | 4.08s |
+
+`bd dolt push`:
+
+| # | delta | wall |
+|---|---|---|
+| 1 | nothing to send (first push of the session) | 13.66s |
+| 2 | nothing to send | 6.06s |
+| 3 | nothing to send | 5.56s |
+| 4 | nothing to send | 5.98s |
+| 5 | nothing to send | 5.96s |
+| 6 | 1 commit (new issue row) | 12.88s |
+| 7 | 1 commit (one comment) | 12.54s |
+| 8 | 1 commit (one field update) | 12.50s |
+| 9 | 2 commits (comment + update) | 12.57s |
+| 10 | 1 commit, pushed from the scratch clone | 12.70s |
+| 11 | 7 commits, pushed from the scratch clone | 13.16s |
+| 12 | 9 commits including a merge commit | 13.59s |
+| — | *rejected non-fast-forward* (failure, exit 1) | 14.20s, 6.49s |
+
+Local `bd` writes, for the acquisition-bracket arithmetic below:
+`bd create` 1.85s, `bd comment` 0.74s, `bd update --priority` 1.80s.
+
+`bd bootstrap` (full clone of the database from DoltHub, 74,662 chunks):
+**10.08s** — one reading. Worth knowing: recovering a machine from the
+remote is a ten-second operation, not a restore project.
+
+### Summary
+
+| operation | n | median | mean | range |
+|---|---|---|---|---|
+| pull, **no-op** | 5 | 3.29s | 3.33s | 2.89–3.87s |
+| pull, **1-commit delta** | 4 | 7.06s | 7.04s | 6.54–7.50s |
+| pull, 7-commit delta | 1 | — | 8.50s | — |
+| push, **no-op** (warm) | 4 | 5.97s | 5.89s | 5.56–6.06s |
+| push, **1–2 commit delta** | 5 | 12.57s | 12.64s | 12.50–12.88s |
+| push, 7–9 commit delta | 2 | — | 13.38s | 13.16–13.59s |
+
+Four things this shows that a single number would not:
+
+1. **A no-op is not free, and it is not the same operation.** A no-op push
+   costs ~6s against ~12.6s carrying a delta; a no-op pull ~3.3s against
+   ~7.0s. Roughly half the price of a real sync is handshake, which is why
+   syncing per item costs nearly as much as syncing per session.
+2. **Push is about twice pull**, at both delta sizes and at no-op.
+3. **Size barely matters over this range.** Going from 1 to 7–9 commits
+   moved push from 12.6s to 13.4s and pull from 7.0s to 8.5s — under a
+   second per operation. The cost is per round-trip, not per row. This is
+   measured only up to 9 commits (see limits).
+4. **The first push of a session pays a cold-start penalty**: 13.66s for a
+   no-op, against 5.56–6.06s for four warm no-ops taken minutes later,
+   including two taken seconds after a delta push. That is the whole of the
+   old report's "first push outlier" effect, now ~8s rather than ~45s.
+
+### Re-derived per-session cost
+
+The publication cadence (`beads-sync-runbook.md` §0/§0.1) is one
+session-start pull plus one Finalize push. Both carry real deltas in
+practice — the session-start pull picks up the other machine's work, and the
+Finalize push is by definition publishing something:
+
+    7.04 (delta pull) + 12.64 (delta push) = 19.7s ≈ 0.33 min
+
+An **acquisition bracket** (pull → verify with `bd show` → local write →
+push), which §0.1 requires per acquisition:
+
+    7.04 (delta pull) + ~1.4 (bd show + one bd write) + 12.64 (delta push) ≈ 21s
+
+on a pull that has something to fetch, or ≈17s when it does not. That
+confirms — now against the DoltHub remote rather than by carry-over — the
+~17s figure `claim-sync.md` cites, and it means a session with the four or
+five acquisition brackets a normal `/work` run performs spends roughly
+**1.5–2 minutes** on sync in total, publication push included.
+
+**Consequence for the old GO verdict, stated plainly.** The pre-registered
+rule below was "GO iff per-session sync cost exceeds 2 minutes". Applying it
+to *these* numbers and the old report's own grounded call-site count of the
+smallest realistic session (2 pulls, 8 pushes):
+
+    2 × 7.04 + 8 × 12.64 = 14.1 + 101.1 = 115.2s ≈ 1.92 min
+
+— which is **under** the threshold. The DoltHub transport would not have
+returned GO on prong 1. That does not retract TRK1: the epic shipped, and
+§0.1 has since re-founded the sync policy on *correctness* (bracket
+acquisitions so a claim becomes a lock) rather than on cost. It is recorded
+here because a reader who takes the verdict below as current would be
+reasoning from a transport that no longer exists.
+
+### What was NOT measured, and stays unmeasured
+
+- **Push cost for a session-sized delta.** The largest delta measured is 9
+  commits. A long unattended session can accumulate hundreds. Point 3 above
+  suggests the curve is flat, but it is measured over one order of magnitude
+  short of that and must not be extrapolated to it.
+- **Conflict-resolution cost (§3.3 of the runbook).** No genuine two-sided
+  *conflict* occurred during this window, so the timings of the operator
+  sequence are unmeasured. The 8-vs-89-commit two-sided merge that did occur
+  (reading 12 above) merged cleanly, in 4.08s of merge work on top of an
+  already-completed fetch.
+- **Cross-machine variance.** Every reading is from MacBoo on one network,
+  inside a ten-minute window. Nothing here bounds a bad network day, and the
+  second machine (`Anva@A0030`) was not measured at all.
+- **The old-transport numbers below are not re-derived and not adjusted.**
+  They stand as recorded, labelled as the retired path.
+
+### Incidental finding: a concurrent machine, and what a rejection looks like
+
+Mid-measurement (10:56 UTC) the other machine pushed 89 commits, and the
+next push from this checkout was rejected:
+
+```
+$ bd dolt push
+Pushing to Dolt remote...
+Error: push to origin/main: Error 1105: To https://doltremoteapi.dolthub.com/mrboo/computenet
+ ! [rejected]            main -> main (non-fast-forward)
+error: failed to push some refs to '...'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. Integrate the remote changes (e.g.
+hint: 'dolt pull ...') before pushing again.
+```
+
+(exit 1; the two rejected attempts cost 14.20s and 6.49s.) `bd dolt pull`
+then `bd dolt push` resolved it with no conflict and no operator step — the
+recovery pair the `/work` skill's Finalize already prescribes. Two things
+worth carrying:
+
+- **A rejection is not cheap and not rare.** It costs about what a real push
+  costs, and it happened inside a ten-minute window in which one other
+  machine was active.
+- **`bd dolt push`'s failure output is multi-line, and its success output is
+  one line.** A caller that pipes it through `tail -4` sees only `/usr/bin/time`'s
+  own output and reads a rejection as a pass. Check the exit code, or don't
+  truncate. This cost two readings in this very measurement before it was
+  noticed.
 
 ## Decision rule (pre-registered, before any numbers below)
 
@@ -59,6 +244,9 @@ This rule is taken from computenet-o97.3's acceptance criteria verbatim and is
 not loosened here.
 
 ## Baseline: `.beads` size and issue count
+
+*(Old `refs/dolt/data` transport, 2026-08-12. Current baseline: 303M / 535
+issues — see the 2026-08-15 section.)*
 
 Measured 2026-08-12 12:42 UTC, in `/Users/merlijn/Documents/local-projects/computenet`:
 
@@ -138,6 +326,9 @@ concurrent-edit conflict from requiring the same manual intervention.
 
 ## Raw timed runs
 
+*(Old `refs/dolt/data` transport. Superseded for current cost by the
+2026-08-15 section above; retained as history, not adjusted.)*
+
 Ran `time bd dolt pull` ×3, then `time bd dolt push` ×3, strictly serially,
 from `/Users/merlijn/Documents/local-projects/computenet`, no other `bd dolt`
 operation concurrent, 2026-08-12 ~12:43–12:47 UTC. All six runs succeeded
@@ -163,6 +354,9 @@ Runs #5–#6, with no first-push effect to absorb, land at ~34s, close to pull
 cost.
 
 ## Per-session sync cost
+
+*(Old `refs/dolt/data` transport. The DoltHub re-derivation is in the
+2026-08-15 section above.)*
 
 **Assumption, grounded in `.claude/skills/work/SKILL.md` and
 `references/claim-sync.md`, not guessed.** The task description that spawned
@@ -224,6 +418,10 @@ threshold. The grounded count is markedly higher (≈5.7–7.6 min vs.
 the line the numbers fall on; it only strengthens the case.
 
 ## Verdict
+
+*(Reached on the old `refs/dolt/data` transport. The 2026-08-15 section above
+records that prong 1 would not hold on the DoltHub numbers, and why that does
+not retract the epic.)*
 
 **GO.** Prong 1 of the pre-registered rule holds on its own; prong 2 also
 reads as satisfied, with the caveat recorded below:
@@ -297,6 +495,13 @@ distinct from `main`. It rests on its own already-made human decision
 description) and is unaffected by this measurement either way.
 
 ## Addendum, 2026-08-15 — DoltHub remote, four fresh readings
+
+*(Superseded by the fuller
+[2026-08-15 re-measurement](#dolthub-remote--full-re-measurement-2026-08-15)
+near the top, taken later the same day with stated delta sizes and repeated
+samples. Kept because it is consistent with it — its no-op push readings of
+13.60s/6.14s reproduce the cold-start-then-~6s pattern exactly — and because
+it is the source `claim-sync.md`'s ~17s bracket figure came from.)*
 
 Taken from the shared checkout on MacBoo while deciding whether a child
 claim could afford its own sync bracket (computenet-k9d.3). Not a re-run of
