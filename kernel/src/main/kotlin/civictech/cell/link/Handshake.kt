@@ -196,8 +196,12 @@ internal fun <Api> handshake(
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
             install()
-            support.register(link)
-            sourceLinking?.register(link)
+            // Both sides retain the identity this link was ESTABLISHED with, so
+            // a later rebind re-authorizes the original peer rather than
+            // whoever is ambient at rebind time ([SEC1-10]; the source side is
+            // the one promotion consults).
+            support.register(link, request.identity)
+            sourceLinking?.register(link, request.identity)
             // Only topology-interested consumers pay for edge markers.  Open
             // precedes onLinked catch-up and every subsequent data invocation.
             link.toPort?.let { port ->
@@ -242,7 +246,8 @@ internal fun handshake(
     counterpart: NatureVector = NatureVector.DEFAULT,
 ): LinkResult {
     val support = local.linking
-    support.reject(LinkRequest(from, targetRef, CurrentPeer.get(), role))?.let { return it }
+    val request = LinkRequest(from, targetRef, CurrentPeer.get(), role)
+    support.reject(request)?.let { return it }
 
     // CP-F3: the bridged edge runs the *same* pure reconcile as a local link,
     // so the verdict is location-transparent (BridgedHandshakeTest asserts
@@ -258,7 +263,9 @@ internal fun handshake(
 
     return when (val result = support.onLink(link)) {
         is LinkResult.Connected -> {
-            support.register(link)
+            // Same establishing-identity retention as the in-process path: a
+            // bridged link's peer is exactly the identity a rebind must re-present.
+            support.register(link, request.identity)
             link.onUnlink { l ->
                 support.remove(l)
                 support.onUnlink(l)

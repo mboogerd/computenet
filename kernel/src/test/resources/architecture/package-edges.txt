@@ -77,6 +77,22 @@
 # be composing an installed WaveFrontier per inlet, which cannot express one
 # frontier spanning several inlets -- the structural reason CoalescingCombineCell
 # records in its own KDoc.
+#
+# SEC1-10: evolve -> link ADDED -- Promotion.promote re-authorizes each
+# downstream rebind at PRECHECK ("promotion IS a rebind and MUST re-authorize",
+# spec 40-distribution/43-security.md §The three seams item 2; 93 I-28 §4.3
+# seam 2). Re-authorization is by construction the question link/ owns: the
+# check builds a civictech.cell.link.LinkRequest and asks the two endpoints'
+# LinkSupport.reauthorize, so a rebind is admitted on exactly the terms a fresh
+# handshake would apply. There is no zero-edge form: any expression of the
+# check inside evolve/ names LinkRequest/LinkSupport/Linked, and hiding the
+# call behind a port/ or membrane/ helper would only relocate the same question
+# away from the phase that must ask it -- PRECHECK, since the COMMIT relink
+# that follows is documented non-vetoing. No new cycle: nothing under
+# civictech.cell.link imports civictech.cell.evolve (verified by grep -- the
+# two occurrences there are KDoc [] references, which the scanner does not
+# count), and evolve has no inbound baseline edge at all, so it stays a sink
+# package and this addition is one-way.
 cell -> link
 cell -> port
 consistency -> cell
@@ -99,6 +115,7 @@ data -> port
 data -> protocol
 evolve -> cell
 evolve -> host
+evolve -> link
 evolve -> membrane
 evolve -> port
 evolve -> proxy

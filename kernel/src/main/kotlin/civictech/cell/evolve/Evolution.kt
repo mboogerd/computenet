@@ -5,6 +5,9 @@ import civictech.cell.CellRef
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.LinkRequest
+import civictech.cell.link.LinkRole
+import civictech.cell.link.Linked
 import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
@@ -174,6 +177,7 @@ object Promotion {
                     "contribution under a fresh source (spec 53 §Three handoff tiers)",
             )
         }
+        reauthorizeRebinds(from, to, outletName, downstream)
 
         // 2. PREPARE — the membrane goes red: inbound faces serve a
         // Buffering proxy, all coupled inlets parking together in one
@@ -325,6 +329,65 @@ object Promotion {
         // COMMIT — the rebind (reuse-ref crash-recovery); surviving replicas play
         // the retained incumbent and re-feed the candidate.
         replication.rebind(incumbent, candidate, host)
+    }
+
+    /**
+     * [SEC1-10] — "promotion IS a rebind and MUST re-authorize" (spec
+     * `40-distribution/43-security.md` §"The three seams" item 2; 93 I-28 §4.3
+     * seam 2: any new full-ref link runs `linkAuthority`). Each downstream
+     * [Use] is about to be moved from [from] to [to], which is a *new* link
+     * across the candidate's boundary — so it is offered to the same
+     * first-rejection-wins gate a fresh handshake would run
+     * ([civictech.cell.link.handshake]): the target's own policies first, then
+     * the source's (here the candidate outlet, which is where a mediated
+     * exposure's producer-side `linkAuthority` lives).
+     *
+     * **Why PRECHECK and not the COMMIT relink.** COMMIT is non-vetoing by
+     * construction — "the admission decision was PRECHECK's, so nothing here
+     * may newly reject" — and a throw inside it is classified as an
+     * infrastructure fault that triggers rollback. Enforcing there would
+     * disguise a policy denial as a fault and only after the gate had gone red.
+     * Here the evaluation is pure and nothing has yet been buffered,
+     * snapshotted, unsubscribed or re-subscribed: a refusal leaves the
+     * incumbent linked and serving, with no partial topology ([SEC1-09]
+     * pattern) and no in-flight `Owned`/`Leased` payload to strand — a
+     * [civictech.cell.link.LinkRequest] carries no payload, and the delivery
+     * path this refusal declines to change is the one still carrying traffic.
+     *
+     * The identity offered is the one the incumbent's link was ESTABLISHED with
+     * ([civictech.cell.link.LinkSupport.identityFor]), not an ambient one. Two
+     * limits are real and deliberate, both inherited from the COMMIT relink
+     * being a direct `subscribe` rather than a handshake: a downstream attached
+     * without a handshake retains no identity and so is evaluated as a local
+     * request (which `allowPeers` admits — [SEC1-02] default-open), and the
+     * rebind installed by COMMIT registers no link on the candidate, so the
+     * retained identity is NOT carried forward to a subsequent promotion. Both
+     * would be closed by routing the COMMIT relink through the handshake, which
+     * is a change to promotion's link semantics beyond this refusal.
+     *
+     * Denial accounting (typed record, counter, sanitized dead letter, epic
+     * [SEC1-25]) is deliberately absent here: it rides the SEC1 accounting seam
+     * in its own item, and a second mechanism would have to be unpicked.
+     */
+    private fun reauthorizeRebinds(
+        from: FanOutlet<*>,
+        to: FanOutlet<*>,
+        outletName: String,
+        downstream: List<Use<*>>,
+    ) {
+        downstream.forEach { use ->
+            val request = LinkRequest(to.ref, use.ref, from.linking.identityFor(use.ref), LinkRole.Consume)
+            val refusal = (use as? Linked)?.linking?.reauthorize(request)
+                ?: to.linking.reauthorize(request)
+            if (refusal != null) {
+                throw PromotionAborted(
+                    "PRECHECK",
+                    "promotion would rebind ${use.ref} from the incumbent's '$outletName' onto the " +
+                        "candidate's, and link authority refuses that new link: ${refusal.reason} " +
+                        "(promotion is a rebind and re-authorizes, spec 43 §The three seams item 2)",
+                )
+            }
+        }
     }
 
     private fun outlet(cell: Cell, name: String): FanOutlet<*> =
