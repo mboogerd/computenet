@@ -189,25 +189,38 @@ class BoundaryDenialAccountingTest {
     }
 
     @Test
-    fun `an unhosted membrane still counts and never throws`() {
+    fun `an unhosted membrane still counts, discharges the refused exclusives, and never throws`() {
         // A membrane never spawned onto a ManagedHost has no reporter. Accounting
         // a denial must not itself become a failure path — a refusal that crashes
         // the refusing cell is strictly worse than the silent drop it replaces.
         val membrane = AccountedMembrane()
         val sink = membrane.boundaryDenials["exposedInlet"]!!
 
-        val owned = Owned("still-live")
+        // computenet-usd.2.1 ([SEC1-23], BS-5) reversed what this test asserted
+        // when computenet-usd.1 landed it. It read `owned.take() shouldBe
+        // "still-live"` — "no reporter means no sanitizer ran, so the payload is
+        // untouched" — which is precisely a silent drop of an exclusive on a
+        // suppression path, and the standing AGENTS.md invariant forbids that on
+        // EVERY such path, hosted or not. Unattached, the sink now discharges
+        // the refused arguments itself (Proxy.discharge: consume/release only).
+        // What an unhosted membrane loses is the *record* — no dead letter, no
+        // Frozen/Redacted substitution, since that R8 rule still has exactly one
+        // implementation, in DeadLetters — not the discharge.
+        val owned = Owned("released-anyway")
+        val alreadyTaken = Owned("gone").also { it.take() }
+        var outstanding = 1
+        val leased = Leased("leased-anyway") { outstanding -= 1 }
+
         sink.deny(
             seam = BoundarySeam.DISCLOSURE,
             reason = DenialReason.DISCLOSURE_DENIED,
-            deniedArgs = listOf(owned),
+            deniedArgs = listOf(alreadyTaken, owned, leased, "plain"),
         )
 
         sink.denialCount shouldBe 1L
-        // No reporter means no sanitizer ran, so the payload is untouched: the
-        // sink deliberately does NOT discharge exclusives itself — there is
-        // exactly one discharge site, inside DeadLetters' R8 sanitization.
-        owned.take() shouldBe "still-live"
+        assertThrows<IllegalStateException> { owned.take() }
+        outstanding shouldBe 0
+        assertThrows<IllegalStateException> { leased.release() }
     }
 
     /**
