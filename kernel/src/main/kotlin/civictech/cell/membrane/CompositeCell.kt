@@ -377,10 +377,6 @@ abstract class CompositeCell(
  * markers produced by re-sanitizing an already-discharged wrapper.
  *
  * [subject] names the mediated outlet's contract, and **only** the contract —
- * NB the note below about revisiting the missing `Method` "alongside the
- * exactly-once work" was written before `computenet-usd.2.2`: that work landed
- * and did **not** widen the signature. The reasoning stands as recorded and the
- * field is still contract-only; the revisit is unclaimed, not pending here.
  * unlike the integrity seam ([MediateProxy]), whose record carries
  * `Contract#method`. Not because the emitting `Method` is unknowable here: it
  * is in scope at all three [FanOutlet] call sites. It is that
@@ -390,6 +386,12 @@ abstract class CompositeCell(
  * delta itself travels in `deniedArgs`, which is the auditable part. Revisit
  * alongside the exactly-once work (`computenet-usd.2`), which has to revisit
  * how this filter is invoked in any case.
+ *
+ * NB that last sentence was written before `computenet-usd.2.2`: the
+ * exactly-once work has since landed, it did revisit how this filter is
+ * invoked (at most once per emission), and it did **not** widen the signature.
+ * The reasoning above stands as recorded and the field is still contract-only;
+ * the revisit is unclaimed, not pending.
  */
 private fun DisclosurePolicy.asDeltaFilter(
     denials: BoundaryDenialSink,

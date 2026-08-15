@@ -902,10 +902,18 @@ class BoundaryPolicyTest {
     @Test
     fun `one denial record per suppressed delivery attempt - per consumer, per tap, per observer`() {
         // The DECIDED counting semantics (feature computenet-usd.1): the unit
-        // is the delivery ATTEMPT, not the emission. FanOutlet evaluates
-        // disclosureFilter once per consumer, once per typed tap, once per
-        // observer notification and once per targeted catch-up unicast, so a
-        // boundary that suppressed N deliveries reports exactly N.
+        // is the delivery ATTEMPT, not the emission — one attempt per consumer,
+        // per typed tap, per observer notification and per targeted catch-up
+        // unicast, so a boundary that suppressed N deliveries reports exactly N.
+        //
+        // That used to be a free consequence of FanOutlet evaluating
+        // disclosureFilter once per ATTEMPT. Since computenet-usd.2.2 it
+        // evaluates at most once per EMISSION ([SEC1-19]) and accounts every
+        // further suppressed attempt through FanOutlet.onRepeatSuppression, so
+        // the counts asserted below are unchanged while the mechanism behind
+        // them is not. Nothing here was weakened for that change: only this
+        // comment's description of the mechanism was corrected (review of
+        // computenet-usd.2.2).
         val controller = SimulationController(seed = 19)
         val host = ManagedHost(scheduler = controller.scheduler())
 
@@ -1184,6 +1192,21 @@ class BoundaryPolicyTest {
         // and all three are the same denial, so an auditor counting refusals
         // reads three refusals rather than one refusal plus two other things.
         letters.forEach { it.description shouldContain "DISCLOSURE_DENIED" }
+        // Stronger: the repeat records must be INDISTINGUISHABLE from the first
+        // one in everything a consumer of denial records classifies on — seam,
+        // exposure, principal, subject, reason — so that "N suppressed
+        // deliveries reports N" cannot decay into "reports 1 plus two other
+        // things" if asDeltaFilter and asRepeatSuppressionHook ever drift. The
+        // rendered header is exactly those fields; `detail` (the free-text tail
+        // after it, which deliberately says "further suppressed attempt") and
+        // the empty args are the only permitted differences.
+        letters.map { it.description.substringBefore(" (") }.distinct().size shouldBe 1
+        letters.map { it.invocation!!.portName }.distinct() shouldBe listOf("exposedOutlet")
+        letters.map { it.invocation!!.invocation.methodName }.distinct() shouldBe listOf("ExclusiveDrop")
+        letters.count { it.description.contains("further suppressed attempt") } shouldBe 2
+        // and the one record WITHOUT that tail is exactly the one that carried
+        // the payload — a reader can always tell which record holds it.
+        letters.single { !it.description.contains("further suppressed attempt") } shouldBe valued.single()
     }
 
     @Test
