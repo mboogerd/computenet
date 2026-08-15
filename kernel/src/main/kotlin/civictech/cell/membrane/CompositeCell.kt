@@ -1,11 +1,18 @@
 package civictech.cell.membrane
 
+import civictech.cell.BoundaryDenialAccounting
+import civictech.cell.BoundaryDenialSink
+import civictech.cell.BoundaryDenials
+import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.DenialReason
 import civictech.cell.control.Attention
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.link.LinkPolicy
 import civictech.cell.link.Linked
+import civictech.cell.link.PeerId
 import civictech.cell.port.Port
 import civictech.cell.protocol.ProtocolId
 import civictech.cell.protocol.ProtocolSupport
@@ -70,12 +77,28 @@ data class Exposure(
  */
 abstract class CompositeCell(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
+) : Cell, BoundaryDenialAccounting {
 
     private val exposureMapMutable = linkedMapOf<String, Exposure>()
 
     /** The declared exposure map (spec 10/11) — read-only view for diagnostics/tests. */
     val exposureMap: Map<String, Exposure> get() = exposureMapMutable
+
+    /**
+     * Per-exposure denial accounting for this membrane's [BoundaryPolicy]
+     * seams (spec 40/43, `[SEC1-25]`/`[SEC1-26]`; realization (B), rationale
+     * in [BoundaryDenials]' KDoc). One [BoundaryDenialSink] per exposure that
+     * can carry a seam — every [mediate]/[mediateOutlet] exposure (whose
+     * surface is mediated whether or not the policy currently declares a
+     * predicate) plus any [flatten] exposure that declares `linkAuthority`. A
+     * plain `flatten()` allocates none. The hosting `ManagedHost` attaches the
+     * reporter that routes each refusal into its own `DeadLetters`, so
+     * sanitization (spec 23 R8) is inherited rather than reimplemented here.
+     *
+     * A test reads a boundary's counter here — `boundaryDenials["<exposure>"]!!
+     * .denialCount` — which is why the sinks are exposed rather than private.
+     */
+    final override val boundaryDenials: BoundaryDenials = BoundaryDenials()
 
     /**
      * Flatten-exposes an existing organelle [port] under [externalName]: the
@@ -96,7 +119,7 @@ abstract class CompositeCell(
             "Exposure $externalName declares a flow-time predicate (protocolAuthority/disclosure/integrity); " +
                 "it MUST use mediate()/mediateOutlet(), not flatten() (spec 10/11 \"Boundary policy\")"
         }
-        installLinkAuthority(port, policy)
+        installLinkAuthority(externalName, port, policy)
         exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.FLATTEN, policy = policy)
         return registerPort(externalName, port)
     }
@@ -128,14 +151,15 @@ abstract class CompositeCell(
         policy: BoundaryPolicy = BoundaryPolicy(),
     ): FanInlet<Api> {
         require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
+        val denials = boundaryDenials.sinkFor(externalName)
         val exposed = FanInlet(organelleInlet.clazz)
         exposed.serve(
             Proxy.fromClass(
                 organelleInlet.clazz,
-                MediateProxy(organelleInlet.call, policy.integrity),
+                MediateProxy(organelleInlet.call, policy.integrity, denials = denials),
             ),
         )
-        installLinkAuthority(exposed, policy)
+        installLinkAuthority(externalName, exposed, policy)
         exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, exposed)
     }
@@ -154,7 +178,10 @@ abstract class CompositeCell(
      *
      * - `disclosure` installs [FanOutlet.disclosureFilter] — one filter over
      *   BOTH the `onLinked` catch-up unicast and the live broadcast (20/21
-     *   §Pull, decided 93 I-28: "a snapshot IS a delta").
+     *   §Pull, decided 93 I-28: "a snapshot IS a delta"), which accounts each
+     *   suppressed delivery attempt through this exposure's
+     *   [BoundaryDenialSink] (`[SEC1-25]`/`[SEC1-26]`; per-attempt counting
+     *   explained on [asDeltaFilter]).
      * - `protocolAuthority[Protocols.Attention].ceiling` clamps an asserted
      *   attention level via [ProtocolSupport.inboundFilter] before this
      *   outlet's own attention handling sees it (30/34 decision 6:
@@ -180,18 +207,68 @@ abstract class CompositeCell(
             "mediateOutlet($externalName) requires a flow-time predicate " +
                 "(protocolAuthority/disclosure/integrity); use flatten() for an open outlet"
         }
-        organelleOutlet.disclosureFilter = policy.disclosure.asDeltaFilter()
+        val denials = boundaryDenials.sinkFor(externalName)
+        organelleOutlet.disclosureFilter =
+            policy.disclosure.asDeltaFilter(denials, subject = organelleOutlet.clazz.simpleName)
         if (policy.protocolAuthority.isNotEmpty()) {
-            ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter()
+            ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter(denials)
         }
         exposureMapMutable[externalName] =
             Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, organelleOutlet)
     }
 
-    private fun installLinkAuthority(port: Port, policy: BoundaryPolicy) {
+    /**
+     * Installs seam 2 (`onLink`, `BoundaryPolicy.linkAuthority`) onto [port]'s
+     * link policies — first-rejection-wins, exactly as before — with each
+     * installed [LinkPolicy] wrapped so a non-null
+     * [civictech.cell.link.LinkResult.Rejected] verdict is accounted through
+     * this exposure's [BoundaryDenialSink] **before** it is returned to the
+     * handshake (`[SEC1-25]`/`[SEC1-26]`, BS-2).
+     *
+     * Accounting happens HERE, at the membrane — not in `civictech.cell.link`
+     * (`LinkSupport`/`Handshake`), which this task claims defensively only.
+     * `LinkSupport.reject` walks `policies.firstNotNullOfOrNull { it.evaluate(
+     * request) }`; wrapping each policy before it is added means the wrapper
+     * observes exactly the verdict the unwrapped policy would have produced
+     * and returns it unchanged, so first-rejection-wins, the allowed/local-
+     * request fast path (`allowPeers` on a null identity), and the "reject
+     * before any install/register runs" ordering in
+     * [civictech.cell.link.handshake] are all untouched — no half-registered
+     * port, no subscriber entry, for either the allowed or the denied case.
+     *
+     * Only **one** `linkAuthority` evaluation point exists at this seam on
+     * this branch: the target-side `support.reject(...)` call in both
+     * `handshake()` overloads (`civictech.cell.link.Handshake.kt`). Sibling
+     * feature `computenet-usd.5`'s source-side subscribe-authority evaluation
+     * (`.5.1`) and its PRECHECK promotion re-authorization (`.5.2`) live on an
+     * unmerged sibling branch and are not present here (verified against this
+     * branch's `Handshake.kt`/`LinkSupport.kt`, which declare neither) — so
+     * wrapping the policies installed by this function covers every
+     * evaluation point that exists at merge time for this task.
+     *
+     * The sink is resolved after the empty check, so an exposure that declares
+     * no `linkAuthority` allocates nothing — default-open stays byte-for-byte
+     * unchanged with zero flow-time cost (`[SEC1-02]`/`[SEC1-03]`, BS-15).
+     */
+    private fun installLinkAuthority(externalName: String, port: Port, policy: BoundaryPolicy) {
         if (policy.linkAuthority.isEmpty()) return
-        (port as? Linked)?.linking?.policies?.addAll(policy.linkAuthority)
+        val denials: BoundaryDenialSink = boundaryDenials.sinkFor(externalName)
+        val accounted = policy.linkAuthority.map { linkPolicy ->
+            LinkPolicy { request ->
+                val rejected = linkPolicy.evaluate(request)
+                if (rejected != null) {
+                    denials.deny(
+                        seam = BoundarySeam.LINK_AUTHORITY,
+                        reason = DenialReason.LINK_REFUSED,
+                        principal = request.identity as? PeerId,
+                        detail = rejected.reason,
+                    )
+                }
+                rejected
+            }
+        }
+        (port as? Linked)?.linking?.policies?.addAll(accounted)
     }
 }
 
@@ -201,17 +278,110 @@ abstract class CompositeCell(
  * runs the registered transform over the emitted delta argument (the first
  * argument, by the "one delta-carrying method" convention data-cell contracts
  * follow), suppressing the emission if the projection itself returns null.
+ *
+ * ## Counting: one denial record per suppressed delivery **attempt**
+ *
+ * Both suppression branches account through [denials] before returning null
+ * (`[SEC1-25]`/`[SEC1-26]`), so no silent drop remains here. The unit counted
+ * is the **delivery attempt**, decided by feature `computenet-usd.1` and
+ * realized structurally rather than by bookkeeping: [FanOutlet] evaluates its
+ * `disclosureFilter` once per attempted delivery — once per consumer, once per
+ * typed tap, once per payload-agnostic observer notification, and once per
+ * targeted `at()` delivery (the `onLinked` catch-up unicast / pull reply) —
+ * and this closure runs inside each of those evaluations. A boundary that
+ * suppressed N deliveries therefore reports exactly N, on all three paths:
+ *
+ * - one emission broadcast to k consumers/taps under [DisclosurePolicy.Deny]
+ *   records k denials, not one "emission suppressed" record;
+ * - an emission with no attachment at all attempts no delivery and records
+ *   nothing;
+ * - a suppressed catch-up unicast is one attempt, counted like any other.
+ *
+ * That an *emission* is thereby counted more than once is the honest reading:
+ * each suppressed attempt is a delivery some subscriber did not get, and the
+ * audit question ("what did this boundary refuse to disclose, to whom") is
+ * per-attempt. See [FanOutlet.disclosureFilter] for the evaluation contract
+ * this relies on.
+ *
+ * The refused arguments ride to the sink as `deniedArgs` and reach the fan-out
+ * only through the host's spec-23-R8 sanitization (`Owned -> Frozen`,
+ * `Leased -> ` [civictech.cell.Redacted]) — this seam adds **no discharge
+ * logic of its own** and has no second sanitizer. Exactly-once discharge under
+ * *repeated* filter evaluation (the same argument array is handed to this
+ * closure once per attempt, so two suppressed attempts sanitize the same
+ * wrappers twice — tolerated by the R8 rule's already-consumed branches, not
+ * repaired here) is sibling feature `computenet-usd.2`'s subject. **The
+ * observable cost of that toleration, while it stands:** the *first*
+ * suppressed attempt is the one whose dead letter carries the frozen value;
+ * every later attempt on the same emission finds the wrapper already consumed
+ * and reports `Redacted`, so with k > 1 suppressed attempts an auditor reads
+ * one valued record and k-1 markers. That is a fidelity limit of this
+ * accounting, not of the counting — the counter still reports k.
+ *
+ * [subject] names the mediated outlet's contract, and **only** the contract —
+ * unlike the integrity seam ([MediateProxy]), whose record carries
+ * `Contract#method`. Not because the emitting `Method` is unknowable here: it
+ * is in scope at all three [FanOutlet] call sites. It is that
+ * [FanOutlet.disclosureFilter]'s type is arguments-only, and widening that
+ * public hot-path signature to carry a `Method` was declined as disproportionate
+ * to an audit field and outside `computenet-usd.1.4`'s file claim. The emitted
+ * delta itself travels in `deniedArgs`, which is the auditable part. Revisit
+ * alongside the exactly-once work (`computenet-usd.2`), which has to revisit
+ * how this filter is invoked in any case.
  */
-private fun DisclosurePolicy.asDeltaFilter(): (Array<out Any?>) -> Array<out Any?>? = filter@{ args ->
+private fun DisclosurePolicy.asDeltaFilter(
+    denials: BoundaryDenialSink,
+    subject: String?,
+): (Array<out Any?>) -> Array<out Any?>? = filter@{ args ->
     when (this) {
         is DisclosurePolicy.Full -> args
-        is DisclosurePolicy.Deny -> null
+        is DisclosurePolicy.Deny -> {
+            denials.denyDisclosure(DenialReason.DISCLOSURE_DENIED, subject, "DisclosurePolicy.Deny", args)
+            null
+        }
         is DisclosurePolicy.Project -> {
             val delta = args.firstOrNull() ?: return@filter args
-            val projected = ProjectionRegistry.resolve(id).apply(delta) ?: return@filter null
+            val projected = ProjectionRegistry.resolve(id).apply(delta) ?: run {
+                denials.denyDisclosure(
+                    DenialReason.DISCLOSURE_PROJECTED_AWAY,
+                    subject,
+                    "projection '${id.name}' returned null for this delta",
+                    args,
+                )
+                return@filter null
+            }
             arrayOf(projected, *args.drop(1).toTypedArray())
         }
     }
+}
+
+/**
+ * Accounts one suppressed `PORT_API` outbound delivery attempt (seam 3
+ * disclosure) — the single call shape both suppression branches of
+ * [asDeltaFilter] use, so the record's fields cannot drift between them.
+ *
+ * The principal is the crossing's ambient one ([currentPrincipal]): the peer
+ * whose delivery was suppressed where a peer is stamped (a remote-triggered
+ * catch-up), and null — `LocalTrusted` — for an ordinary in-process broadcast,
+ * where the emitting cell has no peer in scope. Recorded honestly as such
+ * rather than guessed from the target: a `FanOutlet` attachment is a
+ * [civictech.cell.port.PortRef], and no peer identity is derivable from it at
+ * this seam.
+ */
+private fun BoundaryDenialSink.denyDisclosure(
+    reason: DenialReason,
+    subject: String?,
+    detail: String,
+    args: Array<out Any?>,
+) {
+    deny(
+        seam = BoundarySeam.DISCLOSURE,
+        reason = reason,
+        principal = (currentPrincipal() as? Principal.Peer)?.id,
+        subject = subject,
+        detail = detail,
+        deniedArgs = args.toList(),
+    )
 }
 
 /**
@@ -225,20 +395,52 @@ private fun DisclosurePolicy.asDeltaFilter(): (Array<out Any?>) -> Array<out Any
  * asserted interest (30/34 decision 6); the fast in-host path pays nothing
  * and assumes nothing (93 I-28 §4.2, "Local crossings carry `LocalTrusted`
  * and every predicate is a no-op").
+ *
+ * [denials] is this exposure's accounting sink: the `minAuth` and
+ * `ratePerWindow` branches each account their refusal (`MIN_AUTH` / `RATE`,
+ * naming the [ProtocolId] as `subject` and the refused [Principal.Peer.id] as
+ * `principal`) before returning null, so neither is a silent drop
+ * (`[SEC1-13][SEC1-14][SEC1-16]`). Rate is counted **per-`Principal`**: the
+ * `(ProtocolId, Principal)`-keyed window count already isolates one peer's
+ * count from another's, so accounting inherits that isolation for free —
+ * throttling one principal's crossings never records against, or moves the
+ * counter for, another's (BS-11). The `ceiling` branch never becomes a denial
+ * site — a clamp is not a refusal (30/34 decision 6, BS-10): it returns a
+ * clamped message with no call into [denials] and no counter movement.
  */
-private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(): (ProtocolId, Any) -> Any? {
+private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
+    denials: BoundaryDenialSink,
+): (ProtocolId, Any) -> Any? {
     val counts = java.util.concurrent.ConcurrentHashMap<Pair<ProtocolId, Principal>, Int>()
     return filter@{ id, message ->
         val authority = this[id] ?: return@filter message
         val principal = currentPrincipal()
         if (principal == Principal.LocalTrusted) return@filter message
         val peer = principal as Principal.Peer
-        if (peer.auth < authority.minAuth) return@filter null
+        if (peer.auth < authority.minAuth) {
+            denials.denyProtocol(
+                DenialReason.MIN_AUTH,
+                id,
+                peer.id,
+                detail = "auth=${peer.auth} < minAuth=${authority.minAuth}",
+                message = message,
+            )
+            return@filter null
+        }
         authority.ratePerWindow?.let { limit ->
             val key = id to principal
             val next = (counts[key] ?: 0) + 1
             counts[key] = next
-            if (next > limit) return@filter null
+            if (next > limit) {
+                denials.denyProtocol(
+                    DenialReason.RATE,
+                    id,
+                    peer.id,
+                    detail = "count=$next > ratePerWindow=$limit",
+                    message = message,
+                )
+                return@filter null
+            }
         }
         if (id == Protocols.Attention && authority.ceiling != null && message is Attention) {
             // preserve the emitter's version: this is the same LWW update, only clamped
@@ -246,4 +448,31 @@ private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(): (ProtocolId, 
         }
         message
     }
+}
+
+/**
+ * Accounts one refused `PORT_PROTOCOL` frame (seam 3 `protocolAuthority`) —
+ * the single call shape both the `minAuth` and `ratePerWindow` branches of
+ * [asProtocolFilter] use, so the record's fields cannot drift between them.
+ * [message] rides as the sole [BoundaryDenialSink.deny] `deniedArgs` entry —
+ * a metadata-plane frame, never an [civictech.cell.Owned]/[civictech.cell.Leased]
+ * exclusive (protocol messages are plain payloads, unlike `PORT_API`
+ * arguments; feature `computenet-usd.2`'s exclusive-discharge concerns do not
+ * apply at this seam).
+ */
+private fun BoundaryDenialSink.denyProtocol(
+    reason: DenialReason,
+    id: ProtocolId,
+    principal: PeerId,
+    detail: String,
+    message: Any,
+) {
+    deny(
+        seam = BoundarySeam.PROTOCOL_AUTHORITY,
+        reason = reason,
+        principal = principal,
+        subject = id.name,
+        detail = detail,
+        deniedArgs = listOf(message),
+    )
 }

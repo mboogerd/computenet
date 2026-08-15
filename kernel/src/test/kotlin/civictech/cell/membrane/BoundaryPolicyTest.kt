@@ -2,22 +2,31 @@ package civictech.cell.membrane
 
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.Frozen
+import civictech.cell.Leased
+import civictech.cell.Owned
+import civictech.cell.Redacted
 import civictech.cell.control.Attention
 import civictech.cell.control.AttentionBand
 import civictech.cell.Propagate
 import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
+import civictech.cell.host.DeadLetter
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.SupervisionPolicy
 import civictech.cell.link.CurrentPeer
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.LinkResult
 import civictech.cell.link.PeerId
+import civictech.cell.port.PortRef
+import civictech.cell.port.Use
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
 import civictech.cell.link.allowPeers
 import civictech.cell.port.registerPort
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -35,6 +44,46 @@ private fun registerRedactSecretsProjection() {
             dels = d.dels.filterKeys { !it.startsWith("secret") },
         )
     }
+}
+
+/**
+ * The same redaction, but one that also exercises the *suppressing* half of
+ * [DisclosurePolicy.Project]: a delta with nothing left to disclose after
+ * redaction returns null, which suppresses that particular delivery entirely
+ * (spec 40/43 seam 3) and is therefore an accounted denial
+ * (`DISCLOSURE_PROJECTED_AWAY`).
+ */
+private val redactSecretsOrSuppress = ProjectionId("redact-secrets-or-suppress-test")
+
+@Suppress("UNCHECKED_CAST")
+private fun registerSuppressingProjection() {
+    ProjectionRegistry.register(redactSecretsOrSuppress) { delta ->
+        val d = delta as SetDelta<String>
+        val adds = d.adds.filterKeys { !it.startsWith("secret") }
+        val dels = d.dels.filterKeys { !it.startsWith("secret") }
+        if (adds.isEmpty() && dels.isEmpty()) null else SetDelta(adds = adds, dels = dels)
+    }
+}
+
+/**
+ * A contract whose emission carries exclusives ([Owned]/[Leased]) — the shape
+ * that makes the disclosure seam's payload boundary checkable: a *suppressed*
+ * delivery must still route its arguments through the host's spec-23-R8
+ * sanitizer rather than dropping a live handle on the floor.
+ */
+interface ExclusiveDrop {
+    fun send(owned: Owned<String>, leased: Leased<String>)
+}
+
+/** A membrane whose only exposure is a `Deny`-disclosed outlet of [ExclusiveDrop]. */
+private class ExclusiveMembrane : CompositeCell() {
+    private val organelleOutlet = FanOutlet.create<ExclusiveDrop>()
+    val exposedOutlet = mediateOutlet(
+        "exposedOutlet",
+        "outlet",
+        organelleOutlet,
+        policy = BoundaryPolicy(disclosure = DisclosurePolicy.Deny),
+    )
 }
 
 private class SetSource(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
@@ -138,9 +187,10 @@ class BoundaryPolicyTest {
     }
 
     @Test
-    fun `attention ceiling clamps an asserted level before local handling`() {
+    fun `BS-10 attention ceiling clamps an asserted level and emits no denial record or counter movement`() {
         val controller = SimulationController(seed = 12)
         val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
 
         val membrane = AttentionCeilingMembrane(ceiling = AttentionBand.LOW)
         val membraneRef = host.managementInlet.call.spawn(membrane)
@@ -157,6 +207,9 @@ class BoundaryPolicyTest {
             observed += message as Attention
         }
 
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 0L
+
         // A REMOTE consumer asserts HIGH interest upstream (CurrentPeer
         // simulates the bridge-ingress stamp, G-29 phase 1); the boundary's
         // ceiling (LOW) MUST clamp it before this outlet's own handling sees
@@ -169,12 +222,17 @@ class BoundaryPolicyTest {
         controller.runToIdle()
 
         observed shouldBe listOf(Attention(AttentionBand.LOW.level))
+        // computenet-usd.1.3: a clamp is not a denial (30/34 decision 6) — no
+        // record, no counter movement, no dead letter.
+        sink.denialCount shouldBe 0L
+        letters shouldBe emptyList()
     }
 
     @Test
-    fun `remote attention below the protocol floor is refused, not merely unclamped`() {
+    fun `remote attention below the protocol floor is refused before any handler runs, with one MIN_AUTH denial record`() {
         val controller = SimulationController(seed = 13)
         val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
 
         val organelle = SetCell<String>()
         val membrane = object : CompositeCell() {
@@ -190,6 +248,9 @@ class BoundaryPolicyTest {
             )
         }
         val membraneRef = host.managementInlet.call.spawn(membrane)
+        // RESTART, so BS-14 ("a denial is not a fault") is a real check here
+        // too, rather than a vacuous one.
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
         val collector = DeltaCollector()
         val collectorRef = host.managementInlet.call.spawn(collector)
         val link = (
@@ -209,7 +270,107 @@ class BoundaryPolicyTest {
         }
         controller.runToIdle()
 
+        // Refused before any handler runs — this exposure's own attention
+        // handler never sees it.
         observed shouldBe emptyList()
+
+        // computenet-usd.1.3: the minAuth refusal is accounted, not a silent
+        // drop ([SEC1-13][SEC1-14][SEC1-16]).
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        val letter = letters.single()
+        letter.cause shouldBe null
+        letter.description shouldContain "exposedOutlet"
+        letter.description shouldContain "remote-consumer"
+        letter.description shouldContain "MIN_AUTH"
+        letter.description shouldContain Protocols.Attention.name
+
+        // BS-14: not a fault.
+        host.supervisionAccounting().restarts shouldBe 0L
+        letter.invocation!!.invocation.context shouldBe null
+    }
+
+    @Test
+    fun `BS-11 rate refusal is accounted per-Principal - alice over the window is denied, bob is unaffected`() {
+        // computenet-usd.1.3: protocolAuthority.asProtocolFilter's
+        // ratePerWindow branch is now accounted (reason=RATE, subject the
+        // ProtocolId, principal the refused Peer.id). Rate is counted per
+        // (ProtocolId, Principal) — alice's window never touches bob's count
+        // or names him in a record ([SEC1-13][SEC1-14][SEC1-16]).
+        val controller = SimulationController(seed = 21)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val organelle = SetCell<String>()
+        val membrane = object : CompositeCell() {
+            val exposedOutlet = mediateOutlet(
+                "exposedOutlet",
+                "outlet",
+                organelle.outlet,
+                policy = BoundaryPolicy(
+                    protocolAuthority = mapOf(
+                        Protocols.Attention to ProtocolAuthority(ratePerWindow = 2),
+                    ),
+                ),
+            )
+        }
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        // RESTART, so BS-14 is a real check here too, not a vacuous one.
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+        val link = (
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+                as LinkResult.Connected
+            ).link
+
+        // Distinguish alice's/bob's delivered frames by version, since the
+        // handler itself does not see the principal.
+        val observedVersions = mutableListOf<Long>()
+        ProtocolSupport.of(membrane.exposedOutlet).handle(Protocols.Attention) { _, message ->
+            observedVersions += (message as Attention).version
+        }
+
+        val alice = PeerId("alice")
+        val bob = PeerId("bob")
+        fun sendAs(peer: PeerId, version: Long) {
+            CurrentPeer.with(peer) {
+                Protocols.sendUpstream(link, Protocols.Attention, Attention(AttentionBand.HIGH.level, version))
+            }
+        }
+
+        // alice sends k+2 = 4 frames, bob sends k = 2 — interleaved, so a
+        // shared (not per-Principal) counter would wrongly refuse bob's
+        // second frame too.
+        sendAs(alice, 1)
+        sendAs(bob, 101)
+        sendAs(alice, 2)
+        sendAs(bob, 102)
+        sendAs(alice, 3)
+        sendAs(alice, 4)
+        controller.runToIdle()
+
+        // alice's first two (at/under the window) delivered, last two
+        // refused; both of bob's delivered.
+        observedVersions.toSet() shouldBe setOf(1L, 2L, 101L, 102L)
+
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 2L
+        letters.size shouldBe 2
+        letters.forEach { letter ->
+            letter.cause shouldBe null
+            letter.description shouldContain "exposedOutlet"
+            letter.description shouldContain "alice"
+            letter.description shouldContain "RATE"
+            letter.description shouldContain Protocols.Attention.name
+            // BS-14 arm: no wave minted or advanced by reporting a refusal.
+            letter.invocation!!.invocation.context shouldBe null
+        }
+        letters.none { it.description.contains("bob") } shouldBe true
+
+        // BS-14: not a fault.
+        host.supervisionAccounting().restarts shouldBe 0L
     }
 
     @Test
@@ -287,5 +448,370 @@ class BoundaryPolicyTest {
         // Local (no stamped peer) requests are unaffected by the allowlist.
         host.managementInlet.call.connect(sourceRef, "outlet", membraneRef, "exposedInlet")
             .shouldBeInstanceOf<LinkResult.Connected>()
+    }
+
+    @Test
+    fun `BS-2 a denied link-authority peer lands one denial record and the BS-1 allowed twin leaves no trace`() {
+        // computenet-usd.1.5: installLinkAuthority wraps each installed
+        // LinkPolicy so a Rejected verdict is accounted (seam=LINK_AUTHORITY,
+        // principal=the refused peer, detail=the refusing policy's own
+        // rejection reason) BEFORE it is returned to the handshake — the
+        // handshake's own control flow (reject before install/register) is
+        // untouched, so a denial still leaves no half-registered port and no
+        // subscriber entry ([SEC1-08][SEC1-09][SEC1-29]).
+        val controller = SimulationController(seed = 16)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = mutableListOf<DeadLetter>()
+        host.deadLetterOutlet.subscribe(
+            Use.fixed(
+                object : Propagate<DeadLetter> {
+                    override fun propagate(value: DeadLetter) {
+                        letters += value
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+
+        val organelle = SetCell<String>()
+        val membrane = object : CompositeCell() {
+            val exposedInlet = mediate(
+                "exposedInlet",
+                "inlet",
+                organelle.inlet,
+                policy = BoundaryPolicy(linkAuthority = listOf(allowPeers(PeerId("alice")))),
+            )
+        }
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        // RESTART, so BS-14 ("a denial is not a fault") is a real check
+        // rather than a vacuous one — were this denial misclassified as a
+        // cell failure anywhere on this path, this is the policy that would
+        // fire (mirrors BoundaryDenialAccountingTest's precedent).
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
+        val source = SetSource()
+        val sourceRef = host.managementInlet.call.spawn(source)
+        controller.runToIdle()
+
+        val sink = membrane.boundaryDenials["exposedInlet"]!!
+        sink.denialCount shouldBe 0L
+
+        // BS-2: CurrentPeer=mallory is rejected.
+        val rejected = CurrentPeer.with(PeerId("mallory")) {
+            host.managementInlet.call.connect(sourceRef, "outlet", membraneRef, "exposedInlet")
+        }
+        controller.runToIdle()
+        rejected.shouldBeInstanceOf<LinkResult.Rejected>()
+
+        // Exactly one denial record, naming mallory and the refusing policy.
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        val letter = letters.single()
+        letter.cause shouldBe null
+        letter.description shouldContain "exposedInlet"
+        letter.description shouldContain "mallory"
+        letter.description shouldContain "LINK_REFUSED"
+        letter.description shouldContain "not on the allowlist"
+
+        // No port half-registered, no subscriber entry: the rejected request
+        // never reached install()/register().
+        membrane.exposedInlet.linking.links shouldBe emptyList()
+
+        // BS-14: not a fault — no RESTART, no supervision escalation.
+        host.supervisionAccounting().restarts shouldBe 0L
+        // No wave minted or advanced: the synthesized report carries a null context.
+        letter.invocation!!.invocation.context shouldBe null
+
+        // BS-1 twin: CurrentPeer=alice links successfully, no new record, counter unchanged.
+        val connected = CurrentPeer.with(PeerId("alice")) {
+            host.managementInlet.call.connect(sourceRef, "outlet", membraneRef, "exposedInlet")
+        }
+        controller.runToIdle()
+        connected.shouldBeInstanceOf<LinkResult.Connected>()
+
+        sink.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        membrane.exposedInlet.linking.links.size shouldBe 1
+    }
+
+    /** Collects everything the host dead-letters, so a denial's report is readable in-test. */
+    private fun collectDeadLetters(host: ManagedHost): MutableList<DeadLetter> {
+        val letters = mutableListOf<DeadLetter>()
+        host.deadLetterOutlet.subscribe(
+            Use.fixed(
+                object : Propagate<DeadLetter> {
+                    override fun propagate(value: DeadLetter) {
+                        letters += value
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+        return letters
+    }
+
+    @Test
+    fun `BS-8 catch-up and live emission are redacted by the same transform, with denials accounted on both paths`() {
+        // computenet-usd.1.4: DisclosurePolicy.asDeltaFilter accounts every
+        // suppressed delivery attempt through the exposure's
+        // BoundaryDenialSink ([SEC1-25][SEC1-26]). BS-8's claim is that the
+        // onLinked catch-up unicast and the live stream are ONE filter (20/21
+        // §Pull, 93 I-28: "a snapshot IS a delta") — so both must redact by the
+        // same transform AND both must account what they suppress.
+        //
+        // Concord note ([SEC1-30]): 43-security.md carries no normative EARS
+        // ids, so this property is pinned here and filed as an uncovered
+        // candidate in concord/corpus/DISPUTES.md — never as an invented
+        // `covers:` id.
+        registerSuppressingProjection()
+        val controller = SimulationController(seed = 17)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val membrane = DisclosureMembrane(
+            policy = BoundaryPolicy(disclosure = DisclosurePolicy.Project(redactSecretsOrSuppress)),
+        )
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        // RESTART installed so BS-14 ("a denial is not a fault") is a real
+        // check on this seam too, not a vacuous one.
+        host.managementInlet.call.supervise(membraneRef, SupervisionPolicy.RESTART)
+        controller.runToIdle()
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+
+        // Pre-link state, with nobody attached: an emission that attempts no
+        // delivery suppresses nothing and records nothing (the per-attempt
+        // counting rule, stated from its zero end).
+        membrane.organelle.inlet.call.add("secret-one")
+        controller.runToIdle()
+        sink.denialCount shouldBe 0L
+
+        // 1. CATCH-UP PATH. A subscriber joins while the whole state projects
+        //    away: the state-as-delta unicast is suppressed, and that single
+        //    attempt is one denial record.
+        val collectorA = DeltaCollector()
+        val collectorARef = host.managementInlet.call.spawn(collectorA)
+        host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorARef, "inlet")
+            .shouldBeInstanceOf<LinkResult.Connected>()
+        controller.runToIdle()
+        sink.denialCount shouldBe 1L
+        collectorA.received shouldBe emptyList()
+
+        // 2. LIVE PATH. A live delta that projects away is suppressed for the
+        //    one attached consumer — one attempt, one further record.
+        membrane.organelle.inlet.call.add("secret-two")
+        controller.runToIdle()
+        sink.denialCount shouldBe 2L
+
+        // A live delta that survives projection is delivered, redacted.
+        membrane.organelle.inlet.call.add("public-one")
+        controller.runToIdle()
+
+        // 3. A second subscriber's catch-up carries the whole (mixed) state and
+        //    arrives redacted by the SAME transform — secrets stripped, the
+        //    public element present, no extra denial.
+        val collectorB = DeltaCollector()
+        val collectorBRef = host.managementInlet.call.spawn(collectorB)
+        host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorBRef, "inlet")
+            .shouldBeInstanceOf<LinkResult.Connected>()
+        controller.runToIdle()
+
+        membrane.organelle.inlet.call.add("public-two")
+        controller.runToIdle()
+
+        // No un-redacted value observable on EITHER path.
+        val seenByA = collectorA.received.flatMap { it.adds.keys }
+        val seenByB = collectorB.received.flatMap { it.adds.keys }
+        (seenByA + seenByB).none { it.startsWith("secret") } shouldBe true
+        seenByA.toSet() shouldBe setOf("public-one", "public-two")
+        seenByB.toSet() shouldBe setOf("public-one", "public-two")
+
+        // Exactly the two suppressions above were accounted — a delivered
+        // (merely redacted) emission is not a denial.
+        sink.denialCount shouldBe 2L
+        letters.size shouldBe 2
+        letters.forEach { letter ->
+            letter.cause shouldBe null
+            letter.description shouldContain "exposedOutlet"
+            letter.description shouldContain "DISCLOSURE"
+            letter.description shouldContain "DISCLOSURE_PROJECTED_AWAY"
+            letter.description shouldContain redactSecretsOrSuppress.name
+            // BS-14 arm: no wave minted or advanced by reporting a refusal.
+            letter.invocation!!.invocation.context shouldBe null
+        }
+        // The refused delta reaches the host's own audit fan-out (that is the
+        // point of accounting it) — it is the SUBSCRIBER-facing paths above
+        // that must never see it.
+        letters.first().invocation!!.invocation.args.size shouldBe 1
+
+        // BS-14: a denial is not a fault.
+        host.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    @Test
+    fun `BS-9 disclosure Deny still links and still clamps an attention assertion`() {
+        // Deny is a state-disclosure refusal, not a refusal to peer: a
+        // management-/attention-only peering remains a first-class arrangement
+        // (93 I-28). The link succeeds, no state crosses, and the asserted
+        // attention is clamped and applied — a clamp is not a denial (30/34
+        // decision 6), so it moves no counter.
+        val controller = SimulationController(seed = 18)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val organelle = SetCell<String>()
+        val membrane = object : CompositeCell() {
+            val exposedOutlet = mediateOutlet(
+                "exposedOutlet",
+                "outlet",
+                organelle.outlet,
+                policy = BoundaryPolicy(
+                    disclosure = DisclosurePolicy.Deny,
+                    protocolAuthority = mapOf(
+                        Protocols.Attention to ProtocolAuthority(ceiling = AttentionBand.LOW),
+                    ),
+                ),
+            )
+        }
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        organelle.inlet.call.add("private-state")
+        controller.runToIdle()
+
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+        val link = (
+            host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+                as LinkResult.Connected
+            ).link
+        controller.runToIdle()
+
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        // The link stands, and the suppressed catch-up is accounted (one
+        // attempt, one record) rather than dropped silently.
+        sink.denialCount shouldBe 1L
+
+        val observed = mutableListOf<Attention>()
+        ProtocolSupport.of(membrane.exposedOutlet).handle(Protocols.Attention) { _, message ->
+            observed += message as Attention
+        }
+        CurrentPeer.with(PeerId("remote-consumer")) {
+            Protocols.sendUpstream(link, Protocols.Attention, Attention(AttentionBand.HIGH.level))
+        }
+        controller.runToIdle()
+
+        // Clamped and applied, on a peering that discloses nothing.
+        observed shouldBe listOf(Attention(AttentionBand.LOW.level))
+        // A clamp is not a refusal: the counter did not move for it.
+        sink.denialCount shouldBe 1L
+
+        // And no state crosses, live or catch-up.
+        organelle.inlet.call.add("still-private")
+        controller.runToIdle()
+        collector.received shouldBe emptyList()
+        sink.denialCount shouldBe 2L
+    }
+
+    @Test
+    fun `one denial record per suppressed delivery attempt - per consumer, per tap, per observer`() {
+        // The DECIDED counting semantics (feature computenet-usd.1): the unit
+        // is the delivery ATTEMPT, not the emission. FanOutlet evaluates
+        // disclosureFilter once per consumer, once per typed tap, once per
+        // observer notification and once per targeted catch-up unicast, so a
+        // boundary that suppressed N deliveries reports exactly N.
+        val controller = SimulationController(seed = 19)
+        val host = ManagedHost(scheduler = controller.scheduler())
+
+        val membrane = DisclosureMembrane(policy = BoundaryPolicy(disclosure = DisclosurePolicy.Deny))
+        val membraneRef = host.managementInlet.call.spawn(membrane)
+        controller.runToIdle()
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+
+        // Nobody attached: an emission attempts no delivery, so it suppresses
+        // none and records none.
+        membrane.organelle.inlet.call.add("one")
+        controller.runToIdle()
+        sink.denialCount shouldBe 0L
+
+        // One consumer, over a real link — its catch-up unicast is itself one
+        // suppressed attempt.
+        val collector = DeltaCollector()
+        val collectorRef = host.managementInlet.call.spawn(collector)
+        host.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+            .shouldBeInstanceOf<LinkResult.Connected>()
+        controller.runToIdle()
+        sink.denialCount shouldBe 1L
+
+        // Plus a contract-typed tap and a payload-agnostic observer: three
+        // attachments, hence three delivery attempts per emission.
+        val tapped = mutableListOf<SetDelta<String>>()
+        membrane.exposedOutlet.tap(
+            Use.fixed(
+                object : Propagate<SetDelta<String>> {
+                    override fun propagate(value: SetDelta<String>) {
+                        tapped += value
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+        var observedEmissions = 0
+        membrane.exposedOutlet.observe(PortRef.generate()) { observedEmissions++ }
+
+        val before = sink.denialCount
+        membrane.organelle.inlet.call.add("two")
+        controller.runToIdle()
+        sink.denialCount - before shouldBe 3L
+
+        // A second emission adds three more: the count tracks attempts, not
+        // emissions and not attachments-at-first-refusal.
+        membrane.organelle.inlet.call.add("three")
+        controller.runToIdle()
+        sink.denialCount - before shouldBe 6L
+
+        // Nothing crossed on any of the three shapes.
+        collector.received shouldBe emptyList()
+        tapped shouldBe emptyList()
+        observedEmissions shouldBe 0
+    }
+
+    @Test
+    fun `a suppressed attempt carrying exclusives reaches the dead-letter fan-out only in Frozen or Redacted form`() {
+        // The exclusive-payload boundary with feature computenet-usd.2: this
+        // seam adds NO discharge logic of its own — a suppressed attempt's
+        // arguments ride to the sink, and the host's spec-23-R8 sanitizer
+        // (inherited from DeadLetters, never reimplemented) is the single
+        // place Owned/Leased are converted. What is asserted here is only that
+        // no live exclusive handle enters the dead-letter fan-out; exactly-once
+        // discharge under repeated filter evaluation is usd.2's subject and is
+        // deliberately not asserted.
+        val controller = SimulationController(seed = 20)
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val membrane = ExclusiveMembrane()
+        host.managementInlet.call.spawn(membrane)
+        controller.runToIdle()
+
+        var delivered = false
+        membrane.exposedOutlet.subscribe(
+            Use.fixed(
+                object : ExclusiveDrop {
+                    override fun send(owned: Owned<String>, leased: Leased<String>) {
+                        delivered = true
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+
+        membrane.exposedOutlet.call.send(Owned("owned-secret"), Leased("leased-secret"))
+        controller.runToIdle()
+
+        delivered shouldBe false
+        membrane.boundaryDenials["exposedOutlet"]!!.denialCount shouldBe 1L
+        letters.size shouldBe 1
+        val captured = letters.single().invocation!!.invocation.args
+        captured.size shouldBe 2
+        captured[0].shouldBeInstanceOf<Frozen<*>>().value shouldBe "owned-secret"
+        captured[1].shouldBeInstanceOf<Redacted>()
+        captured.none { it is Owned<*> || it is Leased<*> } shouldBe true
+        letters.single().description shouldContain "DISCLOSURE_DENIED"
     }
 }

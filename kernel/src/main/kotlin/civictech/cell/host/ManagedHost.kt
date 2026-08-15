@@ -6,6 +6,7 @@ import civictech.cell.link.*
 import civictech.cell.port.*
 import civictech.cell.protocol.*
 import civictech.cell.BlockingCell
+import civictech.cell.BoundaryDenialAccounting
 import civictech.cell.BoundedStateful
 import civictech.cell.Cell
 import civictech.cell.CellContext
@@ -1099,6 +1100,19 @@ open class ManagedHost(
                 }
                 cells[cell.ref] = cell
                 ProtocolSupport.bind(cell)
+                // SEC1 denial accounting, realization (B) (spec 40/43, [SEC1-26]):
+                // a membrane's per-exposure BoundaryDenialSink reports through THIS
+                // host's DeadLetters, so the spec-23-R8 sanitization is inherited
+                // rather than reimplemented behind the membrane. The seam stays
+                // narrow — `DeadLetters` itself is never handed out; the membrane
+                // can only submit a record plus the refused arguments. Reporting a
+                // denial consults no SupervisionPolicy and mints no wave: a refusal
+                // is not a cell fault ([SEC1-29], BS-14).
+                if (cell is BoundaryDenialAccounting) {
+                    cell.boundaryDenials.attachReporter { denial, deniedArgs ->
+                        deadLetters.boundaryDenial(cell.ref, denial, deniedArgs)
+                    }
+                }
                 PortRegistry.of(cell).names().forEach { name ->
                     PortRegistry.of(cell)[name]?.let { port ->
                         ProtocolSupport.of(port).relay(Protocols.Saturation)

@@ -123,6 +123,28 @@ class FanOutlet<Api : Any>(
      * Identity by default — zero cost, today's behavior, byte-for-byte
      * (P2/P6): only a Mediate exposure that declares a non-`Full`
      * `disclosure` policy installs a non-identity filter here.
+     *
+     * **Evaluation contract — once per delivery ATTEMPT.** This outlet calls
+     * the filter once per *attempted delivery*, never once per emission:
+     * once inside [invoke] for each consumer and each contract-typed tap,
+     * once inside [notifyObserver] for each payload-agnostic observer, and
+     * once inside [at]'s targeted delivery. So one broadcast to k attachments
+     * evaluates it k times, and an emission with no attachment evaluates it
+     * not at all. That is what makes a filter which accounts its suppressions
+     * (`civictech.cell.membrane.BoundaryPolicy`'s `disclosure` seam, spec
+     * 40/43) report exactly one denial per suppressed attempt — a boundary
+     * that suppressed N deliveries reports N — with no per-target bookkeeping
+     * on this hot path. A filter installed here must therefore be safe to call
+     * repeatedly with the *same* argument array within one emission, and must
+     * not consume what it is handed; the one landed consequence of that
+     * repetition (a suppressing filter routing the same exclusive payload to
+     * sanitization once per attempt, so only the first suppressed attempt's
+     * dead letter carries a value and the rest report
+     * [civictech.cell.Redacted]) is tracked as `computenet-usd.2` — "exclusives
+     * discharged exactly once on every denial path; `Project` applies at most
+     * once per emission" — and is deliberately not repaired here. That item,
+     * not this contract, is what reconciles per-attempt evaluation with the
+     * at-most-once-per-emission rule for a `Project` transform.
      */
     @Volatile
     var disclosureFilter: (Array<out Any?>) -> Array<out Any?>? = { it }
