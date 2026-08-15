@@ -2,7 +2,6 @@ package civictech.demo.beadsmirror
 
 import java.nio.file.Files
 import java.nio.file.Path
-import kotlin.io.path.name
 
 /**
  * A throwaway `bd --sandbox init` workspace for tests, per epic computenet-dqj
@@ -12,8 +11,10 @@ import kotlin.io.path.name
  * The workspace's Dolt database root — where `dolt` (and [civictech.demo.beadsmirror.dolt.DoltSql])
  * must run — lives at `<ws>/.beads/embeddeddolt/<name>/`, where `<name>` is the
  * scratch directory's basename with every character that is not a letter,
- * digit or underscore replaced by an underscore. The epic's breakdown probe
- * observed only the dot case (`mktemp -d`'s `tmp.XXXXXXXX` becomes
+ * digit or underscore replaced by an underscore ([doltRootFor], promoted to
+ * main-source code by computenet-dqj.4.2 so [civictech.demo.beadsmirror.BeadsMirrorApp]
+ * shares this exact rule instead of re-deriving it). The epic's breakdown
+ * probe observed only the dot case (`mktemp -d`'s `tmp.XXXXXXXX` becomes
  * `tmp_XXXXXXXX`); this task's own probe against a hyphenated prefix
  * (`Files.createTempDirectory("beadsmirror-bd-scratch-")`) found bd's
  * *database* name (unlike its issue-prefix, which keeps hyphens) sanitises
@@ -24,7 +25,7 @@ import kotlin.io.path.name
 class BdScratchWorkspace private constructor(val root: Path) : AutoCloseable {
 
     /** The Dolt database root for this workspace — NOT the `.dolt/` directory beneath it. */
-    val doltRoot: Path = root.resolve(".beads").resolve("embeddeddolt").resolve(sanitizedName(root))
+    val doltRoot: Path = doltRootFor(root)
 
     /** Runs a `bd` mutation (cwd = this workspace). Throws if `bd` exits non-zero. */
     fun run(vararg bdArgs: String): String {
@@ -52,7 +53,5 @@ class BdScratchWorkspace private constructor(val root: Path) : AutoCloseable {
             workspace.run("--sandbox", "init")
             return workspace
         }
-
-        private fun sanitizedName(root: Path): String = root.name.replace(Regex("[^A-Za-z0-9_]"), "_")
     }
 }
