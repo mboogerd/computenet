@@ -2932,6 +2932,17 @@ No CONFLICT flag required.
 - **External-effect idempotency ceiling** — R8 dedups re-delivery only if the sink holds a
   durable processed-frontier *and* the external world accepts idempotent re-delivery; sinks
   to external systems without idempotency keys remain unsolved (a documented limit).
+  **Narrowed** by `[24-DUR-06]` (KFX-16, `computenet-yh6.1.3.5`): the *unidentified
+  external drive* is no longer part of this ceiling. A `PORT_API` frame reaching an
+  `Effectful` inlet with no `MessageContext` has no position on the processed-frontier, so
+  R8 could not be evaluated for it at all and its effect re-fired on every recovery; such a
+  frame is now **refused as undeliverable** rather than acted on. Driving an `Effectful`
+  cell directly is an act with its own frontier — a stable per-actor source id plus a
+  monotonic counter, stamped before the journal tee — which the *connector ingress* (CON1)
+  mints and persists; the kernel enforces the refusal and supplies the stamping seam
+  (`civictech.cell.host.ActorIngress`). What remains under this ceiling is what it always
+  described: a sink whose *external world* rejects idempotent re-delivery, even for frames
+  the frontier does identify.
 - **Cross-host recovery-frontier divergence** — how far apart two hosts' independent
   recovery frontiers may drift before catch-up cost blows up; an *opt-in* coordinated
   checkpoint for tightly-coupled subgraphs (never global) may be warranted.

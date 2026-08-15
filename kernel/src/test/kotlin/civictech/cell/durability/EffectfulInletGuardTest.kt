@@ -9,6 +9,7 @@ import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.Timestamp
 import civictech.cell.evolve.Effectful
+import civictech.cell.host.ActorIngress
 import civictech.cell.host.HostedCellProxy
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
@@ -34,17 +35,18 @@ import java.util.*
  *   explicitly (spec 23 §Ownership; the AGENTS.md no-silent-drop invariant) and
  *   the discharge must be observable — `SupervisionAccounting`, not a comment.
  *
- * - **KFX-16 / BS-30** — a frame carrying no `MessageContext` has no frontier
- *   position, so `[24-DUR-05]`'s dedup cannot apply to it and its effect
- *   re-fires on replay. The decision recorded for this feature is the third of
- *   the three admissible options: keep the behaviour and write the limit down
- *   (`concord/corpus/DISPUTES.md`, against `24-DUR-05`, under the 93 I-7
- *   external-idempotency ceiling) rather than fabricate wave identity at every
- *   externally-driven ingress or refuse legitimate live traffic. This test is
- *   the assertion that makes the limit a *decided* behaviour rather than an
- *   unexamined one — it is deliberately NOT mirrored by a corpus scenario
- *   (KFX-17: a scenario asserting the re-fire would state a weaker rule than
- *   `[24-DUR-05]` as though it were the decided one).
+ * - **KFX-16 / BS-30**, now `[24-DUR-06]` — a frame carrying no `MessageContext`
+ *   has no frontier position at all, so `[24-DUR-05]`'s antecedent could not be
+ *   evaluated for it and its effect re-fired on replay. That was recorded as a
+ *   bounded limit in `concord/corpus/DISPUTES.md` and has since been **closed by
+ *   construction rather than by patching**: an `Effectful` cell is not directly
+ *   manipulable by a caller that cannot supply frontier information, so a
+ *   contextless `PORT_API` invocation is **undeliverable** at an `Effectful`
+ *   inlet — refused, its exclusives discharged, the refusal accounted. Past that
+ *   refusal every frame the sink acts on has a position, which is what makes
+ *   `[24-DUR-05]` hold unconditionally as written. Direct drivers stamp their own
+ *   actor lane through [civictech.cell.host.ActorIngress]; minting and persisting
+ *   that actor identity is the connector ingress's job (CON1), not the kernel's.
  */
 class EffectfulInletGuardTest {
 
@@ -98,6 +100,23 @@ class EffectfulInletGuardTest {
 
     interface NotifierProxy {
         val inlet: Use<Consumer<Int>>
+    }
+
+    /**
+     * The same shape *without* the `Effectful` marker — the control for
+     * `[24-DUR-06]`'s scope: a contextless drive of an ordinary cell is
+     * legitimate and stays admitted.
+     */
+    class PlainNotifier(override val ref: CellRef, private val seen: MutableList<Int>) : Cell {
+        val inlet = registerPort("inlet", FanInlet.create<Consumer<Int>>())
+
+        init {
+            inlet.serve(object : Consumer<Int> {
+                override fun provide(input: Int) {
+                    seen += input
+                }
+            })
+        }
     }
 
     /**
@@ -209,23 +228,24 @@ class EffectfulInletGuardTest {
     }
 
     /**
-     * BS-30, the decided KFX-16 behaviour. An `Effectful` cell driven directly by
-     * an external caller accepts frames with no `MessageContext` — no
-     * `(sourceId, counter)`, so no position on the inlet's processed-frontier.
-     * `[24-DUR-05]` is written unconditionally, but it can only be honoured
-     * where a frontier position exists; the recorded limit is that these frames
-     * re-fire on replay. The frontier is not merely un-consulted here — it is
-     * never advanced either, which is why the guard never engages (0 suppressions).
+     * BS-30 / `[24-DUR-06]`, the inversion of what this test asserted while
+     * KFX-16 stood as a recorded limit (it used to end `world shouldBe
+     * listOf(1, 1)` — the effect re-firing on replay).
      *
-     * The limit is written down in `concord/corpus/DISPUTES.md` against
-     * `24-DUR-05`; closing it needs a bounded ingress identity, filed as
-     * `computenet-yh6.1.3.5`. If that lands, this test inverts to `listOf(1)`.
+     * The same externally-driven root shape: an `Effectful` cell driven directly
+     * by an outside caller with no `MessageContext`, hence no `(sourceId,
+     * counter)` position on the inlet's processed-frontier. It is now **refused**
+     * — the sink never acts, the frontier is never advanced, the refusal is
+     * accounted and dead-lettered. The same driver going through a stamped
+     * [ActorIngress] is admitted and fires **exactly once across the crash**,
+     * which is `[24-DUR-05]` honoured for traffic the kernel previously could not
+     * evaluate it for.
      *
-     * Its exact extent is pinned by the sibling test below: the limit is
-     * "carries no context", NOT "came from outside".
+     * The refusal is what makes the guard unconditional: past it, there is no
+     * frame at an `Effectful` inlet without a position to compare.
      */
     @Test
-    fun `an externally driven effectful frame carries no frontier position and re-fires on replay (KFX-16 recorded limit)`() {
+    fun `a contextless external drive is refused and the stamped path fires exactly once across replay (KFX-16, 24-DUR-06)`() {
         val controller = SimulationController(seed = 4)
         val journal = InMemoryJournal() // the only thing that survives the crash
         val world = mutableListOf<Int>()
@@ -235,15 +255,22 @@ class EffectfulInletGuardTest {
         host.managementInlet.call.spawn(NotifierCell(CellRef(logicalId), world))
         controller.runToIdle()
 
-        fun driveDirectly(target: ManagedHost, value: Int) {
-            val sink = (HostedCellProxy.create(CellRef(logicalId), target, NotifierProxy::class.java)
-                    as NotifierProxy).inlet.call
-            // NO CurrentContext: the externally-driven root case — HostedCellProxy
-            // stamps `CurrentContext.get()`, which is null off the data path
-            sink.provide(value)
-        }
+        fun sinkOn(target: ManagedHost) =
+            (HostedCellProxy.create(CellRef(logicalId), target, NotifierProxy::class.java) as NotifierProxy).inlet.call
 
-        driveDirectly(host, 1)
+        // NO CurrentContext: the externally-driven root case — HostedCellProxy
+        // stamps `CurrentContext.get()`, which is null off the data path
+        sinkOn(host).provide(99)
+        controller.runToIdle()
+
+        // undeliverable: the sink never acted on it, and the denial is observable
+        world shouldBe emptyList()
+        host.supervisionAccounting().effectfulContextlessRefusals shouldBe 1L
+        host.supervisionAccounting().deadLetters shouldBe 1L
+
+        // the same driver, plugged in as an actor carrying its own frontier lane
+        val actor = ActorIngress(UUID.randomUUID())
+        actor.drive { sinkOn(host).provide(1) }
         controller.runToIdle()
         world shouldBe listOf(1)
 
@@ -254,12 +281,93 @@ class EffectfulInletGuardTest {
         host.recoverFrom(journal)
         controller.runToIdle()
 
-        // The recorded limit, asserted rather than assumed: the replayed frame
-        // has no frontier position, so it is not suppressed and the effect fires
-        // a second time.
-        world shouldBe listOf(1, 1)
-        // and the guard never engaged — there was nothing to compare against
-        host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 0L
+        // fired exactly once across the crash: the stamped frame's position was
+        // journaled with it and the frontier advance beside it, so replay dedups.
+        world shouldBe listOf(1)
+        host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 1L
+        // the refused frame was journaled before it was refused, so replay meets
+        // it again — and refuses it again. The refusal is idempotent, not a
+        // one-shot admission check.
+        host.supervisionAccounting().effectfulContextlessRefusals shouldBe 1L
+    }
+
+    /**
+     * `[24-DUR-06]` is a *failure path*, so the AGENTS.md no-silent-drop
+     * invariant binds it exactly as KFX-20 binds the suppression branch: a
+     * refused invocation's `Owned` is consumed rather than leaked, and the
+     * refusal is counted. The later `take()` is a use-after-move error, which is
+     * the proof the discharge ran rather than the payload merely vanishing.
+     */
+    @Test
+    fun `a refused contextless invocation consumes the Owned it carried (24-DUR-06)`() {
+        val controller = SimulationController(seed = 6)
+        val world = mutableListOf<String>()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val ref = CellRef(UUID.randomUUID())
+        host.managementInlet.call.spawn(OwnedSink(ref, world))
+        controller.runToIdle()
+
+        val sink = (HostedCellProxy.create(ref, host, OwnedSinkProxy::class.java) as OwnedSinkProxy).inlet.call
+        val refused = Owned("refused")
+        sink.provide(refused) // no CurrentContext
+        controller.runToIdle()
+
+        world shouldBe emptyList()
+        shouldThrow<IllegalStateException> { refused.take() }
+        host.supervisionAccounting().effectfulContextlessRefusals shouldBe 1L
+
+        // and the stamped path through the very same proxy is admitted
+        ActorIngress(UUID.randomUUID()).drive { sink.provide(Owned("acted")) }
+        controller.runToIdle()
+        world shouldBe listOf("acted")
+        host.supervisionAccounting().effectfulContextlessRefusals shouldBe 1L
+    }
+
+    /** The lease half of `[24-DUR-06]`: a refused `Leased` returns to its pool exactly once. */
+    @Test
+    fun `a refused contextless invocation releases the Leased it carried (24-DUR-06)`() {
+        val controller = SimulationController(seed = 7)
+        val world = mutableListOf<String>()
+        val returned = mutableListOf<String>()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val ref = CellRef(UUID.randomUUID())
+        host.managementInlet.call.spawn(LeasedSink(ref, world))
+        controller.runToIdle()
+
+        val sink = (HostedCellProxy.create(ref, host, LeasedSinkProxy::class.java) as LeasedSinkProxy).inlet.call
+        val refused = Leased("refused") { returned += it }
+        sink.provide(refused) // no CurrentContext
+        controller.runToIdle()
+
+        world shouldBe emptyList()
+        returned shouldBe listOf("refused")
+        shouldThrow<IllegalStateException> { refused.release() }
+        host.supervisionAccounting().effectfulContextlessRefusals shouldBe 1L
+    }
+
+    /**
+     * The refusal is scoped to `Effectful` inlets and to the data plane. A
+     * non-`Effectful` cell driven with no context is untouched — spontaneous
+     * calls into ordinary cells are legitimate and remain so — and management
+     * traffic (`spawn`, above, in every test here) never enters this branch at
+     * all.
+     */
+    @Test
+    fun `a contextless drive of a non-Effectful cell is unaffected (24-DUR-06 scope)`() {
+        val controller = SimulationController(seed = 8)
+        val seen = mutableListOf<Int>()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val ref = CellRef(UUID.randomUUID())
+        host.managementInlet.call.spawn(PlainNotifier(ref, seen))
+        controller.runToIdle()
+
+        val sink = (HostedCellProxy.create(ref, host, NotifierProxy::class.java) as NotifierProxy).inlet.call
+        sink.provide(1)
+        controller.runToIdle()
+
+        seen shouldBe listOf(1)
+        host.supervisionAccounting().effectfulContextlessRefusals shouldBe 0L
+        host.supervisionAccounting().deadLetters shouldBe 0L
     }
 
     /**
@@ -274,12 +382,17 @@ class EffectfulInletGuardTest {
      * recognises the replayed frame even though nothing about the id was
      * crash-stable.
      *
-     * So the limit recorded in DISPUTES is precisely *"a frame with no frontier
-     * position"* and not *"a frame from outside"*, and stamping is ruled out by
-     * its cost (fabricated wave identity on every externally-driven path; a
-     * per-call id grows the frontier without bound) rather than by any inability
-     * to close the hole. If that reasoning is ever restated, this test is the
-     * thing that keeps it honest.
+     * So the rule `[24-DUR-06]` states is precisely *"a frame with no frontier
+     * position is refused"* and not *"a frame from outside is refused"* — this
+     * test is the boundary that keeps the two from being conflated, and it stays
+     * green unchanged across that closure.
+     *
+     * It also fixes what a caller pays for choosing badly. A per-call minted id
+     * IS admitted and IS correct across replay; what is wrong with it is that it
+     * opens one `(sourceId → counter)` lane, and one journaled `FrontierRecord`,
+     * per call — never collapsible. That is why [ActorIngress] takes a *stable*
+     * actor id and counts within it, and why minting/persisting that id belongs
+     * to the connector ingress (CON1) rather than to each caller.
      */
     @Test
     fun `the same external drive carrying a per-call minted context IS deduped across replay (KFX-16 limit boundary)`() {
