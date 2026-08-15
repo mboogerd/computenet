@@ -16,6 +16,14 @@ import org.junit.jupiter.api.Test
  * carrying the query and cause. Never touches the live `.beads` (epic
  * computenet-dqj §4) — every test here runs against its own throwaway
  * `bd --sandbox init` workspace.
+ *
+ * EVERY test in this class spawns `bd` and `dolt`, so all of them guard with
+ * JUnit assumptions: `.github/workflows/ci.yml` installs neither binary, and
+ * this class is therefore green-but-SKIPPED in CI and a real gate only on a
+ * developer machine. Unlike [civictech.demo.beadsmirror.feed.DoltCommitFeedTest]
+ * and [civictech.demo.beadsmirror.feed.CheckpointResumeTest], which each pair
+ * their live half with a synthetic half that does run in CI, this class has no
+ * such half — a green CI run is no evidence at all about `DoltSql`.
  */
 class DoltSqlTest {
 
