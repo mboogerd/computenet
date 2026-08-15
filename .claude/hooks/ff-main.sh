@@ -36,13 +36,86 @@ fi
 # Tracked changes only. An untracked scratch file is not work-in-progress the
 # way a staged or modified tracked file is, and git refuses a fast-forward on
 # its own if one would be clobbered — so it does not need a guard here.
+#
+# Not decided yet, only recorded. A dirty tree is USUALLY a human mid-edit and
+# this hook must leave it alone — but it is also what THIS HOOK leaves behind
+# when its own fast-forward is killed mid-checkout, and that state latches:
+# the tree never gets cleaner on its own, so every later session reads the
+# wreckage as human work and skips the fast-forward forever. Observed
+# 2026-08-15: the checkout sat 8 commits behind for a day, with 29 modified
+# files and 7 untracked ones that were all byte-identical to origin/main.
+# Telling the two apart needs origin/main, which needs the fetch below, so the
+# verdict is deferred to heal_or_bail() after it.
 dirty=$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)
-if [ -n "$dirty" ]; then
-  echo "ff-main: main checkout has staged/modified tracked files — left alone:"
-  printf '%s\n' "$dirty" | sed 's/^/  /'
-  echo "ff-main: commit or stash them and main will fast-forward on the next session."
-  exit 0
-fi
+
+# Why a fast-forward can be cut in the first place: `git merge --ff-only`
+# writes the working tree, THEN the index, THEN moves HEAD. The SessionStart
+# harness timeout is 30s and the fetch watchdog below may legitimately spend
+# 16s of it, so a large checkout on a loaded machine can be killed after the
+# files are on disk but before HEAD moves. What is left is exactly: tracked
+# files whose content already equals origin/main, untracked files that already
+# exist in origin/main byte-for-byte, and a HEAD that never moved.
+#
+# heal_or_bail() recognises precisely that state and nothing else. Every dirty
+# path must be provably redundant with origin/main before a single one is
+# touched; one path that is not sends the whole thing down the bail branch
+# with the tree untouched. Deleting work is far worse than skipping a
+# fast-forward, so the check is per-path and the failure mode is "do nothing".
+heal_or_bail() {
+  local unsafe="" path status_line
+  # `git status --porcelain -z` and NUL-splitting, because a path may contain
+  # spaces or quotes; the human-readable form would mangle it and the mangled
+  # name would then miss its own safety check.
+  while IFS= read -r -d '' status_line; do
+    path=${status_line:3}
+    case ${status_line:0:2} in
+      ' M')
+        # Modified in the worktree only (index clean). Safe iff the worktree
+        # content is already what origin/main holds — i.e. the "modification"
+        # is the merge's own output, not an edit.
+        git -C "$repo" diff --quiet origin/main -- "$path" 2>/dev/null || unsafe="$unsafe $path" ;;
+      ' D')
+        # Deleted in the worktree only. Safe iff origin/main still carries the
+        # file: restoring it from HEAD then cannot lose anything. (A checkout
+        # cut mid-flight leaves these when it had started removing a path.)
+        git -C "$repo" cat-file -e "origin/main:$path" 2>/dev/null || unsafe="$unsafe $path" ;;
+      *)
+        # Anything staged, renamed, conflicted or unmerged is real work or a
+        # real problem. Never guess.
+        unsafe="$unsafe $path" ;;
+    esac
+  done < <(git -C "$repo" status --porcelain -z --untracked-files=no 2>/dev/null)
+
+  if [ -n "$unsafe" ]; then
+    echo "ff-main: main checkout has staged/modified tracked files — left alone:"
+    printf '%s\n' "$dirty" | sed 's/^/  /'
+    echo "ff-main: commit or stash them and main will fast-forward on the next session."
+    return 1
+  fi
+
+  # Every dirty tracked path is redundant with origin/main. Restore them from
+  # HEAD; the fast-forward re-applies the same content immediately after.
+  if ! git -C "$repo" checkout -- . 2>/dev/null; then
+    echo "ff-main: tried to clear a half-applied fast-forward and could not — left alone."
+    return 1
+  fi
+
+  # Untracked leftovers block the fast-forward ("would be overwritten by
+  # merge"). Remove ONLY those already byte-identical to origin/main's copy,
+  # which the merge is about to write back anyway. An untracked file that is
+  # NOT in origin/main, or differs from it, is somebody's scratch work and is
+  # left where it is — git will then refuse the merge and say so, which is the
+  # correct outcome.
+  local u
+  while IFS= read -r -d '' u; do
+    if git -C "$repo" cat-file -p "origin/main:$u" 2>/dev/null | cmp -s - "$repo/$u"; then
+      rm -f "$repo/$u"
+    fi
+  done < <(git -C "$repo" ls-files --others --exclude-standard -z 2>/dev/null)
+
+  echo "ff-main: cleared a half-applied fast-forward (every dirty path already matched origin/main)."
+  return 0
+}
 
 # Bound the fetch with a watchdog. This is the wake-from-sleep case: a laptop
 # that fires a scheduled slot with no network. GIT_HTTP_LOW_SPEED_* is NOT
@@ -172,6 +245,14 @@ behind=$(git -C "$repo" rev-list --count main..origin/main 2>/dev/null || echo 0
 # exist and hides git's own actionable message.
 if ! git -C "$repo" merge-base --is-ancestor main origin/main 2>/dev/null; then
   echo "ff-main: main has diverged from origin/main ($behind behind) — left alone, resolve by hand."
+  exit 0
+fi
+
+# The deferred verdict from the dirty check at the top. It runs HERE because it
+# needs origin/main (fetched above) and because there is no point healing a
+# checkout that is already current — the `behind` guard above has exited by
+# then, leaving a human's dirty tree untouched, which is what we want.
+if [ -n "$dirty" ] && ! heal_or_bail; then
   exit 0
 fi
 
