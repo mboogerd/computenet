@@ -57,23 +57,16 @@ class LocationRegistry {
     private val instances = InstanceIndex()
 
     /**
-     * Per-instance [civictech.cell.link.Interest] (spec 40/42
-     * §Interest-scoped instance sets, CP-D2): the demand predicate the gossip
-     * linker consults to decide whether a link forms and to filter each
-     * emission to the target's interest. Unset ⇒ total interest — every
-     * instance wants every delta, so the linker's behavior is byte-identical
-     * to pre-interest gossip (the replication default).
+     * Declare [ref]'s interest (the interest-assignment table entry,
+     * CP-D2/CP-D3) — delegates to [instances]; see [InstanceIndex.setInterest].
      */
-    private val interests = ConcurrentHashMap<CellRef, civictech.cell.link.Interest>()
+    fun setInterest(ref: CellRef, interest: civictech.cell.link.Interest) = instances.setInterest(ref, interest)
 
-    /** Declare [ref]'s interest (the interest-assignment table entry, CP-D2/CP-D3). */
-    fun setInterest(ref: CellRef, interest: civictech.cell.link.Interest) {
-        interests[ref] = interest
-    }
-
-    /** [ref]'s declared interest, or [civictech.cell.link.Interest.Total] when unset. */
-    fun interestOf(ref: CellRef): civictech.cell.link.Interest =
-        interests[ref] ?: civictech.cell.link.Interest.Total
+    /**
+     * [ref]'s declared interest, or [civictech.cell.link.Interest.Total] when
+     * unset — delegates to [instances]; see [InstanceIndex.interestOf].
+     */
+    fun interestOf(ref: CellRef): civictech.cell.link.Interest = instances.interestOf(ref)
 
     /**
      * Fire after a *local* publish — the announcement seam (M5.4; multicast

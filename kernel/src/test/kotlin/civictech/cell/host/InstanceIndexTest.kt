@@ -1,6 +1,7 @@
 package civictech.cell.host
 
 import civictech.cell.CellRef
+import civictech.cell.link.Interest
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import org.junit.jupiter.api.Test
@@ -86,5 +87,24 @@ class InstanceIndexTest {
         index.add(refB)
 
         index.replicasOf(logicalId) shouldBe index.instancesOf(logicalId)
+    }
+
+    /**
+     * BS-5 / [KX-04] standalone proof, interest half: a bare [InstanceIndex]
+     * — no [LocationRegistry], no host — defaults an unassigned ref to
+     * [Interest.Total] and reports back exactly what [InstanceIndex.setInterest]
+     * last recorded for it ([KX-15]).
+     */
+    @Test
+    fun `interestOf defaults to Total and reflects the last setInterest`() {
+        val index = InstanceIndex()
+        val logicalId = UUID.randomUUID()
+        val ref = CellRef(logicalId, instanceId = 1)
+
+        index.interestOf(ref) shouldBe Interest.Total
+
+        val partial = Interest.Slots(setOf(0), totalSlots = 2)
+        index.setInterest(ref, partial)
+        index.interestOf(ref) shouldBe partial
     }
 }
