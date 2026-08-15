@@ -24,6 +24,23 @@ no ops (they react to their inlets).
 `counter-source`/`pn-counter`: `increment`/`decrement` take an optional `value:` amount
 (default a unit step), or repeat a unit step with `times:` — both fold to the same total.
 
+**The set-source family, and what an unkeyed `effect-count` derives from it.** An
+`effect-count` check written without a `key:` derives the keys its sink must have
+fired from the script's `add`s, and accepts exactly two ids as the sink's direct
+upstream: **`set-source`** and **`journal-set-source`** (the durable binding of the
+same cell — see Durability below). Every other id refuses, and
+**`rebaseline-source` is deliberately excluded**: it re-announces its state under a
+fresh emission epoch, so it may legitimately re-drive a sink with elements no
+single scripted `add` accounts for, which the one-hop derivation cannot name. The
+sink itself must be declared `effect-sink` for the same reason — that is the only id
+whose contract is one effect per added element, keyed by the element. A refusal is a
+**failing** check telling the author to name the keys (`key:`), never a quiet pass.
+One unkeyed form is exempt from all of this: `exactly: 0` needs no derivation — it
+asserts the log is empty — so it never refuses whatever the graph's shape. The rest of
+the full shape gate (mid-script topology changes, `restart`/`restore` in the cone,
+repeated adds, …) is in `scenario.md` §"`effect-count`: what the unkeyed form
+quantifies over".
+
 `quorum-set` is an **operator**, not a source — see Operators below.
 
 ## Operators
@@ -72,6 +89,30 @@ no ops (they react to their inlets).
 | `feedback-undamped` | — | The same head with a **non-Magnitude** lap payload and no witness, so the cycle-closing edge is **rejected** at connect (`CycleWithoutDamping`, FU-8) — for `34-CYCLE-REJECT-01`. Author the closing edge as a `connect` step with `expect: rejected`. |
 
 The cycle-closing edge names its ports explicitly: `{from: fb, to: fb, outlet: loopOutlet, inlet: feedbackInput}`.
+
+## Durability (`dur` profile, `24-DUR-*`)
+
+The four ids a `dur`-profile scenario is built from. All of them live on the
+reserved host id `dur` (`host: dur`, `scenario.md`). They were bound driver-side by
+W4-B and recorded in `concord/corpus/DISPUTES.md` §"How it is driven"; this section
+**catalogues** them rather than minting them — no id, op or descriptor field changes
+with it.
+
+| id | ops | semantic |
+|---|---|---|
+| `journal-set-source` | `add`, `remove` | The durable `set-source`: an observed-remove set whose accepted ops tee to the write-ahead journal, so a crash replays them. Its outlet's wave identity is replay-stable (ref-derived `sourceId`; the epoch is journaled at checkpoint and rewound on recovery), which is what lets a downstream `effect-sink` recognise a replayed re-emission as already-acted (`24-DUR-04`/`24-DUR-05`). A member of the set-source family above — an unkeyed `effect-count` accepts it as a direct upstream. |
+| `journal-set-view` | — | The durable `set-view`: a journaled set fold recovered from its checkpoint plus the journal tail after it, so `readView` after a crash reads the pre-crash membership (`24-DUR-01`/`24-DUR-02`). Observed through the ordinary view checks. |
+| `effect-sink` | — | The **effect boundary**: a journaled sink that fires one external effect per delivered added element, **keyed by that element**, into the log `effect-count` reads. Guarded by the `Effectful` processed frontier, so an invocation at or behind the frontier — replayed or live-duplicated — is suppressed instead of re-fired (`24-DUR-05`). Required by the unkeyed `effect-count` derivation, and the only `retransmit` target the kernel binding admits (`scenario.md`). |
+| `journal` | — | The **crash handle**: a controller pseudo-cell, not a real cell (no ports, no links, no ops). `despawn`-ing it crashes and recovers the whole durable host in one step — every live instance discarded, the graph rebuilt under the same refs, then recovered from the surviving journal. A `snapshot` of a journaled cell lowers to a host checkpoint (state + frontier compaction). |
+
+`set-source`, `set-view` and `quorum-set` may also be placed on `host: dur`. There
+they are **volatile** members of the durable host — rebuilt fresh on a crash, never
+journaled or replayed. That is how per-cell durability is expressed
+(`24-DUR-01`/`24-DUR-03`), and the volatile fan-in is what a journaled arm replays
+*into* (`24-REPLAY-01`; with `glitch-free: true`, `DUR-GF-01`).
+
+These four bind in `KernelDriverDur` rather than `KernelCatalog`, so they are absent
+from the core/dist binding table below.
 
 ---
 
