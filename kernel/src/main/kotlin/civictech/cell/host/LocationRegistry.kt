@@ -35,8 +35,10 @@ import java.util.concurrent.ConcurrentHashMap
  * [setInterest]/[interestOf]/[isHeld] and friends remain as compatibility
  * delegates onto those two for out-of-kernel callers (kernel main-source
  * reads [instances]/[holds] directly, OQ-1 computenet-iyi.4) — see each
- * delegate's own KDoc. `ExtractionFenceTest` (BS-18) pins the shape: no field
- * on this class may be a second home for either lane.
+ * delegate's own KDoc. `ExtractionFenceTest` (BS-18) pins the shape: exactly
+ * one [InstanceIndex]- and one [DeliveryHold]-typed field, and no other field
+ * whose *name* suggests a second home for either lane (a name heuristic — it
+ * catches the likely accident, not a deliberately disguised one).
  */
 class LocationRegistry {
 
