@@ -440,6 +440,10 @@ class LocationRegistry {
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         synchronized(queue) {
+            // Deliberately does NOT consult [holds]: unlike deliver/replay, a
+            // publish during an active flip window drains the parked queue into
+            // the new location anyway. Pinned by RepartitionHoldTest's "BS-10
+            // install drains despite an active hold", filed as OQ-3 — not fixed.
             queue.drainWhile { send(location, it) }
             locations[ref] = location
             instances.add(ref)

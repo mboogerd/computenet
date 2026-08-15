@@ -11,6 +11,13 @@ import java.util.concurrent.ConcurrentHashMap
  * park/replay path, not a second buffer — [onRelease] is expected to invoke
  * the caller's existing replay so a held ref's parked queue drains through
  * the same path it would have taken unheld.
+ *
+ * Boundary: a hold binds only the paths that consult it. [LocationRegistry]'s
+ * `install` (the publish path) drains a ref's parked queue into the newly
+ * installed location without consulting this set at all, so a publish during
+ * an active flip window drains despite the hold. That asymmetry is current
+ * behaviour, pinned by `RepartitionHoldTest`'s "BS-10 install drains despite
+ * an active hold" and filed as OQ-3 on epic computenet-iyi — not fixed here.
  */
 class DeliveryHold(private val onRelease: (CellRef) -> Unit) {
 
