@@ -138,8 +138,13 @@ class FanOutlet<Api : Any>(
      * repeatedly with the *same* argument array within one emission, and must
      * not consume what it is handed; the one landed consequence of that
      * repetition (a suppressing filter routing the same exclusive payload to
-     * sanitization once per attempt) is tracked as its own work item and is
-     * deliberately not repaired here.
+     * sanitization once per attempt, so only the first suppressed attempt's
+     * dead letter carries a value and the rest report
+     * [civictech.cell.Redacted]) is tracked as `computenet-usd.2` — "exclusives
+     * discharged exactly once on every denial path; `Project` applies at most
+     * once per emission" — and is deliberately not repaired here. That item,
+     * not this contract, is what reconciles per-attempt evaluation with the
+     * at-most-once-per-emission rule for a `Project` transform.
      */
     @Volatile
     var disclosureFilter: (Array<out Any?>) -> Array<out Any?>? = { it }

@@ -111,9 +111,28 @@ data class BoundaryDenial(
     /** The membrane `Exposure.externalName` the refused crossing was addressed to. */
     val exposure: String,
     /**
-     * The refused crossing's principal, as the peer name it carries —
-     * `civictech.cell.membrane.Principal.Peer.id`; `null` is
-     * `Principal.LocalTrusted`.
+     * The peer this refusal is attributed to —
+     * `civictech.cell.membrane.Principal.Peer.id`.
+     *
+     * Like [subject], this is **not one convention across the four seams**,
+     * and a reader of an audit trail has to know which it is looking at:
+     *
+     * - seam 2 (`linkAuthority`) and seam 3 `PORT_PROTOCOL`/`PORT_API`
+     *   outbound (`protocolAuthority`, `disclosure`): the **crossing's
+     *   ambient principal** (`civictech.cell.membrane.currentPrincipal()`, i.e.
+     *   the `CurrentPeer` stamp — for seam 2, the `LinkRequest.identity`).
+     *   There `null` genuinely means `Principal.LocalTrusted`: an in-process
+     *   crossing with no peer stamped.
+     * - seam 3 `PORT_API` inbound (`integrity`): the
+     *   `SignedDelta.mintingPeer` the refused envelope named — *not* the
+     *   ambient principal, because what an integrity refusal is about is the
+     *   peer that minted the delta. `null` here means **no peer could be
+     *   named at all** (a `UNSIGNED` refusal carries no envelope to read one
+     *   from), which is a distinct thing from "the crossing was local".
+     *
+     * `DeadLetters.boundaryDenial` renders a null as the literal
+     * `LocalTrusted`, so on an `UNSIGNED` record read that word as
+     * "unattributed", not as a claim about the transport.
      *
      * The record deliberately carries the [PeerId] rather than the membrane's
      * `Principal` ADT: this file sits at the `civictech.cell` root precisely
