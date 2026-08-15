@@ -1079,3 +1079,73 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   With both, author `21-PULL-03.yaml`: walk, mutate mid-walk, resume to
   completion, and assert stamps-equal ⟹ union-equals-snapshot over a family for
   which that implication actually holds.
+
+---
+
+## SEC1 (boundary-policy denial accounting): BS-8 filed, not covered — `43-security.md` mints no ids
+
+### BS-8 (disclosure covers catch-up and live alike, and accounts what it suppresses) — **`spec-gap` (no requirement id) + `schema-gap`**
+
+- **Category**: `spec-gap` (id-authoring backlog) first, `schema-gap` second.
+  This is the per-behaviour instance of the "13 zero-id chapters" structural
+  entry above: `doc/spec/40-distribution/43-security.md` is one of those
+  thirteen, so the behaviour BS-8 names has **no `[NN-SLUG-nn]` id to cover**.
+  Filed here per this file's opening rule and per `[SEC1-30]`, which is
+  explicit that a SEC1 concord candidate lands as a kernel test **plus** this
+  entry — never as an invented `covers:` id, and never as a hand-edit of
+  `doc/spec/CONCORDANCE.md` (which is generated).
+- **Behaviour it would carry** (epic `computenet-usd`, BS-8; spec
+  `43-security.md` §BoundaryPolicy with `20-dataflow-semantics/21-propagation.md`
+  §Pull and `90-roadmap/93-feature-interactions.md` I-28 — "a snapshot IS a
+  delta, one filter covers both"): *Given a mediated outlet with
+  `disclosure = Project(<transform>)` and pre-existing state, when a new
+  subscriber links and a live delta is then emitted, then the `onLinked`
+  catch-up state-as-delta and the live delta are filtered by the SAME
+  transform, no un-redacted value is observable on either path, and each
+  suppressed delivery attempt on either path produces one denial record and one
+  counter increment.*
+- **Scenario it would have been**: `43-DISCLOSURE-01.yaml`, in a
+  `concord/corpus/43-security/` directory that does not exist.
+- **Why it cannot be checked honestly today — two independent reasons.**
+  1. **No id to cover.** `covers:` is checked against the generated requirement
+     inventory; `43-security.md` mints none, so an authored scenario would
+     either carry a dangling `covers:` id (which fails `./gradlew
+     :concord:check`) or carry none and appear as an orphan. Minting `[43-*]`
+     ids is documentation maintenance and is explicitly **not** authorized by
+     the epic that produced this behaviour.
+  2. **No corpus surface for a membrane.** The scenario schema has no
+     vocabulary for a `CompositeCell` exposure, a `BoundaryPolicy`, a
+     `ProjectionId`, or a per-boundary denial counter: there is no cell-catalog
+     entry that mediates an outlet, no step that declares a disclosure policy,
+     and no check that reads a denial count. Binding one would mean reaching
+     into `civictech.cell.membrane.*` from the corpus — which only
+     `civictech.concord.driver.kernel` may do, and which would make the
+     "scenario" a kernel test wearing YAML.
+- **What was NOT done instead** (the point of filing): no scenario was authored
+  over a nearby *unmediated* outlet asserting only that catch-up and live
+  deliveries agree. Such a scenario would pass, would read as coverage of BS-8
+  in `CONCORDANCE.md`, and would assert nothing about disclosure at all — the
+  filter, the redaction, and the denial accounting are precisely what it could
+  not reach. The behaviour text was likewise not weakened to drop its
+  accounting half.
+- **What is not lost.** The behaviour is pinned implementation-side, by name,
+  in `kernel/src/test/kotlin/civictech/cell/membrane/BoundaryPolicyTest.kt`:
+  - `BS-8 catch-up and live emission are redacted by the same transform, with
+    denials accounted on both paths` — the whole behaviour, including one
+    denial for the suppressed catch-up unicast and one for the suppressed live
+    delivery, and no `secret`-prefixed element observable on either path;
+  - `one denial record per suppressed delivery attempt - per consumer, per tap,
+    per observer` — the decided counting unit (the delivery **attempt**: an
+    emission broadcast to three attachments records three denials; an emission
+    with no attachment records none);
+  - `BS-9 disclosure Deny still links and still clamps an attention assertion`
+    — the management-/attention-only peering twin.
+  What this filing forgoes is the *cross-implementation* obligation: a second,
+  non-kernel binding of the model would not be held to BS-8 by the corpus.
+- **Resolves**: (a) an id-authoring pass over `43-security.md` (the W1-C-shaped
+  pass the structural entry above already names) mints requirement ids for the
+  boundary-policy seams, **and** (b) the scenario schema gains a membrane
+  surface — a mediated-exposure catalog cell with a declarable disclosure
+  policy and a `denial-count` check. (a) alone leaves the behaviour
+  unexpressible; (b) alone leaves it uncoverable. With both, author
+  `43-DISCLOSURE-01.yaml` as described.
