@@ -209,8 +209,23 @@ private fun canonicalOrAbsolute(path: Path): Path =
         path.toAbsolutePath().normalize()
     }
 
-/** `--name value` lookup, then strip both tokens from the returned array. */
-private fun Array<String>.extractFlag(name: String): Pair<String?, Array<String>> {
+/**
+ * `--name value` or `--name=value` lookup, then strip the matched token(s)
+ * from the returned array. The `=` form is required for `--workspace`
+ * (ticket computenet-dqj.4.2's decided direction: "--workspace <path> (also
+ * --workspace=<path>)"); applied to every flag here rather than only
+ * `--workspace` so the three flags this app parses behave consistently.
+ * `internal` (not `private`) so [BeadsMirrorAppTest] can exercise the parsing
+ * directly instead of only through the process-exiting [main].
+ */
+internal fun Array<String>.extractFlag(name: String): Pair<String?, Array<String>> {
+    val prefix = "$name="
+    val inlineIndex = indexOfFirst { it.startsWith(prefix) }
+    if (inlineIndex >= 0) {
+        val value = this[inlineIndex].substring(prefix.length)
+        val rest = toMutableList().apply { removeAt(inlineIndex) }
+        return value to rest.toTypedArray()
+    }
     val i = indexOf(name)
     if (i < 0 || i + 1 >= size) return null to this
     val value = this[i + 1]

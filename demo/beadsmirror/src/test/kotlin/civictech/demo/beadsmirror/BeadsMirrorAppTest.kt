@@ -37,6 +37,32 @@ import java.time.Duration
 class BeadsMirrorAppTest {
 
     @Nested
+    inner class FlagParsing {
+
+        /** Ticket's decided direction: "--workspace <path> (also --workspace=<path>)". */
+        @Test
+        fun `extractFlag reads the space-separated form and strips both tokens`() {
+            val (value, rest) = arrayOf("--workspace", "/tmp/ws", "port").extractFlag("--workspace")
+            value shouldBe "/tmp/ws"
+            rest shouldBe arrayOf("port")
+        }
+
+        @Test
+        fun `extractFlag reads the inline equals form and strips the single token`() {
+            val (value, rest) = arrayOf("--workspace=/tmp/ws", "port").extractFlag("--workspace")
+            value shouldBe "/tmp/ws"
+            rest shouldBe arrayOf("port")
+        }
+
+        @Test
+        fun `extractFlag returns null when the flag is absent`() {
+            val (value, rest) = arrayOf("port").extractFlag("--workspace")
+            value shouldBe null
+            rest shouldBe arrayOf("port")
+        }
+    }
+
+    @Nested
     inner class Refusal {
 
         @Test
