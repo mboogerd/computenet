@@ -44,7 +44,13 @@ Traced claim by claim:
   winner while a never-gossiped local edit on a bystander issue survived
   intact. Its known price is 6 Dolt commits where the bundle path costs 1,
   which collides with BDS4 §2's migration-0055 rationale for avoiding a commit
-  per write — that collision is BDS4's to resolve, not this spike's.
+  per write — that collision is BDS4's to resolve, not this spike's. Claim (b)
+  also hands the line a second **known `bd` 1.1.2 defect**, independent of the
+  seam choice and unfixed by the narrower instrument: `updated_at` is stored at
+  one-second resolution, and an incoming sub-second part ≥ `.500` rounds *up*
+  into the next second and overwrites the local row while the same import
+  reports `tie_kept_local_ids` for it — so the report cannot be trusted to say
+  what LWW actually did on a same-second write (E4).
 - **Claim (c) — close replication: pass.** A peer's close replicates through
   `bd import` with no new `bd` surface, and the originate/replicate asymmetry
   is real and structural: guards fire on `bd close` and do not fire on the
