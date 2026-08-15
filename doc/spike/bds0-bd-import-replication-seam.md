@@ -9,7 +9,92 @@ sub-check live in the linked claim file, not here.
 
 ## Verdict
 
-TODO — authored by the follow-up task `computenet-8kj.6.2`. Do not fill in.
+**`bd import` IS NOT a sound replication write-seam as posed — but a sound
+amended seam exists, and it is two instruments rather than one: read
+provenance from `dolt_diff_issues` (the Dolt commit graph) for echo
+suppression, and write with single-row `bd import --allow-stale` as the
+ordering-authority instrument.** The BDS line is not re-founded by this
+finding; BDS1 and BDS4 are re-scoped against that amended seam before they
+are broken down.
+
+Traced claim by claim:
+
+- **Claim (a) — echo suppression: fails as posed, with a verified fallback.**
+  The provenance stamp `metadata.cn_dot` survives the upsert byte-identically
+  (i) and survives re-export unchanged (iii), so the *carrier* is sound. The
+  seam breaks at the *feed*: the `events` table has no metadata column, and an
+  imported **update** writes no journal event at all — so a projector reading
+  the journal cannot recognise its own echo, and cannot even count hops. That
+  is the half of `bd import` that is not sound. The verified fallback is
+  `dolt_diff_issues`: it carries exactly the point-in-time provenance the
+  journal lacks, and was exercised on the rig (labelled VERIFIED in the claim
+  (a) file, independently re-measured in review). BDS1's *feed* therefore
+  needs re-selecting — the events journal is not it.
+- **Claim (b) — ordering authority: yes, with an unacceptable cost at the
+  granularity the epic assumed.** `--allow-stale` genuinely imposes the
+  incoming row in full (E2 total imposition), so ComputeNet *can* be the
+  ordering authority. But it is a **per-import-run** switch with no per-row,
+  per-id or predicate form, and under it the import report stops printing
+  `stale_skipped_ids`, `updated` and `updated_issues` — so a bulk flagged
+  import destroys never-gossiped local edits, including on bystander rows the
+  sender never intended to touch, and reports nothing. Bulk `--allow-stale` is
+  therefore the wrong instrument. The measured narrower instrument is
+  **single-row `--allow-stale` import, preceded by a writer-side pre-flight
+  against the destination's own export**: on the rig it imposed the dot-order
+  winner while a never-gossiped local edit on a bystander issue survived
+  intact. Its known price is 6 Dolt commits where the bundle path costs 1,
+  which collides with BDS4 §2's migration-0055 rationale for avoiding a commit
+  per write — that collision is BDS4's to resolve, not this spike's.
+- **Claim (c) — close replication: pass.** A peer's close replicates through
+  `bd import` with no new `bd` surface, and the originate/replicate asymmetry
+  is real and structural: guards fire on `bd close` and do not fire on the
+  import path — demonstrated against a destination that held the identical
+  guard-violating structure and had refused the same close one command
+  earlier. The epic's *delete* premise is factually wrong in a direction that
+  makes deletion more dangerous, not less: `bd delete` does exist in bd 1.1.2,
+  is a real hard delete, and is anti-durable under bidirectional replication —
+  the next hop from any peer that still holds the row resurrects it. `close`
+  therefore remains the removal interface, as BDS4 already assumes.
+- **Claim (d) — round-trip fidelity: clean PASS, zero named fidelity losses.**
+  Labels, comments, dependencies, nested metadata, priority and timestamps all
+  round-tripped byte-identically on a maximally-populated fixture and on an
+  unstamped control, reproduced on a second independent rig root. It hands
+  this feature one **known `bd` defect**, not a loss: dependency `created_at`
+  is off by exactly the local UTC offset in bd 1.1.2 — a local-vs-UTC storage
+  bug that round-trips *consistently* wrong. Any consumer of dependency
+  timestamps across machines in different time zones must treat that field as
+  unreliable until the defect is fixed upstream.
+
+### The amended seam, stated once
+
+| Concern | Instrument | Status |
+|---|---|---|
+| Echo suppression / provenance read | `dolt_diff_issues` (Dolt commit graph), **not** the events journal | VERIFIED on the rig (claim (a)) |
+| Ordering-authority write | single-row `bd import --allow-stale`, one invocation per row, with a writer-side pre-flight against the destination's export | measured on the rig (claim (b)); cost 6 Dolt commits vs 1 for the bundle path |
+| Removal | `bd close` (originate) / `bd import` (replicate); **never** `bd delete` | PASS (claim (c)) |
+| Field fidelity | plain `export → import → export` | PASS, one known bd defect on dependency `created_at` (claim (d)) |
+
+Both halves are the instruments the claim files actually verified. No third
+instrument is proposed here, and neither half is a design sketch to be
+re-derived downstream.
+
+### Consequences for the BDS line
+
+The epic's conditional — "IF claim (a) or claim (b) failed, THEN the finding
+proposes the alternative seam and BDS1/BDS4 are flagged for re-scoping" —
+**fires**, on both claims. Accordingly:
+
+- **BDS1 (`computenet-dqj`)** must be re-scoped before breakdown: its feed is
+  specified as the `bd` events journal, which claim (a) shows cannot carry
+  echo suppression for imported updates. The projector's input becomes
+  `dolt_diff_issues`.
+- **BDS4 (`computenet-6wc`)** must be re-scoped before breakdown: its write
+  path must be single-row `--allow-stale` with a writer-side pre-flight, and
+  it must reconcile that instrument's per-row Dolt commit cost against its own
+  §2 migration-0055 rationale.
+
+Neither epic is rewritten by this feature; the re-scope signal is filed as a
+comment on each.
 
 ## Environment
 
