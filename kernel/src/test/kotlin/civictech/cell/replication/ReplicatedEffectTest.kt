@@ -4,6 +4,7 @@ import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.Propagate
 import civictech.cell.evolve.Effectful
+import civictech.cell.host.ActorIngress
 import civictech.cell.host.LocationRegistry
 import civictech.cell.link.Interest
 import civictech.cell.host.ManagedHost
@@ -141,6 +142,19 @@ class ReplicatedEffectTest {
         fun sink(ref: CellRef): SinkOps =
             (HostedCellProxy.create(ref, registry, SinkWriteInletHolder::class.java) as SinkWriteInletHolder)
                 .writeInlet.call
+
+        /**
+         * The external driver this test *is*, plugged in as an actor carrying its
+         * own frontier lane. An `Effectful` inlet refuses a frame with no
+         * `MessageContext` (`[24-DUR-06]`, spec 24 §Effectful), and these deltas
+         * are driven straight from the test rather than from an upstream cell, so
+         * nothing stamps them but this. One lane per peer, its counter advancing
+         * per emit, so no two deltas alias a position and nothing below is
+         * suppressed as already-acted.
+         */
+        private val driver = ActorIngress(UUID.randomUUID())
+
+        fun emit(ref: CellRef, delta: Long) = driver.drive { sink(ref).emit(delta) }
     }
 
     @Test
@@ -166,7 +180,7 @@ class ReplicatedEffectTest {
         c.leading shouldBe false
 
         fun broadcast(delta: Long) {
-            listOf(a, b, c).forEach { p.sink(it.ref).emit(delta) }
+            listOf(a, b, c).forEach { p.emit(it.ref, delta) }
             p.controller.runToIdle()
         }
 
@@ -204,7 +218,7 @@ class ReplicatedEffectTest {
         p.controller.runToIdle()
 
         // ONE logical delta, broadcast to every replica (the replication setting)
-        replicas.forEach { p.sink(it.ref).emit(7) }
+        replicas.forEach { p.emit(it.ref, 7) }
         p.controller.runToIdle()
 
         log shouldBe listOf(7L, 7L, 7L) // N=3 fires for one logical delta — the bug, visible
@@ -223,9 +237,9 @@ class ReplicatedEffectTest {
 
         // disjoint interest: each logical delta reaches exactly ONE covering
         // instance (partitioning), so no delta is fanned to a second firer
-        p.sink(replicas[0].ref).emit(10)
-        p.sink(replicas[1].ref).emit(20)
-        p.sink(replicas[2].ref).emit(30)
+        p.emit(replicas[0].ref, 10)
+        p.emit(replicas[1].ref, 20)
+        p.emit(replicas[2].ref, 30)
         p.controller.runToIdle()
 
         // each logical delta fired exactly once — WITHOUT any authority: the
@@ -241,8 +255,8 @@ class ReplicatedEffectTest {
         p.spawn(sink)
         p.controller.runToIdle()
 
-        p.sink(sink.ref).emit(1)
-        p.sink(sink.ref).emit(2)
+        p.emit(sink.ref, 1)
+        p.emit(sink.ref, 2)
         p.controller.runToIdle()
 
         log shouldBe listOf(1L, 2L) // ordinary Effectful delivery, untouched by PN-17

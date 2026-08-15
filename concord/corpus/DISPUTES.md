@@ -582,11 +582,68 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   (wall-clock/random) cell logic, glitch-free partial-wave buffers (research-gated; named
   under "Not covered" below) and cross-host recovery-frontier drift (also below, out of
   scope for the single-host `dur` driver); `34892d9` touched none of those. C-9's "effects
-  re-fire on replay" statement keeps a live residual too: the second boundary immediately
-  below, where a frame carrying no `MessageContext` has no frontier position at all and
-  re-fires on `recoverFrom`. Read this heading as retiring *this* boundary, not those rows.
+  re-fire on replay" statement kept a live residual too — the second boundary immediately
+  below, where a frame carrying no `MessageContext` had no frontier position at all and
+  re-fired on `recoverFrom`; that residual has since been retired in its own right, by
+  refusing such a frame rather than by deduping it (see there). Read this heading as
+  retiring *this* boundary, not those rows.
 
-### The second boundary (`kernel-gap` / design ceiling, KFX-16, `24-DUR-05`) — the frame with no frontier position
+### The second boundary (`kernel-gap` / design ceiling, KFX-16, `24-DUR-05`) — the frame with no frontier position — RETIRED by an admission rule (`[24-DUR-06]`, `computenet-yh6.1.3.5`)
+
+**How retired, in one sentence**: the hole was closed by *refusing* the frame
+rather than by finding a way to dedup it — a contextless `PORT_API` invocation is
+undeliverable at an `Effectful` inlet (`[24-DUR-06]`, spec 24 §Effectful), so past
+that refusal every frame the sink acts on has a `(sourceId, counter)` position and
+`[24-DUR-05]`'s antecedent is evaluable for all of them. The entry as filed is kept
+verbatim below, because two of its claims are load-bearing elsewhere (the corrected
+stamping argument, and the extent of the limit) and because the *reason* the guard
+could not close it from inside is exactly why the closure had to change shape.
+
+What the kernel now does (`ManagedHost.deliver`, `PORT_API` branch): a frame at an
+`Effectful` inlet with `invocation.context == null` is not delivered; its exclusive
+payloads are discharged explicitly (`Owned.take` / `Leased.release`, the same
+no-silent-drop rule KFX-20 applied to the suppression branch), the refusal is
+counted (`SupervisionAccounting.effectfulContextlessRefusals`) and reported as a
+dead letter. The frontier advance beside the delivery is now unconditional for
+`Effectful` cells (`checkNotNull(timestamp)`, deliberately an assertion rather than
+a condition, so a future path that reintroduces the contextless case fails loudly
+instead of silently reinstating this hole). Direct drivers stamp their own actor
+lane through `civictech.cell.host.ActorIngress`. Asserted by kernel
+`EffectfulInletGuardTest` — *"a contextless external drive is refused and the
+stamped path fires exactly once across replay"* (the inversion of this entry's
+original assertion, which ended `world shouldBe listOf(1, 1)`), plus the `Owned`,
+`Leased` and non-`Effectful`-scope arms.
+
+**Three residuals, stated because retiring an entry is not a licence to round up**:
+
+1. **No corpus scenario covers the externally-driven case yet.** `[24-DUR-06]`
+   enters `CONCORDANCE.md` as a `gap` row. The scenario needs the retransmit /
+   duplicate-delivery verb gated in `computenet-yh6.1.3.3` (a `concord/schema`
+   change under the single-writer contract), which was not available when this
+   landed; inventing a binding out of existing verbs was explicitly out of scope.
+   Filed as `computenet-109f` — see **Follow-up** below. KFX-17's prohibition is
+   discharged either way: what it forbade was a scenario asserting the *weaker*
+   rule, and there is no longer a weaker rule to assert.
+2. **The per-actor durable identity is not implemented here.** The kernel enforces
+   the refusal and supplies the stamping seam; *minting and persisting* an actor
+   identity that means the same thing across a restart and across peers is the
+   connector ingress's job (CON1). Until then a caller that passes a fresh id per
+   process is admitted and correct across replay, but opens one frontier lane per
+   session — bounded by actors only when the actor id is genuinely stable. That is
+   the caller's choice now, not a silent kernel behaviour, which is the difference
+   that made this retirable.
+3. **Enforcement is at delivery, not at link admission.** The decision named link
+   time as the preferred point "where the shape is knowable"; in today's kernel
+   there is nothing there to check — every *linked* producer stamps a context by
+   construction (`FanOutlet` mints one even for a spontaneous emission), and the
+   only contextless producers are direct proxy drives, which admit no link. A
+   link-admission check would therefore be unreachable code, so the delivery-time
+   guard carries the rule alone. If a future producer can emit into a link without
+   a context, this is the paragraph that has to change.
+
+---
+
+*The entry as originally filed follows, unedited.*
 
 `[24-DUR-05]` is written unconditionally ("IF an invocation at an `Effectful`
 inlet is at or behind that inlet's processed-frontier … THEN it SHALL be
@@ -646,12 +703,19 @@ Deliberately **no corpus scenario** accompanies this entry: a scenario asserting
 were the decided one. The kernel test carries the assertion; this ledger carries
 the honesty.
 
-- **Resolves**: a crash-stable ingress identity for externally-driven frames — a
-  durable per-host (or per-connector) source id plus a journaled monotonic
-  counter, stamped before the journal tee so replay carries the same position —
-  after which every frame reaching an `Effectful` inlet has a frontier position
-  and `[24-DUR-05]` holds unconditionally, as written. Filed as
-  `computenet-yh6.1.3.5`.
+- **Resolved by** `computenet-yh6.1.3.5`, but *not* in the shape this bullet
+  predicted. As filed it asked for a crash-stable ingress identity minted inside
+  the kernel — a durable per-host (or per-connector) source id plus a journaled
+  monotonic counter — after which every frame reaching an `Effectful` inlet would
+  have a frontier position. The human decision of 2026-08-10 reframed it: the
+  identity belongs to the **external actor**, not the host, and is minted by the
+  connector ingress (CON1); the kernel's part is the **admission rule** above,
+  which reaches "every frame reaching an `Effectful` inlet has a frontier
+  position" by refusing the ones that do not, and is therefore not waiting on
+  CON1. See the retirement note at the head of this entry.
+- **Follow-up**: the corpus scenario for the externally-driven `[24-DUR-05]` /
+  `[24-DUR-06]` case, gated on the `computenet-yh6.1.3.3` schema verb — filed as
+  `computenet-109f`.
 
 ### The third boundary (`coverage-gap`, `[24-DUR-02]`, KFX BS-12) — the checkpoint's *frontier* half asserts nothing
 

@@ -374,6 +374,17 @@ open class ManagedHost(
     private val effectfulSuppressionCount = AtomicLong()
 
     /**
+     * KFX-16 / `[24-DUR-06]`: how many `PORT_API` invocations were refused at an
+     * `Effectful` inlet for carrying no [civictech.cell.MessageContext], hence no
+     * position on that inlet's processed-frontier. Counted for the same reason
+     * [effectfulSuppressionCount] is: a refusal is a *drop*, so the refused
+     * invocation's exclusive payloads are discharged explicitly and the drop is
+     * made observable rather than silent (spec 23 §Ownership, the AGENTS.md
+     * no-silent-drop invariant, G-46).
+     */
+    private val effectfulContextlessRefusalCount = AtomicLong()
+
+    /**
      * PN-12 — spawn-time consumption of the [civictech.nature.CellDescriptor.manifest]:
      * a `Manifest.DURABLE` cell placed on this host with a journal selector that
      * returns `null` for it is volatile — a previously *silent* durability gap
@@ -394,6 +405,7 @@ open class ManagedHost(
         parkedDrainedOnTeardown = parkedDrainedOnTeardownCount.get(),
         restarts = restartCount.get(),
         effectfulSuppressionsDischarged = effectfulSuppressionCount.get(),
+        effectfulContextlessRefusals = effectfulContextlessRefusalCount.get(),
     )
 
     /**
@@ -825,27 +837,49 @@ open class ManagedHost(
                         // applied (sourceId, counter) is suppressed-emission —
                         // the sink already acted on it, so it does not act again.
                         //
-                        // KFX-16 (a recorded limit, not an oversight): the check
-                        // applies only when the frame carries a wave context. An
-                        // externally-driven frame has none — `Invocation.context`
-                        // is "null on management paths and spontaneous calls" —
-                        // and therefore has no frontier position at all, so it
-                        // re-fires on replay. Stamping a synthetic position at
-                        // ingress WOULD close that (the stamp rides the journaled
-                        // frame and the frontier advance is journaled too, so even
-                        // a per-call id matches the restored frontier) — but it
-                        // fabricates wave identity on every externally-driven path
-                        // (wire ingress included), and a per-call id grows the
-                        // frontier without bound; a bounded stamp needs a
-                        // per-host/per-connector ingress identity with a monotonic
-                        // counter. Refusing to journal such a frame would deny
-                        // legitimate live traffic. Both are wider than this guard, so the
-                        // re-fire is kept as an explicit bounded limit under the
-                        // 93 I-7 external-idempotency ceiling — written down in
-                        // `concord/corpus/DISPUTES.md` against `[24-DUR-05]` and
-                        // asserted by `EffectfulInletGuardTest`.
+                        // KFX-16, decided as an ADMISSION rule rather than a dedup
+                        // rule (`[24-DUR-06]`, spec 24 §Effectful): an `Effectful`
+                        // cell is not directly manipulable by a caller that cannot
+                        // supply frontier information. A `PORT_API` frame carrying
+                        // no `MessageContext` — `Invocation.context` is "null on
+                        // management paths and spontaneous calls", and every
+                        // in-kernel producer stamps `CurrentContext.get()`, so this
+                        // is exactly the externally-driven root case — has no
+                        // position on this inlet's frontier, and is therefore
+                        // UNDELIVERABLE here rather than delivered unguarded. That
+                        // is what makes `[24-DUR-05]` hold unconditionally at this
+                        // guard: past the refusal below, every frame the sink acts
+                        // on has a position to compare.
+                        //
+                        // The external actor's own frontier — a stable per-actor
+                        // source id plus a monotonic counter, stamped before the
+                        // journal tee — belongs to the connector ingress that mints
+                        // and persists that identity (CON1), not here;
+                        // [ActorIngress] is the kernel-side stamping seam it plugs
+                        // into, and the one a direct in-process driver uses today.
                         val timestamp = hostedInvocation.invocation.context?.timestamp
-                        if (cell is Effectful && timestamp != null &&
+                        if (cell is Effectful && timestamp == null) {
+                            // Refused, not delivered. A refusal is a drop, and the
+                            // same no-silent-drop rule the suppression branch obeys
+                            // applies (spec 23 §Ownership, KFX-20): discharge the
+                            // refused invocation's exclusives here (consume `Owned`,
+                            // release `Leased`) and count the refusal so the denial
+                            // is observable (G-46). The dead letter is the *report*
+                            // — `DeadLetters` sanitizes the captured invocation, so
+                            // no live exclusive handle enters the fan-out outlet
+                            // (spec 23 R8); the payload was already discharged above.
+                            hostedInvocation.invocation.args.forEach(Proxy::discharge)
+                            effectfulContextlessRefusalCount.incrementAndGet()
+                            deadLetter(
+                                null,
+                                "refused at Effectful inlet '${hostedInvocation.portName}' on $cellRef: " +
+                                    "PORT_API invocation carries no MessageContext, so it has no processed-frontier " +
+                                    "position and cannot be deduped across recovery (spec 24 §Effectful [24-DUR-06]). " +
+                                    "Drive it through a stamped ingress (ActorIngress) carrying the actor's own " +
+                                    "(sourceId, counter).",
+                                hostedInvocation,
+                            )
+                        } else if (cell is Effectful && timestamp != null &&
                             hostDurability.alreadyProcessed(cellRef, hostedInvocation.portName, timestamp)
                         ) {
                             // Suppressed: already-acted, dropped rather than re-acted.
@@ -877,10 +911,21 @@ open class ManagedHost(
                             civictech.cell.ReplayScope.withSuspending(hostedInvocation.replayFrontier) {
                                 hostedInvocation.invocation.invokeSuspending(port.call)
                             }
-                            if (cell is Effectful && timestamp != null) {
+                            if (cell is Effectful) {
                                 // per-cell tee (CP-C1): the frontier advance rides the same
-                                // journal as this cell's frames — volatile cells (null) skip it
-                                hostDurability.advanceAndJournalFrontier(cellRef, hostedInvocation.portName, timestamp)
+                                // journal as this cell's frames — volatile cells (null) skip it.
+                                //
+                                // `checkNotNull`, not a `timestamp != null` guard: the
+                                // refusal branch above is the only way a contextless frame
+                                // can reach an `Effectful` inlet and it does not fall
+                                // through, so an acted-on `Effectful` frame ALWAYS has a
+                                // position. Written as an assertion rather than a condition
+                                // precisely so a future path that reintroduces the
+                                // contextless case fails loudly instead of silently
+                                // reinstating the `[24-DUR-05]` hole this closed.
+                                hostDurability.advanceAndJournalFrontier(
+                                    cellRef, hostedInvocation.portName, checkNotNull(timestamp),
+                                )
                             }
                         }
                     }

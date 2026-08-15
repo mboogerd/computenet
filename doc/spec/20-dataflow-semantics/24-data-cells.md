@@ -822,7 +822,47 @@ sink. `[24-DUR-05]` IF an invocation at an `Effectful` inlet is at or behind
 that inlet's processed-frontier (the last applied `(sourceId, counter)`),
 THEN it SHALL be suppressed — dropped as already-acted — rather than
 re-driving the sink, whether encountered during `recoverFrom` replay or
-post-recovery live delivery (Unwanted behavior). The decided journal classification still diverges from the landed
+post-recovery live delivery (Unwanted behavior).
+
+`[24-DUR-05]` is written unconditionally, and an **admission rule** is what
+makes it evaluable unconditionally *(KFX-16 resolved, `computenet-yh6.1.3.5`)*.
+The frontier is keyed on `MessageContext.timestamp`, so a frame carrying no
+`MessageContext` has no position on it and the antecedent could not be
+evaluated for such a frame at all — the externally-driven root case, an
+`Effectful` cell driven directly by an outside caller. The decision is that an
+`Effectful` cell is **not directly manipulable by a caller that cannot supply
+frontier information**: driving the graph directly is itself an act that has a
+frontier — a stable per-actor source id (a user, a machine, a connector
+principal) plus a monotonic counter over that actor's actions, stamped onto the
+frame *before* the journal tee so replay carries the identical position.
+`[24-DUR-06]` IF a `PORT_API` invocation arriving at an `Effectful` inlet
+carries no `MessageContext` — hence no `(sourceId, counter)` position on that
+inlet's processed-frontier — THEN it SHALL be refused as undeliverable: not
+delivered to the sink, its exclusive payloads discharged and the refusal
+accounted, rather than acted on without a position (Unwanted behavior).
+Management-plane and protocol-plane traffic is unaffected — the rule binds the
+`PORT_API` data plane only — as is any non-`Effectful` cell, for which a
+spontaneous contextless call remains legitimate.
+
+This **narrows 93 I-7's external-idempotency ceiling** rather than living under
+it: an external effect driven by an *unidentified* external frame is no longer
+possible, so what remains under that ceiling is un-suppressed replay of the
+replay-stable idempotent vocabulary, not unidentified external drives. Two
+limits are honest to state next to the rule. **Minting and persisting the actor
+identity is the connector ingress's (CON1's), not the kernel's**: the kernel
+supplies the stamping seam (`civictech.cell.host.ActorIngress`) and enforces
+the refusal, and a caller that passes a *fresh* id per process is admitted and
+correct across replay but opens one frontier lane per session — bounded by
+actors only if the actor id is actually stable. And enforcement is at
+**delivery**, the point where the target cell's `Effectful`-ness and the frame's
+context are both known: link admission cannot pre-empt it, because every
+*linked* producer stamps a context by construction (`FanOutlet` mints one for a
+spontaneous emission) and the contextless producers are direct proxy drives,
+which admit no link to check. A refused frame has already been journaled by the
+intake tee, so replay meets it again and refuses it again — the refusal is
+idempotent, not a one-shot admission gate.
+
+The decided journal classification still diverges from the landed
 tee: 93 I-7 journals only `PORT_API` data plus topology events, while the
 shipped journal appends every intake frame (management included) and does
 not journal topology at all — the graph is rebuilt out-of-band before
