@@ -721,7 +721,26 @@ the honesty.
   `[24-DUR-06]` case, gated on the `computenet-yh6.1.3.3` schema verb — filed as
   `computenet-109f`.
 
-### The third boundary (`coverage-gap`, `[24-DUR-02]`, KFX BS-12) — the checkpoint's *frontier* half asserts nothing
+### The third boundary (`coverage-gap`, `[24-DUR-02]`, KFX BS-12) — the checkpoint's *frontier* half asserts nothing — RETIRED by `DUR-CKPT-FRONTIER-01` (`computenet-yh6.1.8`)
+
+**How retired, in one sentence**: the duplicate-delivery surface this entry asked
+for is the `retransmit` step verb (`concord/schema/scenario.md`, documented by
+`computenet-yh6.1.3.3` and bound by `computenet-yh6.1.8`), and the construction
+that discriminates the checkpoint's frontier copy is a checkpoint with **no
+journal tail after it**, so that copy is the only thing left that can suppress
+the duplicate. The entry as filed is kept below verbatim, because its negative
+result — that the frontier restore was unobservable, and *why* — is the reason
+the discriminating construction has the shape it does.
+
+Measured, not asserted: with `restoreCheckpoint` patched to skip
+`record.frontier`, `DUR-CKPT-FRONTIER-01` fails 20 of 20 runs
+(`effect-count(sink, key=k2): expected 1 but observed 2`) while every other
+scenario in the `core,dur` profiles stays green and the kernel
+`civictech.cell.durability.*` suite stays green at 34 tests — reproduced
+independently by the task reviewer, not only by the implementer. That is exactly
+the perturbation `DUR-ATOMIC-01`'s own sweep recorded as changing nothing
+observable, so the corpus has gained discriminating power it did not have. The
+frontier half of `[24-DUR-02]` is now asserted head-on.
 
 `CheckpointRecord` carries `state` **and** `frontier` together, and `[24-DUR-02]`'s
 atomicity claim covers both halves. `DUR-ATOMIC-01` (KFX, feature
@@ -752,11 +771,13 @@ that today. Recorded here rather than claimed: `DUR-ATOMIC-01` covers
 `[24-DUR-02]` on the two halves its perturbations actually move, and this ledger
 carries the third.
 
-- **Resolves**: a duplicate-delivery surface — a corpus verb (or kernel fixture)
-  that re-sends an already-delivered frame to an `Effectful` inlet after
-  recovery, at a position the checkpoint frontier covers and the replayed tail
-  does not. With it, dropping `record.frontier` in `restoreCheckpoint` becomes a
-  failing perturbation and the frontier half of `[24-DUR-02]` is asserted head-on.
+- **Resolved by** `computenet-yh6.1.8`, in the shape this bullet predicted: the
+  duplicate-delivery surface is the `retransmit` corpus verb, and
+  `DUR-CKPT-FRONTIER-01` (`concord/corpus/15-durability/`) is the scenario that
+  re-sends an already-delivered frame to an `Effectful` inlet after recovery at a
+  position the checkpoint frontier covers and the replayed tail does not.
+  Dropping `record.frontier` in `restoreCheckpoint` is now a failing
+  perturbation. See the retirement note at the head of this entry.
   That surface is already filed as `computenet-yh6.1.3.3` (a gated
   `concord/schema` change proposing a retransmit verb that re-sends a prior
   invocation, or replays an explicit `(sourceId, counter)` live rather than via
