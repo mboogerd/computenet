@@ -3,6 +3,7 @@ package civictech.wire
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.wire.Peering
+import io.kotest.assertions.withClue
 import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -173,13 +174,50 @@ class WsListenerAcceptorSurvivalTest {
             listener.listeningSocketLoss shouldBe null
         } finally {
             System.setErr(realErr)
-            runCatching { connection?.closeBlocking() }
+            // shutdown(), NOT closeBlocking() (computenet-sumi). `closeBlocking`
+            // closes the socket with `WsConnection.reconnect` still true, so the
+            // resulting `onClose` arms a `ws-reconnect-*` daemon thread that
+            // redials this dead port on the 20ms backoff injected above —
+            // ~50 dials a second, each printing to stderr, for the whole rest of
+            // the JVM. `shutdown()` clears `reconnect` first, so the same
+            // `onClose` arms nothing. See [noReconnectResidue] below.
+            runCatching { connection?.shutdown() }
             runCatching { listener.stop(1_000) }
+        }
+        noReconnectResidue(port)
+    }
+
+    /**
+     * The check that discriminates the fix above from the defect it repairs
+     * (computenet-sumi): a leaked retry thread breaks no assertion of its own,
+     * so this test's own green is no evidence.
+     *
+     * `scheduleReconnect` names its thread `ws-reconnect-<uri>` and starts it
+     * from `onClose`, which java-websocket 1.6.0 calls *before* it counts down
+     * the latch `closeBlocking`/`close` waits on — so by the time the `finally`
+     * above has returned, an armed loop is already a live thread and this reads
+     * it without waiting. The grace is belt-and-braces, and cannot mask the
+     * defect: the leaked loop retries forever, so waiting longer only makes it
+     * more visible, never less.
+     */
+    private fun noReconnectResidue(port: Int) {
+        Thread.sleep(GRACE_MILLIS)
+        val leaked = Thread.getAllStackTraces().keys
+            .filter { it.isAlive && it.name == "ws-reconnect-ws://localhost:$port" }
+        withClue(
+            "this test's dialer left ${leaked.size} live reconnect thread(s) redialling the closed " +
+                "port $port; they retry on the injected 20ms backoff and print to stderr for the " +
+                "rest of this JVM, polluting every later test in :wire (computenet-sumi)",
+        ) {
+            leaked.map(Thread::getName) shouldBe emptyList()
         }
     }
 
     private companion object {
         const val INJECTED = "computenet-dqy.37.1: injected factory failure"
         const val ADMIT_FAILED = "admitting an accepted connection failed"
+
+        /** @see noReconnectResidue — a margin, not a timing assertion. */
+        const val GRACE_MILLIS = 250L
     }
 }
