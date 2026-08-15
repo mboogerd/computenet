@@ -295,3 +295,27 @@ measure, since `bd dolt push`/`pull` operate on `refs/dolt/data`, a ref
 distinct from `main`. It rests on its own already-made human decision
 ("keeping tracker data off main is a requirement, not a preference" per its
 description) and is unaffected by this measurement either way.
+
+## Addendum, 2026-08-15 — DoltHub remote, four fresh readings
+
+Taken from the shared checkout on MacBoo while deciding whether a child
+claim could afford its own sync bracket (computenet-k9d.3). Not a re-run of
+the six-call protocol above — four `/usr/bin/time -p` readings against the
+*current* DoltHub remote, which is the path the staleness notice says the
+body of this document no longer describes.
+
+| operation | wall clock |
+|---|---|
+| `bd dolt pull`, nothing to fetch | 2.96s, 2.78s, 3.12s |
+| `bd dolt push`, nothing to send | 13.60s (first), 6.14s (second) |
+| `bd update <id> --set-metadata` (local write) | 1.45s |
+| `bd dolt push` carrying that one write | 13.63s |
+
+Two things worth keeping. A **full acquisition bracket costs ~17s** (pull +
+verify + local write + push), against the ~30s figure `claim-sync.md` cited
+as its rationale — corrected there. And a **no-op push is not free**: the
+first one cost 13.6s and a second, seconds later, 6.1s, so the price is in
+the handshake rather than the payload. Anything that pushes per item pays
+roughly the same whether or not it has something to say, which is the
+argument for keeping syncs proportional to the depth of the tree rather than
+its breadth.
