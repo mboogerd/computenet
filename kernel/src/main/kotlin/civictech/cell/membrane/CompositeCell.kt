@@ -1,5 +1,8 @@
 package civictech.cell.membrane
 
+import civictech.cell.BoundaryDenialAccounting
+import civictech.cell.BoundaryDenialSink
+import civictech.cell.BoundaryDenials
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.control.Attention
@@ -70,12 +73,28 @@ data class Exposure(
  */
 abstract class CompositeCell(
     override val ref: CellRef = CellRef(UUID.randomUUID()),
-) : Cell {
+) : Cell, BoundaryDenialAccounting {
 
     private val exposureMapMutable = linkedMapOf<String, Exposure>()
 
     /** The declared exposure map (spec 10/11) — read-only view for diagnostics/tests. */
     val exposureMap: Map<String, Exposure> get() = exposureMapMutable
+
+    /**
+     * Per-exposure denial accounting for this membrane's [BoundaryPolicy]
+     * seams (spec 40/43, `[SEC1-25]`/`[SEC1-26]`; realization (B), rationale
+     * in [BoundaryDenials]' KDoc). One [BoundaryDenialSink] per exposure that
+     * can carry a seam — every [mediate]/[mediateOutlet] exposure (whose
+     * surface is mediated whether or not the policy currently declares a
+     * predicate) plus any [flatten] exposure that declares `linkAuthority`. A
+     * plain `flatten()` allocates none. The hosting `ManagedHost` attaches the
+     * reporter that routes each refusal into its own `DeadLetters`, so
+     * sanitization (spec 23 R8) is inherited rather than reimplemented here.
+     *
+     * A test reads a boundary's counter here — `boundaryDenials["<exposure>"]!!
+     * .denialCount` — which is why the sinks are exposed rather than private.
+     */
+    final override val boundaryDenials: BoundaryDenials = BoundaryDenials()
 
     /**
      * Flatten-exposes an existing organelle [port] under [externalName]: the
@@ -96,7 +115,7 @@ abstract class CompositeCell(
             "Exposure $externalName declares a flow-time predicate (protocolAuthority/disclosure/integrity); " +
                 "it MUST use mediate()/mediateOutlet(), not flatten() (spec 10/11 \"Boundary policy\")"
         }
-        installLinkAuthority(port, policy)
+        installLinkAuthority(externalName, port, policy)
         exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.FLATTEN, policy = policy)
         return registerPort(externalName, port)
     }
@@ -128,14 +147,15 @@ abstract class CompositeCell(
         policy: BoundaryPolicy = BoundaryPolicy(),
     ): FanInlet<Api> {
         require(externalName !in exposureMapMutable) { "Duplicate exposure: $externalName" }
+        val denials = boundaryDenials.sinkFor(externalName)
         val exposed = FanInlet(organelleInlet.clazz)
         exposed.serve(
             Proxy.fromClass(
                 organelleInlet.clazz,
-                MediateProxy(organelleInlet.call, policy.integrity),
+                MediateProxy(organelleInlet.call, policy.integrity, denials = denials),
             ),
         )
-        installLinkAuthority(exposed, policy)
+        installLinkAuthority(externalName, exposed, policy)
         exposureMapMutable[externalName] = Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, exposed)
     }
@@ -180,17 +200,35 @@ abstract class CompositeCell(
             "mediateOutlet($externalName) requires a flow-time predicate " +
                 "(protocolAuthority/disclosure/integrity); use flatten() for an open outlet"
         }
-        organelleOutlet.disclosureFilter = policy.disclosure.asDeltaFilter()
+        val denials = boundaryDenials.sinkFor(externalName)
+        organelleOutlet.disclosureFilter = policy.disclosure.asDeltaFilter(denials)
         if (policy.protocolAuthority.isNotEmpty()) {
-            ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter()
+            ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter(denials)
         }
         exposureMapMutable[externalName] =
             Exposure(externalName, organellePortName, SurfaceMode.MEDIATE, policy)
         return registerPort(externalName, organelleOutlet)
     }
 
-    private fun installLinkAuthority(port: Port, policy: BoundaryPolicy) {
+    /**
+     * Installs seam 2 (`onLink`, `BoundaryPolicy.linkAuthority`) onto [port]'s
+     * link policies — first-rejection-wins, exactly as before.
+     *
+     * [denials] is the seam's accounting sink, resolved here and deliberately
+     * **not yet consulted**: this task builds the sink and its plumbing only,
+     * and the three flow-time sites plus this one keep their current behaviour.
+     * Wrapping each [LinkPolicy] so a rejection lands a `LINK_REFUSED` record
+     * is sibling task `computenet-usd.1.5`; the parameter exists so that change
+     * is local to this function.
+     *
+     * The sink is resolved after the empty check, so an exposure that declares
+     * no `linkAuthority` allocates nothing — default-open stays byte-for-byte
+     * unchanged with zero flow-time cost (`[SEC1-02]`/`[SEC1-03]`, BS-15).
+     */
+    private fun installLinkAuthority(externalName: String, port: Port, policy: BoundaryPolicy) {
         if (policy.linkAuthority.isEmpty()) return
+        @Suppress("UNUSED_VARIABLE")
+        val denials: BoundaryDenialSink = boundaryDenials.sinkFor(externalName)
         (port as? Linked)?.linking?.policies?.addAll(policy.linkAuthority)
     }
 }
@@ -201,8 +239,17 @@ abstract class CompositeCell(
  * runs the registered transform over the emitted delta argument (the first
  * argument, by the "one delta-carrying method" convention data-cell contracts
  * follow), suppressing the emission if the projection itself returns null.
+ *
+ * [denials] is this exposure's accounting sink, threaded in and deliberately
+ * **not yet consulted**: this task builds the seam only, so both suppression
+ * branches keep returning null exactly as before. Accounting each suppressed
+ * delivery attempt (`DISCLOSURE_DENIED` / `DISCLOSURE_PROJECTED_AWAY`, live +
+ * observer + `onLinked` catch-up) is sibling task `computenet-usd.1.4`.
  */
-private fun DisclosurePolicy.asDeltaFilter(): (Array<out Any?>) -> Array<out Any?>? = filter@{ args ->
+@Suppress("UNUSED_PARAMETER")
+private fun DisclosurePolicy.asDeltaFilter(
+    denials: BoundaryDenialSink,
+): (Array<out Any?>) -> Array<out Any?>? = filter@{ args ->
     when (this) {
         is DisclosurePolicy.Full -> args
         is DisclosurePolicy.Deny -> null
@@ -225,8 +272,18 @@ private fun DisclosurePolicy.asDeltaFilter(): (Array<out Any?>) -> Array<out Any
  * asserted interest (30/34 decision 6); the fast in-host path pays nothing
  * and assumes nothing (93 I-28 §4.2, "Local crossings carry `LocalTrusted`
  * and every predicate is a no-op").
+ *
+ * [denials] is this exposure's accounting sink, threaded in and deliberately
+ * **not yet consulted**: this task builds the seam only, so the `minAuth` and
+ * `ratePerWindow` branches keep returning null exactly as before. Accounting
+ * them (`MIN_AUTH` / per-`Principal` `RATE`) is sibling task
+ * `computenet-usd.1.3`. The `ceiling` branch never becomes a denial site — a
+ * clamp is not a refusal (30/34 decision 6, BS-10).
  */
-private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(): (ProtocolId, Any) -> Any? {
+@Suppress("UNUSED_PARAMETER")
+private fun Map<ProtocolId, ProtocolAuthority>.asProtocolFilter(
+    denials: BoundaryDenialSink,
+): (ProtocolId, Any) -> Any? {
     val counts = java.util.concurrent.ConcurrentHashMap<Pair<ProtocolId, Principal>, Int>()
     return filter@{ id, message ->
         val authority = this[id] ?: return@filter message

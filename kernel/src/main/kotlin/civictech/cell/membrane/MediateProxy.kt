@@ -1,5 +1,6 @@
 package civictech.cell.membrane
 
+import civictech.cell.BoundaryDenialSink
 import civictech.cell.CurrentContext
 import civictech.cell.proxy.Invocation
 import java.lang.reflect.InvocationHandler
@@ -28,11 +29,22 @@ import java.util.concurrent.ConcurrentHashMap
  * [target] (dead-lettered, never delivered); because Replicable merges are
  * idempotent, drop-and-reconverge is the recovery (no ack, no version
  * vector).
+ *
+ * [denials] is the exposure's boundary-denial accounting sink (spec 40/43
+ * `[SEC1-25]`/`[SEC1-26]`), threaded in by
+ * `CompositeCell.mediate()` and deliberately **not yet consulted**: this task
+ * builds the seam only, so [verifyOrDrop]'s three failure branches keep
+ * returning null exactly as before, and this proxy's observable behaviour is
+ * unchanged. Naming each of them (`UNSIGNED` / `BAD_SIGNATURE` / `REPLAY`) is
+ * sibling task `computenet-usd.1.2`. Null when this proxy is constructed
+ * outside a membrane (tests, direct use), in which case there is no exposure
+ * to account against.
  */
 class MediateProxy<Api : Any>(
     private val target: Api,
     private val integrity: IntegrityPolicy = IntegrityPolicy.None,
     private val verifier: SignatureVerifier = SignatureVerifier.TransportVouched,
+    internal val denials: BoundaryDenialSink? = null,
 ) : InvocationHandler {
     /** Highest counter seen per minting peer (replay defense, spec 40/43 seam 3). */
     private val lastCounter = ConcurrentHashMap<Any, Long>()

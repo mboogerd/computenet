@@ -1,0 +1,263 @@
+package civictech.cell
+
+import civictech.cell.link.PeerId
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Denial accounting for `BoundaryPolicy` refusals (spec 40/43, decided 93
+ * I-28; epic requirements `[SEC1-25]`/`[SEC1-26]`).
+ *
+ * ## Realization (B): a narrow accounting sink, not a thrown `BoundaryDenied`
+ *
+ * The feature that owns this seam (`computenet-usd.1`) named two candidate
+ * realizations and **decided (B)**, this sink. The decision is settled — it is
+ * recorded here so the next reader does not re-litigate it:
+ *
+ * 1. **Precedent.** The same defect class was closed at a different site by
+ *    `[24-DUR-06]` (`ManagedHost`'s `Effectful` contextless-frame refusal):
+ *    explicit discharge, an *additive* counter, a sanitized dead letter, and
+ *    **no exception ridden through supervision**. A refusal there is not a
+ *    fault; consistency with that shape is worth more than novelty.
+ * 2. **(A) cannot serve all three flow-time sites.** The disclosure filter runs
+ *    inside `FanOutlet`'s broadcast loop, in the **emitting** cell's dispatch.
+ *    A thrown `BoundaryDenied` there would abort delivery to the remaining
+ *    *permitted* targets and taps, and would surface as the emitter's fault —
+ *    it never reaches `ManagedHost.enqueue`'s catch on that path. So (A)'s
+ *    premise (reuse the landed catch) is simply false for seam 3b.
+ * 3. **`[SEC1-29]`/BS-14 holds by construction.** "A denial is not a cell
+ *    fault" needs no proof that `RESTART` does not fire when nothing throws:
+ *    this sink never consults [civictech.cell.host.SupervisionPolicy], never
+ *    escalates, and never mints or advances a wave (the report it hands the
+ *    host carries a null [MessageContext]). Under (A) that would have been a
+ *    property to demonstrate rather than a structural guarantee.
+ *
+ * ## Where this file lives, and why
+ *
+ * At the `civictech.cell` root, beside `Ownership.kt`. Every adopting package
+ * already has an edge to `cell` in the T10-C architecture ratchet baseline
+ * (`kernel/src/test/resources/architecture/package-edges.txt`): `membrane ->
+ * cell`, `port -> cell`, `protocol -> cell`, `link -> cell` and `host -> cell`
+ * are all pinned there, so denial accounting reaches every seam **without a
+ * new package edge**. The one import this file adds, [PeerId], rides the
+ * already-pinned `cell -> link` edge (line `cell -> link` in that file). See
+ * [BoundaryDenial.principal] for why the record carries a `PeerId` rather than
+ * the membrane's own `Principal` ADT.
+ */
+
+/** Which `BoundaryPolicy` seam refused a crossing (spec 40/43 "three seams, one per dispatch class"). */
+enum class BoundarySeam {
+    /** Seam 2, `onLink`: `BoundaryPolicy.linkAuthority` refused a mediated-inlet link. */
+    LINK_AUTHORITY,
+
+    /** Seam 3, `PORT_PROTOCOL`: `BoundaryPolicy.protocolAuthority` refused a metadata-plane frame. */
+    PROTOCOL_AUTHORITY,
+
+    /** Seam 3, `PORT_API` outbound: `BoundaryPolicy.disclosure` suppressed an emission. */
+    DISCLOSURE,
+
+    /** Seam 3, `PORT_API` inbound: `BoundaryPolicy.integrity` refused an arriving delta. */
+    INTEGRITY,
+}
+
+/**
+ * Why a crossing was refused. Deliberately closed and named per seam so a
+ * denial record is machine-readable (auditability is the point — SOC2 needs
+ * refusals it can count and classify, not a free-text log line).
+ *
+ * A **clamp is not a denial** (30/34 decision 6): an attention assertion over
+ * `ProtocolAuthority.ceiling` is stored as `min(asserted, ceiling)` with the
+ * emitter's LWW version preserved, and produces no record and no counter
+ * movement. There is deliberately no reason constant for it.
+ */
+enum class DenialReason {
+    /** Seam 2: a `LinkPolicy` in `linkAuthority` rejected the requesting peer. */
+    LINK_REFUSED,
+
+    /** Seam 3 protocol: the crossing's `Principal` is below `ProtocolAuthority.minAuth`. */
+    MIN_AUTH,
+
+    /** Seam 3 protocol: this `Principal` exceeded `ProtocolAuthority.ratePerWindow` (per-principal, never shared). */
+    RATE,
+
+    /** Seam 3 disclosure: `DisclosurePolicy.Deny` — no state crosses this boundary at all. */
+    DISCLOSURE_DENIED,
+
+    /** Seam 3 disclosure: a registered `Projection` returned null, suppressing this particular emission. */
+    DISCLOSURE_PROJECTED_AWAY,
+
+    /** Seam 3 integrity: the argument did not arrive in a `SignedDelta` envelope. */
+    UNSIGNED,
+
+    /** Seam 3 integrity: the `SignatureVerifier` rejected the envelope. */
+    BAD_SIGNATURE,
+
+    /** Seam 3 integrity: the `SignedDelta.counter` did not strictly increase for this minting peer. */
+    REPLAY,
+}
+
+/**
+ * One refused crossing (spec 40/43; the shape is settled by the epic): the
+ * [seam] that refused, the [principal] it refused, the [exposure] it was
+ * crossing, the [subject] (protocol id, or contract/method) it was refused
+ * on, and the [reason].
+ *
+ * This is a **report**, never a payload carrier: the refused arguments travel
+ * separately to the host, which sanitizes them per spec 23 R8 before anything
+ * fans out. Nothing here may hold a live [Owned]/[Leased] handle.
+ */
+data class BoundaryDenial(
+    val seam: BoundarySeam,
+    /** The membrane `Exposure.externalName` the refused crossing was addressed to. */
+    val exposure: String,
+    /**
+     * The refused crossing's principal, as the peer name it carries —
+     * `civictech.cell.membrane.Principal.Peer.id`; `null` is
+     * `Principal.LocalTrusted`.
+     *
+     * The record deliberately carries the [PeerId] rather than the membrane's
+     * `Principal` ADT: this file sits at the `civictech.cell` root precisely
+     * so that `membrane`, `port`, `protocol`, `link` and `host` all reach it
+     * over edges the T10-C ratchet already pins, and `cell -> membrane` is not
+     * one of them (`cell -> link`, which [PeerId] rides, is). A denial record
+     * is not worth opening a new package cycle. The `AuthLevel` a [MIN_AUTH]
+     * refusal turned on rides in [detail].
+     */
+    val principal: PeerId?,
+    /** `ProtocolId.name` for a protocol refusal, `contract#method` for an API one; null where neither applies. */
+    val subject: String?,
+    val reason: DenialReason,
+    /** Free-text specifics for the audit trail (the observed counter, the offending `AuthLevel`, the refusing policy). */
+    val detail: String? = null,
+)
+
+/**
+ * Where a [BoundaryDenial] and its refused arguments are reported. The single
+ * implementation is `ManagedHost`'s wiring onto its own `DeadLetters`
+ * ([BoundaryDenials.attachReporter]) — the sanitization of `deniedArgs` is
+ * **inherited** from `DeadLetters.sanitizeForDeadLetter` (spec 23 R8, G-46),
+ * never reimplemented here.
+ */
+fun interface BoundaryDenialReporter {
+    fun report(denial: BoundaryDenial, deniedArgs: List<Any?>)
+}
+
+/**
+ * The per-[civictech.cell.membrane.Exposure] accounting sink: a monotonic
+ * [denialCount] plus a report hook, mirroring
+ * `civictech.cell.host.DeadLetters.deadLetterCount`.
+ *
+ * **Where a test reads the counter** (the placement this task was asked to
+ * decide and record): on this instance, reached from the membrane that owns
+ * it — `composite.boundaryDenials["exposedOutlet"]!!.denialCount`. Not on the
+ * host: the counter is *per boundary*, and one host may carry many membranes
+ * whose refusals must stay distinguishable. A host-level aggregate in
+ * `SupervisionAccounting` is deliberately **not** added — a denial is not a
+ * supervision event, and the sanitized dead letter is already the host-level
+ * evidence.
+ */
+class BoundaryDenialSink internal constructor(
+    /** The `Exposure.externalName` this sink accounts for. */
+    val exposure: String,
+    private val owner: BoundaryDenials,
+) {
+    private val count = AtomicLong()
+
+    /** Monotonic count of refusals at this boundary. Never decrements, never resets. */
+    val denialCount: Long get() = count.get()
+
+    /**
+     * Accounts one refusal: increments [denialCount] and hands the record plus
+     * the refused arguments to the attached [BoundaryDenialReporter], if any.
+     *
+     * [deniedArgs] are the arguments the refused crossing carried. They may
+     * hold exclusives ([Owned]/[Leased]); they are **not** discharged here.
+     * Discharge happens exactly once, inside the host's spec-23-R8
+     * sanitization (`Owned -> freeze()`, `Leased -> release()` + [Redacted]),
+     * so this path has exactly one sanitizer and exactly one discharge site.
+     * (Exactly-once discharge across *repeated* filter evaluation — the
+     * disclosure-filter-called-twice hazard — is sibling feature
+     * `computenet-usd.2`'s, not this seam's.)
+     *
+     * Unattached (a membrane never spawned onto a `ManagedHost`), the counter
+     * still moves and nothing throws: accounting a denial must never itself be
+     * a failure path.
+     *
+     * A denial is **not a fault** (`[SEC1-29]`, BS-14): no supervision policy
+     * is consulted, no escalation fires, no wave is minted or advanced, and no
+     * source/tag continuity changes.
+     */
+    fun deny(
+        seam: BoundarySeam,
+        reason: DenialReason,
+        principal: PeerId? = null,
+        subject: String? = null,
+        detail: String? = null,
+        deniedArgs: List<Any?> = emptyList(),
+    ): BoundaryDenial {
+        val denial = BoundaryDenial(seam, exposure, principal, subject, reason, detail)
+        count.incrementAndGet()
+        owner.reporter?.report(denial, deniedArgs)
+        return denial
+    }
+}
+
+/**
+ * A membrane's collection of per-exposure [BoundaryDenialSink]s, plus the one
+ * reporter the hosting `ManagedHost` attaches ([attachReporter]).
+ *
+ * The reporter lives here rather than on each sink so that a sink created
+ * *after* the host attached — a membrane that declares an exposure lazily —
+ * still reports; there is no ordering constraint between exposure declaration
+ * and spawn.
+ */
+class BoundaryDenials {
+    private val sinks = ConcurrentHashMap<String, BoundaryDenialSink>()
+
+    @Volatile
+    internal var reporter: BoundaryDenialReporter? = null
+        private set
+
+    /** The sink for [exposure], created on first request. One instance per exposure, for this membrane's lifetime. */
+    fun sinkFor(exposure: String): BoundaryDenialSink =
+        sinks.computeIfAbsent(exposure) { BoundaryDenialSink(it, this) }
+
+    /**
+     * The sink for [exposure] if one was ever created; null for an exposure
+     * that can carry no seam at all — a plain `flatten()` with no
+     * `linkAuthority`. A **mediated** exposure allocates its sink at
+     * declaration time whether or not its `BoundaryPolicy` currently declares
+     * a predicate, so this is non-null there even before any adopter consults
+     * it.
+     */
+    operator fun get(exposure: String): BoundaryDenialSink? = sinks[exposure]
+
+    /** Every accounted exposure name — diagnostics and tests. */
+    val exposures: Set<String> get() = sinks.keys.toSet()
+
+    /** Refusals summed over every exposure of this membrane. Monotonic, like each [BoundaryDenialSink.denialCount]. */
+    val denialCount: Long get() = sinks.values.sumOf { it.denialCount }
+
+    /**
+     * Wires every sink of this membrane — present and future — to [reporter].
+     * Called once by the hosting `ManagedHost` at spawn; a membrane hosted
+     * nowhere keeps a null reporter and simply counts.
+     */
+    internal fun attachReporter(reporter: BoundaryDenialReporter) {
+        this.reporter = reporter
+    }
+}
+
+/**
+ * The narrow seam by which a hosting `ManagedHost` reaches a hosted cell's
+ * boundary denial accounting (implemented by
+ * `civictech.cell.membrane.CompositeCell`).
+ *
+ * Narrow on purpose: `DeadLetters` stays `internal` to `civictech.cell.host`
+ * and is *not* exported wholesale — the host keeps sole control of dead-letter
+ * emission and sanitization, and a membrane only ever hands it a record plus
+ * the refused arguments.
+ */
+interface BoundaryDenialAccounting {
+    val boundaryDenials: BoundaryDenials
+}
