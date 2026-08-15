@@ -190,7 +190,7 @@ reasoning from a transport that no longer exists.
 ### What was NOT measured, and stays unmeasured
 
 - **Push cost for a session-sized delta.** The largest delta measured is 9
-  commits. A long unattended session can accumulate hundreds. Points 3 above
+  commits. A long unattended session can accumulate hundreds. Point 3 above
   suggests the curve is flat, but it is measured over one order of magnitude
   short of that and must not be extrapolated to it.
 - **Conflict-resolution cost (§3.3 of the runbook).** No genuine two-sided

@@ -557,8 +557,11 @@ passing and could be mistaken for invocation sites**:
 - `.claude/skills/work/references/review-feature.md` ("Don't run `bd dolt
   push`" — issue-state sync is the orchestrator's job, not the feature
   reviewer's; the reviewer's `bd` writes stay local).
-- `.claude/skills/work/references/red-check-attribution.md` — references a
-  blocked `bd dolt push` from SKILL.md step 6, doesn't invoke one itself.
+- `.claude/skills/work/references/red-check-attribution.md` — **no longer a
+  hit at all.** It referenced a blocked `bd dolt push` from SKILL.md step 6
+  when the 2026-08-14 derivation ran; PR #175 (2026-08-14 20:09 UTC) removed
+  that sentence. Kept in this list only so a reader who remembers the earlier
+  table does not read its disappearance as an omission.
 - `.beads/config.yaml` — the configuration the callers above read
   (`sync.remote`, plus the credential comment block quoted in the per-machine
   setup section); it declares the remote, it never invokes a sync.
