@@ -24,6 +24,7 @@ import civictech.concord.schema.PagesEqualView
 import civictech.concord.schema.ReplicasConverge
 import civictech.concord.schema.RestartStep
 import civictech.concord.schema.RestoreStep
+import civictech.concord.schema.RetransmitStep
 import civictech.concord.schema.WavePlaneUnchanged
 import civictech.concord.schema.Scenario
 import civictech.concord.schema.ViewsConverge
@@ -388,14 +389,17 @@ object Checks {
      * derived set is **complete**: nothing can reach [sink] that is not a scripted
      * add on one of its direct upstreams. That is one step rather than an induction
      * over the cone, because the shape gate leaves the cone exactly `{sink} ∪
-     * upstream`. Stated exhaustively over the `Step` hierarchy's nine verbs plus the
+     * upstream`. Stated exhaustively over the `Step` hierarchy's ten verbs plus the
      * declared graph — because a summary of this argument is what was wrong twice —
      * an element can enter a direct upstream only through an `add` on it (the derived
      * set), a declared link into it, a mid-script `connect` into it, a `restore` of
-     * it, or a `restart` of it, and every route but the first is a refusal below. The
-     * other five verbs cannot introduce one: `remove`, `quiesce`, `snapshot` and
-     * `read-state` do not feed a cell, `disconnect` only removes an edge, and a
-     * `despawn` only stops traffic (and refuses anyway).
+     * it, or a `restart` of it, and every route but the first is a refusal below. One
+     * verb reaches [sink] without passing through an upstream at all: `retransmit`
+     * injects a delivery at an inlet directly, so it is admitted only where it
+     * re-delivers an element the derived set already names and refused otherwise (see
+     * its arm). The other five verbs cannot introduce one: `remove`, `quiesce`,
+     * `snapshot` and `read-state` do not feed a cell, `disconnect` only removes an
+     * edge, and a `despawn` only stops traffic (and refuses anyway).
      *
      * One route is outside the scenario language: a **replicated** upstream merging a
      * peer's delta (`SetCell.applyRemote`), which no `add` in the script names. No
@@ -482,6 +486,11 @@ object Checks {
         val cone = mutableSetOf(sink)
         while (cone.addAll(links.filter { it.to in cone }.map { it.from })) Unit
         val keys = LinkedHashSet<String>()
+        // Elements a `retransmit` injected straight at [sink] (see the
+        // RetransmitStep arm). Compared against the derived set *after* the walk,
+        // because a duplicate may be scripted before or after the add it
+        // duplicates; the order does not change whether it names a new key.
+        val retransmitted = LinkedHashSet<String>()
         for (step in scenario.script) {
             when (step) {
                 is ConnectStep -> if (step.to in cone) return null
@@ -503,9 +512,33 @@ object Checks {
                         else -> return null
                     }
                 }
+                // A `retransmit` injects a delivery directly at an inlet, bypassing
+                // the graph — so it is the one verb besides `apply` that can put an
+                // element in front of [sink] without a link carrying it. It is
+                // harmless to this derivation in exactly one case: it re-delivers,
+                // at [sink] itself, an element the scripted adds already name. Then
+                // the derived set is unchanged and still complete — the duplicate
+                // either fires nothing (suppressed, which is what such a scenario
+                // asserts) or fires a second effect for a key already in the set,
+                // which the count catches rather than passing over.
+                //
+                // Anything else is a refusal, not a widening: a retransmit into an
+                // upstream would feed [sink] through a cell whose emissions this
+                // one-hop derivation cannot name, and a retransmit of an element no
+                // add names would let that element fire zero times invisibly —
+                // absent from the derived set, absent from the grouping, passing
+                // vacuously. That is the exact hole this whole derivation exists to
+                // close.
+                is RetransmitStep -> {
+                    if (step.on !in cone) continue
+                    if (step.on != sink) return null
+                    if (step.op != "add") return null
+                    retransmitted += Values.render(step.value ?: return null)
+                }
                 else -> Unit
             }
         }
+        if (!keys.containsAll(retransmitted)) return null
         return keys.ifEmpty { null }
     }
 

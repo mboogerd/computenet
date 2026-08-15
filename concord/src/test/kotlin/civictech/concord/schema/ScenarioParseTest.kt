@@ -38,6 +38,13 @@ class ScenarioParseTest {
         // leaving a scenario that passes because both arms only ever saw the
         // post-restart adds.
         "corpus/21-propagation/21-REBASE-01.yaml",
+        // computenet-yh6.1.8: the two duplicate-delivery scenarios, carrying the
+        // schema's newest step verb. Same reason as above — a mistyped `value:` or
+        // `inlet:` key is ignored by the lenient parser and silently defaults, so
+        // the step would retransmit an empty payload (or at the wrong inlet) while
+        // still reading as coverage of the live frontier.
+        "corpus/15-durability/DUR-LIVE-01.yaml",
+        "corpus/15-durability/DUR-CKPT-FRONTIER-01.yaml",
     )
 
     @TestFactory
@@ -97,6 +104,42 @@ class ScenarioParseTest {
             (s.script.subList(0, restartAt).last() is QuiesceStep) shouldBe true
             (s.script[restartAt + 1] is QuiesceStep) shouldBe true
             (s.checks.filterIsInstance<ViewsConverge>().single()).views shouldContainExactly listOf("v", "x")
+        },
+        DynamicTest.dynamicTest("DUR-LIVE-01 retransmits a position an earlier add on the same source minted") {
+            // computenet-yh6.1.8: the verb's whole point is that the position is
+            // EXPLICIT, so what must be pinned is that the explicit position is the
+            // one the script itself produced. `source:` names a cell the script
+            // applies to, and each retransmitted counter is the index of an `add`
+            // on that cell (1-based) — the mapping RetransmitBindingTest pins
+            // behaviourally against the driver.
+            val s = load("corpus/15-durability/DUR-LIVE-01.yaml")
+            val adds = s.script.filterIsInstance<ApplyStep>().filter { it.op == "add" }
+            val duplicates = s.script.filterIsInstance<RetransmitStep>()
+            duplicates.map { it.counter } shouldContainExactly listOf(2L, 3L)
+            duplicates.forEach { step ->
+                step.on shouldBe "sink"
+                step.source shouldBe "source"
+                adds.map { it.on }.toSet() shouldBe setOf(step.source)
+                // the duplicated payload is the element that add carried
+                adds[(step.counter - 1).toInt()].value shouldBe step.value
+            }
+            // and the crash it follows is a real one: the duplicate is delivered
+            // AFTER the durable host was crashed and recovered, or it would be
+            // asserting nothing about a *restored* frontier.
+            val crashAt = s.script.indexOfFirst { it is DespawnStep }
+            (crashAt in 0 until s.script.indexOfFirst { it is RetransmitStep }) shouldBe true
+        },
+        DynamicTest.dynamicTest("DUR-CKPT-FRONTIER-01 puts its checkpoint last, with no journal tail after it") {
+            // The construction is only discriminating if NOTHING is applied between
+            // the checkpoint and the crash: a journal tail would carry its own
+            // frontier records and restore the frontier all over again, which is
+            // exactly why the third boundary was unobservable before this file.
+            val s = load("corpus/15-durability/DUR-CKPT-FRONTIER-01.yaml")
+            val checkpointAt = s.script.indexOfFirst { it is SnapshotStep }
+            val crashAt = s.script.indexOfFirst { it is DespawnStep }
+            (checkpointAt in 0 until crashAt) shouldBe true
+            s.script.subList(checkpointAt, crashAt).filterIsInstance<ApplyStep>() shouldBe emptyList()
+            s.script.filterIsInstance<RetransmitStep>().single().counter shouldBe 2L
         },
         DynamicTest.dynamicTest("CTL-GOLDEN-01 is a control") {
             val s = load("corpus/controls/CTL-GOLDEN-01.yaml")

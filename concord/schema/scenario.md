@@ -200,6 +200,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | restart | `{type: restart, on: s}` | `restart(cell)` |
 | despawn | `{type: despawn, on: c}` | `despawn(cell)` |
 | read-state | `{type: read-state, on: s, limit: 2}` | `readState(cell, cursor, limit)`, looped to completion |
+| retransmit | `{type: retransmit, on: c, inlet?: in, source: s, counter: N, op: add, value?: apple}` | `retransmit(cell, inlet, source, counter, op, value?)` |
 
 - **`op`** is a neutral op verb the cell catalog defines (`add`, `remove`, `put`,
   `remove-key`, `increment`, `decrement`, …).
@@ -212,6 +213,8 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   consumes; `restore … host:` re-materializes on another host (migration/durability).
 - **`read-state … limit:`** is the per-page cap on **whole entries**; optional,
   default 200.
+- **`retransmit … source:` / `counter:`** name the explicit `(sourceId, counter)`
+  wave position the injected delivery carries — see below.
 
 #### `restart` (D-C12, spec 21 §RESTART re-baselines / spec 30/31 rule 5)
 
@@ -270,6 +273,113 @@ be asserting an interleaving it never produced.
 Sweeping `limit` across several `read-state` steps on one cell is how a scenario
 probes page-boundary behaviour; every recorded walk is checked, so one check
 entry covers the whole sweep (`24-BOUND-02`).
+
+#### `retransmit` (KFX followup, `computenet-yh6.1.3.3` + `computenet-yh6.1.8`)
+
+**Status.** Landed, both halves. The gated schema change was approved in
+principle (human answer, 2026-08-10, on `computenet-yh6.1.3.3`), and this
+subsection — which freezes the verb's shape and semantics — was the
+single-writer review of `concord/schema/scenario.md` itself. The matching
+`@SerialName("retransmit")` `Step`, the `Driver` SPI verb, the
+`civictech.concord.driver.kernel` binding and the `CorpusRunner` dispatch arm
+followed under `concord/src/` in `computenet-yh6.1.8`, per D-C12's rule that a
+step verb's seams move together or the module does not compile. Two corpus
+scenarios drive it: `DUR-LIVE-01` (the live half of `[24-DUR-05]`) and
+`DUR-CKPT-FRONTIER-01` (the checkpoint-frontier half of `[24-DUR-02]`).
+
+**One driver-capability note.** Which cells can receive a duplicate is a driver
+capability like any other. The kernel binding admits an `effect-sink` target
+only: an effect boundary reads a delta's added *elements* and decides on the
+message context, both of which a `retransmit` states, whereas re-delivering to a
+tag-algebra fold would additionally need the original delivery's tag identity —
+which a scenario does not name and the binding will not fabricate. Every other
+target is a loud refusal, never a silently weaker delivery.
+
+**What it is for.** No other verb in the closed vocabulary re-delivers an
+already-processed invocation to a *running* host — every other path to a
+duplicate goes through `recoverFrom` journal replay. Two requirements needed
+exactly that live half, and could not be corpus-expressed without it:
+
+- `[24-DUR-05]` (`doc/spec/20-dataflow-semantics/24-data-cells.md:815-825`,
+  BS-11/KFX-05): the `Effectful` processed-frontier guard suppresses "an
+  invocation … encountered during `recoverFrom` replay **or post-recovery live
+  delivery**." Only the replay half was corpus-covered (`DUR-REPLAY-01`,
+  `DUR-SRCID-01`, `DUR-SRCID-02`); the live half was proven only by a kernel
+  test,
+  `kernel/src/test/kotlin/civictech/cell/durability/EffectfulLiveDeliveryTest.kt`
+  (`computenet-yh6.1.3.2`). `DUR-LIVE-01` now carries it in the corpus. (Not to
+  be confused with `concord/corpus/DISPUTES.md`'s "second boundary", which is a
+  *different* `[24-DUR-05]` residual — a frame carrying no `MessageContext` at
+  all, so it has no frontier position to be judged by. That one this verb does
+  not resolve: a retransmit states a position. Its `Resolves` is
+  `computenet-yh6.1.3.5`'s crash-stable ingress identity.)
+- `[24-DUR-02]`'s checkpoint-atomicity claim, frontier half: `DUR-ATOMIC-01`'s
+  perturbation sweep found that deleting `CheckpointRecord.frontier` on restore
+  changes nothing observable, because compaction removes exactly the frames a
+  checkpoint's frontier would have suppressed, and every frame that *is*
+  replayed carries its own `RECORD_FRONTIER` record. Discriminating it needs "an
+  upstream that survives the crash and re-delivers a frame whose `(sourceId,
+  counter)` is at or behind the checkpoint frontier — a duplicate live
+  delivery, not a replay" (`concord/corpus/DISPUTES.md`, "the third boundary").
+  Filed there as this same verb's second consumer, and now built as
+  `DUR-CKPT-FRONTIER-01`: it checkpoints with **no journal tail after it**, so
+  the checkpoint's own frontier copy is the only thing that can suppress the
+  duplicate. Dropping `record.frontier` in `restoreCheckpoint` is a failing
+  perturbation there, and green everywhere else — which is what the third
+  boundary asked for.
+
+**Shape, and why it is the explicit-position form.** The alternative considered
+was a verb that re-sends a *remembered* prior invocation (the driver retains a
+log and a scenario names an earlier step by reference). This form is rejected:
+it would require every driver binding to retain invocation history the neutral
+model does not otherwise ask for, and it could not state the coordinate being
+duplicated in the scenario itself. Instead `retransmit` states everything a
+conforming driver needs inline, so no driver-side memory of prior deliveries is
+required:
+
+- **`on`** is the target cell — the `Effectful`-guarded cell whose inlet
+  receives the injected delivery. Same convention as `restart`/`despawn`/
+  `snapshot`'s `on`: it names the cell under test, not a producer.
+- **`inlet`** selects which inlet receives it; optional, default `"inlet"` (the
+  same default `connect`/`disconnect` use).
+- **`source`** names the *scenario-local cell id* whose per-source wave
+  identity this delivery carries — typically the same source an earlier
+  `apply` step used to produce the invocation being duplicated. The driver
+  resolves it to that cell's real per-source identity (spec 20/22 §Structural
+  changes: "wave ids are per-source monotonic counters, minted by the emitting
+  outlet") — exactly the identity an ordinary delivery from that source would
+  stamp, so the retransmit is indistinguishable, at the frontier, from a
+  genuine second arrival of the same message.
+- **`counter`** is the integer position, within `source`'s monotonic sequence,
+  this delivery claims. To construct an actual duplicate — one the processed
+  frontier has already recorded — a scenario names the same `(source,
+  counter)` an earlier `apply` from that source already produced.
+- **`op`** / **`value`** are exactly `apply`'s fields: the payload this
+  (re)delivery carries. `value` is omittable for value-less ops, as `apply`'s
+  is.
+
+**What it is not.** Not `apply`: `apply` drives an op through a cell's own
+outlet along the graph's existing links, and the driver mints the next wave
+position for that outlet in sequence. `retransmit` injects directly at a named
+inlet under an **explicit** position, bypassing the graph's routing entirely —
+the same bypass `EffectfulLiveDeliveryTest` uses (a direct proxy call wrapped
+in an explicit `MessageContext`, rather than a live outlet link), because a
+genuine duplicate delivery is a re-arrival of the same message, not a second
+op newly driven through the topology. Not `restart` or `restore`: neither the
+target's state nor its checkpoint is touched, and nothing is recovered — only
+whether its `Effectful` processed-frontier suppresses this one delivery is at
+stake. No `times:` — a `retransmit` step is one specific duplicate; repeating
+one means another `retransmit` step, since each must name its own `(source,
+counter)`.
+
+**No new check is needed.** The existing keyed `effect-count` (`{type:
+effect-count, sink: s, key: k1, exactly: 1}`) already states "this key fired
+exactly once even though it was delivered twice," and `no-dead-letters` is
+compatible with a scenario using this verb — unlike `restart`, a suppressed
+retransmit is not a failure event: the guard's live suppression path discharges
+the invocation's payload and counts the suppression, without dead-lettering it
+(`ManagedHost.kt:848-865`, KFX-20). A scenario built on `retransmit` needs no
+schema growth beyond the step itself.
 
 ### Script semantics (normative, all drivers)
 
