@@ -84,7 +84,17 @@ private class Collector(override val ref: CellRef = CellRef(UUID.randomUUID())) 
  */
 class PromotionReauthorizationTest {
 
-    private class World(incumbentAllows: PeerId, candidateAllows: PeerId, seed: Long) {
+    private class World(
+        incumbentAllows: PeerId,
+        candidateAllows: PeerId,
+        seed: Long,
+        /**
+         * The policy of a SECOND candidate, promoted over the first
+         * ([promoteSuccessor]). Only the two-promotion tests narrow it; every
+         * other test leaves it equal to [candidateAllows], where it is inert.
+         */
+        successorAllows: PeerId = candidateAllows,
+    ) {
         val controller = SimulationController(seed)
         val host = ManagedHost(scheduler = controller.scheduler())
         val logicalId: UUID = UUID.randomUUID()
@@ -92,6 +102,7 @@ class PromotionReauthorizationTest {
         val gate = TrafficLightCell.create<Consumer<String>>()
         val incumbent = ExposingMembrane(incumbentAllows, CellRef(logicalId, instanceId = 0))
         val candidate = ExposingMembrane(candidateAllows, CellRef(logicalId, instanceId = 1))
+        val successor = ExposingMembrane(successorAllows, CellRef(logicalId, instanceId = 2))
         val collector = Collector()
 
         val incumbentRef: CellRef
@@ -101,6 +112,7 @@ class PromotionReauthorizationTest {
             host.managementInlet.call.spawn(gate)
             incumbentRef = host.managementInlet.call.spawn(incumbent)
             host.managementInlet.call.spawn(candidate)
+            host.managementInlet.call.spawn(successor)
             collectorRef = host.managementInlet.call.spawn(collector)
             controller.runToIdle()
         }
@@ -117,6 +129,12 @@ class PromotionReauthorizationTest {
 
         fun promote() = Promotion.promote(
             host, gate, incumbent, candidate, "exposedOutlet",
+            downstream = listOf(collector.inlet),
+        )
+
+        /** A SECOND promotion over the same downstream, candidate -> successor. */
+        fun promoteSuccessor() = Promotion.promote(
+            host, gate, candidate, successor, "exposedOutlet",
             downstream = listOf(collector.inlet),
         )
     }
@@ -175,5 +193,64 @@ class PromotionReauthorizationTest {
         world.candidate.emit("from-the-candidate")
         world.controller.runToIdle()
         world.collector.received shouldBe listOf("from-the-candidate")
+    }
+
+    /**
+     * computenet-usd.5.5 — the rebind COMMIT installs is a REAL link record, on
+     * the candidate and no longer on the incumbent. Before this, COMMIT was a
+     * bare `unsubscribe`/`subscribe`: the candidate outlet ended up serving a
+     * consumer it had no [civictech.cell.link.Link] for, while the incumbent
+     * kept the record for a consumer it no longer served (`unsubscribe` drops
+     * the consumer entry, not the `LinkSupport` one).
+     */
+    @Test
+    fun `a successful promotion moves the registered link from the incumbent onto the candidate`() {
+        val world = World(incumbentAllows = PeerId("alice"), candidateAllows = PeerId("alice"), seed = 24)
+        world.connect(PeerId("alice")).shouldBeInstanceOf<LinkResult.Connected>()
+
+        world.promote()
+        world.controller.runToIdle()
+
+        // no stale record for a consumer the incumbent no longer serves
+        world.incumbent.exposedOutlet.linking.links.map { it.to } shouldBe emptyList()
+        // and the candidate holds the real record, carrying the ESTABLISHING identity
+        world.candidate.exposedOutlet.linking.links.map { it.to } shouldBe listOf(world.collector.inlet.ref)
+        world.candidate.exposedOutlet.linking.links.single().from shouldBe world.candidate.exposedOutlet.ref
+        world.candidate.exposedOutlet.linking.identityFor(world.collector.inlet.ref) shouldBe PeerId("alice")
+    }
+
+    /**
+     * computenet-usd.5.5 — the establishing identity survives a promotion, so
+     * the SECOND promotion re-authorizes `alice` and not a local request. The
+     * narrowing is applied only at the second candidate: the first promotion
+     * must succeed, and it is the rebind IT installs that has to carry the
+     * identity forward for the second one to have anything to refuse.
+     */
+    @Test
+    fun `an identity retained across one promotion still refuses the next promotion at PRECHECK`() {
+        val world = World(
+            incumbentAllows = PeerId("alice"),
+            candidateAllows = PeerId("alice"),
+            seed = 25,
+            successorAllows = PeerId("bob"),
+        )
+        world.connect(PeerId("alice")).shouldBeInstanceOf<LinkResult.Connected>()
+
+        world.promote()
+        world.controller.runToIdle()
+        world.candidate.emit("from-the-candidate")
+        world.controller.runToIdle()
+        world.collector.received shouldBe listOf("from-the-candidate")
+
+        val aborted = shouldThrow<Promotion.PromotionAborted> { world.promoteSuccessor() }
+        aborted.message!! shouldContain "PRECHECK"
+        aborted.message!! shouldContain "alice"
+        aborted.message!! shouldContain "allowlist"
+
+        // no partial swap: the first candidate is still linked and still serving
+        world.candidate.exposedOutlet.linking.links.size shouldBe 1
+        world.candidate.emit("after-the-refusal")
+        world.controller.runToIdle()
+        world.collector.received shouldBe listOf("from-the-candidate", "after-the-refusal")
     }
 }

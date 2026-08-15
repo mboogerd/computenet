@@ -5,12 +5,16 @@ import civictech.cell.CellRef
 import civictech.cell.ReBaselineEmitting
 import civictech.cell.Stateful
 import civictech.cell.host.ManagedHost
+import civictech.cell.link.Identity
+import civictech.cell.link.Link
 import civictech.cell.link.LinkRequest
 import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
+import civictech.cell.link.PortLink
 import civictech.cell.membrane.TrafficLightApi
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
+import civictech.cell.port.Port
 import civictech.cell.port.PortRegistry
 import civictech.cell.port.Use
 import civictech.cell.proxy.Proxy
@@ -186,7 +190,7 @@ object Promotion {
         gate.controlInlet.call.setRed()
 
         var droppedIncumbentFromGate = false
-        val relinked = mutableListOf<Use<Any>>()
+        val relinked = mutableListOf<Rebound>()
         try {
             // 3. COMMIT — non-vetoing: the admission decision was PRECHECK's,
             // so nothing here may newly reject; a thrown exception here is an
@@ -214,11 +218,8 @@ object Promotion {
             }
 
             downstream.forEach { use ->
-                from.unsubscribe(use.ref)
                 @Suppress("UNCHECKED_CAST")
-                (to as FanOutlet<Any>).subscribe(use as Use<Any>)
-                @Suppress("UNCHECKED_CAST")
-                relinked += use as Use<Any>
+                relinked += rebind(from, to as FanOutlet<Any>, use as Use<Any>)
             }
 
             // retire the incumbent from the live path: the gate's replay and
@@ -235,12 +236,8 @@ object Promotion {
             // to do, in reverse order, and re-green onto it. Buffered
             // traffic always has a home; the in-window case needs no journal.
             if (droppedIncumbentFromGate) restoreIncumbentToGate(gate, incumbent)
-            relinked.asReversed().forEach { use ->
-                @Suppress("UNCHECKED_CAST")
-                (to as FanOutlet<Any>).unsubscribe(use.ref)
-                @Suppress("UNCHECKED_CAST")
-                (from as FanOutlet<Any>).subscribe(use)
-            }
+            @Suppress("UNCHECKED_CAST")
+            relinked.asReversed().forEach { it.reverse(from as FanOutlet<Any>, to as FanOutlet<Any>) }
             gate.controlInlet.call.setGreen()
             throw PromotionAborted("COMMIT", e.message ?: e.toString(), e)
         }
@@ -355,18 +352,14 @@ object Promotion {
      * path this refusal declines to change is the one still carrying traffic.
      *
      * The identity offered is the one the incumbent's link was ESTABLISHED with
-     * ([civictech.cell.link.LinkSupport.identityFor]), not an ambient one. Two
-     * limits are real and deliberate, both inherited from the COMMIT relink
-     * being a direct `subscribe` rather than a handshake: a downstream attached
-     * without a handshake retains no identity and so is evaluated as a local
-     * request (which `allowPeers` admits — [SEC1-02] default-open), and the
-     * rebind installed by COMMIT registers no link on the candidate, so the
-     * retained identity is NOT carried forward to a subsequent promotion —
-     * while the incumbent keeps its now-stale record, `unsubscribe` dropping
-     * the consumer entry and not the [civictech.cell.link.LinkSupport] one.
-     * All of that would be closed by routing the COMMIT relink through the
-     * handshake, which is a change to promotion's link semantics beyond this
-     * refusal (computenet-usd.5.5).
+     * ([civictech.cell.link.LinkSupport.identityFor]), not an ambient one. Since
+     * computenet-usd.5.5 the COMMIT relink ([rebind]) re-registers that identity
+     * on the candidate, so it survives arbitrarily many promotions and the Nth
+     * one re-authorizes the same peer the 1st did. One limit remains, and it is
+     * deliberate: a downstream attached with no handshake at all (a direct
+     * `FanOutlet.subscribe`, a `Use.fixed` endpoint) retains no identity and so
+     * is evaluated as a local request, which `allowPeers` admits ([SEC1-02]
+     * default-open).
      *
      * **Denial accounting decision (computenet-usd.5.4).** This refusal DOES
      * ride the SEC1 accounting seam (typed record, counter, sanitized dead
@@ -407,6 +400,100 @@ object Promotion {
                 )
             }
         }
+    }
+
+    /**
+     * One downstream [Use]'s COMMIT relink, recorded so it can be reversed
+     * ([reverse]) if a later step of the same COMMIT fails — "same swap,
+     * reversed". [detached] are the incumbent-side records this rebind removed
+     * and [installed] the candidate-side record it minted; [identity] is the
+     * establishing peer both carry.
+     */
+    private class Rebound(
+        val use: Use<Any>,
+        val identity: Identity?,
+        val detached: List<Link>,
+        val installed: Link,
+    ) {
+
+        /**
+         * Undo this rebind exactly: drop the candidate-side record and
+         * subscription, restore the incumbent's subscription, and re-register
+         * the very [Link] objects (not fresh ones) that were detached, with
+         * their identity — so a rolled-back promotion leaves a topology
+         * indistinguishable from the one it found, `id`s included.
+         */
+        fun reverse(from: FanOutlet<Any>, to: FanOutlet<Any>) {
+            val target = use as? Linked
+            to.linking.remove(installed)
+            target?.linking?.remove(installed)
+            to.unsubscribe(use.ref)
+            from.subscribe(use)
+            detached.forEach { link ->
+                from.linking.register(link, identity)
+                target?.linking?.register(link, identity)
+            }
+        }
+    }
+
+    /**
+     * COMMIT's relink of one downstream [use] from [from] onto [to], as a REAL
+     * link record (computenet-usd.5.5). Before this it was a bare
+     * `unsubscribe`/`subscribe` pair, which left the topology describing
+     * something that was not true: `FanOutlet.subscribe` registers no
+     * [civictech.cell.link.Link], so the candidate served a consumer it had no
+     * record of, while `unsubscribe` drops the consumer entry and not the
+     * [civictech.cell.link.LinkSupport] one, so the incumbent kept a record for
+     * a consumer it no longer served. Everything that reads `linking.links` —
+     * the establishing identity [reauthorizeRebinds] needs at the NEXT
+     * promotion, protocol relay, topology walks, inlet ack routing — read that
+     * stale pair.
+     *
+     * **Why this is registration and not a handshake.** COMMIT is non-vetoing
+     * by construction ("the admission decision was PRECHECK's, so nothing here
+     * may newly reject"), so nothing here may be a gate:
+     * [civictech.cell.link.handshake] evaluates both sides' policies,
+     * `checkPayload` and nature reconciliation, and returns
+     * [civictech.cell.link.LinkResult.Rejected] — calling it here would let a
+     * policy denial re-enter after the gate went red and surface as a COMMIT
+     * infrastructure fault. So this mints the same [civictech.cell.link.PortLink]
+     * the handshake would and registers it on both sides, and does nothing that
+     * can fail: no `onLink` (the admission hook — admission was PRECHECK's),
+     * and no `onLinked`/`EdgeOpen` (the catch-up hooks — a promotion's state
+     * handoff is the T0/T1 transfer or the T2 re-baseline immediately above,
+     * and firing catch-up on top of either would double-deliver). The unlink
+     * teardown mirrors the handshake's minus the `EdgeClose` marker, which
+     * would be unbalanced against an `EdgeOpen` that was deliberately never
+     * emitted.
+     *
+     * The identity re-registered is [civictech.cell.link.LinkSupport.identityFor]
+     * on the incumbent — the peer the link was ESTABLISHED with, the same value
+     * PRECHECK just re-authorized, not an ambient one. It is read as a single
+     * value for all of [from]'s records to [use], which is what `identityFor`
+     * itself answers: the binding currently installed.
+     */
+    private fun rebind(from: FanOutlet<*>, to: FanOutlet<Any>, use: Use<Any>): Rebound {
+        val target = use as? Linked
+        val identity = from.linking.identityFor(use.ref)
+        val detached = from.linking.links.filter { it.to == use.ref }
+        detached.forEach { link ->
+            from.linking.remove(link)
+            target?.linking?.remove(link)
+        }
+        from.unsubscribe(use.ref)
+        to.subscribe(use)
+
+        val installed = PortLink(to.ref, use.ref, to, use as? Port, LinkRole.Consume) { link ->
+            to.unsubscribe(use.ref)
+            to.linking.remove(link)
+            target?.linking?.remove(link)
+            target?.linking?.onUnlink?.invoke(link)
+            target?.linking?.onUnlinkListeners?.forEach { it(link) }
+            to.linking.onUnlinkListeners.forEach { it(link) }
+        }
+        to.linking.register(installed, identity)
+        target?.linking?.register(installed, identity)
+        return Rebound(use, identity, detached, installed)
     }
 
     private fun outlet(cell: Cell, name: String): FanOutlet<*> =
