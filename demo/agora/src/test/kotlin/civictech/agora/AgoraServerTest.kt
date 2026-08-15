@@ -1,16 +1,11 @@
 package civictech.agora
 
 import civictech.testkit.HttpProbe
-import civictech.testkit.bounded
-import civictech.testkit.boundedHttpClient
+import civictech.testkit.awaitSseData
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -117,17 +112,12 @@ class AgoraServerTest {
             // weakened attack (0.2625) × b (0.95) → a recovers to 0.375
             probe.awaitCredences { it.getValue(a) > 0.35 }
 
-            // SSE delivers state
-            val client = boundedHttpClient()
-            val events = client.send(
-                HttpRequest.newBuilder(URI("$base/events")).bounded().build(),
-                HttpResponse.BodyHandlers.ofInputStream(),
-            )
-            assertEquals(200, events.statusCode())
-            events.body().bufferedReader().use { reader ->
-                val line = generateSequence { reader.readLine() }.first { it.startsWith("data:") }
-                assertTrue("credence" in line, "SSE payload missing credences: $line")
-            }
+            // SSE delivers state. The read carries its own deadline
+            // (computenet-o7c3): the previous `generateSequence { readLine() }.first`
+            // had none at all, so a stream that never delivered a data: frame parked
+            // this thread until JUnit's 300s timeout.
+            val line = awaitSseData("$base/events", timeoutMs = 5_000)
+            assertTrue("credence" in line, "SSE payload missing credences: $line")
         } finally {
             app.stop()
         }

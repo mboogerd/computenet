@@ -186,9 +186,9 @@ computenet-kg7/3v8 failure, where claim safety silently vanished for a slot.
 
 **Sync brackets acquisition, not writes; ownership makes writes free.**
 Writes under your claimed epic stay local and ride Finalize's publication
-push. Acquisitions — the epic claim below, a cross-epic item claim (5f), the
-friction filing (step 7) — each get their own pull → verify → write → push
-bracket. [references/claim-sync.md](references/claim-sync.md) is the full
+push. Acquisitions — the epic claim below, a cross-epic item claim (5f), a
+child claim under a *closed* epic (5b), the friction filing (step 7) — each
+get their own pull → verify → write → push bracket. [references/claim-sync.md](references/claim-sync.md) is the full
 statement.
 
 **Check you are running the current skill.** Session worktrees branch from
@@ -257,10 +257,7 @@ claimed (live run or lost race): pick the next candidate or stop. Exit 2 →
 claimed locally but unpublished: stop the session and report.
 
 Never `bd ready --claim` (it claims whatever is first *at claim time*, not
-what you read). Two epics carry `skill-friction` themselves —
-`computenet-k9d` and `computenet-ait` — and are deliberately **not** filtered
-here: whether they belong to /work or the SDLC lane is open
-(computenet-wpvy.44); selecting one is allowed, say so in the summary.
+what you read).
 
 **Before committing to an already-broken-down epic, check it has workable
 surface** (`bd ready --parent` is descendant-scoped):
@@ -602,9 +599,24 @@ bd update <task-id> \
 ```
 
 These child claims are not re-synced — they're inside the epic this machine
-claimed. The one hole that leaves: they're invisible to the other machine
-until Finalize, and 5f routes 3–4 claim items in *other* epics against
-pulled state. That is closed by the parent-epic check in 5f, not here.
+claimed, and the epic claim is the lock that keeps the other machine out of
+the whole subtree. One synced claim per level you descend, not one per
+sibling.
+
+**Unless the epic is closed.** A closed epic locks nothing, so a child claim
+under one is an acquisition and gets pushed like any other:
+
+```bash
+bd show <epic> --json | jq -r '.[0].status'    # local read, no network
+# closed → bd dolt push        (>=300s timeout) right after the claim
+```
+
+This is the `computenet-dqy.40` window (computenet-k9d.3). A session stays
+inside its epic finishing in-flight children until its own Finalize, which
+can be hours after the epic closed — and for all of it the children read as
+unclaimed to the other machine, which 5f route 3 then lets it take. The push
+costs one round-trip and only ever fires in that anomalous case: while the
+epic is open the check is a local read and nothing syncs.
 
 **Read the task's base commit off `ensure-worktree.sh`'s stderr** — the line
 `ensure-worktree: base commit (this branch is cut FROM it; it is NOT a diff
@@ -910,11 +922,13 @@ parentage misses the rest.
 #    id or break the cycle and re-run — never read an error as "no check needed")
 ```
 
-One stated exemption, at the **epic** level: `computenet-k9d` and
-`computenet-ait` carry `skill-friction` themselves and step 3 does *not*
-exclude them — whether the WSK epics belong to /work or this lane is open
-(computenet-wpvy.44), and their dozens of children are reachable by no other
-lane. A session holding one works its children as owned territory.
+No exemptions. The WSK epics `computenet-k9d` and `computenet-ait` used to
+be one, on the grounds that their children were reachable by no other lane;
+that is spent. On 2026-08-15 every open child was re-reviewed, the ones
+already satisfied by merged text were closed, and the rest were reparented
+under `computenet-wpvy` — so both epics hold no open work, and the lane
+question the exemption existed to defer (computenet-wpvy.44) is answered by
+parentage like everything else.
 
 ### 5f. Next feature, or wait, or stop
 
@@ -940,8 +954,8 @@ epic** → claim and work **that item** (not its epic; this adds no epic
 claim), unless the SDLC exclusion catches it. The claim is an acquisition —
 bracket it: `bd dolt pull`, re-verify still ready and unclaimed, claim by id,
 `bd dolt push`. And because a concurrent session's *child* claims are local
-until its Finalize, **check the item's epic first** — epic claims are always
-pushed, child claims never:
+while its epic is open, **check the item's epic first** — an epic claim is
+always pushed, a child claim only once its epic closes (5b):
 
 ```bash
 .claude/skills/work/scripts/epic-of.sh <candidate-id>
@@ -949,11 +963,13 @@ bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_a
 ```
 
 - open or in_progress with the other machine's assignee, or *any* status
-  touched within 15 minutes → treat as live; take the next candidate. (A
-  closing session keeps finishing in-flight children after its epic closes —
-  the computenet-dqy.40 double-claim.)
-- closed, older than 15 minutes → the assignee is provenance; evaluate the
-  candidate normally.
+  touched within 15 minutes → treat as live; take the next candidate.
+- closed, older than 15 minutes → the assignee is provenance, so read the
+  **candidate's own** `status`/`assignee` instead and skip it if another
+  machine holds it. That reading is trustworthy here and only here: 5b makes
+  a child claim under a closed epic an acquisition, so it was pushed. The
+  15-minute floor stays as the guard for the seconds between that claim and
+  its push, and for a session that died in between.
 - `(unparented)` → safe: an unparented item can't be someone's local child
   claim, so any competing claim was itself pushed.
 
@@ -1031,7 +1047,9 @@ bd list --parent=<epic> --all --json     # children; must be non-empty to close
   stay selectable. **In-flight children are still finished and shipped** —
   the closed epic changes who schedules the next item, not the status of
   this one; residuals from those reviews route per review-feature.md § "Ready
-  with residual".
+  with residual". Their claims are no longer invisible while you finish
+  them: the epic is closed, so 5b's rule already pushed each one as an
+  acquisition.
 - **Open, every child closed** (and the epic *has* children — one with none
   is mid-breakdown, never close it) → `bd close <epic>` and drop the owner
   label.
