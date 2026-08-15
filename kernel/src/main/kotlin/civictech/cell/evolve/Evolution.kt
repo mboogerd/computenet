@@ -361,9 +361,12 @@ object Promotion {
      * without a handshake retains no identity and so is evaluated as a local
      * request (which `allowPeers` admits — [SEC1-02] default-open), and the
      * rebind installed by COMMIT registers no link on the candidate, so the
-     * retained identity is NOT carried forward to a subsequent promotion. Both
-     * would be closed by routing the COMMIT relink through the handshake, which
-     * is a change to promotion's link semantics beyond this refusal.
+     * retained identity is NOT carried forward to a subsequent promotion —
+     * while the incumbent keeps its now-stale record, `unsubscribe` dropping
+     * the consumer entry and not the [civictech.cell.link.LinkSupport] one.
+     * All of that would be closed by routing the COMMIT relink through the
+     * handshake, which is a change to promotion's link semantics beyond this
+     * refusal (computenet-usd.5.5).
      *
      * Denial accounting (typed record, counter, sanitized dead letter, epic
      * [SEC1-25]) is deliberately absent here: it rides the SEC1 accounting seam
