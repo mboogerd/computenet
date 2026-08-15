@@ -269,11 +269,11 @@ class LocationRegistry {
      * not on the fast path).
      */
     fun deliver(invocation: HostedPortInvocation) {
-        if (invocation.cellRef !in held && send(locations[invocation.cellRef], invocation)) return
+        if (!holds.isHeld(invocation.cellRef) && send(locations[invocation.cellRef], invocation)) return
         val queue = parked.computeIfAbsent(invocation.cellRef) { ParkQueue() }
         synchronized(queue) {
             // re-check under the per-ref lock so a concurrent publish can't strand this invocation
-            if (invocation.cellRef !in held && send(locations[invocation.cellRef], invocation)) return
+            if (!holds.isHeld(invocation.cellRef) && send(locations[invocation.cellRef], invocation)) return
             queue.park(invocation)
             // Register after parking as well as on the failed offer. If the
             // target crossed low-water between those operations, runNow
@@ -308,7 +308,7 @@ class LocationRegistry {
     }
 
     private fun replay(ref: CellRef, expected: Location) {
-        if (ref in held) return // parked deliberately for the flip window — [release] drains it
+        if (holds.isHeld(ref)) return // parked deliberately for the flip window — [release] drains it
         val queue = parked[ref] ?: return
         synchronized(queue) {
             if (locations[ref] != expected) return
@@ -317,17 +317,16 @@ class LocationRegistry {
     }
 
     /**
-     * Refs whose delivery is deliberately parked for a repartition flip window
-     * (spec 20/24 §Partitioned state "park the flip window", 40/42, CP-D4):
-     * per-ref, so a held key range confines its parking to itself — every other
-     * range flows unblocked (the funnel rule, 93 I-19). This reuses the ordinary
-     * park/replay path, not a second buffer.
+     * Owns the repartition flip-window hold set (spec 20/24 §Partitioned state
+     * "park the flip window", [24-PART-04], CP-D4); see [DeliveryHold] for the
+     * per-ref funnel-rule contract (93 I-19). Release replays [ref]'s current
+     * location through the ordinary park/replay path — not a second buffer.
      */
-    private val held = ConcurrentHashMap.newKeySet<CellRef>()
+    private val holds = DeliveryHold { ref -> locations[ref]?.let { replay(ref, it) } }
 
     /** Park [ref]'s deliveries (per-ref, funnel rule) until [release] — the flip-window buffer. */
     fun hold(ref: CellRef) {
-        held += ref
+        holds.hold(ref)
     }
 
     /**
@@ -336,12 +335,11 @@ class LocationRegistry {
      * pull leg to a migrating shard defers rather than reading torn state — the
      * consumer's per-shard `since` makes the deferred leg's later pull fresh.
      */
-    fun isHeld(ref: CellRef): Boolean = ref in held
+    fun isHeld(ref: CellRef): Boolean = holds.isHeld(ref)
 
     /** Stop holding [ref] and drain everything parked during the window, in park order. */
     fun release(ref: CellRef) {
-        held -= ref
-        locations[ref]?.let { replay(ref, it) }
+        holds.release(ref)
     }
 
     /**
@@ -442,6 +440,10 @@ class LocationRegistry {
     private fun install(ref: CellRef, location: Location) {
         val queue = parked.computeIfAbsent(ref) { ParkQueue() }
         synchronized(queue) {
+            // Deliberately does NOT consult [holds]: unlike deliver/replay, a
+            // publish during an active flip window drains the parked queue into
+            // the new location anyway. Pinned by RepartitionHoldTest's "BS-10
+            // install drains despite an active hold", filed as OQ-3 — not fixed.
             queue.drainWhile { send(location, it) }
             locations[ref] = location
             instances.add(ref)
