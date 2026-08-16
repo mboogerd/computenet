@@ -112,6 +112,19 @@ class DotMinter(val workspaceIdentity: String) {
          * change is the *shape* — commit height most significant, then ordinal,
          * then key index — because that is what makes the packed counter
          * monotone in feed order under `DOT_ORDER`.
+         *
+         * **That freedom is conditional on BDS1's read-only stance, and the
+         * next split must re-check it.** The one place a packed counter leaves
+         * this process is `metadata.cn_dot`'s `<sourceId>:<counter>` rendering
+         * ([CnDotRegistry]), and in BDS1 nothing writes it back — the mirror
+         * only reads (`bd export`, `dolt sql`) and holds the registry in
+         * memory. Once a write-back path exists, counters minted under one
+         * split are persisted in the tracker itself under a [sourceId] that is
+         * a pure function of [workspaceIdentity] and therefore survives the
+         * re-split: a stale cn_dot could then numerically equal a dot freshly
+         * minted for a different feed position, and the echo drop would discard
+         * a real record. Re-splitting after that lands needs the source name
+         * changed with it, or the split frozen.
          */
         fun counter(position: FeedPosition, keyIndex: Int): Long {
             require(position.commitHeight in 0..MAX_COMMIT_HEIGHT) {
