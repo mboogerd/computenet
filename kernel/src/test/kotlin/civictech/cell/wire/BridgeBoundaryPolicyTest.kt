@@ -141,6 +141,14 @@ private class BridgedMembrane(
  * is therefore made on the catch-up evaluation; what the live delta asserts is
  * that it is *projected by the same transform* ([SEC1-17]).
  *
+ * That reading of "live broadcast" holds for this fixture (plain [SetCell]
+ * organelles, whose emissions are driven by `PORT_API` arrivals) and for the
+ * ordinary data path generally. It is **not** unconditional: a broadcast a
+ * remote `PORT_PROTOCOL` frame synchronously *unblocks* — a `Protocols.Progress`
+ * ack completing a wave — runs inside the frame `ManagedHost` now installs, and
+ * therefore under the acking peer. Nothing here pins that case; it is argued and
+ * bounded at the `ManagedHost` change site and in `concord/corpus/DISPUTES.md`.
+ *
  * **`PORT_PROTOCOL` frames did not see a `Peer` principal until this task**,
  * even though the ingress stamps one on them: `ManagedHost` installed
  * `CurrentPeer.with(...)` on its `PORT_MANAGEMENT` branch alone, so an attention

@@ -1292,3 +1292,17 @@ a strict policy`.
 What this does **not** change: no `[43-*]` id is minted, no scenario is
 authored, and BS-16 itself stays filed above — the fix makes the behaviour true,
 not coverable.
+
+**One consequence it does widen, recorded rather than glossed** (reviewer, same
+task): the new frame is ambient for *everything* an inbound protocol frame
+synchronously causes. That is a unicast pull reply (`pullServe` -> `baselineTo`),
+plainly remote-triggered — but also a **fan-out the frame merely unblocks**: a
+`Protocols.Progress` ack completing a wave in `CoalescingCombineCell`/`WaveGate`
+calls `flushReady()` -> `outlet.call.propagate(...)` on the same thread, so a
+mediated outlet's `disclosureFilter` there evaluates under the *acking* peer for
+a delta addressed to every attached observer. The identity is never fabricated
+(`HostedPortInvocation.peer` is non-null only for a bridge-decoded frame), but
+it is not the identity of each recipient's own crossing. Which principal such a
+release should carry is 93 I-28 §8's open cross-hop composition question in
+miniature; SEC1 does not settle it, no test here pins it, and the reasoning sits
+at the `ManagedHost` change site.
