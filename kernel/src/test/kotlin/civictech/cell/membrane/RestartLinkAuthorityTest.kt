@@ -9,6 +9,7 @@ import civictech.cell.data.SetCell
 import civictech.cell.data.SetOps
 import civictech.cell.data.delta.SetDelta
 import civictech.cell.host.HostedCellProxy
+import civictech.cell.host.ManagedHost
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.link.CurrentPeer
 import civictech.cell.link.LinkPolicy
@@ -66,14 +67,15 @@ private interface ControlProxy {
  * (mint fresh epoch) → `onActivate`, nothing else — the narrowest possible
  * form of the mechanism being pinned.
  *
- * **Migration is NOT covered here.** No landed cross-host migration driver
- * exercises a mediated exposure (verified 2026-08-15: no test/harness moves a
- * `CompositeCell` across hosts) — inventing one to make this file "complete"
- * would exercise a fixture, not the migration path, so it is not attempted.
- * I-2 states migration shares RESTART's instanceId-preservation rule and
- * therefore the same no-re-authorization consequence; that claim rests on the
- * spec's stated invariant, not on a test in this file, and is recorded here
- * as an untested hypothesis rather than silently assumed covered.
+ * **Migration is covered too** (computenet-qs22), by the same method and
+ * through the real driver rather than a fixture: `HostManagementApi.migrate`
+ * (spec 33 — the host is the unit of mobility, so a mediated exposure moves
+ * when its host does) drains the source host and re-spawns every cell on the
+ * target. I-2 states migration shares RESTART's instanceId-preservation rule
+ * and therefore the same no-re-authorization consequence; the third test here
+ * asserts it directly, so that is no longer a hypothesis. What the pin does
+ * NOT claim is anything about a *wire-crossing* move: `migrate` is a
+ * host-to-host management call, and no JVM boundary is crossed here.
  */
 class RestartLinkAuthorityTest {
 
@@ -209,6 +211,68 @@ class RestartLinkAuthorityTest {
         membrane.organelle.inlet.call.add("post-restart")
         controller.runToIdle()
         collector.received.flatMap { it.adds.keys } shouldBe listOf("post-restart")
+    }
+
+    /**
+     * computenet-qs22 — the MIGRATION half of [SEC1-11], through the real
+     * driver: `HostManagementApi.migrate` (spec 33, the host is the unit of
+     * mobility) moves the membrane and its peer cells from one [ManagedHost]
+     * to another, drain and all. No fixture stands in for the move.
+     */
+    @Test
+    fun `cross-host migration preserves the subscribe binding without re-evaluating linkAuthority`() {
+        val world = SimWorld(seed = 42)
+        val controller = world.controller
+        val hostA = world.host
+        val hostB = ManagedHost(scheduler = controller.scheduler(), registry = world.registry)
+
+        val alice = PeerId("alice")
+        val countingPolicy = CountingLinkPolicy(allowPeers(alice))
+        val membrane = SubscribeAuthorityMembrane(countingPolicy = countingPolicy)
+        val membraneRef = hostA.managementInlet.call.spawn(membrane)
+
+        val collector = DeltaCollector()
+        val collectorRef = hostA.managementInlet.call.spawn(collector)
+
+        CurrentPeer.with(alice) {
+            hostA.managementInlet.call.connect(membraneRef, "exposedOutlet", collectorRef, "inlet")
+        }.shouldBeInstanceOf<LinkResult.Connected>()
+        controller.runToIdle()
+
+        val evaluationsAtEstablishment = countingPolicy.evaluations
+        (evaluationsAtEstablishment > 0) shouldBe true
+
+        // Narrow the policy AFTER establishment, exactly as the RESTART pins do.
+        membrane.exposedOutlet.linking.policies += excluding(alice)
+
+        hostA.managementInlet.call.migrate(hostB.managementInlet)
+        controller.runToIdle()
+
+        // The move really happened: the registry resolves the membrane on the
+        // target host, not the source.
+        world.registry.locate(membraneRef) shouldBe hostB
+
+        // No rebind: the established link survives the move...
+        membrane.exposedOutlet.linking.links.size shouldBe 1
+        // ...and the narrowed policy was never consulted.
+        countingPolicy.evaluations shouldBe evaluationsAtEstablishment
+
+        // Traffic over the preserved binding still reaches the consumer.
+        membrane.organelle.inlet.call.add("post-migration")
+        controller.runToIdle()
+        collector.received.flatMap { it.adds.keys } shouldBe listOf("post-migration")
+
+        // Non-vacuity: the counting policy is still installed and still live on
+        // the migrated exposure — a NEW subscription by the same peer is
+        // evaluated, and refused by the narrowed policy. So "evaluations
+        // unchanged" above is authority not being consulted, not an instrument
+        // that the move quietly detached.
+        val latecomer = DeltaCollector()
+        val latecomerRef = hostB.managementInlet.call.spawn(latecomer)
+        CurrentPeer.with(alice) {
+            hostB.managementInlet.call.connect(membraneRef, "exposedOutlet", latecomerRef, "inlet")
+        }.shouldBeInstanceOf<LinkResult.Rejected>()
+        (countingPolicy.evaluations > evaluationsAtEstablishment) shouldBe true
     }
 
     @Test
