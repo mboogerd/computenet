@@ -106,14 +106,32 @@ object ProjectionRegistry {
  *    and identity does not transit hops ([BoundaryPolicy]'s multi-hop block,
  *    `computenet-usd.4.3`). At link time a join cannot ask an arm which regime
  *    its upstream crossing was under, because the arm carries no such record.
- * 2. **"The regime of an arm" is not well-formed.** Disclosure is *identity-keyed
- *    and per-exposure*, evaluated per emission against [currentPrincipal] — two
- *    subscribers of one outlet can sit under different regimes simultaneously,
- *    and a re-declaration changes the answer for future emissions without
- *    touching any link. A uniformity constraint would therefore have to be
- *    per-principal and re-evaluated per emission, at which point it is not a
- *    link-time declaration constraint at all. Adding the metadata (1) lacks
- *    would not repair (2).
+ * 2. **"The regime of an arm" is not well-formed.** The regime a value actually
+ *    crossed under is decided **per emission**, not per link, on three counts
+ *    that are all landed today:
+ *    - a [Project] transform decides per delta — the same policy lets one wave
+ *      through and suppresses the next (exactly what BS-13's fixture does), so
+ *      even one boundary under one principal has no constant "regime";
+ *    - it is re-declarable at runtime with no link touched:
+ *      [ProjectionRegistry.register] overwrites the transform behind a live
+ *      [ProjectionId], and `FanOutlet.disclosureFilter` is a public `var`;
+ *    - it is identity-sensitive. Not because [DisclosurePolicy] itself carries a
+ *      [Principal] — it does not, and `CompositeCell`'s filter reads
+ *      [currentPrincipal] only to *label the denial record* — but because a
+ *      [Projection] is an opaque `(Any) -> Any?` free to read the ambient
+ *      principal, and that principal varies per emission frame rather than per
+ *      subscriber: a catch-up unicast runs under the requesting peer, a live
+ *      broadcast under `LocalTrusted` or, when a remote ack unblocks it, under
+ *      the *acking* peer (`ManagedHost`, `computenet-usd.4.3`, which names
+ *      "a principal-keyed projection" as the case it affects). So two
+ *      subscribers of one outlet can hold state minted under different regimes
+ *      — across emissions; **within** one broadcast `[SEC1-19]` shares a single
+ *      verdict with every attachment.
+ *
+ *    A uniformity constraint would therefore have to be re-evaluated per
+ *    emission (and, for a principal-keyed projection, per principal), at which
+ *    point it is not a link-time declaration constraint at all. Adding the
+ *    metadata (1) lacks would not repair (2).
  *
  * Stance (ii) also *earns its keep on the landed machinery*, which is why this
  * feature needed no new frontier or link semantics: if a projected value is a
