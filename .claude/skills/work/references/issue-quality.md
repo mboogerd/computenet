@@ -35,6 +35,15 @@ side.
   already satisfied). Every child item you write must itself instruct:
   *re-verify all cited paths and line numbers against your own base commit,
   and record any drift rather than copying it forward.*
+- **CI evidence must outlive the run it cites.** A bead citing a run id is
+  not completely filed until the primary evidence is inline or attached as
+  a `bd comment` at filing time: the failing task, the exception class and
+  full stack, the surrounding task headers with timestamps, and the runner
+  spec. GitHub ages run logs out in days while beads queue behind epics for
+  weeks, so a bare "see run `<id>`" decays quietly and the implementer
+  rebuilds the diagnosis from a second-hand summary (computenet-ttz:
+  `gh run view --log` already returned nothing by the time the bead was
+  worked). Excerpt what the fix will need, not the whole log.
 
 ## Phrasing a requirement: EARS
 
