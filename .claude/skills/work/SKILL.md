@@ -62,7 +62,10 @@ felt like giving up.
   `--body-file`); clearing a metadata key is `--unset-metadata <key>`
   (`--set-metadata key=` merges, it does not clear).
 - `bd` calls are slow and `bd dolt pull`/`push` can run past 120s — give
-  sync commands a ≥300s timeout (computenet-9oq, computenet-9r8).
+  sync commands a ≥300s timeout, and never chain `bd` *writes* in one Bash
+  block: one write per call, each with the long timeout, or the chain dies
+  mid-sequence and leaves half-recorded state (computenet-9oq,
+  computenet-9r8).
 
 `$SCRATCH` throughout is a **session-unique** temp dir: create it once as
 `SCRATCH=$(mktemp -d "<harness scratchpad>/work.XXXXXX")` — concurrent
@@ -631,17 +634,27 @@ verdict. (`parked` is only meaningful on an empty batch.)
   the orchestrator's — a criterion demanding one is done by you after the
   merge, and the prompt says so ("<id> is closed by me, not by you").
 
-Claim, record, attach:
+Claim, record, attach — **one write per Bash call, each with a ≥300s
+timeout**, never chained in one block: `bd` writes contend on the Dolt DB
+and a chain of them has blown the 120s default mid-sequence, leaving a
+claimed task with no recorded worktree (computenet-9r8):
 
 ```bash
 bd update <task-id> --claim
+```
+
+```bash
 bd update <task-id> \
   --set-metadata worktree=<worktree-root>/<task-id> \
   --set-metadata branch=task/<task-id>
+```
+
+```bash
 .claude/skills/work/scripts/ensure-worktree.sh \
   <worktree-root>/<task-id> task/<task-id> <feature-branch>
 # <feature-branch> = the feature's recorded metadata.branch, re-read here —
-# an empty 3rd arg silently becomes origin/main.
+# an empty 3rd arg silently becomes origin/main. (Runs its own git fetch —
+# give it the long timeout too.)
 ```
 
 These child claims are not re-synced — they're inside the epic this machine
