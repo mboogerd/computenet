@@ -295,6 +295,76 @@ class EffectfulBaselineGuardTest {
     }
 
     /**
+     * `[24-DUR-08]`'s **bound** (`computenet-yh6.1.3.4.2`; spec 24 §Effectful, "Bounding
+     * the discharged-baseline set"). The set is exact and a baseline advances no frontier,
+     * so the checkpoint-time compaction — drop what the processed-frontier already covers
+     * — never fires for a lane that emits baselines and no live frames after them, and the
+     * set only grows. It is capped per inlet at `DISCHARGED_BASELINE_CAP` (1024),
+     * frontier-covered positions first and then oldest-discharge-first.
+     *
+     * Three things are pinned here, and the middle one is the point:
+     *
+     * 1. The bound is real — the oldest baseline position is gone, so a re-delivery of it
+     *    **re-fires**. That is the stated loss mode, and it is the arm that fails against
+     *    an unbounded set, where the position would still be suppressed.
+     * 2. **`[24-DUR-07]` still holds under eviction**: live frames from the same source
+     *    below every baseline's counter fire, none of them suppressed. Eviction only ever
+     *    shrinks the suppression set, which is exactly why the cap cannot reintroduce the
+     *    collateral suppression a per-source high-water would have — the property that
+     *    ruled the high-water candidates out.
+     * 3. Retention is oldest-first, not arbitrary: the newest position is still suppressed.
+     */
+    @Test
+    fun `the discharged-baseline set is bounded per inlet and 24-DUR-07 survives eviction`() {
+        val controller = SimulationController(seed = 8)
+        val world = mutableListOf<Int>()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val ref = CellRef(UUID.randomUUID())
+        host.managementInlet.call.spawn(NotifierCell(ref, world))
+        controller.runToIdle()
+
+        val sink = sinkOn(host, ref)
+        val source = UUID.randomUUID()
+        val anchor = TagFrontier(mapOf(UUID.randomUUID() to 7L))
+
+        // The growth case: a lane that only ever answers with catch-up baselines, so
+        // nothing the processed-frontier covers is ever available to compact. Counters
+        // start high so genuine live traffic can later sit *below* every one of them.
+        val cap = 1024
+        val overflow = 5
+        val first = 1_000L
+        val last = first + cap + overflow - 1
+        for (counter in first..last) {
+            CurrentContext.with(baseline(source, counter, anchor)) { sink.provide(counter.toInt()) }
+        }
+        controller.runToIdle()
+        world.size shouldBe cap + overflow
+        host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 0L
+
+        // (2) `[24-DUR-07]` under eviction: live frames on the same lane, below every
+        // baseline counter, are genuine frames the sink has never acted on. All fire.
+        CurrentContext.with(live(source, 1L)) { sink.provide(1) }
+        CurrentContext.with(live(source, 2L)) { sink.provide(2) }
+        CurrentContext.with(live(source, 3L)) { sink.provide(3) }
+        controller.runToIdle()
+        world.takeLast(3) shouldBe listOf(1, 2, 3)
+        host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 0L
+
+        // (3) the newest discharge is retained — a retransmit of it is still suppressed
+        CurrentContext.with(baseline(source, last, anchor)) { sink.provide(last.toInt()) }
+        controller.runToIdle()
+        world.takeLast(3) shouldBe listOf(1, 2, 3)
+        host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 1L
+
+        // (1) the oldest was evicted — the same retransmit re-fires the effect. Against an
+        // unbounded set this position is still discharged and this arm reads `1, 2, 3`.
+        CurrentContext.with(baseline(source, first, anchor)) { sink.provide(first.toInt()) }
+        controller.runToIdle()
+        world.takeLast(2) shouldBe listOf(3, first.toInt())
+        host.supervisionAccounting().effectfulSuppressionsDischarged shouldBe 1L
+    }
+
+    /**
      * A `[24-DUR-08]` suppression is a drop, so the AGENTS.md no-silent-drop
      * invariant binds it exactly as KFX-20 binds the `[24-DUR-05]` branch it
      * shares: the re-delivered baseline's `Owned` is consumed by the guard rather
