@@ -123,6 +123,38 @@ class MirrorEdgeProjectionTest {
     }
 
     // -----------------------------------------------------------------
+    // MODIFIED — a type change retracts the stale triple (computenet-dqj.7)
+    // -----------------------------------------------------------------
+
+    @Test
+    fun `a MODIFIED edge diff retracts the stale old-type triple and leaves only the new type`() {
+        val cell = SetCell<MirrorEdge>()
+        val projector = projector(cell)
+
+        // bd's own schema (UNIQUE KEY uk_dep_issue_target (issue_id,
+        // depends_on_issue_id)) and `bd dep add`'s own refusal to add a second
+        // type over an existing pair prove a (issueId, dependsOnIssueId) pair
+        // holds at most one live type. So the sequence below — add "blocks",
+        // then a commit that changes the SAME pair's type to "related" — must
+        // leave the mirror holding only the "related" triple, matching what
+        // `bd export` would show for that pair.
+        projector.apply(edgeRecord(1, "B", Triple(DiffType.ADDED, "A", "blocks")))
+        projector.edgeView() shouldBe setOf(MirrorEdge("B", "A", "blocks"))
+
+        val modified = ChangeRecord(
+            commitHash = "commit-2",
+            position = FeedPosition(2, 0),
+            issueId = "B",
+            diffType = null,
+            fieldDiffs = emptyList(),
+            edgeDiffs = listOf(EdgeDiff(DiffType.MODIFIED, "B", "A", "related", oldType = "blocks")),
+        )
+        projector.apply(modified)
+
+        projector.edgeView() shouldBe setOf(MirrorEdge("B", "A", "related"))
+    }
+
+    // -----------------------------------------------------------------
     // replay
     // -----------------------------------------------------------------
 
