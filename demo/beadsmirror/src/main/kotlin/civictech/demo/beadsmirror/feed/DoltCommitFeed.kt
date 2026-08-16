@@ -248,6 +248,10 @@ class DoltCommitFeed(private val sql: DiffQuery) {
                 issueId = row.requiredString("${side}_issue_id", query),
                 dependsOnIssueId = row.requiredString("${side}_depends_on_issue_id", query),
                 type = row.requiredString("${side}_type", query),
+                // MODIFIED is the only diff type with both a from_ and a to_
+                // side present, so it is the only one that can carry the prior
+                // type; ADDED/REMOVED have no "before" or "after" to name.
+                oldType = if (diffType == DiffType.MODIFIED) row.requiredString("from_type", query) else null,
             )
         }
 
