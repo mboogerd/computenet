@@ -221,12 +221,6 @@ internal fun mainCheckoutOf(checkoutRoot: Path): Path? {
 }
 
 /**
- * Walks upward from [start] to the first directory (inclusive) containing a
- * `.beads` subdirectory, returning that subdirectory. `null` if no ancestor
- * has one (e.g. run from outside any bd-tracked repository — a worktree with
- * no `.beads` export is exactly this case, per AGENTS.md's "Repository map").
- */
-/**
  * The directory this class's own bytecode was loaded from — `build/classes/…`
  * under the checkout for a Gradle run, `build/install/beadsmirror/lib/` for
  * the installed distribution — or `null` when the code source is unavailable
@@ -254,6 +248,12 @@ private fun codeSourceDir(): Path? =
         null
     }
 
+/**
+ * Walks upward from [start] to the first directory (inclusive) containing a
+ * `.beads` subdirectory, returning that subdirectory. `null` if no ancestor
+ * has one (e.g. run from outside any bd-tracked repository — a worktree with
+ * no `.beads` export is exactly this case, per AGENTS.md's "Repository map").
+ */
 private fun findAncestorBeadsDir(start: Path): Path? {
     var dir: Path? = start.toAbsolutePath().normalize()
     while (dir != null) {
