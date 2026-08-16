@@ -945,7 +945,10 @@ the branch is at N+1 would ready a PR on evidence that never covered the
 merged code. Wait for agreement, re-read. Commits in the `log` output the
 verdict doesn't mention, touching this diff's files (`gh pr diff <pr-url>
 --name-only`) → merge `origin/main` in and send back for a re-check. Red
-required check → red-check-attribution.md; pending → wait. A verdict
+required check → red-check-attribution.md; pending → wait — and know that
+`gh pr checks` **exits 8 while anything is pending**: never `&&`-chain it
+(the next step silently skips) and never gate a wait on its exit status;
+read the rows (`grep -q pending`) instead (computenet-luhx). A verdict
 carrying a **§6 hand-back** (the classifier refuses reviewers `git merge`,
 computenet-whx4) is yours to complete: do the merge, re-run the affected
 module suite on the merged base, and if the reviewer's disjointness claim
