@@ -62,7 +62,7 @@ class DotMinterTest {
 
         ascending.sorted() shouldBe ascending
         ascending.distinct().size shouldBe ascending.size
-        // the widest legal counter still fits a positive Long (42+10+11 = 63)
+        // the widest legal counter still fits a positive Long (32+20+11 = 63)
         DotMinter.counter(
             pos(DotMinter.MAX_COMMIT_HEIGHT, DotMinter.MAX_ORDINAL),
             DotMinter.MAX_KEY_INDEX,
@@ -76,13 +76,34 @@ class DotMinterTest {
         shouldThrow<IllegalArgumentException> {
             DotMinter.counter(pos(DotMinter.MAX_COMMIT_HEIGHT + 1, 0), 0)
         }.message shouldBe
-            "DotMinter: commitHeight ${DotMinter.MAX_COMMIT_HEIGHT + 1} outside 0..${DotMinter.MAX_COMMIT_HEIGHT} (42 bits)"
+            "DotMinter: commitHeight ${DotMinter.MAX_COMMIT_HEIGHT + 1} outside 0..${DotMinter.MAX_COMMIT_HEIGHT} (32 bits)"
 
         shouldThrow<IllegalArgumentException> { DotMinter.counter(pos(1, DotMinter.MAX_ORDINAL + 1), 0) }
         shouldThrow<IllegalArgumentException> { DotMinter.counter(pos(1, 0), DotMinter.MAX_KEY_INDEX + 1) }
         shouldThrow<IllegalArgumentException> { DotMinter.counter(pos(-1, 0), 0) }
         shouldThrow<IllegalArgumentException> { DotMinter.counter(pos(1, -1), 0) }
         shouldThrow<IllegalArgumentException> { DotMinter.counter(pos(1, 0), -1) }
+    }
+
+    /**
+     * computenet-dqj.9. The ordinal is the baseline's per-issue slot at ONE
+     * synthetic height, so its budget is the ceiling on the size of workspace
+     * the mirror can rebuild — not on per-commit churn. It was 10 bits (1023),
+     * against a mirrored tracker measured at 565 issues on 2026-08-16; the 10
+     * bits it gained came out of the commit height, which at one commit per
+     * `bd` mutation has orders of magnitude to spare.
+     *
+     * These are literals on purpose: asserting them against the constants they
+     * come from would pin nothing, and the split is the thing a future change
+     * should have to state deliberately.
+     */
+    @Test
+    fun `the ordinal budget clears a whole tracker, and the split still fills a Long`() {
+        DotMinter.MAX_ORDINAL shouldBe 1_048_575
+        DotMinter.MAX_COMMIT_HEIGHT shouldBe 4_294_967_295L
+        DotMinter.MAX_KEY_INDEX shouldBe 2047
+
+        DotMinter.COMMIT_HEIGHT_BITS + DotMinter.ORDINAL_BITS + DotMinter.KEY_INDEX_BITS shouldBe 63
     }
 
     @Test

@@ -64,11 +64,29 @@ class DotMinter(val workspaceIdentity: String) {
         /** Low bits: the key's index within its record's ordered key list. */
         const val KEY_INDEX_BITS: Int = 11
 
-        /** Middle bits: the record's ordinal within its commit. */
-        const val ORDINAL_BITS: Int = 10
+        /**
+         * Middle bits: the record's ordinal within its commit.
+         *
+         * Widened 10 -> 20 by computenet-dqj.9. The ordinal is not only "issues
+         * touched by one `bd` mutation" (which is 1 in the supported regime) —
+         * [civictech.demo.beadsmirror.baseline.BaselineBuilder] mints the WHOLE
+         * export at a single synthetic height, one ordinal per issue, so this
+         * budget is the ceiling on **workspace size**, and the mirrored tracker
+         * was 565 issues on 2026-08-16. 1023 was within 2x of ordinary growth;
+         * 1_048_575 is not.
+         */
+        const val ORDINAL_BITS: Int = 20
 
-        /** High bits: the commit's height. 42 + 10 + 11 = 63 — sign bit unused. */
-        const val COMMIT_HEIGHT_BITS: Int = 42
+        /**
+         * High bits: the commit's height. 32 + 20 + 11 = 63 — sign bit unused.
+         *
+         * The 10 bits the ordinal gained came from here, because commit height
+         * is the component with headroom to spare: one commit per `bd` mutation
+         * (epic §4) means 2^32 heights is ~4.29e9 mutations — over ten thousand
+         * years at a thousand mutations a day — while the ordinal budget was
+         * being reached by a tracker that exists today.
+         */
+        const val COMMIT_HEIGHT_BITS: Int = 32
 
         const val MAX_KEY_INDEX: Int = (1 shl KEY_INDEX_BITS) - 1
         const val MAX_ORDINAL: Int = (1 shl ORDINAL_BITS) - 1
@@ -84,8 +102,29 @@ class DotMinter(val workspaceIdentity: String) {
          * converge on a value no commit ever wrote.
          *
          * The budgets are generous for the regime this mirror supports (one
-         * `bd` mutation per commit, epic §4): ~4.4e12 commits, 1024 issues
-         * touched per commit, 2048 keys touched per issue-record.
+         * `bd` mutation per commit, epic §4): ~4.29e9 commits, 1_048_576 issues
+         * per commit-or-baseline, 2048 keys touched per issue-record.
+         *
+         * The layout is not persisted anywhere and carries no compatibility
+         * obligation: the mirror rebuilds its whole state from `bd export` on
+         * every start (epic acceptance), so re-splitting the bits only changes
+         * dots that are about to be re-minted from scratch. What it must not
+         * change is the *shape* — commit height most significant, then ordinal,
+         * then key index — because that is what makes the packed counter
+         * monotone in feed order under `DOT_ORDER`.
+         *
+         * **That freedom is conditional on BDS1's read-only stance, and the
+         * next split must re-check it.** The one place a packed counter leaves
+         * this process is `metadata.cn_dot`'s `<sourceId>:<counter>` rendering
+         * ([CnDotRegistry]), and in BDS1 nothing writes it back — the mirror
+         * only reads (`bd export`, `dolt sql`) and holds the registry in
+         * memory. Once a write-back path exists, counters minted under one
+         * split are persisted in the tracker itself under a [sourceId] that is
+         * a pure function of [workspaceIdentity] and therefore survives the
+         * re-split: a stale cn_dot could then numerically equal a dot freshly
+         * minted for a different feed position, and the echo drop would discard
+         * a real record. Re-splitting after that lands needs the source name
+         * changed with it, or the split frozen.
          */
         fun counter(position: FeedPosition, keyIndex: Int): Long {
             require(position.commitHeight in 0..MAX_COMMIT_HEIGHT) {
