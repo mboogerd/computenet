@@ -3,7 +3,9 @@ package civictech.cell.consistency
 import civictech.cell.Cell
 import civictech.cell.CellRef
 import civictech.cell.CurrentContext
+import civictech.cell.MessageContext
 import civictech.cell.Propagate
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.host.CellError
 import civictech.cell.link.LinkResult
@@ -353,6 +355,99 @@ class BoundaryDenialWaveCompletenessTest {
         fixture.obs.map { it.ts.sourceId }.distinct() shouldBe listOf(sourceId)
         sink.denialCount shouldBe 1L
         fixture.violations.size shouldBe 1
+        fixture.world.host.supervisionAccounting().restarts shouldBe 0L
+    }
+
+    // ------------------------------------------------------------------
+    // The other half of the classification rule: a denial that names no
+    // wave position classifies NOTHING.
+    // ------------------------------------------------------------------
+
+    /**
+     * The suppression guard, which the two variants above cannot see because
+     * every denial they stage rides a live wave.
+     *
+     * `CompositeCell.stallDeniedEdges` emits only when the refused crossing's
+     * ambient [civictech.cell.MessageContext] names a wave position. The
+     * failure mode it exists to prevent is not a missing notice but a *wrong*
+     * one: a timestampless `Stall` is RE-SCOPE's other branch, which closes the
+     * edge outright (the unlink frontier-shrink, [WaveFrontier]) — catastrophic
+     * for a per-emission denial whose edge is still alive. Both excluded
+     * contexts are staged here:
+     *
+     * - **no context at all** — unwaved traffic, which passes a frontier anyway;
+     * - **a non-null `baseline`** — a catch-up baseline, "never a wave position"
+     *   (20/21 §Pull, 93 I-24), excluded from every wave set, so nothing waits
+     *   on it and there is nothing to rescue.
+     *
+     * Each is denied at the boundary (the counter moves, so the denial really
+     * happened), and the assertions are that no [GlitchViolation] surfaced and
+     * that an ordinary wave afterwards still joins on **both** arms — the edge
+     * was never closed behind it.
+     *
+     * **Staged at the INTEGRITY seam on purpose, and only there.** The two
+     * excluded contexts are reachable at an inbound crossing because
+     * `MediateProxy` reads [CurrentContext] as the caller left it. They are
+     * *not* reachable at the disclosure seam: an outbound emission is filtered
+     * inside [civictech.cell.port.FanOutlet]'s own
+     * `CurrentContext.with(ctx)` frame, and that `ctx` is never null — a
+     * spontaneous emission mints `Timestamp(sourceId, waveCounter+1)` from the
+     * outlet's own epoch. So a suppressed spontaneous emission classifies its
+     * own freshly minted wave, which is the right answer there (a consumer of
+     * that outlet really was owed that wave) and is why the disclosure variant
+     * above needs no guard case of its own.
+     */
+    @Test
+    fun `a denial naming no wave position classifies nothing and leaves the edge open`() {
+        val fixture = Fixture(seed = 33)
+        val membrane = SignedArmMembrane()
+
+        fixture.world.host.managementInlet.call.spawn(fixture.source)
+        fixture.world.host.managementInlet.call.spawn(fixture.labelArm)
+        fixture.world.host.managementInlet.call.spawn(membrane)
+        fixture.world.host.managementInlet.call.spawn(fixture.join)
+        fixture.world.runToIdle()
+
+        fixture.source.outlet.subscribe(Use.fixed(fixture.labelArm.inlet.call, fixture.labelArm.inlet.ref))
+        // poisonedWave = 0: nothing the *source* emits is refused here, so
+        // every denial below is one this test drove in by hand.
+        fixture.source.outlet.subscribe(Use.fixed(signingArm(membrane, poisonedWave = 0), PortRef.generate()))
+        fixture.joinFrom(fixture.labelArm.outlet)
+        fixture.joinFrom(membrane.exposedOutlet)
+        fixture.world.runToIdle()
+
+        val sink = membrane.boundaryDenials["exposedInlet"]!!
+        @Suppress("UNCHECKED_CAST")
+        val inbound = membrane.exposedInlet.call as Propagate<Any>
+
+        // (a) Unwaved: an unsigned crossing driven straight in, outside any
+        // wave — RequireSigned refuses it with no context to classify.
+        inbound.propagate("unwaved-unsigned")
+        fixture.world.runToIdle()
+        sink.denialCount shouldBe 1L
+        fixture.violations.shouldBeEmpty()
+
+        // (b) A catch-up baseline delta: it carries a timestamp, but that
+        // timestamp is tag currency, not a wave position.
+        CurrentContext.with(
+            MessageContext(
+                timestamp = Timestamp(UUID.randomUUID(), 7),
+                sourcePort = PortRef.generate(),
+                baseline = TagFrontier(emptyMap()),
+            ),
+        ) {
+            inbound.propagate("baseline-unsigned")
+        }
+        fixture.world.runToIdle()
+        sink.denialCount shouldBe 2L
+        fixture.violations.shouldBeEmpty()
+
+        // Neither denial touched the frontier: the arm is still an expected
+        // edge, so the next real wave joins on both arms and releases clean.
+        fixture.source.emit(1)
+        fixture.world.runToIdle()
+        fixture.byWave()[1L]!!.toSet() shouldBe setOf("B:1", "M:1")
+        fixture.violations.shouldBeEmpty()
         fixture.world.host.supervisionAccounting().restarts shouldBe 0L
     }
 }
