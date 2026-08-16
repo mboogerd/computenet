@@ -168,6 +168,48 @@ class InspectorSearchTest {
     }
 
     /**
+     * computenet-tr82 — the health rollup is server-side and pre-aggregated,
+     * so `computenet-0994`'s client-side refusal/fault split could not reach
+     * it: a graph whose only error rows are `BoundaryPolicy` refusals was
+     * still counted as carrying dead letters, lighting up the navigator's "N
+     * dead" pill, the erring constellation card and `?mode=problems`. A
+     * refusal is not a fault, and none of the three may report it as one.
+     */
+    @Test
+    fun `a boundary refusal is not counted as a dead letter by the graph health rollup`() {
+        val denied = DeadLetterRow(
+            ref = "ref-a",
+            description = "boundary denial at exposure exposedInlet",
+            atMs = 1,
+            denial = BoundaryDenialSummary(
+                seam = "INTEGRITY",
+                reason = "REPLAY",
+                exposure = "exposedInlet",
+            ),
+        )
+        val dropped = DeadLetterRow(ref = "ref-a", description = "unknown port", atMs = 2)
+        val component = Component(
+            id = "g-1",
+            name = "refusals only",
+            nodes = listOf(Node(ref = "ref-a", typeFqn = "civictech.inspect.Fake")),
+        )
+
+        Graphs.list(listOf(component), snapshotOf(denied)).graphs.single().health shouldBe
+            GraphHealth(deadLetters = 0, parked = 0, restarts = 0)
+        Graphs.problems(listOf(component), snapshotOf(denied)).hits.shouldBeEmpty()
+
+        // and a real fault alongside the refusal still counts exactly once
+        Graphs.list(listOf(component), snapshotOf(denied, dropped)).graphs.single().health.deadLetters shouldBe 1
+    }
+
+    private fun snapshotOf(vararg rows: DeadLetterRow) = ErrorSnapshot(
+        counters = ErrorCounters(deadLetters = rows.size.toLong(), parked = 0, restarts = 0, drainedOnTeardown = 0),
+        deadLetters = rows.toList(),
+        parked = emptyList(),
+        restarts = emptyList(),
+    )
+
+    /**
      * The emptiness has to be *declined*: `GraphHealth.restarts` folds in
      * `Errors.snapshot().restarts`, whose only writer is `Errors.pollRestarts`,
      * and this class runs on [InspectorServer.startUnscheduled] — so with no

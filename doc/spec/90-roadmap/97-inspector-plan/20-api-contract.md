@@ -403,6 +403,13 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // components sharing a host. Consequence: health is bounded by however much
 // row history the error feed's ring buffers (cap 200 each) still retain — GET
 // /api/inspect/errors' counters remain the true, unbounded per-host totals.
+// health.deadLetters is a FAULT count (computenet-tr82): rows carrying
+// `denial != null` are excluded, matching counters.deadLetters' meaning above —
+// a BoundaryPolicy refusal is enforcement working, not a fault, and must not
+// light up a graph as erring. There is no per-graph denial count on the wire; a
+// client that wants one derives it the same way it derives the host-wide one,
+// by counting ErrorSnapshot.deadLetters[] rows with `denial != null` whose ref
+// belongs to the graph.
 // RESOLVED — health does NOT roll up wave-health rows, and will not.
 // (V3-BE raised it deliberately unanswered; decided at the inspector-v4
 // C-replan checkpoint, 2026-07-29.) The three fields health already carries are

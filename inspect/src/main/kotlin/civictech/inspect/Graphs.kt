@@ -322,11 +322,18 @@ internal object Graphs {
      * dead letters and restarts roll up only what M2's bounded ring buffers
      * still retain (cap 200 each) — the honest per-graph number, which the
      * top-level `GET /errors` counters remain the true totals for.
+     *
+     * computenet-tr82 — a `BoundaryPolicy` refusal (`DeadLetterRow.denial !=
+     * null`) is an enforced boundary working, never a fault, so it is excluded
+     * from [GraphHealth.deadLetters] the way `computenet-0994` excluded it
+     * from the client-side error counters. This rollup is the *fault*
+     * register; refusals are read per-graph off `GET /errors`' rows, which
+     * retain them and carry the typed `denial`.
      */
     private fun health(component: Component, errors: ErrorSnapshot): GraphHealth {
         val refs = component.refs
         return GraphHealth(
-            deadLetters = errors.deadLetters.count { it.ref in refs },
+            deadLetters = errors.deadLetters.count { it.ref in refs && it.denial == null },
             parked = errors.parked.filter { it.ref in refs }.sumOf { it.count },
             restarts = errors.restarts.count { it.ref in refs },
         )
