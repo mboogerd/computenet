@@ -619,9 +619,55 @@ function ErrorsSection() {
             <h4 class="error-group__title">Dead letters</h4>
             <For each={deadLetters()}>
               {(dl) => (
-                <div class="dead-letter-card">
-                  <div class="dead-letter-card__cause">{dl.cause ?? 'dropped (unknown target)'}</div>
+                <div
+                  class="dead-letter-card"
+                  style={dl.denial ? { 'border-left-color': 'var(--wave-health)' } : undefined}
+                >
+                  {/* computenet-4ixu: a BoundaryPolicy refusal (dl.denial
+                      non-null) and a plain host-level drop are BOTH
+                      `cause: null` — before this field the only
+                      discriminator was parsing `description`'s
+                      "boundary denial at exposure" prefix. Read the
+                      structural field instead, and use the same
+                      not-a-fault register `.wave-health-row` already
+                      established (SEC1-29: a denial is not a cell fault)
+                      rather than the alarm-red `--error` a thrown
+                      exception gets. */}
+                  <Show
+                    when={dl.denial}
+                    fallback={<div class="dead-letter-card__cause">{dl.cause ?? 'dropped (unknown target)'}</div>}
+                  >
+                    {(denial) => (
+                      <div
+                        class="dead-letter-card__cause"
+                        style={{ color: 'var(--wave-health)' }}
+                        title="refused by BoundaryPolicy (spec 40/43) — a denial is not a cell fault"
+                      >
+                        refused · {denial().seam} · {denial().reason}
+                      </div>
+                    )}
+                  </Show>
                   <div class="dead-letter-card__desc">{dl.description}</div>
+                  {/* computenet-4ixu: the refusal's own attribution —
+                      exposure, subject, principal, and any free-text
+                      detail — in the same visual register as the header
+                      above, distinct from the invocation summary below
+                      (which a denial ALSO carries: DeadLetters.boundaryDenial
+                      reports the refused call as an invocation too). */}
+                  <Show when={dl.denial}>
+                    {(denial) => (
+                      <div
+                        class="dead-letter-card__invocation mono"
+                        style={{ color: 'var(--wave-health)' }}
+                        title={`principal: ${denial().principal ?? 'LocalTrusted'}${
+                          denial().detail ? ` · ${denial().detail}` : ''
+                        }`}
+                      >
+                        exposure {denial().exposure}
+                        <Show when={denial().subject}> · {denial().subject}</Show>
+                      </div>
+                    )}
+                  </Show>
                   {/* V3: the failing call, when the drop happened during an
                       invocation — absent (older server) or `null` (plain
                       host-level drop) renders nothing extra, so a card

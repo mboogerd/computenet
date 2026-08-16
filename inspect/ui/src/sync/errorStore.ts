@@ -41,7 +41,15 @@ const EMPTY_COUNTERS: ErrorCounters = {
  *  Indexed by ref throughout (M2-FE ticket Implement §1: "index by ref") so
  *  the detail panel's Errors subsection (per-cell) and the canvas overlay
  *  (per-cell badge, per-edge parked pill) can both read in O(1) per node
- *  without scanning the whole snapshot on every render. */
+ *  without scanning the whole snapshot on every render.
+ *
+ *  computenet-4ixu: `DeadLetterEntry.denial` (the `BoundaryPolicy`-refusal
+ *  discriminator, computenet-usd.7) needs no special handling here — this
+ *  store never destructures a `DeadLetterEntry`, only stores and indexes the
+ *  whole row, so `denial` rides through `applySnapshot`/`applyDeadLetter`
+ *  exactly like `invocation`/`disposition` before it, opaque cargo the store
+ *  is not required to understand. `components/DetailPanel.tsx` is the reader
+ *  that interprets it. */
 export class ErrorStore {
   private _counters: ErrorCounters = EMPTY_COUNTERS;
   private _deadLetters = new Map<Ref, DeadLetterEntry[]>();

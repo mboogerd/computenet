@@ -401,6 +401,48 @@ export interface HeartbeatEvent {
 
 // --- M2: errors (20-api-contract.md "ErrorSnapshot (M2)", "error.* events") ----
 
+/** `civictech.cell.BoundarySeam.name` — which `BoundaryPolicy` seam refused
+ *  a crossing (spec 40/43 "three seams, one per dispatch class"). */
+export type BoundarySeam = 'ADMISSION' | 'LINK_AUTHORITY' | 'PROTOCOL_AUTHORITY' | 'DISCLOSURE' | 'INTEGRITY';
+
+/** `civictech.cell.DenialReason.name` — why a crossing was refused. Deliberately
+ *  closed and named per seam, not free text: a denial record is meant to be
+ *  machine-readable. There is no reason constant for an attention clamp — a
+ *  clamp is not a denial and produces no record (30/34 decision 6). */
+export type DenialReason =
+  | 'NOT_ADMITTED'
+  | 'LINK_REFUSED'
+  | 'MIN_AUTH'
+  | 'RATE'
+  | 'DISCLOSURE_DENIED'
+  | 'DISCLOSURE_PROJECTED_AWAY'
+  | 'UNSIGNED'
+  | 'BAD_SIGNATURE'
+  | 'REPLAY';
+
+/** computenet-usd.7 / computenet-4ixu — `DeadLetterRow.denial`: the
+ *  structural discriminator that lets a client tell a `BoundaryPolicy`
+ *  refusal apart from a plain host-level drop, both of which are
+ *  `cause: null` and, before this field, shared one free-text
+ *  `description` a client had to parse to tell apart. Never a fault: a
+ *  denial is not classified as a cell failure and mints no wave. */
+export interface BoundaryDenialSummary {
+  seam: BoundarySeam;
+  reason: DenialReason;
+  /** The membrane `Exposure.externalName` the refused crossing was addressed to. */
+  exposure: string;
+  /** The `PeerId` this refusal is attributed to — the convention differs by
+   *  seam (see server `BoundaryDenial.principal` KDoc); null does not always
+   *  mean the same thing. */
+  principal: string | null;
+  /** What was refused, named per seam (protocol id, or contract/method); null
+   *  where the seam has no such subject (e.g. admission). */
+  subject: string | null;
+  /** Free-text specifics for the audit trail (observed counter, offending
+   *  auth level, refusing policy name). */
+  detail: string | null;
+}
+
 export interface DeadLetterEntry {
   ref: Ref;
   /** null for a drop (unknown target) — no thrown exception to name (server
@@ -433,6 +475,13 @@ export interface DeadLetterEntry {
     ownership: 'frozen' | 'redacted' | 'borrowed' | 'owned' | 'leased' | 'plain';
     reason: string | null;
   }[];
+  /** computenet-4ixu: non-null exactly when this row reports a
+   *  `BoundaryPolicy` refusal (server `DeadLetter.denial`), never a fault —
+   *  never both this and `cause`. Optional-tolerant on read like
+   *  `provenance`/`page`/`unreadable` on `CellState`: an older server that
+   *  omits the key entirely decodes the same as it always has (additive
+   *  evolution, `10-design-notes.md` binding constraint 8). */
+  denial?: BoundaryDenialSummary | null;
 }
 
 /** `error.parked` — "send on change; `count: 0` clears" (contract): a

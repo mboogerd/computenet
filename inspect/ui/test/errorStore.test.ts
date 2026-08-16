@@ -22,6 +22,7 @@ function deadLetter(over: Partial<DeadLetterEntry> = {}): DeadLetterEntry {
     atMs: 1000,
     invocation: null,
     disposition: [],
+    denial: null,
     ...over,
   };
 }
@@ -89,6 +90,20 @@ describe('ErrorStore.applySnapshot', () => {
     store.applySnapshot(snapshot({ deadLetters: [deadLetter({ ref: 'a:0', cause: null })] }));
     expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null })]);
   });
+
+  it('computenet-4ixu: carries a BoundaryPolicy denial through untouched — opaque cargo, not destructured', () => {
+    const store = new ErrorStore();
+    const denial = {
+      seam: 'DISCLOSURE' as const,
+      reason: 'DISCLOSURE_DENIED' as const,
+      exposure: 'feed',
+      principal: 'peer-1',
+      subject: null,
+      detail: null,
+    };
+    store.applySnapshot(snapshot({ deadLetters: [deadLetter({ ref: 'a:0', cause: null, denial })] }));
+    expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null, denial })]);
+  });
 });
 
 describe('ErrorStore.applyDeadLetter', () => {
@@ -110,6 +125,20 @@ describe('ErrorStore.applyDeadLetter', () => {
     store.subscribe(() => calls++);
     store.applyDeadLetter(deadLetter());
     expect(calls).toBe(1);
+  });
+
+  it('computenet-4ixu: a pushed error.deadLetter event carries denial through the same as a snapshot row', () => {
+    const store = new ErrorStore();
+    const denial = {
+      seam: 'INTEGRITY' as const,
+      reason: 'REPLAY' as const,
+      exposure: 'sync',
+      principal: 'peer-2',
+      subject: null,
+      detail: 'counter=41',
+    };
+    store.applyDeadLetter(deadLetter({ ref: 'a:0', cause: null, denial }));
+    expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null, denial })]);
   });
 });
 
