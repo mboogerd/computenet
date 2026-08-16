@@ -233,15 +233,24 @@ class CheckpointResumeTest {
 
         @Test
         fun `a poll against a persisted checkpoint emits only the commits after it`() {
+            // computenet-dqj.6: readFrom now narrows the diff-table queries
+            // themselves to the wanted commit set (here, exactly "c2" — the
+            // checkpoint below is "c1") instead of scanning the whole table
+            // and filtering in memory. The fixture pins both the table
+            // (ISSUE_QUERY/EDGE_QUERY as a prefix) and the narrowing itself
+            // (the exact "where to_commit in (...)" suffix) rather than a
+            // bare startsWith, so a query that named the wrong commits — not
+            // just the wrong table — would still fail loudly here instead of
+            // silently matching.
             val feed = DoltCommitFeed(
                 DiffQuery { sql ->
                     when (sql) {
                         DoltCommitFeed.LOG_QUERY -> listOf("c2", "c1").map { mapOf("commit_hash" to JsonPrimitive(it)) }
-                        DoltCommitFeed.ISSUE_QUERY -> listOf(
+                        "${DoltCommitFeed.ISSUE_QUERY} where to_commit in ('c2')" -> listOf(
                             row("diff_type" to "added", "to_commit" to "c1", "to_id" to "a"),
                             row("diff_type" to "added", "to_commit" to "c2", "to_id" to "b"),
                         )
-                        DoltCommitFeed.EDGE_QUERY -> emptyList()
+                        "${DoltCommitFeed.EDGE_QUERY} where to_commit in ('c2')" -> emptyList()
                         else -> error("unexpected query: $sql")
                     }
                 },
