@@ -826,7 +826,9 @@ gh pr checks <pr-url>
 The task reviewer tested a branch without its merged siblings; this is the
 first signal the whole still builds. Red is work: file a task
 (`bd create --parent=<feature-id>` with `model` and `files`) for the next
-batch. The one narrow exception — a red check in a module this diff doesn't
+batch, carrying the log excerpt issue-quality.md's CI-evidence rule
+requires — the run link alone ages out before the task runs
+(computenet-ttz). The one narrow exception — a red check in a module this diff doesn't
 touch — requires
 [references/red-check-attribution.md](references/red-check-attribution.md)'s
 four artifacts before treating any red as not this feature's. Never ship on
