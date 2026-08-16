@@ -115,7 +115,15 @@ question on the feature.
 Five things, all of them:
 
 1. **Current state**, with `path:line` evidence. Verify every file, module,
-   and test you name actually exists.
+   and test you name actually exists — **at the commit you actually
+   inspected**, and name that commit. Prefer stable anchors (symbol names,
+   requirement ids, a grep pattern) over bare line numbers: siblings merge
+   underneath a written item, so any line number in a parent is stale by
+   construction the moment one lands — one epic's breakdowns hit shifted
+   spans, a moved package, and criteria siblings had already satisfied
+   (computenet-5ao). Every child item you write must itself instruct:
+   *re-verify all cited paths and line numbers against your own base
+   commit, and record any drift rather than copying it forward.*
 2. **Decided direction** — what is settled, and what is explicitly left to
    the implementer's judgment. Name both; silence on a fork reads as "settled"
    to one agent and "open" to the next.
