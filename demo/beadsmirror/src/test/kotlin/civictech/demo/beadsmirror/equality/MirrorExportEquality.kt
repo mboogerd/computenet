@@ -102,8 +102,8 @@ object MirrorExportEquality {
      * once set (`description`, `design`, `acceptance_criteria`, `notes`,
      * `assignee`, `estimated_minutes`, `closed_at`, `external_ref`,
      * `spec_id`, `close_reason`, `metadata`, `due_at`, `defer_until`,
-     * `no_history`, `started_at` — each verified live to appear in export
-     * once given a non-default value via `bd update`).
+     * `no_history`, `started_at`, `owner` — each verified live to appear in
+     * export once given a non-default value via `bd update`).
      *
      * A field in this set is only ever a *tolerated fold-only* key — one
      * whose absence from export for one issue does not mean it should be
@@ -116,9 +116,25 @@ object MirrorExportEquality {
      *
      * Everything not in this set and not [BaselineBuilder.EXCLUDED_FIELDS] is
      * a "core" field `bd export` prints on every issue unconditionally: `id`,
-     * `title`, `status`, `priority`, `issue_type`, `owner`, `created_at`,
+     * `title`, `status`, `priority`, `issue_type`, `created_at`,
      * `created_by`, `updated_at` — pinned by the live-workspace half of
      * [MirrorExportEqualityTest].
+     *
+     * **`owner` used to be listed as core, and that was wrong**
+     * (computenet-1anx). `bd` derives an issue's owner from git's configured
+     * `user.email`; a workspace created where git has no identity — a stock
+     * GitHub Actions runner — stores `owner = ''` and `bd export` then omits
+     * the key, exactly like every other optional field above. The claim held
+     * only because it was verified on developer machines, which always
+     * resolve an owner, and its falsity was invisible until this module's
+     * real-workspace suites first ran on `ubuntu-latest`, where the
+     * feed-built fold's `owner` -> `""` was reported as an [UnexpectedField]
+     * in 8 tests. `owner` is therefore a FEED_ONLY field, not a core one; it
+     * is still compared for value on every workspace whose export does print
+     * it, which is what
+     * `MirrorExportEqualityTest.an owner export prints is still compared for value`
+     * and the ownerless live probe in [MirrorExportEqualityTest] pin between
+     * them.
      */
     val FEED_ONLY: Set<String> = setOf(
         "content_hash",
@@ -127,6 +143,7 @@ object MirrorExportEquality {
         "acceptance_criteria",
         "notes",
         "assignee",
+        "owner",
         "estimated_minutes",
         "closed_at",
         "closed_by_session",

@@ -118,6 +118,42 @@ class MirrorExportEqualityTest {
         MirrorExportEquality.compare(view, emptySet(), export) shouldBe emptyList()
     }
 
+    /**
+     * computenet-1anx. A workspace `bd` resolved no owner for stores `owner =
+     * ''` and `bd export` omits the key, so the feed-built fold's `owner` ->
+     * `""` is agreement, not divergence. Hand-built here so the rule holds on
+     * a machine that never sees an ownerless workspace; the live counterpart
+     * is in [AgainstAScratchWorkspace].
+     */
+    @Test
+    fun `an empty owner the export omits is tolerated, not an UnexpectedField`() {
+        val export = rows("""{"id":"ws-a","title":"Alpha"}""")
+        val view = mapOf("ws-a" to mapOf("id" to "\"ws-a\"", "title" to "\"Alpha\"", "owner" to "\"\""))
+
+        MirrorExportEquality.compare(view, emptySet(), export) shouldBe emptyList()
+    }
+
+    /**
+     * The other half of the same rule: FEED_ONLY tolerates only *absence*
+     * from export, so on any workspace whose export does print `owner` — every
+     * machine with a git identity — it is compared for value like any other
+     * field. Without this, moving `owner` into FEED_ONLY would have retired
+     * the comparison instead of correcting it.
+     */
+    @Test
+    fun `an owner export prints is still compared for value`() {
+        val export = rows("""{"id":"ws-a","title":"Alpha","owner":"dev@example.com"}""")
+        val view = mapOf(
+            "ws-a" to mapOf("id" to "\"ws-a\"", "title" to "\"Alpha\"", "owner" to "\"someone.else@example.com\""),
+        )
+
+        val divergences = MirrorExportEquality.compare(view, emptySet(), export)
+
+        divergences shouldBe listOf(
+            FieldMismatch("ws-a", "owner", "\"someone.else@example.com\"", "\"dev@example.com\""),
+        )
+    }
+
     @Test
     fun `a fold-only key outside FEED_ONLY is an UnexpectedField divergence`() {
         val export = rows("""{"id":"ws-a","title":"Alpha"}""")
@@ -266,6 +302,46 @@ class MirrorExportEqualityTest {
         }
 
         /**
+         * The same pipeline against a workspace `bd` resolved **no owner**
+         * for — the CI condition of computenet-1anx, reproduced on any
+         * machine ([BdScratchWorkspace.createOwnerless]) instead of depending
+         * on whether the box running the suite happens to have a git
+         * identity. A stock GitHub Actions runner has none, so its issues
+         * carry `owner = ''`, `bd export` omits the key, and the feed-built
+         * fold carries `owner` -> `""`; before computenet-1anx that was
+         * reported as `UnexpectedField(field=owner, foldRendering="")` and
+         * reddened 8 of this module's real-workspace tests on `ubuntu-latest`
+         * only.
+         *
+         * The two premise assertions are the point of the test: they pin that
+         * the empty column and the omitted export key are both real, so this
+         * cannot quietly degrade into a re-run of the test above on a machine
+         * that does have an owner.
+         */
+        @Test
+        fun `a workspace with no configured bd owner equals its export, with owner empty in the column and absent from export`() {
+            BdScratchWorkspace.createOwnerless().use { ownerless ->
+                val id = createIssue(ownerless, "Ownerless probe")
+
+                val owners = DoltSql(ownerless.doltRoot)
+                    .query("select owner from issues where id = '$id'")
+                    .map { it.getValue("owner").jsonPrimitive.content }
+                owners shouldBe listOf("")
+
+                val export = BdExportReader(ownerless.root).read()
+                export.single { it.id == id }.json.keys.contains("owner") shouldBe false
+
+                val feed = DoltCommitFeed(ownerless.doltRoot)
+                val projector = MirrorProjector(DotMinter("ownerless-scratch"))
+                projector.applyAll(feed.readFrom())
+
+                projector.view().getValue(id)["owner"] shouldBe "\"\""
+
+                MirrorExportEquality.compare(projector.view(), projector.edgeView(), export) shouldBe emptyList()
+            }
+        }
+
+        /**
          * Pins the two accepted datetime renderings against the real values
          * that produced them, rather than the hand-picked strings the
          * hand-built-row tests above use.
@@ -327,13 +403,17 @@ class MirrorExportEqualityTest {
          * proves does not happen. This test pins the schema-level reasoning
          * directly: the live column set, minus the always-printed core, is a
          * subset of [MirrorExportEquality.FEED_ONLY].
+         *
+         * `owner` is deliberately **not** in [core] since computenet-1anx: it
+         * is printed only when `bd` resolved one, which is a property of the
+         * machine, not of the schema.
          */
         @Test
         fun `every non-core issues column is covered by FEED_ONLY`() {
             val sql = DoltSql(workspace.doltRoot)
             val columns = sql.query("describe issues").map { it.getValue("Field").jsonPrimitive.content }
             val core = setOf(
-                "id", "title", "status", "priority", "issue_type", "owner",
+                "id", "title", "status", "priority", "issue_type",
                 "created_at", "created_by", "updated_at",
             )
 
@@ -342,8 +422,10 @@ class MirrorExportEqualityTest {
             (nonCore - MirrorExportEquality.FEED_ONLY) shouldBe emptySet()
         }
 
-        private fun createIssue(title: String): String {
-            val output = workspace.run("create", title, "--json")
+        private fun createIssue(title: String): String = createIssue(workspace, title)
+
+        private fun createIssue(target: BdScratchWorkspace, title: String): String {
+            val output = target.run("create", title, "--json")
             return Regex("\"id\"\\s*:\\s*\"([^\"]+)\"").find(output)!!.groupValues[1]
         }
 

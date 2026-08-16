@@ -22,17 +22,18 @@ import java.nio.file.Path
  * `beadsmirror_bd_scratch_1234_abcd` — so the rule generalises to "any
  * non-alphanumeric, non-underscore character", not "dots only".
  */
-class BdScratchWorkspace private constructor(val root: Path) : AutoCloseable {
+class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: Map<String, String>) : AutoCloseable {
 
     /** The Dolt database root for this workspace — NOT the `.dolt/` directory beneath it. */
     val doltRoot: Path = doltRootFor(root)
 
     /** Runs a `bd` mutation (cwd = this workspace). Throws if `bd` exits non-zero. */
     fun run(vararg bdArgs: String): String {
-        val process = ProcessBuilder(listOf("bd") + bdArgs)
+        val builder = ProcessBuilder(listOf("bd") + bdArgs)
             .directory(root.toFile())
             .redirectErrorStream(true)
-            .start()
+        builder.environment().putAll(bdEnv)
+        val process = builder.start()
         val output = process.inputStream.bufferedReader().readText()
         val exitCode = process.waitFor()
         check(exitCode == 0) {
@@ -57,10 +58,43 @@ class BdScratchWorkspace private constructor(val root: Path) : AutoCloseable {
     }
 
     companion object {
+        /**
+         * The environment that makes `bd` resolve **no owner at all**, so
+         * every issue created in the workspace carries `owner = ''`.
+         *
+         * `bd` takes an issue's `owner` from git's configured `user.email`
+         * (probed live 2026-08-16 against `bd` 1.1.2: a scratch workspace
+         * created under a `HOME` holding `[user] email = ci@example.com`
+         * produced `"owner":"ci@example.com"`, and one with no git config at
+         * all produced an `issues.owner` column of `''` and an export row
+         * with no `owner` key). Pointing both git config files at `/dev/null`
+         * is the smallest way to reproduce that second case on a machine that
+         * does have a git identity — `bd` shells out to `git`, so it honours
+         * git's own `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` overrides.
+         *
+         * This is exactly the shape of a stock GitHub Actions runner, which
+         * has no global git identity — the condition behind computenet-1anx,
+         * where 8 of this module's real-workspace tests failed on
+         * `ubuntu-latest` and passed on every developer machine.
+         */
+        private val OWNERLESS_ENV: Map<String, String> = mapOf(
+            "GIT_CONFIG_GLOBAL" to "/dev/null",
+            "GIT_CONFIG_SYSTEM" to "/dev/null",
+        )
+
         /** Creates a fresh scratch directory and runs `bd --sandbox init` in it. */
-        fun create(): BdScratchWorkspace {
+        fun create(): BdScratchWorkspace = create(emptyMap())
+
+        /**
+         * Like [create], but every `bd` invocation runs under [OWNERLESS_ENV],
+         * so the workspace's issues have an empty `owner` column and `bd
+         * export` omits the `owner` key entirely.
+         */
+        fun createOwnerless(): BdScratchWorkspace = create(OWNERLESS_ENV)
+
+        private fun create(bdEnv: Map<String, String>): BdScratchWorkspace {
             val dir = Files.createTempDirectory("beadsmirror-bd-scratch-")
-            val workspace = BdScratchWorkspace(dir)
+            val workspace = BdScratchWorkspace(dir, bdEnv)
             workspace.run("--sandbox", "init")
             return workspace
         }
