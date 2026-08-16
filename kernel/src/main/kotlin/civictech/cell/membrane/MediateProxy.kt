@@ -5,6 +5,7 @@ import civictech.cell.BoundarySeam
 import civictech.cell.CurrentContext
 import civictech.cell.DenialReason
 import civictech.cell.Leased
+import civictech.cell.MessageContext
 import civictech.cell.Owned
 import civictech.cell.dischargeRefusedArgs
 import civictech.cell.link.PeerId
@@ -78,12 +79,28 @@ import java.util.concurrent.ConcurrentHashMap
  * a second `Frozen`/`Redacted` substitution). The unattached-sink case — a
  * sink whose membrane was never spawned — is closed at the sink itself, in
  * [civictech.cell.BoundaryDenialSink.deny].
+ *
+ * ## The refused edge is classified, not merely accounted (BS-12, `[SEC1-27]`)
+ *
+ * Dropping the invocation closes the *accounting* question and leaves a
+ * liveness one open: the [target] never runs, so it never re-emits, and a
+ * downstream glitch-free join waiting on this membrane's outbound edge for the
+ * refused wave waits forever. [onRefused] is the seam that answers it —
+ * `CompositeCell.mediate` binds it to the landed I-18 "edge that will not
+ * deliver" classification (`StallNotice.Stall(DEAD_LETTERED, ts)` over
+ * `Protocols.Suspension`, per exposed outbound `Consume` link), and it is
+ * handed the refused crossing's ambient [MessageContext] because only that
+ * context knows *which* wave was poisoned. `null` outside a membrane, exactly
+ * like [denials]: a proxy nobody hosts starves nobody. It is invoked **after**
+ * accounting, once per refused invocation, and it is not a fault path — no
+ * `SupervisionPolicy` is consulted and nothing is thrown (`[SEC1-29]`, BS-14).
  */
 class MediateProxy<Api : Any>(
     private val target: Api,
     private val integrity: IntegrityPolicy = IntegrityPolicy.None,
     private val verifier: SignatureVerifier = SignatureVerifier.TransportVouched,
     internal val denials: BoundaryDenialSink? = null,
+    private val onRefused: ((MessageContext?) -> Unit)? = null,
 ) : InvocationHandler {
     /** Highest counter seen per minting peer (replay defense, spec 40/43 seam 3). */
     private val lastCounter = ConcurrentHashMap<Any, Long>()
@@ -114,6 +131,16 @@ class MediateProxy<Api : Any>(
                                 deniedArgs = refused,
                             )
                         }
+                        // I-18 / BS-12, AFTER accounting: the refused delta
+                        // never reaches [target], so [target] never re-emits
+                        // and a downstream glitch-free join waiting on this
+                        // membrane's outbound edge would wait forever. The
+                        // hook classifies that edge as one that will not
+                        // deliver. Accounting runs first so an observer woken
+                        // by the notice already sees the counter moved, and so
+                        // that a re-entrant downstream flush can never be
+                        // mistaken for the refusal's own accounting.
+                        onRefused?.invoke(CurrentContext.get())
                         return null
                     }
                 }
