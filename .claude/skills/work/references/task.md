@@ -283,8 +283,15 @@ than restarting. That's the whole reason the worktree is preserved.
    it, or touch its PR: the orchestrator merges after review and serializes
    it so concurrent merges don't race.
 8. If implementation reveals genuine new follow-up work, create it as a
-   beads item (`bd create --parent=<feature-id>`) with its own `model` and
-   `files` metadata — don't fold unrelated scope into this task.
+   beads item with its own `model` and `files` metadata — don't fold
+   unrelated scope into this task. Parent it by what it *is*:
+   `--parent=<feature-id>` **only** when it is remaining work for that
+   feature's own acceptance criteria — an open child blocks the feature's
+   completion verdict, so a follow-up that is itself the deliverable
+   ("fixed here or filed as its own bead") re-blocks the feature it was
+   discovered in and its review never fires (computenet-hrd). Everything
+   else — discovered defects, improvements, out-of-scope findings — files
+   under the epic (`--parent=<epic-id>`) or top-level.
 9. Finish:
    ```bash
    bd comment <id> "<what landed, and if unfinished, exactly what's left>"
