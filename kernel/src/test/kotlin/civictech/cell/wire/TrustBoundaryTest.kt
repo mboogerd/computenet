@@ -9,6 +9,7 @@ import civictech.cell.host.DeadLetter
 import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
+import civictech.cell.host.SupervisionPolicy
 import civictech.cell.port.FanOutlet
 import civictech.cell.port.LinkFrom
 import civictech.cell.link.PeerId
@@ -23,14 +24,20 @@ import io.kotest.matchers.booleans.shouldBeTrue
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import java.util.*
 
 /**
  * M8.2–M8.4 (G-29 phase 1, spec 43): identity rides deliveries into link
- * requests, and the bridge boundary refuses unlisted peers — rejections
- * observable as ordinary dead letters, over 100 seeds, with an open-mode
- * control proving the harness would have linked.
+ * requests, and the bridge boundary refuses unlisted peers. Since
+ * computenet-usd.4.1 (spec 40/43 seam 1, `[SEC1-06]`/`[SEC1-07]`) that
+ * refusal is a typed `ADMISSION` denial through `BridgeIngressCell`'s own
+ * [civictech.cell.BoundaryDenials] sink, never a thrown fault: nothing
+ * crosses, the ingress's denial counter moves, and — the not-a-fault
+ * property (BS-14) — a `SupervisionPolicy.RESTART` on the ingress never
+ * fires, over 100 seeds, with an open-mode control proving the harness would
+ * have linked.
  */
 class TrustBoundaryTest {
 
@@ -66,6 +73,7 @@ class TrustBoundaryTest {
 
         val deadLettersP = mutableListOf<DeadLetter>()
         val collector = CollectingCell()
+        val loopback: Peering.Loopback
 
         init {
             val p = Peering.Side(
@@ -73,7 +81,10 @@ class TrustBoundaryTest {
                 allow = if (allowlisted) setOf(PeerId("good")) else null,
             )
             val q = Peering.Side(registryQ, bridgeQ, peer = PeerId("evil"))
-            Peering.loopback(p, q)
+            // ingressOnA lives on bridgeP (p's bridge host) and receives q's
+            // ("evil") traffic through p's allowlist — the ingress this test's
+            // refusal assertions read from (computenet-usd.4.1).
+            loopback = Peering.loopback(p, q)
 
             listOf(hostP, bridgeP).forEach { h ->
                 h.deadLetterOutlet.subscribe(Use.fixed(object : Propagate<DeadLetter> {
@@ -101,9 +112,31 @@ class TrustBoundaryTest {
     fun `an unlisted peer's traffic is refused at the boundary on every seed`() {
         for (seed in 0L until 100L) {
             val run = Run(seed, allowlisted = true)
+            val ingress = run.loopback.ingressOnA!!
+            // BS-14, [SEC1-07]: a denial is not a fault — supervise the
+            // ingress under RESTART and prove it never fires.
+            run.bridgeP.managementInlet.call.supervise(ingress.ref, SupervisionPolicy.RESTART)
+
             run.sendFromQ(5)
+
             run.collector.received.shouldBeEmpty() // nothing crossed
             run.deadLettersP.size shouldBeGreaterThan 0 // and the refusal is visible
+
+            // [SEC1-06][SEC1-07]: a typed ADMISSION denial per refused send,
+            // counted on the ingress's own sink — not a bare thrown check().
+            val sink = ingress.boundaryDenials["bridge-ingress"]!!
+            sink.denialCount shouldBe 5L
+
+            val denialLetters = run.deadLettersP.filter { it.description.contains("seam=ADMISSION") }
+            denialLetters.size shouldBe 5
+            denialLetters.forEach { letter ->
+                letter.cause shouldBe null // not a fault
+                letter.description shouldContain "evil"
+                letter.description shouldContain "NOT_ADMITTED"
+            }
+
+            // BS-14: nothing thrown, so supervision never sees a failure.
+            run.bridgeP.supervisionAccounting().restarts shouldBe 0L
         }
     }
 
