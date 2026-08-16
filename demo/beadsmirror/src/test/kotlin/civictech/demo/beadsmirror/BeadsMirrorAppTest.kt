@@ -1,5 +1,9 @@
 package civictech.demo.beadsmirror
 
+import civictech.demo.beadsmirror.baseline.MirrorEvent
+import civictech.demo.beadsmirror.baseline.RebaselineReason
+import civictech.demo.beadsmirror.feed.DoltCommitFeed
+import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.testkit.HttpProbe
 import civictech.testkit.awaitUntil
 import io.kotest.assertions.throwables.shouldNotThrowAny
@@ -226,8 +230,17 @@ class BeadsMirrorAppTest {
             }
         }
 
+        /**
+         * computenet-dqj.3.3 extends what this pins: `start` now runs a
+         * first-start re-baseline — a `bd export` **subprocess against the
+         * workspace** — when no checkpoint exists, which is precisely what
+         * must not happen against the live tracker. The refusal is `start`'s
+         * first statement, so a refused workspace never reaches it; the
+         * distinguishing evidence is the exception *type*, since an export
+         * that did run here would fail as a `BdExportException` instead.
+         */
         @Test
-        fun `BeadsMirrorApp start refuses before touching the feed, checkpoint, or a socket`() {
+        fun `BeadsMirrorApp start refuses before touching the feed, checkpoint, a socket, or bd export`() {
             val repoRoot = Files.createTempDirectory("beadsmirror-fake-repo-")
             try {
                 Files.createDirectories(repoRoot.resolve(".beads"))
@@ -235,7 +248,8 @@ class BeadsMirrorAppTest {
                 // No dolt database exists under repoRoot/.beads/embeddeddolt/... at
                 // all, and no bd/dolt binary needs to be on PATH: if start() got
                 // past the refusal it would fail some other, noisier way (a
-                // missing-database DoltSql error, or a hang starting the poller).
+                // missing-database DoltSql error, a bd export failure, or a hang
+                // starting the poller).
                 // A LiveBeadsWorkspaceException specifically is the proof the
                 // refusal ran first.
                 shouldThrow<LiveBeadsWorkspaceException> {
@@ -243,6 +257,9 @@ class BeadsMirrorAppTest {
                         BeadsMirrorConfig(workspace = repoRoot, repoSearchRoot = repoRoot),
                     )
                 }
+                // Nothing of the mirror's own was created inside the refused
+                // workspace either — the default run dir is <workspace>/.beadsmirror.
+                Files.exists(repoRoot.resolve(".beadsmirror")) shouldBe false
             } finally {
                 repoRoot.toFile().deleteRecursively()
             }
@@ -258,10 +275,18 @@ class BeadsMirrorAppTest {
         private var app: BeadsMirrorApp? = null
         private var probe: HttpProbe? = null
 
+        /**
+         * Every [MirrorEvent] the app under test produced. Synchronized because
+         * a [RebaselineReason.CheckpointGone] rebuild reports from the poller
+         * thread while the test reads from its own.
+         */
+        private val events: MutableList<MirrorEvent> = java.util.Collections.synchronizedList(mutableListOf())
+
         @BeforeEach
         fun setUp() {
             assumeTrue(commandAvailable("bd", "--version"), "bd is not on PATH — skipping")
             assumeTrue(commandAvailable("dolt", "version"), "dolt is not on PATH — skipping")
+            events.clear()
             workspace = BdScratchWorkspace.create()
             runDir = Files.createTempDirectory("beadsmirror-app-run-")
             // An ancestor tree with no .beads of its own, so refuseIfLiveBeads's
@@ -337,6 +362,123 @@ class BeadsMirrorAppTest {
                 deps != null && deps.any { it.jsonObject["depends_on_issue_id"]?.jsonPrimitive?.content == idA }
             }
         }
+
+        // -------------------------------------------------------------
+        // computenet-dqj.3.3 — re-baseline, both trigger paths
+        // -------------------------------------------------------------
+
+        /**
+         * Feature rule 3: with no persisted checkpoint the app baselines from
+         * `bd export` **before consuming the feed**, rather than walking the
+         * commit graph from genesis. The baseline runs inside `start`, so
+         * asserting on the returned app is asserting on state that existed
+         * before the poller thread was ever created — with a 30s poll interval,
+         * no batch can have landed by the time these assertions run either.
+         */
+        @Test
+        fun `a start with no checkpoint baselines from bd export before consuming the feed`() {
+            val ids = (1..4).map { workspace.createIssue("Issue $it") }
+            workspace.run("dep", "add", ids[1], ids[0], "--type", "blocks")
+            val head = DoltCommitFeed(workspace.doltRoot).history().last()
+
+            app = startApp(pollInterval = Duration.ofSeconds(30))
+
+            val event = events.single() as MirrorEvent.Rebaselined
+            event.reason shouldBe RebaselineReason.FirstStart
+            event.headCommit shouldBe head
+            event.issueCount shouldBe 4
+            app!!.state.rebaselineCount shouldBe 1
+            app!!.state.current.view().keys shouldBe ids.toSet()
+            app!!.state.current.edgeView() shouldBe setOf(MirrorEdge(ids[1], ids[0], "blocks"))
+            Files.readString(runDir.resolve("checkpoint")).trim() shouldBe head
+        }
+
+        /**
+         * Feature example 1, end to end against a real compaction: the mirror
+         * is checkpointed, `bd flatten --force` squashes that checkpoint out of
+         * `dolt_log`, and the next poll rebuilds instead of skipping ahead or
+         * wedging. Then rule 2's resume half — a mutation made *after* the
+         * rebuild arrives incrementally, with no further rebuild.
+         *
+         * The 5s poll interval is what makes the gap real rather than raced:
+         * the close/create/flatten sequence (~2s of `bd`) completes well inside
+         * one interval, so the poller meets a workspace whose history has
+         * already been squashed, not a half-applied one.
+         */
+        @Test
+        fun `a flattened-away checkpoint rebuilds from export, then resumes incrementally`() {
+            val idA = workspace.createIssue("Issue A")
+            app = startApp(pollInterval = Duration.ofSeconds(5))
+            probe = HttpProbe("http://localhost:${app!!.boundPort}")
+            events.single() // the FirstStart baseline, and nothing else yet
+
+            workspace.run("close", idA)
+            val idC = workspace.createIssue("Issue C")
+            workspace.flatten()
+            val flattenedHead = DoltCommitFeed(workspace.doltRoot).history().last()
+
+            awaitUntil("the mirror re-baselines past the flattened-away checkpoint") { events.size == 2 }
+            app!!.pollerFailure shouldBe null
+
+            val rebuild = events[1] as MirrorEvent.Rebaselined
+            (rebuild.reason is RebaselineReason.CheckpointGone) shouldBe true
+            rebuild.headCommit shouldBe flattenedHead
+            Files.readString(runDir.resolve("checkpoint")).trim() shouldBe flattenedHead
+
+            // A's post-gap status and the post-gap issue C are both there.
+            val a = Json.parseToJsonElement(probe!!.get("/beads/issues/$idA").body()).jsonObject
+            a["status"]?.jsonPrimitive?.content shouldBe "closed"
+            probe!!.get("/beads/issues/$idC").statusCode() shouldBe 200
+
+            // Rule 2's resume half: the next mutation arrives through the
+            // ordinary incremental path — no third re-baseline.
+            val idD = workspace.createIssue("Issue D")
+            awaitUntil("issue $idD arrives incrementally after the re-baseline") {
+                probe!!.get("/beads/issues/$idD").statusCode() == 200
+            }
+            events.size shouldBe 2
+            app!!.state.rebaselineCount shouldBe 2
+        }
+
+        /**
+         * Feature example 3 (rule 4): an issue that existed pre-gap and is
+         * absent from the export must not survive the swap — neither as a
+         * `view()` entry nor as a dangling dependency edge. The edge half is
+         * the sharper assertion: edges live in a different cell from the issue
+         * fields, so a rebuild that replaced only the map would leave B's
+         * dependency behind.
+         */
+        @Test
+        fun `an issue deleted before the compaction does not survive the re-baseline`() {
+            val idA = workspace.createIssue("Issue A")
+            val idB = workspace.createIssue("Issue B")
+            workspace.run("dep", "add", idB, idA, "--type", "blocks")
+
+            app = startApp(pollInterval = Duration.ofSeconds(5))
+            app!!.state.current.view().keys shouldBe setOf(idA, idB)
+            app!!.state.current.edgeView() shouldBe setOf(MirrorEdge(idB, idA, "blocks"))
+
+            workspace.run("delete", idB, "--force")
+            workspace.flatten()
+
+            awaitUntil("the mirror re-baselines past the flattened-away checkpoint") { events.size == 2 }
+            app!!.pollerFailure shouldBe null
+
+            app!!.state.current.view().keys shouldBe setOf(idA)
+            app!!.state.current.edgeView().none { it.issueId == idB || it.dependsOnIssueId == idB } shouldBe true
+            app!!.state.current.edgeView() shouldBe emptySet<MirrorEdge>()
+        }
+
+        /** [BeadsMirrorApp.start] against this test's scratch workspace, reporting into [events]. */
+        private fun startApp(pollInterval: Duration): BeadsMirrorApp = BeadsMirrorApp.start(
+            BeadsMirrorConfig(
+                workspace = workspace.root,
+                pollInterval = pollInterval,
+                runDir = runDir,
+                repoSearchRoot = isolatedSearchRoot,
+                onEvent = events::add,
+            ),
+        )
 
         private fun BdScratchWorkspace.createIssue(title: String): String {
             val output = run("create", title, "--json")

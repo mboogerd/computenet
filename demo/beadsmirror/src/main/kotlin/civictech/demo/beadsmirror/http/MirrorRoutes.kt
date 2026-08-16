@@ -1,5 +1,6 @@
 package civictech.demo.beadsmirror.http
 
+import civictech.demo.beadsmirror.MirrorState
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import civictech.demo.shell.DemoShell
@@ -26,12 +27,20 @@ import com.sun.net.httpserver.HttpExchange
  * running it through [esc] would instead wrap that JSON text in a second
  * layer of string quoting.
  *
- * **No caller-owned mutable state.** [MirrorRoutes] holds no state of its
- * own — every request re-reads [projector] live, so a route answered after
+ * **No caller-owned mutable state — and no captured projector either.**
+ * [MirrorRoutes] holds no state of its own; every request re-reads
+ * [MirrorState.current] live, so a route answered after
  * [MirrorProjector.apply] runs again reflects the new record with no restart
- * (read-after-apply, the epic's serving-half acceptance rule).
+ * (read-after-apply, the epic's serving-half acceptance rule). Taking a
+ * [MirrorState] rather than a bare [MirrorProjector] extends that same
+ * property across a re-baseline (computenet-dqj.3.3): the projector object
+ * itself is *replaced* when the mirror rebuilds from `bd export`, and a
+ * constructor-captured reference would go on serving the discarded pre-gap
+ * state — zombies and all — for the rest of the process's life. Each request
+ * reads the volatile once, so it is answered wholly from one projector, never
+ * from a mixture of two.
  */
-class MirrorRoutes(private val projector: MirrorProjector) {
+class MirrorRoutes(private val state: MirrorState) {
 
     /** Register this class's routes on [shell]. Call once, before `shell.start()`. */
     fun register(shell: DemoShell) {
@@ -44,9 +53,14 @@ class MirrorRoutes(private val projector: MirrorProjector) {
             return
         }
 
+        // Read the current projector ONCE per request: a re-baseline may swap
+        // it between two reads, and an answer stitched from both would show a
+        // pre-gap issue's fields beside a post-rebuild edge list.
+        val projector = state.current
+
         val id = exchange.requestURI.path.removePrefix(BASE_PATH).trim('/')
         if (id.isEmpty()) {
-            exchange.respond(200, listJson(), "application/json")
+            exchange.respond(200, listJson(projector), "application/json")
             return
         }
 
@@ -55,11 +69,11 @@ class MirrorRoutes(private val projector: MirrorProjector) {
             exchange.respond(404, """{"error":"no such issue"}""", "application/json")
             return
         }
-        exchange.respond(200, issueJson(id, fields), "application/json")
+        exchange.respond(200, issueJson(projector, id, fields), "application/json")
     }
 
     /** `GET /beads/issues`: every present issue, keyed by issue id, fields only. */
-    private fun listJson(): String {
+    private fun listJson(projector: MirrorProjector): String {
         val issues = projector.view()
         return buildString {
             append('{')
@@ -76,7 +90,7 @@ class MirrorRoutes(private val projector: MirrorProjector) {
      * issue's owning-side edges (`MirrorEdge.issueId == id` — `bd dep add B A`
      * shows up under `GET /beads/issues/B`, not under `A`).
      */
-    private fun issueJson(issueId: String, fields: Map<String, String>): String {
+    private fun issueJson(projector: MirrorProjector, issueId: String, fields: Map<String, String>): String {
         val edges = projector.edgeView().filter { it.issueId == issueId }
         return buildString {
             append('{')

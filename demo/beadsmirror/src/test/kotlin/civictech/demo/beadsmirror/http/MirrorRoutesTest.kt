@@ -1,5 +1,6 @@
 package civictech.demo.beadsmirror.http
 
+import civictech.demo.beadsmirror.MirrorState
 import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffType
 import civictech.demo.beadsmirror.feed.EdgeDiff
@@ -32,14 +33,16 @@ class MirrorRoutesTest {
 
     private val minter = DotMinter("beads-scratch-42")
     private lateinit var projector: MirrorProjector
+    private lateinit var state: MirrorState
     private lateinit var shell: DemoShell
     private lateinit var probe: HttpProbe
 
     @BeforeEach
     fun start() {
         projector = MirrorProjector(minter)
+        state = MirrorState(projector)
         shell = DemoShell(0)
-        MirrorRoutes(projector).register(shell)
+        MirrorRoutes(state).register(shell)
         shell.start()
         probe = HttpProbe("http://localhost:${shell.boundPort}")
     }
@@ -143,5 +146,38 @@ class MirrorRoutesTest {
         val body = Json.parseToJsonElement(probe.get("/beads/issues").body()).jsonObject
         body.keys shouldBe setOf("A", "B")
         body.getValue("B").jsonObject["title"]?.jsonPrimitive?.content shouldBe "Beta"
+    }
+
+    // -----------------------------------------------------------------
+    // computenet-dqj.3.3 — the MirrorState indirection
+    // -----------------------------------------------------------------
+
+    /**
+     * The re-baseline swap, seen from the route: after [MirrorState.swap] the
+     * routes must serve the NEW projector and nothing of the old one — a
+     * `MirrorRoutes` that captured the projector at construction would keep
+     * answering from the discarded pre-gap state forever. `A` is deliberately
+     * absent from the replacement (the zombie case, feature rule 4), and its
+     * edge with it.
+     */
+    @Test
+    fun `after the state is swapped the routes serve the new projector and none of the old one`() {
+        projector.apply(issueRecord(1, "A", DiffType.ADDED, "title" to "Alpha"))
+        projector.apply(issueRecord(2, "A", null, edges = listOf(EdgeDiff(DiffType.ADDED, "A", "Z", "blocks"))))
+        Json.parseToJsonElement(probe.get("/beads/issues").body()).jsonObject.keys shouldBe setOf("A")
+
+        val rebuilt = MirrorProjector(DotMinter("beads-scratch-42"))
+        rebuilt.apply(issueRecord(9, "C", DiffType.ADDED, "title" to "Gamma"))
+        state.swap(rebuilt)
+
+        val body = Json.parseToJsonElement(probe.get("/beads/issues").body()).jsonObject
+        body.keys shouldBe setOf("C")
+        body.getValue("C").jsonObject["title"]?.jsonPrimitive?.content shouldBe "Gamma"
+        probe.get("/beads/issues/A").statusCode() shouldBe 404
+        // The old projector's edge went with it: C's route carries no edges,
+        // and A's is gone entirely.
+        Json.parseToJsonElement(probe.get("/beads/issues/C").body())
+            .jsonObject.getValue("dependencies").jsonArray.size shouldBe 0
+        state.rebaselineCount shouldBe 1
     }
 }
