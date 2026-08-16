@@ -46,12 +46,25 @@ data class FieldDiff(val column: String, val old: JsonElement?, val new: JsonEle
  * issue id — the issue ids live in `to_issue_id`/`to_depends_on_issue_id` (and
  * their `from_` counterparts for removals), verified on a live scratch
  * workspace during this feature's breakdown.
+ *
+ * [oldType] is the `from_type` side of a [DiffType.MODIFIED] row — the
+ * relation type this (issueId, dependsOnIssueId) pair carried *before* the
+ * commit — and is `null` for every other [diffType]. `bd`'s own schema proves
+ * a pair holds at most one live type at a time: `dependencies` has
+ * `UNIQUE KEY uk_dep_issue_target (issue_id, depends_on_issue_id)` (verified
+ * on a live scratch workspace, computenet-dqj.7), and `bd dep add` itself
+ * refuses to add a second type over an existing pair without a `dep remove`
+ * first. A `MODIFIED` row is therefore always a type *replacement*, never a
+ * second live type — carrying the prior type is what lets a consumer retract
+ * the stale (issueId, dependsOnIssueId, oldType) triple instead of leaving it
+ * alongside the new one forever (computenet-dqj.7).
  */
 data class EdgeDiff(
     val diffType: DiffType,
     val issueId: String,
     val dependsOnIssueId: String,
     val type: String,
+    val oldType: String? = null,
 )
 
 /**

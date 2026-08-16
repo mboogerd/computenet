@@ -285,17 +285,19 @@ class MirrorProjector(
      * unrelated cells and a collision would cause no cell-level harm on its
      * own — see the class doc's note on why [heldDots] makes it matter anyway.
      *
-     * **ADD and MODIFIED both mint an add-tag.** [EdgeDiff] carries only the
-     * *current* `type` (the diff row's `to_` side; see
-     * `DoltCommitFeed.edgeDiff`), never the prior one, so a `MODIFIED` edge —
-     * the dependency's relation `type` changed while the pair of issue ids
-     * stayed the same — cannot be told apart here from a fresh `ADDED` one,
-     * and a stale `(issueId, dependsOnIssueId, oldType)` triple this projector
-     * minted earlier has no observed removal to retract it. This is a known
-     * gap in what the current envelope can express, not something silently
-     * papered over: filing a fix would mean widening [EdgeDiff] upstream
-     * (computenet-dqj.1 territory), which is out of this task's claim.
+     * **ADD and MODIFIED both mint an add-tag; MODIFIED also retracts the
+     * stale old-type triple first (computenet-dqj.7).** `bd`'s own schema
+     * (`dependencies`' `UNIQUE KEY uk_dep_issue_target (issue_id,
+     * depends_on_issue_id)`) and `bd dep add`'s own refusal to add a second
+     * type over an existing pair without a `dep remove` prove a pair holds at
+     * most one live type at a time — so a `MODIFIED` row is a type
+     * *replacement*, never a second live type. [EdgeDiff.oldType] carries the
+     * diff row's `from_` side for exactly this diff type, which is what lets
+     * [tombstoneEdge] retract the `(issueId, dependsOnIssueId, oldType)`
+     * triple this projector minted earlier in the SAME delta that adds the
+     * new-type triple, so no observer ever sees both live at once.
      *
+
      * **REMOVED tombstones exactly this edge's live tags minted before this
      * record** ([tombstoneEdge]) — the same past-only bound [fieldDelta]'s
      * `tombstone` applies, and for the identical reason: replaying a
@@ -323,7 +325,19 @@ class MirrorProjector(
             val keyIndex = fieldKeyCount + i
             when (diff.diffType) {
                 DiffType.REMOVED -> tombstoneEdge(edge)
-                DiffType.ADDED, DiffType.MODIFIED -> {
+                DiffType.ADDED -> {
+                    val tag = minter.dot(record.position, keyIndex)
+                    adds[edge] = setOf(tag)
+                    mintedLiveEdges.getOrPut(edge) { LinkedHashSet() } += tag
+                    heldDots.addMinted(tag)
+                }
+                DiffType.MODIFIED -> {
+                    // Retract the stale old-type triple first, in the same
+                    // delta as the new-type add, so no observer ever sees
+                    // both (issueId, dependsOnIssueId) triples live at once.
+                    diff.oldType
+                        ?.takeIf { it != diff.type }
+                        ?.let { old -> tombstoneEdge(MirrorEdge(diff.issueId, diff.dependsOnIssueId, old)) }
                     val tag = minter.dot(record.position, keyIndex)
                     adds[edge] = setOf(tag)
                     mintedLiveEdges.getOrPut(edge) { LinkedHashSet() } += tag
