@@ -58,20 +58,39 @@ export default function Header() {
  *  doubles as the affordance to switch the toggle on." Always rendered
  *  (unlike the canvas overlay, not gated on `showErrors()`) — its whole
  *  purpose is to be visible before the toggle is on. Clicking it flips the
- *  Errors toggle. */
+ *  Errors toggle.
+ *
+ *  computenet-0994: a BoundaryPolicy refusal is reported as its own "denied"
+ *  item, not folded into "dead" — `errorStore.counters.deadLetters` is
+ *  already fault-only (`sync/errorStore.ts`'s `applyDeadLetter`), and
+ *  `boundaryDenialCount` is the derived not-a-fault split. It reuses the
+ *  `--item--wave` class (the `--wave-health` not-a-fault color register) the
+ *  wave-health item below already established, rather than inventing a
+ *  fourth visual treatment for what is the same "worth a look, not a
+ *  failure" register. */
 function ErrorCounters() {
   const counters = createMemo(() => {
     errorVersion();
     return errorStore.counters;
   });
+  const boundaryDenials = createMemo(() => {
+    errorVersion();
+    return errorStore.boundaryDenialCount;
+  });
   return (
     <button
       class="error-counters"
       classList={{ 'is-active': showErrors() }}
-      title="Errors: dead letters / parked / restarts / wave-health (heuristic, informational — not a defect count) — click to toggle the Errors overlay"
+      title="Errors: dead letters (faults) / denied (BoundaryPolicy refusals — not a fault, SEC1-29) / parked / restarts / wave-health (heuristic, informational — not a defect count) — click to toggle the Errors overlay"
       onClick={() => setShowErrors((v) => !v)}
     >
       <span class="error-counters__item error-counters__item--dead">{counters().deadLetters} dead</span>
+      <span
+        class="error-counters__item error-counters__item--wave"
+        title="BoundaryPolicy refusals — refused, not a cell fault"
+      >
+        {boundaryDenials()} denied
+      </span>
       <span class="error-counters__item error-counters__item--parked">{counters().parked} parked</span>
       <span class="error-counters__item error-counters__item--restarts">{counters().restarts} restarts</span>
       <span class="error-counters__item error-counters__item--wave">{counters().waveHealth} wave</span>

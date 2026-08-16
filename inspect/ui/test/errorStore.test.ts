@@ -22,6 +22,7 @@ function deadLetter(over: Partial<DeadLetterEntry> = {}): DeadLetterEntry {
     atMs: 1000,
     invocation: null,
     disposition: [],
+    denial: null,
     ...over,
   };
 }
@@ -89,6 +90,20 @@ describe('ErrorStore.applySnapshot', () => {
     store.applySnapshot(snapshot({ deadLetters: [deadLetter({ ref: 'a:0', cause: null })] }));
     expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null })]);
   });
+
+  it('computenet-4ixu: carries a BoundaryPolicy denial through untouched — opaque cargo, not destructured', () => {
+    const store = new ErrorStore();
+    const denial = {
+      seam: 'DISCLOSURE' as const,
+      reason: 'DISCLOSURE_DENIED' as const,
+      exposure: 'feed',
+      principal: 'peer-1',
+      subject: null,
+      detail: null,
+    };
+    store.applySnapshot(snapshot({ deadLetters: [deadLetter({ ref: 'a:0', cause: null, denial })] }));
+    expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null, denial })]);
+  });
 });
 
 describe('ErrorStore.applyDeadLetter', () => {
@@ -110,6 +125,72 @@ describe('ErrorStore.applyDeadLetter', () => {
     store.subscribe(() => calls++);
     store.applyDeadLetter(deadLetter());
     expect(calls).toBe(1);
+  });
+
+  it('computenet-4ixu: a pushed error.deadLetter event carries denial through the same as a snapshot row', () => {
+    const store = new ErrorStore();
+    const denial = {
+      seam: 'INTEGRITY' as const,
+      reason: 'REPLAY' as const,
+      exposure: 'sync',
+      principal: 'peer-2',
+      subject: null,
+      detail: 'counter=41',
+    };
+    store.applyDeadLetter(deadLetter({ ref: 'a:0', cause: null, denial }));
+    expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null, denial })]);
+  });
+
+  it('computenet-0994: does NOT increment counters.deadLetters for a denial row — a refusal is not a fault (SEC1-29)', () => {
+    const store = new ErrorStore();
+    store.applySnapshot(snapshot({ counters: { deadLetters: 2, parked: 0, restarts: 0, drainedOnTeardown: 0, waveHealth: 0 } }));
+    const denial = {
+      seam: 'DISCLOSURE' as const,
+      reason: 'DISCLOSURE_DENIED' as const,
+      exposure: 'feed',
+      principal: 'peer-1',
+      subject: null,
+      detail: null,
+    };
+    store.applyDeadLetter(deadLetter({ ref: 'a:0', cause: null, denial }));
+    // the row is still indexed by ref (computenet-4ixu) ...
+    expect(store.deadLettersFor('a:0')).toEqual([deadLetter({ ref: 'a:0', cause: null, denial })]);
+    // ... but the fault counter is UNCHANGED — a denial never increments it.
+    expect(store.counters.deadLetters).toBe(2);
+    // the denial is counted on its own, separate register instead.
+    expect(store.boundaryDenialCount).toBe(1);
+
+    // A genuine fault on the same ref still increments the fault counter
+    // normally, proving the guard is on `denial`, not on the ref or a
+    // one-shot flag.
+    store.applyDeadLetter(deadLetter({ ref: 'a:0', cause: 'OwnershipViolation', denial: null }));
+    expect(store.counters.deadLetters).toBe(3);
+    expect(store.boundaryDenialCount).toBe(1);
+  });
+
+  it('computenet-0994: boundaryDenialCount is recomputed from applySnapshot, never trusted off a wire counter (the server sends none)', () => {
+    const store = new ErrorStore();
+    const denial = {
+      seam: 'PROTOCOL_AUTHORITY' as const,
+      reason: 'MIN_AUTH' as const,
+      exposure: 'attention',
+      principal: null,
+      subject: 'ATTENTION',
+      detail: null,
+    };
+    store.applySnapshot(
+      snapshot({
+        counters: { deadLetters: 1, parked: 0, restarts: 0, drainedOnTeardown: 0, waveHealth: 0 },
+        deadLetters: [deadLetter({ ref: 'a:0', cause: 'X', denial: null }), deadLetter({ ref: 'b:0', cause: null, denial })],
+      }),
+    );
+    expect(store.boundaryDenialCount).toBe(1);
+
+    // A second, unrelated snapshot fully replaces it, same "whole known
+    // world" discipline `applySnapshot` already documents for every other
+    // field — not an accumulator across snapshots.
+    store.applySnapshot(snapshot());
+    expect(store.boundaryDenialCount).toBe(0);
   });
 });
 

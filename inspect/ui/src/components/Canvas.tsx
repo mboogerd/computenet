@@ -123,13 +123,27 @@ export default function Canvas() {
   // here since neither memo depends on structuralVersion/layout(), only on
   // nodeRefs()/edgeIds() (already structural-version-gated) plus errorVersion()
   // and showErrors() (both pure value signals).
+  // computenet-0994: only FAULT dead letters (denial == null) count toward
+  // the red "erring" badge — a BoundaryPolicy refusal is never a cell fault
+  // (SEC1-29), so a pure-refusal graph must not light up the canvas as if
+  // cells were failing. `cellDenialBadges` below is the separate,
+  // not-a-fault (`--wave-health` register) count for the same cells.
   const cellBadges = createMemo(() => {
     errorVersion();
     return cellErrorBadges(
       nodeRefs(),
-      (ref) => errorStore.deadLettersFor(ref).length + errorStore.restartsFor(ref).length,
+      (ref) =>
+        errorStore.deadLettersFor(ref).filter((dl) => dl.denial == null).length + errorStore.restartsFor(ref).length,
       showErrors(),
     );
+  });
+
+  // computenet-0994: BoundaryPolicy refusals for this cell, reported
+  // separately from the fault badge above — same `cellErrorBadges` helper,
+  // filtered the other way (`denial != null`).
+  const cellDenialBadges = createMemo(() => {
+    errorVersion();
+    return cellErrorBadges(nodeRefs(), (ref) => errorStore.deadLettersFor(ref).filter((dl) => dl.denial != null).length, showErrors());
   });
 
   const edgeParked = createMemo(() => {
@@ -742,7 +756,11 @@ export default function Canvas() {
                 M2-FE ticket Implement §2). A separate layer for the same
                 reason the state chip above is: `.node-card` clips via
                 `overflow: hidden`, and this badge deliberately pokes past the
-                card's top-right corner. */}
+                card's top-right corner.
+                computenet-0994: this badge, and its `cellBadges()` count, are
+                FAULTS only — a BoundaryPolicy refusal never contributes to
+                it (see `cellBadges` above); the sibling denial badge below
+                covers refusals in the not-a-fault register. */}
             <For each={nodeRefs()}>
               {(ref) => {
                 const ln = () => layout().nodes.get(ref);
@@ -756,7 +774,9 @@ export default function Canvas() {
                 const badgeTooltip = () => ({
                   title: `${count()} error${count() === 1 ? '' : 's'}`,
                   rows: [
-                    { label: 'dead letters', value: String(errorStore.deadLettersFor(ref).length) },
+                    // computenet-0994: fault dead letters only — a denial row
+                    // is reported by the sibling badge below, not folded in here.
+                    { label: 'dead letters', value: String(errorStore.deadLettersFor(ref).filter((dl) => dl.denial == null).length) },
                     { label: 'restarts', value: String(errorStore.restartsFor(ref).length) },
                   ],
                 });
@@ -764,6 +784,7 @@ export default function Canvas() {
                   <Show when={ln() && count()}>
                     <div
                       class="node-error-badge"
+                      data-kind="fault"
                       style={{ left: `${ln()!.x + ln()!.w}px`, top: `${ln()!.y}px` }}
                       ref={badgeEl}
                       onPointerEnter={() =>
@@ -777,7 +798,50 @@ export default function Canvas() {
                 );
               }}
             </For>
-  
+
+            {/* computenet-0994: a distinct badge for BoundaryPolicy refusals
+                — poking past the top-LEFT corner (the fault badge above owns
+                top-right), reusing `.node-error-badge`'s shape but recolored
+                inline to `--wave-health`, the same not-a-fault register
+                `DetailPanel.tsx`'s denial card border already uses. A cell
+                with denials only (no faults) therefore shows no red badge at
+                all — exactly the "pure-refusal graph must not look like
+                cells are failing" requirement. */}
+            <For each={nodeRefs()}>
+              {(ref) => {
+                const ln = () => layout().nodes.get(ref);
+                const count = () => cellDenialBadges().get(ref);
+                let badgeEl: HTMLDivElement | undefined;
+                const badgeTooltip = () => ({
+                  title: `${count()} boundary denial${count() === 1 ? '' : 's'} — refused, not a cell fault`,
+                  rows: [
+                    { label: 'denied', value: String(errorStore.deadLettersFor(ref).filter((dl) => dl.denial != null).length) },
+                  ],
+                });
+                return (
+                  <Show when={ln() && count()}>
+                    <div
+                      class="node-error-badge"
+                      data-kind="denial"
+                      style={{
+                        left: `${ln()!.x}px`,
+                        top: `${ln()!.y}px`,
+                        background: 'var(--wave-health)',
+                        color: '#1a1300',
+                      }}
+                      ref={badgeEl}
+                      onPointerEnter={() =>
+                        showTooltip({ key: `denial:${ref}`, content: badgeTooltip(), anchor: () => elementAnchor(badgeEl!) })
+                      }
+                      onPointerLeave={() => hideTooltip()}
+                    >
+                      {count()}
+                    </div>
+                  </Show>
+                );
+              }}
+            </For>
+
             {/* Errors toggle: amber "n parked" pill at the midpoint of every
                 edge whose target (ref, port) has parked traffic
                 (10-target-v3.md Errors toggle: "amber 'n parked' pills on

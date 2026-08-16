@@ -98,10 +98,16 @@ import topologyFixture from '../../fixtures/topology.json';
  *  ref, the default `/cell/{ref}/state` fixture below. No errors of its own
  *  in `fixtures/errors.json`. */
 export const CAND_SKILLS_REF: Ref = 'e7651ef0-8140-48c3-b9a9-647bac311c4c:0';
-/** `matches` — a `JoinSetCell`; the one ref `fixtures/errors.json` actually
- *  carries a dead letter / parked row / restart / wave-health entry for, and
+/** `matches` — a `JoinSetCell`; the ref `fixtures/errors.json` carries a
+ *  FAULT dead letter / parked row / restart / wave-health entry for, and
  *  `fixtures/cell-state-truncated.json`'s ref. */
 export const MATCHES_REF: Ref = '016eda8f-96de-40e1-a04c-f997395ade62:0';
+/** `qualification` — a `LookupJoinCell`; computenet-0994: the ref
+ *  `fixtures/errors.json` carries a BoundaryPolicy-refusal dead letter for
+ *  (`denial != null`, `cause: null`) — no fault, no restart, no parked row —
+ *  so DOM assertions can tell "erring" (fault badge) apart from "denied"
+ *  (not-a-fault badge) on a cell that only ever has the latter. */
+export const QUALIFICATION_REF: Ref = '560edf02-f361-4b4f-b188-7bcba136fe8c:0';
 /** An `ObserveCell` sink (`name: null` in the topology fixture) —
  *  `fixtures/cell-state-unavailable.json`'s ref. */
 export const UNAVAILABLE_STATE_REF: Ref = '1875486c-b83b-4fea-a9b1-f6339794cfd5:0';
