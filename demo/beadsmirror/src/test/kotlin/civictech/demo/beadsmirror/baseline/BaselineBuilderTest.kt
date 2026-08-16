@@ -86,7 +86,16 @@ class BaselineBuilderTest {
                 listOf("id", "priority", "status", "title")
             record.fieldDiffs.forEach { it.old shouldBe null }
             BaselineBuilder.EXCLUDED_FIELDS shouldBe
-                setOf("_type", "dependencies", "dependency_count", "dependent_count", "comment_count")
+                setOf("_type", "dependencies", "dependency_count", "dependent_count", "comment_count", "labels")
+        }
+
+        @Test
+        fun `a labels array is excluded, matching the fact that a label-only commit carries no dolt_diff_issues row`() {
+            val record = builder.records(
+                rows("""{"id":"ws-a","title":"Alpha","labels":["urgent","p1"]}"""), "headhash", 0,
+            ).single()
+
+            record.fieldDiffs.map { it.column } shouldContainExactly listOf("id", "title")
         }
 
         @Test
