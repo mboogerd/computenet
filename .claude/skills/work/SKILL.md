@@ -728,6 +728,18 @@ checkout's working copy drifts (measured 44 commits behind, computenet-kcu).
 An agent with no worktree reads via `git show origin/main:<path>`. Say which
 in every prompt.
 
+**While a batch runs, never read a running agent's output** — not
+`TaskOutput`, not `Read`, not `tail`. For a local agent that file is the
+full JSONL transcript (thinking blocks, tool payloads); one call dumped
+tens of thousands of tokens into orchestrator context, unrecoverably, in a
+session built to run for hours (computenet-dal). `TaskOutput`'s own text
+reads as a mild preference — treat it as a context hazard. The safe
+progress checks are: the completion notification (it always comes), the
+task's own bd comments (`bd comments <id> --json > "$SCRATCH/..."` —
+task.md has agents comment at parks and at finish), and
+`git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
+the budget deadline below — there is nothing useful between.
+
 **On batch completion** (wait for the whole batch — a staggered re-batch
 computes overlap against a moving set): files touched outside a claim → fix
 that task's `files` metadata; a task parked a question → that's one task, not
