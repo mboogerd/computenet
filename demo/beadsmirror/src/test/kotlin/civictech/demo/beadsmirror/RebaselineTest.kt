@@ -2,6 +2,7 @@ package civictech.demo.beadsmirror
 
 import civictech.demo.beadsmirror.baseline.BaselineBuilder
 import civictech.demo.beadsmirror.baseline.BdExportReader
+import civictech.demo.beadsmirror.baseline.EmptyExportRefused
 import civictech.demo.beadsmirror.baseline.ExportRow
 import civictech.demo.beadsmirror.baseline.MirrorEvent
 import civictech.demo.beadsmirror.baseline.Rebaseline
@@ -16,6 +17,7 @@ import civictech.demo.beadsmirror.feed.FieldDiff
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorProjector
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.throwables.shouldThrowAny
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
@@ -203,6 +205,95 @@ class RebaselineTest {
     }
 
     // -----------------------------------------------------------------
+    // computenet-dqj.13 — a zero-row export must not silently replace a fold
+    // -----------------------------------------------------------------
+
+    /**
+     * computenet-dqj.13: a `bd export` that SUCCEEDS and yields zero rows used
+     * to swap an empty projector over a populated fold and checkpoint the
+     * empty state as current — silently, because nothing about it is a
+     * failure. Against the unfixed code this test failed with
+     * "Expected a throwable, but nothing was thrown."
+     *
+     * The refusal must leave BOTH the fold and the checkpoint exactly as they
+     * were, since the guard's whole value is that the previous state survives
+     * to be served.
+     */
+    @Test
+    fun `a zero-row export on a restart refuses instead of replacing the fold`() {
+        val populated = MirrorProjector(DotMinter(IDENTITY))
+        populated.apply(
+            ChangeRecord(
+                commitHash = "pre",
+                position = FeedPosition(11, 0),
+                issueId = "A",
+                diffType = DiffType.ADDED,
+                fieldDiffs = listOf(FieldDiff("title", old = null, new = JsonPrimitive("Alpha"))),
+                edgeDiffs = emptyList(),
+            ),
+        )
+        val state = MirrorState(populated)
+        checkpoint.write("pre")
+
+        val refusal = shouldThrow<EmptyExportRefused> {
+            rebaseline(state, rows = emptyList()).run(RebaselineReason.Restart("pre"))
+        }
+        refusal.reason shouldBe RebaselineReason.Restart("pre")
+
+        (state.current === populated) shouldBe true
+        state.current.view().keys shouldBe setOf("A")
+        checkpoint.read() shouldBe "pre"
+        events shouldBe emptyList()
+    }
+
+    /**
+     * The constraint that stops the guard being "reject zero rows": an empty
+     * tracker is a legitimate state, and a first start against one must come
+     * up. [EmptyExportRefused] documents why the reason is the only
+     * discriminator available at start time.
+     */
+    @Test
+    fun `a zero-row export on a first start is accepted, because an empty tracker is legitimate`() {
+        val state = MirrorState(MirrorProjector(DotMinter(IDENTITY)))
+
+        rebaseline(state, rows = emptyList()).run(RebaselineReason.FirstStart)
+
+        state.current.view().keys shouldBe emptySet()
+        checkpoint.read() shouldBe "head"
+        (events.single() as MirrorEvent.Rebaselined).issueCount shouldBe 0
+    }
+
+    @Test
+    fun `the explicit override accepts the empty export the guard would refuse`() {
+        val populated = MirrorProjector(DotMinter(IDENTITY))
+        populated.apply(
+            ChangeRecord(
+                commitHash = "pre",
+                position = FeedPosition(11, 0),
+                issueId = "A",
+                diffType = DiffType.ADDED,
+                fieldDiffs = listOf(FieldDiff("title", old = null, new = JsonPrimitive("Alpha"))),
+                edgeDiffs = emptyList(),
+            ),
+        )
+        val state = MirrorState(populated)
+        checkpoint.write("pre")
+
+        Rebaseline(
+            export = { emptyList() },
+            feed = DoltCommitFeed(fakeLog(listOf("c0", "c1", "head"))),
+            checkpoint = checkpoint,
+            state = state,
+            workspaceIdentity = IDENTITY,
+            onEvent = events::add,
+            acceptEmptyExport = true,
+        ).run(RebaselineReason.Restart("pre"))
+
+        state.current.view().keys shouldBe emptySet()
+        checkpoint.read() shouldBe "head"
+    }
+
+    // -----------------------------------------------------------------
     // rule 5 — the typed event
     // -----------------------------------------------------------------
 
@@ -320,6 +411,76 @@ class RebaselineTest {
             (checkpointed == concurrentCommit) shouldBe false
             val resumed = feed.readFrom(checkpointed)
             resumed.any { it.commitHash == concurrentCommit && it.issueId == a } shouldBe true
+        }
+        /**
+         * computenet-dqj.13 with a REAL `bd --sandbox export` producing the
+         * zero-row-but-successful output, rather than a stubbed `emptyList()`.
+         *
+         * The empty export comes from a second, freshly-initialised scratch
+         * workspace — verified 2026-08-16 to exit 0 and emit zero rows — while
+         * the checkpoint and the fold belong to the populated one. That
+         * substitution stands in for whatever real path makes an export come
+         * back empty; the epic reviewer's own trigger (removing
+         * `.beads/config.yaml`) does not reproduce on this bd build, so the
+         * shape is reproduced honestly instead of the trigger being faked.
+         */
+        @Test
+        fun `a real zero-row bd export is refused on a restart, leaving the workspace's fold served`() {
+            val a = workspace.createIssue("Issue A")
+            val feed = DoltCommitFeed(workspace.doltRoot)
+            val state = MirrorState(MirrorProjector(DotMinter(IDENTITY)))
+            Rebaseline(
+                export = BdExportReader(workspace.root)::read,
+                feed = feed,
+                checkpoint = checkpoint,
+                state = state,
+                workspaceIdentity = IDENTITY,
+                onEvent = events::add,
+            ).run(RebaselineReason.FirstStart)
+
+            val populated = state.current
+            populated.view().keys shouldBe setOf(a)
+            val head = checkpoint.read()
+
+            BdScratchWorkspace.create().use { empty ->
+                val emptyRows = BdExportReader(empty.root).read()
+                emptyRows shouldBe emptyList() // a real bd export, exit 0, zero rows
+
+                shouldThrow<EmptyExportRefused> {
+                    Rebaseline(
+                        export = BdExportReader(empty.root)::read,
+                        feed = feed,
+                        checkpoint = checkpoint,
+                        state = state,
+                        workspaceIdentity = IDENTITY,
+                        onEvent = events::add,
+                    ).run(RebaselineReason.Restart(head!!))
+                }
+            }
+
+            (state.current === populated) shouldBe true
+            state.current.view().keys shouldBe setOf(a)
+            checkpoint.read() shouldBe head
+        }
+
+        /** The other side of the same rule, against a real empty workspace: a first start comes up. */
+        @Test
+        fun `a first start against a genuinely empty workspace comes up on the empty export`() {
+            BdScratchWorkspace.create().use { empty ->
+                val state = MirrorState(MirrorProjector(DotMinter(IDENTITY)))
+                Rebaseline(
+                    export = BdExportReader(empty.root)::read,
+                    feed = DoltCommitFeed(empty.doltRoot),
+                    checkpoint = checkpoint,
+                    state = state,
+                    workspaceIdentity = IDENTITY,
+                    onEvent = events::add,
+                ).run(RebaselineReason.FirstStart)
+
+                state.current.view().keys shouldBe emptySet()
+                checkpoint.read() shouldBe DoltCommitFeed(empty.doltRoot).history().last()
+                (events.single() as MirrorEvent.Rebaselined).issueCount shouldBe 0
+            }
         }
     }
 
