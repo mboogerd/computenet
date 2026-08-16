@@ -582,7 +582,11 @@ Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
 verdict, parked, capacity}`. The batch is what can safely run at once:
 resumables first (nothing else ever picks them back up), then ready tasks
 whose `files` claims don't overlap the batch; a task with no claim comes back
-alone (comment on it — the breakdown needs fixing). The batch is also bounded
+alone. That is correct scheduling either way — but check the description
+before commenting: `files unknowable before diagnosis` marks a deliberate
+diagnosis-first task (feature.md's exception, computenet-ahu), dispatched
+alone by design; any other missing claim means the breakdown needs fixing —
+comment on it. The batch is also bounded
 by **machine capacity** (`capacity.max_parallel = max(1, cores // 5)`,
 measured — see `capacity_limit()` in the script): parallel Gradle contention
 lands as timeouts in exactly the suites the epics exist to characterise,
@@ -728,9 +732,22 @@ checkout's working copy drifts (measured 44 commits behind, computenet-kcu).
 An agent with no worktree reads via `git show origin/main:<path>`. Say which
 in every prompt.
 
+**While a batch runs, never read a running agent's output** — not
+`TaskOutput`, not `Read`, not `tail`. For a local agent that file is the
+full JSONL transcript (thinking blocks, tool payloads); one call dumped
+tens of thousands of tokens into orchestrator context, unrecoverably, in a
+session built to run for hours (computenet-dal). `TaskOutput`'s own text
+reads as a mild preference — treat it as a context hazard. The safe
+progress checks are: the completion notification (it always comes), the
+task's own bd comments (`bd comments <id> --json > "$SCRATCH/..."` —
+task.md has agents comment at parks and at finish), and
+`git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
+the budget deadline below — there is nothing useful between.
+
 **On batch completion** (wait for the whole batch — a staggered re-batch
 computes overlap against a moving set): files touched outside a claim → fix
-that task's `files` metadata; a task parked a question → that's one task, not
+that task's `files` metadata, and for a diagnosis-first task write the real
+claim from the diff — the empty claim was unknowable, not violated; a task parked a question → that's one task, not
 the feature; a task reported done → 5c. **If a budget notification arrives
 while you're still waiting, the batch is over its limit**: `TaskStop` the
 stragglers, leave them `in_progress` with a comment (worktrees and branches
