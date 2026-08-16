@@ -43,16 +43,25 @@ data class FieldDiff(val column: String, val old: JsonElement?, val new: JsonEle
  * record of the issue it belongs to ([issueId], the edge's *owning* side).
  *
  * Note that the diff table's bare `to_id`/`from_id` is a UUID row key, not an
- * issue id — the issue ids live in `to_issue_id`/`to_depends_on_issue_id` (and
- * their `from_` counterparts for removals), verified on a live scratch
- * workspace during this feature's breakdown.
+ * issue id. The owning side is `to_issue_id` (its `from_` counterpart for
+ * removals), verified on a live scratch workspace during this feature's
+ * breakdown. The far side is *not* a single column: `dependencies` has three
+ * nullable far-side columns — `depends_on_issue_id`, `depends_on_wisp_id` and
+ * `depends_on_external` — and a row carries exactly one of them, chosen by how
+ * `bd` resolved the target (verified live 2026-08-16, computenet-dqj.11).
+ * [dependsOnIssueId] carries whichever one the row holds, verbatim, so it is a
+ * *reference* and not a claim that the mirror holds the referenced issue; see
+ * `DoltCommitFeed.farSide` for the selection rule and why an external target is
+ * mapped rather than skipped.
  *
  * [oldType] is the `from_type` side of a [DiffType.MODIFIED] row — the
  * relation type this (issueId, dependsOnIssueId) pair carried *before* the
  * commit — and is `null` for every other [diffType]. `bd`'s own schema proves
- * a pair holds at most one live type at a time: `dependencies` has
- * `UNIQUE KEY uk_dep_issue_target (issue_id, depends_on_issue_id)` (verified
- * on a live scratch workspace, computenet-dqj.7), and `bd dep add` itself
+ * a pair holds at most one live type at a time: `dependencies` has a unique key
+ * over `issue_id` and the far side for each of the three far-side columns
+ * (`uk_dep_issue_target`, `uk_dep_wisp_target`, `uk_dep_external_target`;
+ * verified on a live scratch workspace, computenet-dqj.7 and .11), and
+ * `bd dep add` itself
  * refuses to add a second type over an existing pair without a `dep remove`
  * first. A `MODIFIED` row is therefore always a type *replacement*, never a
  * second live type — carrying the prior type is what lets a consumer retract
