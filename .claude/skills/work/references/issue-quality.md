@@ -26,6 +26,15 @@ side.
   "handles errors properly" are not criteria — they are the absence of one.
 - **Say what's out of scope.** An unstated exclusion gets built anyway by
   whoever reads the issue most generously.
+- **Code citations are pinned and anchor-first.** Verify every file, module,
+  and test you name exists at the commit you actually inspected, and name
+  that commit. Prefer stable anchors (symbol names, requirement ids, a grep
+  pattern) over bare line numbers: siblings merge underneath a written item,
+  so a parent's line numbers are stale by construction the moment one lands
+  (computenet-5ao: shifted spans, a moved package, criteria a sibling had
+  already satisfied). Every child item you write must itself instruct:
+  *re-verify all cited paths and line numbers against your own base commit,
+  and record any drift rather than copying it forward.*
 
 ## Phrasing a requirement: EARS
 
@@ -114,16 +123,8 @@ question on the feature.
 
 Five things, all of them:
 
-1. **Current state**, with `path:line` evidence. Verify every file, module,
-   and test you name actually exists — **at the commit you actually
-   inspected**, and name that commit. Prefer stable anchors (symbol names,
-   requirement ids, a grep pattern) over bare line numbers: siblings merge
-   underneath a written item, so any line number in a parent is stale by
-   construction the moment one lands — one epic's breakdowns hit shifted
-   spans, a moved package, and criteria siblings had already satisfied
-   (computenet-5ao). Every child item you write must itself instruct:
-   *re-verify all cited paths and line numbers against your own base
-   commit, and record any drift rather than copying it forward.*
+1. **Current state**, with `path:anchor` (or `path:line`) evidence, pinned
+   and re-verify-carrying per the Universal citation rule above.
 2. **Decided direction** — what is settled, and what is explicitly left to
    the implementer's judgment. Name both; silence on a fork reads as "settled"
    to one agent and "open" to the next.
