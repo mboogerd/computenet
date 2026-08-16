@@ -650,6 +650,20 @@ to be broken deliberately:
   contradiction in your report, and **do not record it as a defect in the
   PR** — the PR removing a step is the point of the PR, not a fault in it.
 
+- **Run the skills rubric gate.** It is the one check a skill diff has that
+  compiling and testing cannot give it, and it lives outside this flow, so
+  nothing else will run it:
+
+  ```bash
+  ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
+  ```
+
+  Run it from `main`'s copy per the rule above, against the worktree's files.
+  Failures are structural (bad frontmatter, a long reference with no
+  `## Contents`) and are defects in the PR. Notes prefixed `note:` are
+  warnings — report them, but do not fail a PR for a pre-existing one it did
+  not introduce.
+
 The reason to read from `main` rather than the worktree is not only
 circularity. The main checkout's local branch is not refreshed by anything in
 this flow, so `origin/main:` is also the only reliable way to get the
