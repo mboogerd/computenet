@@ -189,10 +189,11 @@ jobs:
               # nothing would otherwise be this step's exit status and redden a
               # required job over the shape of a diagnostic. Measured 2026-08-16
               # against fixtures: with the attribute order Gradle actually emits
-              # (`<testcase name=... classname=...>` then `<skipped/>` on its own
-              # line) the chain matches; with `classname` first, or with the
-              # element inlined on one line, it matches nothing and the step
-              # exited 1 on an otherwise-fine report.
+              # (`<testcase name=... classname=...>`, `<skipped/>` either on its
+              # own line or inlined) the chain matches; with `classname` before
+              # `name` it matches nothing and the step exited 1 on an
+              # otherwise-fine report. The order, not the line breaking, is what
+              # decides it.
               grep -B1 '<skipped' "$REPORT_DIR"/TEST-*.xml | grep -E 'testcase name|message=' || true
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
