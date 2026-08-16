@@ -806,8 +806,19 @@ retransmit of the same position later in the same replay. In other words
 `[24-DUR-08]`'s exact-position set partially masks a frontier regression. BS-1
 therefore also asserts `effectfulSuppressionsDischarged shouldBe 9L`, which is
 what proves all nine journaled frames (seven applied plus two undelivered
-retransmits) really were replayed and really were suppressed by the frontier
-rather than never reaching the guard.
+retransmits) really were replayed and really reached the guard, rather than
+never being replayed at all.
+
+That counter is **origin-blind** — `ManagedHost.deliver` increments it on one
+branch whose condition is `alreadyProcessed(...) || alreadyDischargedBaseline(...)`
+— so on its own it does not attribute the nine suppressions to the frontier.
+BS-1's *pair* of assertions does: nothing was discharged as a baseline before the
+crash (the seven applied frames are live, `baseline == null`, so they advance the
+frontier and record no discharge, and the two retransmits were never delivered so
+they recorded nothing either), and any replayed frame that fired during recovery
+would have appended to the external effect log, which the equality on the line
+above forbids. Read the count alone and it is weaker than it looks; that is why
+both assertions stand together.
 
 ### What "crash mid-drain" is realized as, and its limit
 
