@@ -82,8 +82,9 @@ class BeadsMirrorApp private constructor(
          * subprocess a first-start baseline would otherwise spawn against the
          * live tracker.
          *
-         * **Two paths reach [Rebaseline], and neither is the genesis walk**
-         * (feature computenet-dqj.3 rules 1 and 3):
+         * **Three paths reach [Rebaseline], and none is the genesis walk**
+         * (feature computenet-dqj.3 rules 1 and 3; the restart path is
+         * feature computenet-dqj.5's design amendment 2):
          *
          * - **First start** — no persisted checkpoint. The baseline runs
          *   *before* [DoltFeedPoller.start], so the poller's first tick already
@@ -91,6 +92,16 @@ class BeadsMirrorApp private constructor(
          *   commit graph from genesis. (`DoltCommitFeed.readFrom(null)` still
          *   walks from genesis; it just is not this app's first-run path any
          *   more, and remains available to tests and library callers.)
+         * - **[RebaselineReason.Restart]** — a checkpoint *is* persisted, and
+         *   the baseline runs anyway, at the same point in `start`. Nothing
+         *   persists the projector across processes, so this start begins with
+         *   an empty one; resuming the feed strictly after the checkpoint
+         *   would replay only the commits made while the mirror was down and
+         *   drop every pre-checkpoint issue permanently (measured during
+         *   computenet-dqj.5's breakdown, when this branch read
+         *   `if (checkpoint.read() == null)`). The checkpoint keeps its job
+         *   *while running* — incremental resume and truncation detection —
+         *   and is simply not a substitute for state no one kept.
          * - **[FeedCondition.CheckpointGone]** — the checkpoint fell out of
          *   `dolt_log`. The baseline runs synchronously inside
          *   `DoltFeedPoller.pollOnce`'s `onCondition` call, on the poller
@@ -134,10 +145,14 @@ class BeadsMirrorApp private constructor(
                 },
             )
 
-            // Before the socket: a first-start baseline is part of "started",
+            // Before the socket: a start-time baseline is part of "started",
             // so the very first request is answered from complete state rather
-            // than from an empty projector that fills in moments later.
-            if (checkpoint.read() == null) rebaseline.run(RebaselineReason.FirstStart)
+            // than from an empty projector that fills in moments later. It
+            // runs on EVERY start, checkpoint or not — see the class doc.
+            val persisted = checkpoint.read()
+            rebaseline.run(
+                if (persisted == null) RebaselineReason.FirstStart else RebaselineReason.Restart(persisted),
+            )
 
             val shell = DemoShell(config.port)
             MirrorRoutes(state).register(shell)
@@ -172,7 +187,8 @@ class BeadsMirrorApp private constructor(
  *   supplies a collector and asserts the typed value rather than parsing that
  *   line. Called on whichever thread produced the event (the poller thread for
  *   a [RebaselineReason.CheckpointGone] rebuild, the caller of
- *   [BeadsMirrorApp.Companion.start] for a [RebaselineReason.FirstStart] one),
+ *   [BeadsMirrorApp.Companion.start] for a start-time [RebaselineReason.FirstStart]
+ *   or [RebaselineReason.Restart] one),
  *   synchronously, so an implementation that blocks stalls polling.
  */
 data class BeadsMirrorConfig(
