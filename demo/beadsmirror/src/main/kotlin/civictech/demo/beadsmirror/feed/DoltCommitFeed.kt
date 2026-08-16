@@ -62,17 +62,16 @@ fun interface DiffQuery {
  * belong to computenet-dqj.1.3 ([DoltFeedPoller]) and drive this class through
  * [readFrom]/[history].
  *
- * KNOWN LIMITATION (flagged in computenet-dqj.1.2's review, left open by
- * computenet-dqj.1.3 as a judgment call, not fixed here): [readFrom] always
- * scans all of `dolt_diff_issues`/`dolt_diff_dependencies`, then filters to
- * `afterCommit`'s unseen commits in memory — it does not narrow the SQL query
- * itself. Called once from a cold start that is cheap; called every tick of a
- * [DoltFeedPoller] loop, the per-poll cost is O(history), not O(new commits).
- * Fine for the scratch/demo workspaces this module targets (measured ~0.2s
- * per scan against a scratch DB); worth bounding — e.g. a `to_commit IN (...)`
- * filter over the wanted commit set, or narrowing by commit height once one
- * is known — before this feed is pointed at a workspace with real history
- * depth.
+ * RESOLVED (computenet-dqj.6; previously a known limitation flagged in
+ * computenet-dqj.1.2's review and left open by computenet-dqj.1.3 as a
+ * judgment call): when [readFrom] resumes from a non-null `afterCommit`,
+ * [readIssueDiffs]/[readEdgeDiffs] add a `to_commit IN (...)` filter over the
+ * wanted commit set, so the query itself — not just the in-memory filter —
+ * is bounded by the number of new commits. A genesis read (`afterCommit ==
+ * null`, or the cold-start case where every commit is wanted) keeps issuing
+ * the unfiltered [ISSUE_QUERY]/[EDGE_QUERY] text unchanged, since there is
+ * nothing to narrow by. A steady-state [DoltFeedPoller] tick against a deep
+ * history now costs O(new commits), not O(history).
  *
  * Access is the `dolt` CLI via [DoltSql] (a `bd sql` connection is unusable in
  * embedded mode — BDS0). All timestamps in Dolt are UTC; this reader never
@@ -127,13 +126,18 @@ class DoltCommitFeed(private val sql: DiffQuery) {
 
         val heights = commits.withIndex().associate { (index, hash) -> hash to index.toLong() }
         val wanted = commits.subList(startIndex, commits.size).toSet()
+        // A genesis read (afterCommit == null) wants every commit already, so
+        // there is nothing to narrow by — keep issuing the plain, unfiltered
+        // query text in that case rather than an IN(...) clause that would
+        // just list the whole history back to itself.
+        val full = startIndex == 0
 
         // Two table scans rather than two queries per commit: the diff tables
         // span the whole commit graph, the scratch databases this feeds off are
         // small, and a single scan keeps the pass internally consistent (a
         // concurrent bd mutation cannot land between per-commit queries).
-        val issueDiffs = readIssueDiffs(wanted)
-        val edgeDiffs = readEdgeDiffs(wanted)
+        val issueDiffs = readIssueDiffs(wanted, full)
+        val edgeDiffs = readEdgeDiffs(wanted, full)
 
         return commits.subList(startIndex, commits.size).flatMap { hash ->
             val issues = issueDiffs[hash].orEmpty().associateBy { it.issueId }
@@ -157,9 +161,10 @@ class DoltCommitFeed(private val sql: DiffQuery) {
         }
     }
 
-    private fun readIssueDiffs(wanted: Set<String>): Map<String, List<IssueDiff>> {
+    private fun readIssueDiffs(wanted: Set<String>, full: Boolean): Map<String, List<IssueDiff>> {
+        val query = narrowedQuery(ISSUE_QUERY, wanted, full)
         val perCommit = mutableMapOf<String, MutableMap<String, IssueDiff>>()
-        for (row in sql.query(ISSUE_QUERY)) {
+        for (row in sql.query(query)) {
             val commit = row.requiredString("to_commit", ISSUE_QUERY)
             if (commit !in wanted) continue
             val diff = issueDiff(row, commit, ISSUE_QUERY)
@@ -176,8 +181,8 @@ class DoltCommitFeed(private val sql: DiffQuery) {
         return perCommit.mapValues { (_, byIssue) -> byIssue.values.toList() }
     }
 
-    private fun readEdgeDiffs(wanted: Set<String>): Map<String, List<EdgeDiff>> =
-        sql.query(EDGE_QUERY)
+    private fun readEdgeDiffs(wanted: Set<String>, full: Boolean): Map<String, List<EdgeDiff>> =
+        sql.query(narrowedQuery(EDGE_QUERY, wanted, full))
             .mapNotNull { row ->
                 val commit = row.requiredString("to_commit", EDGE_QUERY)
                 if (commit !in wanted) null else commit to edgeDiff(row, EDGE_QUERY)
@@ -195,6 +200,26 @@ class DoltCommitFeed(private val sql: DiffQuery) {
          * changes on every record.
          */
         private val NON_FIELD_COLUMNS = setOf("commit", "commit_date")
+
+        /**
+         * Narrows [base] (one of [ISSUE_QUERY]/[EDGE_QUERY]) to a `WHERE
+         * to_commit IN (...)` scan of exactly [wanted] when [full] is false —
+         * a resumed read scans only the commits new since the checkpoint,
+         * not the whole diff table. A genesis read ([full] true) has nothing
+         * to narrow by and returns [base] unchanged, byte-for-byte, so a cold
+         * start keeps issuing the plain unfiltered scan it always has.
+         *
+         * Commit hashes come from this same connection's own `dolt_log`
+         * ([LOG_QUERY]) — never external input — but they are still
+         * single-quote-escaped before being spliced into the SQL text, on
+         * the general principle that no value assembled into a query string
+         * should assume its own shape.
+         */
+        internal fun narrowedQuery(base: String, wanted: Set<String>, full: Boolean): String {
+            if (full) return base
+            val inList = wanted.sorted().joinToString(", ") { "'" + it.replace("'", "''") + "'" }
+            return "$base where to_commit in ($inList)"
+        }
 
         /**
          * Maps one `dolt_diff_issues` row. Exposed to tests so the shape-failure
@@ -239,6 +264,30 @@ class DoltCommitFeed(private val sql: DiffQuery) {
             )
         }
 
+        /**
+         * The three columns of `dependencies` that can carry an edge's far
+         * side — `depends_on_issue_id`, `depends_on_wisp_id` and
+         * `depends_on_external` — all nullable, `bd` filling whichever matches
+         * how it resolved the target (schema read live 2026-08-16).
+         *
+         * Exactly one is non-NULL on any row, and that is the table's own
+         * invariant rather than this reader's assumption: `dependencies`
+         * carries `CONSTRAINT ck_dep_one_target CHECK (((NOT(depends_on_issue_id
+         * IS NULL)) + (NOT(depends_on_wisp_id IS NULL)) +
+         * (NOT(depends_on_external IS NULL))) = 1)` (read from `show create
+         * table dependencies` on a scratch workspace, bd 1.1.2 / dolt 2.2.3).
+         * That is what makes [farSide]'s zero- and two-column branches
+         * schema-drift signals rather than ordinary inputs.
+         *
+         * `dolt sql -r json` omits NULL columns from the row object entirely,
+         * so the non-chosen ones are absent rather than null here.
+         */
+        private val FAR_SIDE_COLUMNS = listOf(
+            "depends_on_issue_id",
+            "depends_on_wisp_id",
+            "depends_on_external",
+        )
+
         /** Maps one `dolt_diff_dependencies` row. Exposed to tests for the same reason as [issueDiff]. */
         internal fun edgeDiff(row: Map<String, JsonElement>, query: String): EdgeDiff {
             val diffType = DiffType.parse(row.requiredString("diff_type", query), query)
@@ -246,13 +295,57 @@ class DoltCommitFeed(private val sql: DiffQuery) {
             return EdgeDiff(
                 diffType = diffType,
                 issueId = row.requiredString("${side}_issue_id", query),
-                dependsOnIssueId = row.requiredString("${side}_depends_on_issue_id", query),
+                dependsOnIssueId = row.farSide(side, query),
                 type = row.requiredString("${side}_type", query),
                 // MODIFIED is the only diff type with both a from_ and a to_
                 // side present, so it is the only one that can carry the prior
                 // type; ADDED/REMOVED have no "before" or "after" to name.
                 oldType = if (diffType == DiffType.MODIFIED) row.requiredString("from_type", query) else null,
             )
+        }
+
+        /**
+         * The edge's far side, read from whichever of [FAR_SIDE_COLUMNS] this
+         * row actually carries, and carried into [EdgeDiff.dependsOnIssueId]
+         * verbatim — an external or wisp target is **mapped**, not skipped
+         * (computenet-dqj.11).
+         *
+         * Mapping is what the mirror's equality contract requires. `bd export`
+         * renders every edge the same way regardless of which column holds its
+         * far side — one `dependencies` entry whose `depends_on_id` names the
+         * target, verified live 2026-08-16 for the `depends_on_external` case
+         * — so a skipped edge is a permanent divergence from `bd export`, not
+         * a tidy omission. The far side is therefore a *reference*, not a
+         * promise that the mirror holds the referenced issue: an external
+         * target names an id that no export row of this workspace defines, and
+         * nothing downstream may assume it resolves.
+         *
+         * Exactly one far side must be present. **None** means the table's
+         * shape has changed under the reader; **more than one** means an edge
+         * whose target the reader would have to guess between. Both fail
+         * loudly with [FeedShapeException] rather than being resolved by
+         * precedence, which is epic computenet-dqj §3's rule (it leaves
+         * schema-drift hardening *beyond* a loud failure out of scope, and
+         * that presumes the failure is loud).
+         */
+        private fun Map<String, JsonElement>.farSide(side: String, query: String): String {
+            val present = FAR_SIDE_COLUMNS.filter { valueOrNull("${side}_$it") != null }
+            val looked = FAR_SIDE_COLUMNS.joinToString(", ") { "\"${side}_$it\"" }
+            if (present.isEmpty()) {
+                throw FeedShapeException(
+                    query,
+                    "row carries none of the far-side columns $looked: $this",
+                )
+            }
+            if (present.size > 1) {
+                throw FeedShapeException(
+                    query,
+                    "row carries more than one far-side column " +
+                        present.joinToString(", ") { "\"${side}_$it\"" } +
+                        " — exactly one of $looked is expected: $this",
+                )
+            }
+            return requiredString("${side}_${present.single()}", query)
         }
 
         private fun Map<String, JsonElement>.valueOrNull(key: String): JsonElement? =

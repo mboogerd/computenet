@@ -3,6 +3,19 @@ package civictech.demo.beadsmirror.feed
 import java.time.Duration
 
 /**
+ * A [DoltFeedPoller]'s background loop has exited on [failure], with
+ * [checkpoint] the last commit it had persisted (`null` if it had persisted
+ * none, or if reading the checkpoint failed too).
+ *
+ * The loop does not restart itself, so this value is terminal: every fold
+ * downstream of that poller is frozen at [checkpoint] from here on. That is
+ * why it carries the position as well as the throwable — "it broke" without
+ * "and it stopped here" does not tell an operator how stale the served state
+ * is (computenet-dqj.12).
+ */
+data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
+
+/**
  * Wraps [DoltCommitFeed] in a checkpointed poll loop: there is no Dolt commit
  * watch (BDS0), so the read half is polling on a bounded, configurable
  * interval.
@@ -39,6 +52,7 @@ class DoltFeedPoller(
     private val interval: Duration,
     private val onBatch: (List<ChangeRecord>) -> Unit,
     private val onCondition: (FeedCondition) -> Unit = { throw FeedConditionException(it) },
+    private val onStopped: (PollLoopStopped) -> Unit = {},
 ) : AutoCloseable {
 
     init {
@@ -57,16 +71,25 @@ class DoltFeedPoller(
      * an [onCondition] that swallows it). `null` while the loop has not
      * failed. A background thread's uncaught exception has nowhere else to
      * go, so this is how a caller of [start] observes one after the fact.
+     *
+     * **Polling this field is not enough on its own** (computenet-dqj.12): a
+     * caller that only reads it when it happens to look learns nothing at the
+     * moment the loop dies, and the feed never resumes — that is what
+     * [onStopped] is for, and why the app wires the served read surface to
+     * [stopped] rather than trusting anyone to check.
      */
     @Volatile
-    var failure: Throwable? = null
+    var stopped: PollLoopStopped? = null
         private set
+
+    /** The throwable half of [stopped]; `null` while the loop has not failed. */
+    val failure: Throwable? get() = stopped?.failure
 
     /** Starts the background poll loop. Not reentrant: call [stop] before calling [start] again. */
     fun start() {
         check(thread == null) { "already started" }
         running = true
-        failure = null
+        stopped = null
         thread = Thread({
             try {
                 while (running) {
@@ -77,7 +100,18 @@ class DoltFeedPoller(
             } catch (_: InterruptedException) {
                 // stop() requested — exit quietly, this is not a failure.
             } catch (t: Throwable) {
-                failure = t
+                // Record BEFORE reporting: an onStopped that throws must not
+                // be able to leave the loop dead and `stopped` still null,
+                // which is precisely the invisible state this exists to end.
+                val exit = PollLoopStopped(t, checkpointOrNull())
+                stopped = exit
+                try {
+                    onStopped(exit)
+                } catch (reporting: Throwable) {
+                    // Nowhere left to report to; keep the primary failure as
+                    // the record and do not mask it with the reporter's.
+                    t.addSuppressed(reporting)
+                }
             } finally {
                 running = false
             }
@@ -114,6 +148,19 @@ class DoltFeedPoller(
      * loop has fully exited and released it. Safe to call when not started,
      * or more than once.
      */
+    /**
+     * The persisted checkpoint, or `null` when there is none — or when
+     * reading it is itself what has just gone wrong. The loop is already
+     * failing when this is called; a second failure here must not replace the
+     * first, so it degrades to "unknown position" rather than propagating.
+     */
+    private fun checkpointOrNull(): String? =
+        try {
+            checkpoint.read()
+        } catch (_: Throwable) {
+            null
+        }
+
     fun stop() {
         running = false
         thread?.interrupt()

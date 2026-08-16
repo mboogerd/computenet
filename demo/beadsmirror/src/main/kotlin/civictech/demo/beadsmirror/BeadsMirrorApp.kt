@@ -2,6 +2,7 @@ package civictech.demo.beadsmirror
 
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.baseline.MirrorEvent
+import civictech.demo.beadsmirror.baseline.PollLoopDied
 import civictech.demo.beadsmirror.baseline.Rebaseline
 import civictech.demo.beadsmirror.baseline.RebaselineReason
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
@@ -57,6 +58,13 @@ class BeadsMirrorApp private constructor(
      * Set if the background poll loop died — most usefully, when a
      * re-baseline triggered by [FeedCondition.CheckpointGone] failed, since
      * that runs on the poller thread and has nowhere else to surface.
+     *
+     * This is a convenience for a test holding the app object, **not** the
+     * mechanism by which the failure is made observable: nothing in a real
+     * run polls it (which is the whole of computenet-dqj.12). The operator
+     * learns through [BeadsMirrorConfig.onEvent] receiving a [PollLoopDied],
+     * and a consumer of the HTTP surface learns because every route switches
+     * to `503` — see [MirrorRoutes].
      */
     val pollerFailure: Throwable? get() = poller.failure
 
@@ -143,6 +151,12 @@ class BeadsMirrorApp private constructor(
                             rebaseline.run(RebaselineReason.CheckpointGone(condition.checkpoint))
                     }
                 },
+                // computenet-dqj.12: the loop dying is the one thing this
+                // process cannot keep to itself. It reports through the same
+                // channel as every other MirrorEvent, so an operator who
+                // wired up `onEvent` at all hears it without wiring anything
+                // else, and the default handler prints it.
+                onStopped = { config.onEvent(PollLoopDied(it.failure, it.checkpoint)) },
             )
 
             // Before the socket: a start-time baseline is part of "started",
@@ -155,7 +169,7 @@ class BeadsMirrorApp private constructor(
             )
 
             val shell = DemoShell(config.port)
-            MirrorRoutes(state).register(shell)
+            MirrorRoutes(state, poller::stopped).register(shell)
             shell.start()
             poller.start()
 
@@ -197,8 +211,29 @@ data class BeadsMirrorConfig(
     val pollInterval: Duration = Duration.ofMillis(1000),
     val runDir: Path? = null,
     val repoSearchRoot: Path = Path.of("").toAbsolutePath(),
-    val onEvent: (MirrorEvent) -> Unit = { println("beadsmirror: $it") },
+    val onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
 )
+
+/**
+ * The default [BeadsMirrorConfig.onEvent]: one line per event on stdout, plus
+ * — for a [PollLoopDied] — the throwable's stack trace on stderr.
+ *
+ * The extra stack trace is the difference between "the mirror stopped" and
+ * "the mirror stopped *here*". The event line already names the throwable and
+ * the frozen checkpoint, which is what the criterion requires; the trace is
+ * what makes the next such failure diagnosable without reproducing it, and a
+ * dead poll loop is rare enough that the noise costs nothing.
+ */
+fun printMirrorEvent(event: MirrorEvent) {
+    println("beadsmirror: $event")
+    if (event is PollLoopDied) {
+        System.err.println(
+            "beadsmirror: the poll loop has stopped for good; the served fold is frozen at " +
+                "${event.checkpoint ?: "(no checkpoint)"} and every route now answers 503.",
+        )
+        event.failure.printStackTrace()
+    }
+}
 
 /**
  * Raised by [refuseIfLiveBeads] when a workspace resolves to the repository's

@@ -667,6 +667,42 @@ data class DeadLetterRow(
      * own sanitization outcome, never a value — see [ArgDisposition].
      */
     val disposition: List<ArgDisposition> = emptyList(),
+    /**
+     * computenet-usd.7 — non-null exactly when this row reports a
+     * `BoundaryPolicy` refusal ([civictech.cell.host.DeadLetter.denial]),
+     * never a fault. Before this field, a refusal and a plain host-level drop
+     * were both `cause == null`, and the only discriminator a client had was
+     * parsing [description]'s `"boundary denial at exposure"` prefix — the
+     * defect this field closes. Additive and defaulted, so an older client
+     * decoding this shape is unaffected.
+     */
+    val denial: BoundaryDenialSummary? = null,
+)
+
+/**
+ * computenet-usd.7 — [DeadLetterRow.denial]: the `BoundaryPolicy` refusal a
+ * denial dead letter reports, extracted to primitives at capture time exactly
+ * as [InvocationSummary] and [ArgDisposition] are — no kernel domain object
+ * (`civictech.cell.BoundaryDenial`) is held past that conversion.
+ */
+@Serializable
+data class BoundaryDenialSummary(
+    /** `BoundarySeam.name` — which seam refused (`ADMISSION`, `LINK_AUTHORITY`, `PROTOCOL_AUTHORITY`, `DISCLOSURE`, `INTEGRITY`). */
+    val seam: String,
+    /** `DenialReason.name` — why it refused. */
+    val reason: String,
+    /** The membrane `Exposure.externalName` the refused crossing was addressed to. */
+    val exposure: String,
+    /**
+     * The `PeerId` this refusal is attributed to, or null — see
+     * `civictech.cell.BoundaryDenial.principal`'s KDoc: the convention differs
+     * by seam, and null does not always mean the same thing.
+     */
+    val principal: String? = null,
+    /** What was refused, named per seam (protocol id, contract/method, or null) — see `BoundaryDenial.subject`. */
+    val subject: String? = null,
+    /** Free-text specifics for the audit trail (the observed counter, the offending auth level, the refusing policy). */
+    val detail: String? = null,
 )
 
 /**

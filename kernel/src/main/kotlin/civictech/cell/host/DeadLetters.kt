@@ -62,8 +62,12 @@ internal class DeadLetters(
     }
 
     /** Sanitize (spec 23 R8) and hand to the host's outlet. The one emission path; the one discharge site. */
-    private fun publish(cause: Throwable?, description: String, invocation: HostedPortInvocation?) =
-        emit(DeadLetter(hostRef, cause, description, invocation?.let(::sanitizeForDeadLetter)))
+    private fun publish(
+        cause: Throwable?,
+        description: String,
+        invocation: HostedPortInvocation?,
+        denial: BoundaryDenial? = null,
+    ) = emit(DeadLetter(hostRef, cause, description, invocation?.let(::sanitizeForDeadLetter), denial))
 
     /**
      * The `BoundaryPolicy` denial-accounting entry point (spec 40/43,
@@ -125,13 +129,13 @@ internal class DeadLetters(
      * the operator sized for faults.
      *
      * The consequence for a reader of the dead-letter **outlet** — the
-     * Inspector's ring, `KernelDriver`, any subscribed cell: a denial still
-     * arrives there as a `DeadLetter` with a null `cause` and a description
-     * beginning `boundary denial at exposure`. That record is the audit trail;
-     * the counter beside it is not. Making the record structurally
-     * self-describing (a typed field on `DeadLetter`) would need
-     * `host/DeadLetter.kt`, outside this item's file claim, and is left as
-     * follow-up.
+     * Inspector's ring, `KernelDriver`, any subscribed cell: a denial arrives
+     * there as a `DeadLetter` with a null `cause`, a description beginning
+     * `boundary denial at exposure`, **and** [DeadLetter.denial] populated with
+     * this very [BoundaryDenial] — the structurally self-describing
+     * discriminator that was left as follow-up here (`computenet-usd.6`) and
+     * closed by `computenet-usd.7`. That record is the audit trail; the
+     * counter beside it is not.
      */
     internal fun boundaryDenial(cellRef: CellRef, denial: BoundaryDenial, deniedArgs: List<Any?>) {
         val type = when (denial.seam) {
@@ -190,6 +194,7 @@ internal class DeadLetters(
                     context = null,
                 ),
             ),
+            denial = denial,
         )
     }
 
