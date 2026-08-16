@@ -94,7 +94,15 @@ Note the flag: `bd create` takes **`--metadata`** with a JSON object.
 `bd create` fails with `unknown flag` and creates nothing.
 
 Both metadata fields are load-bearing — a task missing either can't be
-scheduled and gets sent back.
+scheduled and gets sent back. One exception: a **diagnosis-first task** (a
+flake, a defect whose location *is* the question) cannot know its claim —
+any pre-diagnosis `files` is a guess that co-schedules a sibling into a
+conflict, and a guess has been categorically wrong (test-source hypothesis,
+production-defect reality; computenet-ahu). Leave `files` empty, open the
+description with `files unknowable before diagnosis`, and put the expected
+scope in the acceptance criteria instead ("diff confined to test sources
+unless a production defect is found, in which case it is reported"). The
+orchestrator dispatches it alone and writes the real claim from the diff.
 
 If the task is a bug fix and you write a reproduction into its description,
 label it `verified-failing:` (with the output you watched it fail with) or
