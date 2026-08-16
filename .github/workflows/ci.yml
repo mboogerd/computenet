@@ -185,7 +185,15 @@ jobs:
           {
             echo "demo:beadsmirror JUnit results: ${total} tests, ${skipped} skipped"
             if [ "$skipped" -gt 0 ]; then
-              grep -B1 '<skipped' "$REPORT_DIR"/TEST-*.xml | grep -E 'testcase name|message='
+              # `|| true`: `set -o pipefail` is on, so a grep chain that matches
+              # nothing would otherwise be this step's exit status and redden a
+              # required job over the shape of a diagnostic. Measured 2026-08-16
+              # against fixtures: with the attribute order Gradle actually emits
+              # (`<testcase name=... classname=...>` then `<skipped/>` on its own
+              # line) the chain matches; with `classname` first, or with the
+              # element inlined on one line, it matches nothing and the step
+              # exited 1 on an otherwise-fine report.
+              grep -B1 '<skipped' "$REPORT_DIR"/TEST-*.xml | grep -E 'testcase name|message=' || true
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
