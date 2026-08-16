@@ -330,9 +330,11 @@ that "denied ⇒ discharged" is the kernel's own standard.
 
 #### Owner of the remainder
 
-Residuals 1 and 2: KFX, or whoever carries the 93 I-6/I-8 exclusive-bit
-widening and the 93 I-17 contract-granularity suppression. Neither is CHA2's
-to fix (`[CHA2-50]`).
+Both residuals are now carried and fixed: residual 1 by `computenet-ulss`
+(93 I-6/I-8 exclusive-bit widening, with `computenet-yzsc` correcting the
+scan's reach over `Borrowed`/`Frozen`), residual 2 by `computenet-3jv2`
+(93 I-17 contract-granularity suppression). Neither was CHA2's to fix
+(`[CHA2-50]`); CHA2 reproduced them and handed them on.
 
 ---
 

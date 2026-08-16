@@ -19,7 +19,7 @@ import org.junit.jupiter.api.assertThrows
 import java.util.UUID
 
 /**
- * **C-11 reach: BS-7 and BS-12 pinned, BS-8 and BS-9 standing as expected failures.**
+ * **C-11 reach: all four reproductions pinned; no standing expected failures remain.**
  *
  * The adjudication these four reproductions consume is
  * `doc/evidence-lane-findings.md` -> "C-11 — shadow suppression drops exclusives",
@@ -34,9 +34,11 @@ import java.util.UUID
  *   an arbitrary payload object, and `ContractProcessor.carriesExclusive` recursed through
  *   type *arguments* only, so a field-nested exclusive was not even marked. Both halves
  *   widened; BS-8 keeps its body, loses its `@ExpectedFailure`, and is the acceptance test;
- * - residual 2 (BS-9) is still real: `Evolution.kt:64` is literally
- *   `if (cell is Effectful) suppress(cell)`, and nothing in `kernel/` reads the
- *   `ContractDescriptor.effect` bit that G-32/93 I-17 decided should be the cut.
+ * - residual 2 (BS-9) **was** real and is now fixed by `computenet-3jv2` (93 I-17 /
+ *   G-32): `Shadow.spawn` cut suppression at `cell is Effectful` and nothing in `kernel/`
+ *   read the `ContractDescriptor.effect` bit the decision names as the boundary. Suppression
+ *   now serves every effect-carrying contract, with the cell marker kept as the coarse
+ *   fallback; BS-9 keeps its body, loses its `@ExpectedFailure`, and is the acceptance test.
  *
  * ## Detection, and the `[CHA2-26]` deviation
  *
