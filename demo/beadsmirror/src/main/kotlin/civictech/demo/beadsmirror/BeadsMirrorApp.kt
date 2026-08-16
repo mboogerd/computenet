@@ -1,8 +1,13 @@
 package civictech.demo.beadsmirror
 
+import civictech.demo.beadsmirror.baseline.BdExportReader
+import civictech.demo.beadsmirror.baseline.MirrorEvent
+import civictech.demo.beadsmirror.baseline.Rebaseline
+import civictech.demo.beadsmirror.baseline.RebaselineReason
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.feed.DoltFeedPoller
 import civictech.demo.beadsmirror.feed.FeedCheckpoint
+import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.http.MirrorRoutes
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorProjector
@@ -37,10 +42,23 @@ import kotlin.system.exitProcess
 class BeadsMirrorApp private constructor(
     private val shell: DemoShell,
     private val poller: DoltFeedPoller,
+    /**
+     * The live projector handle, swapped wholesale by a re-baseline. Exposed
+     * so a test can read [MirrorProjector.view]/`edgeView` and
+     * [MirrorState.rebaselineCount] directly instead of only through HTTP.
+     */
+    val state: MirrorState,
 ) : AutoCloseable {
 
     /** The port the shell actually bound — meaningful once [start] has run. */
     val boundPort: Int get() = shell.boundPort
+
+    /**
+     * Set if the background poll loop died — most usefully, when a
+     * re-baseline triggered by [FeedCondition.CheckpointGone] failed, since
+     * that runs on the poller thread and has nowhere else to surface.
+     */
+    val pollerFailure: Throwable? get() = poller.failure
 
     fun stop() {
         poller.stop()
@@ -53,41 +71,80 @@ class BeadsMirrorApp private constructor(
 
         /**
          * Builds and starts every component — [DoltCommitFeed], [FeedCheckpoint],
-         * [MirrorProjector], [DoltFeedPoller] (started immediately), [MirrorRoutes]
-         * on a started [DemoShell] — and returns the running app.
+         * [MirrorState] over a [MirrorProjector], [Rebaseline], [DoltFeedPoller]
+         * (started immediately), [MirrorRoutes] on a started [DemoShell] — and
+         * returns the running app.
          *
          * Refuses via [LiveBeadsWorkspaceException] before starting anything
          * ([refuseIfLiveBeads]) when [BeadsMirrorConfig.workspace] resolves to
-         * this repository's own live `.beads`.
+         * this repository's own live `.beads`. That refusal is the very first
+         * statement here specifically so it precedes the `bd export`
+         * subprocess a first-start baseline would otherwise spawn against the
+         * live tracker.
+         *
+         * **Two paths reach [Rebaseline], and neither is the genesis walk**
+         * (feature computenet-dqj.3 rules 1 and 3):
+         *
+         * - **First start** — no persisted checkpoint. The baseline runs
+         *   *before* [DoltFeedPoller.start], so the poller's first tick already
+         *   reads from the baselined head rather than replaying the whole
+         *   commit graph from genesis. (`DoltCommitFeed.readFrom(null)` still
+         *   walks from genesis; it just is not this app's first-run path any
+         *   more, and remains available to tests and library callers.)
+         * - **[FeedCondition.CheckpointGone]** — the checkpoint fell out of
+         *   `dolt_log`. The baseline runs synchronously inside
+         *   `DoltFeedPoller.pollOnce`'s `onCondition` call, on the poller
+         *   thread, and that tick emits nothing, so no post-gap record can be
+         *   applied before the rebuild completes. See [Rebaseline]'s class doc
+         *   for why that removes the need for a lock rather than merely hiding
+         *   it.
          */
         fun start(config: BeadsMirrorConfig): BeadsMirrorApp {
             refuseIfLiveBeads(config.workspace, config.repoSearchRoot)
 
             val doltRoot = doltRootFor(config.workspace)
             val runDir = config.runDir ?: config.workspace.resolve(".beadsmirror")
-            val minter = DotMinter(sanitizedDoltDatabaseName(config.workspace))
+            val workspaceIdentity = sanitizedDoltDatabaseName(config.workspace)
 
             val feed = DoltCommitFeed(doltRoot)
             val checkpoint = FeedCheckpoint(runDir)
-            val projector = MirrorProjector(minter)
+            val state = MirrorState(MirrorProjector(DotMinter(workspaceIdentity)))
 
-            // The poller's default onCondition (throw FeedConditionException) is
-            // kept: re-baselining past a gone checkpoint is computenet-dqj.3's
-            // job, not this task's — a loud crash on CheckpointGone is correct
-            // here.
+            val rebaseline = Rebaseline(
+                export = BdExportReader(config.workspace)::read,
+                feed = feed,
+                checkpoint = checkpoint,
+                state = state,
+                workspaceIdentity = workspaceIdentity,
+                onEvent = config.onEvent,
+            )
+
             val poller = DoltFeedPoller(
                 feed = feed,
                 checkpoint = checkpoint,
                 interval = config.pollInterval,
-                onBatch = projector::applyAll,
+                // Re-read the handle per batch: a re-baseline earlier in this
+                // very tick may have replaced the projector.
+                onBatch = { records -> state.current.applyAll(records) },
+                onCondition = { condition ->
+                    when (condition) {
+                        is FeedCondition.CheckpointGone ->
+                            rebaseline.run(RebaselineReason.CheckpointGone(condition.checkpoint))
+                    }
+                },
             )
 
+            // Before the socket: a first-start baseline is part of "started",
+            // so the very first request is answered from complete state rather
+            // than from an empty projector that fills in moments later.
+            if (checkpoint.read() == null) rebaseline.run(RebaselineReason.FirstStart)
+
             val shell = DemoShell(config.port)
-            MirrorRoutes(projector).register(shell)
+            MirrorRoutes(state).register(shell)
             shell.start()
             poller.start()
 
-            return BeadsMirrorApp(shell, poller)
+            return BeadsMirrorApp(shell, poller, state)
         }
     }
 }
@@ -109,6 +166,14 @@ class BeadsMirrorApp private constructor(
  *   find the repository's own `.beads` directory; defaults to the process's
  *   working directory. Overridable so a test can point the search at a
  *   throwaway directory tree instead of this repository's real layout.
+ * @param onEvent receives every [MirrorEvent] the running mirror produces —
+ *   today only [MirrorEvent.Rebaselined]. The default prints one line to
+ *   stdout, which is what makes a rebuild visible in a demo run; a test
+ *   supplies a collector and asserts the typed value rather than parsing that
+ *   line. Called on whichever thread produced the event (the poller thread for
+ *   a [RebaselineReason.CheckpointGone] rebuild, the caller of
+ *   [BeadsMirrorApp.Companion.start] for a [RebaselineReason.FirstStart] one),
+ *   synchronously, so an implementation that blocks stalls polling.
  */
 data class BeadsMirrorConfig(
     val workspace: Path,
@@ -116,6 +181,7 @@ data class BeadsMirrorConfig(
     val pollInterval: Duration = Duration.ofMillis(1000),
     val runDir: Path? = null,
     val repoSearchRoot: Path = Path.of("").toAbsolutePath(),
+    val onEvent: (MirrorEvent) -> Unit = { println("beadsmirror: $it") },
 )
 
 /**
