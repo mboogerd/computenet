@@ -94,6 +94,59 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
+      # computenet-dqj.14: every real-workspace test in :demo:beadsmirror
+      # (BeadsMirrorAppTest, RebaselineTest, BaselineBuilderTest,
+      # MirrorExportEqualityTest, DoltCommitFeedTest, DoltSqlTest,
+      # DivergenceControlTest, ...) guards itself with
+      # `assumeTrue(commandAvailable("bd", ...))` /
+      # `assumeTrue(commandAvailable("dolt", ...))` and is skipped, not run,
+      # whenever those binaries are absent. No job in this workflow installed
+      # either, so every one of those suites had been skipped on every CI run
+      # since the module was created — invisible from a developer machine,
+      # where both are normally already on PATH (`bd gain`/`brew` etc.), so
+      # `0 skipped` there looks like full coverage. build-test-fast already
+      # runs `:demo:beadsmirror:test` as part of the repo-wide `check` below
+      # (the module carries no `multi-jvm` tag), so installing both binaries
+      # here — rather than adding a new job — is what actually turns the
+      # existing required check into real coverage instead of a second gate
+      # nothing enforces.
+      #
+      # Both projects publish a single static Linux/amd64 binary as a GitHub
+      # release asset (this repo already relies on that pattern for the
+      # `gradle/actions/setup-gradle` and `actions/setup-*` actions), so the
+      # install is two `curl`s and untars in well under 10s combined — no
+      # build-from-source path, no package manager, no daemon. `bd` is
+      # fetched as a plain tarball (its own install.sh falls back to `go
+      # install` only when a platform lacks a prebuilt asset, which
+      # linux/amd64 never does) so the version is pinned without depending on
+      # GitHub's unauthenticated API rate limit; `dolt`'s own install.sh is
+      # itself version-pinned by URL and does the platform detection, so it
+      # is used as published rather than reimplemented here. Versions match
+      # what a contributor's `brew install dolt` / `bd --version` currently
+      # resolve to as of computenet-dqj.14 (2026-08-16); bump both together
+      # if that drifts.
+      #
+      # `bd --sandbox init` (what every one of these tests actually drives,
+      # via BdScratchWorkspace) is a throwaway embedded-Dolt workspace under
+      # the test's own temp dir — no DoltHub credentials, no network, no
+      # `bd dolt push/pull` — so nothing beyond the two binaries themselves
+      # is required for these suites to run for real in CI.
+      - name: Install bd and dolt (for :demo:beadsmirror's real-workspace tests)
+        run: |
+          set -euo pipefail
+          BD_VERSION=1.2.2
+          DOLT_VERSION=2.3.0
+
+          curl -fsSL -o /tmp/bd.tar.gz \
+            "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/bd.tar.gz -C /tmp bd
+          sudo install -m 0755 /tmp/bd /usr/local/bin/bd
+
+          curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
+
+          bd --version
+          dolt version
+
       # `:kernel:test` is excluded here because it runs in its own required
       # `kernel-test` job below (computenet-dqy.16): it is the repo's largest
       # suite and used to serialise the last ~139s of this lane behind one
@@ -109,6 +162,41 @@ jobs:
       # a full 30s task to the wrong task this way).
       - name: Build and check (fast lane — excludes multi-jvm-tagged tests)
         run: ./gradlew build check -PexcludeMultiJvm=true -x :kernel:test --profile
+
+      # computenet-dqj.14's third acceptance criterion: a skip for missing
+      # `bd`/`dolt` must be visible in the gate's own run, not just locally
+      # invisible-by-default the way it was before the install step above.
+      # Mirrors the `:wire:` roster step's own rule below — never the reason
+      # this required job fails on its own account, except the one signal
+      # that means the coverage this ticket exists for silently regressed:
+      # no JUnit XML at all, i.e. `:demo:beadsmirror:test` did not run.
+      - name: "Publish :demo:beadsmirror's skipped-test count (computenet-dqj.14)"
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          REPORT_DIR="demo/beadsmirror/build/test-results/test"
+          if ! ls "$REPORT_DIR"/TEST-*.xml >/dev/null 2>&1; then
+            echo "no :demo:beadsmirror JUnit XML in $REPORT_DIR — :demo:beadsmirror:test did not run in this build" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          total=$(grep -oh 'tests="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          skipped=$(grep -oh 'skipped="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          {
+            echo "demo:beadsmirror JUnit results: ${total} tests, ${skipped} skipped"
+            if [ "$skipped" -gt 0 ]; then
+              # `|| true`: `set -o pipefail` is on, so a grep chain that matches
+              # nothing would otherwise be this step's exit status and redden a
+              # required job over the shape of a diagnostic. Measured 2026-08-16
+              # against fixtures: with the attribute order Gradle actually emits
+              # (`<testcase name=... classname=...>`, `<skipped/>` either on its
+              # own line or inlined) the chain matches; with `classname` before
+              # `name` it matches nothing and the step exited 1 on an
+              # otherwise-fine report. The order, not the line breaking, is what
+              # decides it.
+              grep -B1 '<skipped' "$REPORT_DIR"/TEST-*.xml | grep -E 'testcase name|message=' || true
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # A CI checkout is always a fresh clone, so this also enforces the
       # clean-clone guard: any load-bearing file that was never committed (the
