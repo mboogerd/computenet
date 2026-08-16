@@ -531,9 +531,10 @@ when the effect subgraph's source was **volatile** (it dies on the crash and is
 re-delivered nothing — exactly how `EffectfulRecoveryTest`'s unhosted source is discarded),
 and the sink recovered from its *own* journaled frames. This was the recorded G-59 gap
 ("spontaneously-emitting sources … `Effectful` sinks without idempotency keys are
-unhandled") and the C-9 boundary; it is why `DUR-REPLAY-01` keeps the data-recovery path
-(journaled/snapshot, `incremental-equals-batch`) and the effect-once path (`effect-count`)
-as **two independent subgraphs**.
+unhandled") and the C-9 boundary; it is why `DUR-REPLAY-01` originally kept the
+data-recovery path (journaled/snapshot, `incremental-equals-batch`) and the effect-once
+path (`effect-count`) as **two independent subgraphs** — a shape folded onto one by
+`computenet-yh6.1.9`, two bullets below.
 
 **How resolved**: commit `34892d9` (`computenet-yh6.1.2`, "A recovered outlet re-emits under
 replay-stable wave identity") made a durable outlet's `sourceId` ref-derived
@@ -618,12 +619,56 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   `DUR-SNAPTAIL-01`, the corpus's other journaled-source→view scenario, asserts
   `views-converge` against a twin instead. Since `[24-DUR-01]`/`[24-DUR-02]`'s data-recovery
   half *in this scenario* is exactly that check, folding would trade a durability assertion
-  for nothing. The probe was reverted and never shipped; `DUR-REPLAY-01` keeps its
-  two-subgraph shape — **now for that stated reason, not the retired one**, which its own
-  graph comment says. Filed as `computenet-yh6.1.9`. Every count in this bullet is against
-  the in-process effect log the `effect-sink` writes; no end-to-end external exactly-once
-  claim is made or implied here, and the external actuator's idempotency remains 93 I-7's
-  stated ceiling and CON1's territory (`[KFX-24]`).
+  for nothing. The probe was reverted and never shipped; `DUR-REPLAY-01` kept its
+  two-subgraph shape — **for that stated reason, not the retired one**. Filed as
+  `computenet-yh6.1.9`, and **taken there**: see the bullet below. Every count in this
+  bullet is against the in-process effect log the `effect-sink` writes; no end-to-end
+  external exactly-once claim is made or implied here, and the external actuator's
+  idempotency remains 93 I-7's stated ceiling and CON1's territory (`[KFX-24]`).
+- **The fold is now TAKEN; the omission was an oversight, not a deliberate modelling
+  refusal** (`computenet-yh6.1.9`). The open question the bullet above left — whether a
+  journaled source's *replayed* op history can diverge from the script's accepted-op
+  multiset `BatchOracle` folds, which if it could would have made the omission
+  deliberate and the fold case actively wrong — was answered **no**, and answered before
+  the case was added. Five structural reasons, each checkable in the tree: both catalog
+  ids lower to the same `SetCell` (`KernelDriverDur.build`); the journal tee is
+  write-ahead and *inside the staging lock*
+  (`ManagedHost.enqueueHostedInvocation` appends before `attentionScheduler.stage` in one
+  `synchronized(dataLock)` block, the coalesce branch included), so journal order **is**
+  acceptance order and nothing accepted is missing or reordered; both append sites are
+  guarded by `!hostDurability.recovering`, so replay cannot grow the history either; a
+  checkpoint substitutes a `Stateful` snapshot for exactly the prefix it compacts
+  (`[24-DUR-02]`), so checkpoint + tail folds to the whole history; and the set fold is
+  idempotent under `add` regardless, the only op besides `remove` the binding admits.
+  The corpus already asserted the conclusion from two directions, which is why this is an
+  observation rather than an argument: `DUR-SNAPTAIL-01` pins a journaled source→view
+  against an **uninterrupted volatile twin driven with the identical op history**, and
+  `DUR-ATOMIC-01`'s `final-view` golden is literally the fold of its script's adds across
+  checkpoint, compaction, tail replay and live post-recovery traffic. The riskier case was
+  in the fold table all along: whether a driver's read matches the whole-history fold
+  across a crash is a property of the *scenario's* recovery construction, not the source's
+  binding, and a **volatile** `set-source` on `host: dur` — which the oracle has always
+  folded — loses its state outright (`[24-DUR-03]`), which is precisely why the pre-fold
+  `DUR-REPLAY-01` had to snapshot and restore its view. So `BatchOracle.sourceFold` now
+  folds `journal-set-source` as the `SetCell` it is (`journal-set-view` likewise a view
+  pass-through), and `DUR-REPLAY-01` is folded onto **one** subgraph with
+  `incremental-equals-batch(dview)` restored: one journaled source feeding both the
+  volatile view and the journaled `effect-sink`, passing the `core,dur` sweep (20 runs per
+  scenario, 69 scenarios, 0 failures) and the full `core,dist,dur` corpus (75 scenarios, 0
+  failures) — no other scenario's verdict moved, and none could, since `DUR-REPLAY-01` is
+  the only scenario in the corpus that pairs an `incremental-equals-batch` with a
+  `journal-*` cell. The fold also made that check **stronger**: the view's own
+  snapshot/restore was dropped, so `dview` holds its pre-crash prefix at the end only
+  because `recoverFrom` replayed the frame tail into a rebuilt graph, and the check can no
+  longer be satisfied by a second, independent route back to that state. Two consequences
+  in files outside that item's claim are left recorded rather than done silently — the
+  check layer's half (`Values.VIEW_TYPES`, `Values.canonicalForView`) and
+  `DUR-ATOMIC-01`'s now-stale "WHY `final-view` AND NOT `incremental-equals-batch`"
+  rationale — filed as `computenet-yh6.1.10` and documented in
+  `BatchOracle.DURABLE_SET_VIEW`'s KDoc; both are inert against today's corpus and both
+  fail in the safe direction. As above, every count here is against the in-process effect
+  log the `effect-sink` writes; nothing in this bullet claims end-to-end external
+  exactly-once, which stays 93 I-7's ceiling and CON1's territory (`[KFX-24]`).
 - **Also not resolved by this entry**: `[24-DUR-04]`'s emission-identity plane is now
   asserted head-on by `DUR-SRCID-01`/`DUR-SRCID-02`; its OR-set tag plane and
   wave-aligned-consumer plane are recorded separately under "Not covered" below.
