@@ -332,11 +332,16 @@ So:
   Quote each required check's name and conclusion in your verdict — and quote
   them for the **PR's current head**. If §6's re-fetch makes you merge
   `origin/main`, that merge moves the head and this reading goes stale; §6
-  says how to re-take it. Two traps:
+  says how to re-take it. Three traps:
   a green check on a diff that touches no compiled input is evidence of
   nothing (it too can be cache and skip), so say which checks actually
-  exercised the changed modules; and a check still `pending` is not a pass —
-  wait for it or certify draft. A **red** required check is not yours to wave
+  exercised the changed modules; a check still `pending` is not a pass —
+  wait for it or certify draft; and `gh pr checks` **exits 8 while anything
+  is pending**, so never put it on the left of `&&` (the next step is
+  silently skipped) and never gate a wait loop on its exit status — a
+  jq/until waiter exited instantly looking like a completed green wait
+  (computenet-luhx). Gate on the printed rows instead:
+  `until ! gh pr checks <pr-url> | grep -q pending; do sleep 30; done`. A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 
 ## 5. Repair by default — up to a bound
