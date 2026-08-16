@@ -48,6 +48,14 @@ import kotlinx.serialization.json.JsonPrimitive
  * **Scope.** Issue fields and dependency edges. The `metadata.cn_dot` echo
  * drop (computenet-dqj.2.3) gates both, before either mints anything
  * ([admits]); re-baseline (dqj.3) and HTTP serving (dqj.4) are later features.
+ *
+ * **Both structural guards can be seeded away — for tests only.** The two
+ * paragraphs above describe guards, and a guard nothing can switch off is a
+ * guard nobody has ever seen work. [SeededDefects] is that switch
+ * (computenet-dqj.5.3): reachable only from this module's test source set,
+ * never from [civictech.demo.beadsmirror.BeadsMirrorConfig] or `main`, and
+ * defaulting to [SeededDefects.NONE] on the public constructor, so shipped
+ * behaviour is exactly what it was before the switch existed.
  */
 class MirrorProjector(
     private val minter: DotMinter,
@@ -56,6 +64,36 @@ class MirrorProjector(
     /** The projected dependency-edge set. Exposed so tests and later features can read/subscribe. */
     val edges: SetCell<MirrorEdge> = SetCell(),
 ) {
+
+    /**
+     * Which structural guards are seeded away. **Always [SeededDefects.NONE]
+     * for a projector built through the public constructor** — only the
+     * `internal` constructor below can set it, and only this module's tests
+     * call that one.
+     *
+     * A `var` set from a secondary constructor rather than a primary-constructor
+     * parameter for a visibility reason, not a stylistic one: a public
+     * constructor may not expose an `internal` parameter type, and making the
+     * primary constructor `internal` instead would narrow a type other code in
+     * this module legitimately constructs.
+     */
+    private var defects: SeededDefects = SeededDefects.NONE
+
+    /**
+     * **Test-only.** A projector with [defects] seeded, for the divergence
+     * controls of computenet-dqj.5.3 (feature computenet-dqj.5 rules 3 and 4):
+     * each control seeds one guard away and shows the mirror-vs-export
+     * equality check goes red, which is what makes the guard demonstrably
+     * load-bearing rather than decorative.
+     */
+    internal constructor(
+        minter: DotMinter,
+        defects: SeededDefects,
+        cell: OrMapCell<MirrorKey, String> = OrMapCell(),
+        edges: SetCell<MirrorEdge> = SetCell(),
+    ) : this(minter, cell, edges) {
+        this.defects = defects
+    }
 
     /**
      * The dots this projector has minted and still believes live, per key.
@@ -152,6 +190,33 @@ class MirrorProjector(
     }
 
     /**
+     * The record's field columns, in the deterministic order [keysOf] and
+     * [fieldDelta] assign key indices from.
+     */
+    private fun columnsOf(record: ChangeRecord): List<String> =
+        record.fieldDiffs.map { it.column }.distinct().sorted()
+
+    /**
+     * The map key one field column of one issue lands on: **one key per
+     * (issue, field)** ([MirrorKey]) — unless [SeededDefects.wholeIssueKeying]
+     * is seeded, which collapses every column of an issue onto the single
+     * [SeededDefects.WHOLE_ISSUE_FIELD] key so two commits editing different
+     * fields compete for it.
+     */
+    private fun keyFor(issueId: String, column: String): MirrorKey =
+        if (defects.wholeIssueKeying) MirrorKey(issueId, SeededDefects.WHOLE_ISSUE_FIELD)
+        else MirrorKey(issueId, column)
+
+    /**
+     * Slot 0: the presence key, or nothing when
+     * [SeededDefects.dropPresenceKey] is seeded. Its *size* is what the field
+     * key indices are offset by, so dropping it shifts every field index down
+     * by one rather than leaving a hole.
+     */
+    private fun presenceSlot(record: ChangeRecord): List<MirrorKey> =
+        if (defects.dropPresenceKey) emptyList() else listOf(MirrorKey.presence(record.issueId))
+
+    /**
      * The record's key list, in the order whose indices [DotMinter] packs.
      *
      * Deterministic and positionally stable: the presence key holds slot 0
@@ -160,9 +225,7 @@ class MirrorProjector(
      * re-derives the same index for the same key, and so the same dot.
      */
     private fun keysOf(record: ChangeRecord): List<MirrorKey> =
-        listOf(MirrorKey.presence(record.issueId)) +
-            record.fieldDiffs.map { it.column }.distinct().sorted()
-                .map { MirrorKey(record.issueId, it) }
+        presenceSlot(record) + columnsOf(record).map { keyFor(record.issueId, it) }
 
     /** The one delta this record's issue-field half contributes, or `null`. */
     private fun fieldDelta(record: ChangeRecord): TaggedMapDelta<MirrorKey, String>? {
@@ -170,7 +233,7 @@ class MirrorProjector(
         // all, so it touches no field key. Its edges are dqj.2.2's business.
         if (record.diffType == null) return null
 
-        val keys = keysOf(record)
+        val presenceSlot = presenceSlot(record)
         val puts = LinkedHashMap<MirrorKey, Map<Timestamp, String>>()
         val dels = LinkedHashMap<MirrorKey, MutableSet<Timestamp>>()
 
@@ -234,11 +297,15 @@ class MirrorProjector(
 
             DiffType.ADDED, DiffType.MODIFIED -> {
                 if (record.diffType == DiffType.ADDED) {
-                    put(keys[0], 0, MirrorKey.PRESENT_VALUE)
+                    // Nothing to mint when the presence key is seeded away:
+                    // membership then falls back to the field keys, which is
+                    // the whole point of that control.
+                    presenceSlot.forEach { put(it, 0, MirrorKey.PRESENT_VALUE) }
                 }
-                keys.drop(1).forEachIndexed { i, key ->
-                    val keyIndex = i + 1
-                    val new = record.fieldDiff(key.field)?.new
+                columnsOf(record).forEachIndexed { i, column ->
+                    val key = keyFor(record.issueId, column)
+                    val keyIndex = i + presenceSlot.size
+                    val new = record.fieldDiff(column)?.new
                     // Values are stored in their bd-export JSON form — no typed
                     // per-field schema (BDS1) — as a String, because
                     // `JsonElement` is not `java.io.Serializable` and the cell's
@@ -362,8 +429,14 @@ class MirrorProjector(
      */
     fun view(): Map<String, Map<String, String>> {
         val live = cell.membership()
-        val present = live.filterTo(LinkedHashSet()) { it.field == MirrorKey.PRESENT }
-            .mapTo(LinkedHashSet()) { it.issueId }
+        val present = if (defects.dropPresenceKey) {
+            // The seeded defect: membership derived from *any* live key of the
+            // issue, so a field put no removal could tombstone resurrects it.
+            live.mapTo(LinkedHashSet()) { it.issueId }
+        } else {
+            live.filterTo(LinkedHashSet()) { it.field == MirrorKey.PRESENT }
+                .mapTo(LinkedHashSet()) { it.issueId }
+        }
         val out = sortedMapOf<String, MutableMap<String, String>>()
         present.forEach { out[it] = sortedMapOf() }
         live.filter { it.field != MirrorKey.PRESENT && it.issueId in present }
@@ -380,3 +453,52 @@ class MirrorProjector(
 
 /** The `metadata` JSON column's provenance field (epic computenet-dqj acceptance rule 5). */
 private const val CN_DOT_FIELD: String = "cn_dot"
+
+/**
+ * Which of [MirrorProjector]'s two structural guards are **seeded away** —
+ * the divergence controls of computenet-dqj.5.3 (feature computenet-dqj.5,
+ * acceptance rules 3 and 4).
+ *
+ * **This is a test-only switch, deliberately not shipped configuration**
+ * (feature design: "divergence controls are implemented as test-only
+ * switches, not shipped configuration"). It is `internal`, so it exists for
+ * this module's own test source set and for nothing else;
+ * [civictech.demo.beadsmirror.BeadsMirrorConfig] carries no counterpart, and
+ * neither `main` nor any production call site can reach it. A projector built
+ * through [MirrorProjector]'s public constructor is always [NONE].
+ *
+ * Why it exists at all: each guard's KDoc argues that dropping it would break
+ * a specific property, and until something drops it that argument is
+ * untested. `civictech.demo.beadsmirror.e2e.DivergenceControlTest` seeds each
+ * defect against a real `bd` workspace and shows the mirror-vs-export
+ * equality check turns red — and clean again with the defect off.
+ *
+ * @param dropPresenceKey omit the presence key entirely: nothing is minted at
+ *   slot 0 on an `ADDED` record, and `MirrorProjector.view` derives membership
+ *   from any live field key instead of from [MirrorKey.PRESENT] alone. The
+ *   removal path is untouched (a remove stays tag-precise), so a field put the
+ *   projector never observed — a foreign-sourced straggler arriving through
+ *   the replicated-delta seam — is enough to resurrect a removed issue as a
+ *   partial record.
+ * @param wholeIssueKeying replace the composite (issue, field) key with one
+ *   key per issue ([WHOLE_ISSUE_FIELD]). Two commits editing *different*
+ *   fields of one issue then compete for that key, and the later put's
+ *   floor-bounded tombstone buries the earlier one's value.
+ */
+internal data class SeededDefects(
+    val dropPresenceKey: Boolean = false,
+    val wholeIssueKeying: Boolean = false,
+) {
+    companion object {
+        /** No defect seeded: exactly the shipped behaviour. */
+        val NONE: SeededDefects = SeededDefects()
+
+        /**
+         * The single field name every column collapses onto under
+         * [wholeIssueKeying]. Double-underscore-prefixed for the same reason
+         * [MirrorKey.PRESENT] is: `bd`'s own diff columns are plain SQL
+         * identifiers, so no real column can collide with it.
+         */
+        const val WHOLE_ISSUE_FIELD: String = "__whole"
+    }
+}
