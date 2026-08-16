@@ -43,12 +43,25 @@ import kotlinx.serialization.json.JsonPrimitive
  * without resurrecting removed keys.
  *
  * **Bound (loud, not silent).** Ordinals are the record's slot in
- * [DotMinter]'s packing, capped at [DotMinter.MAX_ORDINAL] = 1023, so an
- * export of more than 1024 issues fails in `DotMinter.counter`'s `require`
- * with the ordinal named. That is a real ceiling on the workspaces this
- * baseline path can rebuild, accepted for this feature; widening it means
- * spreading the baseline over several synthetic heights, which the
- * mint-at-head-height rule above would have to be restated for.
+ * [DotMinter]'s packing, capped at [DotMinter.MAX_ORDINAL], so an export of
+ * more than `MAX_ORDINAL + 1` issues fails in `DotMinter.counter`'s `require`
+ * with the ordinal named rather than aliasing two issues onto one dot. Because
+ * a baseline mints the whole export at ONE height, that cap is the ceiling on
+ * workspace size, not on churn.
+ *
+ * computenet-dqj.9 raised it from 1023 (within 2x of this repo's own 565-issue
+ * tracker, measured 2026-08-16) to 1_048_575, by widening [DotMinter]'s ordinal
+ * field 10 -> 20 bits at the expense of the commit-height field, which had
+ * headroom to spare. The two alternatives were rejected on the epic's own
+ * constraints: *accepting the cap* leaves the stated ambition — mirroring this
+ * tracker — a few years of growth from failing; and *spreading a baseline over
+ * several synthetic heights* cannot be made to hold, because the only heights
+ * available are below the captured head, where they collide with the dots real
+ * commits already minted, or above it, where they collide with the commits the
+ * poller is about to read — either way breaking the mint-at-head-height rule
+ * above and with it the monotone-in-feed-order property last-writer-wins rests
+ * on. Widening the field touches neither: dots stay a pure function of feed
+ * position, and the packing stays commit-height-major.
  *
  * **Known asymmetry, deliberately not solved here.** Values are stored in
  * their export JSON form, verbatim, exactly as [MirrorProjector] stores the

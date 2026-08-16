@@ -220,16 +220,34 @@ class BaselineBuilderTest {
         }
 
         /**
-         * The documented ceiling: ordinals are [DotMinter]'s 10-bit slot, so an
-         * export of more than 1024 issues fails loudly in `DotMinter.counter`
-         * rather than aliasing two issues onto one dot.
+         * computenet-dqj.9. A baseline mints one ordinal per issue at ONE
+         * synthetic height, so [DotMinter.MAX_ORDINAL] is the ceiling on the
+         * *size of workspace* this path can rebuild. At 10 bits it was 1023,
+         * against a mirrored tracker measured at 565 issues (2026-08-16) — this
+         * pins the widened budget by building a baseline seven times the old
+         * ceiling and reading the dots it mints.
+         *
+         * 4096 is the acceptance figure, not the ceiling; the ceiling itself
+         * (1_048_575, and its loud `require`) is pinned in `DotMinterTest`,
+         * where it costs no allocation.
          */
         @Test
-        fun `an export beyond the ordinal budget fails loudly`() {
-            val many = (0..DotMinter.MAX_ORDINAL + 1).map { """{"id":"ws-${it.toString().padStart(5, '0')}"}""" }
+        fun `a baseline far beyond the old ordinal budget succeeds with distinct ascending dots`() {
+            val many = (0 until 4096).map { """{"id":"ws-${it.toString().padStart(5, '0')}"}""" }
 
-            shouldThrow<IllegalArgumentException> { builder.build(rows(*many.toTypedArray()), "headhash", 0) }
-                .message!! shouldContain "ordinal"
+            val records = builder.records(rows(*many.toTypedArray()), "headhash", 7)
+            records.size shouldBe 4096
+            records.map { it.position.ordinal } shouldContainExactly (0 until 4096).toList()
+
+            // Every record's slot-0 (presence) dot: distinct, and strictly
+            // increasing in feed order — DOT_ORDER's counter is the whole of
+            // last-writer-wins here, so aliasing or a non-monotone step would
+            // make the mirror converge on a value no commit ever wrote.
+            val counters = records.map { DotMinter.counter(it.position, 0) }
+            counters.distinct().size shouldBe counters.size
+            counters.sorted() shouldContainExactly counters
+
+            builder.build(rows(*many.toTypedArray()), "headhash", 7).view().size shouldBe 4096
         }
 
         /** A feed-shaped record carrying [cnDot] as its provenance — the echo the baseline should already hold. */
