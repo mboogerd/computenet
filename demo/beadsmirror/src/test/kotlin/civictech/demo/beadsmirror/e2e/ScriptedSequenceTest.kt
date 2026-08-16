@@ -228,15 +228,18 @@ class ScriptedSequenceTest {
             mirror.events.count { it is MirrorEvent.Rebaselined } == 2
         }
 
-        // The further mutation waits for the rebuild rather than racing it.
-        // `Rebaseline.run` reads `bd export` BEFORE capturing the head commit
-        // (the concurrent-writer race its own KDoc accepts), so a mutation
-        // landing between those two reads is checkpointed as consumed while
-        // its content is absent from the snapshot — measured here on
-        // 2026-08-16 as a stale `priority`/`updated_at` pair surviving a
-        // quiesced fold. That is a real property of the production code, not
-        // a test artifact, and it belongs to whoever tightens the baseline
-        // snapshot, not to this equality gate.
+        // The further mutation waits for the rebuild rather than racing it —
+        // now for sequencing, not for correctness. It originally worked around
+        // computenet-dqj.10: `Rebaseline.run` read `bd export` BEFORE capturing
+        // the head commit, so a mutation landing between those two reads was
+        // checkpointed as consumed while its content was absent from the
+        // snapshot, and never folded (measured here 2026-08-16 as a stale
+        // `priority`/`updated_at` pair surviving a quiesced fold). That order
+        // is now reversed (head first, export second), so such a mutation is
+        // re-folded from the feed instead of lost. The wait stays because this
+        // case is about a mutation applied *after* a completed re-baseline —
+        // the rebaseline-count and event assertions below describe that
+        // sequence, not a race.
         workspace.run("update", script.idA, "--priority", "0")
         mirror.quiesce()
 

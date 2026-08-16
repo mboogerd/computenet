@@ -70,10 +70,19 @@ sealed interface MirrorEvent {
  *
  * One [run] does exactly five things, and their order is load-bearing:
  *
- * 1. `bd export` the workspace ([BdExportReader]).
- * 2. Capture the workspace's head commit and height ([BaselineBuilder.captureHead]).
- *    Export first, head second — the order [BaselineBuilder.captureHead]
- *    documents, along with the concurrent-writer race it accepts.
+ * 1. Capture the workspace's head commit and height ([BaselineBuilder.captureHead]).
+ * 2. `bd export` the workspace ([BdExportReader]).
+ *
+ *    **Head first, export second** — see [BaselineBuilder.captureHead] for the
+ *    concurrent-writer argument. In short (computenet-dqj.10): a commit landing
+ *    between the two reads is then *missing from the checkpoint but present in
+ *    the snapshot*, so the poller re-folds a commit whose content the baseline
+ *    already holds — idempotent, because a replayed record mints at a strictly
+ *    greater height than the baseline's and carries the same values, so
+ *    last-writer-wins re-decides the same way. The reverse order makes the same
+ *    commit *present in the checkpoint and missing from the snapshot*, and that
+ *    one is unrecoverable: the poller resumes strictly after it and its content
+ *    is never folded at all.
  * 3. Build a **fresh** [MirrorProjector] from the export ([BaselineBuilder.build]),
  *    under a fresh [DotMinter] of the *same* [workspaceIdentity]. Same identity,
  *    because the dot source must not change across a restart or a rebuild;
@@ -142,8 +151,8 @@ class Rebaseline(
      * only a completeness one.
      */
     fun run(reason: RebaselineReason) {
-        val rows = export()
         val (headCommit, headHeight) = BaselineBuilder.captureHead(feed)
+        val rows = export()
         val rebuilt = BaselineBuilder(DotMinter(workspaceIdentity)).build(rows, headCommit, headHeight)
 
         state.swap(rebuilt)
