@@ -661,12 +661,18 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   snapshot/restore was dropped, so `dview` holds its pre-crash prefix at the end only
   because `recoverFrom` replayed the frame tail into a rebuilt graph, and the check can no
   longer be satisfied by a second, independent route back to that state. Two consequences
-  in files outside that item's claim are left recorded rather than done silently — the
+  in files outside that item's claim were left recorded rather than done silently — the
   check layer's half (`Values.VIEW_TYPES`, `Values.canonicalForView`) and
-  `DUR-ATOMIC-01`'s now-stale "WHY `final-view` AND NOT `incremental-equals-batch`"
-  rationale — filed as `computenet-yh6.1.10` and documented in
-  `BatchOracle.DURABLE_SET_VIEW`'s KDoc; both are inert against today's corpus and both
-  fail in the safe direction. As above, every count here is against the in-process effect
+  `DUR-ATOMIC-01`'s then-stale "WHY `final-view` AND NOT `incremental-equals-batch`"
+  rationale. Both are now **closed, by `computenet-yh6.1.10`**: `Values.VIEW_TYPES` widened
+  to include `journal-set-view`, so `view: '*'` no longer skips a journaled view;
+  `Values.canonicalForView` now consults `Values.SET_VIEW_TYPES` (which also gained
+  `journal-set-view`), so a journaled set view compares order-insensitively instead of by
+  the driver's `Value.toString()` order; and `DUR-ATOMIC-01`'s rationale comment was
+  rewritten to describe the closed state rather than the open one. The decision to widen
+  the quantifier — and its measured zero blast radius against the corpus at the time —
+  is recorded in `Values.VIEW_TYPES`' KDoc; `BatchOracle.DURABLE_SET_VIEW`'s KDoc points
+  there rather than re-arguing it. As above, every count here is against the in-process effect
   log the `effect-sink` writes; nothing in this bullet claims end-to-end external
   exactly-once, which stays 93 I-7's ceiling and CON1's territory (`[KFX-24]`).
 - **Also not resolved by this entry**: `[24-DUR-04]`'s emission-identity plane is now
