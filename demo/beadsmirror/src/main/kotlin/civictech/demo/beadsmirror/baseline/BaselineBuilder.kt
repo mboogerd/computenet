@@ -170,7 +170,13 @@ class BaselineBuilder(private val minter: DotMinter) {
 
         /**
          * Export keys that are not issue fields: the record discriminator, the
-         * nested dependency array, and bd's derived counts.
+         * nested dependency array, bd's derived counts, and `labels` — `labels`
+         * lives in its own Dolt table, not on `issues`, and a label-only `bd
+         * update --add-label` commits ZERO `dolt_diff_issues` rows (probe:
+         * computenet-dqj.5's breakdown comment thread), so the feed can never
+         * carry it. Excluding it here means a re-baselined fold does not carry
+         * a `labels` key a feed-built fold never has (the same argument this
+         * class already applies to the `*_count` fields).
          */
         val EXCLUDED_FIELDS: Set<String> = setOf(
             "_type",
@@ -178,6 +184,7 @@ class BaselineBuilder(private val minter: DotMinter) {
             "dependency_count",
             "dependent_count",
             "comment_count",
+            "labels",
         )
 
         private const val ISSUE_ID_FIELD = "issue_id"
