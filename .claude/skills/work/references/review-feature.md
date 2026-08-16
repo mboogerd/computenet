@@ -480,7 +480,10 @@ git -C <worktree> log --oneline $(git -C <worktree> merge-base HEAD origin/main)
   applies to any other refused command in this file: substitute the
   documented equivalent (e.g. `--rerun` instead of deleting
   `build/test-results`, review-task.md §2) or hand the step back, always
-  saying which command was refused.
+  saying which command was refused. A hand-back rides a **READY** verdict
+  (its conditions otherwise met) — the push/re-read-checks ordering below
+  travels to the orchestrator along with the merge; only the re-fetch
+  evidence above is yours to quote.
 
 **That merge creates a new head, so it invalidates the `gh pr checks` reading
 §4 requires you to quote.** Every required check you read belongs to the
