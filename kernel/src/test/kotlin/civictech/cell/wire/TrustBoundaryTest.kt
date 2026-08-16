@@ -117,17 +117,27 @@ class TrustBoundaryTest {
             // ingress under RESTART and prove it never fires.
             run.bridgeP.managementInlet.call.supervise(ingress.ref, SupervisionPolicy.RESTART)
 
+            // Baselines, taken *after* the peering is established (Run's init
+            // already ran to idle): opening a loopback announces each side's
+            // own bridge cells (the ingress's ref and its registry mirror's
+            // ref) to the other, and P's allowlist refuses Q's two — genuine
+            // ADMISSION denials, just not ones `sendFromQ` causes. Measuring
+            // the *increment* isolates what this test is actually about.
+            val sink = ingress.boundaryDenials["bridge-ingress"]!!
+            val denialCountBefore = sink.denialCount
+            val lettersBefore = run.deadLettersP.size
+
             run.sendFromQ(5)
 
             run.collector.received.shouldBeEmpty() // nothing crossed
-            run.deadLettersP.size shouldBeGreaterThan 0 // and the refusal is visible
+            run.deadLettersP.size shouldBeGreaterThan lettersBefore // and the refusal is visible
 
             // [SEC1-06][SEC1-07]: a typed ADMISSION denial per refused send,
             // counted on the ingress's own sink — not a bare thrown check().
-            val sink = ingress.boundaryDenials["bridge-ingress"]!!
-            sink.denialCount shouldBe 5L
+            (sink.denialCount - denialCountBefore) shouldBe 5L
 
-            val denialLetters = run.deadLettersP.filter { it.description.contains("seam=ADMISSION") }
+            val denialLetters = run.deadLettersP.drop(lettersBefore)
+                .filter { it.description.contains("seam=ADMISSION") }
             denialLetters.size shouldBe 5
             denialLetters.forEach { letter ->
                 letter.cause shouldBe null // not a fault
@@ -135,7 +145,8 @@ class TrustBoundaryTest {
                 letter.description shouldContain "NOT_ADMITTED"
             }
 
-            // BS-14: nothing thrown, so supervision never sees a failure.
+            // BS-14: nothing thrown, so supervision never sees a failure —
+            // including from the pre-existing setup refusals above.
             run.bridgeP.supervisionAccounting().restarts shouldBe 0L
         }
     }
