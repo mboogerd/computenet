@@ -7,13 +7,18 @@ import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
 import civictech.cell.DenialReason
+import civictech.cell.Frozen
+import civictech.cell.Owned
 import civictech.cell.Propagate
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.input
+import civictech.cell.proxy.HostedPortInvocation
 import civictech.cell.proxy.Invocation
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -155,6 +160,68 @@ class LifecycleAndDeadLetterTest {
         drop.denial shouldBe null
         refusal.denial shouldBe denial
         refusal.description shouldContain "boundary denial at exposure"
+    }
+
+    /**
+     * computenet-mouq — the vacuity pin. `routerInlet.call.route(...)` is the
+     * idiom this file made popular, and it is the WRONG instrument for any
+     * assertion about dead-letter *arguments*: the routing handler throws
+     * inside [ManagedHost]'s private `enqueue` helper, whose fault path calls
+     * `deadLetter(e, ...)` with no `invocation`, so the emitted [DeadLetter]
+     * carries `invocation == null` and
+     * `DeadLetters.sanitizeForDeadLetter` — which keys off exactly that
+     * invocation — never runs. A test that drives a fault through `route` and
+     * then asserts Frozen/Redacted forms or per-argument discharge accounting
+     * asserts over a record whose argument capture was never populated: the
+     * assertions can pass because the shape they check is *absent* rather than
+     * wrong.
+     *
+     * Use [ManagedHost.enqueueHostedInvocation] for those — it is the path
+     * that carries a `HostedPortInvocation` into the fault catch. This test
+     * holds both halves side by side so the difference is executable rather
+     * than folklore; if `route` is ever changed to carry an invocation, the
+     * first half goes red and points the changer here.
+     *
+     * The second half also records the exclusive consequence: the `Owned`
+     * handed to `route` is dropped **undischarged** (still takeable), while
+     * the one that reaches the capture path is frozen. That asymmetry is
+     * reported, not blessed — see the bead.
+     */
+    @Test
+    fun `a route-driven dead letter carries no invocation, so per-argument capture is unreachable through it`() {
+        val controller = SimulationController()
+        val host = ManagedHost(scheduler = controller.scheduler())
+        val letters = collectDeadLetters(host)
+
+        val cell = TrackingCell()
+        host.managementInlet.call.spawn(cell)
+
+        val viaRoute = Owned("via-route")
+        host.routerInlet.call.route(cell.ref, "nope", Invocation.of(provide, arrayOf(viaRoute)))
+        controller.runToIdle()
+
+        letters.size shouldBe 1
+        // the pin: no invocation reached the dead letter, so there is no
+        // per-argument capture on this record to assert anything about
+        letters[0].invocation shouldBe null
+        // and consequently nothing sanitized the argument — it is still live
+        viaRoute.take() shouldBe "via-route"
+
+        // the instrument that does exercise the capture path
+        val viaIntake = Owned("via-intake")
+        host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                cellRef = cell.ref,
+                portName = "nope",
+                type = HostedPortInvocation.Type.PORT_API,
+                invocation = Invocation.of(provide, arrayOf(viaIntake)),
+            ),
+        )
+        controller.runToIdle()
+
+        letters.size shouldBe 2
+        val captured = letters[1].invocation.shouldNotBeNull()
+        captured.invocation.args.single().shouldBeInstanceOf<Frozen<*>>()
     }
 
     @Test
