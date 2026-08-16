@@ -41,8 +41,16 @@ dependencies {
 // the Test task, and an absolute machine-specific one would cost the task its cross-machine
 // build-cache hits. A Gradle Test task's working directory is the project directory, so
 // ExpectedFailureLedger.DEFAULT_REPORT_PATH — a relative path — resolves to exactly this
-// file. Keep the two in step; printing the path below is what makes a mismatch visible
-// instead of silently reporting zero.
+// file. Keep the two in step; printing the path below is what makes a mismatch visible.
+//
+// Printing the path is NOT by itself what stops a silent zero, and the absent-file branch
+// below is. Measured 2026-08-16 during this feature's review: with the report file deleted
+// and `:kernel:test` UP-TO-DATE (the same shape a build-cache hit produces on a fresh
+// machine — `build/reports/**` is not a declared output of the test task, so a FROM-CACHE
+// `:kernel:test` does not restore it), this task printed `Standing expected failures
+// (@ExpectedFailure): 0` next to a correct path, which reads as "nothing stands" when the
+// truth is "nothing ran". An empty-but-present file is the real zero — `doFirst` truncates
+// it whenever the test task actually executes — so absent and empty are reported apart.
 // The renderer is a FINALIZER rather than a `doLast` on `test`, because a `doLast` is
 // skipped when the task fails — and a run with a failing test is exactly when a reader wants
 // to know which of the failures were the standing, expected ones.
@@ -52,11 +60,17 @@ val reportExpectedFailures = tasks.register("reportExpectedFailures") {
     description = "Prints the expected failures still standing after :kernel:test [CHA2-45]."
     val reportFile = expectedFailureReport.get().asFile
     doLast {
-        val entries = if (reportFile.isFile) {
-            reportFile.readLines().filter { it.isNotBlank() }.distinct()
-        } else {
-            emptyList()
+        if (!reportFile.isFile) {
+            logger.lifecycle(
+                "Standing expected failures (@ExpectedFailure): NOT REPORTED — :kernel:test " +
+                    "did not execute in this build (up-to-date, or restored from the build " +
+                    "cache, which does not restore this file), so no per-run ledger was " +
+                    "written. This is not a count of zero. Re-run with --rerun for the " +
+                    "current list. (${reportFile.absolutePath})"
+            )
+            return@doLast
         }
+        val entries = reportFile.readLines().filter { it.isNotBlank() }.distinct()
         logger.lifecycle(
             buildString {
                 appendLine("Standing expected failures (@ExpectedFailure): ${entries.size}")
