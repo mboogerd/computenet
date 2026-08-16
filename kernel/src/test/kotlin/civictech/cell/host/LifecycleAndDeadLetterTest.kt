@@ -1,10 +1,14 @@
 package civictech.cell.host
 
+import civictech.cell.BoundaryDenial
+import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.DenialReason
 import civictech.cell.Propagate
+import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
 import civictech.cell.port.Use
 import civictech.cell.port.input
@@ -109,6 +113,48 @@ class LifecycleAndDeadLetterTest {
 
         cell.deactivations shouldBe 1
         letters.size shouldBe 2
+    }
+
+    /**
+     * computenet-usd.7: a boundary refusal and a plain host-level drop both
+     * carry `cause == null`, so before this test's subject existed the only
+     * discriminator on the dead-letter outlet was a string prefix on
+     * [DeadLetter.description]. [DeadLetter.denial] is the structural fix —
+     * drives [DeadLetters] directly (this test lives in its own package,
+     * `internal` is visible) rather than through a hosted `BoundaryPolicy`
+     * seam, because what is under test is the record shape [DeadLetters]
+     * hands to the outlet, not any one adopter of it.
+     */
+    @Test
+    fun `a boundary denial's dead letter carries a typed denial distinct from a plain drop`() {
+        val letters = mutableListOf<DeadLetter>()
+        val hostRef = CellRef(UUID.randomUUID())
+        val deadLetters = DeadLetters(hostRef) { letters += it }
+
+        // a plain fault/drop: no denial attached
+        deadLetters.deadLetter(cause = null, description = "routing to an unknown port")
+
+        val denial = BoundaryDenial(
+            seam = BoundarySeam.INTEGRITY,
+            exposure = "exposedInlet",
+            principal = PeerId("mallory"),
+            subject = "Consumer#provide",
+            reason = DenialReason.REPLAY,
+            detail = "counter=7 not > last accepted 7",
+        )
+        deadLetters.boundaryDenial(CellRef(UUID.randomUUID()), denial, deniedArgs = emptyList())
+
+        letters.size shouldBe 2
+        val (drop, refusal) = letters
+
+        // both share the fault-vs-denial ambiguity this item closes: null cause
+        drop.cause shouldBe null
+        refusal.cause shouldBe null
+
+        // the discriminator: only the refusal carries a denial record
+        drop.denial shouldBe null
+        refusal.denial shouldBe denial
+        refusal.description shouldContain "boundary denial at exposure"
     }
 
     @Test
