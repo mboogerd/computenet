@@ -93,6 +93,15 @@ interface CoalescingCombineApi {
  * condition exactly as it does for the frontier. Like that frontier, an inlink
  * that structurally never carries a given source is a phantom expected edge for
  * that source's waves (G-13: static link-set frontier, no upstream traversal).
+ * Since `computenet-usd.3.1` a `BoundaryPolicy` denial is a **second producer**
+ * of exactly that unmirrored terminal stall (`civictech.cell.membrane`'s
+ * `stallDeniedEdges` emits `StallNotice.Stall(DEAD_LETTERED, ts)` over
+ * `Protocols.Suspension`), so a denied wave reaching this cell is retired only
+ * by a later wave's watermark or by `EdgeClose` — never by RE-SCOPE. That
+ * matters because this is the only landed reconvergence point that forms a
+ * per-wave *combination*, which is why `[SEC1-28]` is filed UNVERIFIED in
+ * `concord/corpus/DISPUTES.md`; whether this cell must handle terminal stalls
+ * is resolve-condition (b) of that entry, not a decision taken here.
  *
  * Single writer of its output stream, like [GroupByCell]/[CombineLatestCell]:
  * the sum is a deterministic function of convergent inputs, so peers recompute

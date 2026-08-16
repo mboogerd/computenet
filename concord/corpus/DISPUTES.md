@@ -1306,3 +1306,164 @@ it is not the identity of each recipient's own crossing. Which principal such a
 release should carry is 93 I-28 §8's open cross-hop composition question in
 miniature; SEC1 does not settle it, no test here pins it, and the reasoning sits
 at the `ManagedHost` change site.
+
+---
+
+## SEC1 (wave completeness + reconvergence): BS-12/BS-13 are kernel-test-covered only, and `[SEC1-28]` is UNVERIFIED
+
+Two entries, filed together by `computenet-usd.3.2` (feature `computenet-usd.3`).
+The first is the `[SEC1-30]` coverage record for the pair; the second is the
+honest verdict on `[SEC1-28]` itself.
+
+### BS-12 / BS-13 (`[SEC1-27]`, `[SEC1-28]`) — coverage — **`spec-gap` (no requirement id)**
+
+- **Category**: `spec-gap` (id-authoring backlog). The third instance of the
+  same structural fact the BS-8 and BS-16 entries above record for this chapter:
+  `doc/spec/40-distribution/43-security.md` mints no `[NN-SLUG-nn]` ids, so the
+  behaviours BS-12 and BS-13 name have **no legal `covers:` target**. Filed per
+  `[SEC1-30]`: a SEC1 concord candidate lands as a kernel test **plus** an entry
+  here — never as an invented `covers:` id (which fails `./gradlew
+  :concord:check` as a dangling id), never as a scenario carrying none (an
+  orphan, which fails the same gate), and never as a hand-edit of the generated
+  `doc/spec/CONCORDANCE.md`.
+- **Behaviours** (epic `computenet-usd`, feature `computenet-usd.3`; spec
+  `40-distribution/43-security.md` §BoundaryPolicy with `20-dataflow-semantics/22-consistency.md`
+  §"Completeness over silent or stuck edges", `30-execution-model/31-hosts.md` rule 5,
+  and `90-roadmap/93-feature-interactions.md` I-18 / I-28 §6):
+  - **BS-12** — *Given a downstream wave depending on two upstream edges, one
+    crossing a boundary that refuses a delta mid-wave, then the wave reaches
+    completeness within a bounded wait via the I-18 edge-will-not-deliver
+    classification, the frontier advances, the edge stays open, and the run does
+    not hang.*
+  - **BS-13** — *Given a reconvergent diamond with one filtered and one
+    unfiltered arm, when the filtered arm is denied mid-wave, then the
+    reconvergence point never observes a mixed pre/post-denial combination.*
+- **Scenarios they would have been**: `43-DENIAL-COMPLETENESS-01.yaml` and
+  `43-DENIAL-DIAMOND-01.yaml`, in a `concord/corpus/43-security/` directory that
+  does not exist.
+- **Why they cannot be authored today**: reason 1 above (no id to cover), plus
+  the BS-8 entry's reason 2 verbatim — the scenario schema has no vocabulary for
+  a `CompositeCell` exposure, a `BoundaryPolicy`, a `ProjectionId`, an
+  `IntegrityPolicy`, or a per-boundary denial counter, and binding one would
+  mean reaching into `civictech.cell.membrane.*` from the corpus, which only
+  `civictech.concord.driver.kernel` may do.
+- **What was NOT done instead**: no scenario was authored over a nearby
+  *unmediated* two-edge join or diamond asserting only that waves group
+  correctly. Such a scenario passes today, would read as coverage of BS-12/BS-13
+  in `CONCORDANCE.md`, and asserts nothing about a denial — which is the entire
+  behaviour. `22-WAVE-FANIN-01` already covers the undenied fan-in; adding a
+  denial-shaped *name* to an undenied scenario is precisely the weakening this
+  file exists to refuse.
+- **What is not lost.** Both behaviours are pinned implementation-side, by name:
+  - `kernel/src/test/kotlin/civictech/cell/consistency/BoundaryDenialWaveCompletenessTest.kt`
+    (BS-12, `computenet-usd.3.1`) — integrity and disclosure variants of the
+    two-edge join, each asserting the *poisoned wave itself* releases before any
+    later wave exists to retroactively complete it, plus the guard that a denial
+    naming no wave position classifies nothing and leaves the edge open;
+  - `kernel/src/test/kotlin/civictech/cell/consistency/BoundaryDenialDiamondGlitchTest.kt`
+    (BS-13, `computenet-usd.3.2`) — the diamond, over seeds `0 until 40`, with
+    its own control run proving the harness tears without the frontier.
+  What this filing forgoes is the *cross-implementation* obligation: a second,
+  non-kernel binding of the model would not be held to BS-12/BS-13 by the
+  corpus.
+- **Resolves**: normative `[43-*]` ids land in `doc/spec/40-distribution/43-security.md`
+  (the SEC1 feature-6 id-authoring authorization — documentation maintenance
+  **not** authorized by the epic that produced these behaviours), **and** the
+  scenario schema gains the membrane surface BS-8's item (b) already names. With
+  both, author the two scenarios above.
+
+### BS-13 / `[SEC1-28]` — **UNVERIFIED** (`requirement-gap`): the reconvergence point forms no combination
+
+Filed as the explicitly-allowed outcome of `computenet-usd.3.2`, not as a
+failure of it. `[SEC1-28]` is **not** weakened, and the kernel test above is not
+softened to make this entry go away: it asserts the narrower properties that are
+genuinely checkable and leaves the rest here.
+
+- **Category**: `requirement-gap`. Unlike the entries above, the obstacle is not
+  the corpus schema or a missing id — it is that the requirement's subject has
+  no referent in the landed model, so no binding, kernel or corpus, could check
+  it as written.
+- **The requirement**: "*a boundary denying mid-wave in a reconvergent diamond
+  with one filtered and one unfiltered arm SHALL never yield an observed mixed
+  pre/post-denial combination*".
+- **Why it cannot be checked as stated — the reconvergence point forms no
+  combination.** `GlitchFreeCell` is a *grouping* pass-through: a completed
+  wave's buffered invocations are replayed to the consumer **individually**
+  (`WaveFrontier.flushReady`). That is not an accident of this test's shape but
+  the structural fact `civictech.cell.data.op.CoalescingCombineCell`'s KDoc
+  records as the reason a coalescing operator cannot compose the frontier
+  policy. So at the reconvergence point there is no combined value to inspect
+  for a pre/post-denial mixture; there is a *group* of arrivals.
+- **What was checked instead, and is asserted** (`BoundaryDenialDiamondGlitchTest`,
+  a diamond whose projecting arm redacts `M:secret-n -> M:n` and suppresses
+  every third wave, swept over seeds `0 until 40`):
+  1. **wave-contiguity** — the arrival log partitions into exactly one
+     contiguous run per wave, in strictly increasing counter order; no wave's
+     contributions are split by another's;
+  2. **no stale substitution** — each run carries contributions of that wave
+     only; on a denied wave the surviving arm rides alone, and the denied arm's
+     pre-denial value is never paired into the release;
+  3. **the flagged RE-SCOPE release, exactly once per denied wave** — one
+     `GlitchViolation` naming `DEAD_LETTERED` and that wave's `Timestamp`, with
+     the boundary's denial counter moved and no supervision restart
+     (`[SEC1-29]`, BS-14);
+  4. **the regimes genuinely differ** — no unredacted value is observable at the
+     reconvergence point.
+  The test's name and KDoc claim exactly these four and no more. A `control -`
+  test runs the same graph, seeds and denials without the frontier and requires
+  that the full property (1)+(2) does tear, so none of it is "no glitch was
+  observed".
+- **What could NOT be checked, measured rather than asserted away.** One hop
+  past the join, any consumer that folds the two arms into a single value does
+  hold the mixture `[SEC1-28]` names, and nothing refuses, flags or tags it:
+  - **at a denied wave** the fold retains the denied arm's *previous* value
+    beside the surviving arm's fresh one — literally a pre/post-denial pair;
+  - **within every wave, denied or not**, the fold is torn between the group's
+    two arrivals. So the denial is not what creates the hazard: it is the
+    ordinary partial-fold transient of a grouping join, which means a check of
+    `[SEC1-28]` at that level would fail for reasons having nothing to do with
+    boundaries.
+  Both are pinned as measurements in the test (`the fold one hop past the join
+  does form the mixed combination nothing refuses`) so the gap cannot rot
+  silently; a failure there means something started refusing the mixture and
+  **this entry is stale and must be revisited**.
+- **The stance this is judged under, and where it is recorded.** 93 I-28 §9 open
+  question 1 is decided by `computenet-usd.3.2` as **stance (ii)**: a projected
+  value is a distinct logical value, so reconvergence across disclosure regimes
+  is a modelling error rather than a runtime hazard the frontier can rescue. The
+  reasoning, the rejection of stance (i), and the enforceable-today-vs-deferred
+  split are recorded as a design record in the `DisclosurePolicy` KDoc,
+  `kernel/src/main/kotlin/civictech/cell/membrane/BoundaryPolicy.kt`. Under that
+  stance the fold above is precisely the modelling error — and it is **nobody's
+  job to detect today**, which is why this entry exists rather than a passing
+  scenario.
+- **Why neither stance is enforceable on the landed machinery** (verified at
+  this branch's base, `5e56586`):
+  - **no cross-hop policy visibility** — a policy is a property of the exposure
+    it is declared on, nothing propagates it, and identity does not transit hops
+    (`BoundaryPolicy`'s multi-hop block, `computenet-usd.4.3`). A join cannot
+    ask, at link time, which regime an arm's upstream crossing was under.
+  - **no regime tagging on values** — a projected delta is indistinguishable
+    downstream from a full one, so the reconvergence point cannot detect that
+    its arms disagree, let alone refuse it.
+  - and, for the reconvergence shape that *does* combine: `CoalescingCombineCell`
+    registers a handler for `Protocols.Progress` only — it installs **no**
+    `Protocols.Suspension` handler, so the I-18 classification a boundary denial
+    emits does not reach it at all. A denied wave there is retired only by a
+    later wave's monotone watermark or by `EdgeClose`. (Read from
+    `kernel/src/main/kotlin/civictech/cell/data/op/CoalescingCombineCell.kt`; its
+    KDoc says as much — "Deliberately *not* mirrored ... terminal-stall
+    RE-SCOPE". Not measured here: staging a `CounterDelta` diamond over that
+    operator is outside `computenet-usd.3.2`'s scope, and this bullet is a
+    code-reading fact, not a test result.)
+- **Resolves**: (a) a value-level **disclosure-regime tag** that survives
+  re-emission through intermediate cells — a provenance carrier the wave/tag
+  plane deliberately lacks (predicates never mint or carry waves, 93 I-28 §6 /
+  G-20) — plus a decided rule for what a cell derived from two regimes *is*;
+  that is 93 I-28 §8's open cross-hop composition question, which SEC1 does not
+  settle. **And** (b) a decision about whether a combining reconvergence point
+  (`CoalescingCombineCell`) must handle terminal stalls, since without it the
+  denial classification never reaches the only landed cell that forms a
+  combination. With both, restore the check as: stage the diamond over a
+  combining join, and assert the emitted per-wave value for a denied wave is
+  either refused as regime-crossed or carries no pre-denial contribution.
