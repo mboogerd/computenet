@@ -14,6 +14,21 @@ import java.io.Serializable
  * on [MirrorProjector]'s edge projection for why a `type` change cannot be
  * observed as a removal of the old triple with the data this record carries).
  *
+ * **[dependsOnIssueId] is a reference, not a membership claim** — it need not
+ * name an issue this mirror holds (computenet-dqj.11). `bd`'s `dependencies`
+ * table carries an edge's far side in one of three columns —
+ * `depends_on_issue_id` for a target in this workspace, `depends_on_wisp_id`
+ * for an ephemeral one, `depends_on_external` for an id `bd` resolved as
+ * foreign — and the mirror carries whichever one the row holds, verbatim,
+ * under this single field. That is what `bd export` does too: it renders all
+ * three the same way, as one `dependencies` entry whose `depends_on_id` names
+ * the target (verified live 2026-08-16 for the external case), so an edge
+ * dropped for having a foreign target would be a permanent divergence from
+ * the export the mirror is compared against. It matters in ordinary use, not
+ * only in principle: a workspace seeded from another tracker's `bd export`
+ * (epic computenet-dqj §4) gives every seeded issue a foreign prefix, so an
+ * `bd dep add` onto one of them is exactly this case.
+ *
  * [Serializable] for the same reason as [MirrorKey]: `civictech.cell.data.SetCell`
  * requires Serializable elements for its `snapshot()`/`restore()` seam (G-25).
  */

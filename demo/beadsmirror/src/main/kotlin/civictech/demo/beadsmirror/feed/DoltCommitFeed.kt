@@ -264,6 +264,21 @@ class DoltCommitFeed(private val sql: DiffQuery) {
             )
         }
 
+        /**
+         * The three columns of `dependencies` that can carry an edge's far
+         * side, exactly one of which is non-NULL on any row (schema read live
+         * 2026-08-16: `depends_on_issue_id`, `depends_on_wisp_id` and
+         * `depends_on_external` are all nullable, and `bd` fills whichever
+         * matches how it resolved the target). `dolt sql -r json` omits NULL
+         * columns from the row object entirely, so the non-chosen ones are
+         * absent rather than null here.
+         */
+        private val FAR_SIDE_COLUMNS = listOf(
+            "depends_on_issue_id",
+            "depends_on_wisp_id",
+            "depends_on_external",
+        )
+
         /** Maps one `dolt_diff_dependencies` row. Exposed to tests for the same reason as [issueDiff]. */
         internal fun edgeDiff(row: Map<String, JsonElement>, query: String): EdgeDiff {
             val diffType = DiffType.parse(row.requiredString("diff_type", query), query)
@@ -271,13 +286,57 @@ class DoltCommitFeed(private val sql: DiffQuery) {
             return EdgeDiff(
                 diffType = diffType,
                 issueId = row.requiredString("${side}_issue_id", query),
-                dependsOnIssueId = row.requiredString("${side}_depends_on_issue_id", query),
+                dependsOnIssueId = row.farSide(side, query),
                 type = row.requiredString("${side}_type", query),
                 // MODIFIED is the only diff type with both a from_ and a to_
                 // side present, so it is the only one that can carry the prior
                 // type; ADDED/REMOVED have no "before" or "after" to name.
                 oldType = if (diffType == DiffType.MODIFIED) row.requiredString("from_type", query) else null,
             )
+        }
+
+        /**
+         * The edge's far side, read from whichever of [FAR_SIDE_COLUMNS] this
+         * row actually carries, and carried into [EdgeDiff.dependsOnIssueId]
+         * verbatim — an external or wisp target is **mapped**, not skipped
+         * (computenet-dqj.11).
+         *
+         * Mapping is what the mirror's equality contract requires. `bd export`
+         * renders every edge the same way regardless of which column holds its
+         * far side — one `dependencies` entry whose `depends_on_id` names the
+         * target, verified live 2026-08-16 for the `depends_on_external` case
+         * — so a skipped edge is a permanent divergence from `bd export`, not
+         * a tidy omission. The far side is therefore a *reference*, not a
+         * promise that the mirror holds the referenced issue: an external
+         * target names an id that no export row of this workspace defines, and
+         * nothing downstream may assume it resolves.
+         *
+         * Exactly one far side must be present. **None** means the table's
+         * shape has changed under the reader; **more than one** means an edge
+         * whose target the reader would have to guess between. Both fail
+         * loudly with [FeedShapeException] rather than being resolved by
+         * precedence, which is epic computenet-dqj §3's rule (it leaves
+         * schema-drift hardening *beyond* a loud failure out of scope, and
+         * that presumes the failure is loud).
+         */
+        private fun Map<String, JsonElement>.farSide(side: String, query: String): String {
+            val present = FAR_SIDE_COLUMNS.filter { valueOrNull("${side}_$it") != null }
+            val looked = FAR_SIDE_COLUMNS.joinToString(", ") { "\"${side}_$it\"" }
+            if (present.isEmpty()) {
+                throw FeedShapeException(
+                    query,
+                    "row carries none of the far-side columns $looked: $this",
+                )
+            }
+            if (present.size > 1) {
+                throw FeedShapeException(
+                    query,
+                    "row carries more than one far-side column " +
+                        present.joinToString(", ") { "\"${side}_$it\"" } +
+                        " — exactly one of $looked is expected: $this",
+                )
+            }
+            return requiredString("${side}_${present.single()}", query)
         }
 
         private fun Map<String, JsonElement>.valueOrNull(key: String): JsonElement? =

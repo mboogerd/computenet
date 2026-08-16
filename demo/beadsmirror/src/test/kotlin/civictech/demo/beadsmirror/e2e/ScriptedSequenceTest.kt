@@ -197,6 +197,48 @@ class ScriptedSequenceTest {
     }
 
     /**
+     * computenet-dqj.11 — the external-target dependency edge, reproduced as
+     * the epic-level review measured it: three ordinary `bd` commands against
+     * a workspace seeded the way epic §4 prescribes leave the mirror
+     * permanently diverged *and* silent.
+     *
+     * `bd dep add A <foreign-id>` writes the far side into
+     * `depends_on_external` with `depends_on_issue_id` NULL. Before the fix
+     * [DoltCommitFeed]'s edge mapping demanded `to_depends_on_issue_id`, so the
+     * whole poll pass raised [civictech.demo.beadsmirror.feed.FeedShapeException],
+     * [civictech.demo.beadsmirror.feed.DoltFeedPoller]'s loop stored it and
+     * exited, and every later commit was silently absent — which is what the
+     * mutation *after* the dep add is here to catch. `quiesce` fails on both
+     * halves of that: a non-null `pollerFailure`, and a checkpoint that never
+     * reaches head.
+     *
+     * This matters at epic scale rather than as a corner: §4 seeds throwaway
+     * workspaces from `bd export` of the live tracker, so every seeded id
+     * carries a foreign prefix relative to the sandbox's own, and an ordinary
+     * `bd dep add` onto a seeded issue *is* this case.
+     */
+    @Test
+    fun `an external-target dependency edge is mirrored and the poller keeps folding`() {
+        val mirror = startMirror(runDir = tempDir("beadsmirror-e2e-run-external-"))
+        val script = MutationScript(workspace)
+
+        script.runAll()
+        mirror.quiesce()
+
+        workspace.run("dep", "add", script.idA, EXTERNAL_TARGET, "--type", EXTERNAL_DEP_TYPE)
+        // A further mutation, so a poll loop that died on the dep add is
+        // caught as a *missing later commit* and not only as a missing edge.
+        workspace.run("update", script.idB, "--priority", "0")
+        mirror.quiesce()
+
+        val export = exportNow()
+        val fold = mirror.stateFold()
+
+        MirrorExportEquality.compare(fold.view, fold.edges, export) shouldBe emptyList()
+        fold.edges shouldBe script.expectedEdges + MirrorEdge(script.idA, EXTERNAL_TARGET, EXTERNAL_DEP_TYPE)
+    }
+
+    /**
      * The feature's compaction case: `bd flatten --force` squashes the
      * mirror's checkpoint out of `dolt_log` mid-run, the mirror re-baselines
      * ([MirrorEvent.Rebaselined] with [RebaselineReason.CheckpointGone], and
@@ -418,5 +460,14 @@ class ScriptedSequenceTest {
             .waitFor() == 0
     } catch (e: Exception) {
         false
+    }
+
+    private companion object {
+        /**
+         * An id no scratch workspace contains, so `bd dep add` resolves it as
+         * external (`depends_on_external`) rather than as a native edge.
+         */
+        const val EXTERNAL_TARGET = "elsewhere-x7q"
+        const val EXTERNAL_DEP_TYPE = "discovered-from"
     }
 }
