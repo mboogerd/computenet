@@ -135,6 +135,23 @@ internal class DeadLetters(
      */
     internal fun boundaryDenial(cellRef: CellRef, denial: BoundaryDenial, deniedArgs: List<Any?>) {
         val type = when (denial.seam) {
+            // computenet-usd.4.1: seam 1 refuses the raw frame before
+            // WireCodec.decode runs, so — unlike every other seam below —
+            // there is no real Invocation to classify; what kind of port
+            // call it would have been is unknowable by construction. Of the
+            // three Types, PORT_MANAGEMENT is the deliberate pick, not a
+            // confident fit: it groups ADMISSION with LINK_AUTHORITY as the
+            // same *kind* of refusal ("can this peer touch this cell/link at
+            // all", spec 43 mechanisms 2 vs. `linkAuthority` — a
+            // connection-admission gate, not a data (PORT_API) or metadata
+            // (PORT_PROTOCOL) delivery). PORT_API and PORT_PROTOCOL are
+            // wrong on their face: both name a specific decoded call shape
+            // this record never has. Nothing downstream branches on this
+            // field to decide behavior (`sanitizeForDeadLetter` treats all
+            // three identically); it is read-only app-visible classification
+            // on the dead-letter's `invocation.type`, so an imprecise label
+            // here costs an operator's audit reading, not correctness.
+            BoundarySeam.ADMISSION -> HostedPortInvocation.Type.PORT_MANAGEMENT
             BoundarySeam.LINK_AUTHORITY -> HostedPortInvocation.Type.PORT_MANAGEMENT
             BoundarySeam.PROTOCOL_AUTHORITY -> HostedPortInvocation.Type.PORT_PROTOCOL
             BoundarySeam.DISCLOSURE, BoundarySeam.INTEGRITY -> HostedPortInvocation.Type.PORT_API
