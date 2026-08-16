@@ -88,7 +88,11 @@ guessing one here cost a reviewer 8 runs):
    **either** → this is a first sighting, not a flake: file it as an
    unparented bug bead (the fix belongs on `main`, not on a feature branch,
    because every other PR is equally blocked) and treat the check as red
-   work.
+   work. The bead carries the primary evidence per issue-quality.md's
+   "CI evidence must outlive the run it cites" — failing task, exception
+   class and full stack, surrounding task headers with timestamps, runner
+   spec — not just the run id and `FAILED` line: the log ages out before
+   the bead is worked (computenet-ttz).
 4. **What that prior bead instructs** — read it even when it is closed. A
    closed bead can carry a standing constraint that outlives it:
    computenet-dqy.3 closed with "if either test reddens again, reopen
@@ -127,7 +131,10 @@ that may ship on a red check. The rule below is unchanged by it.
 have now reproduced three times, and it goes back to being red work under
 the default. Comment each occurrence on the flake bead (run id, sha,
 pass/fail) — the occurrence count is what eventually gets it fixed, and it
-only exists if you write it.
+only exists if you write it. (Occurrence comments are counting, not
+diagnosis — the run-id-only form is deliberate here and exempt from
+issue-quality.md's CI-evidence rule; the *bead itself* carries the full
+excerpt.)
 
 - **It goes green** → that is a green required check; carry on normally.
 - **It stays red** → the feature is *blocked on infrastructure, not
