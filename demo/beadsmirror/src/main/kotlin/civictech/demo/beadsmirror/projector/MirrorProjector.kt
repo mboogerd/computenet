@@ -297,7 +297,6 @@ class MirrorProjector(
      * triple this projector minted earlier in the SAME delta that adds the
      * new-type triple, so no observer ever sees both live at once.
      *
-
      * **REMOVED tombstones exactly this edge's live tags minted before this
      * record** ([tombstoneEdge]) — the same past-only bound [fieldDelta]'s
      * `tombstone` applies, and for the identical reason: replaying a
