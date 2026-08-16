@@ -1417,6 +1417,26 @@ open class ManagedHost(
             }
         })
 
+        // computenet-mouq — **dead letters from this dispatch carry no
+        // HostedPortInvocation.** The routing handler runs inside the private
+        // [enqueue] helper, whose fault path calls `deadLetter(e, ...)` with no
+        // `invocation:` argument (and the throw happens before any target port
+        // is resolved, so there is nothing to hand it). Two consequences the
+        // next reader should not have to rediscover:
+        //
+        //  - `DeadLetters.sanitizeForDeadLetter` keys off exactly that
+        //    invocation, so **per-argument capture never runs here**. A test
+        //    that drives a fault through `host.routerInlet.call.route(...)` and
+        //    then asserts Frozen/Redacted forms or per-argument discharge
+        //    accounting is asserting over an absent record and can pass while
+        //    covering nothing. Use [enqueueHostedInvocation] for those — it is
+        //    the path that carries the invocation into the fault catch. The
+        //    difference is pinned executably by
+        //    `LifecycleAndDeadLetterTest."a route-driven dead letter carries no
+        //    invocation, so per-argument capture is unreachable through it"`.
+        //  - An `Owned`/`Leased` argument handed to a *failing* `route` is
+        //    therefore dropped undischarged. Observed, not blessed; filed
+        //    separately rather than fixed here.
         routerInlet.serve(Proxy.fromClass(HostRoutingApi::class.java) { _, method, args ->
             if (intakeControl.intakeState == IntakeState.CLOSED) throw IntakeClosedException(ref)
             val invocation = Invocation.of(method, args).withTarget(internalHostRoutingApi)
