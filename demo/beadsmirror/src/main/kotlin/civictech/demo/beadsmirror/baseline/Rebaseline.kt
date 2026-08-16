@@ -84,6 +84,28 @@ sealed interface MirrorEvent {
  * still returned every issue. The trigger is therefore unconfirmed; the
  * zero-row-exit-zero *shape* is not.)
  *
+ * Measured during this task's review, 2026-08-16, three real paths to a
+ * zero-row-exit-zero export on a workspace that was **not** always empty —
+ * two benign, one not:
+ *
+ * - `bd delete`-ing every issue. The tracker really is empty; a restart is
+ *   then a *false* refusal (see below).
+ * - Wiping `.beads` and re-running `bd --sandbox init` at the same path. Again
+ *   genuinely empty — and the Dolt database is a new one, so the old fold was
+ *   not the workspace's state either way.
+ * - **`BEADS_DIR` set in the mirror process's environment, pointing at a
+ *   different (empty) bd workspace.** `--sandbox` does not stop it: with cwd a
+ *   populated workspace and `BEADS_DIR` at an empty one, `bd --sandbox export`
+ *   exited `0` with zero rows. [DoltCommitFeed] resolves its database *by
+ *   path*, not through `BEADS_DIR`, so in that configuration the export and
+ *   the feed disagree and the export is simply wrong. This is the case the
+ *   guard exists for: an operator-environment mistake, not a `bd` failure.
+ *
+ * And the replacement itself was observed, not inferred: with the guard below
+ * removed, a real zero-row `bd export` swapped an empty projector over a
+ * populated fold, advanced the checkpoint to the new head and emitted
+ * [MirrorEvent.Rebaselined] with `issueCount = 0` — the whole hazard, silently.
+ *
  * ## Why the rule is "zero rows and not a first start", and nothing cleverer
  *
  * The obvious guard — refuse a re-baseline that is *materially smaller* than
@@ -129,7 +151,19 @@ sealed interface MirrorEvent {
  *   and accepts the empty export. This is safe precisely because of design
  *   amendment 2: every start re-baselines from `bd export` and re-captures the
  *   head anyway, so a deleted checkpoint costs nothing — its only cross-process
- *   job is choosing the reason.
+ *   job is choosing the reason. (Confirmed by reading [FeedCheckpoint] and
+ *   [BeadsMirrorApp][civictech.demo.beadsmirror.BeadsMirrorApp]: `read()` is
+ *   `null` when the file is absent, that `null` is the *only* input to the
+ *   [RebaselineReason.FirstStart]/[RebaselineReason.Restart] choice, and the
+ *   checkpoint file is the module's only persisted state at all.)
+ *
+ * **Both overrides are start-time.** The refusal can also fire on the
+ * [RebaselineReason.CheckpointGone] path, which runs on the poller thread of a
+ * *running* mirror: there the throw kills the poll loop, so the fold freezes
+ * and every route answers `503`
+ * ([civictech.demo.beadsmirror.http.MirrorRoutes], via `PollLoopDied`) rather
+ * than a start aborting. Deleting the checkpoint file does not rescue that
+ * process — it takes effect on the next start.
  *
  * This is a demo module, not a production guard; the guard is sized to match.
  *
