@@ -421,3 +421,119 @@ Report, do not edit. This task's diff touches this file and
 and nothing else. No `doc/spec/**` edit, no `CONCORDANCE.md` edit, no
 `91-gap-analysis.md` edit, no plan-document edit, no concord scenario or
 schema change, no kernel main-source change.
+
+---
+
+## `computenet-umx.1.5` — BS-11 baseline pin + BS-10 boundary-denial reproduction (denied ⇒ discharged)
+
+Recorded by: `computenet-umx.1.5` (feature `computenet-umx.1` — CHA2). Realizes
+`[CHA2-25]` (BS-11) and `[CHA2-23]` as adjudicated above (BS-10). Deliverable:
+`kernel/src/test/kotlin/civictech/cell/repro/DenialDischargeReproTest.kt`. Base
+commit unchanged from the rest of this file: `46ed020`.
+
+### BS-10's routing record
+
+The boundary-denial silent drop this task's own item was originally filed to
+reproduce as an `@ExpectedFailure` — the KHYG finding recorded above under
+"C-11 — Residual 3 — boundary-denial silent drop" (every `BoundaryPolicy`
+denial was a bare `return null` at `MediateProxy.kt:42,52-57` and
+`CompositeCell.kt:205-215,229-249`, discharging no `Owned`/`Leased` while the
+KDoc claimed "dead-lettered") — **is FIXED on `main`**, exactly as that
+section already adjudicates: commit `ab69412` (`computenet-usd.2`,
+"Exclusive payloads are discharged exactly once on every `BoundaryPolicy`
+denial path"), extended by `1b9653b` (the wire crossing consults the
+`Exposure`'s `BoundaryPolicy`) and by this task's own base commit `46ed020`
+(`mediateOutlet` exactly-once discharge under disclosure Deny). Re-verified
+independently by this task, not merely inherited: `DenialDischargeReproTest`'s
+BS-10 test constructs its own hosted, mediated `CompositeCell` boundary
+(`BoundaryDenialMembrane`) and denies a badly-signed `SignedDelta` carrying an
+`Owned`, and it passes.
+
+Per that adjudication, BS-10 is written **unweakened, with PASS as the
+accepted outcome, and carries no `@ExpectedFailure` annotation**. Annotating a
+passing reproduction would itself break the build the moment it ran
+(`[CHA2-44]`), and softening it to manufacture a failure matching the
+feature's 2026-08-08 prose is exactly what the no-manufactured-failure
+principle (BS-13, AGENTS.md) forbids in the other direction. If a later change
+reopens the drop, this test fails honestly and the annotation is added then —
+not pre-emptively now.
+
+### Citation, not duplication
+
+`kernel/src/test/kotlin/civictech/cell/membrane/MediateProxyIntegrityTest.kt`
+(landed with `ab69412`) already asserts the **identical shape** BS-10 names —
+a hosted, mediated `CompositeCell` boundary whose `BoundaryPolicy` denies an
+inbound invocation carrying an `Owned`, with the refused payload frozen and
+dead-lettered exactly once (`BS-5 an integrity refusal freezes an Owned
+carried inside the SignedDelta envelope exactly once`), plus its `Leased`
+twin immediately below it (`BS-5 an integrity refusal releases a Leased
+carried inside the envelope exactly once, back to its pool`), plus an
+unattached-sink variant and a no-sink-at-all variant further down the same
+file.
+
+`DenialDischargeReproTest`'s own BS-10 test is the evidence lane's
+independent pin of that same fact — kept in its own suite, under its own
+package, so the fixing lane's tests and the reproduction lane's tests stay
+separately verifiable rather than one silently standing in for the other —
+and it deliberately does **not** re-derive the `Leased`, unattached-sink, or
+no-sink-at-all variants: `MediateProxyIntegrityTest` already covers all three
+exhaustively, and duplicating them here would be exactly the kind of
+manufactured redundancy this lane's citation discipline (`[CHA2-31]`'s C-12
+precedent, above) exists to avoid.
+
+### BS-11's baseline
+
+The ADMIT tier (`kernel/src/main/kotlin/civictech/cell/port/InletPolicy.kt:110`,
+`Admit.offer`, "T05 finding 3") and the dead-letter capture path
+(`kernel/src/main/kotlin/civictech/cell/host/DeadLetters.kt:231`,
+`sanitizeForDeadLetter`) both already treated "dropped/denied ⇒ discharged" as
+the kernel's own standard, predating SEC1's fix entirely — this is the
+baseline BS-10 above is now shown to meet too.
+
+`kernel/src/test/kotlin/civictech/cell/port/AdmitDischargeTest.kt` already
+pins the ADMIT tier's `Owned` discharge (`a dropped Owned-carrying invocation
+is discharged, not leaked`), but it does not carry a `Leased` in the same
+invocation, does not install `onDrop` at all (so never asserts that "the drop
+is counted in the tier's own accounting" — BS-11's literal wording), and does
+not touch the dead-letter path. No existing test in the repository, checked
+by `git grep -n "sanitizeForDeadLetter\|Redacted(\"" -- kernel/src/test`,
+routes a genuine *fault* (as opposed to a boundary denial) carrying a live
+`Owned`/`Leased` through `DeadLetters.sanitizeForDeadLetter`:
+`LifecycleAndDeadLetterTest`'s throwing-cell tests use plain payloads, and
+`MediateProxyIntegrityTest`'s BS-5 pair captures a boundary *denial*
+(`DeadLetters.boundaryDenial`), a different sink entirely from the per-fault
+capture (`DeadLetters.deadLetter`) BS-11 asks about.
+
+`DenialDischargeReproTest`'s two BS-11 tests fill exactly that gap:
+
+- one ADMIT-tier drop — `Owned` and `Leased` in a single invocation, both
+  discharged, with `onDrop` counting the drop;
+- one dead-lettered fault — routed through `ManagedHost.enqueueHostedInvocation`
+  directly, not `host.routerInlet.call.route(...)`. The latter was tried
+  first and verified empirically (not merely assumed) to dispatch through
+  `routerInlet`'s raw management-shortcut path (`invocation.invoke()` inside
+  the host's bare `enqueue()`, `ManagedHost.kt:1420-1425`), which never
+  attaches a `HostedPortInvocation` to the resulting dead letter — the
+  captured `DeadLetter.invocation` came back `null` even though the fault
+  itself, cause and description, was reported correctly. Building the
+  `HostedPortInvocation` directly and calling `enqueueHostedInvocation` routes
+  through the ordinary attention-staged dispatch into `ManagedHost.deliver`'s
+  own fault catch, which does attach it — the only path that lets
+  `sanitizeForDeadLetter`'s per-argument capture (`Owned` → `Frozen`, `Leased`
+  → `Redacted`) be asserted at all.
+
+### `[CHA2-26]` deviation, as adjudicated above
+
+No rig code, no CHA1 exclusive-payload accounting through a rig's own check —
+both BS-11 tests and the BS-10 test assert discharge directly (a second
+`take()`/`release()` throwing `IllegalStateException` is the observable), the
+weak form this task and `computenet-umx.1.4` implement, per the strict-form
+gate recorded above ("CHA1's rig does not exist").
+
+### Disposition
+
+Report, do not edit. This task's diff touches this file and
+`kernel/src/test/kotlin/civictech/cell/repro/DenialDischargeReproTest.kt`, and
+nothing else. Zero kernel main-source changes ([CHA2-50]). No SEC1 fix
+specification or requirement restatement — the fix is `computenet-usd.2`'s and
+stays owned there; this entry only pins and independently cites it.
