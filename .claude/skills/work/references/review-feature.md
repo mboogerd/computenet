@@ -99,6 +99,13 @@ implying the workflow is fully validated. (Host quirk that costs a retry:
 
 ## 1. Establish the standard
 
+`$SCRATCH` throughout this file is **your own** agent-unique dir, created
+once — `SCRATCH=$(mktemp -d "<harness scratchpad>/<feature-id>-review.XXXXXX")`
+— never the shared harness scratchpad directly: that dir holds other agents'
+files under exactly the names you would pick (~40 stale logs including
+`exchange.log` and `wire.log`, computenet-84z6), and a reviewer that reads
+one quotes the implementer's build as its own independent evidence.
+
 ```bash
 bd show <feature-id> --json          # acceptance criteria, description
 bd list --parent=<feature-id> --all --json  # the tasks (--all: they are closed by now)
@@ -111,7 +118,7 @@ has not seen the thread. On a long-lived item the thread is where the
 decisive context lives: prior sessions' handoffs, a *withdrawn*
 certification, a corrected premise, a human's answer to a parked question. A
 reviewer unaware of a withdrawn certification reviews the wrong thing.
-Redirect it (`$SCRATCH` is SKILL.md's name for your scratchpad directory) —
+The redirect to a file is likewise not optional:
 the JSON overruns the tool-result limit
 on exactly the beads that need it, and a truncated array reads as fewer
 comments rather than as an error (SKILL.md, "Two `bd` JSON traps").
@@ -325,11 +332,16 @@ So:
   Quote each required check's name and conclusion in your verdict — and quote
   them for the **PR's current head**. If §6's re-fetch makes you merge
   `origin/main`, that merge moves the head and this reading goes stale; §6
-  says how to re-take it. Two traps:
+  says how to re-take it. Three traps:
   a green check on a diff that touches no compiled input is evidence of
   nothing (it too can be cache and skip), so say which checks actually
-  exercised the changed modules; and a check still `pending` is not a pass —
-  wait for it or certify draft. A **red** required check is not yours to wave
+  exercised the changed modules; a check still `pending` is not a pass —
+  wait for it or certify draft; and `gh pr checks` **exits 8 while anything
+  is pending**, so never put it on the left of `&&` (the next step is
+  silently skipped) and never gate a wait loop on its exit status — a
+  jq/until waiter exited instantly looking like a completed green wait
+  (computenet-luhx). Gate on the printed rows instead:
+  `until ! gh pr checks <pr-url> | grep -q pending; do sleep 30; done`. A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 
 ## 5. Repair by default — up to a bound
@@ -507,6 +519,13 @@ Quote the shas or the "unchanged" line in the verdict. A verdict with no
 re-fetch line is a verdict against a base that may no longer exist.
 
 ## 7. Decide
+
+Every verdict comment and residual bead below quotes criteria and code
+verbatim — build those bodies with a quoted heredoc (or `bd comment --file`)
+per issue-quality.md's "Backticks…" rule: backticks in a double-quoted
+argument execute as shell and vanish from the stored text, and filing a
+residual is exactly how that once ran `gh pr ready` as a side effect
+(computenet-9w9). The inline `"<...>"` forms below are placeholders.
 
 Three outcomes, not two.
 

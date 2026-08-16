@@ -16,6 +16,12 @@ Two rules follow:
 - **Work only in your own worktree.** Never the main checkout, the feature
   worktree, or another task's.
 
+**Any bead body you write that quotes code goes through a quoted heredoc or
+`bd comment <id> --file <path>`** — backticks inside a double-quoted
+argument execute as shell and silently vanish from the stored text
+(issue-quality.md's "Backticks…" rule, computenet-9w9). The inline
+`bd comment "<...>"` templates below are placeholders, not license.
+
 **Your tracker writes have a scope too, and it is narrower than your file
 claim.** By default you write to **your own assigned bead and to items you
 create** — nothing else. Closing, re-prioritising, reassigning, re-parenting
@@ -213,6 +219,10 @@ than restarting. That's the whole reason the worktree is preserved.
      task-count line and no `BUILD SUCCESSFUL` at all — then grep for the task:
 
      ```bash
+     # $SCRATCH = YOUR OWN dir, created once:
+     #   SCRATCH=$(mktemp -d "<harness scratchpad>/<task-id>-impl.XXXXXX")
+     # Sibling and reviewer agents share the harness scratchpad; a colliding
+     # name hands your log to another agent as evidence (computenet-84z6).
      ./gradlew :kernel:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
      grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
      ```

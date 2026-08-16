@@ -62,7 +62,10 @@ felt like giving up.
   `--body-file`); clearing a metadata key is `--unset-metadata <key>`
   (`--set-metadata key=` merges, it does not clear).
 - `bd` calls are slow and `bd dolt pull`/`push` can run past 120s — give
-  sync commands a ≥300s timeout (computenet-9oq, computenet-9r8).
+  sync commands a ≥300s timeout, and never chain `bd` *writes* in one Bash
+  block: one write per call, each with the long timeout, or the chain dies
+  mid-sequence and leaves half-recorded state (computenet-9oq,
+  computenet-9r8).
 
 `$SCRATCH` throughout is a **session-unique** temp dir: create it once as
 `SCRATCH=$(mktemp -d "<harness scratchpad>/work.XXXXXX")` — concurrent
@@ -631,17 +634,27 @@ verdict. (`parked` is only meaningful on an empty batch.)
   the orchestrator's — a criterion demanding one is done by you after the
   merge, and the prompt says so ("<id> is closed by me, not by you").
 
-Claim, record, attach:
+Claim, record, attach — **one write per Bash call, each with a ≥300s
+timeout**, never chained in one block: `bd` writes contend on the Dolt DB
+and a chain of them has blown the 120s default mid-sequence, leaving a
+claimed task with no recorded worktree (computenet-9r8):
 
 ```bash
 bd update <task-id> --claim
+```
+
+```bash
 bd update <task-id> \
   --set-metadata worktree=<worktree-root>/<task-id> \
   --set-metadata branch=task/<task-id>
+```
+
+```bash
 .claude/skills/work/scripts/ensure-worktree.sh \
   <worktree-root>/<task-id> task/<task-id> <feature-branch>
 # <feature-branch> = the feature's recorded metadata.branch, re-read here —
-# an empty 3rd arg silently becomes origin/main.
+# an empty 3rd arg silently becomes origin/main. (Runs its own git fetch —
+# give it the long timeout too.)
 ```
 
 These child claims are not re-synced — they're inside the epic this machine
@@ -826,7 +839,9 @@ gh pr checks <pr-url>
 The task reviewer tested a branch without its merged siblings; this is the
 first signal the whole still builds. Red is work: file a task
 (`bd create --parent=<feature-id>` with `model` and `files`) for the next
-batch. The one narrow exception — a red check in a module this diff doesn't
+batch, carrying the log excerpt issue-quality.md's CI-evidence rule
+requires — the run link alone ages out before the task runs
+(computenet-ttz). The one narrow exception — a red check in a module this diff doesn't
 touch — requires
 [references/red-check-attribution.md](references/red-check-attribution.md)'s
 four artifacts before treating any red as not this feature's. Never ship on
@@ -945,7 +960,10 @@ the branch is at N+1 would ready a PR on evidence that never covered the
 merged code. Wait for agreement, re-read. Commits in the `log` output the
 verdict doesn't mention, touching this diff's files (`gh pr diff <pr-url>
 --name-only`) → merge `origin/main` in and send back for a re-check. Red
-required check → red-check-attribution.md; pending → wait. A verdict
+required check → red-check-attribution.md; pending → wait — and know that
+`gh pr checks` **exits 8 while anything is pending**: never `&&`-chain it
+(the next step silently skips) and never gate a wait on its exit status;
+read the rows (`grep -q pending`) instead (computenet-luhx). A verdict
 carrying a **§6 hand-back** (the classifier refuses reviewers `git merge`,
 computenet-whx4) is yours to complete: do the merge, re-run the affected
 module suite on the merged base, and if the reviewer's disjointness claim
@@ -1242,10 +1260,20 @@ machine → done, its lane owns it). Found but closed → a recurrence of a
 fixed issue: file fresh and say so in the description. Not found:
 
 ```bash
+# Build bodies with quoted heredocs — backticks in a double-quoted argument
+# execute as shell before the script ever runs, silently deleting the
+# quoted phrases and running them (issue-quality.md, computenet-9w9):
+DESC=$(cat <<'EOF'
+<what the skill says, what actually happened, what you did instead, what it cost>
+EOF
+)
+ACCEPT=$(cat <<'EOF'
+<what would have to change in the skill for this not to recur>
+EOF
+)
 .claude/skills/work/scripts/file-friction.sh --type <bug|feature> \
   --title "<the friction in one line>" \
-  --desc "<what the skill says, what actually happened, what you did instead, what it cost>" \
-  --accept "<what would have to change in the skill for this not to recur>" \
+  --desc "$DESC" --accept "$ACCEPT" \
   --skill-version <the epic's metadata.skill_version>
 ```
 

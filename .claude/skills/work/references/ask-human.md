@@ -31,6 +31,8 @@ Hand the item to a human — reassign it, don't just tag it:
 
 ```bash
 bd update <id> --status=blocked --add-label=human --assignee=human
+# A question quoting code needs a heredoc-built body or --file — inline
+# backticks execute as shell (issue-quality.md "Backticks…", computenet-9w9).
 bd comment <id> "QUESTION: <the actual question, with enough context that someone cold can answer it — what you were doing, the options you're choosing between, what you'd do by default, and why it's not a call you should make unilaterally>"
 ```
 
