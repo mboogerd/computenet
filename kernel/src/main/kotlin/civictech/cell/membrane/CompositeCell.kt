@@ -424,6 +424,16 @@ abstract class CompositeCell(
  * is metadata-plane and is **a real residual hazard**, recorded rather than
  * silently skipped: a denied `Progress`/absorb-ack frame can starve settlement
  * downstream, and this seam does not classify it (`computenet-usd.3.1` scope).
+ *
+ * ## Residual: emitting the notice is not the same as it being handled
+ *
+ * A consumer only benefits if it handles `Protocols.Suspension`.
+ * [civictech.cell.consistency.WaveFrontier] does;
+ * [civictech.cell.data.op.CoalescingCombineCell] — the only landed cell that
+ * forms a per-wave *combination* — deliberately does not, so a denied wave
+ * there is retired only by a later watermark or `EdgeClose`. That is the gap
+ * behind `[SEC1-28]`'s UNVERIFIED filing in `concord/corpus/DISPUTES.md`
+ * (resolve-condition (b)), not something this classification closes.
  */
 private fun stallDeniedEdges(ports: Sequence<Port>, context: MessageContext?) {
     if (context == null || context.baseline != null) return
