@@ -19,7 +19,7 @@ import org.junit.jupiter.api.assertThrows
 import java.util.UUID
 
 /**
- * **C-11 reach: BS-7 and BS-12 pinned, BS-8 and BS-9 standing as expected failures.**
+ * **C-11 reach: all four reproductions pinned; no standing expected failures remain.**
  *
  * The adjudication these four reproductions consume is
  * `doc/evidence-lane-findings.md` -> "C-11 — shadow suppression drops exclusives",
@@ -29,13 +29,16 @@ import java.util.UUID
  * - the discharging suppression proxy is **landed** — `Shadow.spawn`/`suppress`/
  *   `suppressionProxy` (`evolve/Evolution.kt:62,69,84,88`) and `Proxy.discharging`
  *   (`proxy/Proxy.kt:101`). BS-7 and BS-12 pin it and **pass**;
- * - residual 1 (BS-8) is still real: `Proxy.discharge`'s `when` (`proxy/Proxy.kt:123-134`)
- *   has `Owned`/`Leased`/`Map`/`Iterable`/`Array` branches and no case for an arbitrary
- *   payload object; `ContractProcessor.carriesExclusive` (`ContractProcessor.kt:70-73`)
- *   recurses through type *arguments* only, so a field-nested exclusive is not even marked;
- * - residual 2 (BS-9) is still real: `Evolution.kt:64` is literally
- *   `if (cell is Effectful) suppress(cell)`, and nothing in `kernel/` reads the
- *   `ContractDescriptor.effect` bit that G-32/93 I-17 decided should be the cut.
+ * - residual 1 (BS-8) **was** real and is now fixed by `computenet-ulss` (93 I-6 / I-8):
+ *   `Proxy.discharge` had `Owned`/`Leased`/`Map`/`Iterable`/`Array` branches and no case for
+ *   an arbitrary payload object, and `ContractProcessor.carriesExclusive` recursed through
+ *   type *arguments* only, so a field-nested exclusive was not even marked. Both halves
+ *   widened; BS-8 keeps its body, loses its `@ExpectedFailure`, and is the acceptance test;
+ * - residual 2 (BS-9) **was** real and is now fixed by `computenet-3jv2` (93 I-17 /
+ *   G-32): `Shadow.spawn` cut suppression at `cell is Effectful` and nothing in `kernel/`
+ *   read the `ContractDescriptor.effect` bit the decision names as the boundary. Suppression
+ *   now serves every effect-carrying contract, with the cell marker kept as the coarse
+ *   fallback; BS-9 keeps its body, loses its `@ExpectedFailure`, and is the acceptance test.
  *
  * ## Detection, and the `[CHA2-26]` deviation
  *
@@ -48,13 +51,15 @@ import java.util.UUID
  * `computenet-umx.1.5` used. When the rig lands it should adopt these tests rather than
  * re-derive them.
  *
- * ## Why the two failing tests are annotated and not softened
+ * ## Why no test here is annotated any more
  *
  * `@ExpectedFailure` (`computenet-umx.1.2`) runs the body on every build and **fails the
- * build if it passes** (`[CHA2-44]`). So an annotation here is a falsifiable claim that the
- * divergence is real today, not a way to keep a red test quiet — and, in the other
- * direction, nothing here is weakened to manufacture a failure the plan predicted (BS-13,
- * the discipline `computenet-umx.1.5` applied to BS-10).
+ * build if it passes** (`[CHA2-44]`), so an annotation is a falsifiable claim that the
+ * divergence is real today. BS-8 and BS-9 each carried one until their fix landed; both
+ * annotations are now removed and both bodies kept unchanged, which is what `[CHA2-44]`
+ * requires. Nothing here was ever weakened to manufacture a failure the plan predicted
+ * (BS-13, the discipline `computenet-umx.1.5` applied to BS-10), and nothing was softened
+ * to make one pass.
  */
 class ExclusiveDischargeReproTest {
 
@@ -131,8 +136,8 @@ class ExclusiveDischargeReproTest {
     }
 
     // ------------------------------------------------------------------
-    // BS-8 ([CHA2-21]) — nested-exclusive escape. EXPECTED FAILURE.
-    // Owner: computenet-ulss.
+    // BS-8 ([CHA2-21]) — nested-exclusive escape. FIXED by computenet-ulss;
+    // this is now the acceptance test for that fix, not an expected failure.
     // ------------------------------------------------------------------
 
     private class NestedExclusiveSink(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell, Effectful {
@@ -161,20 +166,20 @@ class ExclusiveDischargeReproTest {
      * materialize — no `DISPUTES.md` fallback needed), so the reproduction is written as a
      * real behavioural test rather than a filed dispute.
      *
-     * The escape has two cooperating layers and this test observes the composite outcome,
-     * which is the one that matters: **the payload stays live**. The mechanism assertions
-     * that stay true after a fix are outside the signature block; the two that *are* the
-     * divergence are inside it.
+     * **`computenet-ulss` fixed the divergence and this body is unchanged**: the
+     * `@ExpectedFailure(signature = "CHA2-BS-8")` annotation is gone (`[CHA2-44]` — an
+     * expected failure that starts passing must be un-annotated, not deleted), and the same
+     * assertions now pin the fix. Its method name still says "escapes" because that is the
+     * reproduction id BS-8 and the findings entry refer to; what it asserts is that the
+     * escape no longer happens.
+     *
+     * The escape had two cooperating layers and this test observes the composite outcome,
+     * which is the one that matters: **the payload must not stay live**. The mechanism
+     * assertions that were always true are outside the signature block; the two that were
+     * the divergence are inside it, and [withSignature] stays so a regression still fails
+     * with the recorded token rather than an anonymous assertion.
      */
     @Test
-    @ExpectedFailure(
-        signature = BS8_NESTED_EXCLUSIVE_ESCAPES,
-        reason = "an Owned nested in a plain data-class parameter crosses a shadow-suppressed " +
-            "discharging proxy undischarged: carriesExclusive walks type arguments only, and " +
-            "Proxy.discharge has no branch for an arbitrary payload object",
-        owner = "computenet-ulss",
-        filedAs = FINDINGS,
-    )
     fun `BS-8 an Owned nested in a data-class parameter escapes a shadow-suppressed discharging proxy`() {
         val controller = SimulationController(seed = 32)
         val host = ManagedHost(scheduler = controller.scheduler())
@@ -200,24 +205,24 @@ class ExclusiveDischargeReproTest {
         sink.effects shouldBe 0
 
         withSignature(BS8_NESTED_EXCLUSIVE_ESCAPES) {
-            // The behavioural half first, deliberately: it is the defect, and it is the one
-            // that stays failing until *both* layers are fixed. Widening only the KSP scan
-            // marks pushNested exclusive but hands the envelope to a `discharge` that has no
-            // branch for it; widening only `discharge` never gets called because the method
-            // is not marked. So this assertion is the true acceptance test for
-            // computenet-ulss, and the structural one below is its explanation.
+            // The behavioural half first, deliberately: it is the defect, and it only passes
+            // once *both* layers are fixed. Widening only the KSP scan marks pushNested
+            // exclusive but hands the envelope to a `discharge` with no branch for it;
+            // widening only `discharge` never gets called because the method is not marked.
+            // So this assertion is the acceptance test for computenet-ulss, and the
+            // structural one below is its explanation.
             assertThrows<IllegalStateException> { envelope.payload.take() }
 
-            // The KSP half, verified to fail independently (checked by running this block in
-            // both orders, 2026-08-16): the method carrying a field-nested exclusive is not
-            // marked exclusive at all.
+            // The KSP half (`ContractProcessor.carriesExclusive`, widened to walk a payload
+            // class's declared properties): the method carrying a field-nested exclusive is
+            // marked exclusive, which is what makes the discharging proxy walk its args.
             descriptor.methods.single { it.name == "pushNested" }.exclusive shouldBe true
         }
     }
 
     // ------------------------------------------------------------------
-    // BS-9 ([CHA2-22]) — unsuppressed non-Effectful shadow. EXPECTED FAILURE.
-    // Owner: computenet-3jv2.
+    // BS-9 ([CHA2-22]) — unsuppressed non-Effectful shadow. FIXED by computenet-3jv2;
+    // this is now the acceptance test for that fix, not an expected failure.
     // ------------------------------------------------------------------
 
     /** Serves an `@Contract(effect = true)` inlet, and deliberately does **not** implement `Effectful`. */

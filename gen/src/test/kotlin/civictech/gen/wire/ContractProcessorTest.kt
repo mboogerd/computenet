@@ -602,6 +602,59 @@ class ContractProcessorTest {
         )
     }
 
+    // computenet-yzsc (found reviewing computenet-ulss): the 93 I-6/I-8 property walk
+    // in `carriesExclusive` must stop at `Borrowed`/`Frozen`, exactly as
+    // `Proxy.discharge`'s `is Borrowed<*>, is Frozen<*> -> Unit` branch does. Both are
+    // non-consuming, fan-out-safe views (spec 23 §Taps, `Ownership.kt` "Fan-out safe"),
+    // so a tap port declared over one must not be marked exclusive — the bit drives the
+    // link handshake's SPSC rule, `Shadow.suppressionProxy`'s choice of
+    // `Proxy.discharging`, and ADMIT accounting.
+    //
+    // The test pins both directions so neither can regress: false for the two view-wrapped
+    // parameters, and still true for the nested exclusive the widening was written for.
+    @Test
+    fun `exclusive bit stops at Borrowed and Frozen but still reaches a nested Owned`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package civictech.cell
+            class Owned<T : Any>(private val value: T)
+            class Borrowed<T : Any>(val value: T)
+            class Frozen<T : Any>(val value: T)
+            """.trimIndent(),
+            """
+            package example
+            import civictech.cell.Borrowed
+            import civictech.cell.Frozen
+            import civictech.cell.Owned
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Key
+
+            class OwnedEnvelope(val label: String, val payload: Owned<String>)
+
+            @Contract
+            interface TapContract {
+                fun tapBorrowed(@Key view: Borrowed<OwnedEnvelope>)
+                fun tapFrozen(@Key view: Frozen<OwnedEnvelope>)
+                fun pushNested(@Key envelope: OwnedEnvelope)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "tapBorrowed"), table)
+        assertEquals(false, exclusiveBitOf(table, "tapFrozen"), table)
+        assertEquals(true, exclusiveBitOf(table, "pushNested"), table)
+    }
+
+    /** Reads one `MethodDescriptor` row's `exclusive` flag out of a whitespace-normalised table. */
+    private fun exclusiveBitOf(normalisedTable: String, methodName: String): Boolean {
+        val row = Regex("""name = "$methodName",.*?exclusive = (true|false)""")
+            .find(normalisedTable)
+            ?: error("no MethodDescriptor row for '$methodName' in:\n$normalisedTable")
+        return row.groupValues[1].toBoolean()
+    }
+
     private fun generatedSources(compilation: KotlinCompilation) =
         compilation.kspSourcesDir.walkTopDown().filter { it.isFile }.toList()
 

@@ -201,21 +201,71 @@ mode D-C12 adjudicated for C-12. **Correcting them is documentation
 maintenance and requires its own authorization; this file records the finding
 and edits nothing** (`[CHA2-03]`, AGENTS.md).
 
-#### Residual 1 — exclusive-bit reach. STILL REAL.
+#### Residual 1 — exclusive-bit reach. WAS REAL; FIXED by `computenet-ulss`.
 
-`Proxy.discharge` (`Proxy.kt:123-134`) recurses into `Map`, `Iterable` and
-`Array` and **nothing else**. An `Owned` nested inside a plain data-class
-payload is dropped undischarged by a proxy that believes it discharged. The
-widening is decided and unimplemented — `doc/spec/10-programming-model/12-ports.md:167-168`:
+**As recorded at `46ed020`**: `Proxy.discharge` recursed into `Map`, `Iterable`
+and `Array` and **nothing else**, and `ContractProcessor.carriesExclusive`
+recursed through a type's *arguments* only. An `Owned` nested inside a plain
+data-class payload was therefore never marked exclusive and, even where the
+method was marked, was dropped undischarged by a proxy that believed it
+discharged. The widening was decided and unimplemented —
+`doc/spec/10-programming-model/12-ports.md`:
 
 > The exclusive bit's KSP scan is decided to widen (decided in 93 I-6 and
 > I-8, unimplemented).
 
-**Consequence for `computenet-umx.1.4`**: BS-8 (`[CHA2-21]`) stands as a
-genuine `@ExpectedFailure`, anchored to `12-ports.md:167-168` and to this
-entry. Feature risk 6 stands too: if KSP refuses the nested-exclusive
-`@Contract` shape, the honest outcome is a `DISPUTES.md` entry
-(`[CHA2-46]`), not a weaker test.
+**Now implemented** by `computenet-ulss`, both cooperating halves, because
+either alone leaves the invariant violated (widening only the scan marks the
+method and hands the payload to a `discharge` with no branch for it; widening
+only `discharge` is never entered because the method is not marked):
+
+- `gen/src/main/kotlin/civictech/gen/wire/ContractProcessor.kt` —
+  `carriesExclusive` also walks a payload declaration's **declared
+  properties**, guarded by a fully-qualified-name `seen` set (so a
+  self-referential payload terminates) and skipping `kotlin.*`/`java.*`
+  declarations, which can only hold an exclusive as a type argument the
+  existing argument walk already covers.
+- `kernel/src/main/kotlin/civictech/cell/proxy/Proxy.kt` — `discharge` walks
+  an arbitrary payload object's fields reflectively, with an **identity**
+  `seen` set (aliased payloads discharged once, cycles terminate), not opening
+  `Borrowed`/`Frozen` (non-consuming views, spec 23 §Taps) or platform
+  classes, and swallowing per-field reflection failures rather than throwing
+  out of a cleanup path.
+
+Limits of that claim, stated here because they bound what the fix guarantees:
+reach is *field-and-element* reach from the argument graph. An exclusive
+reachable only through a computed getter with no backing field, or held by a
+platform class the walk declines to open, is still not discharged, and an
+exclusive reachable through a field the JVM refuses to make accessible is
+skipped silently rather than reported.
+
+Three further limits were **measured under review** (2026-08-16,
+`computenet-ulss`). The first was fixed on this branch; the other two are
+filed rather than fixed here, because each is a semantic decision rather than
+a wording one:
+
+- The two halves disagreed about `Borrowed`/`Frozen`. `Proxy.discharge`
+  declines to open them (spec 23 §Taps, fan-out safe); `carriesExclusive` did
+  not, so `tap(view: Borrowed<OwnedEnvelope>)` was marked **exclusive** where
+  it was not before the widening — a new false positive on a fan-out-safe
+  port. Filed as `computenet-yzsc` and **fixed here**: `carriesExclusive` now
+  stops at `KernelFqn.NON_CONSUMING_VIEWS`, checked before the type-argument
+  walk, and `ContractProcessorTest` pins both directions.
+- A `kotlin.*`/`java.*` container that is not `Map`/`Iterable`/`Array` —
+  `Pair`, `Triple`, `Result`, `Optional` — is marked exclusive by the scan and
+  then skipped by the walk, so the exclusive is dropped by a proxy that
+  believes it discharged. Filed as `computenet-woto`.
+- Reach is also *over*-reach: any exclusive reachable through a non-payload
+  reference an argument happens to hold is discharged too, and one already
+  consumed throws out of the walk. Filed as `computenet-h6sf`.
+
+**Consequence for `computenet-umx.1.4`'s BS-8** (`[CHA2-21]`): its body is
+unchanged and its `@ExpectedFailure(signature = "CHA2-BS-8")` annotation is
+removed — `[CHA2-44]` requires exactly that when a recorded expected failure
+starts passing. `ExclusiveDischargeReproTest`'s BS-8 is now the acceptance
+test for this fix. Feature risk 6 never materialized: KSP accepted the
+nested-exclusive `@Contract` shape, so no `DISPUTES.md` entry (`[CHA2-46]`)
+was needed.
 
 #### Residual 2 — suppression granularity. FIXED by `computenet-3jv2`.
 
@@ -246,9 +296,11 @@ the run against the unfixed code with the annotation removed:
 without suppression() FAILED — ExpectedFailureSignal: CHA2-BS-9: Unexpected
 elements from index 0, expected:<[]> but was:<["effect-1"]>`.
 
-**Not fixed here**: residual 1 above (BS-8) is independent — different decision
-(93 I-6/I-8), different code site (`Proxy.discharge` + the KSP scan) — and still
-stands as an expected failure under `computenet-ulss`.
+**Not fixed by `computenet-3jv2`**: residual 1 above (BS-8) is independent —
+different decision (93 I-6/I-8), different code site (`Proxy.discharge` + the
+KSP scan). It was still a standing expected failure when `computenet-3jv2` was
+written; `computenet-ulss` has since fixed it (see residual 1 above), and the
+two land together with no expected failure left standing.
 
 #### Residual 3 — boundary-denial silent drop. FIXED by SEC1.
 
@@ -283,9 +335,11 @@ that "denied ⇒ discharged" is the kernel's own standard.
 
 #### Owner of the remainder
 
-Residuals 1 and 2: KFX, or whoever carries the 93 I-6/I-8 exclusive-bit
-widening and the 93 I-17 contract-granularity suppression. Neither is CHA2's
-to fix (`[CHA2-50]`).
+Both residuals are now carried and fixed: residual 1 by `computenet-ulss`
+(93 I-6/I-8 exclusive-bit widening, with `computenet-yzsc` correcting the
+scan's reach over `Borrowed`/`Frozen`), residual 2 by `computenet-3jv2`
+(93 I-17 contract-granularity suppression). Neither was CHA2's to fix
+(`[CHA2-50]`); CHA2 reproduced them and handed them on.
 
 ---
 
