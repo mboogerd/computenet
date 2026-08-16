@@ -1,9 +1,11 @@
 package civictech.inspect
 
+import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellContext
 import civictech.cell.CellRef
 import civictech.cell.Consumer
+import civictech.cell.DenialReason
 import civictech.cell.data.SetApi
 import civictech.cell.data.SetCell
 import civictech.cell.host.HostedCellProxy
@@ -11,6 +13,8 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SupervisionPolicy
 import civictech.cell.host.VirtualThreadScheduler
+import civictech.cell.link.PeerId
+import civictech.cell.membrane.CompositeCell
 import civictech.cell.port.FanInlet
 import civictech.cell.port.Use
 import civictech.cell.port.registerPort
@@ -172,6 +176,69 @@ class InspectorErrorsTest {
         }
     }
 
+    /**
+     * computenet-usd.7: a `BoundaryPolicy` refusal and a plain host-level drop
+     * both carry `cause == null` on the outlet — before this row field
+     * existed the only way a client could tell them apart was parsing
+     * [DeadLetterRow.description]'s `"boundary denial at exposure"` prefix.
+     * Drives the [civictech.cell.BoundaryDenialSink] directly (as
+     * `BoundaryDenialAccountingTest` does in `:kernel`) rather than through
+     * one adopted seam, because what is under test is this module's DTO
+     * threading, not any one `BoundaryPolicy` predicate.
+     */
+    @Test
+    fun `a boundary denial's row and SSE frame carry a typed denial the drop above does not`() {
+        val events = listen()
+        val plainCell = SetCell<String>().also { host.managementInlet.call.spawn(it) }
+        val membrane = AccountedMembrane().also { host.managementInlet.call.spawn(it) }
+
+        // a plain drop first — deliver()'s "unknown port" branch (cause stays
+        // null), same fixture as this class's very first test — so the two
+        // are distinguishable side by side
+        host.enqueueHostedInvocation(
+            HostedPortInvocation(
+                cellRef = plainCell.ref,
+                portName = "nope",
+                type = HostedPortInvocation.Type.PORT_API,
+                invocation = Invocation.of(PROVIDE, arrayOf("x")),
+            ),
+        )
+        events.awaitKind(Event.ERROR_DEAD_LETTER, 1)
+
+        val sink = membrane.boundaryDenials["exposedInlet"]!!
+        sink.deny(
+            seam = BoundarySeam.INTEGRITY,
+            reason = DenialReason.REPLAY,
+            principal = PeerId("mallory"),
+            subject = "Consumer#provide",
+            detail = "counter=7 not > last accepted 7",
+        )
+
+        val frames = events.awaitKind(Event.ERROR_DEAD_LETTER, 2)
+        val dropFrame = frames[0]
+        val denialFrame = frames[1]
+        dropFrame["cause"] shouldBe JsonNull
+        dropFrame["denial"] shouldBe JsonNull
+        denialFrame["cause"] shouldBe JsonNull
+        val deniedObj = denialFrame["denial"]!!.jsonObject
+        deniedObj["seam"]!!.jsonPrimitive.content shouldBe "INTEGRITY"
+        deniedObj["reason"]!!.jsonPrimitive.content shouldBe "REPLAY"
+        deniedObj["exposure"]!!.jsonPrimitive.content shouldBe "exposedInlet"
+        deniedObj["principal"]!!.jsonPrimitive.content shouldBe "mallory"
+        deniedObj["subject"]!!.jsonPrimitive.content shouldBe "Consumer#provide"
+
+        awaitUntil("both dead letters reach the snapshot") { snapshot().deadLetters.size == 2 }
+        val rows = snapshot().deadLetters
+        rows[0].denial shouldBe null
+        val deniedRow = rows[1].denial!!
+        deniedRow.seam shouldBe "INTEGRITY"
+        deniedRow.reason shouldBe "REPLAY"
+        deniedRow.exposure shouldBe "exposedInlet"
+        deniedRow.principal shouldBe "mallory"
+        deniedRow.subject shouldBe "Consumer#provide"
+        deniedRow.detail shouldBe "counter=7 not > last accepted 7"
+    }
+
     // --------------------------------------------------------------- restarts
 
     @Test
@@ -314,6 +381,31 @@ class InspectorErrorsTest {
 
     private interface CounterProxy {
         val inlet: Use<Consumer<Int>>
+    }
+
+    /** Minimal organelle behind a mediated exposure: an inlet that swallows whatever it is given. */
+    private class SinkOrganelle(override val ref: CellRef = CellRef(UUID.randomUUID())) : Cell {
+        @Suppress("UNCHECKED_CAST")
+        val inlet = registerPort("inlet", FanInlet(Consumer::class.java as Class<Consumer<String>>))
+
+        init {
+            inlet.serve(object : Consumer<String> {
+                override fun provide(input: String) {}
+            })
+        }
+    }
+
+    /**
+     * A membrane with one mediated inlet exposure, i.e. one
+     * [civictech.cell.BoundaryDenialSink] — same shape as
+     * `BoundaryDenialAccountingTest.AccountedMembrane` in `:kernel`, repeated
+     * here because this test drives the sink directly rather than through a
+     * `BoundaryPolicy` predicate.
+     */
+    private class AccountedMembrane(
+        val organelle: SinkOrganelle = SinkOrganelle(),
+    ) : CompositeCell() {
+        val exposedInlet = mediate("exposedInlet", "inlet", organelle.inlet)
     }
 
     /** Counts everything it accepts; a negative input throws mid-message. */

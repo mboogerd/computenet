@@ -255,6 +255,51 @@ class DoltCommitFeedTest {
             shouldThrow<FeedShapeException> { feed.readFrom() }
         }
 
+        /**
+         * computenet-dqj.6: a resumed read must narrow the SQL text itself, not
+         * just filter an unbounded scan's results in memory — the residual
+         * documented in [DoltCommitFeed]'s class KDoc before this fix. Observed
+         * through the [DiffQuery] seam, as the KDoc there prescribes.
+         */
+        @Test
+        fun `a resumed read narrows the diff-table queries to the wanted commits, not the whole history`() {
+            val observedQueries = mutableListOf<String>()
+            val feed = DoltCommitFeed(
+                DiffQuery { sql ->
+                    observedQueries += sql
+                    when {
+                        sql == DoltCommitFeed.LOG_QUERY ->
+                            listOf("c3", "c2", "c1").map { mapOf("commit_hash" to JsonPrimitive(it)) }
+                        sql.startsWith(DoltCommitFeed.ISSUE_QUERY) -> listOf(
+                            row("diff_type" to "added", "to_commit" to "c2", "to_id" to "a"),
+                            row("diff_type" to "added", "to_commit" to "c3", "to_id" to "b"),
+                        )
+                        sql.startsWith(DoltCommitFeed.EDGE_QUERY) -> emptyList()
+                        else -> error("unexpected query: $sql")
+                    }
+                },
+            )
+
+            val records = feed.readFrom(afterCommit = "c1")
+
+            records.map { it.issueId } shouldContainExactly listOf("a", "b")
+            observedQueries.single { it.startsWith(DoltCommitFeed.ISSUE_QUERY) } shouldBe
+                "${DoltCommitFeed.ISSUE_QUERY} where to_commit in ('c2', 'c3')"
+            observedQueries.single { it.startsWith(DoltCommitFeed.EDGE_QUERY) } shouldBe
+                "${DoltCommitFeed.EDGE_QUERY} where to_commit in ('c2', 'c3')"
+
+            // A genesis read (no checkpoint yet) has nothing to narrow by, so it
+            // keeps issuing the plain, unfiltered query text unchanged — the cold
+            // start this module was always cheap for (class KDoc).
+            observedQueries.clear()
+            feed.readFrom()
+            observedQueries shouldContainExactly listOf(
+                DoltCommitFeed.LOG_QUERY,
+                DoltCommitFeed.ISSUE_QUERY,
+                DoltCommitFeed.EDGE_QUERY,
+            )
+        }
+
         @Test
         fun `commit and commit_date are diff bookkeeping, not issue field changes`() {
             val feed = DoltCommitFeed(

@@ -62,17 +62,16 @@ fun interface DiffQuery {
  * belong to computenet-dqj.1.3 ([DoltFeedPoller]) and drive this class through
  * [readFrom]/[history].
  *
- * KNOWN LIMITATION (flagged in computenet-dqj.1.2's review, left open by
- * computenet-dqj.1.3 as a judgment call, not fixed here): [readFrom] always
- * scans all of `dolt_diff_issues`/`dolt_diff_dependencies`, then filters to
- * `afterCommit`'s unseen commits in memory — it does not narrow the SQL query
- * itself. Called once from a cold start that is cheap; called every tick of a
- * [DoltFeedPoller] loop, the per-poll cost is O(history), not O(new commits).
- * Fine for the scratch/demo workspaces this module targets (measured ~0.2s
- * per scan against a scratch DB); worth bounding — e.g. a `to_commit IN (...)`
- * filter over the wanted commit set, or narrowing by commit height once one
- * is known — before this feed is pointed at a workspace with real history
- * depth.
+ * RESOLVED (computenet-dqj.6; previously a known limitation flagged in
+ * computenet-dqj.1.2's review and left open by computenet-dqj.1.3 as a
+ * judgment call): when [readFrom] resumes from a non-null `afterCommit`,
+ * [readIssueDiffs]/[readEdgeDiffs] add a `to_commit IN (...)` filter over the
+ * wanted commit set, so the query itself — not just the in-memory filter —
+ * is bounded by the number of new commits. A genesis read (`afterCommit ==
+ * null`, or the cold-start case where every commit is wanted) keeps issuing
+ * the unfiltered [ISSUE_QUERY]/[EDGE_QUERY] text unchanged, since there is
+ * nothing to narrow by. A steady-state [DoltFeedPoller] tick against a deep
+ * history now costs O(new commits), not O(history).
  *
  * Access is the `dolt` CLI via [DoltSql] (a `bd sql` connection is unusable in
  * embedded mode — BDS0). All timestamps in Dolt are UTC; this reader never
@@ -127,13 +126,18 @@ class DoltCommitFeed(private val sql: DiffQuery) {
 
         val heights = commits.withIndex().associate { (index, hash) -> hash to index.toLong() }
         val wanted = commits.subList(startIndex, commits.size).toSet()
+        // A genesis read (afterCommit == null) wants every commit already, so
+        // there is nothing to narrow by — keep issuing the plain, unfiltered
+        // query text in that case rather than an IN(...) clause that would
+        // just list the whole history back to itself.
+        val full = startIndex == 0
 
         // Two table scans rather than two queries per commit: the diff tables
         // span the whole commit graph, the scratch databases this feeds off are
         // small, and a single scan keeps the pass internally consistent (a
         // concurrent bd mutation cannot land between per-commit queries).
-        val issueDiffs = readIssueDiffs(wanted)
-        val edgeDiffs = readEdgeDiffs(wanted)
+        val issueDiffs = readIssueDiffs(wanted, full)
+        val edgeDiffs = readEdgeDiffs(wanted, full)
 
         return commits.subList(startIndex, commits.size).flatMap { hash ->
             val issues = issueDiffs[hash].orEmpty().associateBy { it.issueId }
@@ -157,9 +161,10 @@ class DoltCommitFeed(private val sql: DiffQuery) {
         }
     }
 
-    private fun readIssueDiffs(wanted: Set<String>): Map<String, List<IssueDiff>> {
+    private fun readIssueDiffs(wanted: Set<String>, full: Boolean): Map<String, List<IssueDiff>> {
+        val query = narrowedQuery(ISSUE_QUERY, wanted, full)
         val perCommit = mutableMapOf<String, MutableMap<String, IssueDiff>>()
-        for (row in sql.query(ISSUE_QUERY)) {
+        for (row in sql.query(query)) {
             val commit = row.requiredString("to_commit", ISSUE_QUERY)
             if (commit !in wanted) continue
             val diff = issueDiff(row, commit, ISSUE_QUERY)
@@ -176,8 +181,8 @@ class DoltCommitFeed(private val sql: DiffQuery) {
         return perCommit.mapValues { (_, byIssue) -> byIssue.values.toList() }
     }
 
-    private fun readEdgeDiffs(wanted: Set<String>): Map<String, List<EdgeDiff>> =
-        sql.query(EDGE_QUERY)
+    private fun readEdgeDiffs(wanted: Set<String>, full: Boolean): Map<String, List<EdgeDiff>> =
+        sql.query(narrowedQuery(EDGE_QUERY, wanted, full))
             .mapNotNull { row ->
                 val commit = row.requiredString("to_commit", EDGE_QUERY)
                 if (commit !in wanted) null else commit to edgeDiff(row, EDGE_QUERY)
@@ -195,6 +200,26 @@ class DoltCommitFeed(private val sql: DiffQuery) {
          * changes on every record.
          */
         private val NON_FIELD_COLUMNS = setOf("commit", "commit_date")
+
+        /**
+         * Narrows [base] (one of [ISSUE_QUERY]/[EDGE_QUERY]) to a `WHERE
+         * to_commit IN (...)` scan of exactly [wanted] when [full] is false —
+         * a resumed read scans only the commits new since the checkpoint,
+         * not the whole diff table. A genesis read ([full] true) has nothing
+         * to narrow by and returns [base] unchanged, byte-for-byte, so a cold
+         * start keeps issuing the plain unfiltered scan it always has.
+         *
+         * Commit hashes come from this same connection's own `dolt_log`
+         * ([LOG_QUERY]) — never external input — but they are still
+         * single-quote-escaped before being spliced into the SQL text, on
+         * the general principle that no value assembled into a query string
+         * should assume its own shape.
+         */
+        internal fun narrowedQuery(base: String, wanted: Set<String>, full: Boolean): String {
+            if (full) return base
+            val inList = wanted.sorted().joinToString(", ") { "'" + it.replace("'", "''") + "'" }
+            return "$base where to_commit in ($inList)"
+        }
 
         /**
          * Maps one `dolt_diff_issues` row. Exposed to tests so the shape-failure
