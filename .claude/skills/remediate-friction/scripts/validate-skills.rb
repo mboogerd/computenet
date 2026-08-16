@@ -14,6 +14,21 @@
 # over authored test cases and takes hours. That is a cadence or on-demand
 # tool, never a per-change gate, and this script is not it.
 #
+# THE SECOND TIER OF CRITERIA, added 2026-08-15. quick_validate.py only ever
+# covered frontmatter, so this script did too — and a skills-rubric pass run
+# by hand found three shape failures it could not have caught, because they
+# live in skill-creator's Skill Writing Guide rather than its script:
+# "Keep SKILL.md under 500 lines" and "For large reference files (>300
+# lines), include a table of contents". Both are now checked here.
+#
+# Their severities differ deliberately. A missing ToC is mechanical, so it
+# FAILS. The 500-line ideal is a design question — .claude/skills/work is a
+# 1200-line operational procedure executed top to bottom, and splitting it
+# changes what is in context at each step — so it WARNS, loudly, rather than
+# blocking every future edit on a restructure nobody has agreed. A file with
+# no `##` sections at all cannot have a meaningful ToC either, so that warns
+# too and names the real problem instead of demanding an index of nothing.
+#
 # Usage: ruby .claude/skills/remediate-friction/scripts/validate-skills.rb [dir]
 # Exit:  0 all pass, 1 any failure.
 require 'yaml'
@@ -34,6 +49,21 @@ abort "no SKILL.md found under #{root}" if files.empty?
 # it rather than skipping silently.
 missing = Dir.glob(File.join(root, '*')).select { |d| File.directory?(d) } -
           files.map { |f| File.dirname(f) }
+
+# skill-creator: "Keep SKILL.md under 500 lines; if you're approaching this
+# limit, add an additional layer of hierarchy along with clear pointers about
+# where the model using the skill should go next to follow up."
+BODY_LINE_IDEAL = 500
+# skill-creator: "For large reference files (>300 lines), include a table of
+# contents."
+REFERENCE_TOC_THRESHOLD = 300
+
+# A ToC is any heading that reads as one. Matching the heading rather than a
+# list shape keeps this from mistaking the first ordered list in the body for
+# an index.
+def toc?(text)
+  text.match?(/^##+\s+(contents|table of contents)\b/i)
+end
 
 failures = 0
 files.each do |f|
@@ -81,6 +111,26 @@ files.each do |f|
       end
     rescue StandardError => e
       errs << "invalid YAML: #{e.message}"
+    end
+  end
+
+  # Shape, not frontmatter. Counted on the body below the frontmatter, since
+  # the guide's budget is about what lands in context when the skill fires.
+  body_lines = body.sub(/\A---\n.*?\n---\n/m, '').lines.length
+  if body_lines > BODY_LINE_IDEAL
+    warns << "SKILL.md body is #{body_lines} lines (ideal <=#{BODY_LINE_IDEAL}); " \
+             'add a layer of hierarchy and point into it'
+  end
+
+  Dir.glob(File.join(File.dirname(f), 'references', '*.md')).sort.each do |r|
+    text = File.read(r, encoding: 'UTF-8')
+    next unless text.lines.length > REFERENCE_TOC_THRESHOLD
+
+    rel = File.join('references', File.basename(r))
+    if text.scan(/^## /).length < 2
+      warns << "#{rel} is #{text.lines.length} lines with no sections to index"
+    elsif !toc?(text)
+      errs << "#{rel} is #{text.lines.length} lines (>#{REFERENCE_TOC_THRESHOLD}) with no Contents"
     end
   end
 

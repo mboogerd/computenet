@@ -1,6 +1,6 @@
 ---
 name: remediate-friction
-description: Drains everything under the SDLC epic (computenet-wpvy) on its own lane, separate from /work — picks the most-reported open item, re-validates it against the current skill revision, and fixes .claude/skills/ in a reviewed branch and PR. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated SDLC backlog worked.
+description: Owns changes to .claude/skills/ — drains the SDLC epic (computenet-wpvy) on its own lane, separate from /work, and carries the rubric gate every skill edit has to pass. Use when a routine kicks off friction remediation, or the user says "/remediate-friction", "drain the friction log", "fix the work skill friction", or wants the accumulated SDLC backlog worked. Also use for ANY edit to a skill file under .claude/skills/, however it arrives — a one-off fix, a direct request to change the work skill, a correction spotted mid-session — because the rubric check lives here and a skill edited outside this lane silently skips it.
 ---
 
 # /remediate-friction

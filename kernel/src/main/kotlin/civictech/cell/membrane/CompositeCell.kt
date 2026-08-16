@@ -6,14 +6,20 @@ import civictech.cell.BoundaryDenials
 import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.CurrentContext
 import civictech.cell.DenialReason
+import civictech.cell.MessageContext
 import civictech.cell.control.Attention
+import civictech.cell.control.StallNotice
+import civictech.cell.control.StallReason
 import civictech.cell.port.FanInlet
 import civictech.cell.port.FanOutlet
 import civictech.cell.link.LinkPolicy
+import civictech.cell.link.LinkRole
 import civictech.cell.link.Linked
 import civictech.cell.link.PeerId
 import civictech.cell.port.Port
+import civictech.cell.port.PortRegistry
 import civictech.cell.protocol.ProtocolId
 import civictech.cell.protocol.ProtocolSupport
 import civictech.cell.protocol.Protocols
@@ -165,7 +171,20 @@ abstract class CompositeCell(
         exposed.serve(
             Proxy.fromClass(
                 organelleInlet.clazz,
-                MediateProxy(organelleInlet.call, policy.integrity, denials = denials),
+                MediateProxy(
+                    organelleInlet.call,
+                    policy.integrity,
+                    denials = denials,
+                    // I-18 (BS-12): the refused delta never reaches the
+                    // organelle, so the organelle never re-emits and every
+                    // frontier waiting on this membrane's *outbound* edges is
+                    // starved. The classification therefore has to reach PAST
+                    // the mediated target — the exposed outlets, not this
+                    // inlet — which is exactly the walk
+                    // `civictech.cell.host.notifyDownstream` performs for a
+                    // dead-lettered invocation. See [stallDeniedEdges].
+                    onRefused = { context -> stallDeniedEdges(exposedPorts(), context) },
+                ),
             ),
         )
         installLinkAuthority(externalName, exposed, policy)
@@ -253,7 +272,31 @@ abstract class CompositeCell(
         val denials = boundaryDenials.sinkFor(externalName)
         installLinkAuthority(externalName, organelleOutlet, policy)
         val subject = organelleOutlet.clazz.simpleName
-        organelleOutlet.disclosureFilter = policy.disclosure.asDeltaFilter(denials, subject)
+        val accounted = policy.disclosure.asDeltaFilter(denials, subject)
+        // I-18 (BS-12): a suppressed emission is an edge that will not deliver,
+        // so every consumer of THIS outlet is told so. The affected links are
+        // the exposed outlet's own — unlike the integrity seam, disclosure
+        // refuses at the point of emission, and no other exposure of this
+        // membrane is starved by it. Wrapped only for a policy that can
+        // actually suppress, so `Full` (reachable here via a
+        // protocolAuthority-only mediateOutlet) keeps its byte-for-byte
+        // pass-through with no extra frame per emission.
+        organelleOutlet.disclosureFilter =
+            if (policy.disclosure == DisclosurePolicy.Full) {
+                accounted
+            } else {
+                { args ->
+                    accounted(args) ?: run {
+                        stallDeniedEdges(sequenceOf(organelleOutlet), CurrentContext.get())
+                        null
+                    }
+                }
+            }
+        // Rule 5 (`computenet-usd.3.1`): a REPEAT suppression emits nothing.
+        // The first suppression of this emission already classified the wave,
+        // watermark advance is a monotone max, and this hook is deliberately
+        // argument-less and context-free — there is nothing left to classify
+        // with and nothing a second notice would add.
         organelleOutlet.onRepeatSuppression = policy.disclosure.asRepeatSuppressionHook(denials, subject)
         if (policy.protocolAuthority.isNotEmpty()) {
             ProtocolSupport.of(organelleOutlet).inboundFilter = policy.protocolAuthority.asProtocolFilter(denials)
@@ -318,6 +361,94 @@ abstract class CompositeCell(
             }
         }
         (port as? Linked)?.linking?.policies?.addAll(accounted)
+    }
+
+    /** This membrane's exposed ports — the only edges an external frontier can be waiting on. */
+    private fun exposedPorts(): Sequence<Port> {
+        val ports = PortRegistry.of(this)
+        return ports.names().asSequence().mapNotNull { ports[it] }
+    }
+}
+
+/**
+ * The landed I-18 "edge that will not deliver" classification, emitted for a
+ * `BoundaryPolicy` refusal: `StallNotice.Stall(DEAD_LETTERED, ts)` on the
+ * `Suspension` protocol, per affected `Consume` link (spec 20/22 "Completeness
+ * over silent or stuck edges", 30/31 rule 5, decided in 93 I-18; BS-12,
+ * `[SEC1-27]`).
+ *
+ * This is deliberately **the same notice** `civictech.cell.host.ManagedHost`'s
+ * `SupervisionPolicy.PROPAGATE` arm already emits for a dead-lettered
+ * invocation, sent by the same means (`Protocols.sendDownstream(link,
+ * Protocols.Suspension, ...)`, the walk in
+ * `civictech.cell.host.notifyDownstream`), so a glitch-free join needs no new
+ * vocabulary: [civictech.cell.consistency.WaveFrontier] RE-SCOPEs past the
+ * lost contribution — advancing only the poisoned wave's watermark on that
+ * edge, leaving the edge open, and surfacing a
+ * [civictech.cell.consistency.GlitchViolation] — instead of waiting forever.
+ * The `Progress` absorb-ack route was considered and rejected: an absorb-ack
+ * asserts the wave's contribution *is* reflected downstream, which is false
+ * for a refusal.
+ *
+ * ## What this is not
+ *
+ * A denial is **not a fault** (`[SEC1-29]`, BS-14). Emission happens at the
+ * denial seam's own wiring, at the moment of refusal — never by throwing
+ * through `ManagedHost`'s supervision catch. No `SupervisionPolicy` is
+ * consulted, no RESTART fires, and no wave is minted or advanced by the notice
+ * itself: a `Stall` is metadata-plane, and carrying the poisoned wave's
+ * timestamp inside it is the landed I-18 shape rather than wave-carrying in
+ * the G-20 sense (93 I-28 §6 — predicates never mint or carry waves).
+ *
+ * ## Only a real wave position is classified
+ *
+ * [context] is the refused crossing's ambient [MessageContext], and the notice
+ * is emitted **only** when that context names a wave position:
+ *
+ * - a `null` context is unwaved traffic, which passes a frontier anyway;
+ * - a non-null [MessageContext.baseline] is a catch-up baseline — "never a
+ *   wave position" (20/21 §Pull, 93 I-24), released immediately by
+ *   [civictech.cell.consistency.WaveFrontier] and excluded from every wave
+ *   set, so there is nothing to rescue.
+ *
+ * Neither may fall through to a *timestampless* terminal stall: that is
+ * RE-SCOPE's other branch, which closes the edge outright (the unlink
+ * frontier-shrink) — the wrong disposition for a per-emission denial, whose
+ * edge is still very much alive.
+ *
+ * ## Residual: two seams reach no frontier, on purpose
+ *
+ * `BoundarySeam.ADMISSION` refuses a frame before `WireCodec.decode` runs, so
+ * no wave can be named at all, and `BoundarySeam.LINK_AUTHORITY` refuses
+ * before any edge opens, so nothing is waiting. `BoundarySeam.PROTOCOL_AUTHORITY`
+ * is metadata-plane and is **a real residual hazard**, recorded rather than
+ * silently skipped: a denied `Progress`/absorb-ack frame can starve settlement
+ * downstream, and this seam does not classify it (`computenet-usd.3.1` scope).
+ *
+ * ## Residual: emitting the notice is not the same as it being handled
+ *
+ * A consumer only benefits if it handles `Protocols.Suspension`.
+ * [civictech.cell.consistency.WaveFrontier] does;
+ * [civictech.cell.data.op.CoalescingCombineCell] — the only landed cell that
+ * forms a per-wave *combination* — deliberately does not, so a denied wave
+ * there is retired only by a later watermark or `EdgeClose`. That is the gap
+ * behind `[SEC1-28]`'s UNVERIFIED filing in `concord/corpus/DISPUTES.md`
+ * (resolve-condition (b)), not something this classification closes.
+ */
+private fun stallDeniedEdges(ports: Sequence<Port>, context: MessageContext?) {
+    if (context == null || context.baseline != null) return
+    val notice = StallNotice.Stall(StallReason.DEAD_LETTERED, context.timestamp)
+    ports.forEach { port ->
+        val linked = port as? Linked ?: return@forEach
+        linked.linking.links.forEach { link ->
+            // Outbound Consume links only: an inbound link is not starved by
+            // this refusal, and an Observe-role edge never gates a wave
+            // (PN-10, `WaveFrontier.expectedLocalEdges`) — telling it would
+            // buy nothing and surface a spurious GlitchViolation.
+            if (link.fromPort === linked && link.role == LinkRole.Consume) {
+                Protocols.sendDownstream(link, Protocols.Suspension, notice)
+            }
+        }
     }
 }
 

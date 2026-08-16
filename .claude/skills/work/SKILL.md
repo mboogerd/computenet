@@ -44,6 +44,14 @@ felt like giving up.
   invisible to it.
 - `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
   reads `null`. It never includes comment bodies, only `comment_count`.
+- Epic- and feature-sized output overflows the inline tool-result limit
+  (`bd show` on one epic: ~83KB; `bd ready --type=epic --json`: ~43KB) and
+  gets truncated or persisted. Redirect any `--json` call that *can* be big
+  to `"$SCRATCH/<name>.json"` and read the file, same as comments below
+  (computenet-csm).
+- `bd` prints warnings on stdout **before** the JSON, so `jq` and
+  `json.loads` fail on the raw stream; slice from the first line starting
+  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing.
 - Comments are read one way only: `bd comments <id> --json >
   "$SCRATCH/c-<id>.json"`, then read the file. Inline reads truncate on
   long-lived beads (~34KB observed) and present as *fewer comments than
@@ -208,7 +216,8 @@ session. Note the revision in the summary; log a multi-commit gap as friction.
 
 ```bash
 .claude/skills/work/scripts/sweep-stale-claims.sh      # --dry-run to preview
-bd list --type=epic --status=in_progress --assignee="$BEADS_ACTOR" --json
+bd list --status=in_progress --assignee="$BEADS_ACTOR" --limit 0 --json \
+  | jq '[.[] | select(((.labels // []) | index("skill-friction")) | not)]'
 ```
 
 The sweep reopens this machine's abandoned task claims (`bd ready` hides
@@ -217,11 +226,21 @@ same item released repeatedly means work is *failing*, not crashing. Items it
 reports "complete, awaiting decision" are reviewed work awaiting a ship call,
 not fresh work.
 
-The epic query is the **liveness check**: any row with `updated_at` within 15
-minutes probably belongs to a live overlapping run on this machine (same
-`BEADS_ACTOR`, indistinguishable) — stop and report rather than driving one
-epic twice. Check every row. Anything older is a crash leftover: release it
-(`bd update <id> --status=open --assignee=""`).
+The listing is the **liveness check**, and it covers *every* type, not just
+epics: a session working a standalone bug holds no epic claim at all, so an
+epic-only query reads "alone" while another run is live in a shared worktree
+(computenet-sec: duplicated fix, two Gradle builds corrupting one `build/`
+dir, a commit mixing both sessions' work). `skill-friction` items are
+excluded because their claim is routing to an orchestrator lane, not a work
+session — one is often stamped minutes ago by a session that just finished.
+
+Any row with `updated_at` within 15 minutes probably belongs to a live
+overlapping run on this machine (same `BEADS_ACTOR`, indistinguishable) —
+stop and report rather than colliding with it. Check every row. Older rows:
+an *epic* is a crash leftover — release it
+(`bd update <id> --status=open --assignee=""`); leave non-epic rows alone —
+stale *tasks* the sweep above already reopened, and a stale *feature* is the
+5a resume marker, not a leak.
 
 **Only after the liveness check, reconcile beads against merged PRs:**
 
@@ -244,7 +263,10 @@ removals failed — neither is "clean sweep"; say which you got.
 filter applied by eye gets forgotten):
 
 ```bash
-bd ready --type=epic --json | jq '[.[] | select(.id != "computenet-wpvy")]'
+bd ready --type=epic --json > "$SCRATCH/ready-epics.json"   # ~43KB inline — overflow
+jq '[.[] | select(.id != "computenet-wpvy")
+        | {id, title, priority, assignee, updated_at}]' "$SCRATCH/ready-epics.json"
+# full descriptions stay in the file — read the chosen epic's from there
 .claude/skills/work/scripts/claim-epic.sh <the id you selected>
 ```
 
@@ -425,6 +447,16 @@ answers "any unsaved edits?" — a fact about the *tree*. It reads clean at
 exactly the moment an agent is finishing bookkeeping (computenet-ys7: a
 worktree removed under a live reviewer seconds after `gh pr ready`). Keep it
 as the second guard; never read it as "nobody is working here".
+
+A worktree already on disk that this session did not create may also belong
+to a *concurrent session* on this machine, not just a dead one — step 3's
+liveness check races a run that starts mid-slot. Before adopting one, check
+its bead: `in_progress` with `updated_at` in the last 15 minutes → occupied,
+leave it. Guessing wrong costs real work: two agents in one worktree converge
+on the same fix independently, and two concurrent Gradle builds there clobber
+each other's `build/` dirs, failing with errors that read as genuine test
+failures (computenet-sec: `NoSuchFileException` on an in-progress-results
+bin in `:gen:test`).
 
 ### 5a. Set up or resume the feature
 
