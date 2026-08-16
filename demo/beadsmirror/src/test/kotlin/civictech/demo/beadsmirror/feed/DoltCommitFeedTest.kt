@@ -152,6 +152,49 @@ class DoltCommitFeedTest {
             )
         }
 
+        /**
+         * computenet-dqj.11, measured at epic review: `bd dep add <native>
+         * <foreign-id>` writes the far side into `depends_on_external`, leaving
+         * `depends_on_issue_id` NULL — and the JSON `dolt` prints omits NULL
+         * columns entirely, so the row simply has no `to_depends_on_issue_id`
+         * key. Before the fix this raised [FeedShapeException] ("row is missing
+         * expected column \"to_depends_on_issue_id\""), which killed the whole
+         * poll pass and, through [DoltFeedPoller], the poll loop.
+         *
+         * The far side is carried verbatim, which is what makes the mirror
+         * equal to `bd export`: export renders an external edge as an ordinary
+         * `dependencies` entry with `depends_on_id` naming the foreign id
+         * (verified live 2026-08-16 on a scratch workspace), exactly as it
+         * renders a native one.
+         *
+         * The removal half is here too because it reads the `from_` side, the
+         * one column-choice branch that differs.
+         */
+        @Test
+        fun `an edge whose far side is external rides the record like any other`() {
+            val a = workspace.createIssue("Issue A")
+            val beforeDep = DoltCommitFeed(workspace.doltRoot).readFrom().last().commitHash
+
+            workspace.run("dep", "add", a, EXTERNAL_TARGET, "--type", EXTERNAL_DEP_TYPE)
+
+            val added = DoltCommitFeed(workspace.doltRoot).readFrom(afterCommit = beforeDep)
+            added.single { it.issueId == a }.edgeDiffs shouldContainExactly listOf(
+                EdgeDiff(DiffType.ADDED, issueId = a, dependsOnIssueId = EXTERNAL_TARGET, type = EXTERNAL_DEP_TYPE),
+            )
+
+            val afterDepAdd = added.last().commitHash
+            workspace.run("dep", "remove", a, EXTERNAL_TARGET)
+            DoltCommitFeed(workspace.doltRoot).readFrom(afterCommit = afterDepAdd)
+                .single { it.issueId == a }.edgeDiffs shouldContainExactly listOf(
+                    EdgeDiff(
+                        DiffType.REMOVED,
+                        issueId = a,
+                        dependsOnIssueId = EXTERNAL_TARGET,
+                        type = EXTERNAL_DEP_TYPE,
+                    ),
+                )
+        }
+
         @Test
         fun `reading after an unknown commit refuses rather than reporting no changes`() {
             workspace.createIssue("Issue A")
@@ -300,6 +343,79 @@ class DoltCommitFeedTest {
             )
         }
 
+        /**
+         * The third far-side column of `dependencies` (computenet-dqj.11).
+         * `depends_on_wisp_id` was *not* reachable through `bd` on this
+         * machine — a `--wisp-type` issue landed in the ordinary `issues`
+         * table and an edge onto it used `depends_on_issue_id` (probed
+         * 2026-08-16) — so it is exercised here on a synthetic row rather
+         * than claimed as measured against `bd`.
+         */
+        @Test
+        fun `an edge diff whose far side is a wisp reference carries the wisp id`() {
+            val feed = DoltCommitFeed(
+                rowsFor(
+                    commits = listOf("c1"),
+                    edgeRows = listOf(
+                        edgeRow(commit = "c1", issueId = "b", dependsOn = "w-1", farSideColumn = "depends_on_wisp_id"),
+                    ),
+                ),
+            )
+
+            feed.readFrom().single().edgeDiffs.single().dependsOnIssueId shouldBe "w-1"
+        }
+
+        @Test
+        fun `an edge row with no far side at all fails loudly naming every column it looked for`() {
+            val feed = DoltCommitFeed(
+                rowsFor(
+                    commits = listOf("c1"),
+                    edgeRows = listOf(
+                        row("diff_type" to "added", "to_commit" to "c1", "to_issue_id" to "b", "to_type" to "blocks"),
+                    ),
+                ),
+            )
+
+            val failure = shouldThrow<FeedShapeException> { feed.readFrom() }
+
+            failure.query shouldBe DoltCommitFeed.EDGE_QUERY
+            failure.message!!.contains("to_depends_on_issue_id") shouldBe true
+            failure.message!!.contains("to_depends_on_wisp_id") shouldBe true
+            failure.message!!.contains("to_depends_on_external") shouldBe true
+        }
+
+        /**
+         * `dependencies` holds exactly one of the three far-side columns
+         * non-NULL per row; two would mean the table's shape has changed under
+         * the reader, and picking one silently would mirror an edge whose far
+         * side the reader guessed. Loud failure is the epic's rule (§3 leaves
+         * schema-drift hardening *beyond* a loud failure out of scope).
+         */
+        @Test
+        fun `an edge row carrying two far sides fails rather than picking one`() {
+            val feed = DoltCommitFeed(
+                rowsFor(
+                    commits = listOf("c1"),
+                    edgeRows = listOf(
+                        row(
+                            "diff_type" to "added",
+                            "to_commit" to "c1",
+                            "to_issue_id" to "b",
+                            "to_depends_on_issue_id" to "a",
+                            "to_depends_on_external" to "elsewhere-1",
+                            "to_type" to "blocks",
+                        ),
+                    ),
+                ),
+            )
+
+            val failure = shouldThrow<FeedShapeException> { feed.readFrom() }
+
+            failure.query shouldBe DoltCommitFeed.EDGE_QUERY
+            failure.message!!.contains("to_depends_on_issue_id") shouldBe true
+            failure.message!!.contains("to_depends_on_external") shouldBe true
+        }
+
         @Test
         fun `commit and commit_date are diff bookkeeping, not issue field changes`() {
             val feed = DoltCommitFeed(
@@ -327,11 +443,16 @@ class DoltCommitFeedTest {
         private fun row(vararg columns: Pair<String, String>): Map<String, JsonElement> =
             columns.associate { (key, value) -> key to JsonPrimitive(value) }
 
-        private fun edgeRow(commit: String, issueId: String, dependsOn: String) = row(
+        private fun edgeRow(
+            commit: String,
+            issueId: String,
+            dependsOn: String,
+            farSideColumn: String = "depends_on_issue_id",
+        ) = row(
             "diff_type" to "added",
             "to_commit" to commit,
             "to_issue_id" to issueId,
-            "to_depends_on_issue_id" to dependsOn,
+            "to_$farSideColumn" to dependsOn,
             "to_type" to "blocks",
         )
 
@@ -353,3 +474,14 @@ class DoltCommitFeedTest {
         }
     }
 }
+
+/**
+ * An id that no scratch workspace contains, so `bd dep add` resolves it as
+ * *external* and writes it into `depends_on_external` (verified 2026-08-16:
+ * `bd dep add` accepts an arbitrary unknown id and reports the edge added).
+ * Deliberately not a real tracker id — the reader treats it as an opaque
+ * string, and a real one would suggest a coupling that does not exist.
+ */
+private const val EXTERNAL_TARGET = "elsewhere-x7q"
+
+private const val EXTERNAL_DEP_TYPE = "discovered-from"
