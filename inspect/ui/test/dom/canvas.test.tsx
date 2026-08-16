@@ -3,6 +3,7 @@ import { fireEvent, render, waitFor } from '@solidjs/testing-library';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import Canvas from '../../src/components/Canvas';
 import { selection } from '../../src/solid/state';
+import { setShowErrors } from '../../src/solid/toggles';
 import { CAND_SKILLS_REF, resetAppState, startApp } from './harness';
 
 /** Canvas.tsx, seeded from the real `fixtures/topology.json` (16 cells, 18
@@ -73,6 +74,34 @@ describe('Canvas', () => {
 
     await waitFor(() => {
       expect(card.classList.contains('is-selected')).toBe(true);
+    });
+  });
+
+  describe('computenet-0994: BoundaryPolicy refusals do not light up the fault badge', () => {
+    it('a cell with only a denial dead letter gets the denial badge, not the fault badge or is-erring', async () => {
+      setShowErrors(true);
+      const { container, getByText } = await renderReady();
+      const card = getByText('qualification').closest('.node-card') as HTMLElement;
+      expect(card).toBeTruthy();
+
+      await waitFor(() => {
+        expect(container.querySelector('.node-error-badge[data-kind="denial"]')).toBeTruthy();
+      });
+
+      const denialBadges = container.querySelectorAll('.node-error-badge[data-kind="denial"]');
+      expect(denialBadges.length).toBe(1);
+      expect(denialBadges[0].textContent).toBe('1');
+
+      // Exactly one fault badge exists in the whole scene — `matches`'
+      // (fixtures/errors.json's other row, a real OwnershipViolation). The
+      // refusal on `qualification` never contributes a second one: a
+      // pure-refusal graph must not look like cells are failing (SEC1-29).
+      const faultBadges = container.querySelectorAll('.node-error-badge[data-kind="fault"]');
+      expect(faultBadges.length).toBe(1);
+
+      // `qualification`'s own card gets no red "erring" treatment — its only
+      // dead letter is a refusal (denial != null), never a fault.
+      expect(card.classList.contains('is-erring')).toBe(false);
     });
   });
 

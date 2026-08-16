@@ -21,7 +21,25 @@
           "ownership": "frozen",
           "reason": "Owned payload frozen for dead-letter capture (kernel invariant: no consume/copy/delay on a failed path)"
         }
-      ]
+      ],
+      "denial": null
+    },
+    {
+      "ref": "560edf02-f361-4b4f-b188-7bcba136fe8c:0",
+      "cause": null,
+      "description": "boundary denial at exposure feed",
+      "wave": null,
+      "atMs": 1753600200000,
+      "invocation": null,
+      "disposition": [],
+      "denial": {
+        "seam": "DISCLOSURE",
+        "reason": "DISCLOSURE_DENIED",
+        "exposure": "feed",
+        "principal": "peer-1",
+        "subject": null,
+        "detail": null
+      }
     }
   ],
   "parked": [

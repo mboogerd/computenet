@@ -18,8 +18,21 @@ const topologySnapshot = topology as TopologySnapshot;
  *  contract)" — exercised end to end through the real `ErrorStore`, the same
  *  approach `test/fixture.test.ts` (M0/M1) takes for the topology fixture. */
 describe('fixtures/errors.json', () => {
-  it('counters equal the sum of what the row arrays themselves carry', () => {
-    expect(snapshot.counters.deadLetters).toBe(snapshot.deadLetters.length);
+  it('counters equal the sum of what the row arrays themselves carry — EXCEPT deadLetters (computenet-0994)', () => {
+    // computenet-0994: `counters.deadLetters` is a FAULT count only
+    // (`supervisionAccounting()`-derived, server-side); `deadLetters[]`
+    // carries BOTH faults and BoundaryPolicy refusals (`denial != null`),
+    // so `counters.deadLetters == deadLetters.length` is NOT a live-server
+    // invariant — this fixture deliberately carries one of each to prove
+    // it. The 20-api-contract.md "counters.deadLetters vs
+    // deadLetters[].length" note states this asymmetry explicitly. The true
+    // invariant is against the FAULT rows only.
+    const faultRows = snapshot.deadLetters.filter((dl) => dl.denial == null);
+    const denialRows = snapshot.deadLetters.filter((dl) => dl.denial != null);
+    expect(snapshot.counters.deadLetters).toBe(faultRows.length);
+    expect(denialRows.length).toBeGreaterThan(0); // the fixture must actually exercise the asymmetry
+    expect(snapshot.deadLetters.length).toBeGreaterThan(snapshot.counters.deadLetters);
+
     expect(snapshot.counters.restarts).toBe(snapshot.restarts.length);
     expect(snapshot.counters.parked).toBe(snapshot.parked.reduce((sum, p) => sum + p.count, 0));
     expect(snapshot.counters.waveHealth).toBe(snapshot.waveHealth.length);
@@ -48,6 +61,11 @@ describe('fixtures/errors.json', () => {
     for (const r of snapshot.restarts) {
       expect(store.restartsFor(r.ref)).toContainEqual(r);
     }
+    // computenet-0994: the store's own denial split, derived from the loaded
+    // rows — matches the fixture's denial row count exactly, independent of
+    // (and not sourced from) `snapshot.counters`.
+    const denialRows = snapshot.deadLetters.filter((dl) => dl.denial != null);
+    expect(store.boundaryDenialCount).toBe(denialRows.length);
   });
 
   it("the parked row's (ref, port) resolves to a real inbound edge in the topology fixture", () => {
