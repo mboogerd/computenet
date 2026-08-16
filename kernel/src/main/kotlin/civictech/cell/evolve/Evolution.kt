@@ -44,16 +44,29 @@ interface StateMigrating {
  * Shadow deployment (G-32, spec 52): run a candidate against live inputs
  * with its effects suppressed. Subscribing the shadow subgraph to production
  * outlets is ordinary linking (fan-out); this helper only adds the missing
- * piece — [Effectful] cells spawned in shadow mode get every inlet NoOp-served,
- * so the candidate is judged (by invariant cells, 52) without acting twice
- * on the world.
+ * piece — a cell spawned in shadow mode gets its effect-carrying inlets
+ * NoOp-served (`@Contract(effect = true)`, or every inlet when the cell itself
+ * is [Effectful]), so the candidate is judged (by invariant cells, 52) without
+ * acting twice on the world.
  */
 object Shadow {
 
     /**
-     * Spawn [cell] on [host] in shadow mode: if it is [Effectful], all of its
-     * fan-in inlets are NoOp-served after activation. Non-effectful cells
-     * spawn unchanged — pure derivation is harmless to duplicate.
+     * Spawn [cell] on [host] in shadow mode, suppressing its effects.
+     *
+     * The cut is the **contract boundary** (decided 93 I-17, G-32): every fan-in
+     * inlet whose contract is declared `@Contract(effect = true)` — surfaced as
+     * `ContractDescriptor.effect` — is NoOp-served after activation, whatever the
+     * cell itself implements. [Effectful] on the cell stays as the *coarse
+     * fallback* the decision keeps: it suppresses every inlet, including ones
+     * whose contracts carry no effect bit. It is no longer the only trigger — a
+     * cell that does not implement [Effectful] but serves an effect-carrying
+     * contract used to be shadowed with no suppression at all, i.e. it acted on
+     * the world a second time, which is the one thing shadow mode exists to
+     * prevent (C-11 residual 2, reproduction `CHA2-BS-9`).
+     *
+     * Inlets whose contracts carry no effect bit, on a cell that is not
+     * [Effectful], spawn unchanged — pure derivation is harmless to duplicate.
      *
      * ponytail: NoOp-serving happens from the caller's thread post-spawn
      * (fine in the single-threaded simulation; a host-queue hop is the
@@ -61,8 +74,26 @@ object Shadow {
      */
     fun spawn(host: ManagedHost, cell: Cell): CellRef {
         val ref = host.managementInlet.call.spawn(cell)
-        if (cell is Effectful) suppress(cell)
+        if (cell is Effectful) suppress(cell) else suppressEffectContracts(cell)
         return ref
+    }
+
+    /**
+     * NoOp-serve exactly those fan-in inlets of [cell] whose contract is declared
+     * `@Contract(effect = true)` — the fine-grained half of the 93 I-17 cut.
+     *
+     * A contract with no generated descriptor (no `@Contract` at all) carries no
+     * effect bit and is left served by the cell's own handler: the coarse
+     * [Effectful] marker remains the way to suppress an undescribed boundary.
+     */
+    fun suppressEffectContracts(cell: Cell) {
+        val ports = PortRegistry.of(cell)
+        ports.names().forEach { name ->
+            val port = ports[name]
+            if (port is FanInlet<*> && ContractRegistry.descriptor(port.clazz)?.effect == true) {
+                suppress(port)
+            }
+        }
     }
 
     /** NoOp-serve every fan-in inlet of [cell] (spec 52's "NoOp-served sinks"). */

@@ -239,15 +239,6 @@ class ExclusiveDischargeReproTest {
     }
 
     @Test
-    @ExpectedFailure(
-        signature = BS9_UNSUPPRESSED_NON_EFFECTFUL_SHADOW,
-        reason = "Shadow.spawn's guard is `if (cell is Effectful)`, so a non-Effectful cell serving " +
-            "an @Contract(effect = true) inlet is shadowed with no suppression at all and acts on " +
-            "the world a second time; the decided cut (93 I-17 / G-32) is the contract bit, which " +
-            "kernel reads nowhere",
-        owner = "computenet-3jv2",
-        filedAs = FINDINGS,
-    )
     fun `BS-9 a non-Effectful cell serving an effect-carrying contract is shadowed without suppression`() {
         val controller = SimulationController(seed = 33)
         val host = ManagedHost(scheduler = controller.scheduler())

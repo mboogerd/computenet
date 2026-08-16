@@ -217,17 +217,38 @@ entry. Feature risk 6 stands too: if KSP refuses the nested-exclusive
 `@Contract` shape, the honest outcome is a `DISPUTES.md` entry
 (`[CHA2-46]`), not a weaker test.
 
-#### Residual 2 — suppression granularity. STILL REAL.
+#### Residual 2 — suppression granularity. FIXED by `computenet-3jv2`.
 
-`Shadow.spawn` suppresses only `if (cell is Effectful)` (`Evolution.kt:64`),
-so an effect-carrying *contract* on a non-`Effectful` cell is shadowed with no
-suppression at all. `91-gap-analysis.md:107` (G-32 row) records the decision
-and the divergence in its own words: suppression "cuts at the
-`@Contract(effect=true)` boundary contracts, the cell-level marker demoted to
-a coarse fallback … (landed cell-granularity NoOp diverges)" (93 I-17).
+As adjudicated at `46ed020`: `Shadow.spawn` suppressed only
+`if (cell is Effectful)` (`Evolution.kt:64`), so an effect-carrying *contract*
+on a non-`Effectful` cell was shadowed with no suppression at all.
+`91-gap-analysis.md:107` (G-32 row) records the decision and the divergence in
+its own words: suppression "cuts at the `@Contract(effect=true)` boundary
+contracts, the cell-level marker demoted to a coarse fallback … (landed
+cell-granularity NoOp diverges)" (93 I-17).
 
-**Consequence for `computenet-umx.1.4`**: BS-9 (`[CHA2-22]`) stands as a
-genuine `@ExpectedFailure`.
+`computenet-3jv2` implemented that cut. `Shadow.spawn` now reads
+`if (cell is Effectful) suppress(cell) else suppressEffectContracts(cell)`:
+`Shadow.suppressEffectContracts(cell)` NoOp-serves every `FanInlet` whose
+`ContractRegistry.descriptor(inlet.clazz)?.effect == true`, and the cell-level
+`Effectful` marker survives exactly as the coarse fallback the decision keeps —
+it still suppresses every inlet, including ones whose contracts carry no effect
+bit (and including contracts with no generated descriptor, which carry no bit
+to read).
+
+**Consequence for BS-9** (`[CHA2-22]`): the reproduction started passing, which
+is `[CHA2-44]`'s deliberate red build. Its `@ExpectedFailure` annotation was
+removed and the test kept, unweakened, as this fix's acceptance test — it is now
+regression protection for the contract-granularity cut. The `withSignature`
+wrapper stays, so a regression still fails carrying `CHA2-BS-9`. Evidence, from
+the run against the unfixed code with the annotation removed:
+`BS-9 a non-Effectful cell serving an effect-carrying contract is shadowed
+without suppression() FAILED — ExpectedFailureSignal: CHA2-BS-9: Unexpected
+elements from index 0, expected:<[]> but was:<["effect-1"]>`.
+
+**Not fixed here**: residual 1 above (BS-8) is independent — different decision
+(93 I-6/I-8), different code site (`Proxy.discharge` + the KSP scan) — and still
+stands as an expected failure under `computenet-ulss`.
 
 #### Residual 3 — boundary-denial silent drop. FIXED by SEC1.
 
