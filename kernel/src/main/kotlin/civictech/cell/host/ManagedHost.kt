@@ -1420,9 +1420,11 @@ open class ManagedHost(
         // computenet-mouq — **dead letters from this dispatch carry no
         // HostedPortInvocation.** The routing handler runs inside the private
         // [enqueue] helper, whose fault path calls `deadLetter(e, ...)` with no
-        // `invocation:` argument (and the throw happens before any target port
-        // is resolved, so there is nothing to hand it). Two consequences the
-        // next reader should not have to rediscover:
+        // `invocation:` argument. This dispatch is a raw management shortcut —
+        // it never builds a [HostedPortInvocation] at all — so there is nothing
+        // to hand that fault path, whether the throw comes from an unresolved
+        // cell/port or from the target inlet's own handler. Two consequences
+        // the next reader should not have to rediscover:
         //
         //  - `DeadLetters.sanitizeForDeadLetter` keys off exactly that
         //    invocation, so **per-argument capture never runs here**. A test

@@ -162,7 +162,6 @@ class LifecycleAndDeadLetterTest {
         refusal.description shouldContain "boundary denial at exposure"
     }
 
-
     /**
      * computenet-mouq — the vacuity pin. `routerInlet.call.route(...)` is the
      * idiom this file made popular, and it is the WRONG instrument for any
