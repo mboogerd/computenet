@@ -9,6 +9,10 @@ Two rules follow:
 - **Stay inside your `metadata.files` claim.** Siblings were scheduled in
   parallel on the assumption it's accurate — a file outside it is likely
   being edited on another branch this second, and will merge into a conflict.
+  Exception: an *empty* claim whose description opens
+  `files unknowable before diagnosis` means you were dispatched alone and
+  the confinement rule does not apply — your scope is the acceptance
+  criteria, and the orchestrator records the real claim from your diff.
 - **Work only in your own worktree.** Never the main checkout, the feature
   worktree, or another task's.
 
