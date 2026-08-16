@@ -1014,12 +1014,14 @@ file carries an actual invocation.
 - **`[CHA2-30]` zero C-12 reproductions**: `C12AdjudicationRecordTest.kt`
   contains no `@Test` whose name or body constitutes a reproduction and no
   `@ExpectedFailure` annotation anywhere in the file (`grep -n '@Test\|@ExpectedFailure'`
-  shows six plain `@Test`s, each asserting over a checked-in artifact — the gap
-  row's own text, `D-C12.md`'s presence, `21-REBASE-01.yaml`'s `covers:` id, the
-  `DISPUTES.md` RESOLVED heading, this file's own out-of-scope naming of G-43/G-42,
-  and the absence of a C-12 reproduction in the `repro` package itself). No
-  kernel behaviour is exercised; this is exactly the documentation-of-record
-  shape `computenet-umx.1.1`'s entry above specifies.
+  shows **seven** plain `@Test`s — corrected here from an earlier miscount of six,
+  which dropped one from the enumeration — each asserting over a checked-in
+  artifact: the gap row's own text, `D-C12.md`'s presence, `21-REBASE-01.yaml`'s
+  `covers:` id, the `DISPUTES.md` RESOLVED heading, this file's own out-of-scope
+  naming of G-43/G-42, the findings file naming all three ledger rules against
+  the pinned base commit, and the absence of a C-12 reproduction in the `repro`
+  package itself. No kernel behaviour is exercised; this is exactly the
+  documentation-of-record shape `computenet-umx.1.1`'s entry above specifies.
 - No generated/build output in the diff (`kernel/build.gradle.kts` is
   hand-written build configuration, not generated output); no `gen/` change.
 
@@ -1093,7 +1095,14 @@ that the fix must remove the `@ExpectedFailure` annotation and keep the test —
 shrink, exclusive-payload accounting) does not exist on `main`, as recorded
 above under "CHA1's rig does not exist, and five CHA2 clauses are gated on it".
 Re-verified by this task: `grep -rn 'FaultPlan\|CrashFault\|JournalFault\|RestartAtFrontierFault\|DstRun\|DstReplay\|testkit.dst' --include='*.kt' .`
-still returns zero matches at this branch's tip, and epic `computenet-umx` (CHA1)
+returns exactly one hit at this branch's tip — a KDoc comment in
+`ExclusiveDischargeReproTest.kt` (line 43) that itself narrates the rig's
+absence ("That rig does not exist on `main` (no `civictech.testkit.dst`)") —
+and no hit that is rig code, a rig usage, or a rig import. Corrected here from
+an earlier overclaim of "zero matches": the substance stands (no
+`civictech.testkit.dst` package, no `FaultPlan`/`CrashFault`/`JournalFault`/
+`RestartAtFrontierFault`/`DstRun`/`DstReplay` type anywhere in the tree), only
+the grep-result count was wrong. Epic `computenet-umx` (CHA1)
 still has no rig-building child. This is the recorded scheduling decision of the
 unattended `/work` session (2026-08-16, on `computenet-umx.1`): proceed on
 `.1`-`.5` plus `.7`, leave `.6` blocked pending CHA1. **Consequence, stated
