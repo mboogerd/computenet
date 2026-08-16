@@ -13,7 +13,10 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.JsonPrimitive
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * computenet-dqj.2.1: the projector folds issue-field change records into a
@@ -279,5 +282,132 @@ class MirrorProjectorTest {
         // only the later edit is readable; the status edit is unrecoverable —
         // there is no second key to hold it
         broken.value("A") shouldBe json("hi")
+    }
+
+    // -----------------------------------------------------------------
+    // computenet-dqj.5.3 — the seeded-defect switch itself
+    // -----------------------------------------------------------------
+
+    /**
+     * The test-only [SeededDefects] switch, at the unit level: that it is
+     * *off* by default, that each defect does what its KDoc says to the fold,
+     * and that it is unreachable from shipped configuration.
+     *
+     * The end-to-end halves — each defect turning computenet-dqj.5.1's
+     * mirror-vs-export comparator red against a real `bd` workspace, and clean
+     * again with the defect off — are
+     * [civictech.demo.beadsmirror.e2e.DivergenceControlTest]'s. These cases
+     * cost no subprocess and run on every CI machine, `bd` on PATH or not.
+     */
+    @Nested
+    inner class Defects {
+
+        @Test
+        fun `the public constructor seeds nothing`() {
+            // Same records, two constructions: the public one and an explicitly
+            // defect-free internal one. Identical folds, presence key and
+            // per-field keys intact — the pin behind "no behavior change under
+            // default construction".
+            val default = MirrorProjector(minter)
+            val explicitlyClean = MirrorProjector(minter, SeededDefects.NONE)
+            val records = listOf(
+                issueRecord(1, "A", DiffType.ADDED, "status" to "open"),
+                issueRecord(2, "A", DiffType.MODIFIED, "notes" to "x"),
+            )
+
+            default.applyAll(records)
+            explicitlyClean.applyAll(records)
+
+            default.rawValue(MirrorKey.presence("A")) shouldBe MirrorKey.PRESENT_VALUE
+            default.view() shouldBe mapOf("A" to mapOf("notes" to json("x"), "status" to json("open")))
+            explicitlyClean.view() shouldBe default.view()
+        }
+
+        @Test
+        fun `dropPresenceKey mints no presence key and reads membership off the field keys`() {
+            val projector = MirrorProjector(minter, SeededDefects(dropPresenceKey = true))
+
+            projector.apply(issueRecord(1, "A", DiffType.ADDED, "status" to "open"))
+
+            projector.rawValue(MirrorKey.presence("A")).shouldBeNull()
+            projector.view() shouldBe mapOf("A" to mapOf("status" to json("open")))
+        }
+
+        @Test
+        fun `dropPresenceKey lets a straggler the removal could not tombstone resurrect the issue`() {
+            // The mirror image of `a stale field key left live by a tag-precise
+            // remove does not resurrect the issue` above: same sequence, guard
+            // seeded away, opposite outcome. The straggler here is a MODIFIED
+            // record arriving after the removal — the in-process stand-in for
+            // DivergenceControlTest's foreign-sourced put through deltaInlet.
+            val projector = MirrorProjector(minter, SeededDefects(dropPresenceKey = true))
+            projector.apply(issueRecord(1, "A", DiffType.ADDED, "status" to "open"))
+            projector.apply(issueRecord(4, "A", DiffType.REMOVED))
+
+            projector.apply(issueRecord(6, "A", DiffType.MODIFIED, "status" to "closed"))
+
+            projector.view() shouldBe mapOf("A" to mapOf("status" to json("closed")))
+        }
+
+        @Test
+        fun `wholeIssueKeying collapses every column onto one key and the later commit buries the earlier`() {
+            val projector = MirrorProjector(minter, SeededDefects(wholeIssueKeying = true))
+            val collapsed = MirrorKey("A", SeededDefects.WHOLE_ISSUE_FIELD)
+
+            projector.apply(issueRecord(1, "A", DiffType.ADDED))
+            projector.apply(issueRecord(2, "A", DiffType.MODIFIED, "status" to "closed"))
+            projector.apply(issueRecord(3, "A", DiffType.MODIFIED, "notes" to "hi"))
+
+            // The two edits touch *different* fields, so under the shipped
+            // composite key both survive (`two records editing different fields
+            // of one issue both survive`, above). Here the second put's
+            // floor-bounded tombstone covers the first's dot: one edit is gone.
+            projector.rawValue(MirrorKey("A", "status")).shouldBeNull()
+            projector.rawValue(collapsed) shouldBe json("hi")
+            projector.view() shouldBe mapOf("A" to mapOf(SeededDefects.WHOLE_ISSUE_FIELD to json("hi")))
+        }
+
+        /**
+         * "Not shipped configuration", checked where it is actually decidable:
+         * in the source. Within this module's **main** source set,
+         * [SeededDefects] is named only in the file that declares it — so
+         * nothing production wires it, [civictech.demo.beadsmirror.BeadsMirrorConfig] carries no
+         * counterpart, and no command line can reach it — and it is declared
+         * `internal`, alongside the only constructor that accepts it, so
+         * nothing outside this module can name it either.
+         *
+         * Why source text rather than reflection: `internal` and
+         * constructor visibility are Kotlin-metadata facts, readable only
+         * through `kotlin-reflect`, which is not on this module's test
+         * classpath (and adding it to make an assertion possible would be a
+         * build change this control does not need). The mangling that would
+         * make Java reflection do it is not applied to constructors, so a
+         * `java.lang.Class.getConstructors()` check would see the internal
+         * constructor as public and prove nothing.
+         *
+         * Reads the source tree relative to the Gradle test task's working
+         * directory (the module directory), and fails loudly if that directory
+         * is not where it expects — a check that silently found no files would
+         * pass vacuously, which is the one outcome this test must not have.
+         */
+        @Test
+        fun `the seeded-defect switch is internal and named nowhere else in main source`() {
+            val declaring = Path.of("src/main/kotlin/civictech/demo/beadsmirror/projector/MirrorProjector.kt")
+            val declaringText = Files.readString(declaring)
+            declaringText.contains("internal data class SeededDefects") shouldBe true
+            declaringText.contains("internal constructor(") shouldBe true
+
+            val mainSource = Path.of("src/main/kotlin/civictech/demo/beadsmirror")
+            Files.isDirectory(mainSource) shouldBe true
+
+            val mentions = Files.walk(mainSource).use { paths ->
+                paths.filter { it.toString().endsWith(".kt") }
+                    .filter { Files.readString(it).contains(SeededDefects::class.simpleName!!) }
+                    .map { it.fileName.toString() }
+                    .toList()
+            }
+
+            mentions shouldBe listOf("MirrorProjector.kt")
+        }
     }
 }

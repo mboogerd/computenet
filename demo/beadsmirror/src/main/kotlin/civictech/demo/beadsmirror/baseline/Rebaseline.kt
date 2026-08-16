@@ -18,6 +18,21 @@ sealed interface RebaselineReason {
     data object FirstStart : RebaselineReason
 
     /**
+     * The mirror is starting against a workspace it has mirrored before —
+     * [checkpoint] was persisted by a previous run — and rebuilds from `bd
+     * export` anyway (feature computenet-dqj.5 design amendment 2).
+     *
+     * **Why a restart cannot simply resume.** Nothing persists the projector:
+     * a new process starts with an *empty* [MirrorProjector], so resuming the
+     * feed strictly after [checkpoint] would replay only the commits made
+     * while the mirror was down and leave every pre-checkpoint issue absent
+     * forever. The checkpoint still earns its keep *while running* — it is
+     * what makes incremental resume and [CheckpointGone] truncation detection
+     * work — it just cannot stand in for state the process never kept.
+     */
+    data class Restart(val checkpoint: String) : RebaselineReason
+
+    /**
      * The persisted [checkpoint] fell out of `dolt_log` (history compaction),
      * so the feed could not be resumed and [FeedCondition.CheckpointGone] was
      * raised.
@@ -83,7 +98,8 @@ sealed interface MirrorEvent {
  * poller's own thread, and `pollOnce` returns immediately afterwards having
  * emitted nothing for that tick — so no post-gap record can reach a projector
  * before the rebuild completes (feature rule 1). On
- * [RebaselineReason.FirstStart] it runs before `DoltFeedPoller.start`, so the
+ * the two start-time reasons ([RebaselineReason.FirstStart] and
+ * [RebaselineReason.Restart]) it runs before `DoltFeedPoller.start`, so the
  * poller thread does not exist yet. The poller thread is therefore the only
  * writer of [MirrorState.current] and the only caller of `applyAll`; HTTP
  * readers see either the old or the new projector through the volatile. No
@@ -113,9 +129,17 @@ class Rebaseline(
      * Nothing is caught here: a failed export or an empty `dolt_log` leaves
      * the previous state and the previous checkpoint untouched and propagates
      * — on the [RebaselineReason.CheckpointGone] path out of `pollOnce` into
-     * `DoltFeedPoller.failure`, on the [RebaselineReason.FirstStart] path out
-     * of `BeadsMirrorApp.start`. Half-rebuilding on a broken export would be
+     * `DoltFeedPoller.failure`, on the start-time paths
+     * ([RebaselineReason.FirstStart], [RebaselineReason.Restart]) out of
+     * `BeadsMirrorApp.start`. Half-rebuilding on a broken export would be
      * strictly worse than not starting.
+     *
+     * Note what that means for a [RebaselineReason.Restart]: a `bd export`
+     * that fails now aborts a start that, before design amendment 2, would
+     * have come up on the persisted checkpoint. That is the intended trade —
+     * a mirror that cannot rebuild its pre-checkpoint state would serve a
+     * silently incomplete fold — but it is a real availability change, not
+     * only a completeness one.
      */
     fun run(reason: RebaselineReason) {
         val rows = export()
