@@ -362,8 +362,12 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // FAULT count only — built from `supervisionAccounting().deadLetters`, which a BoundaryPolicy
 // refusal never increments (SEC1-29: a denial is not a cell fault). `deadLetters[]` carries BOTH
 // faults and refusals — a denial is dead-lettered for visibility through the same fan-out. So
-// `counters.deadLetters == deadLetters.length` holds only before any refusal has ever been
-// captured; once one has, `deadLetters.length` is strictly greater. A client must not treat the
+// `counters.deadLetters == deadLetters.length` is not an invariant, and it can fail in EITHER
+// direction: a captured refusal puts a row in `deadLetters[]` that the counter never counted, and
+// — independently of denials — `deadLetters[]` is a bounded ring (cap 200; see `GraphSummary.health`
+// below, whose rollup carries the same bound) while the counter is the true unbounded all-time
+// total, so a host past 200 dead letters has `deadLetters.length` strictly LESS than
+// `counters.deadLetters`. A client must not treat the
 // row array's length as the fault count, and must not derive an "is this a fault" signal from
 // `counters.deadLetters` changing — read `denial` on the row itself instead. There is no
 // `counters.boundaryDenials` (or equivalent) on the wire: a client that wants a denial count
