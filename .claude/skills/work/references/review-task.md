@@ -181,6 +181,11 @@ What to consume, per test run:
 
   ```bash
   # Capture the whole run. Never `| tail -N` (see below), never -q.
+  # $SCRATCH = YOUR OWN dir, created once:
+  #   SCRATCH=$(mktemp -d "<harness scratchpad>/<task-id>-review.XXXXXX")
+  # The shared scratchpad holds other agents' logs under these very names,
+  # and reading one quotes the implementer's build as your evidence
+  # (computenet-84z6).
   ./gradlew :kernel:test --tests 'civictech.cell.FifoOrderTest' > "$SCRATCH/run.log" 2>&1
   grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
   ```

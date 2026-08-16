@@ -111,7 +111,13 @@ has not seen the thread. On a long-lived item the thread is where the
 decisive context lives: prior sessions' handoffs, a *withdrawn*
 certification, a corrected premise, a human's answer to a parked question. A
 reviewer unaware of a withdrawn certification reviews the wrong thing.
-Redirect it (`$SCRATCH` is SKILL.md's name for your scratchpad directory) —
+Redirect it. `$SCRATCH` throughout this file is **your own** agent-unique
+dir, created once — `SCRATCH=$(mktemp -d "<harness scratchpad>/<feature-id>-review.XXXXXX")`
+— never the shared harness scratchpad directly: that dir holds other agents'
+files under exactly the names you would pick (~40 stale logs including
+`exchange.log` and `wire.log`, computenet-84z6), and a reviewer that reads
+one quotes the implementer's build as its own independent evidence.
+The redirect matters because —
 the JSON overruns the tool-result limit
 on exactly the beads that need it, and a truncated array reads as fewer
 comments rather than as an error (SKILL.md, "Two `bd` JSON traps").
