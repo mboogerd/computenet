@@ -537,3 +537,163 @@ Report, do not edit. This task's diff touches this file and
 nothing else. Zero kernel main-source changes ([CHA2-50]). No SEC1 fix
 specification or requirement restatement — the fix is `computenet-usd.2`'s and
 stays owned there; this entry only pins and independently cites it.
+
+---
+
+## `computenet-umx.1.4` — C-11 reach: BS-7/BS-12 pinned, BS-8/BS-9 standing as expected failures
+
+Recorded by: `computenet-umx.1.4` (feature `computenet-umx.1` — CHA2). Realizes
+`[CHA2-20]` (BS-7) and the C-11 half of `[CHA2-02]`, `[CHA2-21]` (BS-8),
+`[CHA2-22]` (BS-9), `[CHA2-24]` (BS-12); records the `[CHA2-26]` deviation
+again from this task's side. Deliverables:
+`kernel/src/test/kotlin/civictech/cell/repro/ExclusiveDischargeReproTest.kt`
+and its fixtures
+`kernel/src/test/kotlin/civictech/cell/repro/ReproContracts.kt`.
+
+**Base commit `0169fd7`** (`feature/computenet-umx.1`, which merges
+`computenet-umx.1.1`, `.1.2` and `.1.5` onto `main` at `46ed020`). Every
+citation below was re-read at that commit by this task.
+
+### The adjudication was re-verified, not inherited
+
+`computenet-umx.1.1`'s C-11 verdict above is the input to this task, and the
+task's own instruction was to check each direction against the code before
+choosing it. Re-verified at `0169fd7`:
+
+- **BS-7 / BS-12 — the landed core.** `Shadow.spawn` → `suppress(cell)` →
+  `suppress(inlet)` → `suppressionProxy` (`Evolution.kt:62`, `:69`, `:84`,
+  `:88`), and `Proxy.discharging`'s `requireNotNull(ContractRegistry.descriptor(clazz))`
+  (`Proxy.kt:101-104`). Both reproductions **pass**, and neither carries an
+  annotation.
+- **BS-8 — still genuinely divergent.** `Proxy.discharge`'s `when` at
+  `Proxy.kt:123-134` still has exactly `Owned`, `Leased`, `Map`, `Iterable`,
+  `Array` and no case for a plain payload object.
+- **BS-9 — still genuinely divergent.** `Evolution.kt:64` is still literally
+  `if (cell is Effectful) suppress(cell)`.
+
+No contradiction with the recorded adjudication was found, so nothing is
+disputed here. What this task *adds* to the record is the second, independent
+half of BS-8's mechanism, which the adjudication did not name: the divergence
+is **two cooperating layers**, not one.
+
+### BS-8 is two layers, and the reproduction pins both
+
+`ContractProcessor.carriesExclusive`
+(`gen/src/main/kotlin/civictech/gen/wire/ContractProcessor.kt:70-73`) tests the
+parameter's own declaration against `EXCLUSIVE_MARKERS` and then recurses
+through `type.arguments` — **type arguments only**. An `Owned` reached through
+a *field* of a data-class parameter is therefore never marked on the generated
+`MethodDescriptor.exclusive` at all, quite apart from `Proxy.discharge`'s
+missing branch. The consequence for whoever fixes this is that **neither half
+alone closes it**: widening only the KSP scan marks the method exclusive and
+hands the envelope to a `discharge` with no branch for it; widening only
+`discharge` never gets called, because the method is not marked. Both
+assertions were verified to fail independently, by running the signature block
+in both orders (2026-08-16) — the behavioural one is placed first in the test
+because it is the one that stays failing until both layers land.
+
+The reproduction's contract (`ReproNestedExclusivePush`) is deliberately
+two-method: a bare-`Owned` `pushDirect` alongside the nested `pushNested`. The
+direct method makes `descriptor.methods.any { it.exclusive }` true, so
+`suppressionProxy` (`Evolution.kt:88-93`) selects `Proxy.discharging` and not
+`Proxy.noop` — so the escape is observed crossing a **discharging** sink,
+which is the shape `[CHA2-21]` names, rather than crossing a proxy that was
+never going to discharge anything. Both assertions that are not the divergence
+(the direct method *is* marked exclusive; the sink's own handler did **not**
+run) sit outside the signature block, so a regression in either reddens the
+build honestly instead of being absorbed as "expected".
+
+**Feature §9 risk 6 did not materialize.** KSP accepted the nested-exclusive
+contract shape without complaint — `exclusiveRequiresKey`
+(`ContractProcessor.kt:131-147`) does not fire, precisely because
+`carriesExclusive` cannot see the nested exclusive. The `[CHA2-46]`
+`DISPUTES.md` fallback was therefore **not** triggered and
+`concord/corpus/DISPUTES.md` is deliberately left untouched: that file is the
+concord corpus's honesty ledger for requirement-id coverage, and an entry
+recording a dispute that did not happen would be noise on a single-writer
+surface.
+
+### BS-9's marker, verified by symbol
+
+The effect-carrying marker is `@Contract(effect = true)`
+(`nature/src/main/kotlin/civictech/gen/wire/Contract.kt:22-26`, "Marks a
+world-touching boundary that shadow execution must suppress"), surfaced as
+`ContractDescriptor.effect`
+(`nature/src/main/kotlin/civictech/nature/ContractDescriptor.kt:31`) and
+populated at `ContractProcessor.kt:369`. There is no other effect marker in
+`nature/` or `gen/`. **Nothing in `kernel/` reads that bit** — checked by
+`git grep` over `kernel/src/main` — which is the mechanical form of G-32's
+"landed cell-granularity NoOp diverges". The reproduction asserts the
+descriptor bit is set *outside* its signature block (if the fixture ever stops
+being effect-carrying the reproduction has lost its subject and must fail
+loudly, not "as expected") and asserts the absence of the side effect inside
+it.
+
+### Owners filed: one bead per residual
+
+Judgment recorded as the ticket asks: **two beads, not one**. The residuals
+share the C-11 gap row and nothing else — different decisions (93 I-6/I-8 vs
+93 I-17), different code sites (`Proxy.discharge` plus the KSP scan vs
+`Shadow.spawn`), and either can land without the other, so a single bead would
+be unclosable until both did.
+
+- `computenet-ulss` — "Widen the exclusive bit and `Proxy.discharge` reach to
+  nested exclusives (93 I-6/I-8, C-11 residual 1)". Owner of BS-8.
+- `computenet-3jv2` — "Shadow suppression cuts at `@Contract(effect=true)`,
+  not at `Cell is Effectful` (93 I-17/G-32, C-11 residual 2)". Owner of BS-9.
+
+Neither is KFX's: `computenet-yh6.1` is scoped to C-9 and its closing feature
+names C-11 out of scope, as the adjudication above records. Both beads carry
+the instruction that the fix must **remove** the `@ExpectedFailure` annotation
+and keep the test — `[CHA2-44]` makes the build go red the moment either
+reproduction starts passing, which is the mechanism by which a reproduction
+becomes the fixing lane's acceptance test.
+
+### Citation, not duplication
+
+`kernel/src/test/kotlin/civictech/cell/evolve/ShadowOwnershipTest.kt` (the
+W1.2 exit test) already covers the landed BS-7 core, and this suite does not
+rewrite it: BS-7 here is the evidence lane's own pin, under its own fixtures
+in its own package, so the two suites stay independently verifiable — the
+discipline `computenet-umx.1.5` applied to `MediateProxyIntegrityTest`. What
+BS-7 adds beyond the exit test is the *exactly once* half stated as such: a
+lease's `returnToPool` callback counts one release and no more, alongside the
+second-`take()`/`release()` evidence the exit test already carries.
+
+The fixtures are likewise not reused from `ShadowOwnershipTest` — a change to
+the landed exit test must not be able to silently reshape a reproduction, or
+the reverse.
+
+### `[CHA2-26]` deviation, as adjudicated
+
+Unchanged from the "CHA1's rig does not exist" section above and from
+`computenet-umx.1.5`'s entry: there is no `civictech.testkit.dst` on `main`, so
+`[CHA1-53]`'s exclusive-payload accounting cannot be the detector. Every
+assertion in this suite observes the payload directly instead — a second
+`take()`/`release()` throwing `IllegalStateException`, and a lease's own
+`returnToPool` counter. When CHA1's rig lands it should **adopt** these tests
+rather than re-derive them.
+
+### One observation, recorded and not tested
+
+`Shadow.suppress` reaches `Proxy.discharging` only via `suppressionProxy`'s
+`ContractRegistry.descriptor(clazz)?.methods?.any { it.exclusive } == true`
+(`Evolution.kt:88-93`). For a contract with **no** generated descriptor the
+elvis short-circuits to `false`, so the shadow path silently selects
+`Proxy.noop` and never reaches BS-12's loud `requireNotNull`. Whether that is
+a divergence depends on whether a descriptor-less contract on a hosted inlet
+is reachable at all, which this task did not establish. It is recorded here as
+an observation rather than reproduced either way: manufacturing a failure from
+an unadjudicated reading is exactly what BS-13 forbids.
+
+### Disposition
+
+Report, do not edit. This task's diff touches this file,
+`kernel/src/test/kotlin/civictech/cell/repro/ExclusiveDischargeReproTest.kt`
+and `kernel/src/test/kotlin/civictech/cell/repro/ReproContracts.kt`, and
+nothing else. Zero kernel main-source changes (`[CHA2-50]`), zero `gen/`
+changes, no `doc/spec/**` edit, no `91-gap-analysis.md` edit, no
+`CONCORDANCE.md` edit, no plan-document edit, no concord scenario or schema
+change, and no `DISPUTES.md` entry (its trigger did not fire, above). Two
+tracker items created (`computenet-ulss`, `computenet-3jv2`); no other bead
+touched.
