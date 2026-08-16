@@ -590,15 +590,43 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   `expected:<[1, 2, 3, 4, 5, 6, 7]> but was:<[1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]>`
   — this entry's double-fire, verbatim — and with `alreadyProcessed` forced false all three
   fail. Reasoning, mutation transcript and the recorded BS-5 answer:
-  `doc/evidence-lane-findings.md` → "`computenet-umx.1.3` — C-9 reproductions". Nothing
-  about this entry is retired or narrowed by that suite; the reconciliation of these rows is
-  `computenet-yh6.1.5`/`[KFX-23]`'s.
-- **Not resolved by this entry**: `DUR-REPLAY-01`'s two-independent-subgraphs construction is
-  untouched — the fold into one subgraph this entry's original "Resolves" bullet named as the
-  natural consequence is a change to that scenario file, out of this ledger entry's scope.
-  `[24-DUR-04]`'s emission-identity plane is now asserted head-on by `DUR-SRCID-01`/
-  `DUR-SRCID-02`; its OR-set tag plane and wave-aligned-consumer plane are recorded
-  separately under "Not covered" below.
+  `doc/evidence-lane-findings.md` → "`computenet-umx.1.3` — C-9 reproductions".
+  **Re-observed at this feature's own commit** (`6ebbcff`) by `computenet-yh6.1.5.1`
+  (`[KFX-22]`), because a record made on another branch is not evidence about this tree: all
+  three PASS unweakened — no `@ExpectedFailure` (the run's own standing count is 0), no
+  re-seeding, no narrowed assertion, and the file byte-identical to the one CHA2 shipped —
+  and BS-4's pass re-confirmed mutation-discriminating *there*, reproducing the double-fire
+  signature above verbatim. Transcript: `doc/evidence-lane-findings.md` →
+  "`computenet-yh6.1.5` — `[KFX-22]` acceptance run". The reconciliation that entry deferred
+  to `computenet-yh6.1.5`/`[KFX-23]` is done, and is the two bullets below.
+- **The fold was attempted and is NOT taken — the blocker is a harness limit, not a
+  durability residual** (`computenet-yh6.1.5.2`, `[KFX-23]`). This entry's original
+  "Resolves" bullet named folding `DUR-REPLAY-01`'s two independent subgraphs onto one as
+  the natural consequence of the fix. That fold was **driven rather than reasoned about**:
+  `DUR-REPLAY-01` was rewritten to one subgraph — a `journal-set-source` feeding **both** the
+  volatile data view and the journaled `effect-sink`, so a single replayed emission stream
+  must be re-applied idempotently at the view and suppressed as already-acted at the sink at
+  the same time — and put through the `core,dur` sweep. Its durability half holds: with
+  `incremental-equals-batch(dview)` removed the folded scenario passes **20 of 20** runs on
+  `effect-count(esink, exactly: 1)` (the strengthened unkeyed reading, so both the
+  double-fire and the effect-loss direction) plus `no-dead-letters` — a third independent
+  confirmation, at corpus level and in this scenario's own shape, that the construction this
+  entry recorded as broken is not. What fails is `incremental-equals-batch(dview)`, 20 of 20,
+  with `source type 'journal-set-source' has no oracle fold`: the harness-side
+  `BatchOracle.sourceFold` models `set-source` and not its durable binding, so a view fed by
+  a journaled source has no batch oracle to compare against — which is also why
+  `DUR-SNAPTAIL-01`, the corpus's other journaled-source→view scenario, asserts
+  `views-converge` against a twin instead. Since `[24-DUR-01]`/`[24-DUR-02]`'s data-recovery
+  half *in this scenario* is exactly that check, folding would trade a durability assertion
+  for nothing. The probe was reverted and never shipped; `DUR-REPLAY-01` keeps its
+  two-subgraph shape — **now for that stated reason, not the retired one**, which its own
+  graph comment says. Filed as `computenet-yh6.1.9`. Every count in this bullet is against
+  the in-process effect log the `effect-sink` writes; no end-to-end external exactly-once
+  claim is made or implied here, and the external actuator's idempotency remains 93 I-7's
+  stated ceiling and CON1's territory (`[KFX-24]`).
+- **Also not resolved by this entry**: `[24-DUR-04]`'s emission-identity plane is now
+  asserted head-on by `DUR-SRCID-01`/`DUR-SRCID-02`; its OR-set tag plane and
+  wave-aligned-consumer plane are recorded separately under "Not covered" below.
 - **The G-59 / C-9 gap rows themselves are not closed by this.** What is retired is the
   slice this entry recorded — a spontaneously-emitting *journaled* source double-firing an
   `Effectful` sink. G-59's row (`91-gap-analysis.md`) also spans non-deterministic

@@ -1,3 +1,33 @@
+# WHY THIS IS STILL TWO SUBGRAPHS, and why that is no longer the reason it says
+# below (computenet-yh6.1.5.2, `[KFX-23]`).
+#
+# The two-subgraph split was originally load-bearing: a journaled source feeding an
+# `Effectful` sink DOUBLE-FIRED on recovery, because the replayed re-emission carried
+# a freshly-minted random outlet identity the sink's restored frontier could not
+# match. That is fixed (`34892d9`, `24-DUR-04` ref-derived outlet identity) and the
+# boundary is retired — see `concord/corpus/DISPUTES.md`'s G-59/C-9 entry, which the
+# corpus asserts head-on in `DUR-SRCID-01`/`DUR-SRCID-02`. So the split is NOT kept
+# because the folded shape misbehaves.
+#
+# The fold was attempted here and measured, not argued about. Folded to one subgraph
+# — this file's `journal-set-source` feeding BOTH the data view and the effect-sink,
+# so one replayed emission stream is re-applied idempotently at the view and
+# suppressed as already-acted at the sink at once — the durability half passes 20 of
+# 20 runs (`effect-count(esink, exactly: 1)`, `no-dead-letters`). What fails, 20 of
+# 20, is `incremental-equals-batch(dview)`: `source type 'journal-set-source' has no
+# oracle fold`. The harness-side `BatchOracle.sourceFold` models `set-source` and not
+# its durable binding, so a view fed by a journaled source has no batch oracle to be
+# compared against (`DUR-SNAPTAIL-01` sidesteps the same gap by asserting
+# `views-converge` against a twin). Since `incremental-equals-batch` is exactly how
+# this scenario carries the `24-DUR-01`/`24-DUR-02` data-recovery half, folding would
+# trade a durability assertion for nothing.
+#
+# So: shape retained for a harness reason, not a kernel one. Teaching the oracle the
+# durable set bindings and re-attempting the fold is `computenet-yh6.1.9`.
+#
+# Exactly-once here is a statement about the in-process effect log this driver's
+# `effect-sink` writes. The external actuator's idempotency is 93 I-7's stated
+# ceiling and CON1's territory (`[KFX-24]`); nothing in this file claims it.
 id: DUR-REPLAY-01
 title: Crash, journal replay, and continue — the data view converges to batch and the effectful sink fires once per key
 covers: [24-DUR-01, 24-DUR-02, 24-DUR-05]
@@ -26,8 +56,11 @@ graph:
     - {id: dsource, type: set-source, host: dur}
     - {id: dview, type: set-view, host: dur}
     # effect subgraph — the source is VOLATILE (dies on crash, re-delivered nothing,
-    # 24-DUR-03) so it never re-drives the journaled effectful sink on replay; the
-    # sink recovers exactly-once from its own journaled frames + processed-frontier
+    # 24-DUR-03), so the sink recovers from its own journaled frames + restored
+    # processed-frontier alone. NOTE (computenet-yh6.1.5.2): a volatile source is no
+    # longer *required* for exactly-once here — a journaled one feeding this sink is
+    # now safe (`24-DUR-04`, `DUR-SRCID-01`/`-02`). See the header comment for why the
+    # shape is nevertheless kept.
     - {id: esource, type: set-source, host: dur}
     - {id: esink, type: effect-sink, host: dur}
     # the crash/restart handle: despawning it crashes and recovers the durable host
