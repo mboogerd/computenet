@@ -44,6 +44,14 @@ felt like giving up.
   invisible to it.
 - `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
   reads `null`. It never includes comment bodies, only `comment_count`.
+- Epic- and feature-sized output overflows the inline tool-result limit
+  (`bd show` on one epic: ~83KB; `bd ready --type=epic --json`: ~43KB) and
+  gets truncated or persisted. Redirect any `--json` call that *can* be big
+  to `"$SCRATCH/<name>.json"` and read the file, same as comments below
+  (computenet-csm).
+- `bd` prints warnings on stdout **before** the JSON, so `jq` and
+  `json.loads` fail on the raw stream; slice from the first line starting
+  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing.
 - Comments are read one way only: `bd comments <id> --json >
   "$SCRATCH/c-<id>.json"`, then read the file. Inline reads truncate on
   long-lived beads (~34KB observed) and present as *fewer comments than
@@ -255,7 +263,10 @@ removals failed — neither is "clean sweep"; say which you got.
 filter applied by eye gets forgotten):
 
 ```bash
-bd ready --type=epic --json | jq '[.[] | select(.id != "computenet-wpvy")]'
+bd ready --type=epic --json > "$SCRATCH/ready-epics.json"   # ~43KB inline — overflow
+jq '[.[] | select(.id != "computenet-wpvy")
+        | {id, title, priority, assignee, updated_at}]' "$SCRATCH/ready-epics.json"
+# full descriptions stay in the file — read the chosen epic's from there
 .claude/skills/work/scripts/claim-epic.sh <the id you selected>
 ```
 
