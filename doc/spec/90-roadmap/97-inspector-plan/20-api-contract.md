@@ -322,7 +322,7 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
                        { "index": 0, "ownership": "frozen" | "redacted" | "borrowed" | "owned" | "leased" | "plain",
                          "reason": "Leased payload released at dead-letter capture" | null }
                      ],
-                     "denial": {                         // computenet-4ixu — non-null iff this row is a BoundaryPolicy
+                     "denial": {                         // computenet-4ixu — non-null iff this row is a BoundaryPolicy refusal
                        "seam": "ADMISSION" | "LINK_AUTHORITY" | "PROTOCOL_AUTHORITY" | "DISCLOSURE" | "INTEGRITY",
                        "reason": "NOT_ADMITTED" | "LINK_REFUSED" | "MIN_AUTH" | "RATE" | "DISCLOSURE_DENIED" |
                                  "DISCLOSURE_PROJECTED_AWAY" | "UNSIGNED" | "BAD_SIGNATURE" | "REPLAY",
