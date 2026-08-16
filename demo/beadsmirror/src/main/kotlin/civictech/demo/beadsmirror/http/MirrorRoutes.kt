@@ -51,8 +51,15 @@ import com.sun.net.httpserver.HttpExchange
  * {"mirror":"frozen",
  *  "frozen_at_checkpoint":"<the last commit folded, or null>",
  *  "failure":"<throwable class>: <message>",
+ *  "stale_status":<the status this route would have answered: 200, or 404>,
  *  "stale":{ ...the body this route would have served ... }}
  * ```
+ *
+ * A miss is served the same way rather than as a bare `404`: `stale_status` is
+ * `404` and `stale` carries `{"error":"no such issue"}`, so "this id is
+ * unknown" is reported as a fact about a frozen fold and never as a fact about
+ * the workspace — the reviewer's run had exactly that, a later-created issue
+ * answering `404`.
  *
  * Three shapes were weighed for that (the item left the call open):
  * a documented staleness *field* on a `200`, a distinct *status code*, and
@@ -66,7 +73,7 @@ import com.sun.net.httpserver.HttpExchange
  *   "is this true?" opt-in.
  * - Refusing to serve destroys the one thing still worth having. The stale
  *   fold is not garbage: it is the accurate state of the workspace as of
- *   [FeedCheckpoint]'s commit, and a consumer told *how* stale it is can
+ *   `frozen_at_checkpoint`'s commit, and a consumer told *how* stale it is can
  *   often still use it.
  *
  * So: relabel, do not withhold. `503` is the status every consumer already
@@ -76,6 +83,17 @@ import com.sun.net.httpserver.HttpExchange
  * than intermittent (the loop is not restarted), so this cannot flap between
  * `200` and `503`: a mirror that has answered `503` once will answer it until
  * the process is restarted.
+ *
+ * **What `200` does and does not promise.** The signal is derived from the
+ * poll loop having *exited on a throwable*, and from nothing else — which is
+ * what keeps it honest in the direction that matters (a slow tick, a long
+ * `dolt` call, an idle workspace are all still live, and are never reported
+ * frozen). The converse limit is real and deliberate: a loop that is merely
+ * *stuck* — a tick blocked indefinitely rather than failing — has not stopped,
+ * so these routes still answer `200`, and a `200` therefore means "the feed
+ * has not died", not "the fold is fresh as of now". Liveness-by-timeout is a
+ * separate mechanism (nothing here measures how long a tick has been running);
+ * computenet-dqj.12 asked only that a *dead* loop stop being invisible.
  *
  * @param pollLoopStopped reads the poller's terminal state — `null` while the
  *   feed is live. A function rather than a value because the poller is
