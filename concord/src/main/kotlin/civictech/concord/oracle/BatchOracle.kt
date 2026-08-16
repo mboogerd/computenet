@@ -74,6 +74,9 @@ class OracleUnsupported(message: String) : RuntimeException(message)
  *   `semi-join` keeps left elements whose key is present on the right.
  * - **`map-source` op payload.** `put` accepts either a `[key, value]` pair or a
  *   `{key:, value:}` object; `remove` takes the bare key.
+ * - **Durable set bindings** (`journal-set-source`, `journal-set-view`) fold
+ *   exactly as their volatile twins — see [DURABLE_SET_SOURCE]/[DURABLE_SET_VIEW]
+ *   for the adjudication and its one recorded residual.
  */
 class BatchOracle(private val scenario: Scenario) {
 
@@ -107,7 +110,16 @@ class BatchOracle(private val scenario: Scenario) {
         return renderView(cell.type, foldOf(viewId))
     }
 
-    /** Every view cell's expected final value (drives `incremental-equals-batch view: '*'`). */
+    /**
+     * Every view cell's expected final value (drives `incremental-equals-batch view: '*'`).
+     *
+     * Deliberately enumerated over [Values.VIEW_TYPES] alone, **not** over
+     * [VIEW_TYPES]: `view: '*'` is a check-layer quantifier, and widening what it
+     * quantifies over would change the meaning of every existing `'*'` check rather
+     * than only make a new one expressible. Naming a `journal-set-view` explicitly
+     * works ([view]); `'*'` still skips it. See [DURABLE_SET_VIEW] for the residual
+     * this leaves and the item that closes it.
+     */
     fun allViewValues(): Map<String, Value> =
         graph.cells.filter { it.type in Values.VIEW_TYPES }.associate { it.id to view(it.id) }
 
@@ -126,7 +138,11 @@ class BatchOracle(private val scenario: Scenario) {
     private fun sourceFold(cell: CellSpec): Fold {
         val ops = scenario.script.filterIsInstance<ApplyStep>().filter { it.on == cell.id }
         return when (cell.type) {
-            "set-source" -> {
+            // `journal-set-source` is the DURABLE BINDING of this same cell
+            // (`KernelDriverDur.build`: both lower to `SetCell`), and it folds
+            // identically — see [DURABLE_SET_SOURCE] for why the journal changes
+            // nothing the oracle models.
+            "set-source", DURABLE_SET_SOURCE -> {
                 val members = LinkedHashSet<Value>()
                 for (op in ops) repeat(op.times ?: 1) {
                     when (op.op) {
@@ -240,7 +256,7 @@ class BatchOracle(private val scenario: Scenario) {
             "presence-count" -> presenceCountFold(ins)
             "window" -> windowFold(cell, single())
             // Views are pass-throughs of their upstream fold; renderView converts to Value.
-            in Values.VIEW_TYPES -> single()
+            in VIEW_TYPES -> single()
             else -> throw OracleUnsupported("operator type '${cell.type}' has no oracle fold")
         }
     }
@@ -378,7 +394,7 @@ class BatchOracle(private val scenario: Scenario) {
 
     // --- rendering ----------------------------------------------------------
 
-    private fun renderView(type: String, fold: Fold): Value = when (type) {
+    private fun renderView(type: String, fold: Fold): Value = when (if (type == DURABLE_SET_VIEW) "set-view" else type) {
         "set-view" -> Value.ListVal(Values.sortedList(asSet(fold)))
         "list-view" -> when (fold) {
             is Fold.ListF -> Value.ListVal(fold.items)
@@ -438,6 +454,81 @@ class BatchOracle(private val scenario: Scenario) {
     private fun asScalar(f: Fold): Value = when (f) {
         is Fold.ScalarF -> f.value
         else -> throw OracleUnsupported("expected a scalar fold, got ${f::class.simpleName}")
+    }
+
+    private companion object {
+
+        /**
+         * The durable binding of `set-source` (`KernelDriverDur`), folded by
+         * [sourceFold] exactly as its volatile twin.
+         *
+         * **Why that is sound, adjudicated rather than assumed** (computenet-yh6.1.9;
+         * the question `computenet-yh6.1.5.2` left open was whether a journaled
+         * source's *replayed* op history can diverge from the script's accepted-op
+         * multiset this oracle folds — if it could, the omission would have been
+         * deliberate and adding the case would make every `incremental-equals-batch`
+         * over a journaled source quietly wrong):
+         *
+         * 1. Both catalog ids lower to the **same** `SetCell` (`KernelDriverDur.build`);
+         *    the journal is a write-path tee, not a second semantics.
+         * 2. The tee is **write-ahead and inside the staging lock**
+         *    (`ManagedHost.enqueueHostedInvocation`, `[24-DUR-01]`): every accepted
+         *    invocation is appended before it is staged, in the same
+         *    `synchronized(dataLock)` block, so journal order **is** acceptance order.
+         *    A coalesced invocation is appended too. Nothing accepted is missing from
+         *    the replayed history, and nothing is reordered relative to it.
+         * 3. Replay cannot **grow** the history either: both append sites are guarded
+         *    by `!hostDurability.recovering`, so a replayed frame is never re-journaled.
+         * 4. A checkpoint substitutes a `Stateful` snapshot for the prefix it compacts
+         *    (`[24-DUR-02]`), so checkpoint + surviving tail folds to the same value as
+         *    the whole history.
+         * 5. And the set fold is idempotent under `add` anyway, which is the only op
+         *    besides `remove` this binding admits (`KernelDriverDur.apply`).
+         *
+         * The corpus already asserts the conclusion from two directions, which is why
+         * this is an observation and not an argument: `DUR-SNAPTAIL-01` pins a
+         * journaled source→view against an **uninterrupted volatile twin driven with
+         * the identical op history** (`views-converge`), and `DUR-ATOMIC-01`'s
+         * `final-view` golden is literally the fold of its script's adds, across
+         * checkpoint, compaction, tail replay and post-recovery live traffic.
+         *
+         * **The riskier case was already in the table.** Whether a driver's read
+         * matches this whole-history fold across a crash is a property of the
+         * *scenario's* recovery construction, not of the source's binding — and a
+         * **volatile** `set-source` on `host: dur`, which this oracle has always
+         * folded, loses its state outright on the crash (`[24-DUR-03]`). A journaled
+         * source is the *safer* of the two: its replay reconstructs exactly the
+         * accepted-op fold.
+         */
+        const val DURABLE_SET_SOURCE = "journal-set-source"
+
+        /**
+         * The durable binding of `set-view` — a view pass-through like every other
+         * ([operatorFold]), rendered as a set ([renderView]).
+         *
+         * **Recorded residual, because this half is not complete.** Two check-layer
+         * facts about journaled views live in `oracle/Values.kt`, outside
+         * computenet-yh6.1.9's file claim, and are therefore NOT changed here:
+         * `Values.VIEW_TYPES` (which `Checks.viewCells` and [allViewValues] enumerate)
+         * and `Values.canonicalForView` (which re-sorts a `set-view` before comparing).
+         * Consequences, both inert against today's corpus — no scenario pairs a
+         * `journal-set-view` with an `incremental-equals-batch` — and both loud rather
+         * than silent if one ever does: `view: '*'` skips a journaled view, and an
+         * explicitly named one is compared **order-sensitively** (the driver sorts a
+         * set by `Value.toString()`, this oracle by `Values.compare`, which agree on
+         * homogeneous sets and may not on mixed-type ones), so the failure mode is a
+         * spurious mismatch, never a spurious pass. Filed as computenet-yh6.1.10,
+         * which also carries `DUR-ATOMIC-01`'s now-stale "WHY `final-view` AND NOT
+         * `incremental-equals-batch`" rationale (same reason: outside the file claim).
+         */
+        const val DURABLE_SET_VIEW = "journal-set-view"
+
+        /**
+         * View catalog ids this oracle can fold and render — the neutral ones plus the
+         * durable binding. Distinct from [Values.VIEW_TYPES] on purpose; see
+         * [allViewValues].
+         */
+        val VIEW_TYPES: Set<String> = Values.VIEW_TYPES + DURABLE_SET_VIEW
     }
 
     /** The oracle's intermediate stream state — a pure fold, one per cell. */
