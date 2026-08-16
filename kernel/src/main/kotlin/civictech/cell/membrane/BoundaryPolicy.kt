@@ -77,6 +77,81 @@ object ProjectionRegistry {
  * Seam-3 `PORT_API` outbound predicate (spec 40/43, 20/21 §Pull): one filter
  * covers both the `onLinked` catch-up unicast and the live stream uniformly
  * — "a snapshot IS a delta" (decided 93 I-28).
+ *
+ * ## Reconvergence across disclosure regimes: a projected value is a DISTINCT LOGICAL VALUE
+ *
+ * Decided `computenet-usd.3.2` (2026-08-16), settling 93 I-28 §9 open question 1
+ * — **stance (ii)**. A reconvergent (diamond) graph can present one downstream
+ * cell with values that reached it under different disclosure regimes: one arm
+ * crossing a membrane declaring [Project], another arm crossing none. Since
+ * disclosure is a property of ONE boundary (see [BoundaryPolicy]'s multi-hop
+ * block), nothing about that meeting is visible to either boundary or to the
+ * join. The modelling rule is:
+ *
+ * > `Project(p)` does not produce a dimmer view of the same logical value. It
+ * > **mints a different logical value**, in `p`'s own domain, at the boundary.
+ * > Joining `p(v)` with `v` and reading the pair as one consistent state is
+ * > therefore a **modelling error at the graph author's hand** — two different
+ * > logical values presented as one — and, per the stance's own words, one the
+ * > boundary would be the right place to refuse.
+ *
+ * ### Why (ii) and not (i)
+ *
+ * Stance (i) — "disclosure regimes must be uniform across all arms reaching a
+ * reconvergence point", checkable at link time — was rejected on two grounds,
+ * the second of which is fatal independent of any missing machinery:
+ *
+ * 1. **Nothing to consult.** There is no cross-hop policy visibility: a policy
+ *    is a property of the exposure it is declared on, nothing propagates it,
+ *    and identity does not transit hops ([BoundaryPolicy]'s multi-hop block,
+ *    `computenet-usd.4.3`). At link time a join cannot ask an arm which regime
+ *    its upstream crossing was under, because the arm carries no such record.
+ * 2. **"The regime of an arm" is not well-formed.** Disclosure is *identity-keyed
+ *    and per-exposure*, evaluated per emission against [currentPrincipal] — two
+ *    subscribers of one outlet can sit under different regimes simultaneously,
+ *    and a re-declaration changes the answer for future emissions without
+ *    touching any link. A uniformity constraint would therefore have to be
+ *    per-principal and re-evaluated per emission, at which point it is not a
+ *    link-time declaration constraint at all. Adding the metadata (1) lacks
+ *    would not repair (2).
+ *
+ * Stance (ii) also *earns its keep on the landed machinery*, which is why this
+ * feature needed no new frontier or link semantics: if a projected value is a
+ * distinct logical value, then a **suppressed** projection is simply "this arm
+ * has no value in its own domain for this wave" — the same shape as any arm
+ * that does not contribute to a wave, whose disposition the model already
+ * decided (the I-18 edge-will-not-deliver classification -> `WaveFrontier`
+ * RE-SCOPE + a surfaced `GlitchViolation`, landed `computenet-usd.3.1`). Under
+ * stance (i) the same graph would instead have been *ill-formed from the
+ * start*, and the runtime's job would have been to reject it — a strictly
+ * larger, and unbuildable, obligation.
+ *
+ * ### Enforceable today: nothing. Deferred, and what it needs
+ *
+ * Neither stance is enforceable on the landed machinery, and this record does
+ * not pretend otherwise: there is **no regime tagging on values**, so a
+ * projected delta is indistinguishable downstream from a full one, and the
+ * reconvergence point cannot detect — let alone refuse — that its arms
+ * disagree. Enforcing (ii) needs a value-level regime tag that survives
+ * re-emission through intermediate cells (a provenance carrier the wave/tag
+ * plane deliberately does not have — predicates never mint or carry waves, 93
+ * I-28 §6 / G-20), plus a rule for what a cell derived from two regimes then
+ * *is*. That is cross-hop composition, which 93 I-28 §8 leaves open and SEC1
+ * does not settle. **Until it lands, the rule above is a modelling discipline
+ * for graph authors, enforced by nobody.**
+ *
+ * ### The residual this leaves, stated where it bites
+ *
+ * `[SEC1-28]` ("the reconvergence point never observes a mixed pre/post-denial
+ * combination") is therefore only partly true, and is filed UNVERIFIED in
+ * `concord/corpus/DISPUTES.md`. What holds, asserted in
+ * `kernel/src/test/kotlin/civictech/cell/consistency/BoundaryDenialDiamondGlitchTest.kt`:
+ * a glitch-free join releases each wave contiguously and carries only that
+ * wave's contributions, so the denied arm's pre-denial value is never
+ * substituted into the release. What does not: the join forms no *combination*
+ * — it groups — so any consumer that folds the arms holds the mixture, at a
+ * denied wave and (torn, transiently) at every other wave too. Nothing refuses
+ * it, which under this stance is exactly the deferred enforcement above.
  */
 sealed interface DisclosurePolicy {
     /** Forwards unchanged — today's behavior. */
@@ -133,6 +208,15 @@ sealed interface IntegrityPolicy {
  *   (`currentPrincipal` reads the ambient stamp of the delivery in flight), so
  *   "who is really asking, two hops out" is not a question this vocabulary can
  *   answer today.
+ *
+ * ## Sibling decision: reconvergence across regimes
+ *
+ * The other half of I-28 §9 — what it means when two arms of one *diamond*
+ * reach a join under different disclosure regimes — is decided on
+ * [DisclosurePolicy] (`computenet-usd.3.2`): a projected value is a distinct
+ * logical value, so reconvergence across regimes is a modelling error, and
+ * enforcing that is deferred for want of regime tagging. Read the two together:
+ * this block is why the enforcement has nothing to consult.
  *
  * No `[43-*]` requirement id is minted for any of this: `doc/spec/40-distribution/43-security.md`
  * carries no normative EARS ids, so the default lives here as design record

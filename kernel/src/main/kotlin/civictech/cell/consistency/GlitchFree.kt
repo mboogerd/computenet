@@ -42,6 +42,23 @@ interface GlitchFree
  * gate by installing a [WaveFrontier] on one of its own inlets — this cell just
  * packages the common case (a whole-cell fan-in join with a matching outlet).
  *
+ * ## It GROUPS a wave; it does not COMBINE one
+ *
+ * Worth stating where readers looking for "glitch-freedom" land
+ * (`computenet-usd.3.2`, 93 I-28 §9 q1): a released wave's invocations reach
+ * the downstream consumer **individually** ([WaveFrontier]'s `flushReady`
+ * replays each buffered invocation under its own context). So what this cell
+ * guarantees is that a wave's contributions arrive together, contiguously, and
+ * carry only that wave — not that a consumer ever sees them as one value.
+ * A consumer that folds the arms into a single value therefore passes through
+ * a torn intermediate between the group's arrivals, and retains an arm's
+ * previous value for any wave that arm did not contribute to (a boundary denial
+ * being one such case,
+ * `kernel/src/test/kotlin/civictech/cell/consistency/BoundaryDenialDiamondGlitchTest.kt`).
+ * Coalescing to one value per wave is a different job, done at the operator:
+ * [civictech.cell.data.op.CoalescingCombineCell]'s KDoc records why wrapping a
+ * per-arm combine in this cell cannot substitute for it.
+ *
  * Eager cell (C-7): serves in init, usable unhosted; safe without onActivate.
  */
 class GlitchFreeCell<Api : Any>(
