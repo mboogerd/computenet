@@ -263,16 +263,21 @@ Per suite you run, consume and **quote in your verdict**:
   the count, is what separates a run from a replay:
 
   ```bash
+  # One glob PER MODULE you verified — substitute the real module paths; a
+  # glob matching nothing is indistinguishable from a passing empty suite,
+  # so the snippet refuses to report zero files (computenet-wpvy.41).
   python3 -c '
   import glob, sys
   from xml.etree import ElementTree as ET
+  paths = [p for g in sys.argv[1:] for p in glob.glob(g)]
+  if not paths: sys.exit("NO RESULT FILES - wrong glob or module; zero is not a pass")
   t = f = e = 0; newest = ""
-  for p in glob.glob(sys.argv[1]):
+  for p in paths:
       r = ET.parse(p).getroot()
       t += int(r.get("tests", 0)); f += int(r.get("failures", 0)); e += int(r.get("errors", 0))
       newest = max(newest, r.get("timestamp", ""))
-  print(f"{t} tests, {f} failures, {e} errors, newest {newest}")' \
-    'kernel/build/test-results/test/TEST-*.xml'
+  print(f"{len(paths)} files: {t} tests, {f} failures, {e} errors, newest {newest}")' \
+    '<module>/build/test-results/test/TEST-*.xml'
   ```
 
 An unquantified "suites green" — yours or the implementers' — is not a
