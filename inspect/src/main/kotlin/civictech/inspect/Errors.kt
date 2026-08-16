@@ -175,6 +175,13 @@ internal class Errors(
      * truncated at [REDACTION_REASON_MAX]. No argument value is read, copied,
      * `toString()`-ed, encoded or referenced — [dispositionOf] receives each
      * argument only to ask what class it is.
+     *
+     * computenet-usd.7 — [letter]'s `denial` (non-null only for a
+     * `BoundaryPolicy` refusal, never a fault) is extracted the same way, to
+     * [BoundaryDenialSummary]: this is the structural discriminator that lets
+     * a client tell a refusal apart from a plain host-level drop, both of
+     * which are `cause == null` and previously shared one string-prefixed
+     * [description].
      */
     private fun onDeadLetterReceived(letter: DeadLetter) {
         val hosted = letter.invocation
@@ -198,6 +205,16 @@ internal class Errors(
                 )
             },
             disposition = args.mapIndexed { index, arg -> dispositionOf(index, arg) },
+            denial = letter.denial?.let {
+                BoundaryDenialSummary(
+                    seam = it.seam.name,
+                    reason = it.reason.name,
+                    exposure = it.exposure,
+                    principal = it.principal?.name,
+                    subject = it.subject,
+                    detail = it.detail,
+                )
+            },
         )
         // V3 — the restart-cause candidate, recorded from the same primitives
         // the row already carries and keyed by ref. See [lastFailure].
