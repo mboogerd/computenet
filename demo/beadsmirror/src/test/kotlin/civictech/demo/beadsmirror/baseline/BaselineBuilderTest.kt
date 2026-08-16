@@ -281,9 +281,10 @@ class BaselineBuilderTest {
         }
 
         /**
-         * The whole baseline path against real `bd`: export first, head second
-         * (the documented order), then build and compare the projection to the
-         * workspace's content.
+         * The whole baseline path against real `bd`: head first, export second
+         * (the documented order — see [BaselineBuilder.captureHead], and
+         * computenet-dqj.10 for why the reverse loses a concurrent commit),
+         * then build and compare the projection to the workspace's content.
          */
         @Test
         fun `builds the workspace's issues and dependency edge from a real bd export`() {
@@ -291,8 +292,8 @@ class BaselineBuilderTest {
             val b = workspace.createIssue("Issue B")
             workspace.run("dep", "add", a, b, "--type", "blocks")
 
-            val rows = BdExportReader(workspace.root).read()
             val (head, height) = BaselineBuilder.captureHead(DoltCommitFeed(workspace.doltRoot))
+            val rows = BdExportReader(workspace.root).read()
 
             val projector = BaselineBuilder(DotMinter("scratch-live")).build(rows, head, height)
 

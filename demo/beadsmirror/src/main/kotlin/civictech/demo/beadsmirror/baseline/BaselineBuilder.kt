@@ -200,15 +200,30 @@ class BaselineBuilder(private val minter: DotMinter) {
          * would assign that commit, which is what makes the baseline's position
          * commensurable with the feed's.
          *
-         * **Order of operations, and its one accepted race.** Call `bd export`
-         * FIRST, then this, on a quiesced workspace. A writer committing
-         * between the two would leave the baseline holding pre-commit content
-         * checkpointed at a head that already includes it, so that commit would
-         * never be replayed. The single-writer scratch workspaces this feature
-         * targets do not have that writer, and closing the window properly
-         * needs a snapshot read of both at one commit — out of scope by the
-         * feature's own design decision, recorded here rather than only in the
-         * tracker.
+         * **Order of operations: call this FIRST, then `bd export`**
+         * ([Rebaseline.run] does, and computenet-dqj.10 is the bug that came of
+         * the other order). The two reads are not atomic — closing the window
+         * properly needs a snapshot read of both at one commit, which is out of
+         * scope — so a writer committing between them is possible and the order
+         * decides which way the resulting skew falls:
+         *
+         * - **Head first (this order).** The commit is absent from the captured
+         *   head but present in the export snapshot, so the baseline already
+         *   holds its content *and* the poller replays it. That replay is
+         *   harmless: a replayed record mints at a height strictly greater than
+         *   the baseline's (the baseline mints at the captured head height, the
+         *   commit is above it) and carries the same values, so last-writer-wins
+         *   re-decides identically; a removal replays as a tombstone over keys
+         *   the snapshot already omitted.
+         * - **Export first (the old order).** The commit is present in the
+         *   captured head — hence in the checkpoint — and absent from the
+         *   snapshot, so the poller resumes strictly after it and its content is
+         *   never folded. The fold keeps pre-commit values indefinitely.
+         *
+         * Only the second is unrecoverable, which is why the cheap re-fold is
+         * the accepted cost. Measured on a real workspace 2026-08-16: a `bd
+         * update` issued while a rebuild was in flight left a stale
+         * priority/updated_at in a quiesced fold.
          *
          * @throws IllegalStateException if the workspace has no commits at all.
          */

@@ -145,6 +145,41 @@ class RebaselineTest {
     }
 
     /**
+     * computenet-dqj.10: a commit that lands *while the baseline is being
+     * taken* must not be checkpointed as consumed.
+     *
+     * The export snapshot here is read before `concurrent` exists (the lambda
+     * appends to the fake `dolt_log` on its way out, standing in for a writer
+     * committing during the export subprocess), so nothing in the rebuilt
+     * state carries that commit's content. Checkpointing it would tell the
+     * poller to resume strictly after it, and its content would never be
+     * folded — the fold would keep the pre-commit values forever. The
+     * checkpoint must therefore stay at the head observed *before* the
+     * snapshot, leaving `concurrent` for the feed.
+     */
+    @Test
+    fun `a commit landing while the export is read is left for the feed, not checkpointed as consumed`() {
+        val log = mutableListOf("c0", "c1", "head")
+        val state = MirrorState(MirrorProjector(DotMinter(IDENTITY)))
+
+        Rebaseline(
+            export = {
+                val rows = listOf(row("B", "title" to "Beta"))
+                log += "concurrent" // the concurrent writer; its content is NOT in `rows`
+                rows
+            },
+            feed = DoltCommitFeed(fakeLog(log)),
+            checkpoint = checkpoint,
+            state = state,
+            workspaceIdentity = IDENTITY,
+            onEvent = events::add,
+        ).run(RebaselineReason.FirstStart)
+
+        checkpoint.read() shouldBe "head"
+        (events.single() as MirrorEvent.Rebaselined).headCommit shouldBe "head"
+    }
+
+    /**
      * Ordering pin (the operation's one crash-safety rule): the swap happens
      * BEFORE the checkpoint write, so a crash between them re-runs an
      * idempotent baseline next start rather than resuming the feed over
@@ -248,6 +283,43 @@ class RebaselineTest {
             head shouldBe feed.history().last()
             feed.readFrom(head) shouldBe emptyList()
             (events.single() as MirrorEvent.Rebaselined).issueCount shouldBe 2
+        }
+
+        /**
+         * computenet-dqj.10 against a real workspace, with the interference
+         * forced rather than raced: the `export` seam runs a real `bd export`
+         * and *then* issues a real `bd update`, so the mutation's commit is
+         * one the snapshot provably does not contain. It must be left after
+         * the checkpoint, where the poller will fold it — this is the measured
+         * sequence from computenet-dqj.5.2 (a mutation issued while a rebuild
+         * was in flight left a stale priority in a quiesced fold).
+         */
+        @Test
+        fun `a workspace mutation landing while the export is read is left for the feed to fold`() {
+            val a = workspace.createIssue("Issue A")
+            val feed = DoltCommitFeed(workspace.doltRoot)
+            val reader = BdExportReader(workspace.root)
+            val state = MirrorState(MirrorProjector(DotMinter(IDENTITY)))
+            var concurrentCommit: String? = null
+
+            Rebaseline(
+                export = {
+                    val rows = reader.read()
+                    workspace.run("update", a, "--priority", "0")
+                    concurrentCommit = feed.history().last()
+                    rows
+                },
+                feed = feed,
+                checkpoint = checkpoint,
+                state = state,
+                workspaceIdentity = IDENTITY,
+                onEvent = events::add,
+            ).run(RebaselineReason.FirstStart)
+
+            val checkpointed = checkpoint.read()!!
+            (checkpointed == concurrentCommit) shouldBe false
+            val resumed = feed.readFrom(checkpointed)
+            resumed.any { it.commitHash == concurrentCommit && it.issueId == a } shouldBe true
         }
     }
 
