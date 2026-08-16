@@ -11,11 +11,14 @@ import java.time.Duration
  * 1. Reads the persisted checkpoint (or `null` for genesis) from [checkpoint].
  * 2. Calls [DoltCommitFeed.readFrom] with it. A [DoltCommitFeed] refuses an
  *    `afterCommit` that has fallen out of `dolt_log` with
- *    [IllegalArgumentException] — the history-truncation precondition
+ *    [CheckpointNotInHistoryException] — the history-truncation precondition
  *    computenet-dqj.1.2 left for this task to convert into the feature's
  *    typed condition (see that task's comment). This poller is the seam that
- *    does the converting: it catches that exception and calls [onCondition]
- *    with [FeedCondition.CheckpointGone] instead, emitting nothing.
+ *    does the converting: it catches exactly that exception type — not the
+ *    broader [IllegalArgumentException] it extends — and calls [onCondition]
+ *    with [FeedCondition.CheckpointGone] instead, emitting nothing. Any other
+ *    [IllegalArgumentException] a tick's read raises propagates uncaught,
+ *    rather than being folded into the same compaction condition.
  * 3. Otherwise, if the read produced records, hands the whole batch to
  *    [onBatch] and ONLY THEN persists the last record's commit hash as the
  *    new checkpoint — so a crash between steps 3's two halves re-delivers the
@@ -88,17 +91,17 @@ class DoltFeedPoller(
      * Runs one poll tick synchronously on the calling thread: read the
      * checkpoint, read the feed, hand any records to [onBatch], persist the
      * new checkpoint. Raises via [onCondition] (default: throws
-     * [FeedConditionException]) on history truncation, emitting nothing.
+     * [FeedConditionException]) on history truncation, emitting nothing. Any
+     * other exception a tick's read raises — including a plain
+     * [IllegalArgumentException] that is not [CheckpointNotInHistoryException]
+     * — propagates out of this call unconverted.
      */
     fun pollOnce() {
         val after = checkpoint.read()
         val records = try {
             feed.readFrom(after)
-        } catch (e: IllegalArgumentException) {
-            val gone = checkNotNull(after) {
-                "readFrom(null) refused a null afterCommit; this should be unreachable"
-            }
-            onCondition(FeedCondition.CheckpointGone(gone))
+        } catch (e: CheckpointNotInHistoryException) {
+            onCondition(FeedCondition.CheckpointGone(e.checkpoint))
             return
         }
         if (records.isEmpty()) return

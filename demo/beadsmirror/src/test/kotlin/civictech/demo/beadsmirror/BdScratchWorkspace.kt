@@ -41,6 +41,17 @@ class BdScratchWorkspace private constructor(val root: Path) : AutoCloseable {
         return output
     }
 
+    /**
+     * Squashes this workspace's Dolt history into a single commit
+     * (`bd flatten --force`) — the real history-compaction operation tests
+     * use to produce a checkpoint hash that genuinely falls out of
+     * `dolt_log`, rather than synthesizing the condition at the reader seam.
+     * Verified live (computenet-dqj.3.2 probe): flattens in well under a
+     * second against a scratch workspace, pre-flatten commit hashes are gone
+     * from `dolt_log` afterward, and issue content survives.
+     */
+    fun flatten(): String = run("flatten", "--force")
+
     override fun close() {
         root.toFile().deleteRecursively()
     }

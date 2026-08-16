@@ -3,6 +3,7 @@ package civictech.demo.beadsmirror.feed
 import civictech.demo.beadsmirror.BdScratchWorkspace
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -135,6 +136,45 @@ class CheckpointResumeTest {
             batches shouldBe emptyList()
             // The gap is never silently bridged: the checkpoint file is untouched.
             checkpoint.read() shouldBe goneHash
+        }
+
+        /**
+         * computenet-dqj.3.2's end-to-end requirement: at least one missing-checkpoint
+         * detection is exercised through a REAL history compaction, not a synthesized
+         * unknown hash. `bd flatten --force` squashes the workspace's whole Dolt history
+         * into one commit (verified live: well under a second against a scratch
+         * workspace), so the checkpoint captured before flattening is genuinely absent
+         * from `dolt_log` afterward — not merely a hash dolt_log never contained.
+         */
+        @Test
+        fun `a real bd flatten drops the checkpoint from history and the poller raises CheckpointGone`() {
+            workspace.createIssue("Issue A")
+            val checkpoint = FeedCheckpoint(runDir)
+            val batches = mutableListOf<ChangeRecord>()
+            val poller = DoltFeedPoller(
+                feed = DoltCommitFeed(workspace.doltRoot),
+                checkpoint = checkpoint,
+                interval = Duration.ofMillis(50),
+                onBatch = { batches += it },
+            )
+            poller.pollOnce()
+            batches.size shouldBe 1
+            val persistedCheckpoint = checkpoint.read()!!
+
+            workspace.createIssue("Issue B")
+            workspace.flatten()
+            // The pre-flatten checkpoint hash is genuinely gone: dolt_log after a
+            // flatten holds only the new synthetic root and whatever commits came
+            // after it (`bd flatten` itself commits the squash).
+            DoltCommitFeed(workspace.doltRoot).history() shouldNotContain persistedCheckpoint
+
+            val failure = shouldThrow<FeedConditionException> { poller.pollOnce() }
+
+            failure.condition shouldBe FeedCondition.CheckpointGone(persistedCheckpoint)
+            // Nothing was emitted for this tick, and the checkpoint file is untouched —
+            // the gap is never silently bridged.
+            batches.size shouldBe 1
+            checkpoint.read() shouldBe persistedCheckpoint
         }
 
         @Test
@@ -272,6 +312,51 @@ class CheckpointResumeTest {
                 val failure = shouldThrow<FeedConditionException> { poller.pollOnce() }
 
                 failure.condition shouldBe FeedCondition.CheckpointGone("not-a-real-commit")
+            }
+        }
+
+        /**
+         * computenet-dqj.3.2: closes the false-positive path the dqj.1 review
+         * flagged — [DoltFeedPoller] must catch exactly
+         * [CheckpointNotInHistoryException], not the broader
+         * [IllegalArgumentException] it extends. A plain [IllegalArgumentException]
+         * raised anywhere under [DoltCommitFeed.readFrom] (here, from the
+         * [DiffQuery] fake itself) must propagate out of [DoltFeedPoller.pollOnce]
+         * unconverted — it must NOT surface as [FeedCondition.CheckpointGone] via
+         * [onCondition].
+         */
+        @Test
+        fun `a plain IllegalArgumentException from the query propagates, not converted to CheckpointGone`() {
+            val feed = DoltCommitFeed(
+                DiffQuery { sql ->
+                    when (sql) {
+                        DoltCommitFeed.LOG_QUERY -> listOf("c1").map { mapOf("commit_hash" to JsonPrimitive(it)) }
+                        DoltCommitFeed.ISSUE_QUERY -> throw IllegalArgumentException("boom: not a truncation")
+                        DoltCommitFeed.EDGE_QUERY -> emptyList()
+                        else -> error("unexpected query: $sql")
+                    }
+                },
+            )
+
+            withTempRunDir { runDir ->
+                val checkpoint = FeedCheckpoint(runDir)
+                // No checkpoint written: readFrom(null) starts at genesis, so any
+                // IllegalArgumentException reaching pollOnce here can only have come
+                // from the query fake, not from a history-truncation precondition.
+                val conditions = mutableListOf<FeedCondition>()
+                val poller = DoltFeedPoller(
+                    feed,
+                    checkpoint,
+                    Duration.ofMillis(10),
+                    onBatch = { error("must not be called") },
+                    onCondition = { conditions += it },
+                )
+
+                val failure = shouldThrow<IllegalArgumentException> { poller.pollOnce() }
+
+                (failure is CheckpointNotInHistoryException) shouldBe false
+                failure.message shouldBe "boom: not a truncation"
+                conditions shouldBe emptyList()
             }
         }
 
