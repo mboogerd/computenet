@@ -152,13 +152,19 @@ fun doltRootFor(workspace: Path): Path =
  * as the repository containing [searchFrom] — feature rule 4: this mirror
  * must never read or write the repository's own live issue tracker.
  *
- * The repository's `.beads` is found by walking upward from [searchFrom] to
- * the first ancestor directory that contains one (matching how `bd`/`bv`
- * themselves locate a workspace root); if no ancestor has one, there is
- * nothing to refuse against and this returns normally. Both paths are
- * canonicalized ([canonicalOrAbsolute]) before comparison so a symlinked
- * checkout or a `..`-laden `--workspace` argument cannot slip past a naive
- * string comparison.
+ * A live `.beads` is looked for from **three** starting points, and any match
+ * refuses: upward from [searchFrom] to the first ancestor containing one
+ * (matching how `bd`/`bv` themselves locate a workspace root); upward from
+ * this class's own code source ([codeSourceDir]); and — when that code source
+ * sits in a linked git worktree — the main checkout that worktree belongs to
+ * ([mainCheckoutOf]), which is where `bd`'s Dolt database actually lives. The
+ * [searchFrom] candidate alone is only as good as the process's working
+ * directory, which the caller does not control; [codeSourceDir] and
+ * [mainCheckoutOf] each carry a measured escape they close. If none finds
+ * one, there is nothing to refuse against and this returns normally.
+ * Both paths are canonicalized ([canonicalOrAbsolute]) before comparison so a
+ * symlinked checkout or a `..`-laden `--workspace` argument cannot slip past
+ * a naive string comparison.
  *
  * Pure path logic — no `bd`/`dolt` process is started, and nothing is
  * mutated — so this is testable without either binary on `PATH`, and runs
@@ -169,16 +175,49 @@ fun doltRootFor(workspace: Path): Path =
  *   repository's own.
  */
 fun refuseIfLiveBeads(workspace: Path, searchFrom: Path) {
-    val repoBeads = findAncestorBeadsDir(searchFrom) ?: return
     val workspaceBeads = canonicalOrAbsolute(workspace.resolve(".beads"))
-    val repoBeadsCanonical = canonicalOrAbsolute(repoBeads)
-    if (workspaceBeads == repoBeadsCanonical) {
+    val ownBeads = codeSourceDir()?.let(::findAncestorBeadsDir)
+    val liveCandidates = listOfNotNull(
+        findAncestorBeadsDir(searchFrom),
+        ownBeads,
+        ownBeads?.parent?.let(::mainCheckoutOf)?.resolve(".beads")?.takeIf(Files::isDirectory),
+    )
+    if (liveCandidates.any { canonicalOrAbsolute(it) == workspaceBeads }) {
         throw LiveBeadsWorkspaceException(
-            "refusing to mirror $workspaceBeads: it resolves to this repository's own live " +
-                ".beads. Point --workspace at a throwaway bd workspace (bd --sandbox init), " +
-                "never at the repository you are running from.",
+            "refusing to mirror $workspaceBeads: it resolves to a live repository checkout's " +
+                ".beads, not a throwaway workspace. Point --workspace at a scratch workspace " +
+                "(bd --sandbox init), never at a repository checkout.",
         )
     }
+}
+
+/**
+ * The main checkout of the git repository that [checkoutRoot] is a **linked
+ * worktree** of, or `null` when [checkoutRoot] is not one (its `.git` is a
+ * directory, or absent). A linked worktree's `.git` is a text file reading
+ * `gitdir: <main>/.git/worktrees/<name>`, so the main checkout is two levels
+ * above the `.git` component of that path — a plain file read, no `git`
+ * process.
+ *
+ * This is the third [refuseIfLiveBeads] candidate and it matters here
+ * specifically: a `/work` session builds and runs this app inside a linked
+ * worktree, whose own `.beads` holds only the checked-in configuration, while
+ * the **Dolt database that `bd` actually mutates lives in the main checkout**
+ * (AGENTS.md: `bd` must be run with `-C <main checkout>`). Without this,
+ * `--workspace=<main checkout>` from a worktree-built binary is the live
+ * tracker and would not be refused — measured during this feature's review.
+ */
+internal fun mainCheckoutOf(checkoutRoot: Path): Path? {
+    val dotGit = checkoutRoot.resolve(".git")
+    if (!Files.isRegularFile(dotGit)) return null
+    val gitDirLine = try {
+        Files.readAllLines(dotGit).firstOrNull { it.startsWith("gitdir:") }
+    } catch (_: IOException) {
+        null
+    } ?: return null
+    var component: Path? = Path.of(gitDirLine.removePrefix("gitdir:").trim()).normalize()
+    while (component != null && component.fileName?.toString() != ".git") component = component.parent
+    return component?.parent
 }
 
 /**
@@ -187,6 +226,34 @@ fun refuseIfLiveBeads(workspace: Path, searchFrom: Path) {
  * has one (e.g. run from outside any bd-tracked repository — a worktree with
  * no `.beads` export is exactly this case, per AGENTS.md's "Repository map").
  */
+/**
+ * The directory this class's own bytecode was loaded from — `build/classes/…`
+ * under the checkout for a Gradle run, `build/install/beadsmirror/lib/` for
+ * the installed distribution — or `null` when the code source is unavailable
+ * (an exotic class loader) or not a filesystem path.
+ *
+ * [refuseIfLiveBeads] walks upward from here as its second candidate, and
+ * that is what makes the refusal independent of the process's working
+ * directory. Measured during this feature's review: with `searchFrom` alone,
+ * running the installed `beadsmirror` from `/tmp` (no `.beads` anywhere above
+ * it) against `--workspace=<the computenet checkout>` started normally and
+ * wrote `.beadsmirror/checkpoint` into the live checkout — the exact thing
+ * epic computenet-dqj §4 forbids. The code source cannot be pointed elsewhere
+ * by the caller, so "this repository" means the checkout the running binary
+ * was built in, which is the criterion's own wording.
+ *
+ * Note that a `.git` directory is *not* a usable discriminator here: `bd
+ * --sandbox init` creates one inside the scratch workspace itself (measured —
+ * it failed both scratch-workspace tests when tried).
+ */
+private fun codeSourceDir(): Path? =
+    try {
+        val location = BeadsMirrorApp::class.java.protectionDomain?.codeSource?.location
+        location?.let { Path.of(it.toURI()) }?.let { if (Files.isDirectory(it)) it else it.parent }
+    } catch (_: Exception) {
+        null
+    }
+
 private fun findAncestorBeadsDir(start: Path): Path? {
     var dir: Path? = start.toAbsolutePath().normalize()
     while (dir != null) {

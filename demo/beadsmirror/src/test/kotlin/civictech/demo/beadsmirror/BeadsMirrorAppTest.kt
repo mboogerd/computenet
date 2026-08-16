@@ -127,6 +127,91 @@ class BeadsMirrorAppTest {
             }
         }
 
+        /**
+         * Review repair (computenet-dqj.4): the refusal must not depend on the
+         * process's working directory. Measured before the fix — the installed
+         * `beadsmirror` run from `/tmp` against `--workspace=<the computenet
+         * checkout>` started normally and wrote `.beadsmirror/checkpoint` into
+         * the live checkout. `searchFrom` here is a temp directory with no
+         * `.beads` above it, so only the code-source candidate can refuse.
+         */
+        @Test
+        fun `refuses this checkout's own dot-beads even when searchFrom is outside any repository`() {
+            val thisCheckout = checkoutRootFromCwd()
+            assumeTrue(thisCheckout != null, "no .beads above the test's cwd — nothing to refuse against")
+            val elsewhere = Files.createTempDirectory("beadsmirror-elsewhere-")
+            try {
+                shouldThrow<LiveBeadsWorkspaceException> {
+                    refuseIfLiveBeads(workspace = thisCheckout!!, searchFrom = elsewhere)
+                }
+            } finally {
+                elsewhere.toFile().deleteRecursively()
+            }
+        }
+
+        /** A scratch workspace is still fine when only the code-source candidate is in play. */
+        @Test
+        fun `does not refuse a scratch workspace when searchFrom is outside any repository`() {
+            val scratch = Files.createTempDirectory("beadsmirror-fake-scratch-")
+            val elsewhere = Files.createTempDirectory("beadsmirror-elsewhere-")
+            try {
+                Files.createDirectories(scratch.resolve(".beads"))
+
+                shouldNotThrowAny {
+                    refuseIfLiveBeads(workspace = scratch, searchFrom = elsewhere)
+                }
+            } finally {
+                scratch.toFile().deleteRecursively()
+                elsewhere.toFile().deleteRecursively()
+            }
+        }
+
+        /**
+         * Review repair (computenet-dqj.4), the worktree half: a `/work` session
+         * builds and runs this app inside a linked worktree, whose own `.beads`
+         * holds only checked-in config while `bd`'s Dolt database lives in the
+         * main checkout. Measured before the fix — the installed binary run from
+         * `/tmp` against `--workspace=<main checkout>` started and wrote
+         * `.beadsmirror/checkpoint` there. Driven at [mainCheckoutOf] because the
+         * code-source end of the walk cannot be injected, and a plain clone (CI)
+         * has no linked worktree to observe.
+         */
+        @Test
+        fun `mainCheckoutOf resolves a linked worktree's dot-git file to the main checkout`() {
+            val main = Files.createTempDirectory("beadsmirror-fake-main-")
+            val worktree = Files.createTempDirectory("beadsmirror-fake-worktree-")
+            try {
+                Files.createDirectories(main.resolve(".git/worktrees/wt"))
+                Files.writeString(worktree.resolve(".git"), "gitdir: $main/.git/worktrees/wt\n")
+
+                mainCheckoutOf(worktree)?.toRealPath() shouldBe main.toRealPath()
+            } finally {
+                main.toFile().deleteRecursively()
+                worktree.toFile().deleteRecursively()
+            }
+        }
+
+        @Test
+        fun `mainCheckoutOf returns null for a normal checkout whose dot-git is a directory`() {
+            val clone = Files.createTempDirectory("beadsmirror-fake-clone-")
+            try {
+                Files.createDirectories(clone.resolve(".git"))
+                mainCheckoutOf(clone) shouldBe null
+            } finally {
+                clone.toFile().deleteRecursively()
+            }
+        }
+
+        /** The checkout containing the test's working directory, found the way `bd` finds one. */
+        private fun checkoutRootFromCwd(): Path? {
+            var dir: Path? = Path.of("").toAbsolutePath().normalize()
+            while (dir != null) {
+                if (Files.isDirectory(dir.resolve(".beads"))) return dir
+                dir = dir.parent
+            }
+            return null
+        }
+
         @Test
         fun `does not refuse when no ancestor of searchFrom has a dot-beads at all`() {
             val noRepo = Files.createTempDirectory("beadsmirror-no-repo-")
