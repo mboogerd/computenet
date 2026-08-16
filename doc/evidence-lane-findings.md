@@ -240,14 +240,17 @@ exclusive reachable through a field the JVM refuses to make accessible is
 skipped silently rather than reported.
 
 Three further limits were **measured under review** (2026-08-16,
-`computenet-ulss`) and are filed rather than fixed here, because each is a
-semantic decision rather than a wording one:
+`computenet-ulss`). The first was fixed on this branch; the other two are
+filed rather than fixed here, because each is a semantic decision rather than
+a wording one:
 
-- The two halves disagree about `Borrowed`/`Frozen`. `Proxy.discharge`
-  declines to open them (spec 23 §Taps, fan-out safe); `carriesExclusive` does
-  not, so `tap(view: Borrowed<OwnedEnvelope>)` is now marked **exclusive**
-  where it was not before the widening — a new false positive on a
-  fan-out-safe port. Filed as `computenet-yzsc`.
+- The two halves disagreed about `Borrowed`/`Frozen`. `Proxy.discharge`
+  declines to open them (spec 23 §Taps, fan-out safe); `carriesExclusive` did
+  not, so `tap(view: Borrowed<OwnedEnvelope>)` was marked **exclusive** where
+  it was not before the widening — a new false positive on a fan-out-safe
+  port. Filed as `computenet-yzsc` and **fixed here**: `carriesExclusive` now
+  stops at `KernelFqn.NON_CONSUMING_VIEWS`, checked before the type-argument
+  walk, and `ContractProcessorTest` pins both directions.
 - A `kotlin.*`/`java.*` container that is not `Map`/`Iterable`/`Array` —
   `Pair`, `Triple`, `Result`, `Optional` — is marked exclusive by the scan and
   then skipped by the walk, so the exclusive is dropped by a proxy that
@@ -293,9 +296,11 @@ the run against the unfixed code with the annotation removed:
 without suppression() FAILED — ExpectedFailureSignal: CHA2-BS-9: Unexpected
 elements from index 0, expected:<[]> but was:<["effect-1"]>`.
 
-**Not fixed here**: residual 1 above (BS-8) is independent — different decision
-(93 I-6/I-8), different code site (`Proxy.discharge` + the KSP scan) — and still
-stands as an expected failure under `computenet-ulss`.
+**Not fixed by `computenet-3jv2`**: residual 1 above (BS-8) is independent —
+different decision (93 I-6/I-8), different code site (`Proxy.discharge` + the
+KSP scan). It was still a standing expected failure when `computenet-3jv2` was
+written; `computenet-ulss` has since fixed it (see residual 1 above), and the
+two land together with no expected failure left standing.
 
 #### Residual 3 — boundary-denial silent drop. FIXED by SEC1.
 

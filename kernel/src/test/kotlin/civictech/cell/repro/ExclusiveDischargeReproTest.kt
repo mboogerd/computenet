@@ -51,13 +51,15 @@ import java.util.UUID
  * `computenet-umx.1.5` used. When the rig lands it should adopt these tests rather than
  * re-derive them.
  *
- * ## Why the two failing tests are annotated and not softened
+ * ## Why no test here is annotated any more
  *
  * `@ExpectedFailure` (`computenet-umx.1.2`) runs the body on every build and **fails the
- * build if it passes** (`[CHA2-44]`). So an annotation here is a falsifiable claim that the
- * divergence is real today, not a way to keep a red test quiet — and, in the other
- * direction, nothing here is weakened to manufacture a failure the plan predicted (BS-13,
- * the discipline `computenet-umx.1.5` applied to BS-10).
+ * build if it passes** (`[CHA2-44]`), so an annotation is a falsifiable claim that the
+ * divergence is real today. BS-8 and BS-9 each carried one until their fix landed; both
+ * annotations are now removed and both bodies kept unchanged, which is what `[CHA2-44]`
+ * requires. Nothing here was ever weakened to manufacture a failure the plan predicted
+ * (BS-13, the discipline `computenet-umx.1.5` applied to BS-10), and nothing was softened
+ * to make one pass.
  */
 class ExclusiveDischargeReproTest {
 
@@ -219,8 +221,8 @@ class ExclusiveDischargeReproTest {
     }
 
     // ------------------------------------------------------------------
-    // BS-9 ([CHA2-22]) — unsuppressed non-Effectful shadow. EXPECTED FAILURE.
-    // Owner: computenet-3jv2.
+    // BS-9 ([CHA2-22]) — unsuppressed non-Effectful shadow. FIXED by computenet-3jv2;
+    // this is now the acceptance test for that fix, not an expected failure.
     // ------------------------------------------------------------------
 
     /** Serves an `@Contract(effect = true)` inlet, and deliberately does **not** implement `Effectful`. */
