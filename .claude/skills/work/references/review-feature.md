@@ -470,6 +470,21 @@ git -C <worktree> log --oneline $(git -C <worktree> merge-base HEAD origin/main)
   the shas that landed. If one of them touches the same subsystem as this
   feature, re-read the diff too, not just the tests.
 
+  **If the harness refuses the merge** (`git merge` has been denied to
+  reviewer agents by the permission classifier — twice in one session,
+  computenet-whx4), the hand-back is the prescribed outcome, not a failure:
+  state in your verdict which shas landed, whether their files are disjoint
+  from this diff (list both file sets), and that the merge + §3 re-run on the
+  merged base is handed to the orchestrator. Do not quietly skip the re-check
+  and do not report the denial as a blocker on the feature itself. The same
+  applies to any other refused command in this file: substitute the
+  documented equivalent (e.g. `--rerun` instead of deleting
+  `build/test-results`, review-task.md §2) or hand the step back, always
+  saying which command was refused. A hand-back rides a **READY** verdict
+  (its conditions otherwise met) — the push/re-read-checks ordering below
+  travels to the orchestrator along with the merge; only the re-fetch
+  evidence above is yours to quote.
+
 **That merge creates a new head, so it invalidates the `gh pr checks` reading
 §4 requires you to quote.** Every required check you read belongs to the
 *previous* head; at the moment you are asked to quote them they describe a
