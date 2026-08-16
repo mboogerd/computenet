@@ -213,6 +213,10 @@ than restarting. That's the whole reason the worktree is preserved.
      task-count line and no `BUILD SUCCESSFUL` at all — then grep for the task:
 
      ```bash
+     # $SCRATCH = YOUR OWN dir, created once:
+     #   SCRATCH=$(mktemp -d "<harness scratchpad>/<task-id>-impl.XXXXXX")
+     # Sibling and reviewer agents share the harness scratchpad; a colliding
+     # name hands your log to another agent as evidence (computenet-84z6).
      ./gradlew :kernel:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
      grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
      ```
