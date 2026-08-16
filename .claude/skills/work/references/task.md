@@ -16,6 +16,12 @@ Two rules follow:
 - **Work only in your own worktree.** Never the main checkout, the feature
   worktree, or another task's.
 
+**Any bead body you write that quotes code goes through a quoted heredoc or
+`bd comment <id> --file <path>`** — backticks inside a double-quoted
+argument execute as shell and silently vanish from the stored text
+(issue-quality.md's "Backticks…" rule, computenet-9w9). The inline
+`bd comment "<...>"` templates below are placeholders, not license.
+
 **Your tracker writes have a scope too, and it is narrower than your file
 claim.** By default you write to **your own assigned bead and to items you
 create** — nothing else. Closing, re-prioritising, reassigning, re-parenting

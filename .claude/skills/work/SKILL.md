@@ -1260,10 +1260,20 @@ machine → done, its lane owns it). Found but closed → a recurrence of a
 fixed issue: file fresh and say so in the description. Not found:
 
 ```bash
+# Build bodies with quoted heredocs — backticks in a double-quoted argument
+# execute as shell before the script ever runs, silently deleting the
+# quoted phrases and running them (issue-quality.md, computenet-9w9):
+DESC=$(cat <<'EOF'
+<what the skill says, what actually happened, what you did instead, what it cost>
+EOF
+)
+ACCEPT=$(cat <<'EOF'
+<what would have to change in the skill for this not to recur>
+EOF
+)
 .claude/skills/work/scripts/file-friction.sh --type <bug|feature> \
   --title "<the friction in one line>" \
-  --desc "<what the skill says, what actually happened, what you did instead, what it cost>" \
-  --accept "<what would have to change in the skill for this not to recur>" \
+  --desc "$DESC" --accept "$ACCEPT" \
   --skill-version <the epic's metadata.skill_version>
 ```
 

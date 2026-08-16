@@ -82,6 +82,8 @@ which does not exclude even the unrepaired rate. The failure mode to close is
 **an affordable measurement silently standing in for an unaffordable one**.
 
 ```bash
+# Bodies quoting code: heredoc-build them first (issue-quality.md
+# "Backticks…", computenet-9w9) — inline backticks execute as shell.
 bd create --type=task --parent=<feature-id> --validate \
   --title="<outcome as a change to the system, not an activity>" \
   --description="<current state with path:line evidence / the decided direction, saying what's settled and what's left to judgment / non-goals / the exact verification command>" \
