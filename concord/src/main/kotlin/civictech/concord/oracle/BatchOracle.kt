@@ -113,12 +113,16 @@ class BatchOracle(private val scenario: Scenario) {
     /**
      * Every view cell's expected final value (drives `incremental-equals-batch view: '*'`).
      *
-     * Deliberately enumerated over [Values.VIEW_TYPES] alone, **not** over
-     * [VIEW_TYPES]: `view: '*'` is a check-layer quantifier, and widening what it
-     * quantifies over would change the meaning of every existing `'*'` check rather
-     * than only make a new one expressible. Naming a `journal-set-view` explicitly
-     * works ([view]); `'*'` still skips it. See [DURABLE_SET_VIEW] for the residual
-     * this leaves and the item that closes it.
+     * Enumerated over [Values.VIEW_TYPES] — the check layer's own catalog of terminal
+     * views, which since computenet-yh6.1.10 includes [DURABLE_SET_VIEW], so `'*'`
+     * quantifies over a journaled view like any other. The alternative considered when
+     * computenet-yh6.1.9 taught this oracle the durable bindings was to leave the
+     * check-layer constant narrow, on the reasoning that widening a `'*'` quantifier
+     * changes the meaning of every existing `'*'` check; that was revisited against the
+     * corpus and decided the other way, because the narrow form's failure mode on a
+     * scenario whose only view is journaled is a *vacuous pass* over an empty target
+     * set. The reasoning and the measured blast radius are in `Values.VIEW_TYPES`'
+     * KDoc, which is where the decision lives.
      */
     fun allViewValues(): Map<String, Value> =
         graph.cells.filter { it.type in Values.VIEW_TYPES }.associate { it.id to view(it.id) }
@@ -506,27 +510,32 @@ class BatchOracle(private val scenario: Scenario) {
          * The durable binding of `set-view` — a view pass-through like every other
          * ([operatorFold]), rendered as a set ([renderView]).
          *
-         * **Recorded residual, because this half is not complete.** Two check-layer
-         * facts about journaled views live in `oracle/Values.kt`, outside
-         * computenet-yh6.1.9's file claim, and are therefore NOT changed here:
-         * `Values.VIEW_TYPES` (which `Checks.viewCells` and [allViewValues] enumerate)
-         * and `Values.canonicalForView` (which re-sorts a `set-view` before comparing).
-         * Consequences, both inert against today's corpus — no scenario pairs a
-         * `journal-set-view` with an `incremental-equals-batch` — and both loud rather
-         * than silent if one ever does: `view: '*'` skips a journaled view, and an
-         * explicitly named one is compared **order-sensitively** (the driver sorts a
-         * set by `Value.toString()`, this oracle by `Values.compare`, which agree on
-         * homogeneous sets and may not on mixed-type ones), so the failure mode is a
-         * spurious mismatch, never a spurious pass. Filed as computenet-yh6.1.10,
-         * which also carries `DUR-ATOMIC-01`'s now-stale "WHY `final-view` AND NOT
-         * `incremental-equals-batch`" rationale (same reason: outside the file claim).
+         * **The check layer knows it too, since computenet-yh6.1.10.** Two check-layer
+         * facts in `oracle/Values.kt` were left behind by computenet-yh6.1.9 (outside
+         * that item's file claim) and are now closed: `Values.VIEW_TYPES` — which
+         * `Checks.viewCells` and [allViewValues] enumerate, so `view: '*'` no longer
+         * skips a journaled view — and `Values.canonicalForView`, which now consults
+         * `Values.SET_VIEW_TYPES` and so compares a journaled set **order-insensitively**
+         * rather than structurally. That second one was a real divergence, not a
+         * cosmetic one: the driver sorts a set by `Value.toString()`
+         * (`KernelCatalog.readView`) and this layer by `Values.compare`, orders that
+         * agree on homogeneous sets and need not agree on mixed-type ones. The decision
+         * and its measured blast radius are recorded in `Values.VIEW_TYPES`' KDoc.
          */
         const val DURABLE_SET_VIEW = "journal-set-view"
 
         /**
-         * View catalog ids this oracle can fold and render — the neutral ones plus the
-         * durable binding. Distinct from [Values.VIEW_TYPES] on purpose; see
-         * [allViewValues].
+         * View catalog ids this oracle can fold and render — the check layer's terminal
+         * views plus the durable binding.
+         *
+         * Since computenet-yh6.1.10 put [DURABLE_SET_VIEW] into [Values.VIEW_TYPES] the
+         * union is idempotent and the two sets are **equal**; the `+` is kept because
+         * the two answer different questions ("what does the check layer call a
+         * terminal view?" versus "what can this oracle fold and render?"), and this one
+         * must stay true of the durable binding even if the check layer's catalog were
+         * ever narrowed again. Nothing here changed behaviour when they converged:
+         * [operatorFold]'s view pass-through already matched `journal-set-view` through
+         * this set.
          */
         val VIEW_TYPES: Set<String> = Values.VIEW_TYPES + DURABLE_SET_VIEW
     }

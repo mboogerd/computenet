@@ -63,9 +63,10 @@ object Values {
      *   `computenet-yh6.1.9` the oracle can fold and render it
      *   ([BatchOracle.VIEW_TYPES]), so the honest answer no longer costs anything.
      *
-     * The residual this closes is recorded in `BatchOracle.DURABLE_SET_VIEW`'s KDoc,
-     * which still describes both halves as open; that KDoc lives outside
-     * computenet-yh6.1.10's file claim and is therefore not corrected here.
+     * The residual this closes was recorded in `BatchOracle.DURABLE_SET_VIEW`'s KDoc,
+     * which now describes both halves as closed. `concord/corpus/DISPUTES.md`'s
+     * G-59/C-9 entry still narrates the pre-widening state as computenet-yh6.1.9's
+     * scope; it is a historical record of that item and was left alone.
      */
     val VIEW_TYPES: Set<String> =
         SET_VIEW_TYPES + setOf("map-view", "count-view", "value-view", "list-view")
