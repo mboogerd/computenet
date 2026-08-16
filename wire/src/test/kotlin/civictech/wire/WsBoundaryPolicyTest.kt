@@ -364,9 +364,24 @@ class WsBoundaryPolicyTest {
 
             // A live delta after the link, through the SAME transform ([SEC1-17]),
             // genuinely encoded/decoded across the socket a second time.
+            //
+            // The two adds are two separate emissions, so they cross as two
+            // deltas — and the FIRST of them is `secret-two`, which the
+            // projection empties rather than suppresses: an empty SetDelta is
+            // still a delta and still crosses. So `received.size > afterCatchUp`
+            // is satisfied by the redacted-empty arrival, before `public-two`
+            // has landed, and the content assertion below then reads
+            // `["public-one"]`. Waiting on the content this test is actually
+            // about — not on a count that a different delta can move — is what
+            // makes it a real barrier. (Measured: green on darwin/arm64, red
+            // deterministically enough to fail `build-test-fast` on ubuntu,
+            // run 31925035646.)
             run.membrane.projected.inlet.call.add("secret-two")
             run.membrane.projected.inlet.call.add("public-two")
-            await("live delta crossed the socket") { collector.received.size > afterCatchUp }
+            await("the live public delta crossed the socket") {
+                collector.received.flatMap { it.adds.keys }.contains("public-two")
+            }
+            collector.received.size shouldBeGreaterThan afterCatchUp
 
             val disclosed = collector.received.flatMap { it.adds.keys }
             disclosed.none { it.startsWith("secret") } shouldBe true
