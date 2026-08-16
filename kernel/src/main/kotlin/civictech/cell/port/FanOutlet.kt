@@ -8,6 +8,7 @@ import civictech.cell.ReBaselineNotice
 import civictech.cell.ReplayScope
 import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
+import civictech.cell.link.CurrentPeer
 import civictech.cell.link.Linked
 import civictech.cell.link.LinkResult
 import civictech.cell.link.LinkRole
@@ -229,17 +230,65 @@ class FanOutlet<Api : Any>(
                 if (filter === IDENTITY_DISCLOSURE) null
                 else EmissionDisclosure(filter, onRepeatSuppression)
             }
-            for (key in tapOrder) {
-                when (val target = taps[key]) {
-                    is TapTarget.Typed -> invoke(target.port, method, args, gate)
-                    is TapTarget.Observer -> notifyObserver(target, args, ctx, gate)
-                    // untapped between the order snapshot and this step
-                    null -> Unit
-                }
-            }
-            for (key in consumerOrder) consumers[key]?.let { target -> invoke(target, method, args, gate) }
+            // A broadcast carries no peer (`computenet-usd.8`, deciding 93 I-28
+            // §8's fan-out corner as `LocalTrusted`). `CurrentPeer` is a bare
+            // ThreadLocal, so everything a remote delivery synchronously causes
+            // inherits it — and since `computenet-usd.4.3` a `PORT_PROTOCOL`
+            // frame installs one. A `Protocols.Progress` ack that completes a
+            // wave in a gated organelle (`CoalescingCombineCell`, `WaveGate`)
+            // runs `flushReady()` -> `propagate(...)` right here, on the acking
+            // peer's thread, for a delta addressed to every attachment rather
+            // than to that peer: the disclosure verdict and the
+            // `BoundaryDenialSink` record would name a peer who is neither the
+            // requester nor a recipient of this emission. The peer is not
+            // *wrong* about anything it names — it is simply not this
+            // crossing's identity, and this fan-out has no single one: each
+            // attachment is a [PortRef] no peer is derivable from, and a
+            // remote one gets its own stamped ingress a hop further down.
+            //
+            // The reset is HERE, at the fan-out, and deliberately not at
+            // `ManagedHost`'s delivery frame: the other shape a remote frame
+            // causes — a pull/catch-up reply through [at] — IS addressed to the
+            // asking peer and must keep `Peer`. Narrowing the frame would take
+            // both (`PeerUnblockedFanOutPrincipalTest` pins the pair).
+            //
+            // Scope only: `[SEC1-19]`'s single shared verdict and `[SEC1-20]`'s
+            // exactly-once discharge are untouched — the gate above is still
+            // computed once per emission and shared by every attachment below.
+            // Whether disclosure could ever be decided *per recipient* is 93
+            // I-28 §8 cross-hop composition, open and outside SEC1.
+            //
+            // Read-first, write-never on the local path (P2/P6): in-process
+            // traffic has no stamp, so the hot path pays one ThreadLocal read
+            // and no set/restore at all.
+            if (CurrentPeer.get() == null) fanOut(method, args, ctx, gate)
+            else CurrentPeer.with(null) { fanOut(method, args, ctx, gate) }
         }
         null
+    }
+
+    /**
+     * The broadcast itself: taps first, in emission order (spec 20/23
+     * "taps-fire-first"), then consumers. Extracted from [call] only so the
+     * peer scope decided in `computenet-usd.8` can wrap the whole fan-out in
+     * one place; the loops are otherwise verbatim, iterating both lists
+     * directly with no intervening copy (audit finding B11).
+     */
+    private fun fanOut(
+        method: java.lang.reflect.Method,
+        args: Array<out Any?>?,
+        ctx: MessageContext,
+        gate: EmissionDisclosure?,
+    ) {
+        for (key in tapOrder) {
+            when (val target = taps[key]) {
+                is TapTarget.Typed -> invoke(target.port, method, args, gate)
+                is TapTarget.Observer -> notifyObserver(target, args, ctx, gate)
+                // untapped between the order snapshot and this step
+                null -> Unit
+            }
+        }
+        for (key in consumerOrder) consumers[key]?.let { target -> invoke(target, method, args, gate) }
     }
 
     // `Use<*>`, not `Use<Api>`: the consumer path passes a `Use<Api>` and the

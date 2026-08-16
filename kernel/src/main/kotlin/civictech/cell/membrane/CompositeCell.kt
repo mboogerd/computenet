@@ -630,12 +630,31 @@ private fun DisclosurePolicy.asRepeatSuppressionHook(
  * same one (which is what makes them add up to the per-attempt count).
  *
  * The principal is the crossing's ambient one ([currentPrincipal]): the peer
- * whose delivery was suppressed where a peer is stamped (a remote-triggered
- * catch-up), and null — `LocalTrusted` — for an ordinary in-process broadcast,
- * where the emitting cell has no peer in scope. Recorded honestly as such
+ * whose delivery was suppressed where a peer is stamped — a **targeted**
+ * delivery, i.e. a remote-triggered catch-up or pull reply through
+ * [civictech.cell.port.FanOutlet.at], which is addressed to exactly that peer —
+ * and null, `LocalTrusted`, for a **broadcast**. Recorded honestly as such
  * rather than guessed from the target: a `FanOutlet` attachment is a
  * [civictech.cell.port.PortRef], and no peer identity is derivable from it at
  * this seam.
+ *
+ * "Broadcast is `LocalTrusted`" is a decided rule, not an accident of where
+ * peers happen to be stamped (`computenet-usd.8`, 2026-08-16). It used to be
+ * merely usually true: since `computenet-usd.4.3` a `PORT_PROTOCOL` frame runs
+ * under `CurrentPeer`, so a fan-out that frame merely *unblocked* — a
+ * `Protocols.Progress` ack completing a wave in a gated organelle — evaluated
+ * here under the **acking** peer, who is the upstream producer of one arm and
+ * neither the requester nor a recipient of the released emission. A fan-out has
+ * no single rightful principal (each attachment's own crossing, if remote, is
+ * stamped a hop further down), so [civictech.cell.port.FanOutlet]'s broadcast
+ * loops now run under `CurrentPeer.with(null)` and this field reads
+ * `LocalTrusted` for every one of them. `FanOutlet.at` is deliberately not
+ * reset — see `PeerUnblockedFanOutPrincipalTest`.
+ *
+ * That settles *scope* only. Per-**recipient** disclosure stays 93 I-28 §8
+ * cross-hop composition, open and outside SEC1: `[SEC1-19]` shares one verdict
+ * per emission with every attachment and `[SEC1-20]` discharges against that
+ * single evaluation. See `concord/corpus/DISPUTES.md`.
  */
 private fun BoundaryDenialSink.denyDisclosure(
     reason: DenialReason,

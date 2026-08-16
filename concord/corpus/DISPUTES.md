@@ -1389,19 +1389,42 @@ What this does **not** change: no `[43-*]` id is minted, no scenario is
 authored, and BS-16 itself stays filed above — the fix makes the behaviour true,
 not coverable.
 
-**One consequence it does widen, recorded rather than glossed** (reviewer, same
+**One consequence it did widen, recorded rather than glossed** (reviewer, same
 task): the new frame is ambient for *everything* an inbound protocol frame
 synchronously causes. That is a unicast pull reply (`pullServe` -> `baselineTo`),
 plainly remote-triggered — but also a **fan-out the frame merely unblocks**: a
 `Protocols.Progress` ack completing a wave in `CoalescingCombineCell`/`WaveGate`
 calls `flushReady()` -> `outlet.call.propagate(...)` on the same thread, so a
-mediated outlet's `disclosureFilter` there evaluates under the *acking* peer for
-a delta addressed to every attached observer. The identity is never fabricated
+mediated outlet's `disclosureFilter` there evaluated under the *acking* peer for
+a delta addressed to every attached observer. The identity was never fabricated
 (`HostedPortInvocation.peer` is non-null only for a bridge-decoded frame), but
-it is not the identity of each recipient's own crossing. Which principal such a
-release should carry is 93 I-28 §8's open cross-hop composition question in
-miniature; SEC1 does not settle it, no test here pins it, and the reasoning sits
-at the `ManagedHost` change site.
+it is not the identity of each recipient's own crossing.
+
+**Decided and closed, 2026-08-16 (`computenet-usd.8`): a fan-out carries
+`Principal.LocalTrusted`.** The acking peer is the upstream *producer* of one
+arm — neither the requester nor a recipient of the released emission — and the
+fan-out is not one peer-scoped crossing at all: each attachment is a `PortRef`
+from which no peer identity is derivable at this seam, and an attachment that
+is itself remote gets its own stamped ingress one hop further down. So the
+emission has no single rightful principal, and `LocalTrusted` — the "no peer in
+scope" reading `CompositeCell`'s `denyDisclosure` already documents — is what it
+carries. Realized as a scope reset at the fan-out (`FanOutlet.call`'s broadcast
+loops run under `CurrentPeer.with(null)`), **not** at the `ManagedHost` frame,
+so the unicast reply through `FanOutlet.at` keeps `Peer`. Both halves are pinned
+by `kernel/src/test/kotlin/civictech/cell/membrane/PeerUnblockedFanOutPrincipalTest.kt`.
+
+**What that decision does NOT settle, stated so it is not read as more than it
+is.** It fixes *scope* — which principal is ambient during a broadcast — and
+nothing about *cross-hop composition*. Whether a disclosure decision could ever
+be evaluated **per recipient** remains 93 I-28 §8, open and explicitly outside
+SEC1: `[SEC1-19]` computes one disclosure verdict per emission and shares it
+with every attachment, and `[SEC1-20]` discharges a refused exclusive exactly
+once against that single evaluation — so a per-principal verdict is not merely
+unimplemented, it is incompatible with two landed decisions and would have to
+reopen both. A `Projection` is still an opaque `(Any) -> Any?` free to read
+`currentPrincipal()` itself; under this decision it reads `LocalTrusted` during
+a broadcast, which is honest but is not a per-recipient answer and must not be
+used as one. Nothing here mints a `[43-*]` id or authors a scenario.
 
 ---
 
