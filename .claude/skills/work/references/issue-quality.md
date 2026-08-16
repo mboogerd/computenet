@@ -26,6 +26,28 @@ side.
   "handles errors properly" are not criteria — they are the absence of one.
 - **Say what's out of scope.** An unstated exclusion gets built anyway by
   whoever reads the issue most generously.
+- **Backticks in a double-quoted `bd` argument execute as shell.** Bead
+  bodies quote code, and Markdown's backticks are command substitution
+  inside `--description="..."`: the shell runs each backticked phrase and
+  splices its output (usually empty) into the stored text — the bead
+  silently loses exactly its technical terms, `bd` reports success, and the
+  quoted command really executes (computenet-9w9: filing an issue ran
+  `gh pr ready`; only a missing PR stopped it shipping one). Never inline a
+  body in double quotes. Build it with a quoted heredoc and pass the
+  variable — delimiters at column 0, exactly as below (an indented `EOF`
+  doesn't terminate, and the stray line lands in the stored body):
+
+```bash
+BODY=$(cat <<'EOF'
+... any `code`, $vars, and paths, verbatim ...
+EOF
+)
+bd create --title="..." --description="$BODY" ...
+```
+
+  For comments, `bd comment <id> --file <path>` skips the shell entirely.
+  Every `bd create`/`bd comment` template in these references shows
+  `"<placeholder>"` bodies for brevity — this rule governs them all.
 - **Code citations are pinned and anchor-first.** Verify every file, module,
   and test you name exists at the commit you actually inspected, and name
   that commit. Prefer stable anchors (symbol names, requirement ids, a grep
@@ -35,6 +57,15 @@ side.
   already satisfied). Every child item you write must itself instruct:
   *re-verify all cited paths and line numbers against your own base commit,
   and record any drift rather than copying it forward.*
+- **CI evidence must outlive the run it cites.** A bead citing a run id is
+  not completely filed until the primary evidence is inline or attached as
+  a `bd comment` at filing time: the failing task, the exception class and
+  full stack, the surrounding task headers with timestamps, and the runner
+  spec. GitHub ages run logs out in days while beads queue behind epics for
+  weeks, so a bare "see run `<id>`" decays quietly and the implementer
+  rebuilds the diagnosis from a second-hand summary (computenet-ttz:
+  `gh run view --log` already returned nothing by the time the bead was
+  worked). Excerpt what the fix will need, not the whole log.
 
 ## Phrasing a requirement: EARS
 
