@@ -1,13 +1,18 @@
 package civictech.cell.proxy
 
+import civictech.cell.Borrowed
+import civictech.cell.Frozen
 import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.nature.ContractRegistry
 import civictech.nature.JvmDescriptors
 import civictech.gen.wire.ProxyRegistry
 import java.lang.reflect.InvocationHandler
+import java.lang.reflect.Modifier
 import java.lang.reflect.ParameterizedType
 import java.lang.reflect.Proxy
+import java.util.Collections
+import java.util.IdentityHashMap
 import kotlin.reflect.javaType
 import kotlin.reflect.typeOf
 
@@ -121,15 +126,74 @@ object Proxy {
      * `Invocation`, not a method call it forwards to a sink.
      */
     internal fun discharge(value: Any?) {
+        discharge(value, Collections.newSetFromMap(IdentityHashMap()))
+    }
+
+    /**
+     * C-11 residual 1 (computenet-ulss, 93 I-6 / I-8): the walk reaches an exclusive nested
+     * in a **plain payload object's field**, not only one held directly, in a collection, or
+     * in a type argument. Before the widening, an `Owned` inside a data-class parameter was
+     * left live by a proxy that believed it had discharged — no take, no release, no dead
+     * letter, no accounting — which is exactly the silent drop AGENTS.md's exclusive-payload
+     * invariant forbids. Its KSP half is `ContractProcessor.carriesExclusive`, which had to
+     * widen with it: without that, the method carrying the nested exclusive is never marked
+     * exclusive and this walk is never entered.
+     *
+     * Rules of the object walk, each load-bearing:
+     *
+     * - **[seen] is an identity set**, so an aliased payload reachable twice in one argument
+     *   graph is discharged once (a second `take()` would throw), and a cyclic graph
+     *   terminates.
+     * - **`Borrowed`/`Frozen` are not opened.** Both are explicitly non-consuming views
+     *   (spec 23 §Taps); descending into one could consume an exclusive whose sole consumer
+     *   is somebody else.
+     * - **Platform declarations are not opened.** An exclusive is a kernel type and reaches
+     *   a `kotlin.*`/`java.*` container only as an element, which the branches above already
+     *   cover; opening JDK internals would also trip module access.
+     * - **Reflection failures are swallowed per field** rather than aborting the walk: this
+     *   runs on suppression and denial paths, where discharging the fields that *are*
+     *   reachable is strictly better than propagating out of a cleanup.
+     */
+    private fun discharge(value: Any?, seen: MutableSet<Any>) {
+        if (value == null || !seen.add(value)) return
         when (value) {
             is Owned<*> -> value.take()
             is Leased<*> -> value.release()
             is Map<*, *> -> value.forEach { (key, item) ->
-                discharge(key)
-                discharge(item)
+                discharge(key, seen)
+                discharge(item, seen)
             }
-            is Iterable<*> -> value.forEach(::discharge)
-            is Array<*> -> value.forEach(::discharge)
+            is Iterable<*> -> value.forEach { discharge(it, seen) }
+            is Array<*> -> value.forEach { discharge(it, seen) }
+            is Borrowed<*>, is Frozen<*> -> Unit
+            else -> dischargeFields(value, seen)
         }
+    }
+
+    /** The field walk behind [discharge]'s `else` branch. */
+    private fun dischargeFields(value: Any, seen: MutableSet<Any>) {
+        var clazz: Class<*>? = value.javaClass
+        if (clazz!!.isEnum || clazz.isPrimitive || isPlatformClass(clazz)) return
+        while (clazz != null && !isPlatformClass(clazz)) {
+            clazz.declaredFields.forEach { field ->
+                if (Modifier.isStatic(field.modifiers) || field.isSynthetic) return@forEach
+                // Only primitives are excluded by *declared* type: a field declared
+                // `List<Owned<T>>` erases to a platform type and still holds exclusives, so
+                // the decision to open a value belongs to its runtime class, above.
+                if (field.type.isPrimitive) return@forEach
+                runCatching {
+                    field.isAccessible = true
+                    field.get(value)
+                }.onSuccess { discharge(it, seen) }
+            }
+            clazz = clazz.superclass
+        }
+    }
+
+    /** Declarations [dischargeFields] must not open — see [discharge]'s KDoc. */
+    private fun isPlatformClass(clazz: Class<*>): Boolean {
+        val name = clazz.name
+        return name.startsWith("kotlin.") || name.startsWith("java.") ||
+            name.startsWith("javax.") || name.startsWith("jdk.") || name.startsWith("sun.")
     }
 }

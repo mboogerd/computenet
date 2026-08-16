@@ -66,11 +66,45 @@ class ContractProcessorProvider : SymbolProcessorProvider {
 // T09 §D: top-level (file-scope, not class members) so both [ContractProcessor]
 // and [ContractLints] can call them without threading an instance through.
 
-/** Ownership bit (spec 23, G-21 phase 2): does the type mention Owned/Leased anywhere? */
-private fun carriesExclusive(type: com.google.devtools.ksp.symbol.KSType): Boolean {
-    if (type.declaration.qualifiedName?.asString() in ContractProcessor.Companion.KernelFqn.EXCLUSIVE_MARKERS) return true
-    return type.arguments.any { it.type?.resolve()?.let(::carriesExclusive) == true }
+/**
+ * Ownership bit (spec 23, G-21 phase 2): does the type **reach** an `Owned`/`Leased`
+ * anywhere?
+ *
+ * "Reach", not "mention": the scan walks the type's own declaration, its type *arguments*,
+ * and — since the 93 I-6 / I-8 widening (`doc/spec/10-programming-model/12-ports.md`,
+ * "the exclusive bit's KSP scan is decided to widen"; C-11 residual 1, computenet-ulss) —
+ * the declared **properties** of a payload class. A parameter that is a plain data class
+ * with an `Owned` field used to be invisible here, so no consumer of the bit (link
+ * handshake, suppression proxy, ADMIT accounting) saw the exclusive at all and a
+ * shadow-suppressed sink dropped it silently.
+ *
+ * Termination and cost: [seen] holds the fully-qualified names already under
+ * consideration, so a self-referential payload (`data class Node(val next: Node?)`) ends
+ * rather than recursing forever, and each declaration is opened at most once per query.
+ * Platform types are not opened at all — an exclusive is a kernel type, and it can only sit
+ * inside a `kotlin.*`/`java.*` container through a type argument, which the argument walk
+ * above already covers.
+ */
+private fun carriesExclusive(
+    type: com.google.devtools.ksp.symbol.KSType,
+    seen: MutableSet<String> = mutableSetOf(),
+): Boolean {
+    val fqn = type.declaration.qualifiedName?.asString()
+    if (fqn in ContractProcessor.Companion.KernelFqn.EXCLUSIVE_MARKERS) return true
+    if (type.arguments.any { it.type?.resolve()?.let { argument -> carriesExclusive(argument, seen) } == true }) {
+        return true
+    }
+    if (fqn == null || isPlatformType(fqn) || !seen.add(fqn)) return false
+    val declaration = type.declaration as? KSClassDeclaration ?: return false
+    return declaration.getAllProperties().any { property ->
+        carriesExclusive(property.type.resolve(), seen)
+    }
 }
+
+/** Declarations the property walk of [carriesExclusive] must not open — see its KDoc. */
+private fun isPlatformType(fqn: String): Boolean =
+    fqn.startsWith("kotlin.") || fqn.startsWith("java.") || fqn.startsWith("javax.") ||
+        fqn.startsWith("jdk.") || fqn.startsWith("sun.")
 
 private fun isSubtype(type: KSType, marker: String): Boolean {
     if (type.declaration.qualifiedName?.asString() == marker) return true

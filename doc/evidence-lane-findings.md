@@ -201,21 +201,51 @@ mode D-C12 adjudicated for C-12. **Correcting them is documentation
 maintenance and requires its own authorization; this file records the finding
 and edits nothing** (`[CHA2-03]`, AGENTS.md).
 
-#### Residual 1 — exclusive-bit reach. STILL REAL.
+#### Residual 1 — exclusive-bit reach. WAS REAL; FIXED by `computenet-ulss`.
 
-`Proxy.discharge` (`Proxy.kt:123-134`) recurses into `Map`, `Iterable` and
-`Array` and **nothing else**. An `Owned` nested inside a plain data-class
-payload is dropped undischarged by a proxy that believes it discharged. The
-widening is decided and unimplemented — `doc/spec/10-programming-model/12-ports.md:167-168`:
+**As recorded at `46ed020`**: `Proxy.discharge` recursed into `Map`, `Iterable`
+and `Array` and **nothing else**, and `ContractProcessor.carriesExclusive`
+recursed through a type's *arguments* only. An `Owned` nested inside a plain
+data-class payload was therefore never marked exclusive and, even where the
+method was marked, was dropped undischarged by a proxy that believed it
+discharged. The widening was decided and unimplemented —
+`doc/spec/10-programming-model/12-ports.md`:
 
 > The exclusive bit's KSP scan is decided to widen (decided in 93 I-6 and
 > I-8, unimplemented).
 
-**Consequence for `computenet-umx.1.4`**: BS-8 (`[CHA2-21]`) stands as a
-genuine `@ExpectedFailure`, anchored to `12-ports.md:167-168` and to this
-entry. Feature risk 6 stands too: if KSP refuses the nested-exclusive
-`@Contract` shape, the honest outcome is a `DISPUTES.md` entry
-(`[CHA2-46]`), not a weaker test.
+**Now implemented** by `computenet-ulss`, both cooperating halves, because
+either alone leaves the invariant violated (widening only the scan marks the
+method and hands the payload to a `discharge` with no branch for it; widening
+only `discharge` is never entered because the method is not marked):
+
+- `gen/src/main/kotlin/civictech/gen/wire/ContractProcessor.kt` —
+  `carriesExclusive` also walks a payload declaration's **declared
+  properties**, guarded by a fully-qualified-name `seen` set (so a
+  self-referential payload terminates) and skipping `kotlin.*`/`java.*`
+  declarations, which can only hold an exclusive as a type argument the
+  existing argument walk already covers.
+- `kernel/src/main/kotlin/civictech/cell/proxy/Proxy.kt` — `discharge` walks
+  an arbitrary payload object's fields reflectively, with an **identity**
+  `seen` set (aliased payloads discharged once, cycles terminate), not opening
+  `Borrowed`/`Frozen` (non-consuming views, spec 23 §Taps) or platform
+  classes, and swallowing per-field reflection failures rather than throwing
+  out of a cleanup path.
+
+Limits of that claim, stated here because they bound what the fix guarantees:
+reach is *field-and-element* reach from the argument graph. An exclusive
+reachable only through a computed getter with no backing field, or held by a
+platform class the walk declines to open, is still not discharged, and an
+exclusive reachable through a field the JVM refuses to make accessible is
+skipped silently rather than reported.
+
+**Consequence for `computenet-umx.1.4`'s BS-8** (`[CHA2-21]`): its body is
+unchanged and its `@ExpectedFailure(signature = "CHA2-BS-8")` annotation is
+removed — `[CHA2-44]` requires exactly that when a recorded expected failure
+starts passing. `ExclusiveDischargeReproTest`'s BS-8 is now the acceptance
+test for this fix. Feature risk 6 never materialized: KSP accepted the
+nested-exclusive `@Contract` shape, so no `DISPUTES.md` entry (`[CHA2-46]`)
+was needed.
 
 #### Residual 2 — suppression granularity. STILL REAL.
 
