@@ -1210,6 +1210,118 @@ class BoundaryPolicyTest {
     }
 
     @Test
+    fun `an UNHOSTED mediateOutlet under disclosure Deny discharges an exclusive exactly once across multiple attachments`() {
+        // computenet-e5mn: a coverage residual off the computenet-usd.2 review
+        // (PR #202) — genuinely NEW combined behaviour no single existing test
+        // exercises end to end. BS-6 (above) pins the same discharge property
+        // but HOSTED (spawned onto a ManagedHost, so boundaryDenials has a
+        // reporter and the dead letter's argument count is the observable that
+        // proves exactly-once). BoundaryDenialAccountingTest's "an unhosted
+        // membrane still counts, discharges the refused exclusives, and never
+        // throws" covers the OTHER half — unhosted, but driving
+        // BoundaryDenialSink.deny(...) directly rather than through a real
+        // FanOutlet emission with multiple attachments.
+        //
+        // This membrane is never spawned onto a ManagedHost at all — no
+        // ManagedHost, no SimulationController anywhere in this test — so
+        // `membrane.boundaryDenials`'s `owner.reporter` stays null and
+        // `BoundaryDenialSink.deny` takes the [dischargeRefusedArgs] branch
+        // (computenet-usd.2.1), discharging owned/leased itself with no
+        // sanitized record. `FanOutlet`'s at-most-once evaluation
+        // (computenet-usd.2.2) is what keeps that one discharge call the ONLY
+        // one that carries live arguments — every further suppressed attempt
+        // of the same emission goes through the argument-less
+        // `onRepeatSuppression` hook instead.
+        //
+        // Falsifiability, measured, both directions:
+        // - Reverting ONLY computenet-usd.2.1 (BoundaryDenialSink.deny's
+        //   no-reporter branch made a no-op, as it was before that fix) DOES
+        //   fail this test: `outstandingLeases shouldBe 0` reads 1. That is
+        //   the axis this test actually pins for the unhosted path.
+        // - Reverting ONLY computenet-usd.2.2 (FanOutlet's shared
+        //   EmissionDisclosure gate, back to one direct disclosureFilter call
+        //   per attempt) does NOT fail this test, unlike its hosted BS-6
+        //   twin above (which reads `valued.size` 3 instead of 1). The reason
+        //   is structural, not an oversight: on the unhosted path
+        //   `dischargeRefusedArgs` wraps every argument discharge in its own
+        //   `runCatching`, and `Owned`/`Leased` each guard their own consumed/
+        //   released state before touching the pool — so three same-instance
+        //   discharge attempts (one per attachment, each carrying the full
+        //   [owned, leased] under the reverted per-attempt evaluation) leave
+        //   an IDENTICAL final state to one real discharge plus two
+        //   argument-less repeat-suppression accountings: the pool balance
+        //   and the use-after-move checks cannot tell the two regimes apart
+        //   with no dead letter to count arguments against. BS-6 (hosted) is
+        //   what still pins computenet-usd.2.2 itself; what this test adds is
+        //   that the unhosted no-reporter branch is reached and discharges
+        //   correctly when driven through a REAL FanOutlet emission with
+        //   multiple attachments, not only via a direct `sink.deny(...)` call
+        //   (BoundaryDenialAccountingTest's unhosted case).
+        val membrane = ExclusiveMembrane()
+        val sink = membrane.boundaryDenials["exposedOutlet"]!!
+        sink.denialCount shouldBe 0L
+
+        var outstandingLeases = 0
+        fun lease(value: String): Leased<String> {
+            outstandingLeases++
+            return Leased(value) { outstandingLeases-- }
+        }
+
+        var delivered = 0
+        var tapped = 0
+        var observedEmissions = 0
+        membrane.exposedOutlet.tap(
+            Use.fixed(
+                object : ExclusiveDrop {
+                    override fun send(owned: Owned<String>, leased: Leased<String>) {
+                        tapped++
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+        membrane.exposedOutlet.observe(PortRef.generate()) { observedEmissions++ }
+        membrane.exposedOutlet.subscribe(
+            Use.fixed(
+                object : ExclusiveDrop {
+                    override fun send(owned: Owned<String>, leased: Leased<String>) {
+                        delivered++
+                    }
+                },
+                PortRef.generate(),
+            ),
+        )
+
+        val owned = Owned("owned-secret")
+        val leased = lease("leased-secret")
+        outstandingLeases shouldBe 1
+
+        // Nothing throws out of the emission — unhosted or not, accounting a
+        // denial must never itself be a failure path.
+        membrane.exposedOutlet.call.send(owned, leased)
+
+        // No attachment received the emission — the tap, the payload-agnostic
+        // observer and the sole consumer are all gated by `disclosure = Deny`.
+        delivered shouldBe 0
+        tapped shouldBe 0
+        observedEmissions shouldBe 0
+
+        // The exposure's denialCount equals the number of suppressed
+        // attempts: one per attachment (tap, observer, consumer) — usd.1's
+        // decided per-attempt semantics, unaffected by usd.2.2's evaluation
+        // split (accounted here through onRepeatSuppression for the second
+        // and third attempts).
+        sink.denialCount shouldBe 3L
+
+        // Exactly-once discharge: the Leased pool's outstanding count returns
+        // to its pre-emission value, and a second release()/take() on the
+        // ORIGINAL wrappers each raise use-after-move.
+        outstandingLeases shouldBe 0
+        assertThrows<IllegalStateException> { leased.release() }
+        assertThrows<IllegalStateException> { owned.take() }
+    }
+
+    @Test
     fun `seam 2, a mediateOutlet refusal is accounted through that exposure's denial sink`() {
         // Pins the seam where computenet-usd.5.1 (producer-side linkAuthority
         // on a mediateOutlet exposure) meets computenet-usd.1.5 (installLink-
