@@ -116,6 +116,61 @@ class ChecksTest {
         fail(Checks.lateJoinEqualsEarly(LateJoinEqualsEarly(early = "early", late = "late"), ctx))
     }
 
+    // --- journaled views are check-layer citizens (computenet-yh6.1.10) ------
+
+    /**
+     * `Values.VIEW_TYPES` carries `journal-set-view` and `Values.SET_VIEW_TYPES`
+     * makes it compare as a set. These four read that decision from the two places
+     * it is observable: what `'*'` quantifies over / what `late-join-equals-early`
+     * infers from, and whether a journaled set compares order-insensitively.
+     *
+     * Mutation-checked by narrowing both constants back to the volatile catalog names
+     * (`SET_VIEW_TYPES = {set-view}`, `VIEW_TYPES` = the five volatile ids): three of
+     * the four fail. The fourth — the `'*'` *match* case — passes under the narrow set,
+     * and passes **vacuously**, by quantifying over nothing at all. That is the silent
+     * vacuity the widening exists to remove, and it is why the mismatch case directly
+     * below it is the one that carries the assertion: a check whose green cannot be
+     * distinguished from "no target" is not evidence on its own.
+     */
+    private val journaledViewScenario = scenario(
+        cells = listOf(cell("a", "journal-set-source"), cell("jv", "journal-set-view")),
+        links = listOf(link("a", "jv")),
+        script = listOf(apply("a", "add", s("apple")), apply("a", "add", s("plum"))),
+    )
+
+    @Test
+    fun `incremental-equals-batch view star quantifies over a journal-set-view`() {
+        // The scenario's ONLY view is journaled and the driver's read is wrong. A '*'
+        // enumerated over the volatile catalog names alone has no target here and
+        // passes vacuously; this must fail.
+        val ctx = FakeContext(FakeDriver(views = mapOf("jv" to list(s("apple")))), journaledViewScenario)
+        fail(Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx))
+    }
+
+    @Test
+    fun `incremental-equals-batch view star holds when the journal-set-view matches the oracle`() {
+        val ctx = FakeContext(FakeDriver(views = mapOf("jv" to list(s("plum"), s("apple")))), journaledViewScenario)
+        pass(Checks.incrementalEqualsBatch(IncrementalEqualsBatch("*"), ctx))
+    }
+
+    @Test
+    fun `late-join-equals-early infers an early-late pair of journaled views`() {
+        val sc = scenario(listOf(cell("early", "journal-set-view"), cell("late", "journal-set-view")), emptyList())
+        val ctx = FakeContext(FakeDriver(views = mapOf("early" to list(s("x")), "late" to list(s("x")))), sc)
+        pass(Checks.lateJoinEqualsEarly(LateJoinEqualsEarly(), ctx))
+    }
+
+    @Test
+    fun `a journal-set-view compares order-insensitively, on a mixed-type set`() {
+        // The two sides are ordered differently AND the set is mixed-type, which is
+        // where the driver's `Value.toString()` sort and `Values.compare` part company
+        // (`KernelCatalog.readView`). Outside `Values.SET_VIEW_TYPES` a journaled view
+        // compares structurally and this reordering alone fails it.
+        val sc = scenario(listOf(cell("jv", "journal-set-view")), emptyList())
+        val ctx = FakeContext(FakeDriver(views = mapOf("jv" to list(s("plum"), i(2), s("apple")))), sc)
+        pass(Checks.finalView(FinalView("jv", list(i(2), s("apple"), s("plum"))), ctx))
+    }
+
     // --- observations-all-satisfy -------------------------------------------
 
     @Test
@@ -665,8 +720,13 @@ class ChecksTest {
 
     @Test
     fun `expectedEffectKeys resolves the corpus shape, set-source and journal-set-source alike`() {
-        // DUR-REPLAY-01's effect arm (set-source) and DUR-SRCID/ATOMIC's (journal),
-        // including the mid-script snapshot and the out-of-cone despawn of `ctl`.
+        // The corpus effect-arm shape, including the mid-script snapshot and the
+        // out-of-cone despawn of `ctl`. Since computenet-yh6.1.9 folded DUR-REPLAY-01
+        // onto one journaled source, EVERY corpus effect arm is `journal-set-source`
+        // (DUR-REPLAY-01, DUR-SRCID-01/02, DUR-ATOMIC-01, DUR-LIVE-01,
+        // DUR-CKPT-FRONTIER-01); the `set-source` row is kept because a volatile
+        // source on `host: dur` is still a bindable shape, and the derivation must
+        // resolve it identically rather than by catalog-name accident.
         listOf(src, jsrc).forEach { source ->
             val scen = scenario(
                 cells = listOf(source, esink, cell("ctl", "journal")),

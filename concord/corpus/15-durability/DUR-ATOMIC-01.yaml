@@ -24,16 +24,30 @@
 # The single-record atomicity is what makes both directions impossible at once: there
 # is no window in which one has been restored and the other has not.
 #
-# WHY `final-view` AND NOT `incremental-equals-batch`. The batch oracle models the
-# catalog's *volatile* type names only — `Values.VIEW_TYPES` is
-# {set-view, map-view, count-view, value-view, list-view} and `BatchOracle.sourceFold`
-# knows `set-source`, not `journal-set-source`/`journal-set-view` — so
-# `incremental-equals-batch` over a JOURNALED view fails with "oracle cannot model
-# this scenario" rather than reading recovered state. A journaled view is exactly what
-# BS-12 needs (a volatile view carries no checkpointed `Stateful` state to be torn
-# from the frontier), so the fold is pinned as the explicit `final-view` golden
-# `DUR-GF-01` uses. Teaching the oracle the `journal-` catalog names is a
-# concord-driver change, deliberately not made here.
+# WHY `final-view` AND NOT `incremental-equals-batch`. This used to be a statement
+# about the harness's reach: the batch oracle modelled the catalog's *volatile* type
+# names only, so `incremental-equals-batch` over a JOURNALED view failed with "oracle
+# cannot model this scenario" rather than reading recovered state. That refusal is
+# gone. `computenet-yh6.1.9` taught `BatchOracle.sourceFold` `journal-set-source` (it
+# folds as the `SetCell` it is) and `journal-set-view` (a view pass-through), and
+# `computenet-yh6.1.10` put `journal-set-view` into `Values.VIEW_TYPES` and
+# `Values.SET_VIEW_TYPES`, so the check layer now enumerates and compares a journaled
+# view like any other set view. The oracle folds this scenario to {k1,k2,k3,k4}.
+#
+# The golden is still pinned, and the reason is now a different one. Against THIS
+# construction the two checks are the same comparison twice: both read
+# `readView(view)`, and both compare it against the fold of the script's four adds —
+# an `incremental-equals-batch` here would re-derive, from the same script, the
+# constant already written below, and discriminate nothing `final-view` does not.
+# What it would cost is the record: every non-vacuity perturbation in this header is
+# quoted against an ENUMERATED expectation ("expected [k1,k2,k3,k4] but read
+# [k3,k4]"), which is what makes those results legible later; routing the assertion
+# through a derivation would put the oracle between a reader and the claim. A
+# journaled view is exactly what BS-12 needs (a volatile view carries no checkpointed
+# `Stateful` state to be torn from the frontier), so the fold stays pinned as the
+# explicit `final-view` golden `DUR-GF-01` uses. `DUR-REPLAY-01` is where
+# `incremental-equals-batch` earns its place instead: its data arm is VOLATILE, so
+# everything the oracle's fold is compared against was refilled solely by the replay.
 #
 # NON-VACUITY (every perturbation below was actually run against this scenario, as
 # `24-REPLAY-01` and `DUR-GF-01` did; results are the evidence for the `covers:` line):

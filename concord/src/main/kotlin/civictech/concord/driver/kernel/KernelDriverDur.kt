@@ -79,11 +79,13 @@ import java.util.UUID
  * `effect-sink` construction is exactly that shape, and it is the corpus's
  * headline coverage for it: `DUR-SRCID-01` (uncheckpointed) and `DUR-SRCID-02`
  * (checkpointed), both `covers: [24-DUR-04, 24-DUR-05]`. `DUR-REPLAY-01`
- * (`covers: [24-DUR-01, 24-DUR-02, 24-DUR-05]`) still feeds its journaled sink
- * from a **volatile** source, in a subgraph held independent of its
- * data-recovery subgraph; that construction remains valid coverage, it is
- * simply no longer the *only* way to drive an `Effectful` sink exactly-once
- * through this driver.
+ * (`covers: [24-DUR-01, 24-DUR-02, 24-DUR-05]`) is this shape too: since
+ * `computenet-yh6.1.9` folded it onto ONE subgraph, a single **journaled**
+ * source feeds both its volatile data view and its journaled sink, so the one
+ * replayed emission stream is read two ways at once — re-applied at the view
+ * (which has no other record of it) and suppressed at the sink (whose restored
+ * frontier already recorded it). Every effect arm in the corpus is now driven
+ * from a journaled source.
  *
  * One boundary this fix does not touch: a frame that reaches an `Effectful`
  * inlet with **no** `MessageContext` — the externally-driven-root shape, e.g. a
