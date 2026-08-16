@@ -13,7 +13,6 @@ import civictech.cell.host.LocationRegistry
 import civictech.cell.host.ManagedHost
 import civictech.cell.host.SimulationController
 import civictech.cell.host.SupervisionPolicy
-import civictech.cell.link.CurrentPeer
 import civictech.cell.link.PeerId
 import civictech.cell.membrane.AuthLevel
 import civictech.cell.membrane.BoundaryPolicy
@@ -124,10 +123,9 @@ private class BridgedMembrane(
  * (`FanOutlet.disclosureFilter`, `ProtocolSupport.inboundFilter`,
  * `linkAuthority`). The bridge contributes only *identity* — `BridgeIngressCell`
  * stamps the authenticated [PeerId] onto every delivery it decodes, `ManagedHost`
- * runs a `PORT_MANAGEMENT` dispatch under `CurrentPeer.with(peer)`, and
- * `currentPrincipal()` reads it back as `Peer(id, TransportVouched)`. Neither
- * [Peering.Side] nor the bridge cells gain a policy field, and no frame or
- * version byte changes.
+ * runs the dispatch under `CurrentPeer.with(peer)`, and `currentPrincipal()`
+ * reads it back as `Peer(id, TransportVouched)`. Neither [Peering.Side] nor the
+ * bridge cells gain a policy field, and no frame or version byte changes.
  *
  * ## Where a `Peer` principal is genuinely observable — stated honestly
  *
@@ -143,15 +141,17 @@ private class BridgedMembrane(
  * is therefore made on the catch-up evaluation; what the live delta asserts is
  * that it is *projected by the same transform* ([SEC1-17]).
  *
- * **Measured here, and narrower than the breakdown assumed**: `PORT_PROTOCOL`
- * frames do **not** see a `Peer` principal either, even though the ingress
- * stamps one on them. `ManagedHost` installs `CurrentPeer.with(...)` on its
- * `PORT_MANAGEMENT` branch alone, so an attention assertion arriving over the
- * bridge evaluates the `protocolAuthority` seam at `LocalTrusted` and takes its
- * no-op fast path. That is pinned by the KNOWN GAP test at the bottom of this
- * file (with a control proving the ceiling itself is live), and recorded in
- * `concord/corpus/DISPUTES.md`; the fix is one line in `ManagedHost`, a file
- * this task does not claim.
+ * **`PORT_PROTOCOL` frames did not see a `Peer` principal until this task**,
+ * even though the ingress stamps one on them: `ManagedHost` installed
+ * `CurrentPeer.with(...)` on its `PORT_MANAGEMENT` branch alone, so an attention
+ * assertion arriving over the bridge evaluated the `protocolAuthority` seam at
+ * `LocalTrusted`, took the no-op fast path, and was applied **unclamped** — the
+ * measurement that first ran here. The `PORT_PROTOCOL` branch now installs the
+ * stamped peer too; what keeps that from over-reaching is that the stamp is
+ * non-null iff a bridge ingress decoded the frame, so an in-process assertion
+ * still evaluates at `LocalTrusted`. Both halves are checked together by
+ * `the ceiling clamps a bridge-arriving assertion and stays a no-op for a
+ * local one`.
  *
  * ## How the remote link request is delivered
  *
@@ -369,51 +369,36 @@ class BridgeBoundaryPolicyTest {
         collector.received.shouldBeEmpty() // and no live delta crossed
 
         // ... while PORT_PROTOCOL traffic from the same peer still crosses the
-        // bridge and is applied at this exposure — the peering is usable for
-        // the metadata plane exactly as [SEC1-18] requires, even though the
-        // data plane discloses nothing.
+        // bridge, arrives clamped to the declared ceiling and is applied — the
+        // peering is usable for the metadata plane exactly as [SEC1-18]
+        // requires, even though the data plane discloses nothing.
         run.assertAttentionFromQ("deniedOutlet", Attention(AttentionBand.HIGH.level))
-        observed.size shouldBe 1
+        observed shouldContainExactly listOf(Attention(AttentionBand.LOW.level))
 
         run.hostP.supervisionAccounting().restarts shouldBe 0
     }
 
     /**
-     * **KNOWN GAP — the attention *ceiling* does not clamp a wire-arriving
-     * assertion**, and this test pins the current behavior rather than the
-     * wanted one, so that closing the gap breaks it loudly.
+     * The clamp is a property of the **crossing**, not of the exposure: it must
+     * fire for an assertion that arrived over the bridge and stay a no-op for
+     * one raised in-process — on the same exposure, the same protocol and the
+     * same asserted level. That second half is 93 I-28 §4.2's decided fast path
+     * ("local crossings carry `LocalTrusted` and every predicate is a no-op"),
+     * which is what keeps the seam free on the in-host path (P2).
      *
-     * `computenet-usd.4.3`'s acceptance clause asks for "a remotely-asserted
-     * attention level arriving clamped to the declared ceiling and applied"
-     * ([SEC1-18], BS-9 wire half). Measured here: it arrives and is applied,
-     * **unclamped**.
-     *
-     * The mechanism, and it is one line: `BoundaryPolicy.protocolAuthority` is
-     * evaluated by `CompositeCell`'s `asProtocolFilter`, which reads
-     * `currentPrincipal()` and short-circuits — "every predicate is a no-op"
-     * (93 I-28 §4.2) — on [Principal.LocalTrusted]. `BridgeIngressCell` *does*
-     * stamp the peer onto the decoded `HostedPortInvocation` for every frame
-     * type, but `ManagedHost` installs `CurrentPeer.with(hostedInvocation.peer)`
-     * on the `PORT_MANAGEMENT` branch **only**: a `PORT_PROTOCOL` delivery runs
-     * with no ambient peer, so a genuinely remote assertion is indistinguishable
-     * from a local one at the seam and takes the local fast path.
-     *
-     * The control below is what makes this a gap rather than a missing feature:
-     * the very same assertion, on the very same exposure, clamps correctly the
-     * moment the ambient identity is present. Nothing about the ceiling, the
-     * filter or its installation is missing — only the stamp's reach.
-     *
-     * Fix site (outside this task's file claim, and held concurrently by
-     * `computenet-yh6.1.3.4`): `ManagedHost`'s `PORT_PROTOCOL` delivery branch,
-     * which should run under `CurrentPeer.with(hostedInvocation.peer)` the way
-     * its `PORT_MANAGEMENT` sibling does. Recorded in
-     * `concord/corpus/DISPUTES.md` beside the BS-16 entry. **When that lands,
-     * this test fails**: replace the pinned observation with
-     * `Attention(AttentionBand.LOW.level)` and fold it back into the BS-9 test
-     * above.
+     * The two halves are checked back to back deliberately. Closing the wire
+     * half meant making `ManagedHost` install the ingress-stamped peer around a
+     * `PORT_PROTOCOL` delivery — previously `PORT_MANAGEMENT` only, so a
+     * wire-arriving assertion was applied UNCLAMPED — and the failure mode to
+     * guard against was trading one wrong principal for another by clamping
+     * local assertions too. It cannot: the distinction is carried by the data
+     * rather than inferred, since `HostedPortInvocation.peer` is non-null iff a
+     * bridge ingress decoded the frame, and is never serialized. This test is
+     * what holds that line; the whole-suite twin is `BoundaryPolicyTest`'s
+     * `local attention crossing is never attenuated, even under a strict policy`.
      */
     @Test
-    fun `KNOWN GAP - a ceiling does not clamp an attention assertion arriving over the bridge`() {
+    fun `the ceiling clamps a bridge-arriving assertion and stays a no-op for a local one`() {
         val run = Run(seed = 4)
 
         val observed = mutableListOf<Attention>()
@@ -421,29 +406,26 @@ class BridgeBoundaryPolicyTest {
             observed += message as Attention
         }
 
-        // Over the wire: applied, but NOT clamped — no ambient peer, so the
-        // seam takes 93 I-28 §4.2's LocalTrusted fast path.
+        // Over the wire: the ingress stamp is ambient at the seam, so the
+        // ceiling clamps (30/34 decision 6, `min(asserted, ceiling)`).
         run.assertAttentionFromQ("deniedOutlet", Attention(AttentionBand.HIGH.level))
-        observed shouldContainExactly listOf(Attention(AttentionBand.HIGH.level))
+        observed shouldContainExactly listOf(Attention(AttentionBand.LOW.level))
 
-        // Control: the identical assertion with the peer ambient — the shape
-        // the PORT_MANAGEMENT branch already produces — clamps to the ceiling.
-        // So the ceiling is installed and works; what is missing is the stamp.
-        val edge = WireEdgeLink(
+        // In-process, everything else equal: no peer is stamped, the principal
+        // is LocalTrusted, the predicate is a no-op, the level is unattenuated.
+        val localEdge = WireEdgeLink(
             id = UUID.randomUUID(),
             from = PortRef.generate(),
             to = PortRef.generate(run.membraneRef),
             fromAddr = PortAddress(CellRef(UUID.randomUUID()), "inlet"),
             toAddr = PortAddress(run.membraneRef, "deniedOutlet"),
         )
-        CurrentPeer.with(PeerId("q")) {
-            ProtocolSupport.of(run.membrane.deniedOutlet)
-                .deliver(Protocols.Attention, edge, Attention(AttentionBand.HIGH.level))
-        }
+        ProtocolSupport.of(run.membrane.deniedOutlet)
+            .deliver(Protocols.Attention, localEdge, Attention(AttentionBand.HIGH.level))
         run.controller.runToIdle()
         observed shouldContainExactly listOf(
-            Attention(AttentionBand.HIGH.level),
             Attention(AttentionBand.LOW.level),
+            Attention(AttentionBand.HIGH.level),
         )
 
         run.hostP.supervisionAccounting().restarts shouldBe 0

@@ -1247,7 +1247,8 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
     real bridge cells before the assertions read them;
   - `BS-9 wire half - Deny discloses nothing across the bridge yet the peering
     stays usable` — the `disclosure = Deny` twin: link established, no catch-up
-    and no live delta across the wire, metadata-plane traffic still delivered;
+    and no live delta across the wire, metadata-plane traffic still delivered
+    and clamped to the exposure's declared ceiling;
   - `Deny suppressions on this path move the exposure's denial counter and
     restart nothing` — the accounting and the BS-14 not-a-fault half.
   What this filing forgoes is the *cross-implementation* obligation: a second,
@@ -1258,33 +1259,36 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   `Principal` a boundary predicate evaluated under. All three are needed:
   without (c), (a)+(b) can express a projected crossing but not whose it was.
 
-### Residual measured while pinning BS-16: a `PORT_PROTOCOL` frame carries no ambient peer
+### Resolved while pinning BS-16: a `PORT_PROTOCOL` frame carried no ambient peer
 
-Not a dispute about a scenario — a **kernel gap** found by the BS-9 wire-half
-work and recorded here so it is not re-discovered.
+Not a dispute about a scenario — a **kernel gap**, found by the BS-9 wire-half
+work and fixed in the same task (`computenet-usd.4.3`). Recorded here so the
+measurement is not re-discovered, and because the BS-16 entry above cites it.
 
 `BridgeIngressCell` stamps the authenticated `PeerId` onto every decoded
-`HostedPortInvocation`, whatever its type. `ManagedHost`, however, installs
+`HostedPortInvocation`, whatever its type. `ManagedHost`, however, installed
 `CurrentPeer.with(hostedInvocation.peer)` on its **`PORT_MANAGEMENT` branch
-only**. So `currentPrincipal()` answers `LocalTrusted` for a `PORT_PROTOCOL`
-delivery that genuinely came off the wire, and
+only**. So `currentPrincipal()` answered `LocalTrusted` for a `PORT_PROTOCOL`
+delivery that had demonstrably come off the wire, and
 `BoundaryPolicy.protocolAuthority` — whose filter short-circuits on
 `LocalTrusted` by design (93 I-28 §4.2, "local crossings carry `LocalTrusted`
-and every predicate is a no-op") — does not clamp, floor or throttle a
+and every predicate is a no-op") — did not clamp, floor or throttle a
 *remotely* asserted attention level that arrived over a bridge. Measured: an
 `Attention(HIGH)` frame crossing `Peering.loopback` into an exposure declaring
-`ceiling = LOW` is applied at `HIGH`.
+`ceiling = LOW` was applied at `HIGH`, so `[SEC1-18]`/BS-9's "arriving clamped"
+half did not hold at the wire.
 
-Consequence for `[SEC1-18]`/BS-9's wire half: the "no disclosure, link still
-usable" half holds across the bridge and is tested; the "arriving clamped"
-half does **not** hold, and is pinned as it currently behaves — with a control
-proving the ceiling itself is live the moment the identity is ambient — by
-`KNOWN GAP - a ceiling does not clamp an attention assertion arriving over the
-bridge` in `BridgeBoundaryPolicyTest.kt`.
+**Fixed**: the `PORT_PROTOCOL` delivery branch now runs under
+`CurrentPeer.with(hostedInvocation.peer)`, as its `PORT_MANAGEMENT` sibling
+does. The local fast path is untouched, and the distinction is carried by the
+data rather than inferred — `HostedPortInvocation.peer` is non-null iff a bridge
+ingress decoded the frame, and is never serialized, so an in-process
+`Protocols.sendUpstream` still evaluates at `LocalTrusted`. Both halves are
+pinned together by `the ceiling clamps a bridge-arriving assertion and stays a
+no-op for a local one` in `BridgeBoundaryPolicyTest.kt`, alongside
+`BoundaryPolicyTest`'s `local attention crossing is never attenuated, even under
+a strict policy`.
 
-The fix is one line at `ManagedHost`'s `PORT_PROTOCOL` delivery branch (run it
-under `CurrentPeer.with(hostedInvocation.peer)`, as its `PORT_MANAGEMENT`
-sibling does). It was not taken by `computenet-usd.4.3`, whose file claim
-excludes `ManagedHost.kt` — held concurrently by `computenet-yh6.1.3.4`. When
-it lands, the KNOWN GAP test fails by construction and folds back into the BS-9
-wire-half test.
+What this does **not** change: no `[43-*]` id is minted, no scenario is
+authored, and BS-16 itself stays filed above — the fix makes the behaviour true,
+not coverable.
