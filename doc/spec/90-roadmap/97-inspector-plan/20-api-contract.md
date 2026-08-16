@@ -358,6 +358,19 @@ the pilot demo (skillmatch), default `7071`, overridable via `--inspect-port`.
 // across seams. Additive and defaulted (kotlinx `encodeDefaults = true`, so the key is always
 // present, `null` on every non-denial row) — an older client decoding this shape is unaffected.
 //
+// counters.deadLetters vs deadLetters[].length (computenet-0994): `counters.deadLetters` is a
+// FAULT count only — built from `supervisionAccounting().deadLetters`, which a BoundaryPolicy
+// refusal never increments (SEC1-29: a denial is not a cell fault). `deadLetters[]` carries BOTH
+// faults and refusals — a denial is dead-lettered for visibility through the same fan-out. So
+// `counters.deadLetters == deadLetters.length` holds only before any refusal has ever been
+// captured; once one has, `deadLetters.length` is strictly greater. A client must not treat the
+// row array's length as the fault count, and must not derive an "is this a fault" signal from
+// `counters.deadLetters` changing — read `denial` on the row itself instead. There is no
+// `counters.boundaryDenials` (or equivalent) on the wire: a client that wants a denial count
+// derives it client-side by counting `deadLetters[]` rows with `denial != null` (see
+// `inspect/ui/src/sync/errorStore.ts`'s `boundaryDenialCount`, recomputed from the loaded rows,
+// never trusted off a wire counter that does not exist).
+//
 // `restarts[].cause`/`.causeAtMs` are a TIME-WINDOW CORRELATION, not a kernel-reported restart
 // cause: no seam reports the failure and the restart as one event. `cause` is the simple class name
 // of the most recent dead letter captured for the same ref within 5000ms preceding the observed

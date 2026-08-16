@@ -44,15 +44,36 @@ const EMPTY_COUNTERS: ErrorCounters = {
  *  without scanning the whole snapshot on every render.
  *
  *  computenet-4ixu: `DeadLetterEntry.denial` (the `BoundaryPolicy`-refusal
- *  discriminator, computenet-usd.7) needs no special handling here — this
- *  store never destructures a `DeadLetterEntry`, only stores and indexes the
- *  whole row, so `denial` rides through `applySnapshot`/`applyDeadLetter`
- *  exactly like `invocation`/`disposition` before it, opaque cargo the store
- *  is not required to understand. `components/DetailPanel.tsx` is the reader
- *  that interprets it. */
+ *  discriminator, computenet-usd.7) rides through `applySnapshot`/
+ *  `applyDeadLetter` exactly like `invocation`/`disposition` before it —
+ *  opaque cargo as far as the ref-indexed `_deadLetters` map is concerned.
+ *
+ *  computenet-0994: `denial` is NOT opaque to `counters.deadLetters`, though.
+ *  The server's `counters.deadLetters` (`Errors.kt`, `supervisionAccounting()`)
+ *  is a FAULT count — a `BoundaryPolicy` refusal is never classified as a
+ *  cell fault (SEC1-29) and the server never counts one there. `deadLetters[]`
+ *  itself carries BOTH faults and refusals (a denial is dead-lettered for
+ *  visibility, same fan-out, same array), so `counters.deadLetters ==
+ *  deadLetters.length` — true only by coincidence before any refusal has ever
+ *  been captured — is not an invariant of a live server. `applyDeadLetter`
+ *  below only increments the fault counter for a `denial == null` row;
+ *  `boundaryDenialCount` is this store's own client-side derived split
+ *  (recomputed from the loaded rows, never trusted off any wire counter,
+ *  since the wire carries none) so `Header`/`Canvas` can report refusals in
+ *  the `--wave-health` (not-a-fault) register instead of folding them into
+ *  the fault count/badge. See `doc/spec/90-roadmap/97-inspector-plan/
+ *  20-api-contract.md`'s `deadLetters[].denial` note for the server-side half
+ *  of this asymmetry. */
 export class ErrorStore {
   private _counters: ErrorCounters = EMPTY_COUNTERS;
   private _deadLetters = new Map<Ref, DeadLetterEntry[]>();
+  /** computenet-0994: count of currently-loaded `deadLetters[]` rows with
+   *  `denial != null` — a `BoundaryPolicy` refusal, never a fault. Not part
+   *  of the wire `ErrorCounters` (the server does not emit it); recomputed
+   *  from the rows themselves on every mutation, the same "never drift"
+   *  discipline `counters.parked`/`counters.waveHealth` already use, just
+   *  applied to a client-only derived number instead of a wire-echoed one. */
+  private _boundaryDenials = 0;
   /** ref -> port -> current parked row (count > 0 only; a clear deletes the entry). */
   private _parked = new Map<Ref, Map<string, ParkedEntry>>();
   private _restarts = new Map<Ref, RestartEntry[]>();
@@ -67,6 +88,14 @@ export class ErrorStore {
 
   get counters(): ErrorCounters {
     return this._counters;
+  }
+
+  /** computenet-0994: `deadLetters[]` rows that are a `BoundaryPolicy`
+   *  refusal (`denial != null`), never a fault — reported separately from
+   *  `counters.deadLetters` so a client can put refusals in the
+   *  `--wave-health` (not-a-fault) register instead of the fault count. */
+  get boundaryDenialCount(): number {
+    return this._boundaryDenials;
   }
 
   deadLettersFor(ref: Ref): readonly DeadLetterEntry[] {
@@ -117,12 +146,18 @@ export class ErrorStore {
     this._counters = snapshot.counters;
 
     const deadLetters = new Map<Ref, DeadLetterEntry[]>();
+    let boundaryDenials = 0;
     for (const dl of snapshot.deadLetters) {
       const list = deadLetters.get(dl.ref) ?? [];
       list.push(dl);
       deadLetters.set(dl.ref, list);
+      if (dl.denial != null) boundaryDenials++;
     }
     this._deadLetters = deadLetters;
+    // computenet-0994: recomputed from the loaded rows, not trusted off any
+    // wire counter — the server emits no `boundaryDenials` counter, so this
+    // is the only source of truth available client-side.
+    this._boundaryDenials = boundaryDenials;
 
     const parked = new Map<Ref, Map<string, ParkedEntry>>();
     for (const p of snapshot.parked) {
@@ -164,11 +199,22 @@ export class ErrorStore {
     this.notify();
   }
 
+  /** computenet-0994: a `BoundaryPolicy` refusal (`entry.denial != null`) is
+   *  never a fault (SEC1-29) — it still joins the ref-indexed `deadLetters[]`
+   *  log (so `deadLettersFor`/the detail panel see it, per computenet-4ixu),
+   *  but does NOT increment `counters.deadLetters`, the fault counter. That
+   *  counter's live value must never drift from what the server's own
+   *  `supervisionAccounting()`-derived `counters.deadLetters` would report
+   *  after the same refusal. `boundaryDenialCount` is incremented instead. */
   applyDeadLetter(entry: DeadLetterEntry): void {
     const next = new Map(this._deadLetters);
     next.set(entry.ref, [...(next.get(entry.ref) ?? []), entry]);
     this._deadLetters = next;
-    this._counters = { ...this._counters, deadLetters: this._counters.deadLetters + 1 };
+    if (entry.denial != null) {
+      this._boundaryDenials += 1;
+    } else {
+      this._counters = { ...this._counters, deadLetters: this._counters.deadLetters + 1 };
+    }
     this.notify();
   }
 
