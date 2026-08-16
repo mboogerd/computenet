@@ -520,6 +520,13 @@ re-fetch line is a verdict against a base that may no longer exist.
 
 ## 7. Decide
 
+Every verdict comment and residual bead below quotes criteria and code
+verbatim — build those bodies with a quoted heredoc (or `bd comment --file`)
+per issue-quality.md's "Backticks…" rule: backticks in a double-quoted
+argument execute as shell and vanish from the stored text, and filing a
+residual is exactly how that once ran `gh pr ready` as a side effect
+(computenet-9w9). The inline `"<...>"` forms below are placeholders.
+
 Three outcomes, not two.
 
 ### Ready

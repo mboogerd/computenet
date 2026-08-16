@@ -34,17 +34,20 @@ side.
   quoted command really executes (computenet-9w9: filing an issue ran
   `gh pr ready`; only a missing PR stopped it shipping one). Never inline a
   body in double quotes. Build it with a quoted heredoc and pass the
-  variable:
+  variable — delimiters at column 0, exactly as below (an indented `EOF`
+  doesn't terminate, and the stray line lands in the stored body):
 
-  ```bash
-  BODY=$(cat <<'EOF'
-  ... any `code`, $vars, and paths, verbatim ...
-  EOF
-  )
-  bd create --title="..." --description="$BODY" ...
-  ```
+```bash
+BODY=$(cat <<'EOF'
+... any `code`, $vars, and paths, verbatim ...
+EOF
+)
+bd create --title="..." --description="$BODY" ...
+```
 
   For comments, `bd comment <id> --file <path>` skips the shell entirely.
+  Every `bd create`/`bd comment` template in these references shows
+  `"<placeholder>"` bodies for brevity — this rule governs them all.
 - **Code citations are pinned and anchor-first.** Verify every file, module,
   and test you name exists at the commit you actually inspected, and name
   that commit. Prefer stable anchors (symbol names, requirement ids, a grep

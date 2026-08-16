@@ -57,6 +57,8 @@ the standard the feature reviewer judges against, so an issue that doesn't
 meet it fails later rather than never.
 
 ```bash
+# Bodies quoting code: heredoc-build them first (issue-quality.md
+# "Backticks…", computenet-9w9) — inline backticks execute as shell.
 bd create --type=feature --parent=<epic-id> --validate \
   --title="<outcome as a change to the system>" \
   --description="<what the system does here today, why this work exists, which spec sections govern it, what's out of scope>" \
