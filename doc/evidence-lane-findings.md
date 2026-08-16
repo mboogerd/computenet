@@ -1139,3 +1139,174 @@ bead's own acceptance criteria: a summary comment on `computenet-umx.1` (posted
 via `bd comment computenet-umx.1 --file <path>`, per the dispatch's explicit
 authorization). No other bead touched; `computenet-umx.1` itself is not closed,
 re-prioritised, reassigned or re-parented by this task.
+
+---
+
+## `computenet-yh6.1.5` — `[KFX-22]` acceptance run: CHA2's C-9 reproductions observed at THIS commit, not inherited
+
+Recorded by: `computenet-yh6.1.5.1` (feature `computenet-yh6.1.5`, epic
+`computenet-yh6.1` — KFX). Realizes `[KFX-22]`/BS-50: CHA2's three C-9
+reproductions observed passing unweakened at the feature-branch commit, with
+BS-4 re-confirmed mutation-discriminating at that same commit. Feeds
+`computenet-yh6.1.5.2`'s `[KFX-23]`/BS-51 DISPUTES.md reconciliation — this
+entry states outcomes only, and makes no retire/narrow/unchanged call itself.
+
+**Commit observed: `6ebbcff`** ("CHA2: adjudication record and load-bearing
+expected-failure harness (computenet-umx.1) (#228)", PR #228 — the tip of
+`origin/main` at this task's dispatch and this branch's base commit; `git
+merge-base feature/computenet-yh6.1.5 HEAD` inside this worktree returns
+`6ebbcff`, confirming no later `main` commit landed between dispatch and this
+run). Every command below ran against the tree at that commit, before this
+entry's own edit.
+
+### 0. Why this run, and not the inherited one
+
+`computenet-umx.1.3` recorded all three reproductions passing at `bf18284`, a
+different commit on a different branch (CHA2's own task branch, merged onto
+`main` as squash commit `6ebbcff` via PR #228). This task re-observes at
+`6ebbcff` itself rather than trusting that record, because `[KFX-22]` is this
+epic's own acceptance gate. First check: is the reproduction file the squash
+actually shipped the same one CHA2 wrote, or did the squash silently reshape
+it? `EffectReplayReproTest.kt` was introduced once in this repository's history,
+at `4b69332` ("C-9 effect-replay reproductions stand unweakened…",
+`computenet-umx.1.3`'s own commit); `git diff 4b69332 6ebbcff --
+kernel/src/test/kotlin/civictech/cell/repro/EffectReplayReproTest.kt` is empty,
+and `git show <rev>:<path> | md5` is `5eb8e25bf6acd6276bd1595a02fa4746` at both
+revisions — byte-identical. The squash introduced no weakening.
+
+### 1. The suite as it stands: no annotation, no re-seeding, no narrowing
+
+Read in full at `6ebbcff`. No `@ExpectedFailure` on BS-1, BS-4 or BS-5;
+confirmed independently by `reportExpectedFailures`' own count for the
+repro-only run (§2 below): `Standing expected failures (@ExpectedFailure): 0`.
+Seeds (91–96, one per `SimulationController` instantiation) are the values
+`computenet-umx.1.3` shipped, sequential per-crash-generation values, not a
+rotation away from a discovered failure. Assertions are full-log equalities
+over the external effect list (`effects shouldBe listOf(...)`), not "at most
+once" counts a zero-fire regression would satisfy vacuously — unchanged from
+the byte-identical comparison in §0.
+
+### 2. Gates run, with proof of execution
+
+All four commands ran in the foreground, sequentially, one Gradle invocation
+at a time; no invocation was backgrounded. Full logs kept in this session's
+scratchpad; lines quoted below are copied verbatim from them.
+
+- **`./gradlew :kernel:test --tests 'civictech.cell.repro.EffectReplayReproTest' --rerun`**
+  — `BUILD SUCCESSFUL in 8s`; `27 actionable tasks: 12 executed, 15 from cache`.
+  `> Task :kernel:test` carries no `UP-TO-DATE`/`FROM-CACHE` marker (it ran).
+  JUnit XML (`TEST-civictech.cell.repro.EffectReplayReproTest.xml`):
+  `tests="3" skipped="0" failures="0" errors="0"`, timestamp
+  `2026-08-16T14:27:32.829Z`. `reportExpectedFailures` in this same run:
+  `Standing expected failures (@ExpectedFailure): 0`. All three PASSED: BS-1,
+  BS-4, BS-5.
+- **`./gradlew :concord:test -Pconcord.profiles=core,dur --rerun`** —
+  `BUILD SUCCESSFUL in 3s`; `24 actionable tasks: 2 executed, 2 from cache, 20
+  up-to-date`. `> Task :concord:test` carries no marker. Aggregate JUnit XML
+  across `concord/build/test-results/test/*.xml`: 248 tests, 0 failures, 0
+  errors; newest timestamp `2026-08-16T14:27:48.687Z`
+  (`TEST-civictech.concord.runner.CorpusRunner.xml`). That file's own testcases
+  include `DUR-SRCID-01 (15-durability)` and `DUR-SRCID-02 (15-durability)`,
+  both present with no failure recorded against them — the corpus-level
+  construction of the same journaled-source/effectful-sink case
+  (`covers: [24-DUR-04, 24-DUR-05]`) passes alongside the kernel-level
+  reproduction.
+- **`./gradlew :concord:check`** (run as `--rerun-tasks` for unambiguous proof)
+  — `BUILD SUCCESSFUL in 29s`; **`26 actionable tasks: 26 executed`** — every
+  task in this module's `check` lifecycle actually ran, including
+  `:concord:concordanceGate` and `:concord:test`; no dangling `covers:` id
+  (the gate would otherwise fail the build).
+- **`./gradlew test`** (run as `--rerun-tasks`, repository-wide) — `BUILD
+  SUCCESSFUL in 5m 20s`; **`74 actionable tasks: 74 executed`** — every task in
+  the full build ran, the strongest available proof. 0 `FAILED` across the
+  whole repository (`grep -c FAILED` on the full log: 0).
+
+No gate failed. No gate's proof is a cached replay standing in for a real run.
+
+### 3. Mutation re-check, at this commit: BS-4 is load-bearing here too
+
+Marker written first (`.mutation-in-progress`, naming the exact call site and
+what was removed), per the procedure `computenet-umx.1.3` used.
+`HostDurability.installDurableEpochs` (kernel/src/main) was neutered by
+inserting an unconditional `return` as its first statement, so the ref-derived
+durable outlet wave identity (`OutletWaveState.durable`) is never installed on
+a journaled cell's outlets. Re-ran
+`./gradlew :kernel:test --tests 'civictech.cell.repro.EffectReplayReproTest' --rerun`:
+
+```
+EffectReplayReproTest > BS-1 a mid-drain crash replays the journal without re-firing or losing an effect() PASSED
+EffectReplayReproTest > BS-5 a PN-2 replay-baseline at or behind the restored frontier is suppressed, not exempted() PASSED
+EffectReplayReproTest > BS-4 a journaled source feeding an Effectful sink fires each logical invocation once across a crash() FAILED
+    io.kotest.assertions.AssertionFailedError: Unexpected elements from index 13
+    expected:<[1, 2, 3, 4, 5, 6, 7]> but was:<[1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]>
+3 tests completed, 1 failed
+```
+
+Verbatim match to `computenet-umx.1.3`'s own mutation transcript and to
+`DISPUTES.md:522`'s "as filed" double-fire description. BS-1 and BS-5 stayed
+green under this mutation, as expected — neither of their sources is a
+journaled cell, so neither exercises `installDurableEpochs`.
+
+Reverted immediately: `git diff -- kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt`
+is empty after the revert, `git status --short` clean, `.mutation-in-progress`
+removed before this commit. Re-ran the repro test once more post-revert to
+confirm the green state was not disturbed: `BUILD SUCCESSFUL`, 3 tests, 0
+failures, JUnit timestamp `2026-08-16T14:39:58.775Z`, standing
+`@ExpectedFailure` count still 0.
+
+### 4. Agreement with the earlier record, stated explicitly
+
+`computenet-umx.1.3` (at `bf18284`) recorded BS-1/BS-4/BS-5 all passing, BS-4
+mutation-confirmed with the identical failure signature quoted above. This
+task's independent observation at `6ebbcff` — a different commit, reached via
+a different branch history — agrees in every particular checked: same
+pass/fail per test, the same double-fire signature verbatim, the same absence
+of `@ExpectedFailure` on all three, and the same file content (§0). No
+divergence was found between the two observations; none is reported here as
+one.
+
+### 5. `[KFX-24]` — scope of the exactly-once claim, held to its boundary
+
+Every exactly-once statement above and in the reproduction suite itself is
+against the in-process external effect log — a `MutableList` that outlives the
+host, the registry and every cell instance, but not the JVM process. This task
+adds no end-to-end external exactly-once claim. The external actuator's
+idempotency remains 93 I-7's stated ceiling and CON1's territory, untouched by
+anything run here.
+
+### Verdict, for `computenet-yh6.1.5.2`'s `[KFX-23]`/BS-51 consumption
+
+**Closed, observed at `6ebbcff`, unweakened:**
+- **BS-1** (frontier suppression pin, `[CHA2-10]`) — PASS.
+- **BS-4** (the journaled-source → `Effectful`-sink double-fire, `[CHA2-13]` —
+  this is the exact construction `concord/corpus/DISPUTES.md:522`'s G-59/C-9
+  boundary entry recorded as broken, and the one `[KFX-22]` exists to close)
+  — PASS, and re-confirmed discriminating by a reverted mutation at this
+  commit: neutering `HostDurability.installDurableEpochs` reproduces the
+  double-fire verbatim; the fix (`34892d9`) is what makes it pass.
+- **BS-5** (PN-2 baseline-suppression pin of the `[24-DUR-07]`/`[24-DUR-08]`
+  decided rule, `[CHA2-14]`) — PASS.
+- All three: no `@ExpectedFailure`, no re-seeding, no narrowing, same
+  assertions and scope as CHA2 shipped (§0, §1).
+
+**Not touched or closed by this task:**
+- `DUR-REPLAY-01`'s two-independent-subgraph construction — untouched; whether
+  it can now fold into one subgraph is `computenet-yh6.1.5.2`'s/BS-51's own
+  decision, not made here.
+- C-11 (BS-8/BS-9, owned by `computenet-ulss`/`computenet-3jv2`) and C-12
+  (adjudicated separately, D-C12) — out of this suite's scope, unaffected by
+  this run.
+- `computenet-umx.1.6`'s rig-gated sweep (BS-2/BS-3/BS-6/BS-17, the strict form
+  of `[CHA2-26]`) — still blocked on CHA1's DST rig, which does not exist on
+  `main` at this commit; not exercised here.
+- No end-to-end external exactly-once claim (§5) — that ceiling stands
+  unmoved.
+
+### Disposition
+
+Report, do not edit any other file. This task's diff touches only this file
+(`doc/evidence-lane-findings.md`) — no kernel, `gen/`, `concord/`, or
+`doc/spec/` change; the one mutation applied in §3 was reverted before this
+commit and the `.mutation-in-progress` marker was removed, never committed. No
+`DISPUTES.md`/corpus/`CONCORDANCE.md` edit — that is `computenet-yh6.1.5.2`'s.
+No tracker item created; no bead other than `computenet-yh6.1.5.1` touched.
