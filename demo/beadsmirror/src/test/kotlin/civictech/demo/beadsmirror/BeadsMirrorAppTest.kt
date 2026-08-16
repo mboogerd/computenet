@@ -1,7 +1,9 @@
 package civictech.demo.beadsmirror
 
 import civictech.demo.beadsmirror.baseline.MirrorEvent
+import civictech.demo.beadsmirror.baseline.PollLoopDied
 import civictech.demo.beadsmirror.baseline.RebaselineReason
+import civictech.demo.beadsmirror.dolt.DoltSqlException
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.testkit.HttpProbe
@@ -467,6 +469,73 @@ class BeadsMirrorAppTest {
             app!!.state.current.view().keys shouldBe setOf(idA)
             app!!.state.current.edgeView().none { it.issueId == idB || it.dependsOnIssueId == idB } shouldBe true
             app!!.state.current.edgeView() shouldBe emptySet<MirrorEdge>()
+        }
+
+        // -------------------------------------------------------------
+        // computenet-dqj.12 — a dead poll loop must be audible and visible
+        // -------------------------------------------------------------
+
+        /**
+         * computenet-dqj.12: when a poll tick raises anything other than the
+         * truncation condition the loop exits for good, and before this item
+         * the process printed nothing while every route went on answering 200
+         * from the frozen fold — the epic reviewer measured exactly that
+         * against a real workspace (`GET /beads/issues/<id>` served
+         * `status=in_progress` after `bd` had closed the issue).
+         *
+         * The failure is injected at the feed's own seam rather than
+         * simulated: the workspace's `.dolt` directory is moved aside under
+         * the running poller, so the next tick's `dolt sql` subprocess still
+         * starts (its working directory still exists) but exits non-zero, and
+         * [civictech.demo.beadsmirror.dolt.DoltSqlException] propagates out of
+         * `pollOnce`. Deliberately NOT the external-dependency row that the
+         * reviewer tripped over (computenet-dqj.11) — that one is being
+         * repaired on a sibling branch, and a reproduction built on it would
+         * stop reproducing the moment it lands.
+         *
+         * `.dolt` is then restored so `bd` can go on mutating the workspace.
+         * The poller thread has already exited permanently at that point, so
+         * the mutation made afterwards is one the mirror provably can never
+         * see: the fold under test is frozen, not merely slow.
+         */
+        @Test
+        fun `a dead poll loop is reported to the operator and the frozen fold stops answering 200`() {
+            val idA = workspace.createIssue("Issue A")
+            app = startApp(pollInterval = Duration.ofMillis(50))
+            probe = HttpProbe("http://localhost:${app!!.boundPort}")
+
+            awaitUntil("issue $idA appears on the route") {
+                probe!!.get("/beads/issues/$idA").statusCode() == 200
+            }
+            val frozenCheckpoint = Files.readString(runDir.resolve("checkpoint")).trim()
+
+            val doltDir = workspace.doltRoot.resolve(".dolt")
+            val parked = workspace.doltRoot.resolve(".dolt-parked")
+            Files.move(doltDir, parked)
+            awaitUntil("the poll loop dies on the broken feed") { app!!.pollerFailure != null }
+            Files.move(parked, doltDir)
+
+            // A real mutation the mirror can never catch up with.
+            workspace.run("update", idA, "--status", "in_progress")
+
+            val response = probe!!.get("/beads/issues/$idA")
+            response.statusCode() shouldBe 503
+            val body = Json.parseToJsonElement(response.body()).jsonObject
+            body["mirror"]?.jsonPrimitive?.content shouldBe "frozen"
+            body["frozen_at_checkpoint"]?.jsonPrimitive?.content shouldBe frozenCheckpoint
+            (body["failure"]?.jsonPrimitive?.content?.contains("DoltSqlException") == true) shouldBe true
+            // The stale fold is still served, plainly labelled as stale: it
+            // still says `open`, which bd no longer does.
+            body["stale"]?.jsonObject?.get("status")?.jsonPrimitive?.content shouldBe "open"
+
+            // The list route admits it too, not only the single-issue one.
+            probe!!.get("/beads/issues").statusCode() shouldBe 503
+
+            // ...and the operator got a written record of it, naming the
+            // throwable and the checkpoint the feed stopped at.
+            val died = events.filterIsInstance<PollLoopDied>().single()
+            died.checkpoint shouldBe frozenCheckpoint
+            (died.failure is DoltSqlException) shouldBe true
         }
 
         /** [BeadsMirrorApp.start] against this test's scratch workspace, reporting into [events]. */
