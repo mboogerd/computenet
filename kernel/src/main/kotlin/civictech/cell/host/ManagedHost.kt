@@ -880,26 +880,25 @@ open class ManagedHost(
                     //    `Protocols.Progress` ack completing a wave in
                     //    `CoalescingCombineCell`/`WaveGate` runs `flushReady()` ->
                     //    `outlet.call.propagate(...)` on this thread, so a mediated
-                    //    outlet's `disclosureFilter` evaluates under the *acking*
-                    //    peer, for a delta addressed to every attached observer
-                    //    rather than to that peer. Nothing is fabricated — the
-                    //    frame really did arrive from that peer — but it is not the
-                    //    identity of each recipient's own crossing, and a
-                    //    principal-keyed projection or a `BoundaryDenialSink`
-                    //    record on that outlet will read it as such. It is the
-                    //    counterexample to reading `CompositeCell`'s
-                    //    `denyDisclosure` KDoc ("null — `LocalTrusted` — for an
-                    //    ordinary in-process broadcast") as unconditional.
-                    // The second shape is stated here rather than left to be
-                    // discovered. WHICH principal a fan-out released by one peer's
-                    // ack should carry is 93 I-28 §8's open cross-hop composition
-                    // question in miniature; SEC1 settles only the safe default
-                    // (re-declare at each membrane — `BoundaryPolicy`'s class
-                    // KDoc), and `computenet-usd.4.3` deliberately does not decide
-                    // it. Untested here for the same reason: this task's fixture
-                    // pins the two shapes it does settle (the clamp on a
-                    // bridge-arriving assertion, and the `LocalTrusted` no-op for a
-                    // local one), not a gated organelle behind a mediated outlet.
+                    //    outlet's `disclosureFilter` would evaluate under the
+                    //    *acking* peer, for a delta addressed to every attached
+                    //    observer rather than to that peer.
+                    // The second shape is DECIDED (`computenet-usd.8`, 2026-08-16):
+                    // a fan-out carries `Principal.LocalTrusted`. The acking peer is
+                    // one arm's upstream producer — neither requester nor recipient
+                    // — and the emission has no single rightful principal at all,
+                    // since each attachment that is itself remote is stamped at its
+                    // own ingress a hop further down. The reset lives at the
+                    // fan-out (`FanOutlet.call` runs its broadcast loops under
+                    // `CurrentPeer.with(null)`), NOT here: narrowing this frame
+                    // would also take the unicast reply above, which is genuinely
+                    // addressed to the asking peer and must keep `Peer`. Both
+                    // halves are pinned by
+                    // `civictech.cell.membrane.PeerUnblockedFanOutPrincipalTest`.
+                    // What stays open is per-*recipient* disclosure — 93 I-28 §8
+                    // cross-hop composition, outside SEC1, incompatible with
+                    // `[SEC1-19]`'s single shared verdict as landed
+                    // (`concord/corpus/DISPUTES.md`).
                     //
                     // Non-suspending by construction: `ProtocolSupport.deliver` is
                     // a plain `fun`, so nothing can park inside this frame and

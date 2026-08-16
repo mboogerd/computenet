@@ -120,10 +120,12 @@ object ProjectionRegistry {
  *      [currentPrincipal] only to *label the denial record* — but because a
  *      [Projection] is an opaque `(Any) -> Any?` free to read the ambient
  *      principal, and that principal varies per emission frame rather than per
- *      subscriber: a catch-up unicast runs under the requesting peer, a live
- *      broadcast under `LocalTrusted` or, when a remote ack unblocks it, under
- *      the *acking* peer (`ManagedHost`, `computenet-usd.4.3`, which names
- *      "a principal-keyed projection" as the case it affects). So two
+ *      subscriber: a catch-up unicast runs under the requesting peer, and a
+ *      live broadcast under `LocalTrusted` — including one a remote ack
+ *      unblocks, which ran under the *acking* peer between
+ *      `computenet-usd.4.3` and the scope reset `computenet-usd.8` decided
+ *      (`FanOutlet.call`; that is a rule about the fan-out's scope, not a
+ *      per-recipient regime, which stays open below). So two
  *      subscribers of one outlet can hold state minted under different regimes
  *      — across emissions; **within** one broadcast `[SEC1-19]` shares a single
  *      verdict with every attachment.
