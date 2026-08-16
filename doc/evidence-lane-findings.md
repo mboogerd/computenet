@@ -697,3 +697,184 @@ changes, no `doc/spec/**` edit, no `91-gap-analysis.md` edit, no
 change, and no `DISPUTES.md` entry (its trigger did not fire, above). Two
 tracker items created (`computenet-ulss`, `computenet-3jv2`); no other bead
 touched.
+
+---
+
+## `computenet-umx.1.3` — C-9 reproductions: BS-1 and BS-5 pinned, BS-4 unweakened and passing
+
+Recorded by: `computenet-umx.1.3` (feature `computenet-umx.1` — CHA2). Realizes
+`[CHA2-10]` (BS-1), `[CHA2-13]` (BS-4), `[CHA2-14]` (BS-5), `[CHA2-51]`, and the
+C-9 half of `[CHA2-02]`. Deliverable:
+`kernel/src/test/kotlin/civictech/cell/repro/EffectReplayReproTest.kt`, plus the
+`[CHA2-51]` extension of the `concord/corpus/DISPUTES.md` G-59/C-9 boundary entry.
+
+**Base commit `bf18284`** (`task/computenet-umx.1.3`, cut from
+`feature/computenet-umx.1`, which merges `computenet-umx.1.1`, `.1.2`, `.1.4` and
+`.1.5` onto `main` at `f73fb7f`). Every citation below was re-read at that commit
+by this task. Line numbers drift; symbol names are the durable anchors.
+
+### The adjudication was re-verified, not inherited
+
+`computenet-umx.1.1`'s C-9 verdict above is this task's input, and each of its
+three directions was checked against the code before being acted on:
+
+- **The frontier is landed** — `HostDurability.processedFrontier`,
+  `alreadyProcessed` (the at-or-behind test), `advanceAndJournalFrontier`,
+  `FrontierRecord` (KDoc "G-59, fixes C-9"), folded into the checkpoint payload
+  and restored on recovery. The `PORT_API` branch of `ManagedHost.deliver`
+  consults it and advances beside the delivery. BS-1 pins it and **passes**.
+- **The journaled-source double-fire is fixed** — `installDurableEpochs` puts a
+  journaled cell's outlets on `OutletWaveState.durable(outlet.ref)`
+  (`UUID.nameUUIDFromBytes`, not `randomUUID`), and `restoreOutletWave` carries
+  the epoch across compaction. BS-4 therefore **passes**, unweakened and
+  unannotated.
+- **The baseline exemption is decided, not open** — the `CatchUp.kt` KDoc still
+  records the `Effectful` frontier check as "the only counter observer that does
+  not exempt baselines", and that is now the *decided* rule rather than a hazard:
+  `computenet-yh6.1.3.4` landed `[24-DUR-07]`/`[24-DUR-08]` (spec 24 §Effectful),
+  whose rule (3) is that a PN-2 replay-baseline keeps `[24-DUR-05]` verbatim.
+
+No contradiction with the recorded adjudication was found, so nothing is disputed
+here.
+
+### BS-5's answer, which `[CHA2-14]` asks to be recorded rather than assumed
+
+**Recorded answer: the frontier check does not exempt a baseline, and that is the
+decided behaviour.** A replayed frame arriving at an `Effectful` inlet at or
+behind the restored frontier is suppressed even though PN-2 has stamped it
+`MessageContext.baseline`; a replayed frame *ahead* of the frontier — journal tail
+the sink never acted on — fires. What `[24-DUR-07]` changed is the other half: a
+baseline the sink does act on records its exact `(sourceId, counter)` in the
+sink's own discharged-baseline state (`recordAndJournalBaselineDischarge`) instead
+of advancing the wave-position frontier, because a baseline is anchored at the
+stamped link-install event and advancing a high-water from it would swallow
+genuine live frames below it.
+
+The reproduction had to solve one evidence problem to state that honestly: a
+suppression happens **before** delivery, so the sink's handler never runs and the
+suppressed frame's context is not observable at the sink at all. Asserting only
+"the effect did not re-fire" would leave the antecedent of `[CHA2-14]` unchecked —
+the test would pass identically if the replayed frames had carried no baseline.
+So a plain, non-`Effectful` `ContextRecorder` is co-hosted on the same journal and
+driven under the *same* `(sourceId, counter)` as the sink: it has no frontier
+guard, is replayed through the same `recoverFrom` staging where
+`HostDurability.baselined` stamps every context-carrying frame, and records that
+positions 1 and 2 did arrive baseline-marked. The sink suppressed them anyway.
+
+`[CHA2-46]`'s "unreachable ⇒ write no test" escape did **not** apply: the case is
+reachable through an ordinary crash and replay, with no manufactured counter
+regression.
+
+### BS-4 was expected to fail when CHA2 was filed, and passes
+
+`computenet-umx.1`'s §0 and `[CHA2-13]` both prescribe a standing
+`@ExpectedFailure` owned by KFX for this construction. It is not annotated,
+because `@ExpectedFailure` fails the build when its body passes (`[CHA2-44]`) and
+this body passes: commit `34892d9` landed between CHA2's filing and this task.
+The dispatch's alternative disposition — tag it, record it, patch no kernel code
+(`[CHA2-50]`) — was not needed. The construction itself is untouched: same
+journaled source into an `Effectful` sink on the same host, same crash-and-replay,
+no re-seeding and no narrowing (`[CHA2-47]`, BS-13).
+
+Two assertions beyond "at most once" are deliberate, because "at most once" is
+satisfied by firing **zero** times — the effect-loss direction that this file's
+own `DISPUTES.md` neighbour records as having passed vacuously in `DUR-REPLAY-01`
+until the computenet-61w amendment. Every reproduction here asserts a full
+equality over the external effect log, and each adds a post-recovery delta that
+must land.
+
+### The reproductions discriminate — measured, not asserted
+
+Both mutations were applied to `kernel/src/main/kotlin/civictech/cell/host/HostDurability.kt`,
+run, and reverted; the committed diff contains no kernel main-source change
+(`[CHA2-50]`).
+
+- `installDurableEpochs` neutered (early unconditional `return`): **BS-4 FAILED**
+  `expected:<[1, 2, 3, 4, 5, 6, 7]> but was:<[1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]>`
+  — the exact double-fire the `DISPUTES.md` G-59/C-9 entry recorded. BS-1 and BS-5
+  stayed green, which is right: their sources are not journaled cells.
+- `alreadyProcessed` forced to `false`: **all three FAILED** — BS-1
+  `expected:<[1, 2, 3, 4, 5, 6, 7]> but was:<[1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]>`,
+  BS-5 `expected:<[1, 2, 3]> but was:<[1, 2, 1, 2, 3]>`, BS-4 as above.
+
+One detail of the second mutation is worth recording because it shapes what BS-1
+asserts. Under it, BS-1's two *retransmitted* frames still did not re-fire, so the
+log grew by seven rather than nine: with the frontier disabled, each replayed
+frame fires, and because PN-2 marks it a baseline its firing records a
+`[24-DUR-08]` discharge at that exact position — which then suppresses the
+retransmit of the same position later in the same replay. In other words
+`[24-DUR-08]`'s exact-position set partially masks a frontier regression. BS-1
+therefore also asserts `effectfulSuppressionsDischarged shouldBe 9L`, which is
+what proves all nine journaled frames (seven applied plus two undelivered
+retransmits) really were replayed and really were suppressed by the frontier
+rather than never reaching the guard.
+
+### What "crash mid-drain" is realized as, and its limit
+
+There is no fault-injection rig (`[CHA2-04]`, and this file's "CHA1's rig does not
+exist" section), so a crash is the idiom the landed durability tests use: abandon
+the `SimulationController` and build a fresh one and a fresh `ManagedHost` over the
+same `InMemoryJournal` and the same `CellRef`s. "Mid-drain" is realized concretely
+— `ManagedHost` journals a hosted frame synchronously at intake and delivers it on
+a later scheduler task, so frames pushed and not drained sit in the WAL having been
+acted on by nobody, and the abandoned controller never runs them.
+
+BS-1's undelivered frames are **retransmits of positions 6 and 7**, not novel
+positions. That is a real constraint on what BS-1 pins, stated here rather than
+only in the test: a novel undelivered frame is journal tail that `[24-DUR-05]`
+*requires* to fire on replay, so it would make BS-1's "external effect log
+unchanged in size across replay" clause false against a correct kernel. The
+journal-tail-fires direction is covered instead by BS-5's position 3, and the
+arbitrary-prefix generalisation of it is BS-2 (`[CHA2-11]`), which is rig-gated
+and not this task's.
+
+### Citation, not duplication
+
+`kernel/src/test/kotlin/civictech/cell/durability/` already holds the fixing
+lane's exit tests for all three mechanisms — `EffectfulRecoveryTest` (the
+frontier), `OutletWaveRecoveryTest`/`OutletHighWaterRecoveryTest` (`34892d9`'s
+replay-stable identity) and `EffectfulBaselineGuardTest`
+(`[24-DUR-07]`/`[24-DUR-08]`) — and this suite rewrites none of them. It is the
+evidence lane's own pin, under its own fixtures in its own package, so the two
+suites stay independently verifiable: a change to a fixing lane's exit test must
+not be able to silently reshape a reproduction, or the reverse. The same
+discipline `computenet-umx.1.4` applied to `ShadowOwnershipTest` and
+`computenet-umx.1.5` to `MediateProxyIntegrityTest`.
+
+What the reproductions add beyond those exit tests: BS-1 adds the mid-drain
+retransmit and the suppression-count accounting; BS-4 adds nothing to
+`OutletWaveRecoveryTest`'s mechanism but re-states it as CHA2's own unweakened
+evidence for `[KFX-22]`; BS-5 adds the `ContextRecorder` observation of the PN-2
+stamp on a frame the `Effectful` inlet suppressed, which no existing test makes
+observable.
+
+### `[CHA2-26]` deviation, as adjudicated
+
+Unchanged from `computenet-umx.1.4`'s and `.1.5`'s entries: there is no
+`civictech.testkit.dst` on `main`, so `[CHA1-53]`'s exclusive-payload accounting
+cannot be the detector. Nothing in this suite carries exclusives, so the deviation
+is inert here; detection is the in-process external effect log (`[KFX-24]`) plus
+`SupervisionAccounting.effectfulSuppressionsDischarged`. No end-to-end external
+exactly-once claim is made anywhere in this suite — that ceiling is 93 I-7's and
+belongs to CON1.
+
+### Verification
+
+`./gradlew :kernel:test --tests 'civictech.cell.repro.EffectReplayReproTest' --rerun`
+— `> Task :kernel:test` with no marker, 3 tests, 0 failures, 0 errors.
+`./gradlew :kernel:test --rerun` — BUILD SUCCESSFUL, 1110 tests, 0 failures, 0
+errors, newest JUnit XML timestamp `2026-08-16T12:58:37.120Z`.
+`./gradlew :concord:test --rerun` — BUILD SUCCESSFUL, 254 `PASSED` lines, corpus
+unchanged (no scenario added, no schema change).
+
+### Disposition
+
+Report, do not edit. This task's diff touches this file,
+`kernel/src/test/kotlin/civictech/cell/repro/EffectReplayReproTest.kt` and
+`concord/corpus/DISPUTES.md` (an **extension** of the existing G-59/C-9 boundary
+entry with this suite's test ids, per `[CHA2-51]` — not a duplicate entry, and
+retiring or narrowing nothing, which is `computenet-yh6.1.5`/`[KFX-23]`'s). Zero
+kernel main-source changes (`[CHA2-50]`; the two mutations above were reverted),
+no `doc/spec/**` edit, no `91-gap-analysis.md` edit, no `CONCORDANCE.md` edit, no
+plan-document edit, no concord scenario or schema change. No tracker item created;
+no bead other than `computenet-umx.1.3` touched.

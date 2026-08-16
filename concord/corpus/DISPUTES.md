@@ -570,6 +570,29 @@ would instead suppress live post-recovery traffic as already-acted, that opposit
   `frontier`) rather than by replaying frames compaction removed. Both discriminate
   genuinely: with `installDurableEpochs`/`restoreOutletWave` neutered they fail 20 of 20
   runs on a double-fired effect.
+- **Kernel reproductions (CHA2 evidence lane, `computenet-umx.1.3`, `[CHA2-51]`)**: this
+  entry's construction is now also pinned outside the corpus, in
+  `kernel/src/test/kotlin/civictech/cell/repro/EffectReplayReproTest.kt` — the reproduction
+  suite the milestone plan's CHA2 row asks for, which the concord scenario language cannot
+  express because it carries no crash/replay fault verbs at scenario-authoring level.
+  Three tests, no `@ExpectedFailure` on any of them, and all three observed passing at
+  `bf18284`:
+  `BS-1 a mid-drain crash replays the journal without re-firing or losing an effect`
+  (`[CHA2-10]`, a volatile source and a journaled `Effectful` sink, plus two undelivered
+  retransmits journaled at intake when the crash lands);
+  `BS-4 a journaled source feeding an Effectful sink fires each logical invocation once across a crash`
+  (`[CHA2-13]`, **this entry's own construction**, written unweakened and un-narrowed —
+  CHA2 filed it expecting a standing expected failure and `34892d9` had already fixed it,
+  so its PASS is the evidence `computenet-yh6.1.5`/`[KFX-22]` consumes); and
+  `BS-5 a PN-2 replay-baseline at or behind the restored frontier is suppressed, not exempted`
+  (`[CHA2-14]`, the `[24-DUR-07]`/`[24-DUR-08]` decision of `computenet-yh6.1.3.4`).
+  They discriminate: with `installDurableEpochs` neutered BS-4 fails
+  `expected:<[1, 2, 3, 4, 5, 6, 7]> but was:<[1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]>`
+  — this entry's double-fire, verbatim — and with `alreadyProcessed` forced false all three
+  fail. Reasoning, mutation transcript and the recorded BS-5 answer:
+  `doc/evidence-lane-findings.md` → "`computenet-umx.1.3` — C-9 reproductions". Nothing
+  about this entry is retired or narrowed by that suite; the reconciliation of these rows is
+  `computenet-yh6.1.5`/`[KFX-23]`'s.
 - **Not resolved by this entry**: `DUR-REPLAY-01`'s two-independent-subgraphs construction is
   untouched — the fold into one subgraph this entry's original "Resolves" bullet named as the
   natural consequence is a change to that scenario file, out of this ledger entry's scope.
