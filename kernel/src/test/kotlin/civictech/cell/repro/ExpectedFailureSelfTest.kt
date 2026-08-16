@@ -3,6 +3,7 @@ package civictech.cell.repro
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.extension.ConditionEvaluationResult
@@ -38,7 +39,7 @@ private const val FIXTURE_FILED_AS = "doc/evidence-lane-findings.md#expected-fai
  *
  * ## Why the fixtures carry [SelfTestFixture]
  *
- * Four of them are *designed* to fail, so a direct execution by the ordinary run would
+ * Most of them are *designed* to fail, so a direct execution by the ordinary run would
  * redden the build for no defect. And Gradle does select them directly: measured on
  * 2026-08-16, a full `./gradlew :kernel:test --rerun` with these fixtures unguarded ran
  * `ExpectedFailureSelfTest$PassesUnexpectedly > theFixLanded()` and four siblings as
@@ -101,11 +102,43 @@ class ExpectedFailureSelfTest {
     fun `a reproduction that times out fails the build rather than counting as expected`() {
         val run = execute(TimesOutBeforeItFails::class.java)
 
-        // The failure surfaces as a TimeoutException (the recorded signal, had there been
-        // one, would be demoted to a *suppressed* throwable, which the extension
-        // deliberately does not search) — what matters is that it is a failure and not an
-        // expected-as-passed verdict.
+        // The deadline pre-empts the body, so the recorded token is never thrown at all: the
+        // extension sees an InterruptedException, fails it as an unrecorded signature, and
+        // the timeout wrapper re-reports that as a TimeoutException. What matters is that it
+        // is a failure and not an expected-as-passed verdict, and that nothing was recorded.
+        // The complementary shape — the token thrown *after* the deadline — is
+        // `EmitsItsTokenAfterTheDeadline` below.
         run.value.testEvents().assertStatistics { it.started(1).succeeded(0).failed(1) }
+        run.entries.shouldBeEmpty()
+    }
+
+    @Test
+    fun `a reproduction whose token arrives after the deadline still fails the build`() {
+        val run = execute(EmitsItsTokenAfterTheDeadline::class.java)
+
+        // The other timeout shape, and the one the suppressed-throwable rule is usually
+        // explained by: the body ignores the interrupt and does emit the recorded token, so
+        // the signature MATCHES. Measured 2026-08-16: Jupiter's built-in TimeoutExtension is
+        // registered ahead of an @ExtendWith interceptor, so ExpectedFailureExtension runs
+        // INSIDE it — it matches and swallows the signal, and the timeout wrapper fails the
+        // test afterwards regardless. A hang is a new defect either way [CHA2-43].
+        run.value.testEvents().assertStatistics { it.started(1).succeeded(0).failed(1) }
+
+        // The residue of that ordering, pinned rather than left to be rediscovered: the
+        // reproduction IS recorded, so a standing-report entry is not evidence that a test
+        // passed. If a later change makes the extension outer, this line is what notices.
+        run.entries.single().testId shouldContain EmitsItsTokenAfterTheDeadline::class.java.name
+    }
+
+    @Test
+    fun `an aborted assumption fails the build rather than skipping the reproduction away`() {
+        val run = execute(AbortsItsAssumption::class.java)
+
+        // [CHA2-40] forbids a reproduction being skipped into oblivion, and an assumption is
+        // a skip. It carries no signal, so it lands on the mismatch path — a reproduction
+        // that quietly stops running is exactly the failure mode this mechanism prevents.
+        run.value.testEvents().assertStatistics { it.started(1).succeeded(0).failed(1).aborted(0) }
+        run.value.soleFailureMessage() shouldContain "changed signature"
         run.entries.shouldBeEmpty()
     }
 
@@ -237,6 +270,45 @@ class ExpectedFailureSelfTest {
         fun hangs() {
             Thread.sleep(60_000)
             failAsExpected(RECORDED, "unreachable: the deadline fires first")
+        }
+    }
+
+    /**
+     * BS-15: the second timeout shape. A busy wait ignores the interrupt the deadline sets,
+     * so the body reaches [failAsExpected] and the recorded token really is thrown — unlike
+     * [TimesOutBeforeItFails], where the deadline pre-empts the body and an
+     * `InterruptedException` arrives unsigned instead.
+     */
+    @SelfTestFixture
+    class EmitsItsTokenAfterTheDeadline {
+        @Test
+        @Timeout(value = 100, unit = TimeUnit.MILLISECONDS)
+        @ExpectedFailure(
+            signature = RECORDED,
+            reason = FIXTURE_REASON,
+            owner = FIXTURE_OWNER,
+            filedAs = FIXTURE_FILED_AS,
+        )
+        fun overrunsThenEmits() {
+            val deadline = System.nanoTime() + 300_000_000L
+            while (System.nanoTime() < deadline) { /* busy wait: ignores the interrupt */ }
+            failAsExpected(RECORDED, "the recorded divergence, detected only after the deadline")
+        }
+    }
+
+    /** `[CHA2-40]`: an assumption is a skip, and a reproduction may not be skipped away. */
+    @SelfTestFixture
+    class AbortsItsAssumption {
+        @Test
+        @ExpectedFailure(
+            signature = RECORDED,
+            reason = FIXTURE_REASON,
+            owner = FIXTURE_OWNER,
+            filedAs = FIXTURE_FILED_AS,
+        )
+        fun neverGetsThatFar() {
+            assumeTrue(false, "the environment this reproduction wanted is absent")
+            failAsExpected(RECORDED, "unreachable: the assumption aborts first")
         }
     }
 

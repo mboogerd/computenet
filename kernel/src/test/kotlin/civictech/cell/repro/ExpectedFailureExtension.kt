@@ -36,11 +36,33 @@ import java.lang.reflect.Method
  *
  * - **The cause chain is searched; suppressed throwables are not.** JUnit's same-thread
  *   timeout demotes a real failure to a *suppressed* exception under a `TimeoutException`
- *   (see the long note in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`). Searching
- *   suppressed slots would therefore report "expected failure, as recorded" for a
- *   reproduction that actually hung — and `[CHA2-43]` names a timeout explicitly as a
- *   signature that must fail the build. So a timed-out reproduction fails, even if it
- *   emitted its token before the deadline.
+ *   (see the long note in `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`), so matching on
+ *   a suppressed slot could report "expected failure, as recorded" for a reproduction that
+ *   actually hung — and `[CHA2-43]` names a timeout explicitly as a signature that must fail
+ *   the build.
+ *
+ *   **Where that rule actually bites, measured 2026-08-16 rather than assumed.** Jupiter
+ *   registers its built-in `TimeoutExtension` ahead of any `@ExtendWith` interceptor, so
+ *   this extension runs *inside* the timeout, not outside it, and under the repo's
+ *   same-thread timeout mode it never receives the `TimeoutException` at all. The two
+ *   timeout shapes therefore resolve like this, and **both fail the build**, which is what
+ *   `[CHA2-43]` requires:
+ *
+ *   - the deadline interrupts the body: the body throws `InterruptedException`, which
+ *     reaches path 2 unsigned and fails here; the timeout wrapper re-reports that as a
+ *     `TimeoutException` carrying this extension's diagnostic suppressed;
+ *   - the body ignores the interrupt and emits its token *after* the deadline: the signal is
+ *     matched and swallowed here, and the timeout wrapper then fails the test anyway with a
+ *     bare `TimeoutException`.
+ *
+ *   The residue of that second shape is a reporting one, pinned by
+ *   `ExpectedFailureSelfTest`: the reproduction is recorded in [ExpectedFailureLedger] while
+ *   the build goes red, so **a ledger entry is not proof that a test passed** — read the
+ *   standing report alongside the run's failures, never instead of them. (In a real run the
+ *   entry usually does not even reach the report file: the append takes a `FileLock`, and a
+ *   thread whose interrupt status the deadline just set gets
+ *   `FileLockInterruptionException`, which [ExpectedFailureLedger] swallows by design. Do
+ *   not rely on that accident.)
  * - **An aborted assumption fails too.** `TestAbortedException` is not an error, but
  *   `[CHA2-40]` forbids a reproduction being skipped into oblivion, and an assumption is a
  *   skip. It reaches path 2, carries no signal, and fails.
@@ -181,6 +203,11 @@ data class StandingExpectedFailure(
 /**
  * The per-run ledger of expected failures still standing — `[CHA2-45]`, BS-16: *the residual
  * ledger is an artifact rather than folklore*.
+ *
+ * An entry means *the recorded signature was matched*, which is not quite the same as *the
+ * test passed*: a reproduction that emits its token and then overruns a `@Timeout` is
+ * recorded here and still fails the build (see [ExpectedFailureExtension]'s note on
+ * interceptor ordering). Read this report alongside the run's failures, never instead.
  *
  * Every reproduction that failed as recorded appends one line to a run report file, which
  * `kernel/build.gradle.kts` truncates before the run and prints, with its count, after it.
