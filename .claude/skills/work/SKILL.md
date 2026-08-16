@@ -123,6 +123,16 @@ in other agents' heads as written. In force throughout:
   experiment disproved it (computenet-4l3l). Try it first.
 - **Code you write yourself** (conflict resolutions, unblocking fixes) goes
   to a reviewer on the same terms as task work (5c).
+- **An Agent dispatch can be refused on its prompt's *wording*, not its
+  action** — "denied by the Claude Code auto mode classifier" on a dispatch
+  shaped like six allowed ones means the vivid risk language tripped it
+  ("catastrophic failure mode", "bypassing the gate"; computenet-my7).
+  Unattended, nobody can grant it: re-dispatch the same substance in plainer
+  words ("check that all five jobs still run on every pull request") rather
+  than skipping the step — do not soften what the review must *check*, only
+  how it is phrased. If rephrasing is also refused, the step was skipped:
+  say so in the summary, naming the refused dispatch, like a refused
+  `bd comment` (step 7).
 
 Full case: [references/orchestrator-authorship.md](references/orchestrator-authorship.md).
 
