@@ -18,6 +18,21 @@ sealed interface RebaselineReason {
     data object FirstStart : RebaselineReason
 
     /**
+     * The mirror is starting against a workspace it has mirrored before —
+     * [checkpoint] was persisted by a previous run — and rebuilds from `bd
+     * export` anyway (feature computenet-dqj.5 design amendment 2).
+     *
+     * **Why a restart cannot simply resume.** Nothing persists the projector:
+     * a new process starts with an *empty* [MirrorProjector], so resuming the
+     * feed strictly after [checkpoint] would replay only the commits made
+     * while the mirror was down and leave every pre-checkpoint issue absent
+     * forever. The checkpoint still earns its keep *while running* — it is
+     * what makes incremental resume and [CheckpointGone] truncation detection
+     * work — it just cannot stand in for state the process never kept.
+     */
+    data class Restart(val checkpoint: String) : RebaselineReason
+
+    /**
      * The persisted [checkpoint] fell out of `dolt_log` (history compaction),
      * so the feed could not be resumed and [FeedCondition.CheckpointGone] was
      * raised.
