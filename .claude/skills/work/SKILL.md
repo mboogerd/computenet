@@ -263,7 +263,10 @@ removals failed — neither is "clean sweep"; say which you got.
 filter applied by eye gets forgotten):
 
 ```bash
-bd ready --type=epic --json | jq '[.[] | select(.id != "computenet-wpvy")]'
+bd ready --type=epic --json > "$SCRATCH/ready-epics.json"   # ~43KB inline — overflow
+jq '[.[] | select(.id != "computenet-wpvy")
+        | {id, title, priority, assignee, updated_at}]' "$SCRATCH/ready-epics.json"
+# full descriptions stay in the file — read the chosen epic's from there
 .claude/skills/work/scripts/claim-epic.sh <the id you selected>
 ```
 
