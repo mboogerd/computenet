@@ -1189,3 +1189,102 @@ The bounded-read schema change (`read-state` step, `wave-plane-unchanged` and
   policy and a `denial-count` check. (a) alone leaves the behaviour
   unexpressible; (b) alone leaves it uncoverable. With both, author
   `43-DISCLOSURE-01.yaml` as described.
+
+---
+
+## SEC1 (wire crossing): BS-16 filed, not covered — same zero-id chapter, plus no peering surface
+
+### BS-16 (the bridge crossing consults the Exposure's `BoundaryPolicy`, keyed on the ingress-stamped `PeerId`) — **`spec-gap` (no requirement id) + `schema-gap`**
+
+- **Category**: `spec-gap` (id-authoring backlog) first, `schema-gap` second —
+  the same pair as the BS-8 entry above, for the same chapter. Filed per
+  `[SEC1-30]`: a SEC1 concord candidate lands as a kernel test **plus** an entry
+  here, never as an invented `covers:` id and never as a hand-edit of the
+  generated `doc/spec/CONCORDANCE.md`.
+- **Behaviour it would carry** (epic `computenet-usd`, feature
+  `computenet-usd.4`, BS-16 plus the wire halves of BS-8/BS-9; spec
+  `40-distribution/43-security.md` header and §"The three seams",
+  `40-distribution/41-location.md` §Transport point 4, and
+  `90-roadmap/93-feature-interactions.md` I-28 §4.1/§6): *Given two peers joined
+  over a bridge and a mediated exposure declaring `disclosure = Project(p)`,
+  when the remote peer links across that bridge and receives the `onLinked`
+  catch-up plus a live delta, then both are filtered by the SAME transform, the
+  `Principal` the predicate sees at the remote-triggered evaluation is
+  `Peer(<the ingress-stamped PeerId>, TransportVouched)` — never re-derived and
+  never a stronger claim — and the wire frame form is unchanged (ids-only, with
+  signature/peer/counter as envelope fields).*
+- **Scenario it would have been**: `43-BOUNDARY-PEER-01.yaml`, near
+  `concord/corpus/41-location/`, in a `concord/corpus/43-security/` directory
+  that does not exist.
+- **Why it cannot be checked honestly today — three reasons.**
+  1. **No id to cover**, exactly as for BS-8: `43-security.md` mints no
+     `[NN-SLUG-nn]` ids, so an authored scenario would carry either a dangling
+     `covers:` (which fails `./gradlew :concord:check`) or none (an orphan).
+     Minting `[43-*]` ids is documentation maintenance, explicitly **not**
+     authorized by the epic that produced this behaviour.
+  2. **No corpus surface for a membrane** — the BS-8 entry's reason 2, verbatim:
+     the schema has no vocabulary for a `CompositeCell` exposure, a
+     `BoundaryPolicy`, a `ProjectionId` or a per-boundary denial counter.
+  3. **No corpus surface for a peering.** BS-16 is about *identity at a
+     crossing*, so it needs two peers, a bridge between them, and an assertion
+     about which `Principal` a predicate observed. The `dist` profile can place
+     replicas on separate hosts, but nothing in the scenario schema declares a
+     `Peering.Side`, an admitted `PeerId`, or reads back the principal a
+     boundary evaluated — and the last of those is not a state check at all: it
+     is an observation of *what the runtime knew during one evaluation*.
+- **What was NOT done instead** (the point of filing): no scenario was authored
+  over a cross-host link asserting only that a projected feed arrives projected.
+  That would pass, would read as coverage of BS-16 in `CONCORDANCE.md`, and
+  would assert nothing about identity — which is the entire behaviour. The
+  behaviour text was likewise not weakened to drop its principal half.
+- **What is not lost.** The behaviour is pinned implementation-side, by name, in
+  `kernel/src/test/kotlin/civictech/cell/wire/BridgeBoundaryPolicyTest.kt`, over
+  two `Peering.Side`s joined by `Peering.loopback` under a
+  `SimulationController`:
+  - `BS-16 loopback - catch-up and live deltas cross projected, and the catch-up
+    sees Peer(q, TransportVouched)` — the whole behaviour on the loopback path,
+    with the catch-up unicast and every live delta encoded/decoded across the
+    real bridge cells before the assertions read them;
+  - `BS-9 wire half - Deny discloses nothing across the bridge yet the peering
+    stays usable` — the `disclosure = Deny` twin: link established, no catch-up
+    and no live delta across the wire, metadata-plane traffic still delivered;
+  - `Deny suppressions on this path move the exposure's denial counter and
+    restart nothing` — the accounting and the BS-14 not-a-fault half.
+  What this filing forgoes is the *cross-implementation* obligation: a second,
+  non-kernel binding of the model would not be held to BS-16 by the corpus.
+- **Resolves**: (a) an id-authoring pass over `43-security.md`; (b) a membrane
+  surface in the scenario schema (BS-8's item (b)); **and** (c) a peering
+  surface — a scenario-declarable peer boundary plus a check that can read the
+  `Principal` a boundary predicate evaluated under. All three are needed:
+  without (c), (a)+(b) can express a projected crossing but not whose it was.
+
+### Residual measured while pinning BS-16: a `PORT_PROTOCOL` frame carries no ambient peer
+
+Not a dispute about a scenario — a **kernel gap** found by the BS-9 wire-half
+work and recorded here so it is not re-discovered.
+
+`BridgeIngressCell` stamps the authenticated `PeerId` onto every decoded
+`HostedPortInvocation`, whatever its type. `ManagedHost`, however, installs
+`CurrentPeer.with(hostedInvocation.peer)` on its **`PORT_MANAGEMENT` branch
+only**. So `currentPrincipal()` answers `LocalTrusted` for a `PORT_PROTOCOL`
+delivery that genuinely came off the wire, and
+`BoundaryPolicy.protocolAuthority` — whose filter short-circuits on
+`LocalTrusted` by design (93 I-28 §4.2, "local crossings carry `LocalTrusted`
+and every predicate is a no-op") — does not clamp, floor or throttle a
+*remotely* asserted attention level that arrived over a bridge. Measured: an
+`Attention(HIGH)` frame crossing `Peering.loopback` into an exposure declaring
+`ceiling = LOW` is applied at `HIGH`.
+
+Consequence for `[SEC1-18]`/BS-9's wire half: the "no disclosure, link still
+usable" half holds across the bridge and is tested; the "arriving clamped"
+half does **not** hold, and is pinned as it currently behaves — with a control
+proving the ceiling itself is live the moment the identity is ambient — by
+`KNOWN GAP - a ceiling does not clamp an attention assertion arriving over the
+bridge` in `BridgeBoundaryPolicyTest.kt`.
+
+The fix is one line at `ManagedHost`'s `PORT_PROTOCOL` delivery branch (run it
+under `CurrentPeer.with(hostedInvocation.peer)`, as its `PORT_MANAGEMENT`
+sibling does). It was not taken by `computenet-usd.4.3`, whose file claim
+excludes `ManagedHost.kt` — held concurrently by `computenet-yh6.1.3.4`. When
+it lands, the KNOWN GAP test fails by construction and folds back into the BS-9
+wire-half test.
