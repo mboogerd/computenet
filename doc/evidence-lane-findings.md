@@ -889,3 +889,244 @@ kernel main-source changes (`[CHA2-50]`; the two mutations above were reverted),
 no `doc/spec/**` edit, no `91-gap-analysis.md` edit, no `CONCORDANCE.md` edit, no
 plan-document edit, no concord scenario or schema change. No tracker item created;
 no bead other than `computenet-umx.1.3` touched.
+
+---
+
+## `computenet-umx.1.7` — CHA2 integration gate: suite green, ledger reconciled, hand-off for KFX (BS-16 end-to-end)
+
+Recorded by: `computenet-umx.1.7` (feature `computenet-umx.1` — CHA2). Realizes
+`[CHA2-50]`, `[CHA2-52]`, the end-to-end half of `[CHA2-45]` (BS-16 against real
+reproductions, not the self-test stubs), and this hand-off. Non-goal, honoured:
+no new reproductions, no `DISPUTES.md` retirement or narrowing (`computenet-yh6.1.5`'s
+`[KFX-23]`), no unblocking of the rig-gated sweep sibling, no kernel or corpus
+changes.
+
+**Base commit `ff7ccb5`** ("Merge computenet-umx.1.3"), which carries sibling
+tasks `computenet-umx.1.1`, `.1.2`, `.1.3`, `.1.4` and `.1.5` merged onto `main`
+at `f73fb7f`. Merge-base with `main`, computed inside this worktree: `f73fb7f`
+(`git merge-base origin/main HEAD` — unchanged, confirming no later `main`
+commits landed between dispatch and this run). This task's own diff is confined
+to this file; no other path changed.
+
+### 1. Gates run, with proof of execution
+
+Every command below was run in the foreground, sequentially (no concurrent Gradle
+invocation from this task), with `--rerun`/`--rerun-tasks` so the relevant test task
+is provably not a cached replay. Full logs kept in this session's scratchpad; the
+lines quoted here are copied verbatim from them.
+
+- **`./gradlew :kernel:test --tests 'civictech.cell.repro.*' --rerun`** —
+  `BUILD SUCCESSFUL in 6s`; `27 actionable tasks: 12 executed, 15 from cache`.
+  `> Task :kernel:test` at line 56 carries no `UP-TO-DATE`/`FROM-CACHE` marker (it
+  ran). 26 `PASSED`, 0 `FAILED`. Freshest `repro`-package JUnit XML timestamp:
+  `2026-08-16T13:23:13.955Z`.
+- **`./gradlew :kernel:test --rerun`** — `BUILD SUCCESSFUL in 44s`;
+  `27 actionable tasks: 2 executed, 25 up-to-date` (the 2 executed are
+  `:kernel:test` and `:kernel:reportExpectedFailures`; everything else — compile,
+  ksp, resources — was legitimately unchanged since the prior run seconds earlier,
+  not a stale replay of the test task itself). `> Task :kernel:test` at line 56, no
+  marker. JUnit XML totals across `kernel/build/test-results/test/*.xml`: **1110
+  tests, 0 failures, 0 errors**, newest timestamp `2026-08-16T13:24:17.865Z`. 1101
+  `PASSED` lines, 0 `FAILED` in the console log.
+- **`./gradlew :concord:test --rerun`** — `BUILD SUCCESSFUL in 4s`;
+  `24 actionable tasks: 2 executed, 2 from cache, 20 up-to-date`. `> Task
+  :concord:test` at line 55, no marker. 254 `PASSED`, 0 `FAILED` — corpus untouched
+  by CHA2 (no scenario, no schema change; verified in §2 below), so this count
+  matches `computenet-umx.1.3`'s own recorded 254.
+- **`./gradlew :demo:exchange:test --rerun`** — `BUILD SUCCESSFUL in 8s`;
+  `30 actionable tasks: 4 executed, 4 from cache, 22 up-to-date`. `> Task
+  :demo:exchange:test` at line 73, no marker. 14 `PASSED`, 0 `FAILED`.
+- **`./gradlew test --rerun-tasks`** (repository-wide; `--rerun-tasks` rather than a
+  single `--rerun` because this is the whole-repo gate) — `BUILD SUCCESSFUL in 5m
+  45s`; **`83 actionable tasks: 83 executed`** — every task in the build actually
+  ran, the strongest proof available. 1952 `PASSED`, 0 `FAILED` across the whole
+  repository. `:kernel:test` runs at line 1646 of this log, part of the same
+  all-executed build.
+
+No gate failed. No gate's proof is a cached replay standing in for a real run —
+the two lightest gates (`:concord:test`, `:demo:exchange:test`) show `up-to-date`
+only on unrelated upstream tasks (compile, ksp, resource processing) that
+genuinely had nothing to redo between consecutive runs seconds apart; the test
+task itself carries no cache marker in any of the five runs, and the fifth run
+forced literally everything.
+
+### 2. The expected-failure ledger, end-to-end against real reproductions
+
+`./gradlew test --rerun-tasks`'s own `reportExpectedFailures` output (identical in
+all three runs that exercise the full `:kernel:test` — the repro-only run, the
+full `:kernel:test` run, and the repository-wide run) reads:
+
+```
+Standing expected failures (@ExpectedFailure): 2
+  - civictech.cell.repro.ExclusiveDischargeReproTest.BS-8 an Owned nested in a data-class parameter escapes a shadow-suppressed discharging proxy  [owner computenet-ulss, signature CHA2-BS-8]
+      reason:  an Owned nested in a plain data-class parameter crosses a shadow-suppressed discharging proxy undischarged: carriesExclusive walks type arguments only, and Proxy.discharge has no branch for an arbitrary payload object
+      filedAs: doc/evidence-lane-findings.md#c-11--shadow-suppression-drops-exclusives
+  - civictech.cell.repro.ExclusiveDischargeReproTest.BS-9 a non-Effectful cell serving an effect-carrying contract is shadowed without suppression  [owner computenet-3jv2, signature CHA2-BS-9]
+      reason:  Shadow.spawn's guard is `if (cell is Effectful)`, so a non-Effectful cell serving an @Contract(effect = true) inlet is shadowed with no suppression at all and acts on the world a second time; the decided cut (93 I-17 / G-32) is the contract bit, which kernel reads nowhere
+      filedAs: doc/evidence-lane-findings.md#c-11--shadow-suppression-drops-exclusives
+```
+
+**Reconciled: this matches the standing findings above exactly — count (2), reasons
+(verbatim) and owners (`computenet-ulss` for BS-8, `computenet-3jv2` for BS-9), as
+recorded under `computenet-umx.1.4`'s "Owners filed: one bead per residual" and
+the C-11 adjudication's "Residual 1"/"Residual 2" sections.** No mismatch to fix,
+in either direction — this file was not touched to make the ledger agree, and no
+reproduction's assertions were touched either.
+
+This is the **real, non-self-test** ledger: `ExpectedFailureSelfTest`'s own
+fixtures (`ExpectedFailureSelfTest.kt`) are internal proof of the extension's
+inversion behaviour (BS-14/BS-15) and are excluded by construction — each fixture
+class carries a project-local `@SelfTestFixture` annotation whose
+`SelfTestFixtureCondition` (an `ExecutionCondition`) only admits the class while
+`SelfTestFixtures.isDriving` is raised, which happens solely inside the nested
+`EngineTestKit.engine("junit-jupiter")` execution the outer self-test drives —
+never during the ordinary `:kernel:test` discovery, which has no way to interpret
+an inverted verdict (deliberately not `@Disabled`/a tag exclusion, which is what
+`[CHA2-40]` forbids for reproductions and the fixture file states explicitly it
+avoids even on a fixture). Their `@ExpectedFailure` uses never reach
+`ExpectedFailureLedger`'s report during a real run. The 2 above are the
+only two `@ExpectedFailure`-annotated production reproductions in the repository —
+confirmed by `grep -c '^\s*@ExpectedFailure($' kernel/src/test/kotlin/civictech/cell/repro/*.kt`:
+zero in every file except `ExclusiveDischargeReproTest.kt` (2 — BS-8, BS-9, the
+two above) and `ExpectedFailureSelfTest.kt` (8 — the self-test fixtures, excluded
+from real runs as above). `BS-4` (`EffectReplayReproTest.kt`) and `BS-10`
+(`DenialDischargeReproTest.kt`) each merely *mention* `@ExpectedFailure` in KDoc
+prose narrating that they were originally expected to need the annotation and
+turned out not to (recorded under `computenet-umx.1.3`/`.1.5` above) — neither
+file carries an actual invocation.
+
+### 3. Boundaries verified — `git diff f73fb7f HEAD` (merge-base with `main`)
+
+- **`[CHA2-50]` zero kernel main-source edits**: `git diff --stat f73fb7f HEAD --
+  kernel/src/main` is empty. The only `kernel/` paths in the diff are
+  `kernel/build.gradle.kts` (the `reportExpectedFailures` task and its
+  `finalizedBy`/`doFirst` wiring — build configuration, not source) and eight
+  files under `kernel/src/test/kotlin/civictech/cell/repro/`.
+- **`[CHA2-51]` zero concord scenarios or schema changes, `DISPUTES.md`
+  extension only**: `git diff --stat f73fb7f HEAD -- concord/schema` is empty;
+  the only path under `concord/` in the diff is `concord/corpus/DISPUTES.md`
+  (+23 lines), and reading that diff (recorded under `computenet-umx.1.3`'s
+  entry above) shows it is an appended bullet under the existing "RESOLVED"
+  heading — no new heading, no new scenario file, no schema change.
+- **`[CHA2-03]` zero `doc/spec/**`, `CONCORDANCE.md`, `91-gap-analysis.md` or
+  plan-document edits**: `git diff --stat f73fb7f HEAD -- doc/spec` is empty.
+  The only `doc/` path in the diff is this findings file.
+- **`[CHA2-30]` zero C-12 reproductions**: `C12AdjudicationRecordTest.kt`
+  contains no `@Test` whose name or body constitutes a reproduction and no
+  `@ExpectedFailure` annotation anywhere in the file (`grep -n '@Test\|@ExpectedFailure'`
+  shows six plain `@Test`s, each asserting over a checked-in artifact — the gap
+  row's own text, `D-C12.md`'s presence, `21-REBASE-01.yaml`'s `covers:` id, the
+  `DISPUTES.md` RESOLVED heading, this file's own out-of-scope naming of G-43/G-42,
+  and the absence of a C-12 reproduction in the `repro` package itself). No
+  kernel behaviour is exercised; this is exactly the documentation-of-record
+  shape `computenet-umx.1.1`'s entry above specifies.
+- No generated/build output in the diff (`kernel/build.gradle.kts` is
+  hand-written build configuration, not generated output); no `gen/` change.
+
+No violation found. Nothing was handed back to an owning task.
+
+### 4. `[CHA2-52]` — no gate regressed relative to `main`
+
+The four module gates and the repository-wide gate above are the whole of what
+`main` itself runs for this feature's paths; §1 shows all five green with fresh
+execution. Nothing in this task's own diff (confined to this file) can regress a
+gate by construction, and nothing in the feature's cumulative diff (§3) touches
+`kernel/src/main`, `gen/`, or the concord corpus in a way that could change a
+scenario's or a kernel test's outcome.
+
+### 5. What was adjudicated fixed since the feature was filed
+
+Recorded in full above, under each rule's own section; consolidated here for the
+reader who wants the delta rather than the derivation:
+
+- **C-9 journaled-source double-fire** — fixed by `34892d9`
+  (`computenet-yh6.1.2`, "A recovered outlet re-emits under replay-stable wave
+  identity", PR #15): a durable outlet's `sourceId` became ref-derived
+  (`OutletWaveState.durable`) instead of random. `computenet-umx.1.3`'s BS-4
+  pins this unweakened and it passes.
+- **C-11 boundary-denial silent drop** — fixed by `ab69412`
+  (`computenet-usd.2`, "Exclusive payloads are discharged exactly once on every
+  `BoundaryPolicy` denial path"), extended by `1b9653b` and by this feature's own
+  base commit `46ed020`. `computenet-umx.1.5`'s BS-10 pins this unweakened and it
+  passes.
+- **C-9 baseline exemption, decided rather than left a hazard** — `[24-DUR-07]`/
+  `[24-DUR-08]` landed by `computenet-yh6.1.3.4`: a PN-2 replay-baseline a sink
+  acts on records its own discharged-baseline state rather than advancing the
+  wave-position frontier, so a baseline at or behind the frontier is suppressed,
+  not exempted. `computenet-umx.1.3`'s BS-5 records this as the recorded answer,
+  not an assumed one, and it passes.
+- **C-12 RESTART aliasing** — adjudicated genuinely resolved, D-C12, before this
+  feature was filed; recorded, not reproduced, by `computenet-umx.1.1`'s entry
+  and pinned as documentation-of-record by `C12AdjudicationRecordTest`.
+
+### 6. Which pins pass (the suite's green half)
+
+`BS-1` (frontier suppression, C-9 core), `BS-4` (journaled-source double-fire,
+now fixed), `BS-5` (baseline exemption, now decided), `BS-7`/`BS-12` (discharging
+proxy, C-11 core, plus the loud missing-descriptor failure), `BS-10` (boundary
+denial, now fixed), `BS-11` (ADMIT/dead-letter discharge baseline), and the
+documentation-of-record `C12AdjudicationRecordTest` (C-12, closed). All pass
+unweakened, unannotated, with no manufactured divergence — every one of them was
+originally filed expecting to reproduce a failure and instead pins a fix that
+landed on `main` between the feature's filing (2026-08-08) and each task's own
+run.
+
+### 7. Which expected failures stand, with owners (the suite's red-marked half)
+
+Exactly the two in §2: **BS-8** (`Owned` nested in a data-class parameter escapes
+a shadow-suppressed discharging proxy — `Proxy.discharge` has no branch beyond
+`Map`/`Iterable`/`Array`), owner **`computenet-ulss`** ("Widen the exclusive bit
+and `Proxy.discharge` reach to nested exclusives, 93 I-6/I-8, C-11 residual 1");
+and **BS-9** (a non-`Effectful` cell serving an effect-carrying `@Contract` is
+shadowed without suppression — `Shadow.spawn`'s guard reads only `cell is
+Effectful`), owner **`computenet-3jv2`** ("Shadow suppression cuts at
+`@Contract(effect=true)`, not at `Cell is Effectful`, 93 I-17/G-32, C-11 residual
+2). Both beads were filed by `computenet-umx.1.4` and both carry the instruction
+that the fix must remove the `@ExpectedFailure` annotation and keep the test —
+`[CHA2-44]` makes the build fail the moment either reproduction starts passing.
+
+### 8. What remains rig-gated — the open residual this task does not solve
+
+`computenet-umx.1.6` (sweeping BS-2/BS-3/BS-6/BS-17 and the **strict** form of
+`[CHA2-26]`) is **blocked**: CHA1's DST rig (`civictech.testkit.dst` —
+`CrashFault`, `JournalFault`, `RestartAtFrontierFault`, seed capture/replay/
+shrink, exclusive-payload accounting) does not exist on `main`, as recorded
+above under "CHA1's rig does not exist, and five CHA2 clauses are gated on it".
+Re-verified by this task: `grep -rn 'FaultPlan\|CrashFault\|JournalFault\|RestartAtFrontierFault\|DstRun\|DstReplay\|testkit.dst' --include='*.kt' .`
+still returns zero matches at this branch's tip, and epic `computenet-umx` (CHA1)
+still has no rig-building child. This is the recorded scheduling decision of the
+unattended `/work` session (2026-08-16, on `computenet-umx.1`): proceed on
+`.1`-`.5` plus `.7`, leave `.6` blocked pending CHA1. **Consequence, stated
+explicitly again here so this hand-off does not read as a clean close: CHA2 does
+not meet its own acceptance criteria on this branch.** The five clauses named in
+that section (`[CHA2-11]`/BS-2, `[CHA2-12]`/BS-3, `[CHA2-15]`/BS-6, `[CHA2-47]`/
+BS-17, and the strict form of `[CHA2-26]` across BS-7..BS-12) remain
+unsatisfiable until CHA1 ships its rig. This is not this task's to fix or paper
+over — it is named so `computenet-yh6.1.5` and any later reviewer see it as a
+known, recorded gap rather than an oversight.
+
+### 9. What `computenet-yh6.1.5` (`[KFX-22]`) consumes from this hand-off
+
+- Two owned, standing, unweakened expected failures to flip green: `computenet-ulss`
+  (BS-8) and `computenet-3jv2` (BS-9) — neither is KFX's own scope
+  (`computenet-yh6.1`'s closing feature already names C-11 out of scope), but
+  both are cross-referenced here so KFX's closing review knows the C-11 side of
+  the ledger is accounted for and not silently dropped.
+  `[CHA2-44]`/`[CHA2-43]` mean either bead's fix must remove the annotation and
+  keep the test; a signature change instead of a fix reddens the build honestly.
+- Confirmation that KFX's own scope (C-9, source identity under replay) is
+  **already closed on `main`** by `34892d9`, `computenet-yh6.1.3.4` and
+  `computenet-yh6.1.3.5` — `computenet-yh6.1.5` closes the epic on that basis, not
+  on any further CHA2 deliverable.
+- The recorded, open scheduling gap: `computenet-umx.1.6`'s rig-gated sweep, named
+  in §8, which is CHA1's to unblock, not KFX's and not this hand-off's to solve.
+
+### Disposition
+
+Report, do not edit any other file. This task's diff touches only this file
+(`doc/evidence-lane-findings.md`) — no kernel, `gen/`, `concord/`, or `doc/spec/`
+change; no generated/build output. One cross-bead write, authorized by this
+bead's own acceptance criteria: a summary comment on `computenet-umx.1` (posted
+via `bd comment computenet-umx.1 --file <path>`, per the dispatch's explicit
+authorization). No other bead touched; `computenet-umx.1` itself is not closed,
+re-prioritised, reassigned or re-parented by this task.
