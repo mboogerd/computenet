@@ -1,98 +1,118 @@
-# WHY THIS IS STILL TWO SUBGRAPHS, and why that is no longer the reason it says
-# below (computenet-yh6.1.5.2, `[KFX-23]`).
+# WHY THIS IS NOW ONE SUBGRAPH (computenet-yh6.1.9, re-attempting the fold
+# `computenet-yh6.1.5.2`/`[KFX-23]` measured and deferred).
 #
 # The two-subgraph split was originally load-bearing: a journaled source feeding an
 # `Effectful` sink DOUBLE-FIRED on recovery, because the replayed re-emission carried
 # a freshly-minted random outlet identity the sink's restored frontier could not
 # match. That is fixed (`34892d9`, `24-DUR-04` ref-derived outlet identity) and the
 # boundary is retired — see `concord/corpus/DISPUTES.md`'s G-59/C-9 entry, which the
-# corpus asserts head-on in `DUR-SRCID-01`/`DUR-SRCID-02`. So the split is NOT kept
-# because the folded shape misbehaves.
+# corpus asserts head-on in `DUR-SRCID-01`/`DUR-SRCID-02`.
 #
-# The fold was attempted here and measured, not argued about. Folded to one subgraph
-# — this file's `journal-set-source` feeding BOTH the data view and the effect-sink,
-# so one replayed emission stream is re-applied idempotently at the view and
-# suppressed as already-acted at the sink at once — the durability half passes 20 of
-# 20 runs (`effect-count(esink, exactly: 1)`, `no-dead-letters`). What fails, 20 of
-# 20, is `incremental-equals-batch(dview)`: `source type 'journal-set-source' has no
-# oracle fold`. The harness-side `BatchOracle.sourceFold` models `set-source` and not
-# its durable binding, so a view fed by a journaled source has no batch oracle to be
-# compared against (`DUR-SNAPTAIL-01` sidesteps the same gap by asserting
-# `views-converge` against a twin). Since `incremental-equals-batch` is exactly how
-# this scenario carries the `24-DUR-01`/`24-DUR-02` data-recovery half, folding would
-# trade a durability assertion for nothing.
+# `computenet-yh6.1.5.2` drove the fold rather than arguing about it and found the
+# durability half green 20 of 20 while `incremental-equals-batch(dview)` failed 20 of
+# 20 on `source type 'journal-set-source' has no oracle fold` — a harness limit, not a
+# durability residual. `computenet-yh6.1.9` taught `BatchOracle.sourceFold` the durable
+# set binding: a `journal-set-source` IS the same `SetCell`, and the journal is a
+# write-path tee, not a semantic difference — `ManagedHost`'s intake appends every
+# accepted invocation write-ahead inside the same `dataLock` that stages it, so journal
+# order = acceptance order and the replayed history IS the accepted-op history the
+# oracle folds. With that, both halves of this scenario are assertable on one graph.
 #
-# So: shape retained for a harness reason, not a kernel one. Teaching the oracle the
-# durable set bindings and re-attempting the fold is `computenet-yh6.1.9`.
+# WHAT THE FOLD BUYS. One `journal-set-source` feeds BOTH the volatile data view and
+# the journaled `effect-sink`, so a single replayed emission stream has to be
+# re-applied idempotently at the view and suppressed as already-acted at the sink at
+# the same time — the two halves are no longer permitted to be true of different
+# streams.
+#
+# WHAT THE FOLD DROPPED, AND WHY. The pre-fold scenario snapshotted `dview` before the
+# crash and restored it afterwards, because its data source was volatile and died with
+# the host. A journaled source replays into the rebuilt volatile view instead, so
+# keeping the snapshot/restore would give `dview` a SECOND, independent route back to
+# its pre-crash state, and `incremental-equals-batch(dview)` could no longer tell
+# whether the replay reached the view at all. Dropped, which makes the check strictly
+# stronger: `dview` holds `{k1,k2}` at the end only because `recoverFrom` replayed the
+# frame tail into a rebuilt graph.
+#
+# LIMIT OF THE `24-DUR-02` COVERAGE HERE, stated rather than implied: nothing in this
+# script checkpoints, so it reads `24-DUR-02`'s **rebuild + replay-the-frame-tail** half
+# directly and its restore-the-latest-checkpoint half not at all. That half is
+# `DUR-SNAPTAIL-01`'s and `DUR-ATOMIC-01`'s, both of which checkpoint journaled cells.
+# A checkpoint could not be added here without re-adding the view's own snapshot:
+# compaction removes exactly the frames a volatile view has no other record of.
 #
 # Exactly-once here is a statement about the in-process effect log this driver's
 # `effect-sink` writes. The external actuator's idempotency is 93 I-7's stated
 # ceiling and CON1's territory (`[KFX-24]`); nothing in this file claims it.
 id: DUR-REPLAY-01
-title: Crash, journal replay, and continue — the data view converges to batch and the effectful sink fires once per key
+title: Crash, journal replay, and continue — one replayed stream re-applies at the data view and is suppressed at the effectful sink
 covers: [24-DUR-01, 24-DUR-02, 24-DUR-05]
 profile: dur
 kind: example
 narrative:
   given: >
-    a durable host carrying two independent subgraphs — a data source feeding a
-    view, and a (volatile) source feeding a journaled effectful sink whose every
-    added element fires one externally-observed effect — plus a journal
-    controller. The effectful sink journals a processed-frontier per applied
-    invocation (spec 24-DUR-05); the data view is recovered from its own
-    pre-crash snapshot (the checkpoint half of durable recovery).
+    a durable host carrying ONE subgraph of mixed durability — a journaled source
+    feeding both a volatile view and a journaled effectful sink whose every added
+    element fires one externally-observed effect — plus a journal controller. The
+    source's accepted ops tee to the WAL; the view is volatile (never journaled,
+    never replayed on its own account, spec 24-DUR-01/24-DUR-03) and is rebuilt
+    empty; the effectful sink journals a processed-frontier per applied invocation
+    (spec 24-DUR-05).
   when: >
-    after some adds on both subgraphs, the whole durable host crashes and is
-    rebuilt from its surviving journal (recoverFrom replays the frame tail), then
-    more adds are applied and the graph is driven to quiescence
+    after some adds, the whole durable host crashes and is rebuilt from its
+    surviving journal (recoverFrom replays the frame tail, driving the rebuilt
+    source to re-emit every pre-crash element), then a further add is applied and
+    the graph is driven to quiescence
   then: >
-    the data view equals the batch fold of every add it accepted, AND the
-    effectful sink fired exactly once for each key — the replayed pre-crash
-    invocations were dropped at or behind the sink's restored processed-frontier
-    rather than re-driving the effect
+    the ONE replayed emission stream is read two ways at once — the data view
+    equals the batch fold of every add the source accepted, having been refilled
+    solely by that replay, AND the effectful sink fired exactly once for each key,
+    the replayed pre-crash invocations having been dropped at or behind the sink's
+    restored processed-frontier rather than re-driving the effect
 graph:
   cells:
-    # data subgraph — recovers its view state across the crash (raw snapshot/restore)
-    - {id: dsource, type: set-source, host: dur}
+    # the journaled source: its accepted ops tee to the WAL, and its outlet's emission
+    # epoch is ref-derived, so the replayed re-emission reproduces the (sourceId,
+    # counter) pairs the pre-crash run emitted (24-DUR-04)
+    - {id: dsource, type: journal-set-source, host: dur}
+    # the data arm — VOLATILE (24-DUR-01/03): rebuilt empty on the crash and never
+    # replayed on its own account. Everything it holds afterwards arrived as the
+    # journaled source's replayed re-emission, which is what makes the
+    # `incremental-equals-batch` below actually read the replay.
     - {id: dview, type: set-view, host: dur}
-    # effect subgraph — the source is VOLATILE (dies on crash, re-delivered nothing,
-    # 24-DUR-03), so the sink recovers from its own journaled frames + restored
-    # processed-frontier alone. NOTE (computenet-yh6.1.5.2): a volatile source is no
-    # longer *required* for exactly-once here — a journaled one feeding this sink is
-    # now safe (`24-DUR-04`, `DUR-SRCID-01`/`-02`). See the header comment for why the
-    # shape is nevertheless kept.
-    - {id: esource, type: set-source, host: dur}
+    # the effect arm — journaled Effectful sink: its restored processed-frontier must
+    # suppress the very same replayed stream the view must re-apply
     - {id: esink, type: effect-sink, host: dur}
     # the crash/restart handle: despawning it crashes and recovers the durable host
     - {id: ctl, type: journal, host: dur}
   links:
     - {from: dsource, to: dview}
-    - {from: esource, to: esink}
+    - {from: dsource, to: esink}
 script:
-  - {type: apply, on: dsource, op: add, value: alpha}
-  - {type: apply, on: dsource, op: add, value: beta}
-  - {type: apply, on: dsource, op: add, value: gamma}
-  - {type: apply, on: esource, op: add, value: k1}
-  - {type: apply, on: esource, op: add, value: k2}
+  - {type: apply, on: dsource, op: add, value: k1}
+  - {type: apply, on: dsource, op: add, value: k2}
   - {type: quiesce}
-  # checkpoint the volatile data view's state (its half of recovery is a snapshot)
-  - {type: snapshot, on: dview, as: dv}
   # CRASH + journal replay: discard every instance, rebuild with the same refs,
-  # recoverFrom the surviving journal (the sink's frontier suppresses its own frames)
+  # recoverFrom the surviving journal. The rebuilt source re-emits k1/k2 — refilling
+  # the volatile view, and suppressed at the sink by its restored frontier.
   - {type: despawn, on: ctl}
-  # restore the data view's pre-crash state, then continue
-  - {type: restore, on: dview, from: dv}
-  - {type: apply, on: dsource, op: add, value: delta}
-  - {type: apply, on: esource, op: add, value: k3}
+  # post-recovery live traffic: must reach both arms normally — a frontier restored
+  # ahead of its state point would eat this as already-acted (silent effect loss)
+  - {type: apply, on: dsource, op: add, value: k3}
   - {type: quiesce}
 checks:
-  # dview accepted {alpha,beta,gamma,delta}; equals the batch oracle over dsource's ops
+  # dview accepted {k1,k2,k3}; equals the batch oracle over dsource's ops. Since
+  # computenet-yh6.1.9 the oracle folds `journal-set-source` as the SetCell it is, so
+  # this reads recovered state instead of refusing the scenario.
   - {type: incremental-equals-batch, view: dview}
   # k1,k2 fired pre-crash and were NOT re-fired on replay; k3 fired post-recovery — each
   # exactly once. Since computenet-61w the unkeyed form quantifies over the keys the script
-  # FED esink (the adds on esource, the only cell linked into it: k1,k2,k3), not merely the
+  # FED esink (the adds on dsource, the only cell linked into it: k1,k2,k3), not merely the
   # ones its log contains — so this covers the silent-effect-LOSS direction too: an element
   # suppressed to zero firings reads "observed 0, expected 1" instead of being absent from
   # the grouping and passing vacuously.
   - {type: effect-count, sink: esink, exactly: 1}
+  # Kept keyed and explicit for k3, the post-recovery live add: a frontier restored ahead
+  # of its state point would eat exactly this one, and a keyed count says so at the point
+  # of the assertion rather than leaving it to the derivation above.
+  - {type: effect-count, sink: esink, key: k3, exactly: 1}
   - {type: no-dead-letters}
