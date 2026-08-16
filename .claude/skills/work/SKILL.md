@@ -230,8 +230,9 @@ Any row with `updated_at` within 15 minutes probably belongs to a live
 overlapping run on this machine (same `BEADS_ACTOR`, indistinguishable) —
 stop and report rather than colliding with it. Check every row. Older rows:
 an *epic* is a crash leftover — release it
-(`bd update <id> --status=open --assignee=""`); leave non-epic rows to the
-sweep above (it already reopened anything past its age cutoff).
+(`bd update <id> --status=open --assignee=""`); leave non-epic rows alone —
+stale *tasks* the sweep above already reopened, and a stale *feature* is the
+5a resume marker, not a leak.
 
 **Only after the liveness check, reconcile beads against merged PRs:**
 
