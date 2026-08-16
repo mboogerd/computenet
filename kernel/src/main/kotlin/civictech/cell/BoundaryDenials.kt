@@ -48,6 +48,15 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** Which `BoundaryPolicy` seam refused a crossing (spec 40/43 "three seams, one per dispatch class"). */
 enum class BoundarySeam {
+    /**
+     * Seam 1, the wire crossing itself: `BridgeIngressCell` refused a frame
+     * from a peer not on its allowlist, before `WireCodec.decode` even runs
+     * (spec 40/43 seam 1; 93 I-28 §4.3; `[SEC1-07]`). Distinct from
+     * [LINK_AUTHORITY]: this is the frame admitted onto the bridge at all,
+     * not a mediated-inlet link request the frame's invocation later carries.
+     */
+    ADMISSION,
+
     /** Seam 2, `onLink`: `BoundaryPolicy.linkAuthority` refused a mediated-inlet link. */
     LINK_AUTHORITY,
 
@@ -72,6 +81,13 @@ enum class BoundarySeam {
  * movement. There is deliberately no reason constant for it.
  */
 enum class DenialReason {
+    /**
+     * Seam 1: `BridgeIngressCell`'s `admit` predicate did not name this peer
+     * on the allowlist (93 I-28 §4.3, `[SEC1-07]`). The frame is refused
+     * before decode; the raw bytes are the sole `deniedArgs` entry.
+     */
+    NOT_ADMITTED,
+
     /** Seam 2: a `LinkPolicy` in `linkAuthority` rejected the requesting peer. */
     LINK_REFUSED,
 

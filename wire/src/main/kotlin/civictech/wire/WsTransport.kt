@@ -1,6 +1,10 @@
 package civictech.wire
 
+import civictech.cell.BoundaryDenialSink
+import civictech.cell.BoundaryDenials
+import civictech.cell.BoundarySeam
 import civictech.cell.CellRef
+import civictech.cell.DenialReason
 import civictech.cell.Propagate
 import civictech.cell.link.PeerId
 import civictech.cell.port.PortRef
@@ -307,6 +311,26 @@ object WsTransport {
         send: (ByteArray) -> Unit,
         private val refuse: () -> Unit,
         private val socketBuffered: () -> Boolean = { false },
+        /**
+         * Seam-1 accounting sink for a refused hello (spec 40/43 seam 1,
+         * `[SEC1-07]`; computenet-usd.4.2), the wire half of the
+         * accounted-refusal pattern `BridgeIngressCell` established for a
+         * refused frame (computenet-usd.4.1).
+         *
+         * Supplied by the caller rather than allocated here, because a
+         * listener's Session does not outlive the refusal it records: a
+         * refused hello's [refuse] closes the connection, and the listener
+         * removes this very Session from its `sessions` map on the resulting
+         * `onClose` — see [WsListener.admissionDenials]'s KDoc. A sink owned
+         * by this Session would be discarded with it, losing exactly the
+         * count this seam exists to keep. [WsListener] therefore allocates
+         * one sink and hands it to every Session it opens, so the count
+         * survives every individual connection's removal. A [WsConnection]
+         * keeps one Session for its whole life (see [mirror]'s KDoc), so the
+         * default here — a private, freshly allocated sink — is already
+         * durable for that path.
+         */
+        private val admissionSink: BoundaryDenialSink = BoundaryDenials().sinkFor("hello"),
     ) {
         val egress = BridgeEgressCell()
 
@@ -372,6 +396,28 @@ object WsTransport {
          * fenced off, and a diagnosis asks what the live connection is doing.
          */
         val refusedAnnouncements: Long get() = mirror?.refusedAnnouncements ?: 0L
+
+        /**
+         * Monotonic count of hellos refused at [side]'s allowlist, read
+         * through [admissionSink] (spec 40/43 seam 1, `[SEC1-07]`) — the
+         * hello-half counterpart of `BridgeIngressCell.boundaryDenials`'s
+         * frame-half counter (computenet-usd.4.1). Reporter-less
+         * deliberately: a refused hello has no hosted cell to attach a
+         * [civictech.cell.BoundaryDenialReporter] to, and `BoundaryDenials.kt`'s
+         * own contract says what is lost host-free is the dead-letter
+         * *record*, not the count — see [BoundaryDenials.attachReporter].
+         * Spawning a cell just to get a reporter would be disproportionate to
+         * an audit counter.
+         *
+         * Read directly on [WsConnection.admissionDenialCount] (one Session
+         * for the connection's whole life, like [preHelloDrops]); read
+         * directly on [WsListener.admissionDenialCount] too — **not** summed
+         * over `sessions` the way [preHelloDrops] is, because [admissionSink]
+         * is the *same shared sink* on every Session this listener opens (see
+         * its constructor parameter KDoc), so summing would multiply-count a
+         * refusal once per still-live session sharing it.
+         */
+        val admissionDenialCount: Long get() = admissionSink.denialCount
 
         /** The current announcement hook — replaced on every (re)hello so reconnects don't leak stale announcers (M10.3). */
         @Volatile
@@ -518,6 +564,20 @@ object WsTransport {
             val peer = parts.getOrNull(1)?.let { PeerId(it) }
             if (!side.admits(peer)) {
                 System.err.println("[WsTransport] refusing peer $peer: not on the allowlist (spec 43)")
+                // Seam 1 (spec 40/43, [SEC1-07]): accounted before the
+                // connection is refused. A hello is a text frame with no
+                // exclusives, so there is no deniedArgs payload to carry —
+                // unlike BridgeIngressCell's frame-half refusal
+                // (computenet-usd.4.1), which denies the raw bytes.
+                // Nothing throws — a denial is not a cell fault (BS-14) —
+                // so this never reaches supervision.
+                admissionSink.deny(
+                    seam = BoundarySeam.ADMISSION,
+                    reason = DenialReason.NOT_ADMITTED,
+                    principal = peer,
+                    subject = null,
+                    detail = "hello from $peer refused: not on the allowlist (spec 43)",
+                )
                 refuse()
                 return
             }
@@ -698,6 +758,34 @@ object WsTransport {
 
         /** @see preHelloDrops */
         val refusedAnnouncements: Long get() = sessions.values.sumOf { it.refusedAnnouncements }
+
+        /**
+         * Seam-1 accounting for every hello this listener has ever refused at
+         * [side]'s allowlist (spec 40/43 seam 1, `[SEC1-07]`;
+         * computenet-usd.4.2), the wire half of the accounted-refusal pattern
+         * `BridgeIngressCell` established for a refused frame
+         * (computenet-usd.4.1).
+         *
+         * Allocated **once, here** rather than per [Session] — unlike
+         * [preHelloDrops]/[refusedAnnouncements], summing over live sessions
+         * would not work for this counter: a refused hello's [Session.refuse]
+         * closes the connection immediately, and [onClose] removes that exact
+         * Session from [sessions] right after, so a per-Session sink would be
+         * discarded together with the very refusal it recorded — losing
+         * exactly the count this seam exists to keep. Handing every accepted
+         * connection's Session the *same* sink (see [onOpen]) means a
+         * refusal is still counted here after its Session is gone.
+         */
+        private val admissionDenials = BoundaryDenials()
+        private val admissionSink = admissionDenials.sinkFor("hello")
+
+        /**
+         * Monotonic count of hellos this listener refused across every
+         * connection it has ever accepted (spec 40/43 `[SEC1-07]`) — reads
+         * [admissionSink] directly, **not** summed over [sessions] (see its
+         * KDoc for why).
+         */
+        val admissionDenialCount: Long get() = admissionSink.denialCount
 
         /**
          * The announcement channel's two ends on this listener's live sessions
@@ -1230,7 +1318,10 @@ object WsTransport {
         }
 
         override fun onOpen(conn: WebSocket, handshake: ClientHandshake) {
-            val session = Session(side, { conn.send(it) }, { conn.close() }, { conn.hasBufferedData() })
+            // admissionSink is THIS listener's shared sink (see its KDoc) —
+            // every Session this listener opens reports into it, so a
+            // refusal survives this Session's own removal in onClose.
+            val session = Session(side, { conn.send(it) }, { conn.close() }, { conn.hasBufferedData() }, admissionSink)
             sessions[conn] = session
             conn.send(session.hello())
         }
@@ -1335,6 +1426,15 @@ object WsTransport {
 
         /** @see preHelloDrops */
         val refusedAnnouncements: Long get() = session.refusedAnnouncements
+
+        /**
+         * Hellos this dialer refused at its own allowlist (spec 40/43 seam 1,
+         * `[SEC1-07]`; computenet-usd.4.2) — see
+         * [Session.admissionDenialCount]. A client keeps one Session across
+         * every reconnect, so this accumulates over the connection's whole
+         * life, same as [preHelloDrops].
+         */
+        val admissionDenialCount: Long get() = session.admissionDenialCount
 
         /**
          * The announcement channel's two ends on this dialer (computenet-dqy.68)

@@ -339,6 +339,18 @@ object Peering {
         private val b: Side,
         val aToB: InvocationSink,
         val bToA: InvocationSink,
+        /**
+         * The [BridgeIngressCell] receiving `b`'s frames on `a`'s bridge host
+         * (computenet-usd.4.1) — the seam-1 accounting test surface,
+         * `ingressOnA.boundaryDenials["bridge-ingress"]`. Null for the direct
+         * constructor call `MirrorCloseFenceTest` makes with its own
+         * hand-wired `SeverableLink`s, which never routes through
+         * [hostIngress]'s `onSpawn` hook; every path through [loopback] itself
+         * supplies it.
+         */
+        val ingressOnA: BridgeIngressCell? = null,
+        /** [ingressOnA]'s counterpart: the ingress receiving `a`'s frames on `b`'s bridge host. */
+        val ingressOnB: BridgeIngressCell? = null,
     ) {
         private lateinit var mirrorOnA: RegistryMirrorCell
         private lateinit var mirrorOnB: RegistryMirrorCell
@@ -424,16 +436,34 @@ object Peering {
     }
 
     fun loopback(a: Side, b: Side): Loopback {
-        val aToB = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(b, fromPeer = a.peer), PortRef.generate())) }
-        val bToA = BridgeEgressCell().also { it.outlet.subscribe(Use.fixed(hostIngress(a, fromPeer = b.peer), PortRef.generate())) }
+        lateinit var ingressOnB: BridgeIngressCell
+        lateinit var ingressOnA: BridgeIngressCell
+        val aToB = BridgeEgressCell().also {
+            it.outlet.subscribe(
+                Use.fixed(hostIngress(b, fromPeer = a.peer, onSpawn = { ingressOnB = it }), PortRef.generate()),
+            )
+        }
+        val bToA = BridgeEgressCell().also {
+            it.outlet.subscribe(
+                Use.fixed(hostIngress(a, fromPeer = b.peer, onSpawn = { ingressOnA = it }), PortRef.generate()),
+            )
+        }
         // the mirrors and announcers are the *connection instance*, minted by
         // Loopback itself so that a heal can mint fresh ones (computenet-dqy.20)
-        return Loopback(a, b, aToB, bToA)
+        return Loopback(a, b, aToB, bToA, ingressOnA, ingressOnB)
     }
 
-    /** Spawn a [BridgeIngressCell] on [side]'s bridge host; returned api is safe to call from any thread. */
-    fun hostIngress(side: Side, fromPeer: PeerId? = null): Propagate<ByteArray> {
+    /**
+     * Spawn a [BridgeIngressCell] on [side]'s bridge host; returned api is
+     * safe to call from any thread. [onSpawn] hands back the spawned cell
+     * itself before it is hosted — a test-only widening (computenet-usd.4.1)
+     * so [loopback] can expose its ingress cells' `boundaryDenials` (seam 1
+     * accounting) without changing this function's return type for its
+     * production callers (`WsTransport`).
+     */
+    fun hostIngress(side: Side, fromPeer: PeerId? = null, onSpawn: (BridgeIngressCell) -> Unit = {}): Propagate<ByteArray> {
         val ingress = BridgeIngressCell(InvocationSink(side.registry::deliver), peer = fromPeer, admit = side::admits)
+        onSpawn(ingress)
         side.bridgeHost.managementInlet.call.spawn(ingress)
         return (HostedCellProxy.create(ingress.ref, side.registry, FrameInletProxy::class.java)
                 as FrameInletProxy).inlet.call

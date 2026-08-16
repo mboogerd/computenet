@@ -1,7 +1,11 @@
 package civictech.cell.wire
 
+import civictech.cell.BoundaryDenialAccounting
+import civictech.cell.BoundaryDenials
+import civictech.cell.BoundarySeam
 import civictech.cell.Cell
 import civictech.cell.CellRef
+import civictech.cell.DenialReason
 import civictech.cell.Leased
 import civictech.cell.Owned
 import civictech.cell.Propagate
@@ -46,6 +50,12 @@ class BridgeEgressCell(override val ref: CellRef = CellRef(UUID.randomUUID())) :
  * failures throw: the hosting host's supervision policy decides, like any
  * other cell failure.
  *
+ * An admission refusal (seam 1, spec 40/43, `[SEC1-07]`) is different: it is
+ * accounted through [boundaryDenials] rather than thrown, so it is never
+ * classified as a cell fault — see [admit]. Only a genuine decode failure
+ * (a frame that passed admission but is not a well-formed [WireCodec] frame)
+ * is a fault on this cell.
+ *
  * Eager cell (C-7): serves in `init` so it composes host-free.
  */
 class BridgeIngressCell(
@@ -55,8 +65,13 @@ class BridgeIngressCell(
     private val peer: PeerId? = null,
     /**
      * Boundary admission (M8.3, spec 43 mechanism 2): allowlists are bridge
-     * configuration, not a protocol fork. A refused frame throws — the
-     * hosting host dead-letters it, so rejection is observable topology.
+     * configuration, not a protocol fork. A refused frame is refused before
+     * [WireCodec.decode] runs and before any delivery reaches the local
+     * registry ([SEC1-06]): a typed [civictech.cell.BoundaryDenial] naming the
+     * refused [PeerId] is emitted through [boundaryDenials] and this cell's
+     * denial counter increments ([SEC1-07]). Nothing is thrown, so the
+     * refusal is never classified as a cell fault that triggers supervision
+     * RESTART or escalation — a denial is not a fault (BS-14).
      */
     private val admit: (PeerId?) -> Boolean = { true },
     /**
@@ -70,13 +85,36 @@ class BridgeIngressCell(
     private val replySink: InvocationSink = deliverTo,
     /** This side's negotiated protocol-id set (G-35 phase B); see [defaultProtocolCapabilities]. */
     private val protocolCapabilities: Set<ProtocolId> = defaultProtocolCapabilities(),
-) : Cell {
+) : Cell, BoundaryDenialAccounting {
     val inlet = registerPort("inlet", FanInlet.create<Propagate<ByteArray>>())
+
+    /**
+     * Seam-1 accounting for this ingress (spec 40/43, `[SEC1-07]`). One sink,
+     * allocated at construction — see [admit]'s KDoc — and reached by tests
+     * through the indexer (`boundaryDenials["bridge-ingress"]`), the same
+     * convention `CompositeCell` uses for its per-exposure sinks.
+     */
+    override val boundaryDenials: BoundaryDenials = BoundaryDenials()
+    private val admissionSink = boundaryDenials.sinkFor("bridge-ingress")
 
     init {
         inlet.serve(object : Propagate<ByteArray> {
             override fun propagate(value: ByteArray) {
-                check(admit(peer)) { "frame from $peer refused: not on the allowlist (spec 43)" }
+                if (!admit(peer)) {
+                    // Seam 1 (spec 40/43, [SEC1-07]): refused before decode and
+                    // before any delivery reaches the local registry
+                    // ([SEC1-06]). Nothing throws — a denial is not a cell
+                    // fault (BS-14) — so this never reaches supervision.
+                    admissionSink.deny(
+                        seam = BoundarySeam.ADMISSION,
+                        reason = DenialReason.NOT_ADMITTED,
+                        principal = peer,
+                        subject = null,
+                        detail = "frame from $peer refused: not on the allowlist (spec 43)",
+                        deniedArgs = listOf(value),
+                    )
+                    return
+                }
                 val decoded = WireCodec.decode(value)
                 val withPeer = if (decoded.type == HostedPortInvocation.Type.PORT_PROTOCOL) {
                     val edge = decoded.protocolLink as WireEdgeLink
