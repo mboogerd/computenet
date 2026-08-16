@@ -239,6 +239,23 @@ platform class the walk declines to open, is still not discharged, and an
 exclusive reachable through a field the JVM refuses to make accessible is
 skipped silently rather than reported.
 
+Three further limits were **measured under review** (2026-08-16,
+`computenet-ulss`) and are filed rather than fixed here, because each is a
+semantic decision rather than a wording one:
+
+- The two halves disagree about `Borrowed`/`Frozen`. `Proxy.discharge`
+  declines to open them (spec 23 §Taps, fan-out safe); `carriesExclusive` does
+  not, so `tap(view: Borrowed<OwnedEnvelope>)` is now marked **exclusive**
+  where it was not before the widening — a new false positive on a
+  fan-out-safe port. Filed as `computenet-yzsc`.
+- A `kotlin.*`/`java.*` container that is not `Map`/`Iterable`/`Array` —
+  `Pair`, `Triple`, `Result`, `Optional` — is marked exclusive by the scan and
+  then skipped by the walk, so the exclusive is dropped by a proxy that
+  believes it discharged. Filed as `computenet-woto`.
+- Reach is also *over*-reach: any exclusive reachable through a non-payload
+  reference an argument happens to hold is discharged too, and one already
+  consumed throws out of the walk. Filed as `computenet-h6sf`.
+
 **Consequence for `computenet-umx.1.4`'s BS-8** (`[CHA2-21]`): its body is
 unchanged and its `@ExpectedFailure(signature = "CHA2-BS-8")` annotation is
 removed — `[CHA2-44]` requires exactly that when a recorded expected failure

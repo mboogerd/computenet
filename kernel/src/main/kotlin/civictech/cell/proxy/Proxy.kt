@@ -147,12 +147,19 @@ object Proxy {
      * - **`Borrowed`/`Frozen` are not opened.** Both are explicitly non-consuming views
      *   (spec 23 §Taps); descending into one could consume an exclusive whose sole consumer
      *   is somebody else.
-     * - **Platform declarations are not opened.** An exclusive is a kernel type and reaches
-     *   a `kotlin.*`/`java.*` container only as an element, which the branches above already
-     *   cover; opening JDK internals would also trip module access.
+     * - **Platform declarations are not opened**, because opening JDK internals would trip
+     *   module access. This is a real limit on reach, not a free one: a `kotlin.*`/`java.*`
+     *   container that is neither `Map`, `Iterable` nor `Array` — `Pair`, `Triple`,
+     *   `Result`, `java.util.Optional` — is skipped here, so an exclusive held only inside
+     *   one is **not** discharged even though the KSP scan marks the method exclusive
+     *   (measured 2026-08-16 under review of computenet-ulss). Widening to those shapes is
+     *   filed, not done.
      * - **Reflection failures are swallowed per field** rather than aborting the walk: this
      *   runs on suppression and denial paths, where discharging the fields that *are*
-     *   reachable is strictly better than propagating out of a cleanup.
+     *   reachable is strictly better than propagating out of a cleanup. Note the swallow
+     *   covers field *access* only — an `Owned` already consumed elsewhere still throws out
+     *   of `take()` here, and the walk stops with the remaining fields undischarged. Callers
+     *   that must not throw wrap this themselves (`dischargeRefusedArgs`).
      */
     private fun discharge(value: Any?, seen: MutableSet<Any>) {
         if (value == null || !seen.add(value)) return
