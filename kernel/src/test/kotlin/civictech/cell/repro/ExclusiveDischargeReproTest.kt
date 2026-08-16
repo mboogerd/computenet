@@ -200,13 +200,18 @@ class ExclusiveDischargeReproTest {
         sink.effects shouldBe 0
 
         withSignature(BS8_NESTED_EXCLUSIVE_ESCAPES) {
-            // The KSP half: the method carrying a field-nested exclusive is not marked.
-            descriptor.methods.single { it.name == "pushNested" }.exclusive shouldBe true
-
-            // The behavioural half, and the one that actually matters: the suppressed sink
-            // believes it discharged, and the Owned is still takeable — leaked, with no
-            // dead letter and no accounting anywhere.
+            // The behavioural half first, deliberately: it is the defect, and it is the one
+            // that stays failing until *both* layers are fixed. Widening only the KSP scan
+            // marks pushNested exclusive but hands the envelope to a `discharge` that has no
+            // branch for it; widening only `discharge` never gets called because the method
+            // is not marked. So this assertion is the true acceptance test for
+            // computenet-ulss, and the structural one below is its explanation.
             assertThrows<IllegalStateException> { envelope.payload.take() }
+
+            // The KSP half, verified to fail independently (checked by running this block in
+            // both orders, 2026-08-16): the method carrying a field-nested exclusive is not
+            // marked exclusive at all.
+            descriptor.methods.single { it.name == "pushNested" }.exclusive shouldBe true
         }
     }
 
