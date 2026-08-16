@@ -266,12 +266,21 @@ class DoltCommitFeed(private val sql: DiffQuery) {
 
         /**
          * The three columns of `dependencies` that can carry an edge's far
-         * side, exactly one of which is non-NULL on any row (schema read live
-         * 2026-08-16: `depends_on_issue_id`, `depends_on_wisp_id` and
-         * `depends_on_external` are all nullable, and `bd` fills whichever
-         * matches how it resolved the target). `dolt sql -r json` omits NULL
-         * columns from the row object entirely, so the non-chosen ones are
-         * absent rather than null here.
+         * side — `depends_on_issue_id`, `depends_on_wisp_id` and
+         * `depends_on_external` — all nullable, `bd` filling whichever matches
+         * how it resolved the target (schema read live 2026-08-16).
+         *
+         * Exactly one is non-NULL on any row, and that is the table's own
+         * invariant rather than this reader's assumption: `dependencies`
+         * carries `CONSTRAINT ck_dep_one_target CHECK (((NOT(depends_on_issue_id
+         * IS NULL)) + (NOT(depends_on_wisp_id IS NULL)) +
+         * (NOT(depends_on_external IS NULL))) = 1)` (read from `show create
+         * table dependencies` on a scratch workspace, bd 1.1.2 / dolt 2.2.3).
+         * That is what makes [farSide]'s zero- and two-column branches
+         * schema-drift signals rather than ordinary inputs.
+         *
+         * `dolt sql -r json` omits NULL columns from the row object entirely,
+         * so the non-chosen ones are absent rather than null here.
          */
         private val FAR_SIDE_COLUMNS = listOf(
             "depends_on_issue_id",
