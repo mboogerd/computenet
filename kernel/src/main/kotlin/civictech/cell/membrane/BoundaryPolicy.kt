@@ -104,6 +104,39 @@ sealed interface IntegrityPolicy {
  * open behavior (P7/P6) — absent a declared [BoundaryPolicy], every crossing
  * is exactly as permissive as before this ticket. Peer admission is enforced
  * at the hello gate (`Peering.Allowlist`), not here.
+ *
+ * ## Multi-hop: re-declare at every membrane, never compose implicitly
+ *
+ * A delta that crosses membrane A and then membrane B is subject to **B's own**
+ * [disclosure] and [integrity], evaluated afresh at B. Nothing here composes A's
+ * predicates onto B's crossing, and nothing propagates them there: a policy is a
+ * property of the exposure it is declared on, and an exposure that declares none
+ * is open (P7) regardless of what the value passed through upstream. So a
+ * membrane that must not re-disclose what it received under a projection has to
+ * **say so on its own exposure**; inheriting A's projection is not something B
+ * gets for free, and a design that assumed it would be wrong.
+ *
+ * That is the decided *safe default* of 93 I-28 §9 open question 2 ("the safe
+ * default is re-declare"), and it is deliberately the whole of what SEC1
+ * settles. The safe default is not the same as an answer: cross-hop
+ * **composition** — whether a downstream membrane should be able to see, weaken
+ * or be bound by an upstream one's disclosure, and what a transitive audit of a
+ * multi-hop path even means — stays open at 93 I-28 §8 and is nobody's here. Two
+ * consequences worth stating plainly, because re-declare is safe rather than
+ * complete:
+ *
+ * - re-declaring is **manual and unenforced**. Nothing detects a membrane that
+ *   forwards a projected feed under `Full`; the boundary that failed to
+ *   re-declare simply discloses what it holds.
+ * - a re-declared predicate is evaluated against **the local crossing's**
+ *   [Principal], not the originating one. Identity does not transit hops either
+ *   (`currentPrincipal` reads the ambient stamp of the delivery in flight), so
+ *   "who is really asking, two hops out" is not a question this vocabulary can
+ *   answer today.
+ *
+ * No `[43-*]` requirement id is minted for any of this: `doc/spec/40-distribution/43-security.md`
+ * carries no normative EARS ids, so the default lives here as design record
+ * (`computenet-usd.4.3`), not as a citable requirement.
  */
 data class BoundaryPolicy(
     /** Seam 2 (`onLink`) — reuses the existing [LinkPolicy] mechanism (G-14), first-rejection-wins. */

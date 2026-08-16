@@ -841,7 +841,74 @@ open class ManagedHost(
                         val descriptor = ProtocolRegistry.protocol(id.name)
                         DirectedProtocolLink(link, port, localIsFrom = descriptor?.direction == civictech.nature.ProtocolDirection.UPSTREAM)
                     }
-                    ProtocolSupport.of(port).deliver(id, directed, hostedInvocation.protocolMessage as Any)
+                    // The transport identity of the delivery is ambient here for
+                    // exactly the reason it already is on the PORT_MANAGEMENT
+                    // branch below (G-29 phase 1, M8.2; spec 40/43 §Identity,
+                    // decided 93 I-28 §4.1, "Principal at every crossing").
+                    // `BridgeIngressCell` stamps [HostedPortInvocation.peer] on
+                    // every frame it decodes, whatever the type, but until
+                    // `computenet-usd.4.3` only management deliveries installed
+                    // it — so `currentPrincipal()` answered `LocalTrusted` for a
+                    // protocol frame that had demonstrably come off the wire, and
+                    // `BoundaryPolicy.protocolAuthority` (seam 3) therefore took
+                    // its local no-op fast path: a remotely asserted `Attention`
+                    // crossing a bridge into an exposure declaring a ceiling was
+                    // applied UNCLAMPED (measured over `Peering.loopback` in
+                    // `BridgeBoundaryPolicyTest`).
+                    //
+                    // **This does not weaken the local fast path** (93 I-28 §4.2,
+                    // "local crossings carry `LocalTrusted` and every predicate is
+                    // a no-op"), and the distinction is carried by the data rather
+                    // than inferred: [HostedPortInvocation.peer] is non-null *iff*
+                    // a bridge ingress decoded this frame, and is never
+                    // serialized, so an in-process `Protocols.sendUpstream`
+                    // arrives with a null peer and `CurrentPeer.with(null)` leaves
+                    // `currentPrincipal()` at `LocalTrusted` exactly as before.
+                    // A live broadcast driven by *data* is untouched for the same
+                    // reason: it is a `PORT_API` emission in the *emitting* cell's
+                    // own dispatch, and that branch installs nothing.
+                    //
+                    // What this DOES newly cover is any emission a remote protocol
+                    // frame synchronously causes *inside* this frame, and there are
+                    // two shapes of that, not one:
+                    //  - a unicast reply to the asking peer — `pullServe`'s
+                    //    `StateRequest` -> `baselineTo` (`CatchUp.kt`). Remote-
+                    //    *triggered* by definition, and `Peer` is the honest
+                    //    principal there: the identical reading the `onLinked`
+                    //    catch-up already has one branch down (`PORT_MANAGEMENT`).
+                    //  - a *fan-out* the frame merely unblocks. A
+                    //    `Protocols.Progress` ack completing a wave in
+                    //    `CoalescingCombineCell`/`WaveGate` runs `flushReady()` ->
+                    //    `outlet.call.propagate(...)` on this thread, so a mediated
+                    //    outlet's `disclosureFilter` evaluates under the *acking*
+                    //    peer, for a delta addressed to every attached observer
+                    //    rather than to that peer. Nothing is fabricated — the
+                    //    frame really did arrive from that peer — but it is not the
+                    //    identity of each recipient's own crossing, and a
+                    //    principal-keyed projection or a `BoundaryDenialSink`
+                    //    record on that outlet will read it as such. It is the
+                    //    counterexample to reading `CompositeCell`'s
+                    //    `denyDisclosure` KDoc ("null — `LocalTrusted` — for an
+                    //    ordinary in-process broadcast") as unconditional.
+                    // The second shape is stated here rather than left to be
+                    // discovered. WHICH principal a fan-out released by one peer's
+                    // ack should carry is 93 I-28 §8's open cross-hop composition
+                    // question in miniature; SEC1 settles only the safe default
+                    // (re-declare at each membrane — `BoundaryPolicy`'s class
+                    // KDoc), and `computenet-usd.4.3` deliberately does not decide
+                    // it. Untested here for the same reason: this task's fixture
+                    // pins the two shapes it does settle (the clamp on a
+                    // bridge-arriving assertion, and the `LocalTrusted` no-op for a
+                    // local one), not a gated organelle behind a mediated outlet.
+                    //
+                    // Non-suspending by construction: `ProtocolSupport.deliver` is
+                    // a plain `fun`, so nothing can park inside this frame and
+                    // resume on a worker whose thread-local was never set (the
+                    // hazard `Invocation.invokeSuspending` carries context
+                    // elements for).
+                    CurrentPeer.with(hostedInvocation.peer) {
+                        ProtocolSupport.of(port).deliver(id, directed, hostedInvocation.protocolMessage as Any)
+                    }
                 }
 
                 HostedPortInvocation.Type.PORT_MANAGEMENT -> {
