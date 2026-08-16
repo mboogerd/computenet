@@ -17,8 +17,8 @@ only to record a later re-verification, and the amendment says so.
 ## CHA2 — the C-9 / C-11 / C-12 adjudication against `main`
 
 Recorded by: `computenet-umx.1.1` (feature `computenet-umx.1` — CHA2; epic
-`computenet-umx` — CHA1). Realizes `[CHA2-01]`, `[CHA2-03]`, `[CHA2-30]`,
-`[CHA2-31]`, `[CHA2-32]`, `[CHA2-33]`; BS-13.
+`computenet-umx` — CHA1). Realizes `[CHA2-01]`, `[CHA2-03]`, `[CHA2-05]`,
+`[CHA2-30]`, `[CHA2-31]`, `[CHA2-32]`, `[CHA2-33]`; BS-13.
 
 **Base commit: `46ed020`** ("Pin an UNHOSTED `mediateOutlet`'s exactly-once
 discharge under disclosure Deny (computenet-e5mn) (#227)"). Every file:line
@@ -113,7 +113,7 @@ outlet's `sourceId` ref-derived (`OutletWaveState.durable`,
 cells only (`HostDurability.installDurableEpochs`), and carries the outlet's
 whole epoch — `sourceId` *and* counter high-water — across a crash. The
 surface is `kernel/src/main/kotlin/civictech/cell/port/FanOutlet.kt:351`
-(`waveState(): OutletWaveState`), `:359` (`adoptWaveState`), `:369`
+(`waveState(): OutletWaveState`), `:358` (`adoptWaveState`), `:368`
 (`mintFreshEpoch`).
 
 **Consequence for `computenet-umx.1.3`**: BS-4 must be written **unweakened**
