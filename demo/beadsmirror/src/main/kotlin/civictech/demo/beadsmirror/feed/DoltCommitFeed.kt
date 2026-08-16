@@ -27,6 +27,21 @@ class FeedShapeException(
 ) : RuntimeException("unmappable dolt diff row for query [$query]: $message", cause)
 
 /**
+ * Raised by [DoltCommitFeed.readFrom] when [checkpoint] — the caller's
+ * `afterCommit` — is not present in `dolt_log`: history compaction/truncation
+ * (`bd compact`/`gc`, retention, or a `bd flatten`) has moved the checkpoint
+ * out from under the reader. Extends [IllegalArgumentException] so existing
+ * callers that treat a bad `afterCommit` as bad input keep working unchanged;
+ * [DoltFeedPoller] catches this exact type (not the broader
+ * [IllegalArgumentException]) to convert it into the feature's typed
+ * [FeedCondition.CheckpointGone] — any other [IllegalArgumentException]
+ * raised under [DoltCommitFeed.readFrom] propagates instead of being folded
+ * into that condition.
+ */
+class CheckpointNotInHistoryException(val checkpoint: String) :
+    IllegalArgumentException("commit $checkpoint is not in dolt_log (history truncated?)")
+
+/**
  * The one thing [DoltCommitFeed] needs from the world: run a SQL query, get
  * rows. In production this is [DoltSql.query]; keeping it an interface lets the
  * feed's assembly rules (record-per-(commit, issue), ordinals, synthesis of
@@ -91,18 +106,20 @@ class DoltCommitFeed(private val sql: DiffQuery) {
      * mapped fails the entire pass with [FeedShapeException] rather than
      * yielding the records read so far.
      *
-     * @throws IllegalArgumentException if [afterCommit] is not in `dolt_log`.
-     *   That is the history-truncation case; computenet-dqj.1.3 owns turning it
-     *   into the feature's typed compaction condition, and this reader states it
-     *   only as a precondition so a checkpoint gap can never be read as "no new
-     *   commits".
+     * @throws CheckpointNotInHistoryException if [afterCommit] is not in
+     *   `dolt_log`. That is the history-truncation case; [DoltFeedPoller] owns
+     *   turning it into the feature's typed compaction condition
+     *   ([FeedCondition.CheckpointGone]), and this reader states it only as a
+     *   precondition so a checkpoint gap can never be read as "no new
+     *   commits". [CheckpointNotInHistoryException] extends
+     *   [IllegalArgumentException], so it is still catchable as one.
      */
     fun readFrom(afterCommit: String? = null): List<ChangeRecord> {
         val commits = history()
         val startIndex = when (afterCommit) {
             null -> 0
             else -> commits.indexOf(afterCommit).let { found ->
-                require(found >= 0) { "commit $afterCommit is not in dolt_log (history truncated?)" }
+                if (found < 0) throw CheckpointNotInHistoryException(afterCommit)
                 found + 1
             }
         }
