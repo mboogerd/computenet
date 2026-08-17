@@ -127,8 +127,9 @@ reviewer**, that there is **no prior verdict or partial state to reconcile**,
 what blocker you already cleared for it, and that **a stated verdict on
 honestly-scoped evidence outranks exhaustive coverage**.
 
-**Clear the known blocker BEFORE dispatching, not after.** §6's `git merge` is
-refused to reviewer agents by the classifier — predictable, not bad luck. If
+**Clear the known blocker BEFORE dispatching, not after.** A `git merge` is
+refused to reviewer agents by the classifier ([review-feature.md](review-feature.md)
+§6 records the denial) — predictable, not bad luck. If
 `origin/main` has moved and the reviewer will need the merge, **do the merge,
 re-run the affected module suite, and push first**, then tell the reviewer it
 is done. That converts a guaranteed mid-review wall into a precondition
@@ -150,7 +151,7 @@ the task reviewer names repair shas and withholds `metadata.review=passed`, it
 has told you it authored part of the deliverable — dispatch a second reader
 scoped to *those shas only* before merging, rather than treating the pass as
 final. The dispatch template is
-[ship-feature.md](references/ship-feature.md) §4, written for a feature
+[ship-feature.md](ship-feature.md) §4, written for a feature
 reviewer's substantive repair; read task for feature and the task worktree
 and branch for the feature's. A prose or design-record deliverable is
 substantive by default, because there rewriting the text is rewriting the
@@ -345,7 +346,7 @@ exclusive and `--parent` is correct here. The description carries the log
 excerpt issue-quality.md's CI-evidence rule requires — the run link alone
 ages out before the task runs (computenet-ttz). The one narrow exception —
 a red check in a module this diff doesn't touch — requires
-[references/red-check-attribution.md](references/red-check-attribution.md)'s
+[red-check-attribution.md](red-check-attribution.md)'s
 four artifacts before treating any red as not this feature's. Never ship on
 "it's a flake".
 

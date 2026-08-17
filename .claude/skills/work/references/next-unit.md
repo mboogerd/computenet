@@ -216,7 +216,7 @@ Three admission gates:
 **A directly-filed bug or chore usually has no acceptance criteria** — nothing
 broke it down, so nobody wrote them. Write them onto the bead before you
 dispatch (`bd update <id> --acceptance=…`, to
-[references/issue-quality.md](references/issue-quality.md)'s standard), and
+[issue-quality.md](issue-quality.md)'s standard), and
 say in the dispatch prompt that they are yours. Skip this and the reviewer
 invents the bar it then certifies against, which is marking its own paper; and
 because the bar then lives only in a dispatch prompt that is discarded, a
