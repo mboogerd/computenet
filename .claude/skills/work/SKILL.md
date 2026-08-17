@@ -267,6 +267,21 @@ sleep 2700;  echo "BUDGET EXPIRED: go to Finalize now"`
 })
 ```
 
+**Record the slot start durably, before you arm it** — you have no other
+memory of when this session began, and a resume needs it (below):
+
+```bash
+SLOT=18000                              # seconds the routine allocated (5h default)
+date -u +%s > "$SCRATCH/slot-start"; echo "$SLOT" > "$SCRATCH/slot-seconds"
+```
+
+Record the *length* as well as the start: a resume that assumes 5h on a 3h
+slot re-arms a clock that never expires. The files outlive the host process —
+the harness scratchpad is not cleaned between sessions — but `$SCRATCH` is a
+shell variable and nothing exports it across calls, let alone across a
+restart, so **note the directory's absolute path** here in as many words. A
+resume reads the *previous* session's dir by that literal path.
+
 Fires at 3h15m / 4h / 4h45m of a 5h slot (the last 15m is Finalize); scale
 proportionally if the routine names a different slot. **Note the monitor's
 task id** — `TaskStop` it when you reach Finalize. **`persistent: true` is
@@ -373,6 +388,56 @@ done
 - **Between notifications you have no sense of elapsed time.** Run
   `date -u +%H:%M` before any budget-gated decision — one session misread
   1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
+
+### Resuming after the host process died
+
+A `task-notification` with **`status=stopped`** whose summary says it comes
+*from the previous session* means the Claude Code host process exited and this
+is a resume — not that anything failed. Observed 2026-08-15 mid-breakdown
+(computenet-024s). Three things are true at once and none of them is obvious:
+
+- **`status=stopped` is an UNKNOWN outcome, explicitly not a failure.** The
+  agent may have finished its work and died before reporting.
+- **The budget monitor is gone and nothing re-arms it.** The session then runs
+  with no clock at all — the `computenet-m5l`/`776` failure, reached by a route
+  those items do not cover.
+- **Re-arm from the ORIGINAL slot start, never from now.** The offsets above
+  are fixed `sleep`s from step 2, so a naive re-arm grants a full fresh 5h:
+
+  ```bash
+  S=<step 2's scratch dir, spelled out — the PREVIOUS session's path>
+  start=$(cat "$S/slot-start"); slot=$(cat "$S/slot-seconds")
+  left=$(( start + slot - $(date -u +%s) ))
+  echo "seconds left in slot: $left"     # <=0 → go straight to Finalize
+  ```
+
+  Arm one monitor over `$left`, keeping the same shape against the *original*
+  slot end: warn at `left-6300`, `left-3600`, `left-900` seconds, dropping any
+  that is already ≤0 and going straight to the next one.
+
+  Those files survive a host-process exit, so the usual reason to miss them is
+  not knowing the path, not deletion. If you genuinely cannot recover it, take
+  the start from the epic's claim — `bd show <epic> --json | jq -r
+  '.[0].started_at'`, which `--claim` sets at step 3, a few minutes after the
+  true start — and the slot length from the routine that invoked you. (A first
+  bd comment's timestamp works too, but nothing before step 5 requires one, so
+  on an early resume there may be none.) Failing all of those, say so and
+  treat the remaining budget as **one hour** — a short slot that finishes is
+  worth more than a long one nobody is timing.
+
+**Query for side effects before re-dispatching anything.** A killed agent may
+have already done its work: a breakdown that died may have filed its children
+(`computenet-8kj.5.1` existed, complete and usable), and re-dispatching would
+have duplicated it while reading the stop as failure would have discarded it.
+
+```bash
+bd list --parent=<feature-or-epic> --all --json     # a breakdown's children
+git -C <task-worktree> log --oneline; git -C <task-worktree> status --short
+```
+
+**Resume, don't restart**, wherever those show work landed — 5b's resume query
+picks up an `in_progress` item with its worktree and branch intact. Re-dispatch
+only what left nothing behind.
 
 ## 3. Sync, release stale claims, take one epic
 
@@ -559,7 +624,13 @@ bd list --parent=<epic> --all --json     # statuses of ALL children, closed incl
   session's one epic claim** — it is bookkeeping, not work — so the session
   then selects and claims a real work epic and proceeds (computenet-q93p).
 - **Children open but none workable** (human-gated, or blocked on another
-  epic) → park it and select the next:
+  epic) → park it and select the next. "Human-gated" is not the same as
+  "gated": an item whose gate constrains the *form* of the change is
+  workable, and only a gate needing an *answer* from a person is not — 5f
+  route 4's **"A gated item: the discriminator is WHO MAY DECIDE"** states
+  the test, and it applies to this epic's own children exactly as it does to
+  continuation candidates. Apply it before concluding a child is unworkable;
+  the `human` label only catches gates somebody already formalised.
 
 ```bash
 bd comment <epic> "Parking: no workable surface. <ids: human-gated / blocked on <other-epic>>"
@@ -1722,6 +1793,27 @@ direct dependents of this session's completed items; file-surface overlap
 with this session's pushed branches (`git diff --name-only
 origin/main...<branch>`, never titles); unparented ready bugs/chores;
 general ready order — ties break by the next criterion down.
+
+**A gated item: the discriminator is WHO MAY DECIDE, not what it costs.**
+Read the gate in two places, because they hold different ones — the bead's own
+text, *and* the contract of the file it touches (`concord/schema/*.md` states
+its own gate in its header). Then:
+
+- **A gate on the FORM of a change** — "must be its own ticket", "not to be
+  done opportunistically", "schema changes are gated" — constrains *how*, not
+  *whether*. An unattended session satisfies it by filing such a ticket and
+  working that: workable.
+- **A gate that requires an ANSWER from a person** — a preference, a policy
+  call, a tradeoff nobody has made — is an `ask-human.md` park, **whatever it
+  costs**. Cheap does not make it yours to decide.
+- **An open DESIGN question is neither.** A design question a dispatched agent
+  can settle *on evidence* and a reviewer can check is workable — settle it,
+  and record which way it went and why. Rule 3 (`ask-human.md`'s bar) applies
+  only when the evidence does not settle it.
+
+**Record the decision on the bead either way** (`bd comment`), so the next
+session does not re-litigate it — and so a park that turns out to be wrong is
+visible *as a park* rather than as silence (computenet-bypi).
 
 Three admission gates:
 

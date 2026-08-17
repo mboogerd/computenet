@@ -11,6 +11,14 @@ The bar is **ambiguous AND costly** — both halves, not either one:
 The test: *if this turns out wrong, is it a five-minute fix or a five-hour
 one?* Five minutes, decide it and record the assumption. Five hours, park it.
 
+One thing that is a park **without** this bar: an item (or the contract of the
+file it touches) that explicitly reserves the decision for a person — "needs a
+human answer in principle", a preference, a policy call nobody has made. That
+is not ambiguity you could resolve with more evidence, so the cost test never
+applies: park it however cheap it looks. A gate on the *form* of a change
+("must be its own ticket", "not opportunistically") reserves nothing and is
+workable — SKILL.md 5f route 4, "the discriminator is WHO MAY DECIDE".
+
 Two things that are **not** this bar:
 
 - **Ordinary judgment calls** — variable names, which existing helper to
