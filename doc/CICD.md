@@ -8,12 +8,13 @@ Two workflows, both GitHub-native.
 
 Runs on every `push` and `pull_request`. JDK 21 Temurin (matching
 `buildSrc/src/main/kotlin/kotlin-jvm.gradle.kts`'s `jvmToolchain(21)`), Gradle
-cached via `gradle/actions/setup-gradle@v4`. Five jobs, each with a
+cached via `gradle/actions/setup-gradle@v4`. Six jobs, each with a
 `timeout-minutes` cap so a hung test can't burn a runner indefinitely:
 
 | Job | What it gates | Timeout |
 |---|---|---|
-| `build-test-fast` | `./gradlew build check -PexcludeMultiJvm=true`, plus the clean-clone untracked-files guard | 45m |
+| `build-test-fast` | `./gradlew build check -PexcludeMultiJvm=true` (excluding `:kernel:test`), plus the clean-clone untracked-files guard | 45m |
+| `kernel-test` | `:kernel:test` alone — split out of the fast lane so the repo's largest suite runs concurrently (computenet-dqy.16) | 30m |
 | `build-test-serial` | `./gradlew check -PmultiJvmOnly=true --max-workers=1` — the two-JVM/ProcessBuilder tests | 30m |
 | `concord-full` | full concord corpus (`core,dist,dur`) + `CONCORDANCE.md` regeneration must be a no-op | 30m |
 | `ui-test` | `inspect/ui` typecheck + tests | 15m |
@@ -45,9 +46,11 @@ Flip these in GitHub, or the two workflows above do nothing useful:
    Without this, `gh pr merge --auto` errors out.
 2. **Settings → Rules → Rulesets** (or Branches → branch protection) on `main`:
    - Require a pull request before merging.
-   - **Require status checks to pass**, and add as required checks:
+   - **Require status checks to pass**, and add all **six** as required checks:
      `build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
-     `agora-ui-test`.
+     `agora-ui-test`, `kernel-test`. This list is a copy; the ruleset is the
+     original, and `AGENTS.md` § "Branches, PRs, and auto-merge" carries the
+     `gh api` one-liner that reads it (computenet-4prd).
    - Optionally "Require branches to be up to date before merging" (safer, but
      costs a re-run per intervening merge).
 3. **Settings → General → Merge button → Allow squash merging** — enabled
