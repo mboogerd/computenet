@@ -18,8 +18,9 @@ It is installed on some machines and not others (absent on `Anva@A0030`,
 2026-08-16, where a session spent time working out why *the* documented entry
 point was missing — computenet-j9ku). There is no install step here, so
 absence is the expected state on a fresh machine, not a fault to fix. The
-fallback is `bd ready --json` plus `scripts/ready-in-epic.sh` for epic scope;
-you lose the graph ranking, not the ability to select work.
+fallback is `bd ready --json` plus `.claude/skills/work/scripts/ready-in-epic.sh`
+for epic scope (that path, not the repo-root `scripts/`, which has no such
+file); you lose the graph ranking, not the ability to select work.
 
 Work **selection and prioritization** starts with `bv`
 (https://github.com/Dicklesworthstone/beads_viewer), a graph-aware triage
@@ -72,8 +73,9 @@ Rules:
   importance. Only `quick_ref.top_picks` and entries marked actionable are
   claimable; verify with `bd show <id>` before claiming.
 
-Commands (verified on **this machine** 2026-08-12 at bv v0.18.0 — a
-per-machine, per-version observation, not a repo-wide guarantee):
+Commands (verified on **one machine** 2026-08-12 at bv v0.18.0, and again on
+`MacBoo` 2026-08-17 at the same version — a per-machine, per-version
+observation, not a repo-wide guarantee):
 
 ```bash
 bv --robot-triage     # THE entry point: ranked picks, quick wins, blockers, health

@@ -75,12 +75,17 @@ felt like giving up.
   hand-set `--status=blocked` (an ask-human park) is invisible to it.
 - `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
   reads `null`. It never includes comment bodies, only `comment_count`.
-- **It exposes BOTH `parent_id` and `parent`, and `parent_id` is always
-  `null`** — even for a bead with a live parent edge. So the natural
-  `.[0].parent_id` reads a correctly-parented bead as orphaned
-  (computenet-uixt; measured on `computenet-uixt` itself: `parent_id: null`,
-  `parent: "computenet-wpvy"`). Read **`.parent`**, or `bd dep list <id>`.
-  And remember `.parent` is absent-not-null when genuinely unset
+- **There is no `parent_id` field at all** — the parent lives under
+  **`.parent`**, and `jq` answers a *missing* key with `null` exactly as it
+  answers an empty one. So the natural `.[0].parent_id` reads every bead as
+  orphaned, correctly-parented ones included (computenet-uixt; measured
+  2026-08-17 on `computenet-uixt`: `has("parent_id")` → `false`, `.parent` →
+  `"computenet-wpvy"`). That is the general trap, not a one-off: a
+  misremembered field name is indistinguishable from an unset one, so before
+  believing any `null` from `bd --json`, check `has("<field>")`. Read
+  **`.parent`**, or `bd dep list <id>` (parentage is the `via parent-child`
+  row — the other rows are `blocks` edges, and an unparented bead still
+  prints those). And `.parent` is absent-not-null when genuinely unset
   (computenet-wpvy.32), so `scripts/epic-of.sh` remains the way to resolve an
   *effective* epic rather than one hop.
 - Epic- and feature-sized output overflows the inline tool-result limit
@@ -2153,17 +2158,28 @@ bd search "<ONE distinctive word>" --status all --json   # --status all, or
                                                         # fixed-and-closed twins are invisible and get re-filed
 ```
 
-**`bd search` matches a literal SUBSTRING, not a set of terms** — so a
-multi-word query only hits when those words appear verbatim and adjacent.
-Measured 2026-08-17: `bd search "pushed-ness"` → 1 hit; `bd search "worktrees
-pushed-ness"` → **0**, on the very bead containing both words. A phrase query
-is therefore a false-negative machine, and "a few distinctive words" was the
-worst possible instruction (computenet-ytlk).
+**`bd search` matches a case-insensitive literal SUBSTRING of the TITLE (and
+id) only — never the description.** Two consequences, both false-negative
+(measured on bd 1.1.2, 2026-08-17, computenet-ytlk):
+
+- A multi-word query hits only when those words appear verbatim *and
+  adjacent* in a title. `bd search "pushed-ness"` → 1; `bd search "worktrees
+  pushed-ness"` → **0** on the very bead whose title holds both words, and
+  reversing an adjacent pair (`"search bd"` for a title reading `bd search`)
+  → **0** too. So "a few distinctive words" was the worst possible
+  instruction.
+- Descriptions are invisible: `bd search "epic-of.sh"` → **0** despite the
+  string appearing in many bodies. Description search is a *filter* on top of
+  a title query — `bd search "<title word>" --desc-contains "<body phrase>"`,
+  AND-ed — and it cannot stand alone (`bd search --desc-contains X` errors
+  `search query is required`). For a body-only sweep, grep the export:
+  `grep -i "<phrase>" .beads/issues.jsonl`.
 
 **Run several single-word searches, one per distinctive term**, and treat an
-empty multi-word result as **no evidence at all** rather than as absence. The
-not-found branch below requires at least one *single-word* search to have come
-back empty before you file.
+empty multi-word result as **no evidence at all** rather than as absence.
+Substrings match inside words (`orktree` finds every `worktrees` title), so
+prefer a stem over an inflected form. The not-found branch below requires at
+least one *single-word* search to have come back empty before you file.
 
 **One issue per kind of friction.** Found (and still open) → **upvote it**:
 comment this session's instance (what you were doing, what happened, what it
