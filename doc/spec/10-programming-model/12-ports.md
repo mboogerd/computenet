@@ -156,9 +156,12 @@ contracts — rule 2 above is enforced, 20/23.)*
 
 A NoOp-served shadow inlet whose contract carries `Owned`/`Leased` MUST be a
 *discharging* sink — `Owned` → `take()`-and-drop, `Leased` → `release()` —
-generated from the same exclusive bit (decided in 93 I-20); the landed
-shadow proxy drops such payloads undischarged (conflict C-11, recorded at
-50/52 and 20/23).
+generated from the same exclusive bit (decided in 93 I-20). *(Conflict C-11
+resolved, `computenet-ulss` + `computenet-3jv2` — the discharging sink is
+landed (`Proxy.discharging`/`Shadow.suppress`, 50/52, 20/23). A platform
+container other than `Map`/`Iterable`/`Array` — `Pair`/`Triple`/`Result`/
+`Optional` — is still marked exclusive by the scan and then skipped by the
+walk, filed as `computenet-woto`.)*
 
 Cardinality is per-instance and per-link — never a cross-replica-set budget
 (decided in 93 I-25, replication machinery unimplemented). For a replicated
@@ -169,8 +172,10 @@ delegate. Where the payload carries `Owned`/`Leased`, the leader instance
 holds the one counterpart — the exclusive bit rejects a second writer link
 at admission, on the leader, per instance.
 
-The exclusive bit's KSP scan is decided to widen (decided in 93 I-6 and
-I-8, unimplemented). The same contract scan also emits, on
+The exclusive bit's KSP scan is widened to reach an exclusive nested in a
+payload object's declared properties, matched by `Proxy.discharge` walking
+the same object's fields (decided in 93 I-6 and I-8; implemented by
+`computenet-ulss`, C-11 above). The same contract scan also emits, on
 `MethodDescriptor`: `magnitude` (a delta parameter type implements
 `Magnitude`) and `idempotentMerge` (the delta type is `Replicable` with an
 idempotent merge), read at link time for cycle admission (21, G-19) — cycle
