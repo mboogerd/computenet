@@ -61,6 +61,36 @@ felt like giving up.
   `--type`); `bd comment` takes the body positionally or via `--file` (not
   `--body-file`); clearing a metadata key is `--unset-metadata <key>`
   (`--set-metadata key=` merges, it does not clear).
+- **`bd create` has no `--set-metadata`** — that flag exists only on `bd
+  update`. On create the spelling is `--metadata '<json object>'`, so
+  `model` and `files` go in as
+  `--metadata '{"model":"sonnet","files":"kernel/src/..."}'`. Getting this
+  wrong is silent in the way that matters: the bead is created, the routing
+  fields are not, and `next-batch.py` dispatches it with no model and no file
+  claim (computenet-kd9s, computenet-w8jt). Don't reach for a second `bd
+  update` instead — it is a second write that can fail on its own and leave
+  the bead half-configured; one `--metadata` on the create is atomic.
+  `scripts/create-ticket.sh` takes `--metadata` and passes it through.
+- **`bd list --json` changes shape under `--skip-labels`**: a bare array by
+  default, `{"issues":[...]}` with the flag. A `jq '.[]'` written against one
+  yields nothing against the other and exits 0, so the caller reads an empty
+  result as "no rows" (computenet-kr18). Use the shape-agnostic row selector
+  everywhere, and never `|| echo '[]'` a `jq` failure into a clean answer:
+
+  ```bash
+  ROWS='(if type=="array" then . else (.issues // []) end)[]'
+  bd list … --json | jq -r "$ROWS | .id"
+  ```
+
+- **Re-parenting a reviewer-filed residual takes two commands.** A
+  `discovered-from` edge occupies the same slot as parent-child, so
+  `bd update <child> --parent=<parent>` errors when review-feature.md §7's
+  prescribed edge already exists (computenet-ofzz). Remove it first:
+
+  ```bash
+  bd dep remove <child> <parent>
+  bd update <child> --parent=<parent>
+  ```
 - **`bd create --parent=<shared epic>` is banned.** It allocates the child id
   from `child_counters`, a per-database table reconciled only at sync, so two
   machines filing between syncs mint the SAME id for different beads — a
@@ -918,12 +948,21 @@ gh pr checks <pr-url>
 ```
 
 The task reviewer tested a branch without its merged siblings; this is the
-first signal the whole still builds. Red is work: file a task
-(`bd create --parent=<feature-id>` with `model` and `files`) for the next
-batch, carrying the log excerpt issue-quality.md's CI-evidence rule
-requires — the run link alone ages out before the task runs
-(computenet-ttz). The one narrow exception — a red check in a module this diff doesn't
-touch — requires
+first signal the whole still builds. Red is work: file a task for the next
+batch — one call, because `bd create` has no `--set-metadata` and a follow-up
+`bd update` can fail on its own (see `bd traps`):
+
+```bash
+bd create --parent=<feature-id> --type=task --title "<one line>" \
+  --description "<what is red, plus the pasted failing log excerpt>" \
+  --metadata '{"model":"sonnet","files":"<the files it may touch>"}'
+```
+
+That create is under a feature THIS session claimed, so the dotted id is
+exclusive and `--parent` is correct here. The description carries the log
+excerpt issue-quality.md's CI-evidence rule requires — the run link alone
+ages out before the task runs (computenet-ttz). The one narrow exception —
+a red check in a module this diff doesn't touch — requires
 [references/red-check-attribution.md](references/red-check-attribution.md)'s
 four artifacts before treating any red as not this feature's. Never ship on
 "it's a flake".
