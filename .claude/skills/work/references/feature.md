@@ -139,12 +139,73 @@ descriptive string there (`none (tracker mutations only)`) is read as a path
 and batched on, which is worse than an empty claim, not better
 (computenet-wpvy.30).
 
+**A clause that predicts CURRENT behaviour gets the same premise check you
+applied to your input.** You verify the epic's premises before splitting it;
+the examples and acceptance clauses *you write* are premises too, and an
+unverified one is paid for a layer down — the implementer builds against it,
+discovers a one-command probe falsifies it, and the cost lands on the party
+least placed to absorb it (computenet-j69i). So wherever a clause asserts
+something about code that already exists, or about an external tool's
+observable behaviour:
+
+- **Run the one command that confirms it** — `grep` for the symbol, `ls` the
+  path, `<tool> --help`, the single test — and write what you observed into
+  the clause. It is seconds at this layer.
+- **Or mark it `unverified:`** in as many words, so the implementer knows to
+  check it *first* rather than to trust it. That is a legitimate answer; an
+  unmarked guess is not, because nothing downstream can tell your checked
+  claims from your plausible ones.
+
+This is `task.md` step 3's rule — a prescribed reproduction is run against the
+unfixed code before anything is built on it — applied one layer up, to the
+clauses that generate those reproductions.
+
 If the task is a bug fix and you write a reproduction into its description,
 label it `verified-failing:` (with the output you watched it fail with) or
 `untested-hypothesis:` — see [issue-quality.md](issue-quality.md). An
 unlabelled sequence is read as verified, and one that in fact passes against
 the unfixed code hands the implementer a test that goes green while proving
 nothing.
+
+**Evidence the implementer cannot produce locally must say so, and say how to
+read it.** A clause whose proof only exists on another platform or inside a CI
+job — "passes on Linux", "the serial lane runs it with two JVMs" — is
+unsatisfiable where the implementer is standing, and an implementer that does
+not know this spends slot time rediscovering it (computenet-wpvy.31). Split
+the clause explicitly:
+
+- **which half is local** (the suite it can run on darwin, the behaviour it
+  can prove here),
+- **which half rides on the CI dispatch**, named as such,
+- **the exact command that reads the dispatch's answer**, runnable as
+  written — not "check CI".
+
+On that third bullet, name the command the way you would run it, redirect
+included. `gh run view <run-id> --log` is the usual one and it is **large**:
+measured 2026-08-17 on this repo's CI, 2670 lines / 345 KB for a green run in
+3s, so it goes to a file and gets grepped, never straight into a reader's
+context. Pick the narrowest form that answers the clause:
+
+```bash
+gh pr checks <pr>                                   # pass/fail per check, cheap
+gh run view <run-id> --log > "$SCRATCH/run.log"     # whole run; then grep it
+gh run view <run-id> --job <job-id> --log           # one job of a matrix
+gh run view <run-id> --log-failed                   # a failure's lines only
+gh run download <run-id> -n <artifact>              # when the answer is ONLY
+                                                    # in an artifact
+```
+
+The last line is not hypothetical: computenet-wpvy.31's own case was a
+re-arm marker that `wire-suite-sample.yml` never echoes into the job log, so
+`--log` answers nothing and only the downloaded `chunk-*.console` does. If
+that is your clause's shape, say the artifact name. And if you cite an
+*already-finished* run rather than the one this PR will trigger, excerpt the
+evidence into the bead — GitHub ages run logs out in days
+([issue-quality.md](issue-quality.md), computenet-ttz).
+
+Without the third bullet, "verified on Linux" becomes a claim nobody can
+check, and the platform half quietly turns into an unverified assertion the
+reviewer inherits.
 
 **`model`** — route by how much is already decided, not by importance:
 
