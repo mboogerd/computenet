@@ -24,6 +24,28 @@ Rules:
   have no export, so `bv` fails there by design.
 - `bv` output embeds `br ...` claim/show commands. Translate them to `bd`
   (`bd update <id> --claim`, `bd show <id>`).
+- **Check the export is fresh before trusting `bv`.** `bd` refuses to
+  overwrite `.beads/issues.jsonl` when it holds a record the Dolt store no
+  longer has — the state a *deliberately deleted* bead leaves behind — and
+  then the export stops tracking the DB entirely while every `bd` command
+  still reports success. The refusal is announced only as a side effect of an
+  unrelated mutation, so a session that only reads never sees it, and `bv`
+  silently ranks against hours-old state with the newest beads invisible
+  (computenet-exb0; hit again 2026-08-17 when a dispatched reviewer created
+  and deleted 7 throwaway beads to test `bd` behaviour). One line, before the
+  triage:
+
+  ```bash
+  [ "$(bd list --all --limit 0 --json | sed -n '/^[[{]/,$p' \
+        | jq '(if type=="array" then . else .issues end) | length')" \
+    = "$(grep -c . .beads/issues.jsonl)" ] \
+    || echo "STALE export — bv is reading a frozen file; repair before triaging"
+  ```
+
+  **Repair by moving the stale export aside** and letting the next `bd`
+  mutation re-export, or by filtering the deleted ids out of it. **Not** by
+  `bd init --from-jsonl`, which the warning itself suggests: that re-imports
+  the deleted beads, which is the wrong direction.
 - Recommendations can include blocked or already-claimed work ranked by graph
   importance. Only `quick_ref.top_picks` and entries marked actionable are
   claimable; verify with `bd show <id>` before claiming.
