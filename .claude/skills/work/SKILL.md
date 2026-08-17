@@ -189,6 +189,36 @@ Unique per machine — it's how claims tell two machines apart. Never fall back
 to `git config user.name` (identical on every machine here). Unset → stop and
 report; a wrong identity is worse than a dead run.
 
+**And check the checkout you are about to run scripts from is current**, here,
+before anything reads it:
+
+```bash
+git fetch origin main --quiet
+git rev-parse HEAD origin/main
+git merge-base --is-ancestor origin/main HEAD \
+  && echo "OK: main checkout contains origin/main" \
+  || echo "STALE: this checkout is BEHIND origin/main — its scripts and SKILL.md are not the ones main has"
+```
+
+Every `scripts/*.sh` in this file runs from the **main checkout**, because
+that is where `bd` lives — and the main checkout's working copy drifts (44
+commits behind, measured; computenet-kcu). So a session can execute a version
+of a script that `main` has already fixed, and find out several steps later as
+a rejected push or a wrong answer, with nothing connecting the two
+(computenet-6xm).
+
+`STALE` → **fast-forward before continuing** (`git -C <main-checkout> merge
+--ff-only origin/main`). If that is refused because the checkout has local
+commits or a dirty tree, stop and report: a session running scripts from an
+unknown revision is worse than a session that did not start. This is the one
+place the check is cheap and the failure is legible; it belongs here and not
+where the symptom appears.
+
+Note the asymmetry with the dispatch rule below: **agents** read
+`.claude/skills/work/**` from their own worktree, cut fresh from
+`origin/main`, so they are current by construction. Only the orchestrator runs
+from the drifting checkout, which is why only the orchestrator needs this.
+
 ## 2. Arm the budget
 
 Don't burn turns polling a clock — arm a timer that tells you:
@@ -805,7 +835,15 @@ verdict. (`parked` is only meaningful on an empty batch.)
   mutation into the prompt under the word MANDATORY without running that
   check; the prompt is what makes a stale instruction sound authoritative.
 - **Restate any cross-bead write the bead's criteria demand — ids and
-  action — in the dispatch prompt.** Authorization living only in the bead is
+  action — in the dispatch prompt. Read it from the batch entry's
+  `cross_bead`, not from the prose.** `next-batch.py` surfaces the field the
+  breakdown wrote (feature.md); an empty string is the normal value and means
+  *none authorized*. Without a field you would be hand-grepping every task's
+  description for a clause you cannot reliably spot, to fill in an input this
+  skill treats as load-bearing (computenet-eetn). If a task's criteria plainly
+  demand a cross-bead write and `cross_bead` is empty, that is a breakdown
+  defect: write the field before dispatching, and say you did.
+  Authorization living only in the bead is
   invisible to the policy check, which reads the prompt; an agent doing
   commissioned cross-posting got flagged and the orchestrator adjudicated its
   own commission as an overstep (computenet-dqy.72, computenet-szdd). Write

@@ -374,6 +374,10 @@ def _entry(task, resumed, files):
         "id": tid,
         "model": meta.get("model") or "",     # empty => breakdown omitted it
         "files": files,
+        # Authorized writes to OTHER beads (computenet-eetn). Absent => none;
+        # the orchestrator must relay this verbatim into the dispatch prompt,
+        # so it is surfaced here rather than hand-grepped out of the prose.
+        "cross_bead": meta.get("cross_bead") or "",
         "worktree": meta.get("worktree") or f"../computenet-worktrees/{tid}",
         "branch": meta.get("branch") or f"task/{tid}",
         "resumed": resumed,

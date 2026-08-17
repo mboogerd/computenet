@@ -88,14 +88,28 @@ bd create --type=task --parent=<feature-id> --validate \
   --title="<outcome as a change to the system, not an activity>" \
   --description="<current state with path:line evidence / the decided direction, saying what's settled and what's left to judgment / non-goals / the exact verification command>" \
   --acceptance="<which of the feature's rules and examples this task makes true>" \
-  --metadata '{"model":"<sonnet|opus>","files":"<comma-separated paths it will create or modify>"}'
+  --metadata '{"model":"<sonnet|opus>","files":"<comma-separated paths it will create or modify>","cross_bead":"<ids and action, or omit>"}'
 ```
 
 Note the flag: `bd create` takes **`--metadata`** with a JSON object.
 `--set-metadata key=value` exists only on `bd update` — passing it to
 `bd create` fails with `unknown flag` and creates nothing.
 
-Both metadata fields are load-bearing — a task missing either can't be
+**`cross_bead` is where an authorized write to ANOTHER bead is recorded.** If
+this task's criteria require touching a bead other than its own — commenting
+on a sibling, updating an upstream item — name the ids and the action here
+(`"cross_bead":"computenet-abc: comment the measured number"`). Omit the key
+when there is none; that is the normal case and the orchestrator reads a
+missing key as "none authorized".
+
+Write it here rather than only in the description. The orchestrator has to
+restate this verbatim in the dispatch prompt — authorization living only in
+the bead is invisible to the policy check, which reads the prompt — and
+without a field it would have to hand-grep every task's prose for a clause it
+cannot reliably spot (computenet-eetn). A field it can read is the difference
+between a load-bearing input and a guess.
+
+The `model` and `files` fields are load-bearing — a task missing either can't be
 scheduled and gets sent back. One exception: a **diagnosis-first task** (a
 flake, a defect whose location *is* the question) cannot know its claim —
 any pre-diagnosis `files` is a guess that co-schedules a sibling into a
