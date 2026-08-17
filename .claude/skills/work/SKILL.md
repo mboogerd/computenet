@@ -666,6 +666,19 @@ human reopens it. (An epic with *no* children just needs breakdown — step 4.)
 
 Nothing claimable at all → report and stop.
 
+**A SUB-EPIC under the epic you already hold is owned territory, not a second
+claim.** `epic.md` assumes the epic it breaks down is claimed, and the rule
+below forbids claiming another — so a sub-epic child sat in a gap with no
+route (computenet-k9uh). It is covered by the claim you already have: its
+effective epic (`scripts/epic-of.sh`) is the one you hold, so **break it down
+in place and do not claim it** — no `--claim`, no assignee, no `owner:` label,
+leave it `open`. Record provenance in a comment on the sub-epic naming this
+session and the parent claim it is working under, so a concurrent machine
+reading an unclaimed open sub-epic can see it is not free. `epic.md`'s dispatch
+template carries the no-claim variant, so this is not hand-written each time.
+And **a sub-epic child counts as workable surface** under the claimed epic:
+5f route 1 takes it like any other child rather than falling through.
+
 **One epic *claim* per session** — the claim is how a concurrent run tells a
 live session from a crash. The rule limits claims, not work: when the epic
 runs dry, 5f says what you may still pick up; idling for hours is a failure
@@ -719,10 +732,19 @@ Agent({
 never the main checkout's working tree — its local branch is stale:
   git -C <main-checkout> show origin/main:.claude/skills/work/references/epic.md
 Follow it to break epic ${epic} into features. Run bd with
--C <main-checkout>. It is already claimed and labeled — skip both.
+-C <main-checkout>. ${claimNote}
 Report the feature ids created.`
 })
 ```
+
+`${claimNote}` is one of two lines, and the difference is load-bearing:
+
+- **A claimed epic** → `It is already claimed and labeled — skip both.`
+- **A sub-epic under the epic you hold** → `This is a SUB-EPIC under
+  ${claimedEpic}, which this session already holds. Do NOT claim it, do not
+  set an assignee, do not add an owner label — leave it open. Comment on it
+  naming this session and that parent claim, so its provenance is visible.`
+
 
 **Read the breakdown's report for a re-scope.** `epic.md` requires it to
 rewrite an epic's title, description and acceptance in place when the epic
@@ -829,6 +851,25 @@ computenet-9xj). Same filters as everywhere: skip `human`-labeled and
 recently-parked items. **When one finishes, re-run this query and take the
 next** — don't fall to 5f while the epic still has direct children; after
 T-90m, stop taking new ones. Only when this query too is empty does 5f apply.
+
+**Three mechanics this route leaves undecided otherwise** (computenet-acc8):
+
+- **It is reviewed with [references/review-feature.md](references/review-feature.md)**,
+  not review-task.md — the item is feature-shaped here, it owns a PR, and the
+  feature review is the one that judges an integrated whole. **Say so in the
+  dispatch prompt**, and say the item has no child tasks, so the reviewer does
+  not go looking for a task layer to reconcile (review-feature.md's §1 already
+  covers the empty-`bd list --parent` shape and names the bullets that do not
+  apply).
+- **Its draft PR opens after the implementer's FIRST commit**, not after a 5c
+  merge. 5d's "on the first merge" trigger has nothing to fire on here: there
+  are no task branches to merge. Open it as soon as there is a commit to open
+  it against, so CI starts and the PR exists to attach the review to.
+- **It may grow a task layer under it.** If the item turns out to want
+  parallel children, break it down and cut those task branches from **this
+  item's** branch, merging them back into it — exactly 5b/5c's flow with this
+  item standing in for the feature. The whole still ships as **one** PR, the
+  item's own.
 
 **If you run several of these at once, keep at most ~2 open PRs against any
 one file.** Nothing else bounds the count here, and 5b's batching by disjoint
@@ -1829,6 +1870,26 @@ round. `DIRTY`/`BEHIND` → resolve per 5e (waiting on a conflict only you can
 clear is deadlock). `MERGED` → `git fetch origin main`, start. `CLOSED` or
 cap reached → park a question, continue down this list. Never background an
 unbounded loop — a PR on a red check stays `OPEN` forever.
+
+**2b. The feature you are ON is un-completable because one of its tasks is
+blocked by a SIBLING feature of this same epic.** This is the near-miss route
+5b's `blocked` verdict used to send to a park, stranding an almost-finished
+feature for the whole session (computenet-c0uf). The blocker is *inside* this
+epic, so it is yours to clear:
+
+- **Park the near-complete feature with a handoff comment** naming the blocking
+  feature by id, which of its outputs is needed, and what state the parked
+  feature is in (which tasks closed, what remains). A park whose comment does
+  not name the unblocker is how the next session re-derives all of this.
+- **Then look at the blocking feature.** Fits the remaining budget with margin
+  (5f's usual test) → work it via 5a; clearing it is what unparks the first.
+- **Doesn't fit → BREAK IT DOWN without claiming it**, so the next session
+  starts from tasks rather than from an unsplit feature.
+
+**A breakdown is admissible late in a slot when an implementation is not.** It
+creates no branch, no worktree and no PR, so it cannot strand — which is the
+whole reason routes 1/3/4 close at T-90m. A breakdown after T-90m is a
+legitimate use of the tail of a slot; starting an implementation is not.
 
 **3. The epic's remaining work is blocked solely by an item in a different
 epic** → claim and work **that item** (not its epic; this adds no epic

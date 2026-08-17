@@ -63,6 +63,14 @@ rewrote it in place. Without that, the orchestrator is left deciding whether
 to trust a breakdown that unilaterally rewrote its own epic's acceptance, on
 no evidence.
 
+**If you were told this is a SUB-EPIC under an epic the session already
+holds**, you are working inside that claim: break it down exactly as below,
+but **do not claim it** — no `--claim`, no assignee, no `owner:` label, leave
+it `open`. Comment on it naming the session and the parent claim instead. A
+second epic claim is what the orchestrator is forbidden to spend; the
+provenance comment is what stops a concurrent machine reading the open
+sub-epic as free (computenet-k9uh).
+
 ## Break it down
 
 Read the full epic (`bd show <id>`) and every spec/doc section it cites —
