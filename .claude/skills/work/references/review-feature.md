@@ -161,6 +161,21 @@ breakdown and 5f's route-4 items are legitimately parentless, and the file
 already tells you how to review one. Only a non-zero exit (`(no such id: …)`
 or `(cycle? …)`) means unresolved.
 
+**`acceptance_criteria` can be absent entirely**, and three reviewers hit it
+in one session. Do not assume it is there and do not invent a standard
+silently. Fall back in this order, and **say in your report which text you
+treated as the criteria**:
+
+1. the **structured description** — its "Implement"/"Test"/non-goals clauses;
+2. the **comment thread**, which needs `bd comments <id> --json > "$SCRATCH/c.json"`
+   and then reading the file, since `bd show` carries only `comment_count`;
+3. **nothing locatable → park it** ([ask-human.md](ask-human.md)), not pass.
+   A bead whose standard exists nowhere cannot be certified against, and a
+   pass here is a reviewer certifying its own invention (computenet-qxg5).
+
+Write what you derived back onto the bead (`bd update <id> --acceptance=…`)
+so the next reader judges the same item you did.
+
 **`acceptance_criteria` may be empty**, and on a bead filed mid-session by
 another agent it usually is — nothing broke it down. That is not a dead end
 and not automatically a defect: the criteria are then whatever the
@@ -329,6 +344,26 @@ mechanics — mutation checks, and not destroying a rare failure's evidence
 with `-q` — are in [review-task.md](review-task.md) §2; use them here
 unchanged when a seam is what you're testing.
 
+**When the diff's only executable artifact is in NO Gradle source set** — a
+script under `scripts/`, a hook, a harness, a `.claude/skills/**/*.sh` — there
+is no suite to cache-prove and the recipe above has nothing to bite on
+(computenet-wl77). Two things substitute, and both are required:
+
+- **Execute the artifact directly** and quote what it printed. That is the
+  run; there is no build to stand in for it.
+- **Show its arms are load-bearing by perturbing what each one claims to
+  measure.** A script that reports PASS/SKIP/FAIL is only evidence if you can
+  make each verdict appear on demand — feed it the state that should produce
+  each, and quote the three outputs. That is this shape's mutation check, and
+  without it "I ran it and it printed OK" proves the script runs, not that it
+  measures anything.
+
+**And say plainly what the required checks did and did not evidence.** For
+such a diff they evidence exactly one thing — *the branch does not break the
+build* — because no required check executes the artifact at all. A verdict
+that rests on green checks here is resting on a fact about other code. Say so
+in as many words rather than letting six green rows read as verification.
+
 ## 4. Your run is on macOS; the required checks are not
 
 Run `uname -sm` and put its output in your report. (For a diff proven
@@ -379,14 +414,37 @@ So:
   `auto-merge` row and "nothing pending" is indistinguishable from all-green
   (computenet-1zhu). Require the six required rows
   (`build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test`)
-  to be PRESENT *and* none of them pending; SKILL.md step 2 carries the loop.
+  to be PRESENT *and* none of them pending. **The loop, inline, because this
+  is where you need it** (computenet-elm3) — SKILL.md step 2 has the same one:
+
+  ```bash
+  req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
+  for i in $(seq 1 30); do
+    rows=$(gh pr checks <pr-url> 2>&1)          # exit status deliberately not tested
+    if [ "$(echo "$rows" | grep -cE "$req")" -lt 6 ]; then
+      echo "round $i: checks not yet reporting"; sleep 20; continue
+    fi
+    echo "$rows" | grep -q pending || { echo SETTLED; echo "$rows"; break; }
+    sleep 20
+  done
+  ```
+
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 
 ## 5. Repair by default — up to a bound
 
 A rejection forfeits everything already spent on the feature, so fix what you
-can rather than sending it back. Within the feature's stated scope, repair:
+can rather than sending it back.
+
+**Budget the repair, because it obliges a CI cycle.** A repair moves the head,
+so §6's re-read is no longer optional for you: you owe one full required-check
+cycle — **2–4 minutes on this repo** — plus the poll to watch it, on top of
+the repair itself. **Repair anyway**; this note exists so the cost is
+*expected*, not so it is avoided (computenet-elm3). Plan it against the
+~45–60 minute bound you were dispatched with, and if the repair plus its cycle
+will not fit, that is the moment to hand back rather than after you have spent
+the time. The poll idiom is in §6 at the point of use. Within the feature's stated scope, repair:
 missed criteria, broken seams, failing tests, gaps between tasks.
 
 Commit repairs on the feature branch, in the feature worktree:
@@ -474,15 +532,23 @@ mid-review:
 Your repairs are **substantive**, and disqualify you from certifying, if any
 of these is true:
 
-- more than ~30 changed lines total across your repair commits — **that is
-  insertions + deletions, exactly as the `--stat` above prints them**, not net
-  (a reviewer self-certified at 41 by reading it as net; the bound exists to
-  remove a judgement call, so it cannot leave one behind, computenet-e0i5) —
-  or more than three files touched. **Reflow counts.** If rewrapping alone
-  pushes you over, that is a reason to hand back a draft, not a reason to
-  recount: a reviewer trading its own verdict against its own line count is
-  the exact conflict this list exists to remove. Reflow less, or accept the
-  draft;
+- **it touches a behavioural code path** — anything that changes what the
+  system *does* at runtime. That is the primary test, and it is decided by
+  reading the diff, not by counting it. A repair that only corrects **text**
+  (prose, comments, KDoc, a message string nothing asserts on) is not
+  substantive on this bullet however long it is;
+- for a repair that *is* code, more than **~30 changed lines** — insertions +
+  deletions, exactly as the `--stat` above prints them, not net (a reviewer
+  self-certified at 41 by reading it as net; computenet-e0i5) — or more than
+  three files touched.
+
+  **Counting text lines was the defect, not the tie-break.** The count is
+  applied to the code half only, so a prose reflow cannot inflate you over the
+  bound and there is no judgement call left about whether wrapping "counts"
+  (computenet-hhm4, computenet-e0i5 — two beads, opposite readings, one rule).
+  Two reviewers handed the same commit — "28 insertions, 15 deletions, mostly
+  wrapped prose" — now reach the same verdict: read what the non-prose lines
+  do; if they touch no behavioural path, this bullet does not fire;
 - any **new or semantically changed test, corpus scenario, or assertion** —
   writing the check that decides the verdict is authoring the verdict.
   **Exception, and it is narrow: a test-only repair** — no production file in

@@ -139,6 +139,11 @@ Check:
   clear, tighten them (`bd update <task-id> --acceptance=…`) and review
   against the tightened version, saying so. Where it doesn't, you can't judge
   this task: say that rather than passing it on vibes.
+- **Absent entirely, with nothing to fall back on named.** Fall back in
+  order and **say which text you used**: the structured description, then the
+  comment thread (`bd comments <id> --json > "$SCRATCH/c.json"`, then read the
+  file — `bd show` carries only `comment_count`), then **park** rather than
+  pass if the standard exists nowhere (computenet-qxg5).
 - **Missing entirely** — the shape a directly-filed bug or chore arrives in,
   with no breakdown to have written them. Write them onto the bead
   (`bd update <id> --acceptance=…`) *before* you judge, and quote them in
