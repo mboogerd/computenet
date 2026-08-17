@@ -104,18 +104,22 @@ cells on its outlets) without acting twice on the world. Verified:
 `ShadowPromotionTest` — including the control where an unsuppressed shadow
 sink double-fires.
 
-*(Observation membrane — decided in 93 I-17, unimplemented; amends the
-granularity of the resolved G-32 mechanism above)*: effect classification
-refines from the cell marker to a contract flag — `@Contract(effect = true)`
-on world-touching boundary contracts, emitted by the same KSP scan as the
-management flag (12). Suppression MUST cut at exactly those boundary
-contracts, never at a cell's data inlets: interior cells run fully, so the
-judge still sees every derived delta (the cell-granularity rule above
-deletes exactly the emissions a judge needs for a mid-graph effectful cell).
-The `Effectful` cell marker demotes to a coarse fallback for opaque in-logic
-I/O: such a cell is replaced wholesale by a NoOp/mock instance and
-terminates judgeability downstream of itself, flagged at cut construction.
-Further membrane rules: **taps are downstream-only** — the shadow-side port
+*(Observation membrane — decided in 93 I-17; suppression-granularity half
+implemented (computenet-3jv2), amending the granularity of the resolved G-32
+mechanism above; the rest of the membrane below is still unimplemented)*:
+effect classification refines from the cell marker to a contract flag —
+`@Contract(effect = true)` on world-touching boundary contracts, emitted by
+the same KSP scan as the management flag (12). **Implemented**: suppression
+cuts at exactly those boundary contracts, never at a cell's data inlets —
+`cell.evolve.Shadow.spawn` NoOp-serves every `FanInlet` whose
+`ContractRegistry` descriptor carries the effect bit — so interior cells run
+fully and the judge still sees every derived delta (the cell-granularity
+rule above no longer deletes the emissions a judge needs for a mid-graph
+effectful cell). The `Effectful` cell marker demotes to a coarse fallback for
+opaque in-logic I/O: such a cell is still replaced wholesale by a NoOp/mock
+instance and terminates judgeability downstream of itself, flagged at cut
+construction. **Still unimplemented**, the further membrane rules: **taps
+are downstream-only** — the shadow-side port
 negotiates no upstream protocol capabilities, so shadow-raised attention or
 state-requests drop at the membrane and a read-only shadow can never summon
 production computation (it initializes only via the downstream late-join
