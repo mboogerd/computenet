@@ -6,6 +6,7 @@ import civictech.demo.beadsmirror.feed.DoltFeedPoller
 import civictech.demo.beadsmirror.feed.FeedCheckpoint
 import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.projector.DotMinter
+import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorProjector
 
 /**
@@ -259,6 +260,12 @@ class EmptyExportRefused(
  *   nothing. This is the guard's explicit operator override; see
  *   [EmptyExportRefused] for the other one, and for what the guard does and
  *   does not protect against.
+ * @param refs when non-null (task computenet-7em.1.1), every rebuilt
+ *   [MirrorProjector] this instance produces is built under [refs]' shared
+ *   logical `CellRef`s rather than random ones — so the swap-in projector
+ *   reuses the SAME `CellRef`s as the one it replaces, which is what keeps it
+ *   the same logical cell across a re-baseline (see [BaselineBuilder.build]).
+ *   `null` (the default) preserves this class's exact prior behaviour.
  */
 class Rebaseline(
     private val export: () -> List<ExportRow>,
@@ -268,6 +275,7 @@ class Rebaseline(
     private val workspaceIdentity: String,
     private val onEvent: (MirrorEvent) -> Unit,
     private val acceptEmptyExport: Boolean = false,
+    private val refs: MirrorCellRefs? = null,
 ) {
 
     /**
@@ -301,7 +309,7 @@ class Rebaseline(
         if (rows.isEmpty() && reason !is RebaselineReason.FirstStart && !acceptEmptyExport) {
             throw EmptyExportRefused(reason, foldSize = state.current.view().size)
         }
-        val rebuilt = BaselineBuilder(DotMinter(workspaceIdentity)).build(rows, headCommit, headHeight)
+        val rebuilt = BaselineBuilder(DotMinter(workspaceIdentity)).build(rows, headCommit, headHeight, refs)
 
         state.swap(rebuilt)
         checkpoint.write(headCommit)
