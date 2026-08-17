@@ -193,26 +193,51 @@ report; a wrong identity is worse than a dead run.
 before anything reads it:
 
 ```bash
-git fetch origin main --quiet
-git rev-parse HEAD origin/main
-git merge-base --is-ancestor origin/main HEAD \
+M=<main-checkout>                       # the -C target, NOT wherever you were launched
+git -C "$M" fetch origin main --quiet
+git -C "$M" rev-parse HEAD origin/main
+git -C "$M" merge-base --is-ancestor origin/main HEAD \
   && echo "OK: main checkout contains origin/main" \
-  || echo "STALE: this checkout is BEHIND origin/main — its scripts and SKILL.md are not the ones main has"
+  || echo "STALE: this checkout does NOT contain origin/main — its scripts and SKILL.md are not the ones main has"
+git -C "$M" status --porcelain          # anything tracked here => another session may be mid-work
 ```
+
+**`-C <main-checkout>` is the whole point of the check** — run it without it
+and you test whichever tree you happen to stand in. You may well have been
+launched from a worktree cut fresh from `origin/main`, in which case the
+bare command prints `OK` while the checkout the scripts actually come from is
+44 commits behind: the exact reported failure, now wearing a green light. The
+asymmetry *is* the bug (computenet-6xm).
 
 Every `scripts/*.sh` in this file runs from the **main checkout**, because
 that is where `bd` lives — and the main checkout's working copy drifts (44
 commits behind, measured; computenet-kcu). So a session can execute a version
 of a script that `main` has already fixed, and find out several steps later as
-a rejected push or a wrong answer, with nothing connecting the two
-(computenet-6xm).
+a rejected push or a wrong answer, with nothing connecting the two.
 
-`STALE` → **fast-forward before continuing** (`git -C <main-checkout> merge
---ff-only origin/main`). If that is refused because the checkout has local
-commits or a dirty tree, stop and report: a session running scripts from an
-unknown revision is worse than a session that did not start. This is the one
-place the check is cheap and the failure is legible; it belongs here and not
-where the symptom appears.
+`STALE` → **fast-forward before continuing** (`git -C "$M" merge --ff-only
+origin/main`). Refused — local commits, or a modification to a file the
+fast-forward would overwrite — → stop and report: a session running scripts
+from an unknown revision is worse than a session that did not start.
+
+**Do not fast-forward a dirty checkout, even though git lets you.** Other
+sessions share this working tree and its index, so `status --porcelain` above
+is a check, not decoration. A `--ff-only` aborts only when it would overwrite
+a file *you* modified; with unrelated modifications staged or unstaged it
+succeeds and moves a shared HEAD out from under a concurrent session
+(measured). Tracked modifications present → stop and report them rather than
+merging. Worktrees attached to the same `.git` are unaffected either way —
+each has its own HEAD, index, and files — so only the main checkout's own
+occupants are at risk.
+
+This is a **one-shot pin, not a live guarantee**: it fixes the revision your
+scripts come from at session start, and `origin/main` will move under a long
+run. That is the intended trade — one consistent revision for the whole run
+beats a moving one, and re-fast-forwarding mid-run would shift scripts under
+your own in-flight steps. What it buys is that no *drifted* script ever runs
+unnoticed, and it buys it before step 3 reads anything. If a script behaves
+unlike its description later in the run, re-run this check before believing
+the description is wrong (15 minutes went that way once).
 
 Note the asymmetry with the dispatch rule below: **agents** read
 `.claude/skills/work/**` from their own worktree, cut fresh from

@@ -2,7 +2,8 @@
 """Regression tests for next-batch.py: the claim-overlap rule (computenet-9eb),
 the empty-batch verdict (computenet-eic), the parked-children ids that verdict
 hands to the 5e review (computenet-k9d.4), and the claimless-runs-alone rule
-that feature.md's zero-diff convention leans on (computenet-wpvy.30).
+that feature.md's zero-diff convention leans on (computenet-wpvy.30), and the
+`cross_bead` field 5b relays verbatim into dispatch prompts (computenet-eetn).
 
 Run: python3 .claude/skills/work/scripts/next-batch.test.py
 """
@@ -102,6 +103,42 @@ else:
     failed += 1
     plan_entry_cases = 1
     print("FAIL: claimless entry files — next-batch.py has no plan_batch()")
+
+
+# --- cross_bead reaches the entry (computenet-eetn) -------------------------
+# 5b reads authorized cross-bead writes off the batch entry instead of
+# hand-grepping the description, so the key has to be present on EVERY entry:
+# absent metadata must read as the empty string ("none authorized"), not as a
+# missing key the orchestrator silently skips over.
+
+def t_meta(id, **meta):
+    task = {"id": id, "issue_type": "task", "status": "open", "labels": []}
+    task["metadata"] = meta
+    return task
+
+
+entry = getattr(nb, "_entry", None)
+cross_bead_cases = [
+    (t_meta("a", files="src/A.kt"), "",
+     "no cross_bead key => empty string, the 'none authorized' value"),
+    (t_meta("b", files="src/B.kt", cross_bead=""),
+     "", "an explicitly empty cross_bead stays empty"),
+    (t_meta("c", files="src/C.kt",
+            cross_bead="computenet-iyi.4: add a bd comment recording the OQ-1 decision"),
+     "computenet-iyi.4: add a bd comment recording the OQ-1 decision",
+     "a written cross_bead reaches the entry verbatim, for verbatim relay"),
+    ({"id": "d", "issue_type": "task", "status": "open", "labels": []}, "",
+     "a task with NO metadata at all still carries the key"),
+]
+for task, want, what in cross_bead_cases:
+    if entry is None:
+        failed += 1
+        print(f"FAIL: {what} — next-batch.py has no _entry()")
+        continue
+    got = entry(task, False, []).get("cross_bead", "<<missing>>")
+    if got != want:
+        failed += 1
+        print(f"FAIL: {what} — expected {want!r}, got {got!r}")
 
 
 # --- classify(): the verdict for an EMPTY batch (computenet-eic) -------------
@@ -281,7 +318,8 @@ else:
     capacity_reason_cases = 1
     print("FAIL: capacity skip reason — next-batch.py has no cap_batch()")
 
-total = (len(cases) + len(plan_cases) + plan_entry_cases + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
+total = (len(cases) + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+         + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases)
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
