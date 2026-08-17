@@ -360,9 +360,18 @@ own work, the SDLC lane's supersede-closes. Four directories were measured
 stranded that way on one machine, and the fix for the leak could not reach
 them because it only looks forward (computenet-8l4r). This script inverts the
 join: it walks `git worktree list` and removes each `computenet-worktrees/<id>`
-whose bead is closed, whose tree is **clean**, and which has been **quiet for
-15 minutes** — the same liveness floor step 3 and 5f use. `rc=1` means a
-candidate was dirty or a removal failed: look, do not re-run.
+whose bead is closed, whose tree is **clean**, which has **no rebase/merge in
+progress**, and whose **HEAD is contained in `origin/<its branch>`**. That last
+one is the guard a clean tree does not give you: `git status --short` says
+nothing about *commits*, so without it a worktree carrying unpushed work is
+deleted silently, `rc=0`, "removed". Detached HEAD, a branch origin has never
+seen, an unreachable origin, and local commits ahead of the remote tip are each
+a SKIP — the script has to *prove* the commits survive elsewhere. Removal is
+additionally held back until the directory has been **quiet for 15 minutes**;
+treat that one as a cheap filter on the close/write race, **not** as a liveness
+test — an agent sitting on an idle worktree reads as quiet. `rc=1` means a
+candidate was dirty, mid-operation, not provably pushed, or a removal failed:
+look, do not re-run.
 
 **Capture to a file rather than piping, for every script whose exit code you
 have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
@@ -668,7 +677,7 @@ if git -C <worktree> fetch origin <branch> 2>/dev/null; then
   git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
     && echo "OK: worktree contains origin/<branch>" \
     || echo "STOP: on the branch at the wrong commit — origin/<branch> is not in HEAD"
-elif git -C <worktree> ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
+elif git -C <worktree> ls-remote origin >/dev/null 2>&1; then
   echo "OK: origin has no <branch> yet (first run, nothing to compare)"
 else
   echo "STOP: origin is UNREACHABLE — this check proved nothing"
@@ -692,8 +701,11 @@ looking clean (computenet-aeg). Either `OK` is fine.
 for "the network is down", so the original single `else` reported an
 unreachable origin as *"first run, nothing to compare"* — an `OK` on a check
 that never ran, which is the failure this whole block exists to prevent
-(computenet-dtl). The `ls-remote --exit-code origin HEAD` in the middle branch
-is what separates them: it succeeds only if origin actually answered.
+(computenet-dtl). The bare `ls-remote origin` in the middle branch is what
+separates them: it succeeds only if origin actually answered. Bare, and with no
+ref argument, deliberately — `ls-remote --exit-code origin HEAD` exits 2 on an
+origin that is reachable but has no refs yet, which would report a reachable
+remote as unreachable.
 
 `ensure-worktree.sh` is idempotent: leaves an attached worktree alone,
 attaches local branches, tracks remote-only branches at the remote tip,
