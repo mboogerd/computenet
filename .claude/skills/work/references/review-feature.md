@@ -790,7 +790,7 @@ answer changed under a live session on 2026-08-14, when the epic was closed
 by a concurrent session while this feature was still in review:
 
 ```bash
-bd show <epic-id> --json | jq -r '.[0].status'
+bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'
 ```
 
 `closed` → the paragraph above stops being true of it. `bd` will let you

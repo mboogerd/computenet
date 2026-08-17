@@ -82,7 +82,22 @@ felt like giving up.
   (computenet-csm).
 - `bd` prints warnings on stdout **before** the JSON, so `jq` and
   `json.loads` fail on the raw stream; slice from the first line starting
-  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing.
+  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing. **Every documented
+  snippet in this skill carries that slice** — it is not decoration, and
+  removing it to shorten a line reintroduces the bug (computenet-efhi).
+  Setting `beads.role` silences the *role* warning, and this clone has it
+  (`beads.role=maintainer` in `.git/config`) — but that is **per-clone local
+  git config, not tracked and not synced**, so the other machine still emits
+  the warning until somebody sets it there too, and so does any fresh clone.
+  It is also one warning of several: the id-collision backstop and Dolt's own
+  notices print the same way. The slice stays regardless; never drop it
+  because "the warning is fixed here".
+
+  **An empty `jq` result must never be read as an empty query result.** That
+  is the whole harm: the pipe fails, `jq` prints nothing, exit status is the
+  last stage's, and "no rows" is indistinguishable from "the parse died". If a
+  query you expect to return something returns nothing, re-run it without the
+  `jq` and look at the raw stream before believing it.
 - Comments are read one way only: `bd comments <id> --json >
   "$SCRATCH/c-<id>.json"`, then read the file. Inline reads truncate on
   long-lived beads (~34KB observed) and present as *fewer comments than
@@ -110,7 +125,7 @@ felt like giving up.
 
   ```bash
   ROWS='(if type=="array" then . else (.issues // []) end)[]'
-  bd list … --json | jq -r "$ROWS | .id"
+  bd list … --json | sed -n '/^[[{]/,$p' | jq -r "$ROWS | .id"
   ```
 
 - **Re-parenting a reviewer-filed residual takes two commands.** A
@@ -443,7 +458,7 @@ is a resume — not that anything failed. Observed 2026-08-15 mid-breakdown
 
   Those files survive a host-process exit, so the usual reason to miss them is
   not knowing the path, not deletion. If you genuinely cannot recover it, take
-  the start from the epic's claim — `bd show <epic> --json | jq -r
+  the start from the epic's claim — `bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r
   '.[0].started_at'`, which `--claim` sets at step 3, a few minutes after the
   true start — and the slot length from the routine that invoked you. (A first
   bd comment's timestamp works too, but nothing before step 5 requires one, so
@@ -584,6 +599,18 @@ treat that one as a cheap filter on the close/write race, **not** as a liveness
 test — an agent sitting on an idle worktree reads as quiet. `rc=1` means a
 candidate was dirty, mid-operation, not provably pushed, or a removal failed:
 look, do not re-run.
+
+**A stranded TASK worktree now always SKIPs here, and the message it prints is
+wrong about the cause.** Task branches are no longer pushed (5c,
+computenet-zmso), so `origin` has no `task/<id>` and the guard reports *"bead
+closed but origin has NO task/<id> — these commits exist only here"*. For a
+task the guard is the only thing left checking, and it is checking the wrong
+ref: a closed task bead means 5c merged it, so its commits reached origin
+**inside the feature branch**, not under their own name. Confirm that by hand
+before removing — `git -C <worktree> branch -r --contains HEAD` naming an
+`origin/feature/…` ref is the proof — then `git worktree remove` it yourself.
+Do **not** blanket-ignore the `rc=1`: the same line on a *feature* worktree
+still means exactly what it says.
 
 **Capture to a file rather than piping, for every script whose exit code you
 have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
@@ -801,7 +828,7 @@ looks exactly like a dead breakdown if you only count children
 `human` label + a `QUESTION:` comment:
 
 ```bash
-bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
 bd comments <epic> --json > "$SCRATCH/epic-comments.json"
 ```
 
@@ -832,7 +859,7 @@ they rot after their blocker clears (computenet-6i1: 3 of 4 parked items were
 finishable). List them repo-wide and keep the ones under this epic:
 
 ```bash
-bd list --status=blocked --limit 0 --json | jq -r '.[] | .id'
+bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,$p' | jq -r '.[] | .id'
 .claude/skills/work/scripts/epic-of.sh <each id>       # keep those under <epic>
 bd comments <id> --json > "$SCRATCH/parked-<id>.json"  # read the QUESTION
 ```
@@ -1260,7 +1287,7 @@ sibling.
 under one is an acquisition and gets pushed like any other:
 
 ```bash
-bd show <epic> --json | jq -r '.[0].status'    # local read, no network
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'    # local read, no network
 # closed → bd dolt push        (>=300s timeout) right after the claim
 ```
 
@@ -1353,7 +1380,8 @@ demonstrably discriminates, and report the substitution on the bead rather
 than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
+outruns that 10-minute cap, COMMIT FIRST (do not push — see your reference),
+then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
@@ -1455,7 +1483,8 @@ commissioned work rather than scope creep, and anything beyond it as
 unauthorized.
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
+outruns that 10-minute cap, COMMIT FIRST (do not push — see your reference),
+then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
@@ -1480,7 +1509,37 @@ and state a verdict plus a NOT VERIFIED section. Agent-completed is not
 task-reviewed; a result skimmed as done here merges unreviewed code.
 
 **Merge the passes yourself, one at a time** — reviewers must not merge
-(concurrent merges into one feature branch race). First confirm the feature
+(concurrent merges into one feature branch race).
+
+**The task branch is LOCAL by design; the feature branch is what must be
+durable.** A dispatched implementer's `git push -u origin <task-branch>` is
+denied by the permission classifier, so task.md now has implementers commit and
+*not* push (computenet-zmso). Nothing needs the remote task branch: its
+reviewer works in that worktree, and the merge below reads the local ref, which
+worktrees of one repository share — including the reviewer's `review:` repair
+commits, which is why merging the *local* ref and not `origin/task/<id>` is
+mandatory, not merely convenient (a fetched merge would have silently dropped a
+certified repair; observed 2026-08-17 on computenet-7em.2.3).
+
+Two consequences you own, because nothing else can:
+
+- **The durability check.** After the push, confirm the merge is actually on
+  origin **before** you close the task — a close is what tells every later
+  session the work landed. `STOP` → do not close, and do not remove the
+  worktree. That line prints `STOP` for an unreachable origin too; that is the
+  safe direction here (unlike 5a's block, where an unreachable origin printing
+  `OK` was the bug), so treat it as "not proven durable", diagnose, retry.
+- **An unmerged task branch dies with this machine.** It is not on origin, so a
+  *later session on the other machine* resuming that task finds neither the
+  local branch nor `origin/task/<id>`, and `ensure-worktree.sh` takes its
+  create-from-base path: a fresh empty branch, narrated on stderr as
+  "creating branch … (exists neither locally nor on origin)". Nothing is
+  corrupted and nothing is silently wrong, but the commits are gone and the
+  task is redone from scratch. So: **merge each pass in this session**, and if
+  you must end with a task reviewed-but-unmerged, say so in the summary with
+  the machine name — that branch is only resumable here.
+
+First confirm the feature
 worktree is still on the recorded branch (computenet-wpvy.29), and close the
 task before touching worktrees, so a crash can't leave merged work looking
 unclaimed:
@@ -1501,6 +1560,10 @@ gh pr list --head <feature-branch> --state open \
 git -C <feature-worktree> diff --stat <feature-branch>..task/<task-id>   # BEFORE the merge — see below
 git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
 git -C <feature-worktree> push
+git -C <feature-worktree> fetch origin <feature-branch> \
+  && git -C <feature-worktree> merge-base --is-ancestor HEAD FETCH_HEAD \
+  && echo "OK: the merge is on origin — durable" \
+  || echo "STOP: the merge is NOT on origin — do not close the task"
 bd close <task-id>
 git -C <task-worktree> status --short                   # expect empty; else an agent died mid-edit — report
 ```
@@ -1966,7 +2029,7 @@ always pushed, a child claim only once its epic closes (5b):
 
 ```bash
 .claude/skills/work/scripts/epic-of.sh <candidate-id>
-bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
+bd show <that epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
 ```
 
 - open or in_progress with the other machine's assignee, or *any* status
@@ -2109,7 +2172,7 @@ Otherwise, in order:
 **1. The epic decision.** One query, three branches:
 
 ```bash
-bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee)"'
 bd list --parent=<epic> --all --json     # children; must be non-empty to close
 ```
 

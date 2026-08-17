@@ -78,7 +78,7 @@ if grep -qiE "rejected|error" <<<"$push_out"; then
     echo "ESCALATE: pull hit a merge conflict — see .claude/skills/work/references/dolt-conflict.md (an issues-only modify/modify conflict is resolvable here; anything else needs an operator); claim is LOCAL-ONLY" >&2
     exit 2
   fi
-  now_assignee=$(bd show "$id" --json | jq -r '.[0].assignee // ""')
+  now_assignee=$(bd show "$id" --json | sed -n '/^[[{]/,$p' | jq -r '.[0].assignee // ""')
   if [ "$now_assignee" != "$BEADS_ACTOR" ]; then
     echo "LOST RACE: after the pull, $id is assigned to '$now_assignee' — select another epic" >&2
     exit 1
