@@ -157,7 +157,10 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
    falsified it, not just a silent workaround.
 
    **Any time you deliberately break code to prove something catches it — a
-   mutation check — leave a marker first**, so an agent that inherits your
+   mutation check — follow [mutation-check.md](mutation-check.md)**, which is
+   the one written procedure: commit first, marker, mutate (through Bash when
+   the Edit tool refuses), `--rerun --no-build-cache`, verify the revert, then
+   the confirming run. **Leave the marker first**, so an agent that inherits your
    worktree after a crash can tell a live mutation from finished work. The two
    are indistinguishable from the diff alone.
 

@@ -259,8 +259,18 @@ What to consume, per test run:
 
   If you only have a truncated log, do not claim the per-task check. Fall back
   to the task-count line plus the JUnit XML timestamp below, which together
-  prove the module's tests ran in *this* invocation — or re-run with `--rerun`
-  and make the question moot.
+  prove the module's tests ran in *this* invocation — or re-run with `--rerun`.
+
+  **`--rerun` does not make the question moot.** Measured 2026-08-15 on
+  `:concord:test`: it printed `> Task :concord:test` **unmarked** and
+  `1 executed`, while the JUnit XML under `build/test-results` still held the
+  *previous* run's 253 tests and older internal `timestamp` attributes under
+  freshly-touched file mtimes — a build-cache restore the per-task marker did
+  not show. So an unmarked line is not proof of execution: read the XML's
+  *content* (counts and the `timestamp` attribute inside the file, never the
+  file's mtime), and for any load-bearing run — a mutation check, a
+  before/after comparison — add `--no-build-cache` alongside `--rerun`
+  ([mutation-check.md](mutation-check.md) step 4, computenet-qsfu).
 - **The JUnit XML**, which carries the counts and a timestamp proving the
   results are from *this* run:
 
@@ -348,7 +358,8 @@ What to consume, per test run:
   alone, and §2 warns only about caching (computenet-2x5l). Check both:
 
   ```bash
-  ./gradlew :<module>:test --tests '<TestName>' --rerun > "$SCRATCH/mut.log" 2>&1
+  ./gradlew :<module>:test --tests '<TestName>' --rerun --no-build-cache \
+    > "$SCRATCH/mut.log" 2>&1
   grep -E '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
   ```
 
@@ -376,6 +387,12 @@ What to consume, per test run:
   stash pop` silently pops whatever agent stashed last, exit 0, wrong file
   contents (measured). A patch in your own `$SCRATCH` is worktree-local and
   cannot be taken by anyone else.
+
+  **The procedure is [mutation-check.md](mutation-check.md); follow it rather
+  than improvising.** It carries the order that makes the check safe (commit
+  first), what to do when the Edit tool refuses the strongest mutation, why
+  `--rerun` alone can restore a cached XML, and how to verify the revert
+  actually reverted. Three sessions each got a different one of those wrong.
 
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,
