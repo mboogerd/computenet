@@ -259,6 +259,53 @@ done
 
   The three states the loop keeps apart — query failed, not yet reporting,
   unsettled — are one state to any test on `$?`, and two of them look green.
+- **A long job YOU started is not supervised by anything.** This is distinct
+  from a dispatched agent, whose completion notification always arrives: a
+  background Bash job that **hangs** produces no notification at all, so
+  absence of news is not progress — one such job silently consumed half a
+  session (computenet-6v1). Never start one bare. Give it a hard timeout so it
+  cannot outlive its usefulness — there is no `timeout(1)` on macOS, so the
+  bound goes in your wrapper (`perl -e 'alarm shift @ARGV; exec @ARGV' 3600
+  <cmd>` exits 142 at the deadline, verified) — and, when the job is long
+  enough that you would rather hear about a stall than wait out the alarm, add
+  a **stall watch**. Ledger the job first, then arm the watch as a **Monitor**:
+  each of its stdout lines becomes a notification, whereas a backgrounded loop's
+  `echo`s reach you only when the loop finally exits — too late to be a warning.
+
+  ```bash
+  # your own ledger — same one you drain in Finalize step 7
+  echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
+  ```
+
+  ```
+  Monitor({description: "stall watch on <job>", persistent: false, timeout_ms: 1900000,
+    command: `
+  L=<spell the log path out>   # the monitor's shell does not inherit your $SCRATCH
+  sz() { [ -f "$1" ] && wc -c < "$1" | tr -d ' ' || echo 0; }   # BSD wc pads with spaces
+  prev=$(sz "$L")
+  for i in $(seq 1 30); do
+    sleep 60
+    now=$(sz "$L")
+    [ "$now" = "$prev" ] && echo "round $i: STALLED — nothing written in 60s ($now bytes)"
+    prev=$now
+  done
+  echo "stall watch ended after 30m — job still running, or you missed its exit"`
+  })
+  ```
+
+  Two details are load-bearing. `wc -c < f` on darwin prints the count **padded
+  with leading spaces**, so comparing it against a bare `0` says "alive" for a
+  file that has sat empty the whole minute — precisely the stall; `tr -d ' '`
+  normalizes both sides. And the size has to be read for a *missing* file too
+  (`sz` returns `0`), because a job that dies before creating its log is the
+  same silence. While this watch is alive it is **the** bounded watch — finish
+  it or `TaskStop` it before arming a PR-checks loop.
+
+  **A hung child does not fail, it waits.** A JVM after `OutOfMemoryError`, a
+  container whose main thread died, a Gradle daemon that lost its worker — all
+  of these keep their process alive with no exit status ever arriving. So the
+  timeout has to live in *your* wrapper; trusting the child to exit is what
+  turns a dead job into a lost session.
 - **Between notifications you have no sense of elapsed time.** Run
   `date -u +%H:%M` before any budget-gated decision — one session misread
   1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
@@ -1517,7 +1564,11 @@ gh pr view <pr-url> --json state,mergeStateStatus,statusCheckRollup
 
 If the check closed anything, run `publish-beads.sh` once more.
 
-**7. `TaskStop` the budget monitor**, then summarize: epic worked and its
+**7. `TaskStop` the budget monitor, then drain the ledger** — `cat
+"$SCRATCH/jobs"` (step 2), `TaskStop` or kill every line still alive, then
+`rm -f` it. An absent or empty file is a positive answer: you started none.
+"I don't think I left any running" is not, and a background job outlives the
+session that forgot it. Then summarize: epic worked and its
 disposition (closed / released / closed-under-you), tasks completed, features
 left in draft (PR urls), parked questions (and what they ask), stale claims
 released at startup, what the startup sweep closed or flagged, what the merge

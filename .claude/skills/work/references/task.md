@@ -342,7 +342,20 @@ than restarting. That's the whole reason the worktree is preserved.
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
-10. **Before you report, kill every background job you started** — `TaskStop`
+10. **Before you report, kill every background job you started.** You cannot
+    enumerate them from memory and there is no "list my background jobs"
+    affordance here — `TaskStop` needs an id you must already hold, and a poll
+    shell you backgrounded 40 tool calls ago is not something you will
+    reliably recall (computenet-k9d.10). Write each one down **as you start
+    it** and read the file back here:
+
+    ```bash
+    echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
+    # ... at report time: cat "$SCRATCH/jobs", kill each line, then rm -f it
+    ```
+
+    An empty or absent file is a positive answer — you started none. "I don't
+    think I started any" is not. Then: `TaskStop`
     each monitor, kill each backgrounded shell, exit each poll loop. Starting
     them is fine (waiting on CI, tailing a long run); leaving one alive is not,
     and never end your turn waiting on one, because nothing resumes you.
