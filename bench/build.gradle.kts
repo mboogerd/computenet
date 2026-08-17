@@ -70,11 +70,15 @@ jmh {
 // BUILD FAILURE, wired into `check` (and therefore into `build`), naming the source
 // set a reader has to go look at.
 //
-// The hook is a verification task reading the generated META-INF/BenchmarkList rather
-// than a `doLast` on the generator, for two reasons: the generator task is SKIPPED
-// outright when the jmh source set is empty, so a `doLast` on it never runs in exactly
-// the case the guard exists for; and a separate task keeps the reason for the failure
-// legible in the task name.
+// The hook is a separate verification task reading the generated META-INF/BenchmarkList
+// rather than a `doLast` on the generator. Note WHY, because the obvious reason is the
+// wrong one: it is not that the generator gets skipped on an empty source set. Measured
+// 2026-08-17 with bench/src/jmh/kotlin moved aside, `:bench:jmhRunBytecodeGenerator`
+// still EXECUTED and simply truncated BenchmarkList to zero bytes — the silently-empty
+// success this guard exists to catch. The reasons are that neither the generator nor
+// `jmhJar` is in the `build` lifecycle (so something has to pull the generator into
+// `check` regardless), and that a named `verifyBenchmarkDiscovery FAILED` line says what
+// went wrong before anyone reads the message.
 //
 // Deliberately declares no outputs, so it is never up-to-date and never restored from
 // the build cache. This is a cheap file read, and a guard that can be skipped is not a
