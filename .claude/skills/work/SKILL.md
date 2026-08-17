@@ -912,6 +912,21 @@ verdict. (`parked` is only meaningful on an empty batch.)
   (computenet-dqy.37 required violating its own claim). Design reaches wider
   → widen the claim and comment why. The dispatch prompt below also tells the
   implementer to report-and-widen rather than choose silently.
+- **Disjoint paths are not enough — read each candidate's acceptance for a
+  cross-reference into another candidate's claim.** `next-batch.py` proves the
+  batch will not merge into a conflict; it cannot see that task A's acceptance
+  names a fixture, symbol or file that lives inside task B's claim, which is an
+  overlap *by construction* and no diff will reveal until both have landed
+  (computenet-nyd). You are already reading every candidate's criteria to write
+  the dispatch, so read them for this too, and **serialise the pair** — run one
+  in this batch and the other in the next — if any such reference exists.
+
+  The tell that you have one: **a dispatch prompt you cannot write without
+  saying both "X is in scope" and an exclusion that covers X.** A prompt
+  carrying both is not a boundary, it is a contradiction the agent has to
+  resolve by guessing. If you cannot make the boundary unambiguous in one
+  sentence, that *is* the signal to sequence rather than batch — do not ship
+  the contradiction and hope.
 - **An empty `files` claim is two different things — read the description
   before scheduling one.** `next-batch.py` batches a claimless task alone
   either way, which is right for both, but they need different bookkeeping.
@@ -1224,11 +1239,75 @@ unclaimed:
 
 ```bash
 git -C <feature-worktree> rev-parse --abbrev-ref HEAD   # must equal <feature-branch>
+if git -C <feature-worktree> fetch origin <feature-branch> 2>/dev/null; then
+  git -C <feature-worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
+    && echo "OK: local contains origin/<feature-branch>" \
+    || echo "STOP: origin/<feature-branch> is AHEAD — somebody pushed under you"
+elif git -C <feature-worktree> ls-remote origin >/dev/null 2>&1; then
+  echo "CHECK: origin has no <feature-branch> — 5a pushed it, so absence is not normal"
+else
+  echo "STOP: origin is UNREACHABLE — this check proved nothing"
+fi
+gh pr list --head <feature-branch> --state open \
+  --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect: only yours, or none
+git -C <feature-worktree> diff --stat <feature-branch>..task/<task-id>   # BEFORE the merge — see below
 git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
 git -C <feature-worktree> push
 bd close <task-id>
 git -C <task-worktree> status --short                   # expect empty; else an agent died mid-edit — report
 ```
+
+**Re-verify the feature branch immediately before you merge into it, and
+refuse on surprise.** 5a set this branch up, but that was potentially an hour
+and several merges ago, and nothing between then and here re-reads it
+(computenet-wpvy.29). Two things can have changed underneath: `origin` can
+hold a tip your local ref does not contain, and a PR you did not open can have
+this branch as its head. **Either is a STOP, not something to resolve** —
+both sides may hold pushed, unreviewed work, and picking a winner discards
+somebody's. Park the choice (`ask-human.md`) rather than merging or
+force-updating.
+
+**An absent *PR* is normal here; an absent *branch* is not.** 5d opens the PR
+only after the first task merges, so `gh pr list` printing nothing is the
+expected first-run state (review-task.md §1 covers the same shape for
+reviewers). The branch itself is different: 5a ends with `git push -u origin
+<branch>`, so by the time you reach 5c `origin/<feature-branch>` exists — its
+absence means that push never landed or something deleted the ref. That is a
+**`CHECK`**, deliberately not a `STOP`: `STOP` is reserved above for the two
+findings that mean *park via ask-human.md* — origin ahead, or a competing PR —
+because in those two somebody else may hold pushed unreviewed work. A missing
+branch endangers nobody's work; find out why and push it, then merge. And the
+third branch exists because a bare `if fetch` cannot tell "no such branch" from
+"the network is down" — it would diagnose an unreachable origin as an absent
+branch, an answer on a check that never ran (the same defect
+`computenet-dtl` fixed in 5a's block). `ls-remote` succeeds only if origin
+answered.
+
+That is also why this is written as `if/elif/else` rather than an `&&`/`||`
+chain: absent, ahead and unreachable are three different findings, and a chain
+reports them as one line.
+
+**The `--stat` that actually caught this is the two-dot diff *before* the
+merge.** Run `git diff --stat <feature-branch>..task/<task-id>` and read it
+every time, not only when something feels wrong: a two-dot diff shows both
+directions, so content sitting on the feature branch and absent from the task
+branch appears as a **deletion**. That is the signature of a base that moved
+— in the observed case, deletions under `references/` and a 262-line test
+file the implementer never wrote.
+
+**Do not substitute the post-merge `git diff --stat HEAD~1 HEAD` for it.** On
+a merge commit `HEAD~1` is the *first* parent, so that diff is the
+first-parent diff, which for a clean merge is exactly the task's own changes —
+a file the task never touched can never appear in it, and the check silently
+never fires (computenet-rbfa is the same first-parent trap read from the
+other side). One benign reading of the two-dot diff does remain: a sibling
+task from the same batch that already merged into this branch after this task
+forked shows up as reversals too. Check the reversed paths against that
+sibling's `files` claim before parking.
+
+5e carries the same guard in its shipping form before `gh pr ready`: the
+`headRefOid`-equals-local-`HEAD` check is the origin-ahead half, and the
+`gh pr list --head` line there is the competing-PR half.
 
 Do **not** remove the task worktree — every removal happens in step 6's
 sweep, after all agents have returned (removing now races the reviewer's own
@@ -1370,9 +1449,17 @@ git -C <feature-worktree> log --oneline \
 # §6 merge moved the head
 git -C <feature-worktree> rev-parse HEAD
 gh pr view <pr-url> --json headRefOid -q .headRefOid    # must equal the line above
+gh pr list --head <branch> --state open \
+  --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect exactly one: yours
 gh pr checks <pr-url>
 gh pr ready <pr-url>
 ```
+
+Those two `gh` lines are 5c's pre-merge guard at the ship gate
+(computenet-wpvy.29). `headRefOid` **is** origin's tip of this branch, so the
+equality is the stronger form of 5c's origin-ahead check; a second open PR on
+this head, or one you did not open, is the collision 5c refuses to resolve —
+park it, do not `gh pr ready`.
 
 Sha mismatch = "checks not yet available for this commit", not a verdict —
 the PR head has been observed lagging the pushed ref by ~10 minutes with
@@ -1483,6 +1570,33 @@ bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_a
 
 - open or in_progress with the other machine's assignee, or *any* status
   touched within 15 minutes → treat as live; take the next candidate.
+  **This branch has no age test, and that is deliberate** (computenet-9ynn).
+  Step 3 will *take over* an open epic untouched for 15 minutes, so 5f is
+  strictly stricter than step 3 for the same state — an epic a dead machine
+  abandoned hours ago is claimable at step 3 but its children are skipped
+  here. The asymmetry is kept because the two branches guard different
+  things, not because one is merely more cautious — both claims are pushed
+  acquisitions, so "announced by a push" is not the discriminator
+  (claim-sync.md brackets 5f routes 3–4 exactly like step 3). Two reasons:
+
+  - **Step 3's age test only ever runs on an epic that is already
+    `open`.** `claim-epic.sh` refuses an `in_progress` epic outright, so
+    there the 15 minutes are a *secondary* guard on a claim that was
+    already released. Here the branch is the *primary* guard — nothing else
+    stands behind it.
+  - **The epic's `updated_at` is not evidence of deadness under an open
+    epic.** Owned-territory writes stay local until Finalize, so from
+    another machine's view the timestamp freezes at claim time and every
+    live multi-hour session reads as stale within 15 minutes. And the
+    holder's *child* claims are local by design (claim-sync.md, "…except on
+    5f routes 3–4"), so pulled state shows those children unclaimed. An age
+    test here would therefore declare essentially every live epic dead and
+    hand its unclaimed-looking children to a second machine — removing the
+    only visible protection they have.
+
+  The cost of leaving it is a machine declining work it is entitled to; the
+  cost of closing it is two machines on one item. Take the next candidate
+  and let step 3 reclaim the epic on the next session.
 - closed, older than 15 minutes → the assignee is provenance, so read the
   **candidate's own** `status`/`assignee` instead and skip it if another
   machine holds it. That reading is trustworthy here and only here: 5b makes
