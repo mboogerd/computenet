@@ -1,7 +1,13 @@
 package civictech.demo.beadsmirror
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.readText
+import kotlin.io.path.writeText
 
 /**
  * A throwaway `bd --sandbox init` workspace for tests, per epic computenet-dqj
@@ -53,9 +59,30 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
      */
     fun flatten(): String = run("flatten", "--force")
 
+    /** Runs `bd dolt push` (cwd = this workspace). */
+    fun push(): String = run("dolt", "push")
+
+    /** Runs `bd dolt pull` (cwd = this workspace). */
+    fun pull(): String = run("dolt", "pull")
+
     override fun close() {
         root.toFile().deleteRecursively()
     }
+
+    /** This workspace's `.beads/metadata.json` "project_id" field. */
+    internal fun projectId(): String {
+        val metadata = Json.parseToJsonElement(metadataFile.readText()) as JsonObject
+        return metadata.getValue("project_id").jsonPrimitive.content
+    }
+
+    /** Rewrites `.beads/metadata.json`'s "project_id" field to [projectId], preserving every other key. */
+    internal fun rewriteProjectId(projectId: String) {
+        val metadata = Json.parseToJsonElement(metadataFile.readText()) as JsonObject
+        val patched = JsonObject(metadata.toMutableMap().apply { put("project_id", JsonPrimitive(projectId)) })
+        metadataFile.writeText(Json.encodeToString(JsonObject.serializer(), patched))
+    }
+
+    private val metadataFile: Path get() = root.resolve(".beads").resolve("metadata.json")
 
     companion object {
         /**
@@ -98,5 +125,93 @@ class BdScratchWorkspace private constructor(val root: Path, private val bdEnv: 
             workspace.run("--sandbox", "init")
             return workspace
         }
+
+        /**
+         * A pusher/puller pair of scratch workspaces wired through one throwaway
+         * `file://` bare Dolt remote, so a test can drive a real `bd dolt
+         * push`/`bd dolt pull` sync between them (task computenet-7em.4.2).
+         *
+         * The recipe below is exactly what was verified live against `bd` 1.1.2
+         * on 2026-08-17, in this order, with no step skippable:
+         *
+         * 1. The pusher does an ordinary [create], then `bd dolt remote add
+         *    origin file://<remoteDir>` and `bd dolt push` — against an empty
+         *    pre-created directory, `dolt push` materialises the remote itself.
+         * 2. A second **independent** `bd --sandbox init` cannot pull that
+         *    remote: `bd dolt pull` refuses with "no common ancestor" (divergent
+         *    histories) and its own hint text recommends `bd bootstrap`. So the
+         *    puller is never grown from its own `init` database — that database
+         *    is deleted and replaced.
+         * 3. The puller runs [create] too (for its own `.beads/metadata.json`
+         *    and config scaffolding), adds the same remote, then deletes its own
+         *    `.beads/embeddeddolt` and `.beads/dolt` and runs `bd bootstrap
+         *    --yes`, which clones the pusher's database in its place.
+         * 4. Post-bootstrap, the puller's `.beads/metadata.json` still carries
+         *    the `project_id` its own `init` minted, which no longer matches the
+         *    cloned database's `_project_id` (the pusher's) — every further `bd`
+         *    mutation in the puller fails with "workspace identity mismatch
+         *    detected". `bd doctor --fix` does **not** repair this in embedded
+         *    mode (verified: it prints "not yet supported in embedded mode" and
+         *    the mismatch persists). The fix, verified: rewrite the puller's
+         *    `project_id` to the pusher's — the pusher minted the database, so
+         *    its own metadata value IS the database's value.
+         *
+         * After this, `push()`/`pull()` on the pair are ordinary `bd dolt
+         * push`/`bd dolt pull` and need no further identity handling — the
+         * mismatch is strictly a bootstrap-time, one-shot fixup.
+         *
+         * [bdEnv] is applied to **both** members, never independently — a pair
+         * split across [OWNERLESS_ENV] and the default would let one side mint
+         * owners the other cannot represent, which defeats the whole point of
+         * a shared-shape pair. Use [createOwnerlessSyncedPair] for the CI-like,
+         * no-git-identity variant.
+         */
+        fun createSyncedPair(): BdSyncedWorkspacePair = createSyncedPair(emptyMap())
+
+        /** Like [createSyncedPair], but both members run under [OWNERLESS_ENV]. */
+        fun createOwnerlessSyncedPair(): BdSyncedWorkspacePair = createSyncedPair(OWNERLESS_ENV)
+
+        private fun createSyncedPair(bdEnv: Map<String, String>): BdSyncedWorkspacePair {
+            val remoteDir = Files.createTempDirectory("beadsmirror-bd-scratch-remote-")
+
+            val pusher = create(bdEnv)
+            pusher.run("dolt", "remote", "add", "origin", "file://$remoteDir")
+            pusher.push()
+
+            val puller = create(bdEnv)
+            puller.run("dolt", "remote", "add", "origin", "file://$remoteDir")
+            puller.root.resolve(".beads").resolve("embeddeddolt").toFile().deleteRecursively()
+            puller.root.resolve(".beads").resolve("dolt").toFile().deleteRecursively()
+            puller.run("bootstrap", "--yes")
+            puller.rewriteProjectId(pusher.projectId())
+
+            return BdSyncedWorkspacePair(pusher, puller, remoteDir)
+        }
+    }
+}
+
+/**
+ * A [pusher]/[puller] pair sharing one throwaway `file://` bare Dolt remote —
+ * see [BdScratchWorkspace.createSyncedPair] for the bootstrap/identity-patch
+ * recipe that produces [puller]. [push] and [pull] drive real `bd dolt
+ * push`/`bd dolt pull`; [close] tears down both workspaces and the shared
+ * remote directory.
+ */
+class BdSyncedWorkspacePair internal constructor(
+    val pusher: BdScratchWorkspace,
+    val puller: BdScratchWorkspace,
+    private val remoteDir: Path,
+) : AutoCloseable {
+
+    /** Runs `bd dolt push` on [pusher]. */
+    fun push(): String = pusher.push()
+
+    /** Runs `bd dolt pull` on [puller]. */
+    fun pull(): String = puller.pull()
+
+    override fun close() {
+        pusher.close()
+        puller.close()
+        remoteDir.toFile().deleteRecursively()
     }
 }

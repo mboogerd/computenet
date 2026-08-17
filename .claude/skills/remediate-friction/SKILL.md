@@ -88,10 +88,14 @@ creates unparented for a hash id and re-parents. Dotted ids stay correct for
 breakdown children under something this lane has claimed.
 
 `--parent` is not transitive, so this listing shows direct children only. If
-the epic ever grows a feature layer, walk descendants with `epic_of` from
-`work`'s 5b rather than assuming one level. Order by
+the epic ever grows a feature layer, walk descendants with
+`.claude/skills/work/scripts/epic-of.sh` rather than assuming one level.
+Order by
 `comment_count` descending — comment count is recurrence, and recurrence is
-priority. Skip anything labeled `human`. Then pick by assignee — filing
+priority. Skip anything labeled `human`, and anything labeled
+`needs-evidence` — those are parked awaiting a corroborating instance
+(step 3), and the un-park is the label's *removal* by the next session that
+hits the wall (`work` step 7). Then pick by assignee — filing
 machines pre-claim items (SKILL.md step 7), and the claim decides which
 orchestrator drains what:
 
@@ -100,10 +104,12 @@ orchestrator drains what:
   rejected → pull, re-check the assignee, take the next item if it's gone.
 - **Assigned to the other machine** → theirs; skip it — *unless* the claim
   is stale (untouched for more than 12h, per `updated_at` from the step-1
-  pull). Then steal it with the full bracket: `bd dolt pull` to confirm it
-  is still untouched, re-claim, `bd dolt push`, and note the steal in a
-  comment. This is the liveness backstop for a machine that claimed at
-  filing and died before draining.
+  pull; deliberately far above `work`'s 15-minute liveness window, because a
+  filing machine holds its claim across whole sessions before draining).
+  Then steal it with the full bracket: `bd dolt pull` to confirm it is still
+  untouched, re-claim, `bd dolt push`, and note the steal in a comment. This
+  is the liveness backstop for a machine that claimed at filing and died
+  before draining.
 
 ```bash
 bd update <id> --claim
@@ -112,7 +118,11 @@ bd update <id> --claim
 Nothing workable → report the log is drained (or fully claimed elsewhere)
 and stop.
 
-## 3. Re-validate against the current skill revision
+## 3. Triage — a verdict before any fix
+
+A filed item is a claim, not a diagnosis. Of the first 180 items this lane
+closed, ~80% were fixed on a single uncorroborated report, and the edits
+were not all improvements (computenet-olrv). The fix has to be earned:
 
 ```bash
 git hash-object .claude/skills/work/SKILL.md      # current revision
@@ -120,15 +130,58 @@ bd show <id> --json                               # .[0].metadata.skill_version
 bd comments <id> --json                           # the instances
 ```
 
-The item's `skill_version` is the revision the reporting session ran under
-(items predating versioning have none — treat as superseded). If it differs
-from the current hash, the skill has changed since the report: re-read the
-current text against the complaint **before** fixing anything.
+`skill_version` is the revision the reporting session ran under (items
+predating versioning have none — treat as superseded). If it differs from
+the current hash, the skill has changed since the report: re-read the
+current text against the complaint **before** judging. Then exactly one
+verdict:
 
-- Already fixed by an intervening revision → `bd close <id> --reason
-  "superseded: fixed as of <current-hash>"`. Go to step 2 for the next item.
-- Still real → `bd update <id> --set-metadata skill_version=<current-hash>`
-  (re-validated against current) and continue.
+- **Superseded** — an intervening revision already fixed it → `bd close
+  <id> --reason "superseded: fixed as of <current-hash>"`. Next item.
+- **Fix** — only on one of two grounds:
+  - *Verified defect*: the claim is checkable right now — the quoted
+    instruction really says what the report says it says, and, where the
+    claim is about behaviour, the misbehaviour reproduces cheaply (a
+    read-only command, a missing path, a flag that errors); a purely
+    textual defect — two steps that contradict each other — is verified by
+    reading alone. Run the check yourself before believing the report;
+    verification substitutes for recurrence.
+  - *Recurrent*: at least two independent instances — the filing plus an
+    instance comment from a different session. Two is the floor; four is
+    the drop-everything signal (`work` step 7).
+
+  Stamp `bd update <id> --set-metadata skill_version=<current-hash>` and go
+  to step 4.
+- **Needs evidence** — a single instance you cannot cheaply verify, or a
+  judgment call ("confusing", "wasteful", "should have X"). Do **not** fix.
+  Comment exactly what a future session must capture to make the case — the
+  command, the verbatim output, what it cost — then park and release:
+
+  ```bash
+  bd update <id> --add-label needs-evidence --assignee="" --status=open
+  ```
+
+  All three flags matter: step 2's `--claim` set assignee *and*
+  `in_progress`, and an item left `in_progress` is invisible to every
+  `--status=open` listing in this file — parked forever, un-parkable by
+  anyone.
+
+  The comment is addressed to the next session that hits the same wall, not
+  to the human; `work` step 7's upvote branch answers it and removes the
+  label, which is what makes the item workable again. Parked items are
+  invisible to this lane and to the gate until then.
+- **Reject** — the report misreads the skill (quote the text that
+  contradicts it), the fix belongs in product code, or the requested change
+  would relax an incident-backed rule without engaging that incident's bead
+  → `bd close <id> --reason "rejected: <why>"`. Step 7's dedup searches
+  closed items too, so a genuine recurrence gets re-filed citing the
+  rejection — that is the appeal path, not a burial.
+
+**When the verdict itself is a judgment call** — the evidence bar is met
+but whether the change is an improvement is a matter of process taste —
+make the call if confident. If not, `bd update <id> --add-label human`,
+park the question per `work`'s `references/ask-human.md`, and name which
+part you are unsure about. Confidence, not category, decides who calls it.
 
 ## 4. Fix, review, ship
 
@@ -163,8 +216,12 @@ the fix is attributable to the revision it amends.
 
 Commit, push, open a **draft** PR. Then dispatch a fresh reviewer agent
 (never yourself in the same breath) to check the fix against the item's
-acceptance and the surrounding skill text; ship per AGENTS.md's confidence
-rule — the reviewer certifies, you run `gh pr ready`.
+acceptance and the surrounding skill text. The reviewer runs under
+`work`'s `references/agent-execution.md` — put that path in the dispatch
+prompt, along with the explicit foreground-timeout line every `work`
+dispatch carries (a bare Gradle or long command otherwise backgrounds at
+120s and the agent stalls). Ship per AGENTS.md's confidence rule — the
+reviewer certifies, you run `gh pr ready`.
 
 On merge:
 
@@ -179,11 +236,18 @@ several items per session is normal.
 ## 5. Finalize
 
 ```bash
-bd dolt push
+.claude/skills/work/scripts/publish-beads.sh   # >=300s timeout
 ```
 
-Report: items closed (with PRs), items superseded-closed, items left open
-and why, and the one-command oversight view for the human:
+Never a bare `bd dolt push`: it has been observed exiting 0 while printing a
+rejection, so the exit code alone is not a signal (`work`'s claim-sync.md;
+computenet-kbk0). The script fails on either signal and recovers a
+non-fast-forward inline.
+
+Report: items closed (with PRs), items superseded-closed, items
+rejected-closed (with the one-line why), items parked `needs-evidence`
+(with what was asked for), items left open and why, and the one-command
+oversight view for the human:
 
 ```bash
 bd list --parent=computenet-wpvy --status=open --json

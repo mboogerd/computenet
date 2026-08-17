@@ -42,6 +42,45 @@ class CheckpointNotInHistoryException(val checkpoint: String) :
     IllegalArgumentException("commit $checkpoint is not in dolt_log (history truncated?)")
 
 /**
+ * Raised by [DoltCommitFeed.readFrom] when [mergeCommit] — a commit in the
+ * walked range, i.e. strictly after the caller's `afterCommit` (or anywhere in
+ * history for a genesis read) — has two or more parents in `dolt_log`. That is
+ * what a real `bd dolt pull` lands: the peer's commits arrive as a merge, and
+ * the linear, gapless, single-writer history the feed's assembly rules assume
+ * no longer holds.
+ *
+ * ## Why this is its own condition rather than [CheckpointNotInHistoryException]
+ *
+ * Measured 2026-08-17 (bd 1.x / dolt 2.x, two sandbox workspaces over a
+ * `file://` bare remote): after `bd dolt pull` the puller's **pre-pull head is
+ * still in `dolt_log`**, so the checkpoint resolves fine and
+ * [CheckpointNotInHistoryException] never fires. Merge detection therefore
+ * cannot be a side effect of the truncation path; it has to be looked for.
+ *
+ * ## Why the walk refuses rather than continuing
+ *
+ * Also measured on that probe: the merge commit's `dolt_diff_issues` rows list
+ * both the peer's new row **and** a row the local side had already applied,
+ * re-reported as `added` at `to_commit = <merge>`. An incremental walk from the
+ * old checkpoint would re-apply local content at shifted heights while the
+ * peer's own commits — which interleave *below* the old checkpoint in
+ * genesis-first order — fall outside the walked range entirely. So the pass
+ * emits nothing at all and [DoltFeedPoller] converts this into
+ * [FeedCondition.HistoryMerged], whose only correct answer is a re-baseline
+ * from `bd export` ([civictech.demo.beadsmirror.baseline.RebaselineReason.HistoryMerged]).
+ * Never a silent skip-ahead, never a partial batch.
+ *
+ * Scoped to the walked range on purpose: once the re-baseline has persisted the
+ * post-merge head as the checkpoint, that same merge commit sits *at* the
+ * checkpoint, the range is empty, and detection does not re-fire.
+ */
+class HistoryMergedException(val mergeCommit: String) :
+    IllegalStateException(
+        "commit $mergeCommit has 2+ parents in dolt_log (a pull merged peer history in) " +
+            "— refusing to walk merged history incrementally",
+    )
+
+/**
  * The one thing [DoltCommitFeed] needs from the world: run a SQL query, get
  * rows. In production this is [DoltSql.query]; keeping it an interface lets the
  * feed's assembly rules (record-per-(commit, issue), ordinals, synthesis of
@@ -93,8 +132,25 @@ class DoltCommitFeed(private val sql: DiffQuery) {
      * append-only under auto-commit, a commit's height does not move as later
      * commits arrive, which is what makes positions replay-stable.
      */
-    fun history(): List<String> = sql.query(LOG_QUERY)
-        .map { it.requiredString("commit_hash", LOG_QUERY) }
+    fun history(): List<String> = log().map { it.commitHash }
+
+    /**
+     * [LOG_QUERY]'s rows as [LogEntry]s, genesis-first — [history] plus each
+     * commit's parents, which is what merge detection needs. Deliberately
+     * *not* public and deliberately non-throwing on a multi-parent commit:
+     * [BaselineBuilder][civictech.demo.beadsmirror.baseline.BaselineBuilder.captureHead]
+     * reads the head through [history] **during** the re-baseline that a merge
+     * triggers, so the log read itself must stay usable on merged history.
+     * Only [readFrom] — the incremental walk, the thing that is actually
+     * unsound over a merge — refuses.
+     */
+    private fun log(): List<LogEntry> = sql.query(LOG_QUERY)
+        .map { row ->
+            LogEntry(
+                commitHash = row.requiredString("commit_hash", LOG_QUERY),
+                parents = parentsOf(row),
+            )
+        }
         .asReversed()
 
     /**
@@ -114,7 +170,8 @@ class DoltCommitFeed(private val sql: DiffQuery) {
      *   [IllegalArgumentException], so it is still catchable as one.
      */
     fun readFrom(afterCommit: String? = null): List<ChangeRecord> {
-        val commits = history()
+        val entries = log()
+        val commits = entries.map { it.commitHash }
         val startIndex = when (afterCommit) {
             null -> 0
             else -> commits.indexOf(afterCommit).let { found ->
@@ -123,6 +180,15 @@ class DoltCommitFeed(private val sql: DiffQuery) {
             }
         }
         if (startIndex >= commits.size) return emptyList()
+
+        // Before anything is read or assembled: a merge in the walked range
+        // makes the whole pass unsound, and the refusal must cost no records.
+        // Checked strictly after the checkpoint (the whole history for a
+        // genesis read) so a completed re-baseline — whose checkpoint IS the
+        // merge commit — leaves an empty range and does not re-trip.
+        entries.subList(startIndex, entries.size)
+            .firstOrNull { it.parents.size >= 2 }
+            ?.let { throw HistoryMergedException(it.commitHash) }
 
         val heights = commits.withIndex().associate { (index, hash) -> hash to index.toLong() }
         val wanted = commits.subList(startIndex, commits.size).toSet()
@@ -190,7 +256,15 @@ class DoltCommitFeed(private val sql: DiffQuery) {
             .groupBy({ it.first }, { it.second })
 
     internal companion object {
-        internal const val LOG_QUERY = "select commit_hash from dolt_log"
+        /**
+         * `parents` rides along with `commit_hash` so merge detection costs no
+         * extra query. Read live 2026-08-17 against this repository's own bd
+         * workspace (bd 1.1.2 / dolt 2.2.3): the column is a **string**, a
+         * merge rendering as two hashes joined by comma-space
+         * (`"umpccoju…, 7vgtto3k…"`), an ordinary commit as one hash, and the
+         * genesis commit as the empty string. See [parentsOf].
+         */
+        internal const val LOG_QUERY = "select commit_hash, parents from dolt_log"
         internal const val ISSUE_QUERY = "select * from dolt_diff_issues"
         internal const val EDGE_QUERY = "select * from dolt_diff_dependencies"
 
@@ -219,6 +293,34 @@ class DoltCommitFeed(private val sql: DiffQuery) {
             if (full) return base
             val inList = wanted.sorted().joinToString(", ") { "'" + it.replace("'", "''") + "'" }
             return "$base where to_commit in ($inList)"
+        }
+
+        /**
+         * A `dolt_log` row's parent commit hashes, in the order the column
+         * lists them. Two or more is a merge.
+         *
+         * Lenient on purpose, in both directions:
+         * - The **empty string** (the genesis commit's rendering) yields an
+         *   empty list rather than one blank parent, which is why this cannot
+         *   go through `requiredString` — that one rejects blanks.
+         * - An **absent** `parents` key yields an empty list too, so a
+         *   [DiffQuery] fake that answers [LOG_QUERY] with `commit_hash` alone
+         *   still describes a linear history. That leniency cannot hide schema
+         *   drift in production: [LOG_QUERY] names the column explicitly, and
+         *   `dolt` exits non-zero on an unknown column (measured 2026-08-17:
+         *   `column "nosuchcol" could not be found in any table in scope`,
+         *   exit 1), which [civictech.demo.beadsmirror.dolt.DoltSql] turns into
+         *   a [civictech.demo.beadsmirror.dolt.DoltSqlException] before any row
+         *   reaches here.
+         *
+         * A non-string `parents` still fails loudly — that is a shape the
+         * reader would have to guess at.
+         */
+        internal fun parentsOf(row: Map<String, JsonElement>): List<String> {
+            val value = row.valueOrNull("parents") ?: return emptyList()
+            val text = (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw FeedShapeException(LOG_QUERY, "column \"parents\" is not a string: $value")
+            return text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
         }
 
         /**
@@ -369,6 +471,12 @@ class DoltCommitFeed(private val sql: DiffQuery) {
         }
     }
 }
+
+/**
+ * One `dolt_log` row: a commit and its parent hashes. Two or more parents is a
+ * merge — the condition [DoltCommitFeed.readFrom] refuses to walk past.
+ */
+private data class LogEntry(val commitHash: String, val parents: List<String>)
 
 /** One issue's whole change within one commit, before edge diffs are attached. */
 internal data class IssueDiff(

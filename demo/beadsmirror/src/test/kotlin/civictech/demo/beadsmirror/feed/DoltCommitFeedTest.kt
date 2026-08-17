@@ -5,6 +5,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonPrimitive
@@ -13,6 +14,9 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Duration
 
 /**
  * computenet-dqj.1.2: the feed reader emits one ordered [ChangeRecord] per
@@ -469,6 +473,243 @@ class DoltCommitFeedTest {
                 DoltCommitFeed.LOG_QUERY -> commits.map { mapOf("commit_hash" to JsonPrimitive(it)) }
                 DoltCommitFeed.ISSUE_QUERY -> issueRows
                 DoltCommitFeed.EDGE_QUERY -> edgeRows
+                else -> error("unexpected query: $sql")
+            }
+        }
+    }
+
+    /**
+     * Task computenet-7em.4.1 — a real `bd dolt pull` lands the peer's commits
+     * as a **merge**, and the incremental walk is unsound over one: measured
+     * 2026-08-17, the merge commit's `dolt_diff_issues` rows re-report a row
+     * the local side had already applied as `added`, while the peer's own
+     * commits interleave *below* the old checkpoint and so fall outside the
+     * walked range entirely. So the walk refuses (feature rule 1), and the
+     * answer is a re-baseline from `bd export` rather than a skip-ahead.
+     *
+     * The `parents` renderings used here are the ones read live off this
+     * repository's own bd workspace on 2026-08-17 (bd 1.1.2 / dolt 2.2.3):
+     * a merge is two hashes joined by comma-space, an ordinary commit is one
+     * hash, the genesis commit is the empty string.
+     */
+    @Nested
+    inner class OverMergedHistory {
+
+        @Test
+        fun `a merge strictly after the checkpoint refuses the walk, and no diff table is even scanned`() {
+            val observed = mutableListOf<String>()
+            val feed = DoltCommitFeed(
+                mergedLog(
+                    commits = listOf(MERGE, "c1"),
+                    parents = mapOf(MERGE to "$PEER, c1", "c1" to "c0"),
+                    // The merge really does carry issue rows — including one
+                    // the local side already applied. None of them may be read.
+                    issueRows = listOf(
+                        row("diff_type" to "added", "to_commit" to MERGE, "to_id" to "peer-issue"),
+                        row("diff_type" to "added", "to_commit" to MERGE, "to_id" to "already-applied-locally"),
+                    ),
+                    observed = observed,
+                ),
+            )
+
+            val refusal = shouldThrow<HistoryMergedException> { feed.readFrom(afterCommit = "c1") }
+
+            refusal.mergeCommit shouldBe MERGE
+            // "emits nothing" the strong way: the refusal happens before the
+            // diff tables are queried at all, so there is no partial batch to
+            // leak and no merged row is ever mapped.
+            observed shouldContainExactly listOf(DoltCommitFeed.LOG_QUERY)
+        }
+
+        @Test
+        fun `a genesis read over merged history refuses too`() {
+            val feed = DoltCommitFeed(
+                mergedLog(
+                    commits = listOf(MERGE, "c1"),
+                    parents = mapOf(MERGE to "$PEER, c1", "c1" to ""),
+                ),
+            )
+
+            shouldThrow<HistoryMergedException> { feed.readFrom() }.mergeCommit shouldBe MERGE
+        }
+
+        /**
+         * The post-re-baseline state: the re-baseline persisted the post-merge
+         * head as the checkpoint, so the merge now sits **at** it and the
+         * walked range (strictly after) no longer contains it. Detection must
+         * not re-fire, or the mirror re-baselines forever.
+         */
+        @Test
+        fun `the merge sitting at the checkpoint does not re-trip, and the walk resumes normally`() {
+            val feed = DoltCommitFeed(
+                mergedLog(
+                    commits = listOf("c3", MERGE, "c1"),
+                    parents = mapOf("c3" to MERGE, MERGE to "$PEER, c1", "c1" to "c0"),
+                    issueRows = listOf(row("diff_type" to "added", "to_commit" to "c3", "to_id" to "b")),
+                ),
+            )
+
+            feed.readFrom(afterCommit = MERGE).map { it.issueId } shouldContainExactly listOf("b")
+        }
+
+        @Test
+        fun `a merge below the checkpoint is out of the walked range and does not fire`() {
+            val feed = DoltCommitFeed(
+                mergedLog(
+                    commits = listOf("c4", "c3", MERGE, "c1"),
+                    parents = mapOf("c4" to "c3", "c3" to MERGE, MERGE to "$PEER, c1", "c1" to "c0"),
+                    issueRows = listOf(row("diff_type" to "added", "to_commit" to "c4", "to_id" to "d")),
+                ),
+            )
+
+            feed.readFrom(afterCommit = "c3").map { it.issueId } shouldContainExactly listOf("d")
+        }
+
+        /** The column's three live renderings, and the one shape it may not have. */
+        @Test
+        fun `parents is read as comma-separated hashes, with the genesis empty string meaning none`() {
+            DoltCommitFeed.parentsOf(parentsColumn("$PEER, c1")) shouldContainExactly listOf(PEER, "c1")
+            DoltCommitFeed.parentsOf(parentsColumn("c0")) shouldContainExactly listOf("c0")
+            DoltCommitFeed.parentsOf(parentsColumn("")) shouldContainExactly emptyList()
+            // A fake log row that omits the column entirely still describes a
+            // linear history; production cannot reach that state silently,
+            // because `dolt` exits non-zero when a selected column is missing.
+            DoltCommitFeed.parentsOf(emptyMap()) shouldContainExactly emptyList()
+
+            shouldThrow<FeedShapeException> {
+                DoltCommitFeed.parentsOf(mapOf("parents" to JsonArray(listOf(JsonPrimitive("a")))))
+            }
+        }
+    }
+
+    /**
+     * The conversion seam: [DoltFeedPoller] turns the reader's refusal into the
+     * feature's typed [FeedCondition], emitting no batch and leaving the
+     * checkpoint where it was — the same shape the pre-existing
+     * [CheckpointNotInHistoryException] -> [FeedCondition.CheckpointGone]
+     * conversion has, which is re-asserted here so the two stay distinct.
+     */
+    @Nested
+    inner class AtThePollerSeam {
+
+        @Test
+        fun `a merge in the walked range arrives as HistoryMerged, with no batch and no checkpoint move`() {
+            val feed = DoltCommitFeed(
+                mergedLog(
+                    commits = listOf(MERGE, "c1"),
+                    parents = mapOf(MERGE to "$PEER, c1", "c1" to "c0"),
+                    issueRows = listOf(row("diff_type" to "added", "to_commit" to MERGE, "to_id" to "peer-issue")),
+                ),
+            )
+
+            withTempRunDir { runDir ->
+                val checkpoint = FeedCheckpoint(runDir)
+                checkpoint.write("c1")
+                val conditions = mutableListOf<FeedCondition>()
+                val batches = mutableListOf<ChangeRecord>()
+                val poller = DoltFeedPoller(
+                    feed,
+                    checkpoint,
+                    Duration.ofMillis(10),
+                    onBatch = { batches += it },
+                    onCondition = { conditions += it },
+                )
+
+                poller.pollOnce()
+
+                conditions shouldContainExactly listOf(FeedCondition.HistoryMerged(MERGE))
+                batches shouldContainExactly emptyList()
+                checkpoint.read() shouldBe "c1"
+            }
+        }
+
+        /**
+         * Unchanged behaviour, asserted next to the new condition rather than
+         * assumed: a checkpoint that has fallen out of `dolt_log` is still
+         * [FeedCondition.CheckpointGone], not the new merge condition. Measured
+         * 2026-08-17: a pull leaves the pre-pull head present, so the two
+         * conditions really are disjoint in production too.
+         */
+        @Test
+        fun `a vanished checkpoint is still CheckpointGone, not the merge condition`() {
+            val feed = DoltCommitFeed(
+                mergedLog(commits = listOf("c1"), parents = mapOf("c1" to "")),
+            )
+
+            withTempRunDir { runDir ->
+                val checkpoint = FeedCheckpoint(runDir)
+                checkpoint.write("compacted-away")
+                val conditions = mutableListOf<FeedCondition>()
+                val poller = DoltFeedPoller(
+                    feed,
+                    checkpoint,
+                    Duration.ofMillis(10),
+                    onBatch = { },
+                    onCondition = { conditions += it },
+                )
+
+                poller.pollOnce()
+
+                conditions shouldContainExactly listOf(FeedCondition.CheckpointGone("compacted-away"))
+            }
+        }
+
+        @Test
+        fun `the default onCondition describes a merge without pretending it is truncation`() {
+            val failure = FeedConditionException(FeedCondition.HistoryMerged(MERGE))
+
+            failure.condition shouldBe FeedCondition.HistoryMerged(MERGE)
+            failure.message!!.contains(MERGE) shouldBe true
+            failure.message!!.contains("2+ parents") shouldBe true
+        }
+
+        private fun <T> withTempRunDir(block: (Path) -> T): T {
+            val dir = Files.createTempDirectory("merged-history-run-")
+            return try {
+                block(dir)
+            } finally {
+                dir.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    private companion object {
+
+        /** A commit hash standing in for the merge a `bd dolt pull` writes. */
+        const val MERGE = "crfi49d1mergecommithash"
+
+        /** The peer-side parent of that merge — the "other" first parent. */
+        const val PEER = "trr1upppeercommithash"
+
+        fun row(vararg columns: Pair<String, String>): Map<String, JsonElement> =
+            columns.associate { (key, value) -> key to JsonPrimitive(value) }
+
+        fun parentsColumn(rendering: String): Map<String, JsonElement> =
+            mapOf("commit_hash" to JsonPrimitive("h"), "parents" to JsonPrimitive(rendering))
+
+        /**
+         * A [DiffQuery] answering [DoltCommitFeed.LOG_QUERY] with both columns.
+         * [commits] is newest-first, as Dolt prints it; [parents] gives each
+         * commit's `parents` column verbatim, defaulting to the genesis empty
+         * string. [observed], when given, records every query issued — which is
+         * how "the refusal reads no diff rows at all" is asserted.
+         */
+        fun mergedLog(
+            commits: List<String>,
+            parents: Map<String, String>,
+            issueRows: List<Map<String, JsonElement>> = emptyList(),
+            observed: MutableList<String>? = null,
+        ) = DiffQuery { sql ->
+            observed?.add(sql)
+            when {
+                sql == DoltCommitFeed.LOG_QUERY -> commits.map { hash ->
+                    mapOf(
+                        "commit_hash" to JsonPrimitive(hash),
+                        "parents" to JsonPrimitive(parents[hash] ?: ""),
+                    )
+                }
+                sql.startsWith(DoltCommitFeed.ISSUE_QUERY) -> issueRows
+                sql.startsWith(DoltCommitFeed.EDGE_QUERY) -> emptyList()
                 else -> error("unexpected query: $sql")
             }
         }
