@@ -658,8 +658,11 @@ computenet-dqy.72 three criterion-prescribed comments were briefly read as an
 overstep and cost an adjudication (computenet-szdd). Check both before
 calling it scope creep, and report a mismatch instead of undoing the write.
 
-**Don't run `bd dolt push`** — issue-state sync to the remote is the
-orchestrator's job (it serializes pushes across concurrent agents); your
+**Don't run `bd dolt push`** — not because a push needs anyone's permission
+(it does not: AGENTS.md, "Syncing bead state is required, not optional"), but
+because it would be the redundant kind. Issue-state sync is the orchestrator's
+job precisely so pushes are serialized across concurrent agents; yours would
+contend with theirs and carry writes their next bracket already carries. Your
 local `bd` writes are enough. That comment and metadata stay in the local
 beads DB; the orchestrator's Finalize push (SKILL.md step 6) sends them to
 the shared tracker. The `review=passed` marker is read by this machine, which
