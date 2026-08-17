@@ -126,6 +126,37 @@ tasks.named("check") {
     dependsOn(verifyBenchmarkDiscovery)
 }
 
+// Runtime-readable companion to the guard above: BenchmarkDiscoverySmokeTest and
+// ProjectGraphTest, both in bench/src/test/kotlin/civictech/bench [BEN1-04, BS-2's
+// companion-test clause, BS-6]. Two things only this build script can hand a JUnit
+// test running inside :bench:test:
+//
+//   - the generated BenchmarkList's absolute path, because the test source set has
+//     no other way to find `build/jmh-generated-resources/...` reliably — reusing
+//     the same `benchmarkList` provider the guard task above reads keeps both
+//     readers pointed at one location instead of two paths that could drift apart;
+//   - :bench:test depending on `jmhRunBytecodeGenerator` (the task that WRITES
+//     BenchmarkList — see the "HOW KOTLIN @Benchmark METHODS ACTUALLY GET
+//     DISCOVERED HERE" comment above for why generation is bytecode-based, not
+//     annotation-processing), so the file exists — even if empty — by the time the
+//     test runs. The lighter generator task is enough here, not
+//     `jmhCompileGeneratedClasses`: the smoke test only reads the generated
+//     resource, it never touches the compiled `_jmhType` classes.
+//
+// Neither test executes a benchmark: `:bench:jmh` and `:bench:jmhJar` stay
+// unreachable from `:bench:test`/`:bench:build`/`check`, exactly as before this
+// wiring — a JMH fork is minutes, and these tests are sub-second by design.
+tasks.named<Test>("test") {
+    dependsOn(tasks.named("jmhRunBytecodeGenerator"))
+    // ProjectGraphTest [BEN1-04, BS-6] parses settings.gradle.kts and every module's
+    // build.gradle.kts from the checkout root. A system property set here, at
+    // configuration time, is a configuration-cache-safe constant — the same
+    // reasoning the guard task's comment above gives for capturing a Provider
+    // rather than reaching for `project` at execution time.
+    systemProperty("computenet.repo.root", rootDir.absolutePath)
+    systemProperty("civictech.bench.jmhBenchmarkList", benchmarkList.get().asFile.absolutePath)
+}
+
 // -----------------------------------------------------------------------------------
 // CONFIGURATION CACHE [BEN1-16] — the open decision this feature was assigned.
 //
