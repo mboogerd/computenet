@@ -151,7 +151,47 @@ class SeededSchedule private constructor(
     val listenerSteps: List<ScheduleStep>,
     val dialerSteps: List<ScheduleStep>,
     val sharedIssueId: String,
+    val listenerPartitionIssueIds: List<String>,
+    val dialerPartitionIssueIds: List<String>,
 ) {
+
+    /**
+     * The mutations task computenet-7em.2.3's partition case lands on the
+     * listener's workspace **while the peering is severed** — one
+     * [ScheduleStep.Create] plus one [ScheduleStep.FieldUpdate] per id in
+     * [listenerPartitionIssueIds], so each partition-era issue carries a field
+     * a fold can be asserted on and not only a title.
+     *
+     * They are deliberately id-STABLE per [seed] rather than drawn from the
+     * random walk: the acceptance criterion is that both folds contain all ten
+     * post-partition mutations *by id*, and "equal folds" alone would be
+     * satisfied by both sides dropping them. An id a test can name is what
+     * makes that check possible.
+     */
+    val listenerPartitionSteps: List<ScheduleStep> get() = partitionSteps(listenerPartitionIssueIds, "L")
+
+    /** [listenerPartitionSteps]' counterpart on the dialer's workspace. */
+    val dialerPartitionSteps: List<ScheduleStep> get() = partitionSteps(dialerPartitionIssueIds, "D")
+
+    /** Every partition-era issue id, both sides — the ten ids the healed folds must both carry. */
+    val partitionIssueIds: List<String> get() = listenerPartitionIssueIds + dialerPartitionIssueIds
+
+    /**
+     * The `design` field value [partitionSteps] writes on [issueId] — the
+     * per-issue value both folds must agree on after the heal, so the
+     * assertion is about the *content* that crossed the healed peering and not
+     * merely about an id existing.
+     */
+    fun partitionDesign(issueId: String): String = "minted while partitioned, $issueId, seed $seed"
+
+    private fun partitionSteps(ids: List<String>, side: String): List<ScheduleStep> =
+        ids.flatMap { id ->
+            listOf(
+                ScheduleStep.Create(id, "partition-era issue $id on $side, seed $seed"),
+                ScheduleStep.FieldUpdate(id, "design", partitionDesign(id)),
+            )
+        }
+
     companion object {
 
         /**
@@ -161,6 +201,13 @@ class SeededSchedule private constructor(
          * 13 that is 30, the design's "~30 mutations" figure.
          */
         private const val RANDOM_STEPS_PER_SIDE = 13
+
+        /**
+         * Issues each side mints while the peering is severed (task
+         * computenet-7em.2.3) — five per side, the ten the feature's design
+         * example names.
+         */
+        private const val PARTITION_STEPS_PER_SIDE = 5
 
         /** Recorded regression seeds, run by [ConvergenceSuite]. Seed 42 is the design's own worked example. */
         const val SEED_1: Long = 42L
@@ -201,7 +248,14 @@ class SeededSchedule private constructor(
             listenerSteps += ScheduleStep.FieldUpdate(sharedId, "design", "set by L, seed $seed")
             dialerSteps += ScheduleStep.FieldUpdate(sharedId, "notes", "set by D, seed $seed")
 
-            return SeededSchedule(seed, listenerSteps, dialerSteps, sharedId)
+            return SeededSchedule(
+                seed = seed,
+                listenerSteps = listenerSteps,
+                dialerSteps = dialerSteps,
+                sharedIssueId = sharedId,
+                listenerPartitionIssueIds = (1..PARTITION_STEPS_PER_SIDE).map { "Lpart$seed-$it" },
+                dialerPartitionIssueIds = (1..PARTITION_STEPS_PER_SIDE).map { "Dpart$seed-$it" },
+            )
         }
 
         private fun nextStep(random: Random, model: SideModel): ScheduleStep {

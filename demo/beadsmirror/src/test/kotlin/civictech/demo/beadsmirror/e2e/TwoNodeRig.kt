@@ -5,6 +5,7 @@ import civictech.demo.beadsmirror.BdScratchWorkspace
 import civictech.demo.beadsmirror.BeadsMirrorApp
 import civictech.demo.beadsmirror.BeadsMirrorConfig
 import civictech.demo.beadsmirror.MirrorPeeringSettings
+import civictech.demo.beadsmirror.MirrorTransport
 import civictech.demo.beadsmirror.MirrorWire
 import civictech.demo.beadsmirror.WsMirrorTransport
 import civictech.demo.beadsmirror.baseline.ExportRow
@@ -62,29 +63,36 @@ class TwoNodeRig private constructor(
     val listenerWorkspace: BdScratchWorkspace,
     val dialerWorkspace: BdScratchWorkspace,
     private val pollInterval: Duration,
+    /**
+     * The rig's transport wiring, injected into BOTH nodes (task
+     * computenet-7em.2.1, made a rig parameter by computenet-7em.2.3) — one
+     * instance, because a partition is a property of the peering rather than
+     * of either node, so the object that severs it has to be the one that
+     * established both ends.
+     *
+     * This is the seam the DSC0 iroh re-run turns, and it is a **constructor
+     * parameter** rather than a field expression precisely so that turning it
+     * costs no edit to this file: [create]'s default is
+     * [civictech.demo.beadsmirror.WsMirrorTransport], the only binding that
+     * exists today, and a future transport is passed in by whatever
+     * constructs the rig (a sibling of [WsConvergenceSuiteTest] supplying a
+     * different `newRig`). What the seam does NOT deliver is transport
+     * neutrality of the *rig's own* test file set: this class and every test
+     * that names [create] without an argument still get the WebSocket
+     * binding, and [ConvergenceDivergenceControlTest] uses the same parameter
+     * to inject a deliberately defective wrapper around it.
+     *
+     * The near-zero reconnect backoff of [create]'s default is the same T12
+     * seam `:wire`'s own reconnect tests use: a heal then costs scheduling
+     * rather than the production 1s-doubling wall clock, and a dropped socket
+     * the rig did not ask for is retried promptly instead of on a
+     * real-network schedule.
+     */
+    private val transport: MirrorTransport,
 ) : AutoCloseable {
 
     private val tempDirs = mutableListOf<Path>()
     private val searchRoot = tempDir("beadsmirror-tworig-searchroot-")
-
-    /**
-     * The rig's transport wiring, injected into BOTH nodes (task
-     * computenet-7em.2.1) — one instance, because a partition is a property of
-     * the peering rather than of either node, so the object that severs it has
-     * to be the one that established both ends.
-     *
-     * This is the seam the DSC0 iroh re-run turns: nothing in this file, and
-     * nothing in any test that drives it, names a socket type — the only
-     * `:wire` reference left in the module is inside
-     * [civictech.demo.beadsmirror.WsMirrorTransport], and swapping this one
-     * expression is the whole of what a different transport costs.
-     *
-     * The near-zero reconnect backoff is the same T12 seam `:wire`'s own
-     * reconnect tests use: a heal then costs scheduling rather than the
-     * production 1s-doubling wall clock, and a dropped socket the rig did not
-     * ask for is retried promptly instead of on a real-network schedule.
-     */
-    private val transport = WsMirrorTransport(reconnectBackoff = { 10L })
 
     private var listenerNode: Node? = null
     private var dialerNode: Node? = null
@@ -289,12 +297,25 @@ class TwoNodeRig private constructor(
          * ([MirrorCellRefs]), so a value reused across runs sharing this JVM
          * would be the one way two unrelated rigs could link.
          */
-        fun create(name: String, pollInterval: Duration = Duration.ofMillis(200)): TwoNodeRig =
+        fun create(
+            name: String,
+            pollInterval: Duration = Duration.ofMillis(200),
+            /**
+             * The wiring both nodes are built through — defaulted to the
+             * production binding, so every existing caller is unchanged, and
+             * overridable so a different transport (DSC0's iroh binding) or a
+             * deliberately defective wrapper
+             * ([ConvergenceDivergenceControlTest]) is supplied without editing
+             * this class.
+             */
+            transport: MirrorTransport = WsMirrorTransport(reconnectBackoff = { 10L }),
+        ): TwoNodeRig =
             TwoNodeRig(
                 rigName = "$name-${System.nanoTime()}",
                 listenerWorkspace = BdScratchWorkspace.create(),
                 dialerWorkspace = BdScratchWorkspace.create(),
                 pollInterval = pollInterval,
+                transport = transport,
             )
     }
 }
