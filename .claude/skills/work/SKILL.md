@@ -925,11 +925,34 @@ Read the verification line, and only it, and know all four it can print:
 |---|---|
 | `OK: worktree contains origin/<branch>` | verified — the remote tip is an ancestor of `HEAD` |
 | `OK: origin has no <branch> yet` | verified — origin is reachable and has no such branch, so there is genuinely nothing to compare |
-| `STOP: on the branch at the wrong commit` | the worktree is missing pushed work |
+| `STOP: on the branch at the wrong commit` | the worktree is missing pushed work — **but see the squash test below** |
 | `STOP: origin is UNREACHABLE` | **nothing was checked** |
 
 `STOP` → do not enter 5b; proceeding silently orphans reviewed work while
 looking clean (computenet-aeg). Either `OK` is fine.
+
+**Before treating that `STOP` as an orphaning hazard, run the squash test.**
+This repo squash-merges, so a merged feature leaves a remote branch whose
+commits are *not* ancestors of anything — which trips the check exactly like
+genuinely unmerged work does, and a workable item then looks unworkable with
+no remediation offered (computenet-q8uv). The test is cheap:
+
+```bash
+git -C <worktree> fetch origin <branch>
+git -C <worktree> diff --stat origin/main FETCH_HEAD    # empty => content is already on main
+git -C <worktree> log --oneline origin/main | grep -F "<the remote tip's subject>"
+```
+
+- **Empty diff, or a commit with that subject already on `origin/main`** →
+  **squash-merged leftover.** It carries nothing to orphan. Remediate rather
+  than stop: either take a distinct branch name and record it in
+  `metadata.branch` (which is what "everything below" already reads, so the
+  feature-id-as-branch-name rule has its exception here — an id that has been
+  re-minted), or delete the dead ref (`git push origin --delete <branch>`) and
+  proceed on the original name. Say which you did.
+- **A non-empty diff** → the branch carries **unmerged commits**, and the
+  `STOP` stands: it is a hard stop, and proceeding to 5b would orphan real
+  work. Nothing here weakens that case.
 
 **The unreachable case is why there are two `OK` lines and not one.** A bare
 `fetch origin <branch>` fails identically for "no such branch on origin" and
@@ -1387,6 +1410,41 @@ that reads as neither pass nor fail.`
 })
 ```
 
+**A reviewer that neither reports nor stops is invisible unless you look.**
+The completion notification never arrives, so nothing wakes you — the review
+is unbounded and the PR sits (computenet-sjwd). **At ~60 minutes after
+dispatch, check the bead rather than waiting**, using signals that cost
+nothing and are not the agent's transcript (a context hazard, above):
+
+```bash
+bd show <id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0]|"\(.status) \(.metadata.review // "-") \(.comment_count)"'
+git -C <task-worktree> log --oneline -3
+```
+
+**A bead untouched since the implementer's own comment is the signal** that
+the review has produced nothing durable. Then, in order — do not kill first:
+
+1. **`SendMessage` the agent**: stop verifying, state a verdict now plus a
+   `NOT VERIFIED` section for what you did not reach. Give it a short window.
+   This keeps its context, which `TaskStop` discards.
+2. **No answer → `TaskStop`**, which 5e already defines as a **draft** verdict.
+   Route on whatever it wrote to the bead.
+3. **Then choose** between a fresh reviewer and leaving the PR draft, on
+   remaining budget — not on principle.
+
+**A re-dispatched reviewer needs framing the first one didn't**, or it repeats
+the open-ended verification that stalled: tell it **it is the second
+reviewer**, that there is **no prior verdict or partial state to reconcile**,
+what blocker you already cleared for it, and that **a stated verdict on
+honestly-scoped evidence outranks exhaustive coverage**.
+
+**Clear the known blocker BEFORE dispatching, not after.** §6's `git merge` is
+refused to reviewer agents by the classifier — predictable, not bad luck. If
+`origin/main` has moved and the reviewer will need the merge, **do the merge,
+re-run the affected module suite, and push first**, then tell the reviewer it
+is done. That converts a guaranteed mid-review wall into a precondition
+(computenet-whx4, computenet-sjwd).
+
 **Find an actual verdict in the result before acting on it.** The completion
 notification looks identical whether the reviewer finished or stopped itself
 mid-review (one returned "Waiting on Arm A…" as its entire result). No
@@ -1816,6 +1874,29 @@ parentage like everything else.
 Take the first that applies. **Routes 1, 3 and 4 are all closed after
 T-90m** — new work you can't review and merge before the slot ends is a
 stranded branch.
+
+**0. A free capacity lane while the current unit is still running.** "One
+feature at a time" idles half the machine on a one-item-wide epic, and 5f is
+unreachable until the in-flight unit returns — so this is not theoretical
+(computenet-0a76). **A second unit may run concurrently, under all four of
+these:**
+
+- it is **within machine capacity** (`next-batch.py`'s cap counts every live
+  agent, not just this batch);
+- its `metadata.files` claim is **disjoint from every running unit's** — and
+  from their acceptance cross-references, per 5b;
+- **module and build contention is part of the test, not just files.** Two
+  units driving the same Gradle modules share caches, daemons and the
+  `buildLogic.lock`, which is how a "parallel" pair runs slower than the
+  sequence would (task.md's contention signatures). Disjoint files over the
+  *same* module is not disjoint work;
+- it lands on **its own branch and PR** — never a second unit merging into a
+  feature branch another unit is still using, which is 5c's serialized merge
+  and does not survive two writers.
+
+Any one failing → **leave the lane idle deliberately, and say so**, rather
+than letting it read as an oversight. On the shape that produced this — a
+ready surface exactly one item wide — idle-and-wait *is* the answer, not a gap.
 
 **1. Another feature under this epic is ready or in progress** (and not
 recently parked) → 5a.
