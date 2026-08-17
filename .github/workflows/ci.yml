@@ -206,11 +206,23 @@ jobs:
       #    below therefore reads `5 tests` rather than `222`, and the uploaded
       #    fast-lane artifact carries only this class for this module (the serial
       #    lane's artifact and a local run still carry the whole suite).
-      #  - check (2) below consequently ranges over this class alone. That is not
-      #    a coverage loss for the toolchain signature it hunts — this class is
-      #    guarded by the same two assumptions — but it no longer speaks for the
-      #    module's other suites, whose reports were replayable before this
-      #    change too.
+      #  - check (2) below consequently ranges over this class alone, and for
+      #    this class it CANNOT FIRE. The guards are the same two assumptions,
+      #    but TwoNodeRigTest carries them in `@BeforeAll`, and a failed
+      #    assumption in a class-level lifecycle method aborts the container —
+      #    which Gradle records as a bare `<skipped/>`, without the assumption
+      #    message check (2) greps for. Measured 2026-08-18 (darwin/arm64,
+      #    /opt/homebrew/bin off PATH): this class's report holds five bare
+      #    `<skipped/>` and zero occurrences of `is not on PATH`, while
+      #    `feed.CheckpointResumeTest` — same module, same guards, but in
+      #    `@BeforeEach` — run the same way holds
+      #    `<skipped message="...Assumption failed: bd is not on PATH — skipping">`
+      #    five times. So in THIS lane the toolchain signature is carried by
+      #    check (3) alone, which does redden on that report (`5 test(s),
+      #    5 skipped`, exit 1, measured the same way); check (2) here is inert
+      #    in both directions and is kept only because the two lanes share this
+      #    script. It stays live in build-test-serial, whose class guards per
+      #    test. Follow-up: computenet-jx3g.
       #
       # `-PexcludeMultiJvm=true` is repeated because this is a separate Gradle
       # invocation; without it the filter would also match nothing new but the
