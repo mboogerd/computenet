@@ -865,6 +865,22 @@ file with ordinary foreground calls — never end a turn waiting on it.
 Out of room, out of time, or blocked, give the partial verdict you have and put the rest under NOT VERIFIED — an honest
 partial verdict beats stopping mid-experiment.
 
+**You cannot enumerate them from memory, so keep a ledger.** There is no
+"list my background jobs" affordance here — `TaskStop` needs an id you must
+already hold, and a poll shell you backgrounded 40 tool calls ago is not
+something you will reliably recall (computenet-k9d.10). So write each one down
+**as you start it**, one line, and read the file back at this step:
+
+```bash
+echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
+# ... at report time:
+cat "$SCRATCH/jobs"     # kill each line, then:
+rm -f "$SCRATCH/jobs"
+```
+
+An empty or absent file is a positive answer — you started none. What is not
+an answer is "I don't think I started any".
+
 **Kill every background job you started before you send that message** —
 `TaskStop` each monitor, kill each backgrounded shell, exit each poll loop.
 Background jobs are legitimate (waiting on CI, tailing a long run); leaving one

@@ -259,6 +259,30 @@ done
 
   The three states the loop keeps apart — query failed, not yet reporting,
   unsettled — are one state to any test on `$?`, and two of them look green.
+- **A long job YOU started is not supervised by anything.** This is distinct
+  from a dispatched agent, whose completion notification always arrives: a
+  background Bash job that **hangs** produces no notification at all, so
+  absence of news is not progress — one such job silently consumed half a
+  session (computenet-6v1). Never start one bare. Either give it a hard
+  timeout so it cannot outlive its usefulness, or arm a bounded check that
+  emits on **stall** (no new output for N minutes) as well as on completion:
+
+  ```bash
+  echo "job <id> <what it waits for>" >> "$SCRATCH/jobs"   # your own ledger
+  # bounded, and it reports a stall rather than waiting forever:
+  for i in $(seq 1 30); do
+    [ -s "$SCRATCH/job.log" ] && prev=$(wc -c < "$SCRATCH/job.log") || prev=0
+    sleep 60
+    now=$(wc -c < "$SCRATCH/job.log" 2>/dev/null || echo 0)
+    [ "$now" = "$prev" ] && echo "round $i: STALLED — no output in 60s" || echo "round $i: alive ($now bytes)"
+  done
+  ```
+
+  **A hung child does not fail, it waits.** A JVM after `OutOfMemoryError`, a
+  container whose main thread died, a Gradle daemon that lost its worker — all
+  of these keep their process alive with no exit status ever arriving. So the
+  timeout has to live in *your* wrapper; trusting the child to exit is what
+  turns a dead job into a lost session.
 - **Between notifications you have no sense of elapsed time.** Run
   `date -u +%H:%M` before any budget-gated decision — one session misread
   1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
