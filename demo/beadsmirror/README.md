@@ -8,6 +8,31 @@ plumbing the mirror serves its materialized fold through). See epic
 computenet-dqj for the full design; `BeadsMirrorAppKt` is the runnable
 `--workspace <path>` entry point.
 
+## Two-node mode: the transport is injected
+
+`--rig <name>` with `--listen <port>` or `--peer <ws://host:port>` turns on the
+two-node mode (`MirrorPeering`): the projector's two cells become replicas of
+one logical cell and gossip their deltas to the peer.
+
+**Which transport carries that gossip is a parameter, not a fact of the code.**
+`MirrorTransport` (main sources) is the seam — it owns establishing the
+listening end, establishing the dialing end, and `partition()`/`heal()` on the
+peering between them. `WsMirrorTransport` is the only binding that exists and
+the only one a running app constructs; it is also the only file in the module
+that names a `:wire` type, so a solo run still loads none of it.
+
+The point of the seam is the convergence suite (feature computenet-7em.2): it
+receives its wiring instead of naming it, so re-running the same assertions
+over a different transport — the iroh work, epic computenet-7em §3 — is a new
+binding and **zero test edits**. No test source under `src/test/**/e2e/`
+imports `civictech.wire`; keep it that way.
+
+`partition()`/`heal()` on the WebSocket binding sever and re-dial the
+**dialing** end, leaving the listener bound throughout — `heal()` therefore
+returns with the link already carrying, so a test's bounded wait is about
+convergence and not about the transport coming back. The binding's own KDoc
+states why that beats killing the listener.
+
 ## Real-workspace tests need `bd` and `dolt` on PATH
 
 Most of this module's test suite is synthetic (in-process fixtures, no
@@ -22,7 +47,7 @@ via `BdScratchWorkspace`:
 - `equality.MirrorExportEqualityTest`
 - `feed.DoltCommitFeedTest`, `feed.CheckpointResumeTest`
 - `dolt.DoltSqlTest`
-- `e2e.DivergenceControlTest`, `e2e.ScriptedSequenceTest`
+- `e2e.DivergenceControlTest`, `e2e.ScriptedSequenceTest`, `e2e.TwoNodeRigTest`
 
 Each of these guards itself with:
 
