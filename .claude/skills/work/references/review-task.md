@@ -330,6 +330,34 @@ What to consume, per test run:
   "I did the mutation check and it failed as expected" is the same
   unfalsifiable sentence this section exists to stop.
 
+  **Read the BUILD LOG, not only the JUnit XML.** A mutation that fails to
+  *compile* leaves the previous run's XML on disk, and that stale XML parses
+  as a plausible result — a mutation verdict for a mutation that never ran.
+  It is not an exotic case: a mutation is often *expected* to break
+  compilation. Caching and a failed compile look identical from the XML
+  alone, and §2 warns only about caching (computenet-2x5l). Check both:
+
+  ```bash
+  ./gradlew :<module>:test --tests '<TestName>' --rerun > "$SCRATCH/mut.log" 2>&1
+  grep -E '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
+  ```
+
+  A `BUILD FAILED` with `e:` lines is **not** a red test. Fix the mutation
+  until it compiles, or pick a different one, and never quote the XML from a
+  run that did not build.
+
+  **Revert only what you mutated.** `git checkout -- <file>` is file-granular
+  and silently discards any *other* edit you made to that file earlier in the
+  review — §2's mutation and §4's repair both happen and nothing orders them,
+  so this is the ordinary case, not a corner (one reviewer lost a KDoc repair
+  this way). Undo the mutation by hand, or park your own work first:
+
+  ```bash
+  git -C <task-worktree> stash push -- <file>   # your repairs, set aside
+  # ... mutate, re-run, watch the named test FAIL, undo the mutation ...
+  git -C <task-worktree> stash pop
+  ```
+
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,
   because the incident that produced it (computenet-leg) was a *feature
@@ -448,9 +476,13 @@ within its stated scope: a missed criterion, a thin test, a small wrong
 edge. Commit on the task branch:
 
 ```bash
-git -C <task-worktree> commit -am "review: <what you fixed>"
+git -C <task-worktree> commit -m "review: <what you fixed>" -- <the paths you edited>
 git -C <task-worktree> push
 ```
+
+`-m … -- <paths>`, never `-am`: this repo's shared index needs the pathspec,
+and `git` rejects the combination outright — `fatal: paths … with -a does not
+make sense` (computenet-2x5l).
 
 Fail it only when the approach is wrong at the design level, or repair would
 rewrite most of the diff. If the task turns out to be underspecified or the

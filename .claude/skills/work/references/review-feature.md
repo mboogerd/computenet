@@ -544,11 +544,27 @@ and your own repairs were trivial by §5. Record the verdict, but **do not run
 that just certified (and possibly repaired) this code, so shipping it too
 would be self-approval. The orchestrator reads your verdict and ships:
 
+**One `bd` write per call** (SKILL.md's `bd` traps). `bd` writes can run past
+120s, and a chained block that dies mid-sequence leaves a half-recorded
+certification — the worst state available, since `review=passed` without its
+evidence comment reads as a clean pass. Each fenced block below is **one**
+call; run them in order, and check each returned before the next.
+
 ```bash
 git -C <worktree> push
+```
+
+```bash
 bd comment <feature-id> "Review passed: <criteria verified with their evidence; test counts and executed/from-cache accounting; uname; gh pr checks conclusions; re-fetch result; what you repaired and its --stat>. Verdict: ready."
+```
+
+```bash
 bd update <feature-id> --set-metadata review=passed
 ```
+
+`review=passed` goes **last**: it is the flag the orchestrator ships on, so a
+sequence that dies earlier leaves the feature uncertified rather than
+certified with nothing behind it.
 
 ### Ready with residual — the honest negative result
 
@@ -571,11 +587,31 @@ Merge it, and keep the residual alive:
 RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
   --acceptance="<the original criterion, unchanged>" \
-  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+  --json | jq -r '.id' > "$SCRATCH/residual-id"   # bd CREATE returns an object; bd SHOW a list
+```
+
+`$RES` cannot cross a Bash call — shell state does not persist between them —
+so the id goes to a file and every later call re-reads it. `review=passed` is
+the last write: a sequence that dies leaves the feature uncertified rather
+than certified with a residual nobody recorded.
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update "$RES" --parent=<epic-id>
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES under <epic-id>, which is what carries the unmet criterion forward."
-bd update <feature-id> --set-metadata review=passed
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update <feature-id> --set-metadata residual=$RES
+```
+
+```bash
+bd update <feature-id> --set-metadata review=passed
 ```
 
 `review=passed` is deliberate: an unmet criterion is not a reason to withhold
@@ -610,11 +646,31 @@ parent, and give it the two references that stand in for one:
 RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>. Filed UNPARENTED deliberately: parent epic <epic-id> was already closed at review time." \
   --acceptance="<the original criterion, unchanged>" \
-  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+  --json | jq -r '.id' > "$SCRATCH/residual-id"   # bd CREATE returns an object; bd SHOW a list
+```
+
+`$RES` cannot cross a Bash call — shell state does not persist between them —
+so the id goes to a file and every later call re-reads it. `review=passed` is
+the last write: a sequence that dies leaves the feature uncertified rather
+than certified with a residual nobody recorded.
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd dep add "$RES" <feature-id> --type=discovered-from
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES, UNPARENTED because <epic-id> is closed, linked discovered-from <feature-id>."
-bd update <feature-id> --set-metadata review=passed
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update <feature-id> --set-metadata residual=$RES
+```
+
+```bash
+bd update <feature-id> --set-metadata review=passed
 ```
 
 **The edge is what replaces the parent, so do not skip it.** An unparented
