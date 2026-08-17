@@ -431,6 +431,14 @@ Your own index, work discovered on the way, and the bead state you leave behind.
 
    **The commit is therefore the whole handoff.** Uncommitted work is
    invisible to every downstream step, and there is no push to catch it later.
+   **Committing here is authorized, not a liberty you are taking.** The
+   conservative git profile in AGENTS.md governs *shared* refs — it does not
+   forbid you committing on your own task branch, and reading it that way is
+   how finished work gets left uncommitted (computenet-h5s4). The reasoning
+   generalizes: **the orchestrator merges your BRANCH**, so anything
+   uncommitted contributes nothing and the task reviews as a no-op. The file
+   is not the deliverable; the commit is.
+
    **This is a gate, not a formality: reporting a task done with an
    uncommitted deliverable is an error.** Every downstream step reads the
    branch, so a finished file that was never committed is indistinguishable

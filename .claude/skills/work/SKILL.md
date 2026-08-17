@@ -1408,7 +1408,11 @@ Agent({
   run_in_background: true,
   prompt: `You are implementing beads task ${id}, already claimed — do not
 claim another. Work ONLY in your own worktree at ${taskWorktree}, on branch
-${taskBranch}. Do not touch the main checkout, the feature worktree, or
+Committing on your own task branch is EXPECTED AND AUTHORIZED — the
+conservative git profile does not forbid it, and a task's deliverable IS
+commits on its branch, not a dirty worktree. What you must not do is merge,
+rebase, switch branches, touch another worktree, or push any shared ref.
+Do not touch the main checkout, the feature worktree, or
 another task's worktree.
 Your branch's BASE COMMIT, observed at dispatch — the commit the branch was
 cut from, NOT a diff baseline: ${taskBase}. Anything merged into main before
@@ -1539,6 +1543,7 @@ Agent({
 ${taskWorktree}, not the main checkout) and follow it to review beads task
 ${id} against its own acceptance criteria.
 Worktree: ${taskWorktree}  ·  Branch: ${taskBranch}
+${featureBranchOnOrigin}
 Cross-bead writes authorized on this item: ${crossBeadWrites or "none"}.
 That is the same line the implementer was given: treat what it names as
 commissioned work rather than scope creep, and anything beyond it as
@@ -1552,6 +1557,9 @@ wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
+Committing your repairs on the branch under review is EXPECTED AND
+AUTHORIZED; the conservative git profile does not forbid it. Do not merge,
+rebase, switch branches, or push a shared ref.
 Repair what you can within the task's scope. Report pass or fail, what you
 repaired, and — on fail — exactly what is missing.
 If you won't finish within ~45-60 minutes, stop at a clean point and write your
@@ -1625,6 +1633,21 @@ mid-review (one returned "Waiting on Arm A…" as its entire result). No
 pass/fail stated → `SendMessage` the same agent (context intact) to finish
 and state a verdict plus a NOT VERIFIED section. Agent-completed is not
 task-reviewed; a result skimmed as done here merges unreviewed code.
+
+`${featureBranchOnOrigin}` is one line, and it saves the reviewer a failed
+command: either `The feature branch ${featureBranch} IS on origin.` or `The
+feature branch ${featureBranch} is NOT on origin yet — this is the first task
+under it, so diff against the base commit ${taskBase} instead.` You know which
+(5d has not run yet for the first task); the reviewer would otherwise discover
+it by a fetch that fails (computenet-e3my).
+
+**A pass carrying a SUBSTANTIVE repair is not final** (computenet-r197). If
+the task reviewer names repair shas and withholds `metadata.review=passed`, it
+has told you it authored part of the deliverable — dispatch a second reader
+scoped to *those shas only* before merging, exactly as 5e does for a feature
+reviewer's substantive repair. A prose or design-record deliverable is
+substantive by default, because there rewriting the text is rewriting the
+thing under review.
 
 **Merge the passes yourself, one at a time** — reviewers must not merge
 (concurrent merges into one feature branch race).
@@ -1885,6 +1908,9 @@ wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
+Committing your repairs on the branch under review is EXPECTED AND
+AUTHORIZED; the conservative git profile does not forbid it. Do not merge,
+rebase, switch branches, or push a shared ref.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,
