@@ -130,6 +130,33 @@ object Proxy {
     }
 
     /**
+     * `[SEC1-20]` accounting for [discharge] (computenet-h6sf): the number of times the walk
+     * met an exclusive that was **already** consumed or released.
+     *
+     * The walk cannot throw out of a cleanup path (see [discharge]'s KDoc), and it also must
+     * not *mask* a double-discharge — `FanOutlet`'s KDoc treats discharge-exactly-once as the
+     * `[SEC1-20]` invariant. So the occurrence is neither propagated nor swallowed: it is
+     * counted, the same counted-tripwire shape `civictech.cell.port.InletPolicy.unackedDrops`
+     * and `civictech.cell.consistency.WaveFrontier.unmatchedDrops` use for their own silent
+     * exits. A host or test that requires the invariant asserts this stays at its prior value.
+     *
+     * Process-wide and monotonic — it is a tripwire, not a per-invocation result — so read it
+     * as a delta across the operation under test, never as an absolute.
+     *
+     * **Limit, stated where the number is:** the count is derived from an
+     * [IllegalStateException] out of `Owned.take()`/`Leased.release()`, which is precisely the
+     * consume-once/release-once `check` today, but `Leased.release` also invokes its
+     * `returnToPool` callback under the same guard. A pool callback that itself threw
+     * `IllegalStateException` would be counted here as a double-discharge (and swallowed).
+     * Pooling is unbuilt (`Ownership.kt`, "G-21 phase 3"), so no such callback exists in this
+     * repository today; making the distinction exact needs a non-consuming state predicate on
+     * `Owned`/`Leased` themselves, which is filed separately.
+     */
+    val doubleDischarges: Long get() = doubleDischargeCount.get()
+
+    private val doubleDischargeCount = java.util.concurrent.atomic.AtomicLong()
+
+    /**
      * C-11 residual 1 (computenet-ulss, 93 I-6 / I-8): the walk reaches an exclusive nested
      * in a **plain payload object's field**, not only one held directly, in a collection, or
      * in a type argument. Before the widening, an `Owned` inside a data-class parameter was
@@ -154,26 +181,83 @@ object Proxy {
      *   one is **not** discharged even though the KSP scan marks the method exclusive
      *   (measured 2026-08-16 under review of computenet-ulss). Widening to those shapes is
      *   filed, not done.
+     * - **Function values are not opened** (computenet-h6sf, defect 1 — over-reach). A
+     *   `kotlin.Function*` type is a *platform* declaration, so `carriesExclusive` stops at it
+     *   and can never mark a method exclusive on account of a captured exclusive. A lambda's
+     *   runtime *carrier* class, however, is an ordinary non-platform class whose fields hold
+     *   exactly those captures, so the field walk used to descend into it and consume an
+     *   exclusive that no contract ever declared as payload — an exclusive consumed by
+     *   something that never owned it, the mirror image of the drop this walk exists to
+     *   prevent. Measured 2026-08-16 under review of computenet-ulss (`class WithFn(val f: ()
+     *   -> Unit)` capturing an `Owned`; pinned by `ProxyDischargeReachTest`).
      * - **Reflection failures are swallowed per field** rather than aborting the walk: this
      *   runs on suppression and denial paths, where discharging the fields that *are*
-     *   reachable is strictly better than propagating out of a cleanup. Note the swallow
-     *   covers field *access* only — an `Owned` already consumed elsewhere still throws out
-     *   of `take()` here, and the walk stops with the remaining fields undischarged. Callers
-     *   that must not throw wrap this themselves (`dischargeRefusedArgs`).
+     *   reachable is strictly better than propagating out of a cleanup.
+     * - **An already-consumed exclusive is counted, not thrown and not swallowed**
+     *   (computenet-h6sf, defect 2). `Owned.take()`/`Leased.release()` used to propagate out
+     *   of here, which on `Proxy.discharging`'s handler and
+     *   `civictech.cell.port.InletPolicy.offer` — both `args.forEach(::discharge)`, unguarded
+     *   — abandoned the *remaining* arguments and fields undischarged: a cleanup path that
+     *   silently drops the rest of an exclusive payload. Wrapping the consumption in a blanket
+     *   `runCatching` would fix that by masking `[SEC1-20]` double-discharge instead, so the
+     *   occurrence is recorded on [doubleDischarges] and the walk continues. Read that
+     *   counter's KDoc for what it does and does not distinguish.
+     *
+     * ## Why the reach is *not* narrowed further (the decision, computenet-h6sf)
+     *
+     * The same review measured a second over-reach shape: `Cmd(val item: Owned, val registry:
+     * SharedRegistry)` where `SharedRegistry` declares an `Owned` property of its own — both
+     * are consumed, though only `item` is intuitively "this invocation's". Neither a depth
+     * bound nor an opt-in payload marker is taken, and deliberately:
+     *
+     * - **The compile-time scan reaches it too.** `ContractProcessor.carriesExclusive` walks
+     *   `getAllProperties()` transitively with no depth bound, so a method taking `Cmd` is
+     *   marked `exclusive` *because of* `registry.held`. Every consumer of that bit — the link
+     *   handshake's SPSC rule, the suppression proxy, ADMIT accounting — already treats it as
+     *   a sole-consumer payload. A runtime walk narrower than the bit that summoned it would
+     *   leave that exclusive with no consumer at all: the silent drop again, now with the
+     *   descriptor asserting it was handled.
+     * - **A depth bound cannot separate the two cases**: `Cmd.registry.held` and
+     *   `OwnedEnvelope.payload` differ in nesting by one, and in ownership by nothing a
+     *   counter can see. Any cutoff drops legitimate payload at some depth.
+     * - **The type level already has the escape hatch.** A reference that is genuinely shared
+     *   rather than transferred is declared `Borrowed`/`Frozen`, and both walks stop there
+     *   (spec 23 §Taps, computenet-yzsc). Declaring a live `Owned` in a type reachable from a
+     *   contract parameter *is* declaring it transferred; that is what the ownership types
+     *   mean.
+     *
+     * So the rule is: **the runtime walk's reach is exactly the compile-time scan's reach** —
+     * the function-value stop above closes the one place they measurably diverged. If those
+     * two ever disagree again, the divergence is the bug, in whichever direction it points.
      */
     private fun discharge(value: Any?, seen: MutableSet<Any>) {
         if (value == null || !seen.add(value)) return
         when (value) {
-            is Owned<*> -> value.take()
-            is Leased<*> -> value.release()
+            is Owned<*> -> consuming { value.take() }
+            is Leased<*> -> consuming { value.release() }
             is Map<*, *> -> value.forEach { (key, item) ->
                 discharge(key, seen)
                 discharge(item, seen)
             }
             is Iterable<*> -> value.forEach { discharge(it, seen) }
             is Array<*> -> value.forEach { discharge(it, seen) }
-            is Borrowed<*>, is Frozen<*> -> Unit
+            is Borrowed<*>, is Frozen<*>, is Function<*> -> Unit
             else -> dischargeFields(value, seen)
+        }
+    }
+
+    /**
+     * Runs one exclusive's consumption so that an already-discharged obligation neither
+     * escapes into the cleanup path nor disappears — see [doubleDischarges]. The catch is
+     * deliberately narrow (`IllegalStateException`, around the consumption alone) rather than
+     * a `runCatching` over the walk: any other failure is not a double-discharge and must
+     * still surface.
+     */
+    private inline fun consuming(consume: () -> Unit) {
+        try {
+            consume()
+        } catch (_: IllegalStateException) {
+            doubleDischargeCount.incrementAndGet()
         }
     }
 
