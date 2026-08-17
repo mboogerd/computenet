@@ -10,9 +10,33 @@ the orchestrator, not the implementer: every item — breakdowns and reviews
 included — goes to a dispatched subagent. No inline "just this once"; that is
 how a multi-hour session's context balloons and drifts.
 
-Rules here are one-line distillations of real incidents; the cited bead id
-(`computenet-…`) holds the full story. Don't relax a rule without reading its
-bead.
+## Contents
+
+**Read before you start** — standing constraints, not steps:
+
+- [The three rules](#the-three-rules) · [`bd` traps](#bd-traps) ·
+  [Scripts and references](#scripts-and-references) ·
+  [What you write yourself is the one thing nobody reviews](#what-you-write-yourself-is-the-one-thing-nobody-reviews)
+
+**The session, in order:**
+
+| | Step | What it settles |
+|---|---|---|
+| 1 | [Identity](#1-identity) | `BEADS_ACTOR`, and that this checkout is not stale |
+| 2 | [Arm the budget](#2-arm-the-budget) | the clock, and how to resume after the host dies |
+| 3 | [Sync, release stale claims, take one epic](#3-sync-release-stale-claims-take-one-epic) | one pull, one epic claim, the sweeps |
+| 4 | [Ensure the epic has features](#4-ensure-the-epic-has-features) | breakdown, or the epic is already decomposed |
+| 5 | [Work features](#5-work-features) | the loop: 5a set up · 5b batch · 5c review+merge · 5d PR · 5e feature review · 5f next |
+| 6 | [Finalize](#6-finalize) | publish, sweep worktrees, hand off |
+| 7 | [Log the friction](#7-log-the-friction) | what to file so the next session is faster |
+
+Step 5 is most of this file. Its six sub-steps are a cycle, not a checklist:
+5b→5c repeats per batch, 5f sends you back to 5a for the next feature.
+
+**This file is long because each rule is an incident.** Cited bead ids
+(`computenet-…`) hold the full story; don't relax a rule without reading its
+bead. If you are looking for one thing, use the table above rather than
+reading start to finish.
 
 ## The three rules
 
@@ -805,6 +829,16 @@ computenet-9xj). Same filters as everywhere: skip `human`-labeled and
 recently-parked items. **When one finishes, re-run this query and take the
 next** — don't fall to 5f while the epic still has direct children; after
 T-90m, stop taking new ones. Only when this query too is empty does 5f apply.
+
+**If you run several of these at once, keep at most ~2 open PRs against any
+one file.** Nothing else bounds the count here, and 5b's batching by disjoint
+`metadata.files` cannot help — items on a friction epic *share* the file by
+construction. Beyond ~2, sequence: hold the next item until one lands. Each
+landing forces every sibling PR on that file to merge `origin/main`, and every
+such merge restarts all six required checks (~4 min) — which the next sibling
+landing can invalidate before it finishes, so the churn grows faster than the
+PR count (computenet-nxac: three such cycles on one PR). [5e](#5e-feature-review)
+has the cheaper re-check tier for the merges you do still pay.
 
 Apply the same two filters to the feature picked above; nothing survives →
 **5f**.
@@ -1630,8 +1664,64 @@ nothing in the output saying so (computenet-qnyn); green-for-commit-N while
 the branch is at N+1 would ready a PR on evidence that never covered the
 merged code. Wait for agreement, re-read. Commits in the `log` output the
 verdict doesn't mention, touching this diff's files (`gh pr diff <pr-url>
---name-only`) → merge `origin/main` in and send back for a re-check. Red
-required check → red-check-attribution.md; pending → wait, with step 2's
+--name-only`) → **one of two tiers**, because same-file is not the same as
+interacting. Read both sides **before** you merge `origin/main` in — after the
+merge the landed side is no longer addressable, because `merge-base HEAD
+origin/main` has become `origin/main` itself:
+
+```bash
+W=<worktree>; B=$(git -C $W merge-base HEAD origin/main)   # BEFORE the merge
+git -C $W diff -U0 $B..origin/main -- <the shared file> | grep '^@@'   # what landed
+git -C $W diff -U0 $B..HEAD        -- <the shared file> | grep '^@@'   # what this PR touches
+git -C $W diff      $B..origin/main -- <the shared file>               # read it, don't just count
+```
+
+(One fenced block on purpose — `$B` does not survive into a second `bash`
+call. Do **not** reach for `origin/main@{1}` as the landed side: it is a
+reflog entry, so it is absent in a fresh clone — `fatal: ambiguous argument
+'origin/main@{1}'` — and where it does resolve it steps back exactly one
+fetch, which is this PR's base only by coincidence.)
+
+- **Disjoint hunk ranges *and* neither side's text is about the other's
+  subject** → **merge and ship.** Record the check in the PR: the landed sha,
+  the hunk ranges each side touches, and that they neither overlap nor
+  interact. A re-review that reads two diffs and confirms they never met is
+  bookkeeping, and it is not free (below).
+- **Overlapping or interacting hunks**, or you cannot tell → **send back for a
+  re-check**, as before. "Cannot tell" is the overlapping case, not the
+  disjoint one.
+
+**Disjoint ranges are necessary, not sufficient — the check is a read of both
+diffs, not a `grep` for overlap.** Two edits 900 lines apart in one
+instruction file interact whenever the landed change: states a rule on the
+same subject as yours (now the file answers one question twice, differently);
+renames, moves or deletes a heading, script path, file, flag or bead id that
+your text cites, or vice versa; changes a step your text says to run "as in
+step N"; or redefines a term you use. None of those leave a shared hunk range,
+and shipping one is a contradiction merged into the file every session
+executes. Any of them, or any doubt → second tier.
+
+**The cost this tier exists to avoid is real and compounds.** Every merge of
+`origin/main` pushes a new head, and every new head restarts all six required
+checks — **~4 minutes** — which a sibling merge can invalidate before it
+finishes. On a repo where several sibling PRs all edit one ~2000-line
+instruction file, the old predicate ("commits touch the same files") is true
+essentially always, so it fired on every merge whether or not the landed
+change interacted. One PR paid that cycle three times before it could ship
+(computenet-nxac, PR #164; reproduced 2026-08-17 on PRs #271 and #278, both of
+which drifted on non-interacting SKILL.md regions). The window in which a PR
+is both green *and* current shrinks as the number of concurrent same-file PRs
+grows, so the churn is superlinear in that number — which is the other half of
+the answer:
+
+**Keep at most ~2 PRs open against any one file.** Beyond that, sequence: hold
+the next item until one lands. This is stated where it bites — the
+no-feature-layer route in [step 5](#5-work-features), where each child gets its
+own worktree/branch/PR off `origin/main` and nothing else bounds the count.
+Batching by disjoint `metadata.files` does not help there — those items
+*share* the file by construction.
+
+Red required check → red-check-attribution.md; pending → wait, with step 2's
 check-wait loop: `gh pr checks` **exits 8 while anything is pending** — never
 `&&`-chain it (the next step silently skips) and never gate a wait on its
 exit status — and its required-check rows may not exist yet, so neither `$?`
