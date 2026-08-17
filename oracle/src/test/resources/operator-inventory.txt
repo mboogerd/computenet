@@ -1,0 +1,108 @@
+# civictech.cell.data.op operator inventory (computenet-4ru.3.2, epic computenet-4ru §9 risk 2).
+#
+# Sorted, one name per line: every top-level (non-nested — no '$' in the class file name)
+# class civictech.cell.data.op puts on :oracle's test classpath at this task's base commit
+# 9a94a80a. That includes hand-written operator cells, their *Api companion interfaces,
+# KSP-generated *Base/*Ports classes, and any top-level-function file facade (e.g. EmitKt) —
+# all of it is real classpath surface for that package, so all of it is what this gate
+# protects. civictech.oracle.bind.OperatorInventoryTest (oracle/src/test/kotlin/civictech/
+# oracle/bind/OperatorInventoryTest.kt) diffs the package's ACTUAL classes against this list
+# on every :oracle:test run and fails naming what was added and what was removed.
+#
+# UPDATING THIS FILE IS THE MOMENT to also update civictech.oracle.bind.OperatorCatalog's
+# registration and the reference model for the changed operator, IN THE SAME CHANGE — that
+# pairing is the whole point of this gate (epic computenet-4ru §9 risk 2, decided at breakdown
+# on computenet-4ru.3): otherwise a kernel operator can drift out of sync with the oracle's
+# registry/reference model with nothing failing to say so.
+#
+# CAUTION, before you touch OperatorCatalog or the reference model because this file went
+# stale: because the diff is against the classpath rather than hand-authored declarations,
+# some additions/removals here carry no operator-vocabulary information at all — e.g. adding
+# or removing the LAST top-level function/property in an operator file flips its Kotlin file
+# facade (a "*Kt" name, like the five already below) in or out with no operator added, removed,
+# or renamed (verified 2026-08-17: an unrelated top-level helper added to CountCell.kt alone
+# reddens this gate as "Added: [CountCellKt]", computenet-4ru.3.2 review). If the diff names
+# only a *Kt facade, or only a *Base/*Ports/*Api name whose corresponding hand-written cell or
+# interface did not itself rename, update this file and stop — there is no operator to register.
+#
+# Lines starting with '#' and blank lines are ignored by the diff.
+AdvertisedLedger
+CoalescingCombineApi
+CoalescingCombineCell
+CoalescingCombineCellBase
+CoalescingCombineCellPorts
+CombineLatestApi
+CombineLatestCell
+CombineLatestCellBase
+CombineLatestCellPorts
+CountCell
+CountCellPorts
+CountSetApi
+CountSetCellBase
+EmitKt
+FilterCell
+FilterCellPorts
+FilterSetApi
+FilterSetCellBase
+FlatMapSetApi
+FlatMapSetCell
+FlatMapSetCellBase
+FlatMapSetCellKt
+FlatMapSetCellPorts
+FrontierBuilder
+GatedFold
+GroupByApi
+GroupByCell
+GroupByCellBase
+GroupByCellPorts
+GroupEntry
+IntersectSetApi
+IntersectSetCell
+IntersectSetCellBase
+IntersectSetCellPorts
+JoinApi
+JoinCell
+JoinCellBase
+JoinCellPorts
+JoinLedger
+JoinSetApi
+JoinSetCell
+JoinSetCellBase
+JoinSetCellKt
+JoinSetCellPorts
+KeyedBinarySetJoin
+KeyedEntry
+LookupJoinApi
+LookupJoinCell
+LookupJoinCellBase
+LookupJoinCellPorts
+MergeableGroupByCell
+MergeableGroupByCellPorts
+MintedLedger
+ObservedRemoveOps
+OperatorEntry
+OperatorPaging
+OperatorPagingKt
+OperatorWalk
+PagedEntry
+PresenceCountApi
+PresenceCountCell
+PresenceCountCellPorts
+PresenceLanes
+QuorumSetApi
+QuorumSetCell
+QuorumSetCellBase
+QuorumSetCellPorts
+SemiJoinApi
+SemiJoinCell
+SemiJoinCellBase
+SemiJoinCellKt
+SemiJoinCellPorts
+SubState
+TaggedEntry
+TaggedSetOperator
+UnionSetApi
+UnionSetCell
+UnionSetCellBase
+UnionSetCellPorts
+WaveGate
