@@ -16,14 +16,16 @@
 # ~6.0s). Budget well above that anyway — a push following a remote merge was
 # measured over 120s on the old transport and has not been re-measured here.
 #
-# KNOWN LIMITATION, unfixed by this script: the checks below test exit codes.
-# .claude/skills/work/scripts/publish-beads.sh records having seen `bd dolt
-# push` exit 0 while printing a non-fast-forward rejection (Error 1105), which
-# this script would report as success. A rejection exited 1 when re-checked on
-# bd 1.1.2 (2026-08-15), so the failure mode may be version-specific; until
-# that is settled, read this script's log rather than trusting its exit status
-# alone. A non-fast-forward is the expected outcome of two machines pushing on
-# a schedule; the recovery is pull, then push again.
+# The push check below tests BOTH signals — nonzero exit and a rejection in
+# the output — matching .claude/skills/work/scripts/publish-beads.sh, which
+# records having seen `bd dolt push` exit 0 while printing a non-fast-forward
+# rejection (Error 1105). A rejection exited 1 when re-checked on bd 1.1.2
+# (2026-08-15), so the exit-0 mode may be version-specific, but it has not
+# been refuted, so neither signal is trusted alone (computenet-kbk0). This
+# script's exit status is now safe to trust for the push step. A
+# non-fast-forward is the expected outcome of two machines pushing on a
+# schedule; unlike publish-beads.sh this script does NOT recover it — the
+# recovery is pull, then push again, i.e. re-run this script.
 #
 # Fail-loudly, never degraded-continue (computenet-kg7 lesson): any failure
 # in either step exits nonzero immediately, naming the command that failed.
