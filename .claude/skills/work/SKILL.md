@@ -737,6 +737,11 @@ If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
 message. A prescribed reproduction that passes unfixed is a false lead — say
 so on the bead rather than quietly substituting your own.
+Run every verification command — Gradle above all — in ONE foreground Bash
+call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
+anything that outruns its 120s default, and a turn that ends waiting on a
+background job never resumes: your turn ending IS your completion, so there is
+nothing to come back to. Never end a turn saying you will wait for a job.
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
 Your worktree and branch are preserved, so a later batch resumes you here.
@@ -754,6 +759,16 @@ checkout's working copy drifts (measured 44 commits behind, computenet-kcu).
 An agent with no worktree reads via `git show origin/main:<path>`. Say which
 in every prompt.
 
+**Every dispatch prompt carries the foreground-timeout line**, implementer
+and reviewer alike — reviewers drive the same suites. Telling an agent to
+"run it in the foreground" does not work and was already tried: the
+foreground/background choice belongs to the Bash tool's 120s default, not to
+the agent's intent, so only an explicit `timeout` argument changes it.
+`:demo:beadsmirror:test` takes ~3m40s; without that argument the call is
+backgrounded, the agent ends its turn saying it will wait, and nothing ever
+wakes it. Five stalls across two items in one session, ~40 minutes lost
+(computenet-hob2).
+
 **While a batch runs, never read a running agent's output** — not
 `TaskOutput`, not `Read`, not `tail`. For a local agent that file is the
 full JSONL transcript (thinking blocks, tool payloads); one call dumped
@@ -765,6 +780,15 @@ task's own bd comments (`bd comments <id> --json > "$SCRATCH/..."` —
 task.md has agents comment at parks and at finish), and
 `git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
 the budget deadline below — there is nothing useful between.
+
+**Find a stated outcome in an implementer's result before acting on it** —
+the same rule 5c gives reviewers, and the same failure. A completion
+notification looks identical whether the agent finished or stopped itself
+mid-task; one returned "I will wait for the background test run notification
+before finalizing" as its entire result — no outcome, no files, no commit, no
+bead state (computenet-itwc). Done / blocked / premise-wrong, plus the files
+touched, or it is not a report: `SendMessage` the same agent (context intact)
+to finish and report, and run nothing downstream on that task until it does.
 
 **On batch completion** (wait for the whole batch — a staggered re-batch
 computes overlap against a moving set): files touched outside a claim → fix
@@ -800,6 +824,11 @@ Cross-bead writes authorized on this item: ${crossBeadWrites or "none"}.
 That is the same line the implementer was given: treat what it names as
 commissioned work rather than scope creep, and anything beyond it as
 unauthorized.
+Run every verification command — Gradle above all — in ONE foreground Bash
+call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
+anything that outruns its 120s default, and a turn that ends waiting on a
+background job never resumes: your turn ending IS your completion, so there is
+nothing to come back to. Never end a turn saying you will wait for a job.
 Repair what you can within the task's scope. Report pass or fail, what you
 repaired, and — on fail — exactly what is missing.
 If you won't finish within ~45-60 minutes, stop at a clean point and write your
@@ -916,6 +945,11 @@ Children left open as ask-human.md parks, deferred by design rather than
 missed (5b's parked-residue): ${parkedChildren or "none"}. Confirm each is
 really a park and not a child blocked on a real dependency that inherited the
 human label from its parent; a real block means work remains.
+Run every verification command — Gradle above all — in ONE foreground Bash
+call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
+anything that outruns its 120s default, and a turn that ends waiting on a
+background job never resumes: your turn ending IS your completion, so there is
+nothing to come back to. Never end a turn saying you will wait for a job.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,
