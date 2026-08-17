@@ -856,6 +856,20 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
 **Before claiming each task:**
 
+- **Re-validate a stated blocker or precondition against the ARTIFACT it
+  names, before you write it into a dispatch prompt.** A bead's "blocked until
+  X lands" was true when it was written; by dispatch time X may have landed
+  differently, partially, or not at all. Check the thing itself — the file,
+  the symbol, the test, the config — **not a commit subject line**, which
+  records what someone intended, not what is now true. Two items in one
+  session were dispatched on preconditions that no longer held
+  (computenet-rjyl). This is the orchestrator-authorship rule applied to
+  preconditions: a claim about what a change *does* needs a run or a citation.
+  When your check was indirect, relay it as such — **"I believe X; verify it
+  first"**, not as a checked fact. An agent cannot tell your verified claims
+  from your plausible ones, and it will build on both. The same applies at 5f
+  **route 4's admission gates**, which are where items with no feature parent
+  get their preconditions read.
 - **Re-derive `metadata.files` against the bead's current decided design.**
   The claim was set at filing; a design answered later can reach outside it
   (computenet-dqy.37 required violating its own claim). Design reaches wider
@@ -1097,6 +1111,17 @@ task.md has agents comment at parks and at finish), and
 `git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
 the budget deadline below — there is nothing useful between.
 
+**To find out whether an unfinished agent is still working, never read its
+transcript** — `TaskOutput`/`Read`/`tail` on a running agent's output file
+dumps tens of thousands of tokens of thinking blocks and tool payloads into
+your context, unrecoverably (computenet-dal, below). The three safe signals,
+in order of cost: `git -C <task-worktree> log --oneline` and `git -C
+<task-worktree> status --short` (commits and edits landing = alive), the
+task's own `bd comments <id>` (task.md has agents comment at parks and at
+finish), and the completion notification itself, which always arrives.
+`SendMessage` to the agent is the fourth, and it is also the *remedy* — it
+keeps the agent's context, where `TaskStop` discards it (computenet-77cx).
+
 **Find a stated outcome in an implementer's result before acting on it** —
 the same rule 5c gives reviewers, and the same failure. A completion
 notification looks identical whether the agent finished or stopped itself
@@ -1191,6 +1216,27 @@ query picks it up.
 ```bash
 gh pr checks <pr-url>
 ```
+
+**Green is not "the tests ran" — check they were not SKIPPED.** A required
+check goes green just as happily when the diff's own suites *skipped
+themselves*: an `assumeTrue`-guarded test whose precondition CI does not
+provide reports `SKIPPED` and the build reports success. Measured 2026-08-17 on
+PR #254 — a lane was widened specifically so a new two-JVM test would run on
+every PR, all six checks went green in 2m25s, and the orchestrator announced
+that Linux execution was now proven. The job log said
+`TwoJvmMirrorTest > … SKIPPED`: green proved the *wiring*, not the behaviour
+(computenet-hacm). This is the CI twin of the `FROM-CACHE`/`UP-TO-DATE` trap
+this skill already warns about for local Gradle runs, and it is less visible,
+because `gh pr checks` reports a conclusion and a duration and nothing else.
+
+```bash
+gh run view <run-id> --log | grep -iE 'SKIPPED|NO-SOURCE|no tests|0 tests' | head -20
+```
+
+Read it for the **modules this diff touches**. Anything skipped there → say so
+plainly in the PR body and in the session summary, or file it — never report
+CI green as verification of the behaviour. An `assumeTrue` guard that CI can
+never satisfy is a real finding about the test, not a detail.
 
 The task reviewer tested a branch without its merged siblings; this is the
 first signal the whole still builds. Red is work: file a task for the next
@@ -1355,6 +1401,11 @@ leaves the ship gate with you. Read the run it names, and ship only once it
 reports — or, if it will not report inside this session, say so in the PR and
 leave the feature for the next one. Reading `review=passed` as "ship it" here
 merges code whose acceptance nobody has finished checking (computenet-wpvy.28).
+
+**Before you ship, confirm the checks EXECUTED this diff's tests**, by 5d's
+`SKIPPED`/`NO-SOURCE` log read above. A green check on a suite that skipped
+itself is not verification of anything, and this is the last point at which
+saying so is cheap (computenet-hacm).
 
 **`gh pr ready` is the ship decision, not the ship.** The moment it returns,
 read [references/ship-feature.md](references/ship-feature.md) and follow its
