@@ -473,13 +473,17 @@ bd dolt pull        # >=300s timeout; on "merge conflicts in issues require
 ```
 
 **If this pull fails, stop the session and report** — with one exception you
-can clear yourself. `merge conflicts in issues require operator resolution` is
-an ordinary two-machine concurrent-edit conflict, not corruption, and
+can clear yourself. `merge conflicts in issues require operator resolution`,
+naming **`issues` and nothing else**, is an ordinary two-machine
+concurrent-edit conflict, not corruption, and
 [references/dolt-conflict.md](references/dolt-conflict.md) is the worked
 resolution (dolt CLI on the embedded DB; last-write-wins by `updated_at`; done
 unattended on 2026-08-12 for 11 conflicts, computenet-3v8). Resolve it, prove
 `pull` and `push` both work again, name the ids you resolved and which side
-won — then continue. Any *other* pull failure still stops the session. It's the only look you
+won — then continue. Read that file before touching the DB: it has its own
+stop conditions, and a variant naming another table (`child_counters`,
+`dependencies`) or an added/added id collision is *not* the covered case. Any
+*other* pull failure still stops the session. The pull is the only look you
 get at the other machine's state; claiming against stale state is the
 computenet-kg7/3v8 failure, where claim safety silently vanished for a slot.
 
