@@ -157,7 +157,10 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
    falsified it, not just a silent workaround.
 
    **Any time you deliberately break code to prove something catches it — a
-   mutation check — leave a marker first**, so an agent that inherits your
+   mutation check — follow [mutation-check.md](mutation-check.md)**, which is
+   the one written procedure: commit first, marker, mutate (through Bash when
+   the Edit tool refuses), `--rerun --no-build-cache`, verify the revert, then
+   the confirming run. **Leave the marker first**, so an agent that inherits your
    worktree after a crash can tell a live mutation from finished work. The two
    are indistinguishable from the diff alone.
 
@@ -304,13 +307,14 @@ The smallest coherent change, and proof the tests actually executed.
    suggestion: past it the tool backgrounds the call whatever you asked for.
    The invariant that makes that survivable (computenet-ng9o):
 
-   > **Commit and push BEFORE you wait on evidence.** Then a stop — budget,
+   > **Commit BEFORE you wait on evidence.** Then a stop — budget,
    > classifier, host death — costs you the evidence, never the work. An agent
    > that waits first and is stopped strands uncommitted changes in a worktree
    > that reads to everyone downstream as "produced nothing".
 
-   That pulls step 7's commit-and-push earlier for this case only — your own
-   branch, nothing else, exactly as step 7 describes. It does **not** override
+   That pulls step 7's commit earlier for this case only — your own
+   branch, nothing else, exactly as step 7 describes, and still **without** a
+   push. It does **not** override
    step 3's marker rule: while `.mutation-in-progress` exists you never commit, so
    a mutation check is never what you background and wait on. Restore the code,
    remove the marker, commit, and only then start the long evidence run.
@@ -353,7 +357,7 @@ The smallest coherent change, and proof the tests actually executed.
    to the other rather than reaching for a bare sleep.
 
    **If you stop with the suite still running, say so ON THE BEAD** — which
-   suite, which log, what is committed and pushed — rather than returning the
+   suite, which log, what is committed (sha) — rather than returning the
    wait as your result. A result that is only "I am waiting" reads to the
    orchestrator exactly like a finished one.
    - Quote test counts *and the newest timestamp* read from the JUnit XML
@@ -409,13 +413,35 @@ The smallest coherent change, and proof the tests actually executed.
 
 Your own index, work discovered on the way, and the bead state you leave behind.
 
-7. Commit on your branch, then push it. Your worktree has its own index, so
-   ordinary staging is safe here:
+7. **Commit on your branch. Do NOT push it — that is the orchestrator's.**
+   Your worktree has its own index, so ordinary staging is safe here:
    ```bash
    git -C <your-worktree> add <your paths>
    git -C <your-worktree> commit -m "<what changed and why>"
-   git -C <your-worktree> push -u origin <your-branch>
+   git -C <your-worktree> status --short            # expect empty
    ```
+
+   A dispatched implementer's `git push -u origin <task-branch>` is **denied
+   by the permission classifier**, so pushing was never reliable and the
+   branches that did get pushed were luck (computenet-zmso). Nothing
+   downstream needs the remote branch anyway: your reviewer works in this
+   worktree, and SKILL.md 5c merges `task/<id>` into the feature branch from
+   the *local* ref — worktrees of one repository share refs. The feature
+   branch is what gets pushed, by the orchestrator, after the merge.
+
+   **The commit is therefore the whole handoff.** Uncommitted work is
+   invisible to every downstream step, and there is no push to catch it later.
+   **Committing here is authorized, not a liberty you are taking.** Reading
+   AGENTS.md's conservative profile as forbidding it is how finished work gets
+   left uncommitted (computenet-h5s4) — but both of its clauses defer to an
+   explicit grant ("unless explicitly asked"; "unless your assignment
+   explicitly grants it"), your dispatch prompt states that grant in as many
+   words, and this step is it. What the profile still forbids is the push:
+   that is the orchestrator's, above. The reasoning
+   generalizes: **the orchestrator merges your BRANCH**, so anything
+   uncommitted contributes nothing and the task reviews as a no-op. The file
+   is not the deliverable; the commit is.
+
    **This is a gate, not a formality: reporting a task done with an
    uncommitted deliverable is an error.** Every downstream step reads the
    branch, so a finished file that was never committed is indistinguishable
@@ -424,11 +450,15 @@ Your own index, work discovered on the way, and the bead state you leave behind.
    `origin/main`. Run `git -C <your-worktree> status --short` before you
    report, and expect it empty.
 
-   Push even when the task is unfinished — an unpushed branch exists only on
-   this machine, so the work is invisible and gets redone if anything else
-   picks the task up.
+   Commit even when the task is unfinished — an uncommitted change exists
+   only in the working tree, so the work is invisible and gets redone if
+   anything else picks the task up. Your branch is local to **this machine**:
+   it survives this session, but if the whole machine is lost before the
+   orchestrator merges you, the commit goes with it. That is accepted — your
+   reviewer and the merge both run here, and the alternative (a push the
+   classifier denies) buys nothing.
 
-   Push **your own branch only**. Never merge into the feature branch, push
+   Touch **your own branch only**. Never merge into the feature branch, push
    it, or touch its PR: the orchestrator merges after review and serializes
    it so concurrent merges don't race.
 8. If implementation reveals genuine new follow-up work, create it as a

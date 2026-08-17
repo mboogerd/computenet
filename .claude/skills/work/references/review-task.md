@@ -44,6 +44,14 @@ BASE=$(git -C <task-worktree> merge-base "$FB" HEAD)
 git -C <task-worktree> diff "$BASE" HEAD
 ```
 
+**Say in your report which baseline you diffed against and why.** Three are
+possible — `origin/<feature-branch>`, the local `<feature-branch>`, or the
+base commit the dispatch names when neither exists — and they are not
+interchangeable: a reader cannot check your line counts or your scope claims
+without knowing which one produced them. Your dispatch prompt states whether
+the feature branch is on origin yet, so this is a fact you are given, not one
+to discover by a failed command (computenet-e3my).
+
 `bd show` never returns comment bodies, and the implementer's reasoning —
 what it decided, what it deliberately left — usually lives only there. Read
 both before the diff.
@@ -61,8 +69,9 @@ downstream step reads that as nothing — the merge merges nothing, and a
 reviewer diffing `origin/<feature-branch>...HEAD` sees an empty diff and can
 reasonably fail the task for having produced nothing. If `status` is not
 empty, **say so and name the files**: the work exists and the defect is that
-it was not committed ([task.md](task.md) makes commit-and-push the required
-final step), which is a different verdict from "produced nothing". Do not
+it was not committed ([task.md](task.md) step 7 makes the commit the required
+final step — and the whole handoff, since implementers do not push), which is
+a different verdict from "produced nothing". Do not
 commit it for the implementer without saying you did.
 
 **Diff against the resolved base, never a bare local `main`.** A task worktree's
@@ -139,17 +148,25 @@ Check:
   clear, tighten them (`bd update <task-id> --acceptance=…`) and review
   against the tightened version, saying so. Where it doesn't, you can't judge
   this task: say that rather than passing it on vibes.
-- **Missing entirely** — the shape a directly-filed bug or chore arrives in,
-  with no breakdown to have written them. Write them onto the bead
-  (`bd update <id> --acceptance=…`) *before* you judge, and quote them in
-  your verdict. Inventing a standard silently and then certifying against it
-  is the reviewer marking its own paper, and it is worse than it looks: the
-  bar lives only in your report, so a resumed item gets a different one
-  (computenet-n58c). Written onto the bead, it survives the session and the
-  orchestrator can disagree with it. This is a backstop, not the normal
-  route: SKILL.md 5f has the orchestrator write them before dispatch, so
-  their absence is itself a finding — name it in your report alongside the
-  criteria you wrote.
+- **Missing entirely** — empty, or the key absent from `bd show --json`
+  altogether (both read as `null`, and neither is a `bd` failure). This is the
+  shape a directly-filed bug or chore arrives in, with no breakdown to have
+  written them, and three reviewers hit it in one session. Do not invent a
+  standard silently: that is the reviewer marking its own paper, and it is
+  worse than it looks, because the bar lives only in your report and a resumed
+  item gets a different one (computenet-n58c). Fall back **in order**, and
+  **say which text you used** (computenet-qxg5):
+  1. the **structured description**, read with the parent feature or epic;
+  2. the **comment thread** — `bd comments <id> --json > "$SCRATCH/c.json"`,
+     then read the file, since `bd show` carries only `comment_count`;
+  3. **nothing locatable anywhere → park it**, rather than pass.
+
+  Whichever answered, write it onto the bead (`bd update <id> --acceptance=…`)
+  *before* you judge and quote it in your verdict: written down it survives
+  the session and the orchestrator can disagree with it. This is a backstop,
+  not the normal route — SKILL.md 5f has the orchestrator write criteria
+  before dispatch, so their absence is itself a finding. Name it in your
+  report alongside the criteria you wrote.
 
 ## 2. Prove the tests ran
 
@@ -259,8 +276,18 @@ What to consume, per test run:
 
   If you only have a truncated log, do not claim the per-task check. Fall back
   to the task-count line plus the JUnit XML timestamp below, which together
-  prove the module's tests ran in *this* invocation — or re-run with `--rerun`
-  and make the question moot.
+  prove the module's tests ran in *this* invocation — or re-run with `--rerun`.
+
+  **`--rerun` does not make the question moot.** Measured 2026-08-15 on
+  `:concord:test`: it printed `> Task :concord:test` **unmarked** and
+  `1 executed`, while the JUnit XML under `build/test-results` still held the
+  *previous* run's 253 tests and older internal `timestamp` attributes under
+  freshly-touched file mtimes — a build-cache restore the per-task marker did
+  not show. So an unmarked line is not proof of execution: read the XML's
+  *content* (counts and the `timestamp` attribute inside the file, never the
+  file's mtime), and for any load-bearing run — a mutation check, a
+  before/after comparison — add `--no-build-cache` alongside `--rerun`
+  ([mutation-check.md](mutation-check.md) step 4, computenet-qsfu).
 - **The JUnit XML**, which carries the counts and a timestamp proving the
   results are from *this* run:
 
@@ -330,6 +357,13 @@ What to consume, per test run:
   "I did the mutation check and it failed as expected" is the same
   unfalsifiable sentence this section exists to stop.
 
+  **A mutation must still COMPILE, and a multi-clause guard is mutated one
+  clause at a time.** Deleting a whole `if (a && b && c)` usually breaks the
+  build — and a compile failure greps identically to a killed test, so read
+  the **build** result before the test result. Weakening one clause keeps it
+  compiling and tells you *which* clause the test constrains, which is the
+  finer answer anyway (computenet-danb).
+
   **When the task's deliverable IS the test — a repaired instrument, a new
   read barrier or probe — there is no production change to mutate, so the
   mutation runs the other way**: remove the instrument the task added and
@@ -348,7 +382,8 @@ What to consume, per test run:
   alone, and §2 warns only about caching (computenet-2x5l). Check both:
 
   ```bash
-  ./gradlew :<module>:test --tests '<TestName>' --rerun > "$SCRATCH/mut.log" 2>&1
+  ./gradlew :<module>:test --tests '<TestName>' --rerun --no-build-cache \
+    > "$SCRATCH/mut.log" 2>&1
   grep -E '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
   ```
 
@@ -376,6 +411,12 @@ What to consume, per test run:
   stash pop` silently pops whatever agent stashed last, exit 0, wrong file
   contents (measured). A patch in your own `$SCRATCH` is worktree-local and
   cannot be taken by anyone else.
+
+  **The procedure is [mutation-check.md](mutation-check.md); follow it rather
+  than improvising.** It carries the order that makes the check safe (commit
+  first), what to do when the Edit tool refuses the strongest mutation, why
+  `--rerun` alone can restore a cached XML, and how to verify the revert
+  actually reverted. Three sessions each got a different one of those wrong.
 
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,
@@ -496,12 +537,41 @@ edge. Commit on the task branch:
 
 ```bash
 git -C <task-worktree> commit -m "review: <what you fixed>" -- <the paths you edited>
-git -C <task-worktree> push
+git -C <task-worktree> status --short          # expect empty
 ```
+
+**Commit; do NOT push.** A dispatched agent's `git push -u origin
+<task-branch>` is denied by the permission classifier, and the task branch is
+local by design (computenet-zmso, [task.md](task.md) step 7): the orchestrator
+merges `task/<id>` into the feature branch from the *local* ref, which
+worktrees of one repository share, and pushes the feature branch. **Name your
+repair commit's sha and `--stat` in your report** — that is what tells the
+orchestrator its merge should contain your work, and the only check that
+catches a repair the merge missed.
 
 `-m … -- <paths>`, never `-am`: this repo's shared index needs the pathspec,
 and `git` rejects the combination outright — `fatal: paths … with -a does not
 make sense` (computenet-2x5l).
+
+**Your repairs have an authorship bound, as a feature reviewer's do**
+([review-feature.md](review-feature.md) §5 states the same idea at feature
+scale, in more detail and in wording that is still being amended; the bound
+below is the one that governs a *task* review, so read it here rather than
+reconciling the two) — without one, a task reviewer can rewrite the
+deliverable and then certify its own text (computenet-r197). Your repair is
+**substantive**, and disqualifies you from certifying, if it touches a
+**behavioural code path**, or adds or semantically changes a **test or
+assertion**, or exceeds ~30 changed lines of code across your repair commits.
+**A repair to a task whose deliverable is prose or a design record is
+substantive by default** — there, rewriting the text *is* rewriting the
+deliverable, and there is no separate artifact left for anyone to check it
+against.
+
+On a substantive repair: **do not set `metadata.review=passed`.** Name your
+repair shas with a per-commit `--stat`, say what each does, and hand back a
+verdict that says an independent read is owed. The work is not discarded — it
+is committed on the branch, and SKILL.md 5c routes it to a second reader
+before merging rather than treating your pass as final.
 
 Fail it only when the approach is wrong at the design level, or repair would
 rewrite most of the diff. If the task turns out to be underspecified or the
@@ -510,7 +580,7 @@ right call is genuinely ambiguous, apply the
 
 **Real work you found that is outside this task becomes a bead, and where it
 is parented is a check, not a habit.** Read the epic's status first
-(`bd show <epic-id> --json | jq -r '.[0].status'`): open → file it under the
+(`bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'`): open → file it under the
 epic, which is what schedules it. **Closed** — which happens, because a
 concurrent session can close an epic while its child is still in review — →
 file it **unparented with a `discovered-from` edge onto the item you were
@@ -608,13 +678,13 @@ matters more than the waiting does.** 600000 ms is the cap, not a
 suggestion: past it the tool backgrounds the call whatever you asked for.
 The invariant that makes that survivable (computenet-ng9o):
 
-> **Commit and push BEFORE you wait on evidence.** Then a stop — budget,
+> **Commit BEFORE you wait on evidence.** Then a stop — budget,
 > classifier, host death — costs you the evidence, never the work. An agent
 > that waits first and is stopped strands uncommitted changes in a worktree
 > that reads to everyone downstream as "produced nothing".
 
-That is section 4's `review:` commit, brought forward — commit and push what
-you have fixed before the wait, not after. It does **not** override the marker
+That is section 4's `review:` commit, brought forward — commit what
+you have fixed before the wait, not after; still no push. It does **not** override the marker
 rule above: while `.mutation-in-progress` exists you never commit, so a
 mutation check is never what you background and wait on. Restore the code,
 remove the marker, commit, and only then start the long evidence run.
@@ -657,7 +727,7 @@ that read as working around a block just given. If one form is refused, switch
 to the other rather than reaching for a bare sleep.
 
 **If you stop with the suite still running, say so ON THE BEAD** — which
-suite, which log, what is committed and pushed — rather than returning the
+suite, which log, what is committed (sha) — rather than returning the
 wait as your result. A result that is only "I am waiting" reads to the
 orchestrator exactly like a finished one.
 

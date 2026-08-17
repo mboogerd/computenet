@@ -59,87 +59,27 @@ felt like giving up.
 
 ## bd traps
 
-- `bd ready` hides `in_progress`/`blocked`/`deferred`; `bd list` hides
-  *closed* unless `--all`. Every check below uses the one it means.
-- `--parent` scope differs by subcommand — but **not the way this file used to
-  say**. `bd list --parent` is one level deep, and so is
-  `bd ready --parent`: it reaches **direct children only**, not descendants.
-  Measured 2026-08-17 on live data — `bd ready --parent=computenet-dqy.37`
-  finds `computenet-dqy.37.2`, while `bd ready --parent=computenet-dqy` does
-  **not**, though `epic-of.sh` resolves that item to `computenet-dqy`. An epic
-  with ready work two levels down therefore reports EMPTY, which is how a live
-  epic gets deferred and hidden on both machines (computenet-28vn). Use
-  `scripts/ready-in-epic.sh <epic>` for any epic-scoped ready question.
-  `bd blocked --parent`'s depth is **unverified** — treat it the same way.
-  And `bd blocked` lists only items blocked by an open dependency edge — a
-  hand-set `--status=blocked` (an ask-human park) is invisible to it.
-- `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
-  reads `null`. It never includes comment bodies, only `comment_count`.
-- Epic- and feature-sized output overflows the inline tool-result limit
-  (`bd show` on one epic: ~83KB; `bd ready --type=epic --json`: ~43KB) and
-  gets truncated or persisted. Redirect any `--json` call that *can* be big
-  to `"$SCRATCH/<name>.json"` and read the file, same as comments below
-  (computenet-csm).
-- `bd` prints warnings on stdout **before** the JSON, so `jq` and
-  `json.loads` fail on the raw stream; slice from the first line starting
-  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing.
-- Comments are read one way only: `bd comments <id> --json >
-  "$SCRATCH/c-<id>.json"`, then read the file. Inline reads truncate on
-  long-lived beads (~34KB observed) and present as *fewer comments than
-  exist* — the "has a human answered this?" misread that wrongly deferred an
-  epic.
-- `bd create` takes the title **positionally** or via `--title` (`-t` is
-  `--type`); `bd comment` takes the body positionally or via `--file` (not
-  `--body-file`); clearing a metadata key is `--unset-metadata <key>`
-  (`--set-metadata key=` merges, it does not clear).
-- **`bd create` has no `--set-metadata`** — that flag exists only on `bd
-  update`. On create the spelling is `--metadata '<json object>'`, so
-  `model` and `files` go in as
-  `--metadata '{"model":"sonnet","files":"kernel/src/..."}'`. Getting this
-  wrong is silent in the way that matters: the bead is created, the routing
-  fields are not, and `next-batch.py` dispatches it with no model and no file
-  claim (computenet-kd9s, computenet-w8jt). Don't reach for a second `bd
-  update` instead — it is a second write that can fail on its own and leave
-  the bead half-configured; one `--metadata` on the create is atomic.
-  `scripts/create-ticket.sh` takes `--metadata` and passes it through.
-- **`bd list --json` changes shape under `--skip-labels`**: a bare array by
-  default, `{"issues":[...]}` with the flag. A `jq '.[]'` written against one
-  yields nothing against the other and exits 0, so the caller reads an empty
-  result as "no rows" (computenet-kr18). Use the shape-agnostic row selector
-  everywhere, and never `|| echo '[]'` a `jq` failure into a clean answer:
+`bd` has a set of behaviours that return a wrong answer rather than an error —
+a `null` that means "absent", a search that misses, a JSON shape that flips, an
+id that two machines can mint twice. They are in
+**[references/bd-traps.md](references/bd-traps.md)**, and every step below
+assumes you have read them.
 
-  ```bash
-  ROWS='(if type=="array" then . else (.issues // []) end)[]'
-  bd list … --json | jq -r "$ROWS | .id"
-  ```
+The two that bite hardest, inline because skipping them costs the most:
 
-- **Re-parenting a reviewer-filed residual takes two commands.** A
-  `discovered-from` edge occupies the same slot as parent-child, so
-  `bd update <child> --parent=<parent>` errors when review-feature.md §7's
-  prescribed edge already exists (computenet-ofzz). Remove it first:
-
-  ```bash
-  bd dep remove <child> <parent>
-  bd update <child> --parent=<parent>
-  ```
-- **`bd create --parent=<shared epic>` is banned.** It allocates the child id
-  from `child_counters`, a per-database table reconciled only at sync, so two
-  machines filing between syncs mint the SAME id for different beads — a
-  primary-key collision whose resolution destroys one of them (computenet-azt,
-  computenet-wpvy.45). Use `scripts/create-ticket.sh`, which creates
-  unparented (hash id, counter untouched) and then re-parents. Breakdown
-  children under an epic or feature YOU claimed are exclusive by that claim
-  and keep their dotted ids — `--parent` is correct there.
-- `bd` calls are slow and `bd dolt pull`/`push` can run past 120s — give
-  sync commands a ≥300s timeout, and never chain `bd` *writes* in one Bash
-  block: one write per call, each with the long timeout, or the chain dies
-  mid-sequence and leaves half-recorded state (computenet-9oq,
-  computenet-9r8).
+- **`bd show <id> --json` returns a LIST** — unwrap `.[0]` or every field reads
+  `null` — and `bd` prints warnings on stdout **before** the JSON, so slice with
+  `sed -n '/^[[{]/,$p'` before `jq`. An empty `jq` result is never evidence of
+  an empty query.
+- **`bd create --parent=<shared epic>` is banned** — it mints ids from a
+  per-database counter and two machines collide. Use
+  `scripts/create-ticket.sh`.
 
 `$SCRATCH` throughout is a **session-unique** temp dir: create it once as
-`SCRATCH=$(mktemp -d "<harness scratchpad>/work.XXXXXX")` — concurrent
-sessions sharing a plain scratchpad path overwrite each other's dumps
+`SCRATCH=$(mktemp -d "<harness scratchpad>/work.XXXXXX")` — concurrent sessions
+sharing a plain scratchpad path overwrite each other's dumps
 (computenet-wpvy.43).
+
 
 ## Scripts and references
 
@@ -175,7 +115,11 @@ References carry the deep protocols; read one when its situation arises:
 | `references/ship-feature.md` | right after `gh pr ready`; on any draft verdict |
 | `references/orchestrator-authorship.md` | before writing a durable causal claim |
 | `references/ask-human.md` | parking a question a human must answer |
+| `references/merge-task.md` | 5c — the orchestrator's half: reviewer dispatch, verdicts, merging a pass |
+| `references/next-unit.md` | 5f's routing table — which of routes 0–4 applies when a unit finishes |
+| `references/bd-traps.md` | `bd` behaviours that return a wrong answer rather than an error |
 | `references/dolt-conflict.md` | step 3, when `bd dolt pull` reports issue conflicts |
+| `references/mutation-check.md` | the one mutation-check procedure; cited by task.md, both review references |
 | `references/epic.md` / `feature.md` / `task.md` | handed to breakdown/implementer dispatches |
 | `references/review-task.md` / `review-feature.md` | handed to reviewer dispatches |
 
@@ -442,7 +386,7 @@ is a resume — not that anything failed. Observed 2026-08-15 mid-breakdown
 
   Those files survive a host-process exit, so the usual reason to miss them is
   not knowing the path, not deletion. If you genuinely cannot recover it, take
-  the start from the epic's claim — `bd show <epic> --json | jq -r
+  the start from the epic's claim — `bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r
   '.[0].started_at'`, which `--claim` sets at step 3, a few minutes after the
   true start — and the slot length from the routine that invoked you. (A first
   bd comment's timestamp works too, but nothing before step 5 requires one, so
@@ -572,17 +516,34 @@ stranded that way on one machine, and the fix for the leak could not reach
 them because it only looks forward (computenet-8l4r). This script inverts the
 join: it walks `git worktree list` and removes each `computenet-worktrees/<id>`
 whose bead is closed, whose tree is **clean**, which has **no rebase/merge in
-progress**, and whose **HEAD is contained in `origin/<its branch>`**. That last
-one is the guard a clean tree does not give you: `git status --short` says
-nothing about *commits*, so without it a worktree carrying unpushed work is
-deleted silently, `rc=0`, "removed". Detached HEAD, a branch origin has never
-seen, an unreachable origin, and local commits ahead of the remote tip are each
-a SKIP — the script has to *prove* the commits survive elsewhere. Removal is
+progress**, and whose **HEAD is contained in some `origin/*` branch**. That
+last one is the guard a clean tree does not give you: `git status --short`
+says nothing about *commits*, so without it a worktree carrying unpushed work
+is deleted silently, `rc=0`, "removed". It asks for containment in **any**
+origin branch rather than the same-named one because a task branch is never
+pushed (5c, computenet-zmso) — its commits reach origin inside the *feature*
+branch, so a by-name test was false for every task worktree and made this
+guard inert for the majority of them (computenet-13kh). The script fetches
+with `--prune` first, so a branch origin has since deleted cannot masquerade
+as containment. Detached HEAD, and commits on no origin branch at all —
+never pushed, or pushed to a branch origin later deleted, or reachable only
+from a tag or `refs/pull/*` — are each a SKIP; an unreachable origin aborts
+the whole run at `rc=3` before anything is checked. The script has to *prove*
+the commits survive elsewhere. Removal is
 additionally held back until the directory has been **quiet for 15 minutes**;
 treat that one as a cheap filter on the close/write race, **not** as a liveness
 test — an agent sitting on an idle worktree reads as quiet. `rc=1` means a
 candidate was dirty, mid-operation, not provably pushed, or a removal failed:
 look, do not re-run.
+
+Task worktrees are reclaimed by the script now; the by-hand proof that used
+to be required here is gone (computenet-13kh). A `SKIP … on NO remote ref`
+line therefore means what it says whatever the worktree is — the commits are
+not on origin under any branch — so do **not** blanket-ignore the `rc=1`.
+The one case where those commits may nonetheless be redundant is a branch
+that was squash-merged and then deleted on origin: the content is on `main`
+under a new sha, these commits are not, and the script cannot tell the two
+apart. Judge that one by hand.
 
 **Capture to a file rather than piping, for every script whose exit code you
 have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
@@ -800,7 +761,7 @@ looks exactly like a dead breakdown if you only count children
 `human` label + a `QUESTION:` comment:
 
 ```bash
-bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
 bd comments <epic> --json > "$SCRATCH/epic-comments.json"
 ```
 
@@ -831,7 +792,7 @@ they rot after their blocker clears (computenet-6i1: 3 of 4 parked items were
 finishable). List them repo-wide and keep the ones under this epic:
 
 ```bash
-bd list --status=blocked --limit 0 --json | jq -r '.[] | .id'
+bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,$p' | jq -r '.[] | .id'
 .claude/skills/work/scripts/epic-of.sh <each id>       # keep those under <epic>
 bd comments <id> --json > "$SCRATCH/parked-<id>.json"  # read the QUESTION
 ```
@@ -911,6 +872,15 @@ T-90m, stop taking new ones. Only when this query too is empty does 5f apply.
   item standing in for the feature. The whole still ships as **one** PR, the
   item's own.
 
+**This query returning exactly one row is where the idle-lane question
+actually bites** (computenet-0a76): the single item is dispatched, one of the
+two lanes is busy, and 5f — which is where the other lane's work would come
+from — is not reachable until it returns. Do not infer an answer here and do
+not wait for 5f: apply
+[5f route 0](#5f-next-feature-or-wait-or-stop)'s four-part test to the free
+lane now, from this spot. It sanctions a second, genuinely disjoint unit and
+tells you when to leave the lane idle on purpose.
+
 **If you run several of these at once, keep at most ~2 open PRs against any
 one file.** Nothing else bounds the count here, and 5b's batching by disjoint
 `metadata.files` cannot help — items on a friction epic *share* the file by
@@ -927,7 +897,12 @@ Apply the same two filters to the feature picked above; nothing survives →
 **Structure**: a feature is the unit of integration — its own worktree,
 branch, and draft PR, into which reviewed task branches merge. A task is its
 own worktree and branch, cut from the feature branch. Work **one feature at a
-time**; the parallelism lives in its tasks.
+time**; the parallelism lives in its tasks. That rule bounds *features*, not
+the machine: when a capacity lane is free while the current unit is still
+running, the free-lane test is [5f route 0](#5f-next-feature-or-wait-or-stop)
+— read it there rather than inferring an answer, and rather than waiting for
+5f to become reachable, which it is not until the unit returns
+(computenet-0a76).
 
 **One worktree, one live agent.** A worktree belongs to the agent dispatched
 into it until **that agent's completion notification arrives in this
@@ -1006,11 +981,59 @@ Read the verification line, and only it, and know all four it can print:
 |---|---|
 | `OK: worktree contains origin/<branch>` | verified — the remote tip is an ancestor of `HEAD` |
 | `OK: origin has no <branch> yet` | verified — origin is reachable and has no such branch, so there is genuinely nothing to compare |
-| `STOP: on the branch at the wrong commit` | the worktree is missing pushed work |
+| `STOP: on the branch at the wrong commit` | the worktree is missing pushed work — **but see the squash test below** |
 | `STOP: origin is UNREACHABLE` | **nothing was checked** |
 
 `STOP` → do not enter 5b; proceeding silently orphans reviewed work while
 looking clean (computenet-aeg). Either `OK` is fine.
+
+**Before treating that `STOP` as an orphaning hazard, run the squash test.**
+This repo squash-merges, so a merged feature leaves a remote branch whose
+commits are *not* ancestors of anything — which trips the check exactly like
+genuinely unmerged work does, and a workable item then looks unworkable with
+no remediation offered (computenet-q8uv). Two cheap tests, in this order:
+
+```bash
+gh pr list --head <branch> --state merged --json number,title   # any row => leftover
+git -C <worktree> log --oneline origin/main --grep '<the id in the branch name>' | head -3
+```
+
+A merged PR on that exact head, or a commit on `origin/main` naming that id,
+is the answer on its own — a squash merge leaves the source commits
+non-ancestral, so the ref outlives its content (verified 2026-08-17 against
+`friction/computenet-kd9s` / PR #262 and `friction/computenet-6xm` / PR #276,
+both still on origin, both correctly identified).
+
+**A `git diff` against `origin/main` is NOT the test, in either form** —
+worth stating because it is the obvious one to reach for. Bare, it diffs
+against everything `main` has landed *since*, which is never empty. Scoped to
+the branch's own files it is still only a *one-way* signal, and a decaying
+one: empty proves the content landed, but `main`'s later churn on those same
+files makes it non-empty again with nothing changed about the branch —
+measured 2026-08-17 on `friction/computenet-kd9s`, empty at one `main` and 993
+deletions at the `main` two PRs later. On the friction lane, where every PR
+edits this file, it goes stale within the hour. Use it only as a
+*confirmation* when it comes back empty, never to conclude "unmerged".
+
+- **A merged PR on the head, or an id match on `origin/main`** →
+  **squash-merged leftover.** It carries nothing to orphan.
+  Remediate rather than stop: either take a distinct branch name and record it
+  in `metadata.branch` (which is what "everything below" already reads, so the
+  feature-id-as-branch-name rule has its exception here — an id that has been
+  re-minted), or delete the dead ref (`git push origin --delete <branch>`) and
+  proceed on the original name. Say which you did.
+- **Neither** → the branch carries **unmerged commits**, and the `STOP`
+  stands: it is a hard stop, and proceeding to 5b would orphan real work.
+  Nothing here weakens that case — verified on this very branch
+  (`friction/computenet-sjwd`: zero merged PRs on the head, no id on `main`,
+  real commits) still halting before 5b.
+- **`gh` failed** → that is not a reading (step 2's rule). The `--grep` is
+  local and still answers; if it too is unavailable, the `STOP` stands.
+
+`feature-branch.sh` already retires a *recorded* branch whose PR merged, so
+what reaches this test is the case it cannot see: an id with no
+`metadata.branch` yet whose `feature/<id>` name is already taken on origin —
+the re-minted id of computenet-q8uv.
 
 **The unreachable case is why there are two `OK` lines and not one.** A bare
 `fetch origin <branch>` fails identically for "no such branch on origin" and
@@ -1034,7 +1057,10 @@ test-instrument defect is probed by breaking the test (task.md step 3,
 computenet-wpvy.34) — and an agent killed mid-mutation looks identical to one
 killed mid-improvement. So a dirty *test* file is not evidence of finished
 work any more than a dirty production file is; the marker, not the file's
-kind, is the discriminator. Classify before acting
+kind, is the discriminator. The marker is **gitignored**, so a clean
+`git status --short` is not evidence there is no marker — look for the file
+itself ([references/mutation-check.md](references/mutation-check.md) step 5,
+computenet-9ytv). Classify before acting
 (computenet-leg):
 
 ```bash
@@ -1256,7 +1282,7 @@ sibling.
 under one is an acquisition and gets pushed like any other:
 
 ```bash
-bd show <epic> --json | jq -r '.[0].status'    # local read, no network
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'    # local read, no network
 # closed → bd dolt push        (>=300s timeout) right after the claim
 ```
 
@@ -1317,6 +1343,13 @@ Agent({
 claim another. Work ONLY in your own worktree at ${taskWorktree}, on branch
 ${taskBranch}. Do not touch the main checkout, the feature worktree, or
 another task's worktree.
+Committing on your own task branch is EXPECTED AND AUTHORIZED — this sentence
+IS the explicit grant both AGENTS.md clauses defer to ("unless explicitly
+asked", "unless your assignment explicitly grants it"), so the conservative
+profile is satisfied, not overridden. A task's deliverable IS commits on its
+branch, not a dirty worktree. What you must not do is push (not even your own
+task branch — the classifier denies it and nothing downstream needs it),
+merge, rebase, or switch branches.
 Your branch's BASE COMMIT, observed at dispatch — the commit the branch was
 cut from, NOT a diff baseline: ${taskBase}. Anything merged into main before
 it is already in your worktree; check with git rather than assuming either
@@ -1349,7 +1382,8 @@ demonstrably discriminates, and report the substitution on the bead rather
 than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
+outruns that 10-minute cap, COMMIT FIRST (do not push — see your reference),
+then background it and wait
 with a BOUNDED until-loop on its log (your reference gives the form) — never
 wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
@@ -1428,205 +1462,24 @@ friction — a task shape that reliably runs long is a sizing defect in
 
 ### 5c. Review each task, then merge it
 
-One reviewer per completed task, concurrently, at the task's own model —
-never the agent that wrote it. **Reviewers count against the same
-`capacity.max_parallel` as implementers** — a reviewer drives Gradle exactly
-as an implementer does, and the cap was measured on mixed lanes
-(computenet-avs). Count every dispatched agent still running; when the cap is
-full, hold the reviewer and dispatch as a lane frees (you merge passes one at
-a time anyway).
+**[references/merge-task.md](references/merge-task.md)** is this step: the
+reviewer dispatch, the verdict rules, and the merge into the feature branch.
+Come back to 5b for the next batch.
 
-```
-Agent({
-  description: "Review task <id>",
-  model: <task's metadata.model>,
-  run_in_background: true,
-  prompt: `Read .claude/skills/work/references/review-task.md (from
-${taskWorktree}, not the main checkout) and follow it to review beads task
-${id} against its own acceptance criteria.
-Worktree: ${taskWorktree}  ·  Branch: ${taskBranch}
-Cross-bead writes authorized on this item: ${crossBeadWrites or "none"}.
-That is the same line the implementer was given: treat what it names as
-commissioned work rather than scope creep, and anything beyond it as
-unauthorized.
-Run every verification command — Gradle above all — in ONE foreground Bash
-call with an explicit timeout, up to 600000 ms. If you already know the suite
-outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
-with a BOUNDED until-loop on its log (your reference gives the form) — never
-wait first, or a stop strands uncommitted work that reads as nothing.
-The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
-background job never resumes: your turn ending IS your completion, so there is
-nothing to come back to. Never end a turn saying you will wait for a job.
-Repair what you can within the task's scope. Report pass or fail, what you
-repaired, and — on fail — exactly what is missing.
-If you won't finish within ~45-60 minutes, stop at a clean point and write your
-state to the bead BEFORE you stop: your verdict so far, what you have and have
-not verified, and whether you authored any commits (with their shas and
---stat). A review stopped without that leaves the worst state available —
-reviewer-authored code on the branch that nobody has certified, and a bead
-that reads as neither pass nor fail.`
-})
-```
+Three things that go wrong silently if skipped, inline:
 
-**Find an actual verdict in the result before acting on it.** The completion
-notification looks identical whether the reviewer finished or stopped itself
-mid-review (one returned "Waiting on Arm A…" as its entire result). No
-pass/fail stated → `SendMessage` the same agent (context intact) to finish
-and state a verdict plus a NOT VERIFIED section. Agent-completed is not
-task-reviewed; a result skimmed as done here merges unreviewed code.
+- **Reviewers must not merge** — concurrent merges into one feature branch
+  race. You merge the passes yourself, **one at a time**, and you re-verify
+  the feature branch immediately before each merge, because 5a set it up an
+  hour and several merges ago.
+- **Find an actual verdict in the result before acting on it.** A completion
+  notification looks identical whether the reviewer finished or stopped
+  itself. No stated pass/fail → `SendMessage` the same agent; agent-completed
+  is not task-reviewed.
+- **The task branch is local by design and the FEATURE branch must be
+  durable** — confirm the merge is on origin before `bd close`, since the
+  close is what tells every later session the work landed.
 
-**Merge the passes yourself, one at a time** — reviewers must not merge
-(concurrent merges into one feature branch race). First confirm the feature
-worktree is still on the recorded branch (computenet-wpvy.29), and close the
-task before touching worktrees, so a crash can't leave merged work looking
-unclaimed:
-
-```bash
-git -C <feature-worktree> rev-parse --abbrev-ref HEAD   # must equal <feature-branch>
-if git -C <feature-worktree> fetch origin <feature-branch> 2>/dev/null; then
-  git -C <feature-worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
-    && echo "OK: local contains origin/<feature-branch>" \
-    || echo "STOP: origin/<feature-branch> is AHEAD — somebody pushed under you"
-elif git -C <feature-worktree> ls-remote origin >/dev/null 2>&1; then
-  echo "CHECK: origin has no <feature-branch> — 5a pushed it, so absence is not normal"
-else
-  echo "STOP: origin is UNREACHABLE — this check proved nothing"
-fi
-gh pr list --head <feature-branch> --state open \
-  --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect: only yours, or none
-git -C <feature-worktree> diff --stat <feature-branch>..task/<task-id>   # BEFORE the merge — see below
-git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
-git -C <feature-worktree> push
-bd close <task-id>
-git -C <task-worktree> status --short                   # expect empty; else an agent died mid-edit — report
-```
-
-**Re-verify the feature branch immediately before you merge into it, and
-refuse on surprise.** 5a set this branch up, but that was potentially an hour
-and several merges ago, and nothing between then and here re-reads it
-(computenet-wpvy.29). Two things can have changed underneath: `origin` can
-hold a tip your local ref does not contain, and a PR you did not open can have
-this branch as its head. **Either is a STOP, not something to resolve** —
-both sides may hold pushed, unreviewed work, and picking a winner discards
-somebody's. Park the choice (`ask-human.md`) rather than merging or
-force-updating.
-
-**An absent *PR* is normal here; an absent *branch* is not.** 5d opens the PR
-only after the first task merges, so `gh pr list` printing nothing is the
-expected first-run state (review-task.md §1 covers the same shape for
-reviewers). The branch itself is different: 5a ends with `git push -u origin
-<branch>`, so by the time you reach 5c `origin/<feature-branch>` exists — its
-absence means that push never landed or something deleted the ref. That is a
-**`CHECK`**, deliberately not a `STOP`: `STOP` is reserved above for the two
-findings that mean *park via ask-human.md* — origin ahead, or a competing PR —
-because in those two somebody else may hold pushed unreviewed work. A missing
-branch endangers nobody's work; find out why and push it, then merge. And the
-third branch exists because a bare `if fetch` cannot tell "no such branch" from
-"the network is down" — it would diagnose an unreachable origin as an absent
-branch, an answer on a check that never ran (the same defect
-`computenet-dtl` fixed in 5a's block). `ls-remote` succeeds only if origin
-answered.
-
-That is also why this is written as `if/elif/else` rather than an `&&`/`||`
-chain: absent, ahead and unreachable are three different findings, and a chain
-reports them as one line.
-
-**The `--stat` that actually caught this is the two-dot diff *before* the
-merge.** Run `git diff --stat <feature-branch>..task/<task-id>` and read it
-every time, not only when something feels wrong: a two-dot diff shows both
-directions, so content sitting on the feature branch and absent from the task
-branch appears as a **deletion**. That is the signature of a base that moved
-— in the observed case, deletions under `references/` and a 262-line test
-file the implementer never wrote.
-
-**Do not substitute the post-merge `git diff --stat HEAD~1 HEAD` for it.** On
-a merge commit `HEAD~1` is the *first* parent, so that diff is the
-first-parent diff, which for a clean merge is exactly the task's own changes —
-a file the task never touched can never appear in it, and the check silently
-never fires (computenet-rbfa is the same first-parent trap read from the
-other side). One benign reading of the two-dot diff does remain: a sibling
-task from the same batch that already merged into this branch after this task
-forked shows up as reversals too. Check the reversed paths against that
-sibling's `files` claim before parking.
-
-5e carries the same guard in its shipping form before `gh pr ready`: the
-`headRefOid`-equals-local-`HEAD` check is the origin-ahead half, and the
-`gh pr list --head` line there is the competing-PR half.
-
-Do **not** remove the task worktree — every removal happens in step 6's
-sweep, after all agents have returned (removing now races the reviewer's own
-bookkeeping). A merge conflict means two claims overlapped: resolve in the
-feature worktree, fix **both** tasks' `files` metadata, say so. A failed
-review keeps its worktree, branch, and `in_progress` status — 5b's resume
-query picks it up.
-
-**Then look at the integrated result** once the PR exists (5d):
-
-```bash
-gh pr checks <pr-url>
-```
-
-**Green is not "the tests ran" — check they were not SKIPPED.** A required
-check goes green just as happily when the diff's own suites *skipped
-themselves*: an `assumeTrue`-guarded test whose precondition CI does not
-provide reports `SKIPPED` and the build reports success. Measured 2026-08-17 on
-PR #254 — a lane was widened specifically so a new two-JVM test would run on
-every PR, all six checks went green (`build-test-serial` in 2m19s), and the
-orchestrator announced that Linux execution was now proven. The job log said
-`TwoJvmMirrorTest > … SKIPPED`: green proved the *wiring*, not the behaviour
-(computenet-hacm). This is the CI twin of the `FROM-CACHE`/`UP-TO-DATE` trap
-this skill already warns about for local Gradle runs, and it is less visible,
-because `gh pr checks` reports a conclusion and a duration and nothing else.
-
-`gh run view <run-id> --log` works non-interactively and returns the whole
-run, every job — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
-Column 1 of each line is the job name, so the output also says *which lane*
-skipped. Save it, then read it with two greps:
-
-```bash
-gh run view <run-id> --log > "$SCRATCH/ci.log"
-grep -E 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
-grep -E '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
-```
-
-**Both filters are load-bearing; the naive grep hides exactly the line you
-came for.** Every build prints ~200 boilerplate
-`checkKotlinGradlePluginConfigurationErrors SKIPPED` and
-`processResources NO-SOURCE` *task* lines, so the bare marker pattern matched
-227 times on that run and a `| head -20` showed nothing but boilerplate — the
-`TwoJvmMirrorTest … SKIPPED` line was line 7519 of 7553. Dropping `> Task `
-lines leaves 11, with the real one in view. (Don't add `no tests`/`0 tests` to
-the pattern either: `0 tests` matches vitest's `10 tests` on every ui-test
-line.) The second grep is the other half — a whole suite that never ran prints
-as a task line, `:module:test NO-SOURCE`/`FROM-CACHE`, and the first grep
-deliberately drops it.
-
-Read both for the **modules this diff touches**. Anything skipped there → say
-so plainly in the PR body and in the session summary, or file it — never
-report CI green as verification of the behaviour. An `assumeTrue` guard that
-CI can never satisfy is a real finding about the test, not a detail.
-
-The task reviewer tested a branch without its merged siblings; this is the
-first signal the whole still builds. Red is work: file a task for the next
-batch — one call, because `bd create` has no `--set-metadata` and a follow-up
-`bd update` can fail on its own (see `bd traps`):
-
-```bash
-bd create --parent=<feature-id> --type=task --title "<one line>" \
-  --description "<what is red, plus the pasted failing log excerpt>" \
-  --metadata '{"model":"sonnet","files":"<the files it may touch>"}'
-```
-
-That create is under a feature THIS session claimed, so the dotted id is
-exclusive and `--parent` is correct here. The description carries the log
-excerpt issue-quality.md's CI-evidence rule requires — the run link alone
-ages out before the task runs (computenet-ttz). The one narrow exception —
-a red check in a module this diff doesn't touch — requires
-[references/red-check-attribution.md](references/red-check-attribution.md)'s
-four artifacts before treating any red as not this feature's. Never ship on
-"it's a flake".
-
-Then 5b again.
 
 ### 5d. Draft PR, on the first merge
 
@@ -1700,6 +1553,13 @@ wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
+Committing your repairs on the feature branch, and pushing that branch, are
+EXPECTED AND AUTHORIZED — this sentence is the explicit grant AGENTS.md's
+conservative profile and multi-agent clause defer to, and your reference
+authorizes both, including the `origin/main` merge on the branch where §6
+permits it — §6's NORMAL path hands that merge to the orchestrator, so read it
+before reaching for `git merge`. Do not
+rebase, switch branches, touch another worktree, or run gh pr ready.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,
@@ -1713,7 +1573,13 @@ that reads as neither pass nor fail.`
 })
 ```
 
-**Act only on a verdict.** Three cases:
+**Act only on a verdict.** Three cases — plus the fourth, where no
+notification ever arrives: a feature reviewer that neither reports nor stops
+is the shape computenet-sjwd measured (1h47m, nothing written, a green PR
+that could not ship). [5c](#5c-review-each-task-then-merge-it)'s dispatch
+timestamp, ~60-minute bead check, `SendMessage`-then-`TaskStop` ladder,
+re-dispatch framing and clear-the-blocker-first rule all apply here
+unchanged; the `TaskStop` case below is where that ladder lands.
 
 - **You had to `TaskStop` it** → that is a DRAFT verdict, not an absent one.
   Route on what it wrote to the bead (commits authored → substantive-repair
@@ -1900,193 +1766,21 @@ parentage like everything else.
 
 ### 5f. Next feature, or wait, or stop
 
-Take the first that applies. **Routes 1, 3 and 4 are all closed after
-T-90m** — new work you can't review and merge before the slot ends is a
-stranded branch.
+When the unit you were working finishes, **[references/next-unit.md](references/next-unit.md)**
+is the routing table: which of routes 0–4 applies, what each requires before it
+fires, and what closes after T-90m.
 
-**1. Another feature under this epic is ready or in progress** (and not
-recently parked) → 5a. **A ready SUB-EPIC child counts as workable surface
-here too**, but it goes to step 4's breakdown under step 3's no-claim rule,
-never to 5a — it is not a feature to implement.
+Two things that decide most sessions, inline so they are not missed:
 
-**2. The only remaining work depends on a feature this session just marked
-ready.** Features branch from `origin/main`, so one sees another's work only
-once it *merges*. Poll in the foreground, 60s apart (a floor — your polls
-and any monitors share the machine's sockets), max 30 rounds or until T-45m.
-A failed `gh` call is not a `state` reading — print the error, retry the
-round. `DIRTY`/`BEHIND` → resolve per 5e (waiting on a conflict only you can
-clear is deadlock). `MERGED` → `git fetch origin main`, start. `CLOSED` or
-cap reached → park a question, continue down this list. Never background an
-unbounded loop — a PR on a red check stays `OPEN` forever.
+- **Routes 1, 3 and 4 are all closed after T-90m.** New work you cannot review
+  and merge before the slot ends is a stranded branch. A *breakdown* is the
+  exception (it creates no branch and cannot strand) and is bounded to
+  T-90m..T-45m.
+- **One epic *claim* per session.** The rule limits claims, not work: when the
+  epic runs dry, the routes there say what you may still pick up. Idling for
+  hours is a failure mode, not compliance. Closing a drained epic, or
+  deferring an unworkable one, is bookkeeping and does not spend the claim.
 
-**2b. The feature you are ON is un-completable because one of its tasks is
-blocked by a SIBLING feature of this same epic.** This is the near-miss route
-5b's `blocked` verdict used to send to a park, stranding an almost-finished
-feature for the whole session (computenet-c0uf). The blocker is *inside* this
-epic, so it is yours to clear:
-
-**Check this one before route 1**, the single exception to "take the first
-that applies". Route 1's "another feature under this epic is ready" *also*
-matches the blocking sibling, so taking it that way starts the blocker with
-no budget test and leaves the near-complete feature parked with no handoff
-comment — which is the whole failure computenet-c0uf recorded.
-
-- **Park the near-complete feature with a handoff comment** naming the blocking
-  feature by id, which of its outputs is needed, and what state the parked
-  feature is in (which tasks closed, what remains). A park whose comment does
-  not name the unblocker is how the next session re-derives all of this.
-- **Then look at the blocking feature.** Fits the remaining budget with margin
-  — route 4's test, read on its estimate, not on elapsed fraction — → work it
-  via 5a; clearing it is what unparks the first.
-- **Doesn't fit → BREAK IT DOWN without claiming it**, so the next session
-  starts from tasks rather than from an unsplit feature. A *feature* breakdown
-  involves no claim in either direction: 5a's `bd update --claim` is what you
-  are declining to do, and no epic claim is in question (a feature is not an
-  epic). Leave it `open`, unassigned, with its new children under it.
-
-**A breakdown is admissible late in a slot when an implementation is not.** It
-creates no branch, no worktree and no PR, so it cannot strand — which is the
-whole reason routes 1/3/4 close at T-90m. So the T-90m "start no new work" bar
-does not catch it, and a breakdown between T-90m and T-45m is a legitimate use
-of the tail of a slot where starting an implementation is not. **T-45m still
-binds**: it closes *dispatches*, and a breakdown is one — past T-45m, park the
-feature with its handoff comment and go to Finalize.
-
-**3. The epic's remaining work is blocked solely by an item in a different
-epic** → claim and work **that item** (not its epic; this adds no epic
-claim), unless the SDLC exclusion catches it. The claim is an acquisition —
-bracket it: `bd dolt pull`, re-verify still ready and unclaimed, claim by id,
-`bd dolt push`. And because a concurrent session's *child* claims are local
-while its epic is open, **check the item's epic first** — an epic claim is
-always pushed, a child claim only once its epic closes (5b):
-
-```bash
-.claude/skills/work/scripts/epic-of.sh <candidate-id>
-bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
-```
-
-- open or in_progress with the other machine's assignee, or *any* status
-  touched within 15 minutes → treat as live; take the next candidate.
-  **This branch has no age test, and that is deliberate** (computenet-9ynn).
-  Step 3 will *take over* an open epic untouched for 15 minutes, so 5f is
-  strictly stricter than step 3 for the same state — an epic a dead machine
-  abandoned hours ago is claimable at step 3 but its children are skipped
-  here. The asymmetry is kept because the two branches guard different
-  things, not because one is merely more cautious — both claims are pushed
-  acquisitions, so "announced by a push" is not the discriminator
-  (claim-sync.md brackets 5f routes 3–4 exactly like step 3). Two reasons:
-
-  - **Step 3's age test only ever runs on an epic that is already
-    `open`.** `claim-epic.sh` refuses an `in_progress` epic outright, so
-    there the 15 minutes are a *secondary* guard on a claim that was
-    already released. Here the branch is the *primary* guard — nothing else
-    stands behind it.
-  - **The epic's `updated_at` is not evidence of deadness under an open
-    epic.** Owned-territory writes stay local until Finalize, so from
-    another machine's view the timestamp freezes at claim time and every
-    live multi-hour session reads as stale within 15 minutes. And the
-    holder's *child* claims are local by design (claim-sync.md, "…except on
-    5f routes 3–4"), so pulled state shows those children unclaimed. An age
-    test here would therefore declare essentially every live epic dead and
-    hand its unclaimed-looking children to a second machine — removing the
-    only visible protection they have.
-
-  The cost of leaving it is a machine declining work it is entitled to; the
-  cost of closing it is two machines on one item. Take the next candidate
-  and let step 3 reclaim the epic on the next session.
-- closed, older than 15 minutes → the assignee is provenance, so read the
-  **candidate's own** `status`/`assignee` instead and skip it if another
-  machine holds it. That reading is trustworthy here and only here: 5b makes
-  a child claim under a closed epic an acquisition, so it was pushed. The
-  15-minute floor stays as the guard for the seconds between that claim and
-  its push, and for a session that died in between.
-- `(unparented)` → safe: an unparented item can't be someone's local child
-  claim, so any competing claim was itself pushed.
-
-If you later find a sibling PR touching your item's files, stop and park —
-don't pick a winner; the losing side may hold pushed, unreviewed work.
-
-**4. The epic is dry but real budget remains** → continuation work, claimed
-by specific id (same acquisition bracket as route 3; never a second *epic*).
-If the epic went dry because everything left is human-gated or cross-epic
-blocked, also `bd defer` it (step 3's route) so the next session doesn't
-resume a dead queue.
-
-Build the pool from `bd ready --json`: features and tasks of other epics,
-plus every bug and chore with **no epic ancestor** — `epic-of.sh <id>`
-answering `(unparented)`, which is the test, not "has no `parent` field".
-The two differ: a residual filed by a previous session's reviewer is parented
-to the unparented item it came out of (review-feature.md §7), so it *has* a
-parent and still has no epic. Filtering on the raw `parent` field drops
-exactly the review-discovered work continuation is meant to pick up, and
-nothing else would ever find it (computenet-wpvy.42). Drop: `human`-labeled; SDLC-excluded (both
-halves of the test); `parked_at` within 6h; **anything that is review or
-verification of this session's own output** (warm context makes
-self-approval likely — excluded whatever its score); anything whose
-`metadata.files` overlaps a claim already `in_progress`. Order the rest:
-direct dependents of this session's completed items; file-surface overlap
-with this session's pushed branches (`git diff --name-only
-origin/main...<branch>`, never titles); ready bugs/chores with no epic
-ancestor; general ready order — ties break by the next criterion down.
-
-**A gated item: the discriminator is WHO MAY DECIDE, not what it costs.**
-Read the gate in two places, because they hold different ones — the bead's own
-text, *and* the contract of the file it touches (`concord/schema/*.md` states
-its own gate in its header). Then:
-
-- **A gate on the FORM of a change** — "must be its own ticket", "not to be
-  done opportunistically", "schema changes are gated" — constrains *how*, not
-  *whether*. An unattended session satisfies it by filing such a ticket and
-  working that: workable.
-- **A gate that requires an ANSWER from a person** — a preference, a policy
-  call, a tradeoff nobody has made — is an `ask-human.md` park, **whatever it
-  costs**. Cheap does not make it yours to decide.
-- **An open DESIGN question is neither.** A design question a dispatched agent
-  can settle *on evidence* and a reviewer can check is workable — settle it,
-  and record which way it went and why. Rule 3 (`ask-human.md`'s bar) applies
-  only when the evidence does not settle it.
-
-**Record the decision on the bead either way** (`bd comment`), so the next
-session does not re-litigate it — and so a park that turns out to be wrong is
-visible *as a park* rather than as silence (computenet-bypi).
-
-Three admission gates:
-
-- **Its stated blocker or precondition still holds, checked against the
-  artifact it names** — 5b's rule, and it bites hardest here, where nothing
-  broke the item down and its "blocked until X lands" may be days old
-  (computenet-rjyl). A commit subject line is not the check.
-
-- **The item's own compute demand fits the slot.** A bead can demand
-  thousands of suite runs while your dispatch prompt forbids starving the
-  machine; you are the only party seeing both (computenet-9vt). Read the
-  acceptance/TEST clauses, multiply sample by per-run cost. Doesn't fit →
-  say so in the dispatch prompt in as many words (run what fits, file the
-  rest as follow-up) and `bd update <id> --set-metadata compute=dedicated`
-  so a later session routes it to a dedicated slot. Never leave the
-  collision for the implementer to discover.
-- **Its 45–60m estimate fits the remaining budget with margin** (15 min
-  default; `WORK_CONTINUATION_MARGIN_MIN` overrides). Never admit on elapsed
-  fraction alone — that converts idle time into half-finished branches,
-  which is worse than idling.
-
-**A directly-filed bug or chore usually has no acceptance criteria** — nothing
-broke it down, so nobody wrote them. Write them onto the bead before you
-dispatch (`bd update <id> --acceptance=…`, to
-[references/issue-quality.md](references/issue-quality.md)'s standard), and
-say in the dispatch prompt that they are yours. Skip this and the reviewer
-invents the bar it then certifies against, which is marking its own paper; and
-because the bar then lives only in a dispatch prompt that is discarded, a
-resumed item gets a different one (computenet-n58c). This is orchestrator work
-under the authorship rule above — it is a claim about what "done" means, and
-it gets a reviewer like anything else you write.
-
-Work the admitted item by shape: feature via 5a; a task via its parent
-feature's flow; an unparented bug/chore as its own worktree/branch/PR like a
-feature. Every shape records `branch`/`worktree` metadata, so an overrun
-leaves resumable state, never a stranded branch.
-
-**5. Nothing can progress → Finalize.**
 
 ## 6. Finalize
 
@@ -2105,7 +1799,7 @@ Otherwise, in order:
 **1. The epic decision.** One query, three branches:
 
 ```bash
-bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee)"'
 bd list --parent=<epic> --all --json     # children; must be non-empty to close
 ```
 
@@ -2251,9 +1945,32 @@ this just before it; one push covers both):
 
 ```bash
 bd dolt pull
-bd search "<a few distinctive words>" --status all --json   # --status all, or
-                                                            # fixed-and-closed twins are invisible and get re-filed
+bd search "<ONE distinctive word>" --status all --json   # --status all, or
+                                                        # fixed-and-closed twins are invisible and get re-filed
 ```
+
+**`bd search` matches a case-insensitive literal SUBSTRING of the TITLE (and
+id) only — never the description.** Two consequences, both false-negative
+(measured on bd 1.1.2, 2026-08-17, computenet-ytlk):
+
+- A multi-word query hits only when those words appear verbatim *and
+  adjacent* in a title. `bd search "pushed-ness"` → 1; `bd search "worktrees
+  pushed-ness"` → **0** on the very bead whose title holds both words, and
+  reversing an adjacent pair (`"search bd"` for a title reading `bd search`)
+  → **0** too. So "a few distinctive words" was the worst possible
+  instruction.
+- Descriptions are invisible: `bd search "epic-of.sh"` → **0** despite the
+  string appearing in many bodies. Description search is a *filter* on top of
+  a title query — `bd search "<title word>" --desc-contains "<body phrase>"`,
+  AND-ed — and it cannot stand alone (`bd search --desc-contains X` errors
+  `search query is required`). For a body-only sweep, grep the export:
+  `grep -i "<phrase>" .beads/issues.jsonl`.
+
+**Run several single-word searches, one per distinctive term**, and treat an
+empty multi-word result as **no evidence at all** rather than as absence.
+Substrings match inside words (`orktree` finds every `worktrees` title), so
+prefer a stem over an inflected form. The not-found branch below requires at
+least one *single-word* search to have come back empty before you file.
 
 **One issue per kind of friction.** Found (and still open) → **upvote it**:
 comment this session's instance (what you were doing, what happened, what it

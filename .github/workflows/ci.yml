@@ -166,20 +166,56 @@ jobs:
       # computenet-dqj.14's third acceptance criterion: a skip for missing
       # `bd`/`dolt` must be visible in the gate's own run, not just locally
       # invisible-by-default the way it was before the install step above.
-      # Mirrors the `:wire:` roster step's own rule below — never the reason
-      # this required job fails on its own account, except the one signal
-      # that means the coverage this ticket exists for silently regressed:
-      # no JUnit XML at all, i.e. `:demo:beadsmirror:test` did not run.
-      - name: "Publish :demo:beadsmirror's skipped-test count (computenet-dqj.14)"
+      #
+      # computenet-7em.5 turned it from a report into an assertion. Publishing
+      # a skipped count is not a gate: the observed failure it exists to catch
+      # (run 32004218853, job 95310345107) was a *green* job — `BUILD
+      # SUCCESSFUL` in 2m25s with the module's substantive e2e test reporting
+      # SKIPPED — and a count nobody reads changes nothing about that. Its
+      # acceptance criterion is explicit that "a failure of those suites SHALL
+      # fail the check rather than being skipped", so a skip that means the
+      # toolchain is absent has to be red.
+      #
+      # Three checks, in widening order of specificity:
+      #
+      #  1. no JUnit XML at all — `:demo:beadsmirror:test` did not run
+      #     (computenet-dqj.14's original hard failure, kept verbatim).
+      #  2. any test skipped with `is not on PATH` in its message — the exact
+      #     signature of the install step above having been removed, reordered
+      #     after the build, or silently failed. This is deliberately narrow:
+      #     it does NOT fail on skips from this module's other assumptions
+      #     (RebaselineTest's read-only-dir probe skips when running as root;
+      #     BeadsMirrorAppTest's refusal test skips with no `.beads` above the
+      #     cwd), which are environment facts rather than lost coverage.
+      #  3. every class named in REQUIRED_CLASSES produced XML with tests>0 and
+      #     skipped=0 — this lane's substantive e2e evidence, by name, so that
+      #     a filter/tag/module-scoping change that quietly stops running it
+      #     reddens the lane instead of passing green having asserted nothing.
+      #
+      # The named class differs per lane because the tag filter does: this lane
+      # runs `-PexcludeMultiJvm=true`, so it owns TwoNodeRigTest (untagged) and
+      # never sees TwoJvmMirrorTest; build-test-serial runs `-PmultiJvmOnly=true`
+      # and owns exactly the reverse. Between the two required checks both of
+      # the classes computenet-7em.5 names are asserted to have executed.
+      #
+      # Nothing here weakens the `assumeTrue` guards themselves — the same
+      # binaries missing on a developer machine still skip, as computenet-7em.5's
+      # third criterion requires. The gate is on CI's environment, not the test.
+      - name: "Assert :demo:beadsmirror's e2e evidence ran (computenet-7em.5, computenet-dqj.14)"
         if: ${{ !cancelled() }}
+        env:
+          REQUIRED_CLASSES: civictech.demo.beadsmirror.e2e.TwoNodeRigTest
         run: |
           set -uo pipefail
           REPORT_DIR="demo/beadsmirror/build/test-results/test"
+          failed=0
+
           if ! ls "$REPORT_DIR"/TEST-*.xml >/dev/null 2>&1; then
-            echo "no :demo:beadsmirror JUnit XML in $REPORT_DIR — :demo:beadsmirror:test did not run in this build" \
+            echo "FAIL: no :demo:beadsmirror JUnit XML in $REPORT_DIR — :demo:beadsmirror:test did not run in this build" \
               | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+
           total=$(grep -oh 'tests="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
           skipped=$(grep -oh 'skipped="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
           {
@@ -197,6 +233,45 @@ jobs:
               grep -B1 '<skipped' "$REPORT_DIR"/TEST-*.xml | grep -E 'testcase name|message=' || true
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # (2) the toolchain-absence signature. Matched on the ASCII substring
+          # only: the assumption message is `bd is not on PATH — skipping` with a
+          # literal em dash, which is not worth putting in a grep pattern.
+          # Verified 2026-08-17 against a real Gradle-emitted report produced by
+          # running this module's serial-lane invocation with /opt/homebrew/bin
+          # off PATH — the same shape the CI job produced on run 32004218853.
+          onpath=$(grep -l 'is not on PATH' "$REPORT_DIR"/TEST-*.xml || true)
+          if [ -n "$onpath" ]; then
+            {
+              echo "FAIL: a :demo:beadsmirror test skipped itself because bd or dolt was not on PATH."
+              echo "The 'Install bd and dolt' step in this job is what provisions them (computenet-7em.5)."
+              echo "Without it this lane passes green having asserted nothing about the mirror. Reports affected:"
+              echo "$onpath"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            failed=1
+          fi
+
+          # (3) the named e2e classes must have executed, not merely been reported on.
+          for cls in $REQUIRED_CLASSES; do
+            xml="$REPORT_DIR/TEST-${cls}.xml"
+            if [ ! -f "$xml" ]; then
+              echo "FAIL: ${cls} produced no JUnit XML — it did not run in this lane." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              failed=1
+              continue
+            fi
+            t=$(grep -o 'tests="[0-9]*"' "$xml" | head -1 | grep -oE '[0-9]+')
+            s=$(grep -o 'skipped="[0-9]*"' "$xml" | head -1 | grep -oE '[0-9]+')
+            if [ "${t:-0}" -eq 0 ] || [ "${s:-0}" -gt 0 ]; then
+              echo "FAIL: ${cls} reports ${t:-0} test(s), ${s:-0} skipped — this lane's substantive e2e evidence did not execute." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              failed=1
+            else
+              echo "ok: ${cls} executed ${t} test(s), 0 skipped" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+          exit "$failed"
 
       # A CI checkout is always a fresh clone, so this also enforces the
       # clean-clone guard: any load-bearing file that was never committed (the
@@ -401,6 +476,40 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
+      # Byte-identical to build-test-fast's install step above, deliberately —
+      # see that step's comment for why each half is shaped the way it is, and
+      # bump both versions together. This lane needs it for the same reason:
+      # :demo:beadsmirror's only `multi-jvm` class, TwoJvmMirrorTest, is
+      # `assumeTrue`-guarded on both binaries and this image installs neither,
+      # so the lane ran it and it reported SKIPPED while the job passed in
+      # 2m25s (observed, run 32004218853 job 95310345107 — computenet-7em.5).
+      # Duplicated rather than factored into a script because a composite
+      # action or a checked-in shell script is a second file to keep in step
+      # with the two versions pinned here; the assertion step at the end of
+      # this job is what actually catches the two copies drifting apart.
+      #
+      # Evidence that this install works as written: on main run 32034768028
+      # the fast lane's copy printed `bd version 1.2.2 (6c124203e)` /
+      # `dolt version 2.3.0` and its report step then read
+      # `demo:beadsmirror JUnit results: 205 tests, 0 skipped` — no Dolt
+      # identity configuration was needed, because BdScratchWorkspace points
+      # git's config files at /dev/null and drives only `bd --sandbox init`.
+      - name: Install bd and dolt (for :demo:beadsmirror's real-workspace tests)
+        run: |
+          set -euo pipefail
+          BD_VERSION=1.2.2
+          DOLT_VERSION=2.3.0
+
+          curl -fsSL -o /tmp/bd.tar.gz \
+            "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/bd.tar.gz -C /tmp bd
+          sudo install -m 0755 /tmp/bd /usr/local/bin/bd
+
+          curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/install.sh" | sudo bash
+
+          bd --version
+          dolt version
+
       # The multi-jvm classes live only in :demo:exchange, :demo:shopping and
       # :demo:beadsmirror, yet this lane used to run repo-wide `check` under
       # --max-workers=1: every module compiled serially plus ten empty
@@ -409,14 +518,14 @@ jobs:
       # multi-jvm-tagged test added in any other module fails this step
       # instead of silently never running.
       #
-      # :demo:beadsmirror is scoped in here for correctness, but buys no
-      # coverage on this runner yet: its only multi-jvm class
-      # (TwoJvmMirrorTest) is assumeTrue-guarded on `bd` and `dolt` being on
-      # PATH and this image installs neither, so the lane runs it and it
-      # reports SKIPPED (observed, run 32004218853 job 95310345107). Green
-      # here is therefore not evidence that the BDS2 mirror works; that
-      # evidence exists only on a developer machine until computenet-7em.5
-      # provisions the two binaries.
+      # :demo:beadsmirror is scoped in here for correctness. Until
+      # computenet-7em.5 it bought no coverage on this runner: its only
+      # multi-jvm class (TwoJvmMirrorTest) is assumeTrue-guarded on `bd` and
+      # `dolt` being on PATH and this image installed neither, so the lane ran
+      # it and it reported SKIPPED while the job passed green (observed, run
+      # 32004218853 job 95310345107). The install step above provisions both,
+      # and the assertion step at the end of this job makes a repeat of that
+      # skip red rather than green.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
           stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange|beadsmirror)/' || true)
@@ -433,8 +542,82 @@ jobs:
       - name: Compile the multi-jvm closure (parallel)
         run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses
 
+      # `--rerun` binds to the task immediately before it, so it applies to
+      # :demo:beadsmirror:test alone and exchange/shopping keep their cache.
+      # It is load-bearing, not hygiene: whether `bd` is on PATH is NOT a
+      # declared input of the test task, so a build-cache entry recorded before
+      # the install step above existed replays its SKIPPED report verbatim.
+      # Observed on this PR's own first run (32039390827, job 95415894698):
+      # install step green, `:demo:beadsmirror:test FROM-CACHE`, and the
+      # assertion below correctly went red on a one-test/one-skipped report the
+      # lane never produced. Cached-and-skipped is exactly the false green
+      # computenet-7em.5 exists to remove, so this lane executes the class every
+      # time (~30s locally) rather than trusting a replay of it.
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
-        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test -PmultiJvmOnly=true --max-workers=1
+        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test --rerun -PmultiJvmOnly=true --max-workers=1
+
+      # computenet-7em.5. Same three checks as build-test-fast's copy of this
+      # step — read that one for the reasoning — with the named class flipped,
+      # because `-PmultiJvmOnly=true` means this lane runs exactly the class the
+      # fast lane excludes and nothing else from this module. Keeping the two
+      # steps in the same shape is also what makes a drift between the two
+      # install steps show up as a red lane rather than as a lane that reports
+      # a skipped count and shrugs.
+      - name: "Assert :demo:beadsmirror's e2e evidence ran (computenet-7em.5)"
+        if: ${{ !cancelled() }}
+        env:
+          REQUIRED_CLASSES: civictech.demo.beadsmirror.e2e.TwoJvmMirrorTest
+        run: |
+          set -uo pipefail
+          REPORT_DIR="demo/beadsmirror/build/test-results/test"
+          failed=0
+
+          if ! ls "$REPORT_DIR"/TEST-*.xml >/dev/null 2>&1; then
+            echo "FAIL: no :demo:beadsmirror JUnit XML in $REPORT_DIR — :demo:beadsmirror:test did not run in this build" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          total=$(grep -oh 'tests="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          skipped=$(grep -oh 'skipped="[0-9]*"' "$REPORT_DIR"/TEST-*.xml | grep -oE '[0-9]+' | awk '{s+=$1} END {print s+0}')
+          {
+            echo "demo:beadsmirror JUnit results (serial lane): ${total} tests, ${skipped} skipped"
+            if [ "$skipped" -gt 0 ]; then
+              grep -B1 '<skipped' "$REPORT_DIR"/TEST-*.xml | grep -E 'testcase name|message=' || true
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          onpath=$(grep -l 'is not on PATH' "$REPORT_DIR"/TEST-*.xml || true)
+          if [ -n "$onpath" ]; then
+            {
+              echo "FAIL: a :demo:beadsmirror test skipped itself because bd or dolt was not on PATH."
+              echo "The 'Install bd and dolt' step in this job is what provisions them (computenet-7em.5)."
+              echo "Without it this lane passes green having asserted nothing about the mirror. Reports affected:"
+              echo "$onpath"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            failed=1
+          fi
+
+          for cls in $REQUIRED_CLASSES; do
+            xml="$REPORT_DIR/TEST-${cls}.xml"
+            if [ ! -f "$xml" ]; then
+              echo "FAIL: ${cls} produced no JUnit XML — it did not run in this lane." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              failed=1
+              continue
+            fi
+            t=$(grep -o 'tests="[0-9]*"' "$xml" | head -1 | grep -oE '[0-9]+')
+            s=$(grep -o 'skipped="[0-9]*"' "$xml" | head -1 | grep -oE '[0-9]+')
+            if [ "${t:-0}" -eq 0 ] || [ "${s:-0}" -gt 0 ]; then
+              echo "FAIL: ${cls} reports ${t:-0} test(s), ${s:-0} skipped — this lane's substantive e2e evidence did not execute." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              failed=1
+            else
+              echo "ok: ${cls} executed ${t} test(s), 0 skipped" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+          exit "$failed"
 
       # Same rationale as the fast lane above. This lane is where the
       # process-kill/relaunch tests live, so it is the likeliest to hang.

@@ -31,7 +31,7 @@ note() { # bd comment is refused by the permission classifier in some
   bd comment "$id" "$1" >/dev/null 2>&1 || bd update "$id" --append-notes "$1" >/dev/null
 }
 
-br=$(bd show "$id" --json | jq -r '.[0].metadata.branch // empty')
+br=$(bd show "$id" --json | sed -n '/^[[{]/,$p' | jq -r '.[0].metadata.branch // empty')
 
 if [ -z "$br" ]; then
   br="feature/$id"
