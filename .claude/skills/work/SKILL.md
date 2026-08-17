@@ -46,9 +46,9 @@ felt like giving up.
   with ready work two levels down therefore reports EMPTY, which is how a live
   epic gets deferred and hidden on both machines (computenet-28vn). Use
   `scripts/ready-in-epic.sh <epic>` for any epic-scoped ready question.
-  `bd blocked --parent`'s depth is **unverified** — treat it the same way. And `bd blocked` lists only items blocked by an open
-  dependency edge — a hand-set `--status=blocked` (an ask-human park) is
-  invisible to it.
+  `bd blocked --parent`'s depth is **unverified** — treat it the same way.
+  And `bd blocked` lists only items blocked by an open dependency edge — a
+  hand-set `--status=blocked` (an ask-human park) is invisible to it.
 - `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
   reads `null`. It never includes comment bodies, only `comment_count`.
 - Epic- and feature-sized output overflows the inline tool-result limit
@@ -445,7 +445,11 @@ ready work two levels down reports empty (`bd traps`, computenet-28vn). That
 matters most right here: the `bd defer` below hides the epic on **both**
 machines, so it must never fire on evidence from an under-reporting query.
 Empty output with exit 0 is a real answer; **exit 3 means nothing was
-checked** — stop, do not defer.
+checked** — stop, do not defer. It also prints a `could not resolve the epic
+of <id>` line to **stderr** for any ready item whose parent chain is broken
+(a vanished ancestor, a cycle): that item was *not* classified, so resolve it
+by hand (`scripts/epic-of.sh <id>`) before treating the listing as complete —
+never defer with one outstanding.
 
 Zero workable items and nothing resumable splits into **two** cases. Separate
 them with step 4's listing, run now rather than later — same command, so no
@@ -619,9 +623,11 @@ bd list --parent=<epic> --type=feature --status=in_progress --json   # resume fi
 The second query is deliberately unfiltered by type: `bd ready --parent
 --type=feature` reaches direct children only *and* hides everything that is
 not a feature, so it can report an empty epic twice over (computenet-28vn).
-Take the first `feature` row it prints; if there is none but there are other
-rows, that is the no-feature-layer shape below, and you already have its
-answer.
+It prints `<id>\t<type>\t<priority>\t<title>` — take the first row whose
+type is `feature`; if there is none but there are other rows, that is the
+no-feature-layer shape below, and you already have its answer. The epic
+itself is never one of the rows, but a ready **sub-epic** under it can be —
+that is a real child needing breakdown (step 4), not a feature to implement.
 
 A resumed feature carrying `metadata.review=passed` was certified last
 session — check its PR (`gh pr view <pr> --json state`); `MERGED` →

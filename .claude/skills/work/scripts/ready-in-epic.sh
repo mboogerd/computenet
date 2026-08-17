@@ -16,7 +16,7 @@
 # (computenet-28vn).
 #
 # HOW. Take the repo-wide `bd ready`, which has no depth to lose, and keep the
-# rows whose effective epic is this one. Membership follows epic-of.sh's rule:
+# rows whose effective epic is this one. Membership follows the epic-of.sh rule:
 # an explicit `.parent` when set, the dotted-id prefix otherwise. Both matter —
 # a bare prefix match is not a substitute, because computenet-f8tf is a child
 # of computenet-wpvy with no dot in its id.
@@ -31,8 +31,11 @@
 # its rule changes, this must change with it.
 #
 # Usage: ready-in-epic.sh <epic-id> [--ids-only]
-# Prints one row per ready item: "<id>\t<priority>\t<title>", or bare ids under
-# --ids-only. EMPTY OUTPUT WITH EXIT 0 IS A REAL ANSWER: nothing ready here.
+# Prints one row per ready item: "<id>\t<type>\t<priority>\t<title>", or bare
+# ids under --ids-only. The TYPE column is load-bearing — step 5 selects the
+# first `feature` row and falls through to the no-feature-layer shape when
+# there is none, which it cannot do from an untyped listing.
+# EMPTY OUTPUT WITH EXIT 0 IS A REAL ANSWER: nothing ready here.
 # Exit 3 = the query itself failed and NOTHING was checked — never read that as
 # an empty epic, because deferring on it hides the epic from both machines.
 set -uo pipefail
@@ -67,7 +70,7 @@ printf '%s' "$allj" > "$tmp/all.json"
 printf '%s' "$raw"  > "$tmp/ready.json"
 
 EPIC="$EPIC" IDS_ONLY="$IDS_ONLY" ALLF="$tmp/all.json" READYF="$tmp/ready.json" python3 -c '
-import json, os, sys, re
+import json, os, sys
 
 def unwrap(raw):
     i = min(x for x in (raw.find("["), raw.find("{")) if x >= 0)
@@ -86,31 +89,46 @@ for r in allrows:
     kind[r["id"]] = r.get("issue_type") or r.get("type") or ""
 
 def epic_of(bid):
-    """epic-of.sh: explicit .parent when set, else the dotted-id prefix; stop at
-    an epic. Returns "(unparented)" for a chain that legitimately reaches no
-    epic — a positive answer, same as epic-of.sh — and None only when the walk
-    is UNRESOLVED (unknown id, or a cycle), which is not the same as
-    not-a-member and is reported to stderr."""
+    """The epic-of.sh rule: explicit .parent when set, else the dotted-id
+    prefix, until an epic is reached.
+
+    Returns "(unparented)" for a chain that legitimately reaches no epic — a
+    positive answer, same as epic-of.sh — and None when the walk is UNRESOLVED,
+    which is NOT the same as not-a-member and is reported to stderr. Unresolved
+    means an id absent from the listing AT ANY HOP (the epic-of.sh
+    "(no such id: ...)", exit 1 — a vanished ancestor must never fall through
+    to "(unparented)", i.e. to "silently not your epic"), or a cycle
+    ("(cycle? ...)", exit 1).
+
+    ONE DELIBERATE DIVERGENCE from epic-of.sh, at the start id only: epic-of.sh
+    answers X for an epic X, because it asks "which epic owns X". This asks
+    "which epic is X ready work BENEATH", so an epic row resolves to its
+    CONTAINING epic — a ready sub-epic (live: computenet-t6b.3 under
+    computenet-t6b) is real workable surface of its parent and must not vanish
+    from it. The epic being queried is dropped from its own listing by the
+    caller loop below, not here."""
     seen = set()
     cur = bid
-    if bid not in parent:
-        return None                      # unknown id: unresolved, not unparented
-    while cur and cur not in seen:
+    while cur not in seen:
         seen.add(cur)
+        if cur not in parent:
+            return None                  # unknown id at any hop: unresolved
         if cur != bid and kind.get(cur) == "epic":
             return cur
         nxt = parent.get(cur)
         if not nxt:
-            m = re.match(r"^(.*)\.[0-9]+$", cur)
-            nxt = m.group(1) if m else None
+            # epic-of.sh uses ${id%.*} — strip the last dotted segment whatever
+            # it looks like; do not narrow that to digits.
+            nxt = cur.rsplit(".", 1)[0] if "." in cur else None
         if nxt is None:
             return cur if kind.get(cur) == "epic" else "(unparented)"
         cur = nxt
-    return None
+    return None                          # cycle
 
-rc = 0
 for r in ready:
     bid = r["id"]
+    if bid == epic:
+        continue        # the epic is not ready work *beneath* itself
     owner = epic_of(bid)
     if owner is None:
         print("ready-in-epic: could not resolve the epic of %s — check it by hand" % bid, file=sys.stderr)
@@ -120,6 +138,6 @@ for r in ready:
     if ids_only:
         print(bid)
     else:
-        print("%s\t%s\t%s" % (bid, r.get("priority", ""), r.get("title", "")))
-'
+        print("%s\t%s\t%s\t%s" % (bid, kind.get(bid, ""), r.get("priority", ""), r.get("title", "")))
+' || { echo "ready-in-epic: the epic walk failed; NOTHING was checked" >&2; exit 3; }
 exit 0
