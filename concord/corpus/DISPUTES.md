@@ -931,6 +931,113 @@ carries the third.
   author the `[24-DUR-02]` frontier perturbation above alongside the
   `[24-DUR-05]` one.
 
+### The fourth boundary (`schema-gap`, `[24-DUR-07]`/`[24-DUR-08]`, `computenet-yh6.1.3.4.1`) — no driver path stamps `MessageContext.baseline` on an I-24 pull, so it is OPEN, not scenario-authored
+
+`computenet-yh6.1.3.4` decided the normative rule for an `Effectful` inlet
+receiving a frame stamped `MessageContext.baseline` (spec 24 §Effectful,
+`kernel/src/test/kotlin/civictech/cell/durability/EffectfulBaselineGuardTest.kt`):
+one rule per baseline *kind*, not one rule for "baseline" generically —
+
+1. An **I-24 pull-baseline** (a `StateRequest` catch-up reply, stamped by
+   `FanOutlet.baselineTo`) fires the effect and **never** advances the
+   processed-frontier from its timestamp (`[24-DUR-07]`) — a baseline's
+   timestamp is anchored at the link-install event, not a wave position.
+2. Because (1) opens a hole no wave-frontier check closes, the sink gets its
+   **own** journaled discharge record, keyed on the baseline's exact position,
+   separate from the wave frontier — an exact match, not a high-water — so a
+   crash-replay or a live re-delivery of the same catch-up position is
+   suppressed without re-firing the effect (`[24-DUR-08]`).
+3. A **PN-2 replay-baseline** (`HostDurability.recoverFrom`'s replayed
+   re-emission stamp) is a *different* baseline and keeps `[24-DUR-05]`
+   exactly — suppressed at-or-behind the restored frontier, journal-tail
+   fires — with no new discharge record involved. This is the mechanism
+   `DUR-REPLAY-01` and `DUR-SRCID-01`/`-02` already exercise.
+
+This task (`computenet-yh6.1.3.4.1`) was scoped to author corpus scenarios for
+`[24-DUR-07]`/`[24-DUR-08]`. It could not: **no path reachable from any concord
+driver, in any profile, ever stamps a delivered frame's `MessageContext.baseline`
+from the I-24 pull-baseline mechanism.** Both places in the kernel that set
+`.baseline` were checked directly:
+
+- `FanOutlet.baselineTo`, invoked only from `pullServe`'s `StateRequest`
+  handler (`kernel/src/main/kotlin/civictech/cell/link/CatchUp.kt`,
+  `SetCell.kt:192`, `OrMapCell.kt:436`) — reached only by an actual
+  `Protocols.StateRequest` protocol message arriving at the producing outlet.
+  **No concord driver ever issues one.** `grep -rn "StateRequest\|pullServe"
+  concord/src/main/kotlin` finds it named only in a `KernelDriverDist` comment
+  (line 135, describing `catchUpOnLinked`, not `pullServe`) — never invoked.
+- Ordinary push catch-up on link install (`FanOutlet.catchUpOnLinked`, what
+  every `connect` step in every profile actually drives) is, by its own KDoc,
+  **not** stamped as a baseline today: "the plan calls for this push catch-up
+  to ride `FanOutlet.baselineTo` … That change is deferred" (`CatchUp.kt:24-26`).
+  So even a scenario that connects a fresh `Effectful` consumer to a source
+  already holding state — the ordinary "late join" shape — gets a plain
+  (`baseline == null`) catch-up delivery, not an I-24 pull-baseline one.
+- The `dur` profile's `effect-sink` wiring (`KernelDriverDur.wire`) makes this
+  doubly unreachable for the one catalog type that is actually `Effectful`:
+  a durable link is installed by `outlet.subscribe(Use.fixed(sinkInlet, …))`
+  (`KernelDriverDur.kt:359-364`), a raw subscription that bypasses link
+  admission entirely — no `EdgeOpen`, no protocol handshake, nothing a
+  `StateRequest` could ride even if a driver sent one. (The one durable edge
+  that *does* go through real link admission, `linkEdge` for `quorum-set`, is
+  neither journaled nor `Effectful` — see the `24-REPLAY-01` entry below.)
+- `retransmit` — the verb `computenet-yh6.1.3.3`/`computenet-yh6.1.8` built
+  for exactly this family of gap (live duplicate delivery to an `effect-sink`)
+  — cannot express it either. Its kernel binding hardcodes the context it
+  stamps: `CurrentContext.with(MessageContext(position, outlet.ref)) { … }`
+  (`KernelDriverDur.kt:468`) — `MessageContext`'s `baseline` parameter is left
+  at its `null` default, and neither `RetransmitStep` (`Step.kt:186-194`,
+  fields `on/inlet/source/counter/op/value`, no `baseline`) nor the `Driver`
+  SPI's `retransmit(...)` signature carries anywhere to put one.
+
+**PN-2 replay-baseline is reachable (crash + `recoverFrom`, already exercised
+elsewhere) but does not discriminate this pair.** A scenario built only on
+crash/replay would deliver rule-3 baselines, which already pass under
+`[24-DUR-05]`'s pre-existing ordinary-frontier suppression — the ledger's own
+"third boundary" and `DUR-REPLAY-01`/`DUR-SRCID-*` cover that mechanism
+already. It would prove nothing about the *new* mechanism `[24-DUR-07]`/
+`[24-DUR-08]` add: acting-without-advancing-the-frontier (rule 1) and the
+baseline's own separate discharge record (rule 2), both specific to the I-24
+pull kind. A scenario that used the reachable (replay) baseline to stand in
+for the unreachable (pull) one would pass unmodified against a guard that
+never implements rules 1/2 at all — exactly the "weakened into a passing
+scenario" AGENTS.md forbids, not a genuine `[24-DUR-07]`/`[24-DUR-08]` check.
+
+**What would actually unblock it**, narrowest first:
+
+1. **Grow `retransmit`** with an optional inline baseline anchor — a
+   `(sourceId, counter)` timestamp (as today) plus a `TagFrontier` anchor,
+   mirroring `EffectfulBaselineGuardTest`'s own `baseline(source, counter,
+   anchor)` helper — so a scenario can state "this delivery carries
+   `MessageContext.baseline = <anchor>`" the same explicit way it already
+   states a duplicate's position. This is the same verb `computenet-yh6.1.3.3`
+   grew for the live-duplicate case and `computenet-yh6.1.8` bound, and
+   `DUR-CKPT-FRONTIER-01` was already that verb's "second consumer" — this
+   would be a third, gated the same way.
+2. **Wire a real pull.** Route the `dur` profile's `effect-sink` connection
+   through actual link admission plus `pullServe`/`StateRequest`, and add a
+   step that triggers a catch-up pull. Materially larger: it reopens the
+   `effect-sink` "raw subscribe, not a link" modeling decision the `quorum-set`
+   entry above already flagged as deliberate, for every durable link, not just
+   this one.
+
+(1) is the narrower, verb-consistent option and does not touch the
+"deliberately deferred" push-catch-up-as-baseline switch `CatchUp.kt` names —
+that switch is a kernel-side decision this task's scope excludes, not a
+concord-driver one.
+
+- **Resolves**: nothing at the corpus boundary yet. A gated `concord/schema`
+  change proposing the `retransmit` extension above (analogous in shape and
+  process to `computenet-em9i`/`computenet-7lb`) is the next step; scenario
+  authoring for `[24-DUR-07]`/`[24-DUR-08]` follows once it lands, gated on
+  the same `retransmit` verb surface as `computenet-yh6.1.3.3`/
+  `computenet-yh6.1.8`, not a new one.
+- **Coverage today**: `[24-DUR-07]`/`[24-DUR-08]` stay `gap` rows in
+  `doc/spec/CONCORDANCE.md`; the sole coverage is kernel-level
+  (`EffectfulBaselineGuardTest.kt`) plus the CHA2 evidence-lane reproduction
+  `BS-5` (`EffectReplayReproTest`, cited above under the journaled-source
+  double-fire boundary, `[CHA2-14]`).
+
 ### Not covered (deferred, honestly out of reach at W4-B)
 
 - `24-DUR-04` (replay-stable identity, no resurrected removals) — **NARROWED
