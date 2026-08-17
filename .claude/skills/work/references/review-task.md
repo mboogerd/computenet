@@ -350,13 +350,22 @@ What to consume, per test run:
   and silently discards any *other* edit you made to that file earlier in the
   review — §2's mutation and §4's repair both happen and nothing orders them,
   so this is the ordinary case, not a corner (one reviewer lost a KDoc repair
-  this way). Undo the mutation by hand, or park your own work first:
+  this way). Undo the mutation by hand, or park your own work as a patch
+  first:
 
   ```bash
-  git -C <task-worktree> stash push -- <file>   # your repairs, set aside
-  # ... mutate, re-run, watch the named test FAIL, undo the mutation ...
-  git -C <task-worktree> stash pop
+  git -C <task-worktree> diff -- <file> > "$SCRATCH/my-repairs.patch"
+  git -C <task-worktree> checkout -- <file>     # now only HEAD's content
+  # ... mutate, re-run, watch the named test FAIL ...
+  git -C <task-worktree> checkout -- <file>     # undo the mutation
+  git -C <task-worktree> apply "$SCRATCH/my-repairs.patch"
   ```
+
+  **Not `git stash`.** `refs/stash` is a single repo-wide ref *shared by every
+  linked worktree* — a dozen of them run here at once — so `git -C <mine>
+  stash pop` silently pops whatever agent stashed last, exit 0, wrong file
+  contents (measured). A patch in your own `$SCRATCH` is worktree-local and
+  cannot be taken by anyone else.
 
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,
