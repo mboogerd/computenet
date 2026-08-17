@@ -11,7 +11,9 @@ import civictech.demo.beadsmirror.feed.ChangeRecord
 import civictech.demo.beadsmirror.feed.DiffQuery
 import civictech.demo.beadsmirror.feed.DiffType
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
+import civictech.demo.beadsmirror.feed.DoltFeedPoller
 import civictech.demo.beadsmirror.feed.FeedCheckpoint
+import civictech.demo.beadsmirror.feed.FeedCondition
 import civictech.demo.beadsmirror.feed.FeedPosition
 import civictech.demo.beadsmirror.feed.FieldDiff
 import civictech.demo.beadsmirror.projector.DotMinter
@@ -19,6 +21,7 @@ import civictech.demo.beadsmirror.projector.MirrorEdge
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.throwables.shouldThrowAny
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -31,6 +34,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 
 /**
  * computenet-dqj.3.3, the operation itself: [Rebaseline] rebuilds the mirror
@@ -485,8 +489,143 @@ class RebaselineTest {
     }
 
     // -----------------------------------------------------------------
+    // computenet-7em.4.1 — the post-pull merge condition
+    // -----------------------------------------------------------------
+
+    /**
+     * The new reason is carried like any other: [Rebaseline.run] is
+     * reason-agnostic, so this pins that the merge path really does rebuild
+     * from the export and reports itself as a merge rather than as truncation
+     * (which is what would let a `bd dolt pull` be misread as history
+     * compaction in an operator's event log).
+     */
+    @Test
+    fun `a re-baseline triggered by a merged history rebuilds from the export and names that reason`() {
+        val stale = MirrorProjector(DotMinter(IDENTITY))
+        stale.apply(
+            ChangeRecord(
+                commitHash = "pre-pull",
+                position = FeedPosition(11, 0),
+                issueId = "A",
+                diffType = DiffType.ADDED,
+                fieldDiffs = listOf(FieldDiff("title", old = null, new = JsonPrimitive("stale Alpha"))),
+                edgeDiffs = emptyList(),
+            ),
+        )
+        val state = MirrorState(stale)
+        checkpoint.write("pre-pull")
+
+        rebaseline(
+            state,
+            // The union the pull produced: the local issue with its current
+            // title, plus the peer's.
+            rows = listOf(row("A", "title" to "Alpha"), row("P", "title" to "Peer")),
+            history = listOf("c0", "pre-pull", MERGE),
+        ).run(RebaselineReason.HistoryMerged(MERGE))
+
+        state.current.view().keys shouldBe setOf("A", "P")
+        state.current.view().getValue("A")["title"] shouldBe "\"Alpha\""
+        checkpoint.read() shouldBe MERGE
+        events shouldBe listOf(MirrorEvent.Rebaselined(RebaselineReason.HistoryMerged(MERGE), MERGE, 2))
+    }
+
+    /**
+     * Feature rule 4's export-failure clause at this seam. Nothing is caught in
+     * [Rebaseline.run], so a `bd export` that throws under the new reason must
+     * propagate out of `pollOnce` — through the poller's loop, which records it
+     * as [PollLoopStopped] (what `MirrorRoutes` serves `503` from via
+     * `PollLoopDied`) — leaving the fold and the checkpoint exactly as they
+     * were. The alternative is the one outcome the feature forbids: continuing
+     * to serve a pre-pull fold as current.
+     *
+     * The poller here is wired exactly as `BeadsMirrorApp` wires it — the
+     * condition maps to `rebaseline.run(HistoryMerged)` synchronously on the
+     * poller thread.
+     */
+    @Test
+    fun `a failing export under the merged-history reason freezes the mirror instead of serving pre-pull state`() {
+        val prePull = MirrorProjector(DotMinter(IDENTITY))
+        prePull.apply(
+            ChangeRecord(
+                commitHash = "pre-pull",
+                position = FeedPosition(11, 0),
+                issueId = "A",
+                diffType = DiffType.ADDED,
+                fieldDiffs = listOf(FieldDiff("title", old = null, new = JsonPrimitive("Alpha"))),
+                edgeDiffs = emptyList(),
+            ),
+        )
+        val state = MirrorState(prePull)
+        checkpoint.write("pre-pull")
+
+        val feed = DoltCommitFeed(mergedLog(listOf("c0", "pre-pull", MERGE)))
+        val exportFailure = IllegalStateException("bd export exited 1")
+        val rebaseline = Rebaseline(
+            export = { throw exportFailure },
+            feed = feed,
+            checkpoint = checkpoint,
+            state = state,
+            workspaceIdentity = IDENTITY,
+            onEvent = events::add,
+        )
+        val poller = DoltFeedPoller(
+            feed = feed,
+            checkpoint = checkpoint,
+            interval = Duration.ofMillis(5),
+            onBatch = { state.current.applyAll(it) },
+            onCondition = { condition ->
+                when (condition) {
+                    is FeedCondition.CheckpointGone ->
+                        rebaseline.run(RebaselineReason.CheckpointGone(condition.checkpoint))
+                    is FeedCondition.HistoryMerged ->
+                        rebaseline.run(RebaselineReason.HistoryMerged(condition.mergeCommit))
+                }
+            },
+        )
+
+        poller.use {
+            poller.start()
+            val deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos()
+            while (poller.stopped == null && System.nanoTime() < deadline) Thread.sleep(10)
+
+            // The loop is dead and says so — the 503 path's whole input.
+            val exit = poller.stopped
+            exit.shouldNotBeNull()
+            exit.failure shouldBe exportFailure
+            exit.checkpoint shouldBe "pre-pull"
+        }
+
+        // ...and nothing moved: the pre-pull fold was neither replaced nor
+        // advanced past, so no post-pull record was folded onto it either.
+        (state.current === prePull) shouldBe true
+        state.current.view().keys shouldBe setOf("A")
+        checkpoint.read() shouldBe "pre-pull"
+        events shouldBe emptyList()
+    }
+
+    // -----------------------------------------------------------------
     // helpers
     // -----------------------------------------------------------------
+
+    /**
+     * A fake `dolt_log` whose newest commit is a MERGE — the shape a real `bd
+     * dolt pull` leaves (`parents` rendering read live 2026-08-17: two hashes
+     * joined by comma-space). [history] is genesis-first.
+     */
+    private fun mergedLog(history: List<String>) = DiffQuery { sql ->
+        if (!sql.contains("dolt_log")) {
+            emptyList()
+        } else {
+            history.mapIndexed { index, hash ->
+                val firstParent = if (index == 0) "" else history[index - 1]
+                val parents = if (hash == MERGE) "$PEER_PARENT, $firstParent" else firstParent
+                mapOf<String, JsonElement>(
+                    "commit_hash" to JsonPrimitive(hash),
+                    "parents" to JsonPrimitive(parents),
+                )
+            }.asReversed()
+        }
+    }
 
     /** A [Rebaseline] over hand-built rows and a fake `dolt_log` of [history]. */
     private fun rebaseline(
@@ -521,6 +660,12 @@ class RebaselineTest {
     private companion object {
         /** Fixed so a rebuilt projector's dots are the ones [BaselineBuilder] would mint for this workspace. */
         const val IDENTITY = "rebaseline_scratch"
+
+        /** The commit a `bd dolt pull` writes: two parents (computenet-7em.4.1). */
+        const val MERGE = "merge-commit-hash"
+
+        /** That merge's peer-side parent — the commit the pull brought in. */
+        const val PEER_PARENT = "peer-parent-hash"
 
         fun BdScratchWorkspace.createIssue(title: String): String {
             val output = run("create", title, "--json")

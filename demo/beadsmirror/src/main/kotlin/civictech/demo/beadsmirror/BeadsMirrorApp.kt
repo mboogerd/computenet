@@ -178,6 +178,13 @@ class BeadsMirrorApp private constructor(
                     when (condition) {
                         is FeedCondition.CheckpointGone ->
                             rebaseline.run(RebaselineReason.CheckpointGone(condition.checkpoint))
+                        // A `bd dolt pull` merged peer history in. Same
+                        // synchronous-on-the-poller-thread path: the tick that
+                        // detected it emitted nothing, and returns straight
+                        // after this call, so no record derived from merged
+                        // history can reach a projector.
+                        is FeedCondition.HistoryMerged ->
+                            rebaseline.run(RebaselineReason.HistoryMerged(condition.mergeCommit))
                     }
                 },
                 // computenet-dqj.12: the loop dying is the one thing this
