@@ -25,7 +25,8 @@ name: Wire suite flake sample (on-demand ubuntu bulk loop)
 #   - `workflow_dispatch` ONLY. No `push`, no `pull_request`, no `schedule`. It
 #     costs nothing until somebody asks for it.
 #   - NOT a required check. The protected-branch ruleset requires
-#     build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test.
+#     build-test-fast, build-test-serial, concord-full, ui-test, agora-ui-test,
+#     kernel-test.
 #     This job's name is not among them and must not be added: an instrument
 #     that runs the flakiest suite in the repo 500 times is the last thing that
 #     should be able to block a merge.

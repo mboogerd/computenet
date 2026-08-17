@@ -54,16 +54,20 @@ name: Post-merge validation
 # records an outage caused by exactly this class of change: one push matched
 # two triggers, branch protection then saw two check runs per required check
 # name, required every one of them to pass, and a single flake blocked the
-# merge while auto-merge parked the PR silently. The required check names are
-# `build-test-fast`, `build-test-serial`, `concord-full`, `ui-test` and
-# `agora-ui-test`. Branch protection matches a required check by its exact
+# merge while auto-merge parked the PR silently. The six required check names
+# are `build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
+# `agora-ui-test` and `kernel-test`. Branch protection matches a required
+# check by its exact
 # check-run name, which for a non-matrix job is the job id. Every job here is
 # prefixed `main-`, so none of them can ever be mistaken for a required check
 # — including on the merged PR's own SHA, where the `closed`-event checks
 # surface. Adding a trigger to `ci.yml` instead would have reintroduced the
 # duplicate-check-run failure mode directly, so `ci.yml` is left untouched.
 #
-# The jobs below deliberately mirror `ci.yml`'s five lanes command-for-command.
+# The jobs below deliberately mirror five of `ci.yml`'s six lanes
+# command-for-command. `kernel-test` is NOT mirrored here — the fast lane's
+# mirror still runs the whole `build check` including `:kernel:test`, so the
+# kernel suite is covered on `main`, just not as its own lane.
 # Keep them in step when a lane changes there; a reusable `workflow_call` would
 # have deduplicated them, but calling it from `ci.yml` renames its check runs
 # and breaks branch protection.

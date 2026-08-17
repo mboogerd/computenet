@@ -341,8 +341,9 @@ unchanged when a seam is what you're testing.
 Run `uname -sm` and put its output in your report. (For a diff proven
 docs-only in §3 there is no platform-dependent behaviour to measure: skip to
 the `gh pr checks` read below, and report its conclusions with §3's limit
-attached.) This repo is developed on darwin; every required check (`build-test-fast`, `build-test-serial`,
-`concord-full`, `ui-test`, `agora-ui-test`) runs on `ubuntu-latest`. For most
+attached.) This repo is developed on darwin; all **six** required checks
+(`build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
+`agora-ui-test`, `kernel-test`) run on `ubuntu-latest`. For most
 diffs that gap is invisible; for anything touching sockets, ports, filesystem
 semantics, path handling, or process spawning it is exactly where the defect
 hides — a `:wire:test` that passed 15/15 locally failed `build-test-fast`
@@ -447,7 +448,11 @@ done
 ```
 
 Read that list first and confirm every commit on it is one you wrote; the
-line counts are only meaningful once it is. Two ways of asking the question
+line counts are only meaningful once it is. **The `--no-merges` in both
+commands is load-bearing for those counts, not just tidiness**: on a merge
+commit `--stat` prints the *first-parent* diff, so a merge left in this list
+would bill you for everything that landed on `main` since you forked
+(computenet-rbfa; §6 states the rule in full). Two ways of asking the question
 give the wrong answer, both because §6 tells you to merge `origin/main`
 mid-review:
 
@@ -587,6 +592,29 @@ git -C <worktree> log --oneline $(git -C <worktree> merge-base HEAD origin/main)
   (its conditions otherwise met) — the push/re-read-checks ordering below
   travels to the orchestrator along with the merge; only the re-fetch
   evidence above is yours to quote.
+
+**Never read `git show --stat` on a MERGE commit as what that merge
+contributed.** For a merge, `git show` prints the **first-parent** diff — which
+for a `--no-ff` merge of a sibling's work is that sibling's entire change, and
+for your own `origin/main` merge is everything that landed on `main` since you
+forked. Either way it reads as if the merge authored all of it, which invites
+attributing a sibling PR's work to this branch (computenet-rbfa; SKILL.md step
+5c reads the same first-parent trap from the other side, where a post-merge
+`git diff --stat HEAD~1 HEAD` silently never fires). When you enumerate what
+**this branch** changed — for §5's line count, for your report, for anything —
+use three dots:
+
+```bash
+git -C <worktree> diff --name-only origin/main...HEAD    # what THIS branch changed
+git -C <worktree> diff --stat      origin/main...HEAD
+```
+
+`git show --name-only <sha>` on a **non-merge** commit is fine and is what §6's
+relevance test uses; the trap is specifically merges. The shas §6 feeds it are
+safe by construction: they come from `merge-base..origin/main`, and the `main`
+ruleset requires linear history and the repo squash-merges, so nothing has
+landed there as a merge commit since the ruleset went active (last merge commit
+on `main`: `c387809f`, 2026-07-29).
 
 **A stopping rule, because `main` can land faster than one review takes.**
 The hand-back above is already bounded — you list the shas once and stop, and

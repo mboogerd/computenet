@@ -206,10 +206,23 @@ Before declaring completion:
 ## Branches, PRs, and auto-merge
 
 `main` is protected by a repository ruleset: changes land only through a pull
-request, required status checks must pass (`build-test-fast`,
-`build-test-serial`, `concord-full`, `ui-test`, `agora-ui-test`), history stays
-linear, and the branch cannot be force-pushed or deleted. A direct push to
-`main` is rejected — always branch.
+request, **six** required status checks must pass (`build-test-fast`,
+`build-test-serial`, `concord-full`, `ui-test`, `agora-ui-test`,
+`kernel-test`), history stays linear, and the branch cannot be force-pushed or
+deleted. A direct push to `main` is rejected — always branch.
+
+That list is the ruleset's, not folklore — read it rather than trusting this
+paragraph if a check's status ever decides a ship:
+
+```bash
+GH_PAGER=cat gh api repos/mboogerd/computenet/rulesets/20149495 \
+  | jq -r '.rules[]|select(.type=="required_status_checks")
+           |.parameters.required_status_checks[].context'
+```
+
+`kernel-test` was missing here until 2026-08-17 while `gh pr checks` reported
+it on every PR, so a session deciding whether a red check blocked had to guess
+(computenet-4prd).
 
 **Auto-merge is enabled, and a workflow arms it on every PR** (`.github/workflows/auto-merge.yml`,
 skipping drafts and forks). The practical consequence:

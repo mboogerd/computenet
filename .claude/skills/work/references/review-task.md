@@ -481,9 +481,9 @@ done
 ## 3. Your run is on macOS; the required checks are not
 
 Run `uname -sm` and put its output in your report — this repo is developed on
-darwin, and that is where you almost certainly are. Every required check
-(`build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
-`agora-ui-test`) runs on `ubuntu-latest`. For most diffs
+darwin, and that is where you almost certainly are. All **six** required
+checks (`build-test-fast`, `build-test-serial`, `concord-full`, `ui-test`,
+`agora-ui-test`, `kernel-test`) run on `ubuntu-latest`. For most diffs
 that gap is invisible; for anything touching sockets, ports, filesystem
 semantics, path handling, or process spawning it is exactly where the defect
 hides — a `:wire:test` that passed 15/15 locally failed `build-test-fast`
