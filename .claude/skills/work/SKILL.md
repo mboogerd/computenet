@@ -194,10 +194,40 @@ Three standing disciplines:
   (`for i in $(seq 1 N)`), exits on a terminal state, and there is at most
   one alive; `TaskStop` the old one and let the stop land before arming a
   replacement.
-- **A failed `gh` call is not a reading.** Socket exhaustion (`dial tcp …
-  can't assign requested address`) says nothing about the PR; the idiom
-  `gh … 2>/dev/null || echo "?"` folds it into a green nobody earned. Every
-  wait loop separates "the query failed" from "the condition is not met".
+- **A failed `gh` call is not a reading — and neither is a nonzero exit.**
+  Socket exhaustion (`dial tcp … can't assign requested address`) says
+  nothing about the PR; the idiom `gh … 2>/dev/null || echo "?"` folds it
+  into a green nobody earned. The inverse trap is just as wrong: `gh pr
+  checks` **exits 8 while anything is pending**, with well-formed rows on
+  stdout, so an `||` branch fires on the ordinary pending case and reports a
+  query failure that never happened (computenet-15it). Classify on the
+  OUTPUT, never on `$?`. And the rows can be *absent*: a check run is created
+  asynchronously after a push, so for roughly the first minute the output is
+  legitimately just the `auto-merge` row — nothing is pending, and a bare
+  `grep -q pending` cannot tell that from all-green (computenet-1zhu). A
+  reading is settled only when every required check is PRESENT and none of
+  them is pending:
+
+```bash
+req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
+for i in $(seq 1 40); do
+  rows=$(gh pr checks <pr-url> 2>&1)     # exit status deliberately not tested
+  n=$(echo "$rows" | grep -cE "$req")
+  if [ "$n" -lt 6 ]; then
+    if echo "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
+      echo "round $i: only $n of 6 required rows reporting"   # normal early state
+    else
+      echo "round $i: QUERY FAILED: $rows"                    # no rows at all
+    fi
+    sleep 20; continue
+  fi
+  echo "$rows" | grep -q pending || { echo SETTLED; echo "$rows"; break; }
+  sleep 20
+done
+```
+
+  The three states the loop keeps apart — query failed, not yet reporting,
+  unsettled — are one state to any test on `$?`, and two of them look green.
 - **Between notifications you have no sense of elapsed time.** Run
   `date -u +%H:%M` before any budget-gated decision — one session misread
   1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
@@ -1016,10 +1046,12 @@ the branch is at N+1 would ready a PR on evidence that never covered the
 merged code. Wait for agreement, re-read. Commits in the `log` output the
 verdict doesn't mention, touching this diff's files (`gh pr diff <pr-url>
 --name-only`) → merge `origin/main` in and send back for a re-check. Red
-required check → red-check-attribution.md; pending → wait — and know that
-`gh pr checks` **exits 8 while anything is pending**: never `&&`-chain it
-(the next step silently skips) and never gate a wait on its exit status;
-read the rows (`grep -q pending`) instead (computenet-luhx). A verdict
+required check → red-check-attribution.md; pending → wait, with step 2's
+check-wait loop: `gh pr checks` **exits 8 while anything is pending** — never
+`&&`-chain it (the next step silently skips) and never gate a wait on its
+exit status — and its required-check rows may not exist yet, so neither `$?`
+nor a bare `grep -q pending` settles it (computenet-luhx, computenet-15it,
+computenet-1zhu). A verdict
 carrying a **§6 hand-back** (the classifier refuses reviewers `git merge`,
 computenet-whx4) is yours to complete: do the merge, re-run the affected
 module suite on the merged base, and if the reviewer's disjointness claim
