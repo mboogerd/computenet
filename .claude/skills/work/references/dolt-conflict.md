@@ -65,11 +65,20 @@ dolt sql -q "select our_id, our_status, their_status,
 do not type it** — `issues` has **54 columns** (measured 2026-08-17), and a
 hand-written list silently drops whichever one you forget:
 
+**`group_concat` truncates at `group_concat_max_len`, which defaults to 1024,
+and the clause you need is 2054 characters** (measured 2026-08-17 on this
+database). Raise the limit **in the same `dolt sql` invocation** — a session
+variable set in a separate call does not survive — and then **check the
+length** before using the result:
+
 ```bash
 SET=$(dolt sql -r csv -q "
+  set session group_concat_max_len=1000000;
   select group_concat(concat('i.\`', column_name, '\` = c.\`their_', column_name, '\`') separator ', ')
   from information_schema.columns
   where table_name='issues' and table_schema=database();" | tail -1)
+
+[ "${#SET}" -gt 2000 ] || { echo "SET clause is ${#SET} chars — TRUNCATED, do not run the UPDATE"; }
 
 dolt sql -q "set @@dolt_allow_commit_conflicts=1;
   UPDATE issues i JOIN dolt_conflicts_issues c ON i.id = c.our_id
@@ -80,6 +89,16 @@ dolt sql -q "set @@dolt_allow_commit_conflicts=1;
 
 Rows where ours is newer are left as they are — that is the "keep ours" half —
 and clearing `dolt_conflicts_issues` is what marks the conflict resolved.
+
+**Why the length check is not paranoia.** At the default limit the clause is
+cut at exactly 1024 characters, which on this schema lands mid-identifier
+(`… i.\`ephemeral\` = c.\`their_ephemeral\`, i.`) and the `UPDATE` fails with a
+syntax error — loud, and survivable. But where the cut lands is an accident of
+column-name widths: one rename away it falls on a clause boundary instead, and
+then the `UPDATE` is **valid** and silently copies only the first ~20 of 54
+columns, leaving rows half-merged with the conflict table already deleted. That
+is unrecoverable without a re-pull. Check the length; do not rely on the syntax
+error.
 
 **5. Commit, then prove the round trip works:**
 
