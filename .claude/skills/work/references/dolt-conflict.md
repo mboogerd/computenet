@@ -53,7 +53,7 @@ dolt config --local --add user.email "$(git config user.email)"
 ```
 
 There is **no `--no-pager` flag on dolt** — `dolt --no-pager sql …` fails with
-`unknown option 'no-pager'` (measured on 1.x here). Non-interactive `-q` output
+`unknown option 'no-pager'` (measured on dolt 2.2.3 here). Non-interactive `-q` output
 does not page anyway; just leave the flag off.
 
 **2. Take a backup branch, then fetch and merge without committing**, allowing
