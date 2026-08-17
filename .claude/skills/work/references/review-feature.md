@@ -144,10 +144,12 @@ Read the parent epic too, and any spec sections the feature cites — those
 are the authority (AGENTS.md), above the feature's own prose.
 
 **Resolving the parent is a script, not a field read.** `bd show --json`
-**omits `parent` entirely when it is unset**, so `.[0].parent` reads `null`
-whether the item has no parent or the key is simply absent — and `bd list
---parent` is not transitive, so a membership scan answers "unparented" for
-exactly the grandchildren that do have one (computenet-wpvy.32). Use the
+**omits `parent` entirely when it is unset** — a parented bead carries the
+key, an unparented one has no such key at all — so `.[0].parent` reads `null`
+both for an item that genuinely has none *and* for an id `bd` could not
+resolve, and the field alone cannot tell you which. `bd list --parent` is no
+help either: it is not transitive, so a membership scan answers "unparented"
+for exactly the grandchildren that do have one (computenet-wpvy.32). Use the
 walk, which follows `.parent` when set and the dotted-id prefix otherwise:
 
 ```bash
@@ -565,12 +567,21 @@ git -C <worktree> log --oneline $(git -C <worktree> merge-base HEAD origin/main)
   fine — merge, re-run the affected module suite (§3, with fresh task-count
   and JUnit numbers; the old ones no longer describe the code being merged),
   quote the shas, and re-read the diff if one of them touches this
-  subsystem.
+  subsystem. Do not quietly skip the re-check
+  and do not report the denial as a blocker on the feature itself. The same
+  applies to any other refused command in this file: substitute the
+  documented equivalent (e.g. `--rerun` instead of deleting
+  `build/test-results`, review-task.md §2) or hand the step back, always
+  saying which command was refused. A hand-back rides a **READY** verdict
+  (its conditions otherwise met) — the push/re-read-checks ordering below
+  travels to the orchestrator along with the merge; only the re-fetch
+  evidence above is yours to quote.
 
-**A stopping rule, because `main` can land faster than one review takes.** On
-a busy day this loop does not terminate on its own: re-merge, re-run,
-re-fetch, and something else has landed. So it is not "re-merge on any
-commit" —
+**A stopping rule, because `main` can land faster than one review takes.**
+The hand-back above is already bounded — you list the shas once and stop, and
+the merge is the orchestrator's. The unbounded loop exists only on the
+merge-it-yourself branch: re-merge, re-run, re-fetch, and something else has
+landed. So on **that** branch it is not "re-merge on any commit" —
 
 - **Re-merge only for a commit that is behaviourally relevant to this diff**:
   it touches a file this PR touches (`gh pr diff <pr-url> --name-only` against
@@ -584,20 +595,16 @@ commit" —
   problem and not yours: say so in the verdict, certify against the head you
   tested, and hand the window to the orchestrator.
 
+The relevance test is the same on both branches: on the hand-back it decides
+whether you flag subsystem overlap for the orchestrator, here whether you
+merge at all.
+
 **The window after you certify belongs to the orchestrator.** Your re-fetch
 line expires the moment you write it (above), and 5e's pre-ship block
 independently re-reads `merge-base..origin/main`, compares the PR head to the
 worktree head, and sends the diff back to you when something relevant landed.
 So you do not hold the review open waiting for the ship: certify, name your
-sha, stop (computenet-wpvy.33). Do not quietly skip the re-check
-  and do not report the denial as a blocker on the feature itself. The same
-  applies to any other refused command in this file: substitute the
-  documented equivalent (e.g. `--rerun` instead of deleting
-  `build/test-results`, review-task.md §2) or hand the step back, always
-  saying which command was refused. A hand-back rides a **READY** verdict
-  (its conditions otherwise met) — the push/re-read-checks ordering below
-  travels to the orchestrator along with the merge; only the re-fetch
-  evidence above is yours to quote.
+sha, stop (computenet-wpvy.33).
 
 **That merge creates a new head, so it invalidates the `gh pr checks` reading
 §4 requires you to quote.** Every required check you read belongs to the
