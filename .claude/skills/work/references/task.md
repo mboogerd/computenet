@@ -104,6 +104,7 @@ What the bead says, what its context says, and what has to have landed first.
    depends on isn't actually done, that's a data problem in beads, not
    something to route around — park it ([ask-human.md](ask-human.md))
    rather than implementing against an assumption.
+
 ## 3–4. Establish the evidence before you build on it
 
 A bug's reproduction must fail unfixed; a measurement must be sized before it is run.
@@ -217,6 +218,7 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
    ```bash
    bd comment <id> "Prescribed measurement does not fit a task slot: <N> runs x <per-run cost> = <total>. Ran <what was affordable> instead, which bounds <quantity> at <figure> and cannot discriminate <the question>. The full sample needs its own item."
    ```
+
 ## 5–6. Implement, then verify
 
 The smallest coherent change, and proof the tests actually executed.
@@ -323,6 +325,7 @@ The smallest coherent change, and proof the tests actually executed.
    run overwriting `<module>/build/test-results`. Invocation, the `SUMMARY`
    fields to quote, and the two cases where a Gradle loop is still the right
    instrument are in [review-task.md](review-task.md) §2.
+
 ## 7–9. Commit, file follow-ups, finish
 
 Your own index, work discovered on the way, and the bead state you leave behind.
@@ -370,6 +373,7 @@ Your own index, work discovered on the way, and the bead state you leave behind.
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
+
 ## 10. Kill your background jobs, then report
 
 Nothing stops them once you are gone, and your report is the evidence the next session trusts.
