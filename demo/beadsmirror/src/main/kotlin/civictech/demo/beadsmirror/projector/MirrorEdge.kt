@@ -1,5 +1,6 @@
 package civictech.demo.beadsmirror.projector
 
+import kotlinx.serialization.SerialName
 import java.io.Serializable
 
 /**
@@ -31,7 +32,14 @@ import java.io.Serializable
  *
  * [Serializable] for the same reason as [MirrorKey]: `civictech.cell.data.SetCell`
  * requires Serializable elements for its `snapshot()`/`restore()` seam (G-25).
+ * And `@kotlinx.serialization.Serializable` + registration in
+ * [civictech.demo.beadsmirror.wire.BeadsMirrorWireSerializers] for the same
+ * reason as [MirrorKey] (computenet-7em.1.5): this triple is the edge
+ * `SetCell`'s element, so it rides a `SetDelta` through `WireCodec`'s
+ * `polymorphic(Any)` scope whenever the two-node mode gossips one.
  */
+@kotlinx.serialization.Serializable
+@SerialName("beadsmirror.MirrorEdge")
 data class MirrorEdge(
     val issueId: String,
     val dependsOnIssueId: String,

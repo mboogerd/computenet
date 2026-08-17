@@ -1,0 +1,254 @@
+package civictech.demo.beadsmirror.e2e
+
+import civictech.cell.Timestamp
+import civictech.demo.beadsmirror.BdScratchWorkspace
+import civictech.demo.beadsmirror.BeadsMirrorApp
+import civictech.demo.beadsmirror.BeadsMirrorConfig
+import civictech.demo.beadsmirror.MirrorPeeringSettings
+import civictech.demo.beadsmirror.MirrorWire
+import civictech.demo.beadsmirror.baseline.ExportRow
+import civictech.demo.beadsmirror.baseline.BdExportReader
+import civictech.demo.beadsmirror.dolt.DoltSql
+import civictech.demo.beadsmirror.feed.DoltCommitFeed
+import civictech.demo.beadsmirror.projector.DotMinter
+import civictech.demo.beadsmirror.projector.MirrorCellRefs
+import civictech.demo.beadsmirror.projector.MirrorEdge
+import civictech.demo.beadsmirror.projector.MirrorKey
+import civictech.demo.beadsmirror.projector.MirrorProjector
+import civictech.demo.beadsmirror.sanitizedDoltDatabaseName
+import civictech.testkit.HttpProbe
+import civictech.testkit.awaitUntil
+import kotlinx.serialization.json.jsonPrimitive
+import org.opentest4j.AssertionFailedError
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Duration
+import java.util.UUID
+
+/**
+ * Task computenet-7em.1.3: the **in-test** two-node rig — two
+ * [BeadsMirrorApp]s in ONE test JVM, each on its own
+ * [civictech.cell.host.ManagedHost], connected through a **real**
+ * `:wire` WebSocket socket.
+ *
+ * This is feature computenet-7em.1's decided allowance ("nodes may run as two
+ * ManagedHosts in one test JVM connected through a real WsTransport socket
+ * where two full JVMs are impractical"). The two-full-JVM launch path is a
+ * different test and stays that way: [TwoJvmMirrorTest], task
+ * computenet-7em.1.4. What this rig buys over that one is *reach* — the test
+ * thread holds both apps' [MirrorProjector]s, so a dot's `sourceId` and a
+ * delta re-injected at the [civictech.cell.data.Replicable] seam are
+ * assertable, and neither is reachable across a process boundary.
+ *
+ * **Everything is scratch.** Both workspaces are [BdScratchWorkspace]s
+ * (`bd --sandbox init` into a fresh temp directory) and `repoSearchRoot`
+ * points at a throwaway tree, so the app's live-`.beads` refusal has nothing
+ * of this repository to find — epic computenet-dqj §4: never the live
+ * tracker.
+ *
+ * **Three-step lifecycle, deliberately not one call.** [startListener] and
+ * [startDialer] are separate because the interesting orderings are between
+ * them: the dialer can only be told the listener's **bound** ws port after the
+ * listener bound one (computenet-dqy.25), and a `bd` mutation applied to the
+ * listener's workspace *before* the dialer exists is the only way to make the
+ * late-join `pullServe` baseline — as opposed to a live delta — the sole path
+ * by which that state can reach the dialer.
+ *
+ * **Bounded waits only** ([await], on `testkit`'s [awaitUntil]); no sleeps.
+ */
+class TwoNodeRig private constructor(
+    val rigName: String,
+    val listenerWorkspace: BdScratchWorkspace,
+    val dialerWorkspace: BdScratchWorkspace,
+    private val pollInterval: Duration,
+) : AutoCloseable {
+
+    private val tempDirs = mutableListOf<Path>()
+    private val searchRoot = tempDir("beadsmirror-tworig-searchroot-")
+
+    private var listenerNode: Node? = null
+    private var dialerNode: Node? = null
+
+    /** The listening node. Available after [startListener]. */
+    val listener: Node get() = checkNotNull(listenerNode) { "startListener() has not run yet" }
+
+    /** The dialing node. Available after [startDialer]. */
+    val dialer: Node get() = checkNotNull(dialerNode) { "startDialer() has not run yet" }
+
+    private val started: List<Node> get() = listOfNotNull(listenerNode, dialerNode)
+
+    /**
+     * Starts node L: `--listen 0`, so it binds a port of its own choosing and
+     * [BeadsMirrorApp.boundWsPort] is the only place that knows which
+     * (computenet-dqy.25 — a pre-picked number would be a port nobody bound).
+     */
+    fun startListener(): Node {
+        check(listenerNode == null) { "the listener is already started" }
+        val node = start(MirrorCellRefs.LISTENER, listenerWorkspace, MirrorWire.Listen(0))
+        checkNotNull(node.app.boundWsPort) { "a listening node must have bound a ws port" }
+        listenerNode = node
+        return node
+    }
+
+    /** Starts node D against the listener's **bound** ws port. */
+    fun startDialer(): Node {
+        check(dialerNode == null) { "the dialer is already started" }
+        val wsPort = checkNotNull(listener.app.boundWsPort) { "the listener has no bound ws port" }
+        val node = start(MirrorCellRefs.DIALER, dialerWorkspace, MirrorWire.Dial("ws://localhost:$wsPort"))
+        dialerNode = node
+        return node
+    }
+
+    private fun start(role: String, workspace: BdScratchWorkspace, wire: MirrorWire): Node {
+        val runDir = tempDir("beadsmirror-tworig-$role-run-")
+        val app = BeadsMirrorApp.start(
+            BeadsMirrorConfig(
+                workspace = workspace.root,
+                pollInterval = pollInterval,
+                runDir = runDir,
+                repoSearchRoot = searchRoot,
+                onEvent = {},
+                peering = MirrorPeeringSettings(rigName, wire),
+            ),
+        )
+        return Node(role, workspace, app, runDir)
+    }
+
+    /**
+     * [awaitUntil] with both nodes' diagnostics folded into the failure —
+     * the in-process counterpart of [JvmPeer.await][civictech.testkit.JvmPeer]'s
+     * child-output folding in [TwoJvmMirrorTest], and for the same reason: every
+     * way convergence can fail here (a poll loop dead on an unserializable
+     * payload — computenet-7em.1.5's defect — a socket that never linked, a
+     * fold frozen at 503) is invisible in a bare "timed out awaiting: …", and
+     * the state that names it is one field read away.
+     */
+    fun await(what: String, timeoutMs: Long = AWAIT_CONVERGENCE_MS, condition: () -> Boolean) {
+        try {
+            awaitUntil(what, timeoutMs, condition)
+        } catch (e: AssertionFailedError) {
+            throw AssertionFailedError("$what\n${diagnostics()}", e)
+        }
+    }
+
+    private fun diagnostics(): String = started.joinToString("\n") { node ->
+        "  ${node.role}: pollerFailure=${node.app.pollerFailure}, " +
+            "http=${runCatching { node.servedFold() }.getOrElse { "unreadable: $it" }}"
+    }
+
+    /** Best-effort teardown: probes, apps (which close their sockets), workspaces, temp dirs. */
+    override fun close() {
+        started.forEach { runCatching { it.close() } }
+        runCatching { listenerWorkspace.close() }
+        runCatching { dialerWorkspace.close() }
+        tempDirs.forEach { runCatching { it.toFile().deleteRecursively() } }
+    }
+
+    private fun tempDir(prefix: String): Path = Files.createTempDirectory(prefix).also { tempDirs.add(it) }
+
+    /**
+     * One node of the rig: its scratch workspace, its running [BeadsMirrorApp],
+     * and the two surfaces the acceptance tests read it through — the served
+     * HTTP fold and the projector's own cells.
+     */
+    class Node internal constructor(
+        /** [MirrorCellRefs.LISTENER] or [MirrorCellRefs.DIALER]. */
+        val role: String,
+        /** The `bd` workspace this node — and ONLY this node — mirrors. */
+        val workspace: BdScratchWorkspace,
+        val app: BeadsMirrorApp,
+        private val runDir: Path,
+    ) : AutoCloseable {
+
+        private val probe = HttpProbe("http://localhost:${app.boundPort}")
+
+        /** This node's own DemoShell port; the two nodes are independently addressable. */
+        val httpPort: Int get() = app.boundPort
+
+        /** The live projector — re-read per call, because a re-baseline replaces it wholesale. */
+        val projector: MirrorProjector get() = app.state.current
+
+        /**
+         * The dot `sourceId` this node's [DotMinter] mints under: a pure
+         * function of its workspace's Dolt database identity
+         * ([sanitizedDoltDatabaseName]), which is exactly what feature rule 4
+         * says a dot's provenance must name.
+         */
+        val dotSourceId: UUID = DotMinter(sanitizedDoltDatabaseName(workspace.root)).sourceId
+
+        fun view(): Map<String, Map<String, String>> = projector.view()
+
+        fun edgeView(): Set<MirrorEdge> = projector.edgeView()
+
+        /** The fold **as served**, verbatim: the response body of `GET /beads/issues`. */
+        fun servedFold(): String = probe.get("/beads/issues").body()
+
+        /** The status of `GET /beads/issues/{id}` — `200` once this node's fold carries [issueId]. */
+        fun servedStatus(issueId: String): Int = probe.get("/beads/issues/$issueId").statusCode()
+
+        /** `bd export` of this node's OWN workspace — the baseline every node's fold is compared against. */
+        fun exportNow(): List<ExportRow> = BdExportReader(workspace.root).read()
+
+        /** This workspace's `dolt_log` commit hashes, newest first — `bd`-level state, untouched by gossip. */
+        fun logHead(): List<String> =
+            DoltSql(workspace.doltRoot).query("select commit_hash from dolt_log")
+                .map { it.getValue("commit_hash").jsonPrimitive.content }
+
+        /**
+         * Every live dot this node's mirror holds for [issueId]'s keys, as
+         * `key -> (dot -> value)`. Read from [civictech.cell.data.OrMapCell.state],
+         * so it is the cell's own dot metadata rather than anything the test
+         * reconstructs — which is what makes the provenance assertion a
+         * statement about the gossip path and not about the test's bookkeeping.
+         */
+        fun dotsFor(issueId: String): Map<MirrorKey, Map<Timestamp, String>> =
+            projector.cell.state().puts.filterKeys { it.issueId == issueId }
+
+        /**
+         * Waits until this node's persisted checkpoint reaches its workspace's
+         * `dolt_log` head — the poller writes the checkpoint only *after*
+         * handing the batch to the projector, so "checkpoint at head" means
+         * "every record of my own workspace applied". Says nothing about
+         * gossip from the peer; that is what [TwoNodeRig.await] is for.
+         */
+        fun quiesce() {
+            val feed = DoltCommitFeed(workspace.doltRoot)
+            awaitUntil("$role reaches its own workspace's head commit") {
+                app.pollerFailure == null && checkpoint() == feed.history().last()
+            }
+            check(app.pollerFailure == null) { "$role's poll loop died: ${app.pollerFailure}" }
+        }
+
+        private fun checkpoint(): String? =
+            runDir.resolve("checkpoint").takeIf { Files.exists(it) }?.let { Files.readString(it).trim() }
+
+        override fun close() {
+            runCatching { probe.close() }
+            runCatching { app.stop() }
+        }
+    }
+
+    companion object {
+
+        /**
+         * Convergence budget for every cross-node wait — `awaitUntil`'s own
+         * default. These waits cover a poll tick plus one socket hop, not a
+         * process start.
+         */
+        const val AWAIT_CONVERGENCE_MS: Long = 30_000
+
+        /**
+         * Two fresh scratch workspaces and a rig name nothing else can collide
+         * with — the rig name is hashed into the shared logical `CellRef`s
+         * ([MirrorCellRefs]), so a value reused across runs sharing this JVM
+         * would be the one way two unrelated rigs could link.
+         */
+        fun create(name: String, pollInterval: Duration = Duration.ofMillis(200)): TwoNodeRig =
+            TwoNodeRig(
+                rigName = "$name-${System.nanoTime()}",
+                listenerWorkspace = BdScratchWorkspace.create(),
+                dialerWorkspace = BdScratchWorkspace.create(),
+                pollInterval = pollInterval,
+            )
+    }
+}

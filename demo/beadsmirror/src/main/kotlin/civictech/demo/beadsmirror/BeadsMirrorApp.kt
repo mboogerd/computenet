@@ -49,10 +49,24 @@ class BeadsMirrorApp private constructor(
      * [MirrorState.rebaselineCount] directly instead of only through HTTP.
      */
     val state: MirrorState,
+    /**
+     * The two-node replica mesh, or `null` in solo mode — which is every run
+     * with no [BeadsMirrorConfig.peering], and is why nothing in a solo run
+     * loads a `:wire` or `civictech.cell.replication` class (see
+     * [MirrorPeering]).
+     */
+    val peering: MirrorPeering? = null,
 ) : AutoCloseable {
 
     /** The port the shell actually bound — meaningful once [start] has run. */
     val boundPort: Int get() = shell.boundPort
+
+    /**
+     * The peering port this node is listening on, or `null` in dial/solo mode
+     * — the port it **bound**, not the one it asked for, so `--listen 0` is
+     * announceable (computenet-dqy.25).
+     */
+    val boundWsPort: Int? get() = peering?.boundWsPort
 
     /**
      * Set if the background poll loop died — most usefully, when a
@@ -71,6 +85,7 @@ class BeadsMirrorApp private constructor(
     fun stop() {
         poller.stop()
         shell.stop()
+        peering?.close()
     }
 
     override fun close() = stop()
@@ -127,7 +142,20 @@ class BeadsMirrorApp private constructor(
 
             val feed = DoltCommitFeed(doltRoot)
             val checkpoint = FeedCheckpoint(runDir)
-            val state = MirrorState(MirrorProjector(DotMinter(workspaceIdentity)))
+
+            // Two-node mode, and NOTHING of it in solo mode: with
+            // `config.peering` null this stays null, `refs` stays null, the
+            // projector keeps its random-ref default, MirrorState keeps its
+            // no-op swap hook, and no `:wire`/replication class is loaded.
+            // Constructed before the projector because Replication's registry
+            // hooks must precede every announcement (see [MirrorPeering]).
+            val peering = config.peering?.let(::MirrorPeering)
+            val refs = peering?.refs
+
+            val minter = DotMinter(workspaceIdentity)
+            val initial = if (refs != null) MirrorProjector(minter, refs) else MirrorProjector(minter)
+            val state = MirrorState(initial, onSwap = { next -> peering?.rebind(next) })
+            peering?.attach(initial)
 
             val rebaseline = Rebaseline(
                 export = BdExportReader(config.workspace)::read,
@@ -136,6 +164,7 @@ class BeadsMirrorApp private constructor(
                 state = state,
                 workspaceIdentity = workspaceIdentity,
                 onEvent = config.onEvent,
+                refs = refs,
             )
 
             val poller = DoltFeedPoller(
@@ -168,12 +197,19 @@ class BeadsMirrorApp private constructor(
                 if (persisted == null) RebaselineReason.FirstStart else RebaselineReason.Restart(persisted),
             )
 
+            // The socket opens LAST — after the start-time baseline has swapped
+            // its projector in and `rebind` has re-pointed the mesh — so the
+            // peer's first announcement lands on cells that are already the
+            // live ones. (`rebind` is correct under concurrent gossip; this
+            // simply means the start-time swap never has to rely on that.)
+            peering?.connect()
+
             val shell = DemoShell(config.port)
             MirrorRoutes(state, poller::stopped).register(shell)
             shell.start()
             poller.start()
 
-            return BeadsMirrorApp(shell, poller, state)
+            return BeadsMirrorApp(shell, poller, state, peering)
         }
     }
 }
@@ -204,6 +240,12 @@ class BeadsMirrorApp private constructor(
  *   [BeadsMirrorApp.Companion.start] for a start-time [RebaselineReason.FirstStart]
  *   or [RebaselineReason.Restart] one),
  *   synchronously, so an implementation that blocks stalls polling.
+ * @param peering opt-in two-node mode (task computenet-7em.1.2): the mirror's
+ *   two cells become replicas of one logical cell and gossip their deltas to
+ *   one peer over `:wire`. **`null` — the default — is solo mode, and solo
+ *   mode is exactly the app that existed before this parameter did**: no
+ *   registry, no host, no [MirrorPeering], no `:wire` class loaded, and the
+ *   projector keeps its random-`CellRef` default.
  */
 data class BeadsMirrorConfig(
     val workspace: Path,
@@ -212,6 +254,7 @@ data class BeadsMirrorConfig(
     val runDir: Path? = null,
     val repoSearchRoot: Path = Path.of("").toAbsolutePath(),
     val onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
+    val peering: MirrorPeeringSettings? = null,
 )
 
 /**
@@ -420,23 +463,74 @@ internal fun Array<String>.extractFlag(name: String): Pair<String?, Array<String
     return value to rest.toTypedArray()
 }
 
+/**
+ * Parses the three two-node flags out of [args] and returns the settings they
+ * describe together with the remaining arguments — `--rig <name>` plus exactly
+ * one of `--listen <wsPort>` (listener) or `--peer <ws-uri>` (dialer). The
+ * role is never given directly: it *is* which of the two endpoint flags was
+ * used, so there is no third flag that can disagree with them.
+ *
+ * `null` settings means solo mode, and solo mode is what no flags at all
+ * means. Every other combination is a usage error rather than a guess, since
+ * each guess would be silently wrong in a different way: a rig name with no
+ * endpoint peers with nobody, an endpoint with no rig name mints a logical
+ * cell no peer can derive, and both endpoints at once names two roles.
+ *
+ * `internal` so the parsing is testable directly rather than only through the
+ * process-exiting [main] — the same reason [extractFlag] is.
+ *
+ * @throws IllegalArgumentException on any partial or contradictory combination.
+ */
+internal fun Array<String>.extractPeering(): Pair<MirrorPeeringSettings?, Array<String>> {
+    val (rig, afterRig) = extractFlag("--rig")
+    val (listen, afterListen) = afterRig.extractFlag("--listen")
+    val (peer, rest) = afterListen.extractFlag("--peer")
+
+    if (rig == null && listen == null && peer == null) return null to rest
+    require(listen == null || peer == null) {
+        "--listen and --peer name opposite roles; give exactly one (--listen <wsPort> to be the " +
+            "listener, --peer <ws-uri> to be the dialer)"
+    }
+    require(rig != null) {
+        "two-node mode needs --rig <name>: the rig name is hashed into the shared logical CellRefs " +
+            "both nodes must derive, so there is no default that could ever match a peer's"
+    }
+    val wire = when {
+        listen != null -> MirrorWire.Listen(
+            requireNotNull(listen.toIntOrNull()) { "--listen takes a port number (0 = any free port), not '$listen'" },
+        )
+        peer != null -> MirrorWire.Dial(peer)
+        else -> throw IllegalArgumentException(
+            "--rig $rig names a rig but no endpoint; add --listen <wsPort> or --peer <ws-uri>",
+        )
+    }
+    return MirrorPeeringSettings(rig, wire) to rest
+}
+
 fun main(args: Array<String>) {
     val (workspaceArg, afterWorkspace) = args.extractFlag("--workspace")
     if (workspaceArg == null) {
         System.err.println(
             "usage: beadsmirror --workspace <path> [--poll-interval-ms <ms>] " +
-                "[--run-dir <path>] [port]",
+                "[--run-dir <path>] [--rig <name> (--listen <wsPort> | --peer <ws-uri>)] [port]",
         )
         exitProcess(1)
     }
     val (pollIntervalArg, afterPollInterval) = afterWorkspace.extractFlag("--poll-interval-ms")
-    val (runDirArg, remaining) = afterPollInterval.extractFlag("--run-dir")
+    val (runDirArg, afterRunDir) = afterPollInterval.extractFlag("--run-dir")
+    val (peering, remaining) = try {
+        afterRunDir.extractPeering()
+    } catch (e: IllegalArgumentException) {
+        System.err.println("beadsmirror: ${e.message}")
+        exitProcess(1)
+    }
 
     val config = BeadsMirrorConfig(
         workspace = Path.of(workspaceArg).toAbsolutePath().normalize(),
         port = demoPort(remaining),
         pollInterval = Duration.ofMillis(pollIntervalArg?.toLongOrNull() ?: 1000L),
         runDir = runDirArg?.let { Path.of(it) },
+        peering = peering,
     )
 
     val app = try {
@@ -448,4 +542,15 @@ fun main(args: Array<String>) {
 
     println("computenet beadsmirror: http://localhost:${app.boundPort}")
     announcePort("http", app.boundPort)
+    when (val wire = peering?.wire) {
+        is MirrorWire.Listen -> {
+            // the BOUND port, not `wire.wsPort`: `--listen 0` asks for any free
+            // one, and only this process knows which it got (computenet-dqy.25)
+            val wsPort = checkNotNull(app.boundWsPort) { "a listening node must have a bound ws port" }
+            println("  rig '${peering.rigName}' as ${peering.role}; awaiting a peer on ws://localhost:$wsPort")
+            announcePort("ws", wsPort)
+        }
+        is MirrorWire.Dial -> println("  rig '${peering.rigName}' as ${peering.role}; peered with ${wire.uri}")
+        null -> println("  single-node mode; add --rig <name> with --listen <wsPort> or --peer <ws-uri> to span two JVMs")
+    }
 }
