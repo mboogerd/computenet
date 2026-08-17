@@ -23,7 +23,10 @@ SDLC_EPIC="computenet-wpvy"
 
 cd "$REPO"
 
-# Actionable = anything under the SDLC epic, not human-gated, and
+# Actionable = anything under the SDLC epic, not human-gated, not parked
+# needs-evidence (the lane triaged it and is waiting for a corroborating
+# instance; work step 7 removes the label when one arrives — counting parked
+# items would launch an hourly session that reads them and exits), and
 # either open+unclaimed or claimed by this machine (open or in_progress —
 # an in_progress item of ours with no live run is a crashed drain to resume).
 # NO --label filter: scope is parentage (computenet-wpvy.37). Gating on
@@ -36,6 +39,7 @@ ROWS='(if type=="array" then . else (.issues // []) end)[]'
 count="$(bd list --parent="$SDLC_EPIC" --json 2>/dev/null |
   jq --arg me "$BEADS_ACTOR" "[ $ROWS
     | select(((.labels // []) | index(\"human\")) == null)
+    | select(((.labels // []) | index(\"needs-evidence\")) == null)
     | select(
         (.status == \"open\" and ((.assignee // \"\") == \"\" or .assignee == \$me))
         or (.status == \"in_progress\" and .assignee == \$me)

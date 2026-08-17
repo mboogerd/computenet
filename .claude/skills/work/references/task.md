@@ -111,14 +111,12 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
 
 3. **If this is a bug fix, make its reproduction fail before you fix
    anything.** A bead that prescribes the sequence to reproduce a bug carries
-   the authority of whoever filed it, and can still be a false lead:
-   computenet-dqy.20 prescribed "announce, do NOT runToIdle, partition, heal,
-   runToIdle", and that exact sequence **passes** against the unfixed code,
-   because `partition()` left the link carrying frames and the peer's
-   retraction silently repaired the very state the test was meant to catch. An
-   implementer who trusted it would have written a test, watched it pass,
-   closed the item having verified nothing, and left permanent false assurance
-   in the suite.
+   the authority of whoever filed it, and can still be a false lead: a
+   prescribed sequence has passed against the unfixed code because a side
+   effect silently repaired the very state it was meant to catch
+   (computenet-dqy.20) — an implementer who trusted it would have verified
+   nothing and left permanent false assurance in the suite.
+
 
    So write the reproduction, run it against the **unfixed** code, and read the
    failure:
@@ -265,140 +263,36 @@ The smallest coherent change, and proof the tests actually executed.
    first, then the affected module's suite. Don't report success on an
    untested claim, and don't let `BUILD SUCCESSFUL` be the claim: Gradle
    replays cached results, so a green build is not evidence a test executed.
-   Your reviewer will demand the accounting in
-   [review-task.md](review-task.md) §2 — produce it yourself, from the same
-   run, using the counting snippet there:
-   - Read Gradle's `N actionable tasks: X executed, Y from cache` line at the
-     end of the run — measured 2026-08-14, the last line under
-     `--no-configuration-cache`, second-to-last in the default mode where
-     `Configuration cache entry reused.` follows it; `tail -3` catches both.
-   - Check the *specific* test task's state line, reading it as an absence:
-     this build prints `> Task :<module>:test` at the default log level, and a
-     task that really executed prints **with no marker**, so grepping for
-     `FROM-CACHE`/`UP-TO-DATE` returns nothing whether it ran or the log never
-     had task lines. Four states, only two marked: `FROM-CACHE`, `UP-TO-DATE`,
-     no marker (it ran), no line at all. So redirect the run to a file — `| tail -30` drops the
-     line while keeping `BUILD SUCCESSFUL` (measured 2026-08-14: 88 lines
-     above the end of a 178-line run), and `-q` prints no task lines, no
-     task-count line and no `BUILD SUCCESSFUL` at all — then grep for the task:
+   - **Prove the run happened per [gradle-evidence.md](gradle-evidence.md)**
+     — the task-count line, the per-task state line read as an absence, and
+     the JUnit XML counts + `timestamp` via `scripts/junit-count.py` — from a
+     log you redirected to your own `$SCRATCH` (never `| tail -N`, never
+     `-q`). Your reviewer will demand this accounting (review-task.md §2);
+     produce it yourself, from the same run, and quote the numbers and the
+     newest timestamp in your report.
+   - **Run the suite under [agent-execution.md](agent-execution.md)'s rules**
+     — one foreground Bash call with an explicit timeout up to 600000 ms
+     (there is no `timeout` binary on this host); a suite you KNOW exceeds
+     10 minutes is backgrounded only AFTER you commit (commit-before-you-wait
+     — a stop then costs the evidence, never the work; it does not override
+     the mutation-marker rule), and waited on with the bounded until-loop.
+     Record every background job in `$SCRATCH/jobs` as you start it.
 
-     ```bash
-     # $SCRATCH = YOUR OWN dir, created once:
-     #   SCRATCH=$(mktemp -d "<harness scratchpad>/<task-id>-impl.XXXXXX")
-     # Sibling and reviewer agents share the harness scratchpad; a colliding
-     # name hands your log to another agent as evidence (computenet-84z6).
-     ./gradlew :kernel:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
-     grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
-     ```
-   - **Give the Bash call an explicit timeout, up to 600000 ms.** Past its
-     120s default the tool backgrounds the call, and a turn that ends waiting
-     on a background job never resumes — your turn ending is your completion.
-     `:demo:beadsmirror:test` alone takes ~3m40s (computenet-hob2). That means
-     the **tool's** timeout argument: there is no `timeout` binary on this
-     host (nor `gtimeout`), and piped it fails OPEN — `timeout 600 ./gradlew …`
-     prints `command not found`, and `timeout … | tee log` hands you the last
-     stage's status, i.e. 0, so a suite that never ran reports success. Under
-     zsh, `${PIPESTATUS[0]}` is empty rather than 127 (computenet-fbuo). For a
-     job that outlasts 600000 ms, use `run_in_background` and poll its output
-     file with ordinary foreground calls — never end a turn waiting on it.
-
-   **A suite you KNOW exceeds 10 minutes must be backgrounded, and the order
-   matters more than the waiting does.** 600000 ms is the cap, not a
-   suggestion: past it the tool backgrounds the call whatever you asked for.
-   The invariant that makes that survivable (computenet-ng9o):
-
-   > **Commit BEFORE you wait on evidence.** Then a stop — budget,
-   > classifier, host death — costs you the evidence, never the work. An agent
-   > that waits first and is stopped strands uncommitted changes in a worktree
-   > that reads to everyone downstream as "produced nothing".
-
-   That pulls step 7's commit earlier for this case only — your own
-   branch, nothing else, exactly as step 7 describes, and still **without** a
-   push. It does **not** override
-   step 3's marker rule: while `.mutation-in-progress` exists you never commit, so
-   a mutation check is never what you background and wait on. Restore the code,
-   remove the marker, commit, and only then start the long evidence run.
-
-   Then background it and wait with a **bounded** until-loop on the log:
-
-   ```bash
-   # run_in_background: true, writing to "$SCRATCH/run.log"
-   i=0
-   until grep -qE 'BUILD (SUCCESSFUL|FAILED)' "$SCRATCH/run.log" 2>/dev/null; do
-     i=$((i + 1)); [ "$i" -gt 60 ] && { echo "GAVE UP at 20m"; break; }
-     sleep 20
-   done
-   tail -5 "$SCRATCH/run.log"
-   ```
-
-   **The bound is the part you cannot drop.** A job that dies without ever
-   writing a `BUILD` line — an OOM, a killed daemon, a redirect that went
-   somewhere else — never satisfies the grep, and an unbounded `until` then burns
-   the rest of the session in a loop nobody is watching. Set the bound above the
-   suite's known duration, and treat hitting it as a reading in its own right:
-   read the log's tail and the job's own status rather than assuming anything.
-   That is the same bounded-watch discipline SKILL.md's step 2 states — every
-   watch but the epic monitor is bounded.
-
-   Wait on the **log's own content**, not on a process: a `pgrep -f <pattern>`
-   waiter matches a sibling shell carrying the same pattern in its argv, and
-   so never goes false (below).
-   And record the job in `$SCRATCH/jobs` when you start it, per step 10.
-
-   **On refusals.** A *bare* long `sleep` is refused by the auto-mode classifier:
-   `sleep 240 && echo done` comes back "To wait for a condition, use Monitor with
-   an until-loop … Do not chain shorter sleeps to work around this block"
-   (measured 2026-08-17), which is where the until form comes from. A
-   `for i in $(seq 1 N); do … sleep …; done` waiter was refused once
-   (computenet-ng9o) but is **not** reliably refused — that same shape is the
-   prescribed `gh pr checks` waiter in SKILL.md step 2, and re-measured
-   2026-08-17 it ran fine. Treat that refusal as contextual, most likely a retry
-   that read as working around a block just given. If one form is refused, switch
-   to the other rather than reaching for a bare sleep.
 
    **If you stop with the suite still running, say so ON THE BEAD** — which
    suite, which log, what is committed (sha) — rather than returning the
    wait as your result. A result that is only "I am waiting" reads to the
    orchestrator exactly like a finished one.
-   - Quote test counts *and the newest timestamp* read from the JUnit XML
-     rather than the build result — the timestamp is what separates a run from
-     a replay (measured 2026-08-14: a cached repeat run left `newest`
-     unchanged with identical counts and a green build; `--rerun` advanced
-     it). An unquantified "suite green" is not a verification record: nobody
-     re-runs your tests, so your report *is* the evidence the next session
-     trusts.
-   - `--rerun` binds to the task it follows, not to the command line
-     (`:kernel:test :wire:test --rerun` re-ran only `:wire:test`), and it does
-     not force the upstream tasks the named task depends on. Put one
-     `--rerun` per test task; use `--rerun-tasks` for a repo-wide run.
 
-   **A build that stalls, times out, or dies before your tests run is probably
-   this skill's own parallelism, not a defect you introduced.** Sibling task and
-   review agents are running right now, each in its own worktree, all driving
-   Gradle against the same shared caches and daemons. Two observed symptoms:
+   **A build that stalls, times out, or dies before your tests run is
+   probably this skill's own parallelism, not a defect you introduced** —
+   sibling agents drive Gradle concurrently against shared caches and
+   daemons. The signatures, the machine-wide scope of `pkill -f
+   KotlinCompileDaemon`, and what is never contention (a wrong *value*) are
+   in [gradle-evidence.md](gradle-evidence.md). Retry once on a signature and
+   say in your report which one you hit — a "the suite fails" line that was
+   really contention costs your reviewer the same detour again.
 
-   - **A run lost to `buildLogic.lock`** — a review agent waited 4 minutes and
-     got nothing. Expect the wait, and retry once before concluding anything.
-   - **A Kotlin-daemon `OutOfMemoryError`** caused by daemons left resident by
-     a build in a *different* directory. `pkill -f KotlinCompileDaemon`
-     cleared it; the retry then succeeded.
-
-   Claim contention on a signature like those two, or on a **wall-clock
-   timeout**: `awaitUntil`/`awaitDrained` raise `AssertionFailedError` when a
-   starved host makes no progress, so contention does reach you as a failing
-   assertion (2026-08-11: three suites timed out under load, passed in 78s
-   once quiet). A wrong *value* is never contention — that one is yours. A red
-   suite in a module your diff never touched is usually the opposite — your
-   edit invalidated that module's cache, so it executed instead of replaying
-   and exposed a latent flake (PR #27, a `:testkit` edit reddening
-   `:kernel:test`).
-
-   `pkill -f KotlinCompileDaemon` is **machine-wide**: a Kotlin daemon's
-   command line carries no project path, so you cannot kill only your own, and
-   a sibling mid-compile loses its daemon too. Fire it on the `OutOfMemoryError`
-   signature, not on any red build. Then retry once, and say in your report
-   which of the two you hit — a "the suite fails" line that was really
-   contention costs your reviewer the same detour again.
 
    **Hunting a rare failure, don't destroy the occurrence you waited for.**
    Told to "run it 100 times": don't hand-roll the loop and don't pass `-q`.
@@ -487,38 +381,13 @@ Your own index, work discovered on the way, and the bead state you leave behind.
 
 Nothing stops them once you are gone, and your report is the evidence the next session trusts.
 
-10. **Before you report, kill every background job you started.** You cannot
-    enumerate them from memory and there is no "list my background jobs"
-    affordance here — `TaskStop` needs an id you must already hold, and a poll
-    shell you backgrounded 40 tool calls ago is not something you will
-    reliably recall (computenet-k9d.10). Write each one down **as you start
-    it** and read the file back here:
+10. **Before you report, kill every background job you started** — drain
+    the `$SCRATCH/jobs` ledger per [agent-execution.md](agent-execution.md):
+    an empty or absent file is a positive answer, "I don't think I started
+    any" is not, and a job that outlives you delivers stale copies of your
+    report to the orchestrator forever (computenet-k9d.8). Never end your
+    turn waiting on one — nothing resumes you.
 
-    ```bash
-    echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
-    # ... at report time: cat "$SCRATCH/jobs", kill each line, then rm -f it
-    ```
-
-    An empty or absent file is a positive answer — you started none. "I don't
-    think I started any" is not. Then: `TaskStop`
-    each monitor, kill each backgrounded shell, exit each poll loop. Starting
-    them is fine (waiting on CI, tailing a long run); leaving one alive is not,
-    and never end your turn waiting on one, because nothing resumes you.
-    Nothing stops it once you are gone either: every time it fires it delivers
-    another task-notification to the orchestrator carrying a stale copy of your
-    final report, and `TaskStop` on a completed agent answers "not running", so
-    the orchestrator has no handle. Six such wakes in one session
-    (computenet-k9d.8) — one stuck wait-loop, one `Monitor` that worked exactly
-    as designed and merely outlived its purpose; that pair is the whole
-    evidence base, but both classes cost the same. Two traps that make loops
-    stick: a `pgrep -f <pattern>` waiter matches any *sibling* process
-    carrying that pattern in its argv — your own backgrounded poll shell among
-    them — so the condition never goes false. (It does not match the waiting
-    shell itself or its ancestors: measured 2026-08-14 on darwin/arm64, macOS
-    `pgrep` excludes both unless given `-a`.) And
-    `gh pr checks --watch` returns immediately when only `auto-merge` has
-    reported on a fresh head, so it is not usable as a wait — which is why
-    these loops get hand-rolled in the first place.
 
     Report: the task id, the outcome, and the files you **actually** touched,
     not just the ones you claimed. Drift is how the orchestrator fixes
