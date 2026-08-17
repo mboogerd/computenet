@@ -263,8 +263,16 @@ sleep 2700;  echo "BUDGET EXPIRED: go to Finalize now"`
 memory of when this session began, and a resume needs it (below):
 
 ```bash
-date -u +%s > "$SCRATCH/slot-start"     # and echo it into your first bd comment
+SLOT=18000                              # seconds the routine allocated (5h default)
+date -u +%s > "$SCRATCH/slot-start"; echo "$SLOT" > "$SCRATCH/slot-seconds"
 ```
+
+Record the *length* as well as the start: a resume that assumes 5h on a 3h
+slot re-arms a clock that never expires. The files outlive the host process —
+the harness scratchpad is not cleaned between sessions — but `$SCRATCH` is a
+shell variable and nothing exports it across calls, let alone across a
+restart, so **note the directory's absolute path** here in as many words. A
+resume reads the *previous* session's dir by that literal path.
 
 Fires at 3h15m / 4h / 4h45m of a 5h slot (the last 15m is Finalize); scale
 proportionally if the routine names a different slot. **Note the monitor's
@@ -389,15 +397,25 @@ is a resume — not that anything failed. Observed 2026-08-15 mid-breakdown
   are fixed `sleep`s from step 2, so a naive re-arm grants a full fresh 5h:
 
   ```bash
-  start=$(cat "$SCRATCH/slot-start"); left=$(( start + 18000 - $(date -u +%s) ))
+  S=<step 2's scratch dir, spelled out — the PREVIOUS session's path>
+  start=$(cat "$S/slot-start"); slot=$(cat "$S/slot-seconds")
+  left=$(( start + slot - $(date -u +%s) ))
   echo "seconds left in slot: $left"     # <=0 → go straight to Finalize
   ```
 
-  Arm one monitor over `$left`, keeping the same T-90m/T-45m/EXPIRED shape
-  proportionally. If `$SCRATCH/slot-start` is gone with the process, take the
-  start from your first bd comment's timestamp; if you cannot establish it at
-  all, say so and treat the remaining budget as **one hour** — a short slot
-  that finishes is worth more than a long one nobody is timing.
+  Arm one monitor over `$left`, keeping the same shape against the *original*
+  slot end: warn at `left-6300`, `left-3600`, `left-900` seconds, dropping any
+  that is already ≤0 and going straight to the next one.
+
+  Those files survive a host-process exit, so the usual reason to miss them is
+  not knowing the path, not deletion. If you genuinely cannot recover it, take
+  the start from the epic's claim — `bd show <epic> --json | jq -r
+  '.[0].started_at'`, which `--claim` sets at step 3, a few minutes after the
+  true start — and the slot length from the routine that invoked you. (A first
+  bd comment's timestamp works too, but nothing before step 5 requires one, so
+  on an early resume there may be none.) Failing all of those, say so and
+  treat the remaining budget as **one hour** — a short slot that finishes is
+  worth more than a long one nobody is timing.
 
 **Query for side effects before re-dispatching anything.** A killed agent may
 have already done its work: a breakdown that died may have filed its children
@@ -587,7 +605,13 @@ bd list --parent=<epic> --all --json     # statuses of ALL children, closed incl
   session's one epic claim** — it is bookkeeping, not work — so the session
   then selects and claims a real work epic and proceeds (computenet-q93p).
 - **Children open but none workable** (human-gated, or blocked on another
-  epic) → park it and select the next:
+  epic) → park it and select the next. "Human-gated" is not the same as
+  "gated": an item whose gate constrains the *form* of the change is
+  workable, and only a gate needing an *answer* from a person is not — 5f
+  route 4's **"A gated item: the discriminator is WHO MAY DECIDE"** states
+  the test, and it applies to this epic's own children exactly as it does to
+  continuation candidates. Apply it before concluding a child is unworkable;
+  the `human` label only catches gates somebody already formalised.
 
 ```bash
 bd comment <epic> "Parking: no workable surface. <ids: human-gated / blocked on <other-epic>>"
