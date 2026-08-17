@@ -323,6 +323,42 @@ locally. (The Docker/Codex harness under `scripts/plan-orchestrator/` and
 `doc/archive/runs/ORCHESTRATION.md` is retired; recent runs used git worktrees
 with the orchestrator merging — the discipline above applies either way.)
 
+## Creating tickets under a shared epic
+
+**Never hand-type `bd create --parent=<shared epic>`.** Tickets under a parent
+this session does not own are created through
+`.claude/skills/work/scripts/create-ticket.sh`, which creates *unparented* and
+then re-parents.
+
+The reason is a primary-key collision that destroys beads. `bd create --parent=X`
+allocates the child id from `child_counters`, a **per-database** table
+reconciled only at sync. Two machines filing under the same parent between
+syncs read the same `last_child` and mint **the same id for different beads**
+(measured 2026-08-14: from a common ancestor at `last_child=39` one machine
+went to 45 and the other to 42, and `wpvy.40/.41/.42` each named two unrelated
+items). The pull then aborts on `child_counters`, and the runbook's
+last-write-wins resolution would destroy one bead of each pair. Creating
+unparented yields a hash id and leaves the counter untouched; re-parenting
+afterwards keeps that id. `computenet-wpvy.47` (2026-08-15) is what a
+hand-typed create under the SDLC epic looks like after the fact — harmless
+that time, unrecoverable the time the other machine mints the same id.
+
+**Scope is shared parents only.** Breakdown children under an epic or feature
+this session has *claimed* are exclusive by that claim, cannot collide, and
+keep their readable dotted ids — `bd create --parent=` is correct there. Reads,
+updates, claims and closes through `bd` are unaffected; only *create* draws
+from the counter.
+
+`.beads/hooks/pre-push` warns (never blocks) when this machine has recently
+minted a dotted id under a parent it does not own — the `wpvy.47` signature.
+The warning is a backstop, not the rule: by the time it fires the id exists and
+cannot be changed. Modifying `bd` itself to close the manual path was
+considered and rejected as out of scope (`computenet-azt`).
+
+This section is deliberately **outside** the `bd`-managed block below, for the
+same reason the sync section above is: a `bd` regen rewrites that block from
+its own template and silently drops edits made inside it.
+
 ## Choosing work: bv (beads_viewer)
 
 Work **selection and prioritization** starts with `bv`

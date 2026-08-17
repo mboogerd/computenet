@@ -31,3 +31,15 @@ if command -v bd >/dev/null 2>&1; then
   if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
 fi
 # --- END BEADS INTEGRATION v1.1.2 ---
+
+# --- computenet: id-collision backstop (computenet-azt) ------------------
+# DELIBERATELY OUTSIDE the BEADS INTEGRATION markers above: `bd hooks install`
+# rewrites that block from its own template and silently drops edits made
+# inside it, the same hash mechanics as AGENTS.md's managed block.
+#
+# Warns, never blocks — the check itself always exits 0, and the rationale for
+# that (and for pre-push over pre-commit) is in the script's header.
+_cn_root=$(git rev-parse --show-toplevel 2>/dev/null) || _cn_root=
+_cn_check="$_cn_root/.claude/skills/work/scripts/check-dotted-ids.sh"
+[ -x "$_cn_check" ] && "$_cn_check" || true
+# --- end computenet backstop ---------------------------------------------

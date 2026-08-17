@@ -78,6 +78,15 @@ exclusion").
 Filtering on the label is how three unlabelled children — `wpvy.25`, `.26`,
 `.27` — sat open on 2026-08-14 while this lane reported the log drained.
 
+**Filing anything new under this epic goes through
+`.claude/skills/work/scripts/create-ticket.sh`** — never a hand-typed
+`bd create --parent=computenet-wpvy`. The epic is a shared parent, so a
+`--parent` create draws its child id from the per-database `child_counters`
+and two machines filing between syncs mint the same id for different beads
+(`computenet-azt`; `computenet-wpvy.47` is the surviving example). The script
+creates unparented for a hash id and re-parents. Dotted ids stay correct for
+breakdown children under something this lane has claimed.
+
 `--parent` is not transitive, so this listing shows direct children only. If
 the epic ever grows a feature layer, walk descendants with `epic_of` from
 `work`'s 5b rather than assuming one level. Order by
