@@ -759,6 +759,21 @@ verdict. (`parked` is only meaningful on an empty batch.)
   (computenet-dqy.37 required violating its own claim). Design reaches wider
   → widen the claim and comment why. The dispatch prompt below also tells the
   implementer to report-and-widen rather than choose silently.
+- **Disjoint paths are not enough — read each candidate's acceptance for a
+  cross-reference into another candidate's claim.** `next-batch.py` proves the
+  batch will not merge into a conflict; it cannot see that task A's acceptance
+  names a fixture, symbol or file that lives inside task B's claim, which is an
+  overlap *by construction* and no diff will reveal until both have landed
+  (computenet-nyd). You are already reading every candidate's criteria to write
+  the dispatch, so read them for this too, and **serialise the pair** — run one
+  in this batch and the other in the next — if any such reference exists.
+
+  The tell that you have one: **a dispatch prompt you cannot write without
+  saying both "X is in scope" and an exclusion that covers X.** A prompt
+  carrying both is not a boundary, it is a contradiction the agent has to
+  resolve by guessing. If you cannot make the boundary unambiguous in one
+  sentence, that *is* the signal to sequence rather than batch — do not ship
+  the contradiction and hope.
 - **An empty `files` claim is two different things — read the description
   before scheduling one.** `next-batch.py` batches a claimless task alone
   either way, which is right for both, but they need different bookkeeping.
@@ -1063,11 +1078,38 @@ unclaimed:
 
 ```bash
 git -C <feature-worktree> rev-parse --abbrev-ref HEAD   # must equal <feature-branch>
+git -C <feature-worktree> fetch origin <feature-branch> 2>/dev/null \
+  && git -C <feature-worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
+  && echo "OK: local feature branch contains origin's tip" \
+  || echo "CHECK: origin/<feature-branch> is absent (normal before 5d) or AHEAD of local"
+gh pr list --head <feature-branch> --state open \
+  --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect: only yours, or none
 git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
+git -C <feature-worktree> diff --stat HEAD~1 HEAD        # files the task never touched = the base moved
 git -C <feature-worktree> push
 bd close <task-id>
 git -C <task-worktree> status --short                   # expect empty; else an agent died mid-edit — report
 ```
+
+**Re-verify the feature branch immediately before you merge into it, and
+refuse on surprise.** 5a set this branch up, but that was potentially an hour
+and several merges ago, and nothing between then and here re-reads it
+(computenet-wpvy.29). Two things can have changed underneath: `origin` can
+hold a tip your local ref does not contain, and a PR you did not open can have
+this branch as its head. **Either is a STOP, not something to resolve** —
+both sides may hold pushed, unreviewed work, and picking a winner discards
+somebody's. Park the choice (`ask-human.md`) rather than merging or
+force-updating.
+
+`origin/<feature-branch>` being **absent** is not a surprise: 5a pushes it and
+5d opens its PR only after the first task merges, so before that point there
+is legitimately nothing on origin (review-task.md §1 covers the same shape for
+reviewers).
+
+**The `--stat` after the merge is the tell that actually caught this.** Files
+in that diff which the task never touched mean the base moved under you — read
+it every time, not only when something feels wrong. 5e cites this same check
+before `gh pr ready`, for the same reason.
 
 Do **not** remove the task worktree — every removal happens in step 6's
 sweep, after all agents have returned (removing now races the reviewer's own
@@ -1322,6 +1364,20 @@ bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_a
 
 - open or in_progress with the other machine's assignee, or *any* status
   touched within 15 minutes → treat as live; take the next candidate.
+  **This branch has no age test, and that is deliberate** (computenet-9ynn).
+  Step 3 will *take over* an open epic untouched for 15 minutes, so 5f is
+  strictly stricter than step 3 for the same state — an epic a dead machine
+  abandoned hours ago is claimable at step 3 but its children are skipped
+  here. The asymmetry is kept because the two decisions are not the same
+  decision. Step 3's takeover is a **claim**, announced by a push, so a
+  machine waking up mid-run sees it and stands down; 5f's route-3/4 pick is a
+  **child** of an epic somebody else still holds, taken with no announcement
+  the holder would ever read. Converging them would make a stale assignee
+  takeable at exactly the point the double-claim protection is the only thing
+  standing between two machines and the same child. The cost of leaving it is
+  a machine declining work it is entitled to; the cost of closing it is two
+  machines on one item. Take the next candidate and let step 3 reclaim the
+  epic on the next session.
 - closed, older than 15 minutes → the assignee is provenance, so read the
   **candidate's own** `status`/`assignee` instead and skip it if another
   machine holds it. That reading is trustworthy here and only here: 5b makes
