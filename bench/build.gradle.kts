@@ -155,6 +155,47 @@ tasks.named<Test>("test") {
     // rather than reaching for `project` at execution time.
     systemProperty("computenet.repo.root", rootDir.absolutePath)
     systemProperty("civictech.bench.jmhBenchmarkList", benchmarkList.get().asFile.absolutePath)
+
+    // BOTH guard tests read files through those system properties — a path string is
+    // not a task input, so without the two declarations below Gradle has no idea the
+    // test's result depends on the file's CONTENT. Measured on this branch before the
+    // declarations existed: with `implementation(project(":bench"))` added to
+    // wire/build.gradle.kts, `./gradlew :bench:test` reported `:bench:test UP-TO-DATE`
+    // and `BUILD SUCCESSFUL`; with bench/src/jmh/kotlin moved aside, the generator came
+    // back FROM-CACHE with a zero-byte BenchmarkList and the test task was again
+    // UP-TO-DATE and green. Only `--rerun` made either violation visible, so
+    // [BEN1-04]'s "a fast unit test in :bench:test SHALL fail" did not hold on an
+    // incremental build — and `org.gradle.caching=true` plus setup-gradle's cache
+    // restore put the same replay inside the required checks. This repository has
+    // already been bitten by exactly this shape (see .github/workflows/ci.yml's
+    // `--rerun` note on :demo:beadsmirror:test: "whether `bd` is on PATH is NOT a
+    // declared input of the test task, so a build-cache entry recorded before the
+    // install step existed replays its SKIPPED report verbatim").
+    //
+    // Declaring the real inputs — rather than `upToDateWhen { false }` — keeps the
+    // task cacheable in the overwhelmingly common case where nothing it reads moved,
+    // while making a violation change the cache key so the assertion actually runs.
+    inputs.file(benchmarkList)
+        .withPropertyName("jmhBenchmarkList")
+        // Content is what the assertion reads; the absolute path varies per checkout
+        // and must not be part of the key, or no cache entry would ever hit.
+        .withPathSensitivity(PathSensitivity.NONE)
+    inputs.files(
+        // Exactly the files ProjectGraphTest parses: the settings script, plus every
+        // module's build script at the one and two segment depths settings.gradle.kts
+        // actually uses (`:kernel`, `:demo:shopping`). Kept as a pattern rather than an
+        // enumeration so that a module added without touching this file is still
+        // covered.
+        fileTree(rootDir) {
+            include("settings.gradle.kts")
+            include("*/build.gradle.kts")
+            include("*/*/build.gradle.kts")
+            exclude("**/build/**")
+            exclude("**/node_modules/**")
+        },
+    )
+        .withPropertyName("moduleBuildScripts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // -----------------------------------------------------------------------------------
