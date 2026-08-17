@@ -42,8 +42,15 @@ import java.util.Collections
  * convergence failure surfaces as a failed fixture naming both nodes'
  * diagnostics ([TwoNodeRig.await]), not as three unattributable timeouts.
  *
+ * **Since task computenet-7em.2.1** it also carries the transport seam's smoke
+ * case: the rig's wiring is injected ([TwoNodeRig]'s single
+ * [civictech.demo.beadsmirror.MirrorTransport], shared by both nodes), and a
+ * delta minted while [TwoNodeRig.partition] holds arrives once
+ * [TwoNodeRig.heal] runs. Nothing in this file names a socket type.
+ *
  * **Not here** (the task's non-goals): seeded two-sided mutation schedules and
- * partition/heal (computenet-7em.2), pre-sync liveness framing
+ * the convergence assertions over partition/heal (computenet-7em.2's own
+ * suite), pre-sync liveness framing
  * (computenet-7em.3), `bd dolt pull` re-baseline (computenet-7em.4), and the
  * two-**JVM** launch path, which is [TwoJvmMirrorTest] (computenet-7em.1.4).
  *
@@ -91,6 +98,21 @@ class TwoNodeRigTest {
 
     /** WD's `dolt_log` hashes captured while the rig was idle, before [idAfterIdle] was created. */
     private lateinit var dialerLogBeforeCreate: List<String>
+
+    /** The issue created in WL **while the peering was partitioned** — the transport-seam smoke case. */
+    private lateinit var idDuringPartition: String
+
+    /**
+     * Whether the partition actually held: `false` if D's fold had already
+     * picked [idDuringPartition] up at the instant L finished folding it
+     * locally, with the peering still severed.
+     *
+     * Recorded rather than asserted inline, per this class's fixture rule. It
+     * is what makes the heal below evidence of anything — a partition that
+     * never severed would let the delta through on its own and the arrival
+     * after [TwoNodeRig.heal] would prove nothing about the transport seam.
+     */
+    private var partitionHeldTheDelta: Boolean = false
 
     /**
      * Every [TaggedMapDelta] node L's OR-map cell emitted from the moment the
@@ -159,6 +181,25 @@ class TwoNodeRigTest {
         rig.await("the create gossips to the dialer's SERVED fold over the real socket") {
             dialer.servedStatus(idAfterIdle) == 200
         }
+
+        // --- the transport seam: partition, mutate, heal ---------------------
+        // Task computenet-7em.2.1's smoke case. Everything here goes through
+        // TwoNodeRig's injected transport binding — the test names a partition,
+        // never a socket — so the identical sequence runs over a future
+        // transport with no edit to this file.
+        rig.partition()
+        idDuringPartition = rig.listenerWorkspace.createIssue("created while the peering was partitioned")
+        // L folds its own create from its own feed; the peering is severed, so
+        // nothing can have carried it to D at this instant.
+        listener.quiesce()
+        rig.await("the listener folds its own partitioned-window create") {
+            listener.view().containsKey(idDuringPartition)
+        }
+        partitionHeldTheDelta = !dialer.view().containsKey(idDuringPartition)
+        rig.heal()
+        rig.await("the partitioned-window create reaches the dialer's SERVED fold after the heal") {
+            dialer.servedStatus(idDuringPartition) == 200
+        }
     }
 
     @AfterAll
@@ -189,8 +230,39 @@ class TwoNodeRigTest {
         dialerBaselineDivergences shouldBe emptyList()
 
         // each node still holds its own baseline, and now the peer's too
-        rigOrFail.listener.view().keys shouldBe setOf(idOnListener, idOnDialer, idAfterIdle)
-        rigOrFail.dialer.view().keys shouldBe setOf(idOnListener, idOnDialer, idAfterIdle)
+        // (plus idDuringPartition, which the fixture's partition/heal case adds
+        // to WL and the heal carries to D — task computenet-7em.2.1)
+        val everything = setOf(idOnListener, idOnDialer, idAfterIdle, idDuringPartition)
+        rigOrFail.listener.view().keys shouldBe everything
+        rigOrFail.dialer.view().keys shouldBe everything
+    }
+
+    /**
+     * Task computenet-7em.2.1: the injected transport binding's
+     * [TwoNodeRig.partition]/[TwoNodeRig.heal] work end to end — a delta minted
+     * while the peering was severed is held back, and arrives once the peering
+     * is healed, within the rig's bounded wait.
+     *
+     * Both halves are the fixture's ([partitionHeldTheDelta] and the `await`
+     * that follows the heal); this states them. The negative half is the one
+     * that makes the case evidence rather than decoration: without it, a
+     * `partition()` that severed nothing would produce exactly the same green.
+     * It is sound without a deadline of its own precisely because it is read
+     * while severed — nothing can deliver the delta, so "not there yet" cannot
+     * be a race with an in-flight arrival.
+     *
+     * What it deliberately does *not* assert is the convergence property
+     * itself; equal folds under seeded two-sided schedules with partition are
+     * feature computenet-7em.2's own suite.
+     */
+    @Test
+    fun `a delta minted while the transport is partitioned arrives once it is healed`() {
+        partitionHeldTheDelta shouldBe true
+
+        rigOrFail.dialer.servedStatus(idDuringPartition) shouldBe 200
+        rigOrFail.dialer.view().keys.contains(idDuringPartition) shouldBe true
+        // and it crossed as a delta, not as bd-level state: WD never heard of it
+        rigOrFail.dialer.exportNow().map { it.id }.contains(idDuringPartition) shouldBe false
     }
 
     /**
