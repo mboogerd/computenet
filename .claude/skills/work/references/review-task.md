@@ -603,6 +603,64 @@ rm -f "$SCRATCH/jobs"
 An empty or absent file is a positive answer — you started none. What is not
 an answer is "I don't think I started any".
 
+**A suite you KNOW exceeds 10 minutes must be backgrounded, and the order
+matters more than the waiting does.** 600000 ms is the cap, not a
+suggestion: past it the tool backgrounds the call whatever you asked for.
+The invariant that makes that survivable (computenet-ng9o):
+
+> **Commit and push BEFORE you wait on evidence.** Then a stop — budget,
+> classifier, host death — costs you the evidence, never the work. An agent
+> that waits first and is stopped strands uncommitted changes in a worktree
+> that reads to everyone downstream as "produced nothing".
+
+That is section 4's `review:` commit, brought forward — commit and push what
+you have fixed before the wait, not after. It does **not** override the marker
+rule above: while `.mutation-in-progress` exists you never commit, so a
+mutation check is never what you background and wait on. Restore the code,
+remove the marker, commit, and only then start the long evidence run.
+
+Then background it and wait with a **bounded** until-loop on the log:
+
+```bash
+# run_in_background: true, writing to "$SCRATCH/run.log"
+i=0
+until grep -qE 'BUILD (SUCCESSFUL|FAILED)' "$SCRATCH/run.log" 2>/dev/null; do
+  i=$((i + 1)); [ "$i" -gt 60 ] && { echo "GAVE UP at 20m"; break; }
+  sleep 20
+done
+tail -5 "$SCRATCH/run.log"
+```
+
+**The bound is the part you cannot drop.** A job that dies without ever
+writing a `BUILD` line — an OOM, a killed daemon, a redirect that went
+somewhere else — never satisfies the grep, and an unbounded `until` then burns
+the rest of the session in a loop nobody is watching. Set the bound above the
+suite's known duration, and treat hitting it as a reading in its own right:
+read the log's tail and the job's own status rather than assuming anything.
+That is the same bounded-watch discipline SKILL.md's step 2 states — every
+watch but the epic monitor is bounded.
+
+Wait on the **log's own content**, not on a process: a `pgrep -f <pattern>`
+waiter matches a sibling shell carrying the same pattern in its argv, and so
+never goes false (below).
+And record the job in `$SCRATCH/jobs` when you start it, in the ledger just above.
+
+**On refusals.** A *bare* long `sleep` is refused by the auto-mode classifier:
+`sleep 240 && echo done` comes back "To wait for a condition, use Monitor with
+an until-loop … Do not chain shorter sleeps to work around this block"
+(measured 2026-08-17), which is where the until form comes from. A
+`for i in $(seq 1 N); do … sleep …; done` waiter was refused once
+(computenet-ng9o) but is **not** reliably refused — that same shape is the
+prescribed `gh pr checks` waiter in SKILL.md step 2, and re-measured
+2026-08-17 it ran fine. Treat that refusal as contextual, most likely a retry
+that read as working around a block just given. If one form is refused, switch
+to the other rather than reaching for a bare sleep.
+
+**If you stop with the suite still running, say so ON THE BEAD** — which
+suite, which log, what is committed and pushed — rather than returning the
+wait as your result. A result that is only "I am waiting" reads to the
+orchestrator exactly like a finished one.
+
 **Kill every background job you started before you send that message** —
 `TaskStop` each monitor, kill each backgrounded shell, exit each poll loop.
 Background jobs are legitimate (waiting on CI, tailing a long run); leaving one

@@ -1267,8 +1267,11 @@ check what landed since the bead was filed, substitute a mutation that
 demonstrably discriminates, and report the substitution on the bead rather
 than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
-call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
-anything that outruns its 120s default, and a turn that ends waiting on a
+call with an explicit timeout, up to 600000 ms. If you already know the suite
+outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
+with a BOUNDED until-loop on its log (your reference gives the form) — never
+wait first, or a stop strands uncommitted work that reads as nothing.
+The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
@@ -1366,8 +1369,11 @@ That is the same line the implementer was given: treat what it names as
 commissioned work rather than scope creep, and anything beyond it as
 unauthorized.
 Run every verification command — Gradle above all — in ONE foreground Bash
-call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
-anything that outruns its 120s default, and a turn that ends waiting on a
+call with an explicit timeout, up to 600000 ms. If you already know the suite
+outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
+with a BOUNDED until-loop on its log (your reference gives the form) — never
+wait first, or a stop strands uncommitted work that reads as nothing.
+The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
 Repair what you can within the task's scope. Report pass or fail, what you
@@ -1600,8 +1606,11 @@ missed (5b's parked-residue): ${parkedChildren or "none"}. Confirm each is
 really a park and not a child blocked on a real dependency that inherited the
 human label from its parent; a real block means work remains.
 Run every verification command — Gradle above all — in ONE foreground Bash
-call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
-anything that outruns its 120s default, and a turn that ends waiting on a
+call with an explicit timeout, up to 600000 ms. If you already know the suite
+outruns that 10-minute cap, COMMIT AND PUSH FIRST, then background it and wait
+with a BOUNDED until-loop on its log (your reference gives the form) — never
+wait first, or a stop strands uncommitted work that reads as nothing.
+The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
 Repair what you can within the feature's scope. You decide the verdict —
