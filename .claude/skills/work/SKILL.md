@@ -1227,6 +1227,17 @@ Two admission gates:
   fraction alone — that converts idle time into half-finished branches,
   which is worse than idling.
 
+**A directly-filed bug or chore usually has no acceptance criteria** — nothing
+broke it down, so nobody wrote them. Write them onto the bead before you
+dispatch (`bd update <id> --acceptance=…`, to
+[references/issue-quality.md](references/issue-quality.md)'s standard), and
+say in the dispatch prompt that they are yours. Skip this and the reviewer
+invents the bar it then certifies against, which is marking its own paper; and
+because the bar then lives only in a dispatch prompt that is discarded, a
+resumed item gets a different one (computenet-n58c). This is orchestrator work
+under the authorship rule above — it is a claim about what "done" means, and
+it gets a reviewer like anything else you write.
+
 Work the admitted item by shape: feature via 5a; a task via its parent
 feature's flow; an unparented bug/chore as its own worktree/branch/PR like a
 feature. Every shape records `branch`/`worktree` metadata, so an overrun
