@@ -1765,8 +1765,15 @@ least one *single-word* search to have come back empty before you file.
 comment this session's instance (what you were doing, what happened, what it
 cost) — comment count is the remediation priority — then claim it for this
 machine if unclaimed (`bd update <id> --claim`; already claimed by the other
-machine → done, its lane owns it). Found but closed → a recurrence of a
-fixed issue: file fresh and say so in the description. Not found:
+machine → done, its lane owns it). If the item is labeled `needs-evidence`,
+the remediation lane judged the existing reports unconvincing and its latest
+comment says exactly what to capture — answer those questions in your
+instance comment, then `bd update <id> --remove-label needs-evidence` in the
+same breath: the label is what hides the item from the lane and its gate, so
+evidence left under a still-parked item is buried. Found but closed → a
+recurrence of a fixed-or-rejected issue: file fresh, say so in the
+description, and if the close reason starts `rejected:` answer it — your
+recurrence is the appeal. Not found:
 
 ```bash
 # Build bodies with quoted heredocs — backticks in a double-quoted argument
@@ -1801,9 +1808,11 @@ unattended sessions while every other subcommand ran), the step still
 happens: read the thread first (`bd comments <id> --json > file`), then
 `bd update <id> --append-notes "<instance>"` — **`--append-notes`, never
 `--notes`** (which overwrites), plain text only (command substitution and
-backticks are refused inside values, computenet-9w9) — and name the refused
-command verbatim in the summary; that is the only way an allowlist entry gets
-made. Don't fall back to one-bead-per-session.
+backticks are refused inside values, computenet-9w9), and carry
+`--remove-label needs-evidence` on that same `bd update` when you are
+answering a parked item — and name the refused command verbatim in the
+summary; that is the only way an allowlist entry gets made. Don't fall back
+to one-bead-per-session.
 
 Write each item for someone editing this skill next week with none of your
 context: name the step, quote the instruction, say what actually happened.
