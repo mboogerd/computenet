@@ -330,6 +330,16 @@ What to consume, per test run:
   "I did the mutation check and it failed as expected" is the same
   unfalsifiable sentence this section exists to stop.
 
+  **When the task's deliverable IS the test — a repaired instrument, a new
+  read barrier or probe — there is no production change to mutate, so the
+  mutation runs the other way**: remove the instrument the task added and
+  confirm the suite's verdict actually changes, i.e. that the barrier is what
+  makes the test discriminate rather than decoration (computenet-wpvy.34).
+  Everything below applies unchanged, marker included: task.md step 3 draws no
+  distinction between a mutated production file and a mutated test one, and a
+  committed test mutation is the quieter failure of the two — a green suite
+  checking less than it claims.
+
   **Read the BUILD LOG, not only the JUnit XML.** A mutation that fails to
   *compile* leaves the previous run's XML on disk, and that stale XML parses
   as a plausible result — a mutation verdict for a mutation that never ran.

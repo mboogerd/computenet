@@ -167,6 +167,46 @@ unlabelled sequence is read as verified, and one that in fact passes against
 the unfixed code hands the implementer a test that goes green while proving
 nothing.
 
+**Evidence the implementer cannot produce locally must say so, and say how to
+read it.** A clause whose proof only exists on another platform or inside a CI
+job — "passes on Linux", "the serial lane runs it with two JVMs" — is
+unsatisfiable where the implementer is standing, and an implementer that does
+not know this spends slot time rediscovering it (computenet-wpvy.31). Split
+the clause explicitly:
+
+- **which half is local** (the suite it can run on darwin, the behaviour it
+  can prove here),
+- **which half rides on the CI dispatch**, named as such,
+- **the exact command that reads the dispatch's answer**, runnable as
+  written — not "check CI".
+
+On that third bullet, name the command the way you would run it, redirect
+included. `gh run view <run-id> --log` is the usual one and it is **large**:
+measured 2026-08-17 on this repo's CI, 2670 lines / 345 KB for a green run in
+3s, so it goes to a file and gets grepped, never straight into a reader's
+context. Pick the narrowest form that answers the clause:
+
+```bash
+gh pr checks <pr>                                   # pass/fail per check, cheap
+gh run view <run-id> --log > "$SCRATCH/run.log"     # whole run; then grep it
+gh run view <run-id> --job <job-id> --log           # one job of a matrix
+gh run view <run-id> --log-failed                   # a failure's lines only
+gh run download <run-id> -n <artifact>              # when the answer is ONLY
+                                                    # in an artifact
+```
+
+The last line is not hypothetical: computenet-wpvy.31's own case was a
+re-arm marker that `wire-suite-sample.yml` never echoes into the job log, so
+`--log` answers nothing and only the downloaded `chunk-*.console` does. If
+that is your clause's shape, say the artifact name. And if you cite an
+*already-finished* run rather than the one this PR will trigger, excerpt the
+evidence into the bead — GitHub ages run logs out in days
+([issue-quality.md](issue-quality.md), computenet-ttz).
+
+Without the third bullet, "verified on Linux" becomes a claim nobody can
+check, and the platform half quietly turns into an unverified assertion the
+reviewer inherits.
+
 **`model`** — route by how much is already decided, not by importance:
 
 | Task shape | model |
@@ -196,23 +236,6 @@ costs nothing and is the honest record of what each will touch
 (computenet-bx4y). This is the one case where an edge follows file overlap,
 and it is legal because the edge is an output dependency in its own right:
 the second task amends what the first creates.
-
-**Evidence the implementer cannot produce locally must say so, and say how to
-read it.** A clause whose proof only exists on another platform or inside a CI
-job — "passes on Linux", "the serial lane runs it with two JVMs" — is
-unsatisfiable where the implementer is standing, and an implementer that does
-not know this spends slot time rediscovering it (computenet-wpvy.31). Split
-the clause explicitly:
-
-- **which half is local** (the suite it can run on darwin, the behaviour it
-  can prove here),
-- **which half rides on the CI dispatch**, named as such,
-- **the exact command that reads the dispatch's answer** — the `gh run view
-  <run-id> --log` or `gh pr checks` invocation, not "check CI".
-
-Without the third, "verified on Linux" becomes a claim nobody can check, and
-the platform half quietly turns into an unverified assertion the reviewer
-inherits.
 
 ## Dependencies
 

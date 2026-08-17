@@ -124,6 +124,17 @@ than restarting. That's the whole reason the worktree is preserved.
    as bad as following it blindly; the next reader has to know the bead's own
    recipe is spent.
 
+   **The same goes for any clause that predicts what the code does today**,
+   not only a reproduction. `feature.md` requires the breakdown to run the
+   one command that confirms such a clause, or to label it `unverified:` /
+   `untested-hypothesis:` when it didn't (computenet-j69i) — so a labelled
+   clause is a hypothesis handed to you deliberately: **check it before you
+   build on it**, with the same one command, and report what you found. An
+   *unlabelled* clause is a claim the breakdown says it verified; if it
+   nonetheless turns out false, that is a breakdown defect worth a
+   `bd comment` on your bead naming the clause and the command that
+   falsified it, not just a silent workaround.
+
    **Any time you deliberately break code to prove something catches it — a
    mutation check — leave a marker first**, so an agent that inherits your
    worktree after a crash can tell a live mutation from finished work. The two
