@@ -17,6 +17,8 @@ import civictech.cell.host.SimulationController
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeFalse
 import io.kotest.matchers.booleans.shouldBeTrue
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.ints.shouldBeLessThanOrEqual
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import org.junit.jupiter.api.Test
@@ -25,6 +27,7 @@ import java.time.Instant
 import java.time.InstantSource
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * computenet-t6b.3.2.1: [walkRouted] drives [readRouted] page by page to a
@@ -58,6 +61,12 @@ class StateWalkTest {
 
     private fun scripted(vararg pages: StatePage): ScriptedBoundedCell =
         ScriptedBoundedCell(pages.toList()).also {
+            host.managementInlet.call.spawn(it)
+            controller.runToIdle()
+        }
+
+    private fun pagingCell(n: Int): PagingCountingCell =
+        PagingCountingCell(n).also {
             host.managementInlet.call.spawn(it)
             controller.runToIdle()
         }
@@ -239,6 +248,130 @@ class StateWalkTest {
         outcome.entries.size shouldBe 20
     }
 
+    // ------------------------------------------------- BS-21 / BS-22 / BS-23
+    //
+    // computenet-t6b.3.2.2. The tests above (BS-20, BS-24, and the cancelled /
+    // deadline reachability pair) prove the walk terminates correctly and that
+    // the cancelled/deadline-exceeded arms are reachable. They do not prove the
+    // caller-side determinism properties this task owns: that a limit is never
+    // widened *and* costs a real read floor (BS-21), that a cancel racing an
+    // outstanding request never lets that request reach the cell (BS-22), and
+    // that a deadline expiring mid-walk — advanced by the test, not wall-clock
+    // — stops the walk from issuing anything further (BS-23). All three need a
+    // fixture that counts `readBounded` invocations, which `SetCell` cannot give
+    // (its own reads are invisible) and `ScriptedBoundedCell` does not track;
+    // [PagingCountingCell] below extends the `CountingBoundedCell` shape
+    // (`RoutedReadTest`) with real limit-bounded paging over `n` entries.
+
+    /**
+     * BS-21 / KRD-11. With `n` entries and caller limit `L`, a walk that
+     * batched pages inside one host invocation, or widened `L` to finish in
+     * fewer round trips, would still terminate and still return the right
+     * entries — the earlier tests would not notice. Only counting the
+     * fixture's own invocations and the limit each one carried catches it:
+     * the host read count must not fall below `ceil(n / L)`, no answered page
+     * may exceed `L` entries, and no issued request may carry a limit larger
+     * than `L`.
+     */
+    @Test
+    fun `a walk costs at least ceil(n divided by L) host reads and never widens the caller's limit`() {
+        val n = 100
+        val limit = 10
+        val cell = pagingCell(n)
+
+        val walk = walkRouted(registry, cell.ref, StateRead(limit = limit))
+        controller.runToIdle()
+        val outcome = walk.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)
+
+        outcome.termination shouldBe StateWalkOutcome.Termination.Completed
+        outcome.entries.size shouldBe n
+
+        val expectedFloor = (n + limit - 1) / limit // ceil(n / limit)
+        cell.reads.get() shouldBeGreaterThanOrEqual expectedFloor
+        cell.pageSizes.forEach { it shouldBeLessThanOrEqual limit }
+        cell.limits.forEach { it shouldBeLessThanOrEqual limit }
+    }
+
+    /**
+     * BS-22 / KRD-13. Steps the scheduler exactly once so page 1 has landed
+     * and page 2's request is submitted but not yet run — the deterministic
+     * scheduler's version of "one page request outstanding". Cancelling there
+     * must not let that outstanding request reach the cell at all: per
+     * `ManagedHost.submitRead`'s `isCancelled` check, running it costs a
+     * dequeue, never a `readBounded` call, which only a fixture that counts
+     * invocations can show — the previous cancellation test's
+     * `outcome shouldBe outcome` check would pass identically whether or not
+     * the cancelled task actually reached the cell.
+     */
+    @Test
+    fun `cancelling mid-walk costs a dequeue, not a page — the fixture's read count is stable`() {
+        val cell = pagingCell(100)
+
+        val walk = walkRouted(registry, cell.ref, StateRead(limit = 10))
+        controller.step().shouldBeTrue() // page 1 lands; page 2's request is outstanding, not yet run
+        cell.reads.get() shouldBe 1
+
+        walk.cancel()
+
+        // cancel() itself never touches the cell: it only cancels the
+        // outstanding future and completes the outcome from that.
+        walk.outcome.isDone.shouldBeTrue()
+        walk.outcome.isCompletedExceptionally.shouldBeFalse()
+        cell.reads.get() shouldBe 1
+
+        val outcome = walk.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        outcome.termination shouldBe StateWalkOutcome.Termination.Cancelled
+        outcome.isComplete.shouldBeFalse()
+        outcome.pages shouldBe 1
+        outcome.entries.size shouldBe 10
+
+        // exactly one already-submitted request remains; stepping it must cost
+        // a dequeue, not a page — the fixture's own invocation count is the
+        // proof, not just outcome stability (completing an already-done
+        // future is a no-op regardless of whether the cell was ever entered).
+        controller.runToIdle() shouldBe 1
+        cell.reads.get() shouldBe 1
+        walk.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS) shouldBe outcome
+    }
+
+    /**
+     * BS-23 / KRD-14. `SimulationController` models no time, so the fake
+     * [InstantSource] here is the only clock — the test itself advances it
+     * past the deadline between two chosen `controller.step()` calls, which is
+     * what makes the expiry point exact rather than a wall-clock race. Beyond
+     * the reachability test above, this also proves the fixture's own read
+     * count never grows once the deadline has passed: quiescence
+     * (`runToIdle() shouldBe 0`) is checked before the outcome is read, so a
+     * defect shows as a real assertion rather than a 30s `TimeoutException`.
+     */
+    @Test
+    fun `a deadline exceeded mid-walk issues no further page request, exactly at the fake clock's expiry`() {
+        val cell = pagingCell(100)
+        var now = Instant.EPOCH
+        val deadline = Instant.EPOCH.plusMillis(5)
+
+        val walk = walkRouted(registry, cell.ref, StateRead(limit = 10), deadline, InstantSource { now })
+        controller.step().shouldBeTrue() // page 1 lands, deadline not yet passed, page 2 requested
+        cell.reads.get() shouldBe 1
+
+        now = deadline // test-advanced: at the deadline counts as passed, not before it
+
+        controller.step().shouldBeTrue() // page 2 lands, and the boundary check stops the walk
+        cell.reads.get() shouldBe 2
+
+        // quiescent BEFORE reading the outcome: a defect here is a real
+        // assertion, not a 30s TimeoutException on the get() below
+        controller.runToIdle() shouldBe 0
+        cell.reads.get() shouldBe 2 // stable: no further page was ever requested
+
+        val outcome = walk.outcome.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        walk.outcome.isCompletedExceptionally.shouldBeFalse()
+        outcome.termination shouldBe StateWalkOutcome.Termination.DeadlineExceeded
+        outcome.isComplete.shouldBeFalse()
+        outcome.pages shouldBe 2
+        outcome.entries.size shouldBe 20
+    }
+
     // --------------------------------------------------------------- KRD-21
 
     /**
@@ -333,6 +466,43 @@ class StateWalkTest {
                 "the walk asked for page ${requests.size} of a ${script.size}-page script"
             }
             return script[requests.size - 1]
+        }
+
+        override fun snapshot(): Serializable = 0
+        override fun restore(state: Serializable) = Unit
+    }
+
+    /**
+     * A cell with `n` entries that genuinely pages — at most `request.limit`
+     * entries per `readBounded` call, resuming from an `Int` offset cursor —
+     * and records every invocation: how many there were ([reads]), the size
+     * of every page it answered ([pageSizes]), and the `limit` every request
+     * actually carried ([limits]). Extends the `CountingBoundedCell` shape
+     * from `RoutedReadTest` (a bare counter) into a transcript, which is what
+     * BS-21/BS-22/BS-23 need and a step count alone cannot give: a driver
+     * that batched two pages into one invocation, or widened the limit to
+     * finish sooner, would still produce the right total entries and even the
+     * right *page* count as seen from the walk's side — only the fixture's
+     * own invocation count and per-request limit expose it. The offset cursor
+     * is never compared across walks; it is read back only within the one
+     * walk that minted it.
+     */
+    private class PagingCountingCell(
+        private val n: Int,
+        override val ref: CellRef = CellRef(UUID.randomUUID()),
+    ) : Cell, BoundedStateful {
+        val reads = AtomicInteger()
+        val limits = mutableListOf<Int>()
+        val pageSizes = mutableListOf<Int>()
+
+        override fun readBounded(request: StateRead): StatePage {
+            reads.incrementAndGet()
+            limits += request.limit
+            val start = request.cursor?.token as? Int ?: 0
+            val end = minOf(start + request.limit, n)
+            val entries = (start until end).map { "k$it" as Serializable }
+            pageSizes += entries.size
+            return StatePage(entries = entries, next = if (end < n) Cursor(end) else null)
         }
 
         override fun snapshot(): Serializable = 0
