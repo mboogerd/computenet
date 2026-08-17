@@ -384,8 +384,30 @@ bd ready --parent=<epic> --json      # workable = items NOT labeled 'human'
 bd list --parent=<epic> --type=feature --status=in_progress --json  # resumable
 ```
 
-Zero workable items and nothing resumable, for an epic that *has* children →
-park it and select the next:
+Zero workable items and nothing resumable splits into **two** cases. Separate
+them with step 4's listing, run now rather than later — same command, so no
+extra round-trip:
+
+```bash
+bd list --parent=<epic> --all --json     # statuses of ALL children, closed included
+```
+
+- **At least one child, and every child closed** → the epic is *finished*, not
+  stalled. Close it and drop the owner label — step 6's identical branch,
+  including its guard: **an epic with no children at all is mid-breakdown, not
+  finished** (`every child closed` is vacuously true there), so that case goes
+  to step 4, never to `bd close`.
+
+  ```bash
+  bd close <epic> && bd update <epic> --remove-label=owner:$BEADS_ACTOR
+  ```
+
+  `bd defer` here would park a completed epic and hide it from both machines
+  until a human noticed. **Closing a drained epic does not consume the
+  session's one epic claim** — it is bookkeeping, not work — so the session
+  then selects and claims a real work epic and proceeds (computenet-q93p).
+- **Children open but none workable** (human-gated, or blocked on another
+  epic) → park it and select the next:
 
 ```bash
 bd comment <epic> "Parking: no workable surface. <ids: human-gated / blocked on <other-epic>>"
@@ -400,7 +422,9 @@ Nothing claimable at all → report and stop.
 **One epic *claim* per session** — the claim is how a concurrent run tells a
 live session from a crash. The rule limits claims, not work: when the epic
 runs dry, 5f says what you may still pick up; idling for hours is a failure
-mode, not compliance. There is deliberately no resume preference across
+mode, not compliance. It counts *work* epics only — an epic this step closed
+as drained, or deferred as unworkable, was never worked, so selecting the next
+one is not a second claim. There is deliberately no resume preference across
 sessions — a released epic re-competes on priority.
 
 ## 4. Ensure the epic has features
@@ -411,6 +435,30 @@ bd list --parent=<epic> --all --json
 
 `--all` matters: without it a *finished* epic reads as never-broken-down and
 you'd re-create its feature set.
+
+**Children are not decomposition — look for the epic's OWN deliverable among
+them.** An epic whose children are its *dependents* (items that consume what
+the epic is supposed to produce) reads as broken-down, so the breakdown never
+runs and the deliverable is never scheduled, while the children sit
+permanently unworkable waiting on it (computenet-45rf). Two readings, both
+from the listing you already have (`issue_type` and `description` are both in
+it): **no child is a `feature`**, or **every child's description names the
+epic as a prerequisite** rather than describing a part of it. Either →
+dispatch the breakdown as if the epic were empty, and say in the prompt that
+existing children are consumers, not parts. The second reading is the
+load-bearing one — computenet-umx's dependents were filed *as features*, so
+the type test alone would have missed the case that motivated this.
+
+The same shape is why step 3's workable-surface check must not commit to an
+epic whose only workable children are declared consumers of undelivered work:
+they are workable in `bd ready`'s sense and unstartable in fact.
+
+**A prerequisite between an epic and a non-epic is unexpressible as a bd
+blocking edge** — `bd` refuses a blocking dependency across the epic boundary.
+So the breakdown cannot wire "these tasks wait on the epic"; it has to give
+the epic's own deliverable a **feature** child and block the dependents on
+*that*, which is a legal same-class edge. `epic.md` says this too; it belongs
+here because it is what makes the fix above expressible at all.
 
 Empty → dispatch the breakdown, **wait for its completion notification**,
 re-run the query. Don't fall through to step 5 while it runs.

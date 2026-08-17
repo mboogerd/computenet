@@ -108,6 +108,16 @@ cannot start until another lands. Not a preferred order, and not "these
 might touch the same files" (file overlap is handled by task-level
 scheduling — see [feature.md](feature.md)). Over-wiring starves the queue.
 
+**A blocking edge cannot cross the epic boundary** — `bd` refuses one between
+an epic and a non-epic. So "these items wait on this epic's deliverable" is
+unexpressible as written, and the shape that *is* expressible is to give the
+epic's own deliverable a **feature** child and block the dependents on that
+feature: a same-class edge `bd` accepts. Filing the dependents as children of
+the epic instead and leaving the deliverable unrepresented is the failure this
+prevents — the epic then reads as already broken down, its own work is never
+scheduled, and the children wait forever on something nobody is building
+(computenet-45rf).
+
 Apply the [ask-human.md](ask-human.md) bar: if the epic's scope is genuinely
 ambiguous, or the split has a risky/expensive/hard-to-revert fork, park a
 question on the epic rather than guessing a split.
