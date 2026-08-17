@@ -3,7 +3,6 @@ package civictech.demo.beadsmirror.e2e
 import civictech.demo.beadsmirror.BdScratchWorkspace
 import civictech.demo.beadsmirror.dolt.DoltSql
 import civictech.testkit.JvmPeer
-import civictech.testkit.awaitUntil
 import io.kotest.matchers.shouldBe
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
@@ -112,13 +111,14 @@ class TwoJvmMirrorTest {
             "0",
         )
         val dialerHttp = dialerPeer.port("http")
+        val peers = listOf(listenerPeer, dialerPeer)
 
         try {
             // 1. Both children come up serving their own fold on their own
             // announced HTTP port, independently addressable, each fold
             // matching its own workspace's export at baseline: both workspaces
             // are freshly `bd --sandbox init`ed, so both folds start empty.
-            JvmPeer.await("both nodes serving their own fold", listOf(listenerPeer, dialerPeer)) {
+            JvmPeer.await("both nodes serving their own fold", peers) {
                 up(listenerHttp) && up(dialerHttp)
             }
             getStatusAndBody(listenerHttp, "/beads/issues") shouldBe (200 to "{}")
@@ -133,12 +133,25 @@ class TwoJvmMirrorTest {
             // DIALER's HTTP fold contains the new issue — cross-JVM gossip
             // over the real socket.
             val newId = listenerWorkspace.createIssue("cross-jvm issue")
-            awaitUntil("the listener's own create appears on its own fold") {
-                getStatusAndBody(listenerHttp, "/beads/issues/$newId").first == 200
-            }
-            awaitUntil("the new issue gossips to the dialer's fold over the real :wire socket") {
-                getStatusAndBody(dialerHttp, "/beads/issues/$newId").first == 200
-            }
+            // `JvmPeer.await`, not a bare `awaitUntil`: every failure mode here
+            // is a child-process death (a poll loop killed by an unserializable
+            // payload, a peer that lost its socket), and Gradle renders a failed
+            // test's exception but never a child's stdout — so a bare timeout
+            // says only "timed out" and buries the cause in a process nobody
+            // reads. `JvmPeer.await` folds both peers' buffered output into the
+            // failure message. Timeout pinned to `awaitUntil`'s own 30s default
+            // rather than `JvmPeer`'s 45s launch budget: these two waits are
+            // convergence, not a cold JVM start.
+            JvmPeer.await(
+                "the listener's own create appears on its own fold",
+                peers,
+                AWAIT_CONVERGENCE_MS,
+            ) { getStatusAndBody(listenerHttp, "/beads/issues/$newId").first == 200 }
+            JvmPeer.await(
+                "the new issue gossips to the dialer's fold over the real :wire socket",
+                peers,
+                AWAIT_CONVERGENCE_MS,
+            ) { getStatusAndBody(dialerHttp, "/beads/issues/$newId").first == 200 }
 
             // 3. The dialer's own workspace stayed un-synced: no bd-level
             // transfer happened, only a cell delta over the socket, so its
@@ -149,6 +162,13 @@ class TwoJvmMirrorTest {
         }
     }
 }
+
+/**
+ * Convergence budget for the post-`bd create` waits — `awaitUntil`'s own
+ * default, kept explicit because [JvmPeer.await]'s default is the longer
+ * cold-start launch budget.
+ */
+private const val AWAIT_CONVERGENCE_MS: Long = 30_000
 
 private fun commandAvailable(vararg command: String): Boolean = try {
     val process = ProcessBuilder(*command)
