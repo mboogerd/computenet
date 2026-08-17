@@ -16,6 +16,13 @@ dependencies {
 
     testImplementation(project(":testkit"))
 
+    // [ORA1-API-01]: the :oracle differential-test module must be consumable from another
+    // module's test source set through a plain project dependency and nothing else. This
+    // line plus civictech.cell.oracle.OracleConsumerTest is that requirement's proof — no
+    // repositories block, no extra configuration, no source-set wiring. Test-scope only;
+    // :oracle never reaches kernel's main classpath.
+    testImplementation(project(":oracle"))
+
     // CHA2's @ExpectedFailure self-test drives fixture classes through a nested JUnit
     // Platform execution and asserts over the resulting events — the only way to prove a
     // verdict-inverting extension without the proof itself reddening the build. The BOM
