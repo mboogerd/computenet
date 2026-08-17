@@ -106,6 +106,25 @@ scope in the acceptance criteria instead ("diff confined to test sources
 unless a production defect is found, in which case it is reported"). The
 orchestrator dispatches it alone and writes the real claim from the diff.
 
+A **zero-diff task** — a measurement, a soak, a spike whose deliverable is a
+bd comment or a run id rather than a file — has the same shape and the
+opposite cause: its claim is not unknowable, it is genuinely *empty*. Leave
+`files` empty and open the description with `no diff: <what it produces
+instead>`. **Never write a nominal claim over files it only reads**: a claim
+is a lock, so a read-only claim blocks a sibling that needs to write those
+files, for no benefit (computenet-wpvy.30). The orchestrator batches a
+claimless task alone, which is the right handling for both shapes.
+
+The description is the only thing that tells the orchestrator which shape it
+is looking at — nothing checks these openers mechanically, so use them
+verbatim rather than a paraphrase, and never leave `files` empty in silence:
+a task whose description explains neither emptiness reads as having simply
+**forgotten** its claim, and that is a breakdown defect to fix, not a shape to
+schedule around. Equally, never put the explanation *in* `files` — a
+descriptive string there (`none (tracker mutations only)`) is read as a path
+and batched on, which is worse than an empty claim, not better
+(computenet-wpvy.30).
+
 If the task is a bug fix and you write a reproduction into its description,
 label it `verified-failing:` (with the output you watched it fail with) or
 `untested-hypothesis:` — see [issue-quality.md](issue-quality.md). An

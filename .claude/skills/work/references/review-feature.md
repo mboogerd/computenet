@@ -649,11 +649,27 @@ values in the comment below). Record the verdict, but **do not run
 that just certified (and possibly repaired) this code, so shipping it too
 would be self-approval. The orchestrator reads your verdict and ships:
 
+**One `bd` write per call** (SKILL.md's `bd` traps). `bd` writes can run past
+120s, and a chained block that dies mid-sequence leaves a half-recorded
+certification — the worst state available, since `review=passed` without its
+evidence comment reads as a clean pass. Each fenced block below is **one**
+call; run them in order, and check each returned before the next.
+
 ```bash
 git -C <worktree> push
+```
+
+```bash
 bd comment <feature-id> "Review passed: <criteria verified with their evidence; test counts and executed/from-cache accounting; uname; gh pr checks conclusions; re-fetch result; what you repaired and its --stat>. Verdict: ready."
+```
+
+```bash
 bd update <feature-id> --set-metadata review=passed
 ```
+
+`review=passed` goes **last**: it is the flag the orchestrator ships on, so a
+sequence that dies earlier leaves the feature uncertified rather than
+certified with nothing behind it.
 
 ### Ready with residual — the honest negative result
 
@@ -673,14 +689,40 @@ Merge it, and keep the residual alive:
 # from a per-database counter, and if the epic's holder (or the other
 # machine) files under it between syncs, two beads mint one id
 # (computenet-wpvy.45). The hash id survives the re-parent unchanged.
-RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
+# bd CREATE returns an object (bd SHOW a list), and bd prints warnings on
+# stdout before the JSON, so slice from the first `{` before jq (SKILL.md).
+bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
   --acceptance="<the original criterion, unchanged>" \
-  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+  --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
+cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
+```
+
+A shell variable cannot cross a Bash call — shell state does not persist
+between them — so the id goes to a file and every later call re-reads it.
+Check the `cat` printed a real id before going on: if `jq` saw a warning
+preamble it writes an empty file, and every command below would then run
+against an empty `$RES`. `review=passed` is the last write: a sequence that
+dies leaves the feature uncertified rather than certified with a residual
+nobody recorded.
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update "$RES" --parent=<epic-id>
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES under <epic-id>, which is what carries the unmet criterion forward."
-bd update <feature-id> --set-metadata review=passed
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update <feature-id> --set-metadata residual=$RES
+```
+
+```bash
+bd update <feature-id> --set-metadata review=passed
 ```
 
 **A criterion waiting on an out-of-band measurement is a third shape**, and
@@ -723,14 +765,40 @@ would sit in a container no session opens again. So file the residual with no
 parent, and give it the two references that stand in for one:
 
 ```bash
-RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
+# bd CREATE returns an object (bd SHOW a list), and bd prints warnings on
+# stdout before the JSON, so slice from the first `{` before jq (SKILL.md).
+bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>. Filed UNPARENTED deliberately: parent epic <epic-id> was already closed at review time." \
   --acceptance="<the original criterion, unchanged>" \
-  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+  --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
+cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
+```
+
+A shell variable cannot cross a Bash call — shell state does not persist
+between them — so the id goes to a file and every later call re-reads it.
+Check the `cat` printed a real id before going on: if `jq` saw a warning
+preamble it writes an empty file, and every command below would then run
+against an empty `$RES`. `review=passed` is the last write: a sequence that
+dies leaves the feature uncertified rather than certified with a residual
+nobody recorded.
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd dep add "$RES" <feature-id> --type=discovered-from
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES, UNPARENTED because <epic-id> is closed, linked discovered-from <feature-id>."
-bd update <feature-id> --set-metadata review=passed
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update <feature-id> --set-metadata residual=$RES
+```
+
+```bash
+bd update <feature-id> --set-metadata review=passed
 ```
 
 **The edge is what replaces the parent, so do not skip it.** An unparented

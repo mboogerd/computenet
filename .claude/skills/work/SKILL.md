@@ -119,13 +119,14 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `.claude/skills/work/scripts/…` | Does |
 |---|---|
 | `sweep-stale-claims.sh` | Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
+| `check-files-claim.sh` | Warns when a bead's own text names a file its `metadata.files` claim omits |
 | `sweep-merged-prs.sh` | Closes beads whose PR merged after their session ended; removes their worktrees |
 | `next-batch.py` | Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
 | `ensure-worktree.sh` | Attaches a worktree on a branch, new or resumed, or fails loudly |
 | `epic-of.sh` | Resolves a bead's effective epic (`.parent` chain, else dotted prefix) |
 | `claim-epic.sh` | Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
-| `publish-beads.sh` | Publication push with rejection recovery, reading output not exit codes |
+| `publish-beads.sh` | Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic and claims it |
 
@@ -722,11 +723,10 @@ Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
 verdict, parked, capacity}`. The batch is what can safely run at once:
 resumables first (nothing else ever picks them back up), then ready tasks
 whose `files` claims don't overlap the batch; a task with no claim comes back
-alone. That is correct scheduling either way — but check the description
-before commenting: `files unknowable before diagnosis` marks a deliberate
-diagnosis-first task (feature.md's exception, computenet-ahu), dispatched
-alone by design; any other missing claim means the breakdown needs fixing —
-comment on it. The batch is also bounded
+alone. That is correct scheduling either way — but a claimless task still
+needs the bookkeeping split out under **Before claiming each task** below
+(deliberate vs forgotten); don't comment on one before reading it. The batch
+is also bounded
 by **machine capacity** (`capacity.max_parallel = max(1, cores // 5)`,
 measured — see `capacity_limit()` in the script): parallel Gradle contention
 lands as timeouts in exactly the suites the epics exist to characterise,
@@ -759,6 +759,51 @@ verdict. (`parked` is only meaningful on an empty batch.)
   (computenet-dqy.37 required violating its own claim). Design reaches wider
   → widen the claim and comment why. The dispatch prompt below also tells the
   implementer to report-and-widen rather than choose silently.
+- **An empty `files` claim is two different things — read the description
+  before scheduling one.** `next-batch.py` batches a claimless task alone
+  either way, which is right for both, but they need different bookkeeping.
+  A description opening `files unknowable before diagnosis` or `no diff: …`
+  is a **deliberate** empty claim (feature.md's two shapes: diagnosis-first,
+  and a measurement whose deliverable is a comment or a run id rather than a
+  file). Write the real claim from the diff afterwards for the first;
+  for the second there is nothing to write. **Nothing to that effect anywhere
+  in the description means the task forgot its claim** — comment on it, fix
+  it before dispatch, and log the breakdown defect (computenet-wpvy.30).
+  Nothing machine-checks these openers; you are reading for the *claim*, not
+  matching a literal. A near-miss (`no-diff:`, `No diff —`, `files unknown
+  until diagnosed`) is the deliberate shape, not a forgotten claim — treat it
+  as such, and normalise the wording to the canonical opener so the next
+  reader doesn't have to make the same call. Reserve "forgot" for a
+  description that says nothing about why the claim is empty. And never let a
+  task take a nominal claim over files it merely reads: a claim is a lock, so
+  a read-only lock blocks a sibling for no benefit. A *descriptive string*
+  where a path list belongs (`none (tracker mutations only)`) is that same
+  defect wearing a non-empty claim — `next-batch.py` reads it as a path and
+  batches on it, so it never reaches this bullet; if you see one, rewrite the
+  field empty and move the sentence into the description.
+- **Date a prescribed reproduction before you repeat it.** A bead that
+  prescribes its own repro or mutation froze an assumption about the code on
+  the day it was filed, and within one epic the siblings are deliberately
+  fixing the same defect class in adjacent files — so a sibling merging
+  *invalidates* it at a rate that is structural, not incidental
+  (computenet-vyr, computenet-dqy.36: the prescribed mutation had been made
+  inert by a sibling the orchestrator had merged an hour earlier, and
+  following it produced a green run that read as "my fix does not work").
+  Before dispatch, compare the bead's `created_at` against what has landed on
+  the files it names:
+
+  ```bash
+  git -C <main-checkout> log --oneline --since=<bead created_at> origin/main \
+    -- <the files the repro names>
+  ```
+
+  Anything comes back → **say so in the prompt instead of restating the repro
+  as mandatory**: name the sibling, and set `${repoAge}` to something like
+  "the repro predates <sha> (<sibling id>) on these files — treat it as a
+  hypothesis, verify it still discriminates before trusting a negative
+  result." Nothing comes back → `${repoAge}` is empty. Never copy a bead's
+  mutation into the prompt under the word MANDATORY without running that
+  check; the prompt is what makes a stale instruction sound authoritative.
 - **Restate any cross-bead write the bead's criteria demand — ids and
   action — in the dispatch prompt.** Authorization living only in the bead is
   invisible to the policy check, which reads the prompt; an agent doing
@@ -832,6 +877,26 @@ the order you picked features — a dispatch once told an agent that merged
 production code "will not be visible" in a worktree that contained it,
 inviting re-implementation (computenet-88v).
 
+**A file the bead's own text names must be in its `metadata.files`.** The
+claim is what bounds the implementer, so a bead demanding a file the claim
+omits is unsatisfiable from the moment it was written — and the implementer
+finds out in its first ten minutes, left choosing between stalling and
+working outside its claim. Neither is its call to make
+(computenet-yh6.1.12 shipped five files outside its claim, each one forced by
+its own acceptance). Check it mechanically before dispatching, on every bead
+in the batch:
+
+```bash
+.claude/skills/work/scripts/check-files-claim.sh <task-id>...   # exit 1 = look
+```
+
+It greps the description and acceptance for path-shaped strings and prints
+each one the claim does not cover. It **warns** rather than blocks — a bead
+may legitimately name a file it only reads — so read what it prints and
+either widen the claim or satisfy yourself the file is read-only. This
+applies wherever you author a bead, not only here: 5c's red-check task, 5e's
+residuals, step 7's friction items.
+
 Dispatch the batch in one message. Anything you add reaches the agent as
 established fact — relay artifacts, not mechanism:
 
@@ -858,13 +923,22 @@ Stay inside your metadata.files claim — sibling tasks are running on sibling
 branches and merge into the same feature branch. If the bead's own design or
 acceptance clause REQUIRES a file outside the claim, do not choose between
 them silently: report which file and which clause, and I will widen the claim.
+Report that the MOMENT you find it, not in your final summary — a claim that
+cannot be satisfied at all is my defect to fix, not a judgement call for you,
+and reporting it at the end means the whole task ran on a boundary we both
+knew was wrong. While you wait for my answer, keep working on whatever part
+of the task the claim DOES cover; if nothing is left, stop and say so rather
+than proceeding outside it.
 Tracker writes: ${crossBeadWrites or "none authorized — write only to this
 bead and to items you create."} Whatever that line says, never close,
 re-prioritise, reassign, re-parent or claim any bead other than your own.
 If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
-message. A prescribed reproduction that passes unfixed is a false lead — say
-so on the bead rather than quietly substituting your own.
+message. A prescribed reproduction that passes unfixed is a false lead — and
+the likeliest reason is that it went stale, not that your fix failed, so
+check what landed since the bead was filed, substitute a mutation that
+demonstrably discriminates, and report the substitution on the bead rather
+than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
 anything that outruns its 120s default, and a turn that ends waiting on a
@@ -925,7 +999,9 @@ to finish and report, and run nothing downstream on that task until it does.
 **On batch completion** (wait for the whole batch — a staggered re-batch
 computes overlap against a moving set): files touched outside a claim → fix
 that task's `files` metadata, and for a diagnosis-first task write the real
-claim from the diff — the empty claim was unknowable, not violated; a task parked a question → that's one task, not
+claim from the diff — the empty claim was unknowable, not violated. A *zero-diff* task that produced a diff is the
+opposite reading: its premise was wrong, so say so on the bead and write the
+claim, rather than recording it as the shape it was filed as. A task parked a question → that's one task, not
 the feature; a task reported done → 5c. **If a budget notification arrives
 while you're still waiting, the batch is over its limit**: `TaskStop` the
 stragglers, leave them `in_progress` with a comment (worktrees and branches
@@ -1368,9 +1444,16 @@ git -C <worktree> push
 .claude/skills/work/scripts/publish-beads.sh
 ```
 
-The script reads output rather than exit codes (`bd dolt push` exits 0 while
-printing rejections), recovers a non-fast-forward inline (expected under
-concurrent operation), and escalates real conflicts. After a *recovered*
+The script fails on **either** signal — a nonzero exit or a rejection in the
+output — recovers a non-fast-forward inline (expected under concurrent
+operation), and escalates real conflicts. Neither signal alone is trusted:
+`dolt push` against a real non-fast-forward exits 1 and prints
+`! [rejected] … (non-fast-forward)` (measured 2026-08-17), but `bd dolt push`
+was once observed exiting 0 while printing a rejection, and staging a real
+non-fast-forward against the shared remote needs the *other* machine to push,
+so that propagation cannot be re-measured from here. `scripts/beads-nightly-sync.sh`
+uses the same pair; it previously tested the exit code only, and the two
+callers disagreed (computenet-kbk0). After a *recovered*
 push, verify your own writes survived the pull's merge — dolt reconciles
 last-write-wins, so a lost row is lost silently (name each write; don't
 assume):
