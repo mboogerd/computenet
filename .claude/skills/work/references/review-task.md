@@ -330,6 +330,13 @@ What to consume, per test run:
   "I did the mutation check and it failed as expected" is the same
   unfalsifiable sentence this section exists to stop.
 
+  **A mutation must still COMPILE, and a multi-clause guard is mutated one
+  clause at a time.** Deleting a whole `if (a && b && c)` usually breaks the
+  build — and a compile failure greps identically to a killed test, so read
+  the **build** result before the test result. Weakening one clause keeps it
+  compiling and tells you *which* clause the test constrains, which is the
+  finer answer anyway (computenet-danb).
+
   **When the task's deliverable IS the test — a repaired instrument, a new
   read barrier or probe — there is no production change to mutate, so the
   mutation runs the other way**: remove the instrument the task added and

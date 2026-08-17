@@ -7,6 +7,20 @@ Architecture reference: `doc/ARCHITECTURE.md`. User-facing intro: `README.md`.
 
 ## Choosing work: bv (beads_viewer)
 
+**`bv` is OPTIONAL and machine-specific — check it exists before relying on
+it, and fall back without diagnosing:**
+
+```bash
+command -v bv >/dev/null || echo "bv absent — use bd ready / bd list and move on"
+```
+
+It is installed on some machines and not others (absent on `Anva@A0030`,
+2026-08-16, where a session spent time working out why *the* documented entry
+point was missing — computenet-j9ku). There is no install step here, so
+absence is the expected state on a fresh machine, not a fault to fix. The
+fallback is `bd ready --json` plus `scripts/ready-in-epic.sh` for epic scope;
+you lose the graph ranking, not the ability to select work.
+
 Work **selection and prioritization** starts with `bv`
 (https://github.com/Dicklesworthstone/beads_viewer), a graph-aware triage
 engine over the beads workspace. `bd` remains the single blessed CLI for
@@ -58,7 +72,8 @@ Rules:
   importance. Only `quick_ref.top_picks` and entries marked actionable are
   claimable; verify with `bd show <id>` before claiming.
 
-Commands (verified in this workspace 2026-08-12, bv v0.18.0):
+Commands (verified on **this machine** 2026-08-12 at bv v0.18.0 — a
+per-machine, per-version observation, not a repo-wide guarantee):
 
 ```bash
 bv --robot-triage     # THE entry point: ranked picks, quick wins, blockers, health
