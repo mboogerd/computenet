@@ -120,6 +120,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 |---|---|
 | `sweep-stale-claims.sh` | Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
 | `check-files-claim.sh` | Warns when a bead's own text names a file its `metadata.files` claim omits |
+| `reclaim-worktrees.sh` | Removes worktrees whose bead is already closed — the join `sweep-merged-prs.sh` cannot make |
 | `sweep-merged-prs.sh` | Closes beads whose PR merged after their session ended; removes their worktrees |
 | `next-batch.py` | Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
 | `ensure-worktree.sh` | Attaches a worktree on a branch, new or resumed, or fails loudly |
@@ -342,6 +343,26 @@ unconditional (no epic/claim/review filter): three narrow re-checks all
 missed the same four leaked features (computenet-wpvy.25). Read `rc`: 3 =
 nothing was checked (`gh`/`bd` unreachable), 1 = some closes or removals
 failed — neither is "clean sweep"; say which you got.
+
+**Then reclaim what the sweep structurally cannot**, in the same step:
+
+```bash
+.claude/skills/work/scripts/reclaim-worktrees.sh > "$SCRATCH/reclaim.txt" 2>&1
+rc=$?; cat "$SCRATCH/reclaim.txt"; echo "rc=$rc"   # --dry-run to preview
+```
+
+`sweep-merged-prs.sh` joins from the **bead** side — it lists non-closed beads
+and removes a worktree only as a consequence of a close it just performed. So
+a bead that reaches `closed` with its worktree still on disk is reclaimed by
+nothing, ever: not the sweep, not Finalize, not the resume path. That is every
+close route except the sweep's own — a human `bd close`, a session closing its
+own work, the SDLC lane's supersede-closes. Four directories were measured
+stranded that way on one machine, and the fix for the leak could not reach
+them because it only looks forward (computenet-8l4r). This script inverts the
+join: it walks `git worktree list` and removes each `computenet-worktrees/<id>`
+whose bead is closed, whose tree is **clean**, and which has been **quiet for
+15 minutes** — the same liveness floor step 3 and 5f use. `rc=1` means a
+candidate was dirty or a removal failed: look, do not re-run.
 
 **Capture to a file rather than piping, for every script whose exit code you
 have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
@@ -647,14 +668,32 @@ if git -C <worktree> fetch origin <branch> 2>/dev/null; then
   git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
     && echo "OK: worktree contains origin/<branch>" \
     || echo "STOP: on the branch at the wrong commit — origin/<branch> is not in HEAD"
-else
+elif git -C <worktree> ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
   echo "OK: origin has no <branch> yet (first run, nothing to compare)"
+else
+  echo "STOP: origin is UNREACHABLE — this check proved nothing"
 fi
 ```
 
-Read the verification line, and only it. `STOP` → do not enter 5b; proceeding
-silently orphans reviewed work while looking clean (computenet-aeg). Either
-`OK` is fine.
+Read the verification line, and only it, and know all four it can print:
+
+| line | meaning |
+|---|---|
+| `OK: worktree contains origin/<branch>` | verified — the remote tip is an ancestor of `HEAD` |
+| `OK: origin has no <branch> yet` | verified — origin is reachable and has no such branch, so there is genuinely nothing to compare |
+| `STOP: on the branch at the wrong commit` | the worktree is missing pushed work |
+| `STOP: origin is UNREACHABLE` | **nothing was checked** |
+
+`STOP` → do not enter 5b; proceeding silently orphans reviewed work while
+looking clean (computenet-aeg). Either `OK` is fine.
+
+**The unreachable case is why there are two `OK` lines and not one.** A bare
+`fetch origin <branch>` fails identically for "no such branch on origin" and
+for "the network is down", so the original single `else` reported an
+unreachable origin as *"first run, nothing to compare"* — an `OK` on a check
+that never ran, which is the failure this whole block exists to prevent
+(computenet-dtl). The `ls-remote --exit-code origin HEAD` in the middle branch
+is what separates them: it succeeds only if origin actually answered.
 
 `ensure-worktree.sh` is idempotent: leaves an attached worktree alone,
 attaches local branches, tracks remote-only branches at the remote tip,
