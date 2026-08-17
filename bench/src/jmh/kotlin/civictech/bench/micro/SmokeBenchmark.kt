@@ -11,7 +11,7 @@ import org.openjdk.jmh.infra.Blackhole
 import java.util.concurrent.TimeUnit
 
 /**
- * The permanent discovery sentinel [BEN1-08].
+ * The permanent discovery sentinel [BEN1-06], [BEN1-07].
  *
  * This is not a measurement and is not meant to become one. It exists to make the
  * Kotlin -> JMH pipeline observable: if the plugin ever stops discovering `@Benchmark`
@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit
  * subclasses of the benchmark class, which a Kotlin `class` (final by default) forbids.
  *
  * It consumes [BenchFixtures] from `bench/src/main/kotlin` on purpose — that reference is
- * the compile-time proof of the main -> jmh source-set wiring.
+ * the compile-time proof of the main -> jmh source-set wiring [BEN1-08].
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
