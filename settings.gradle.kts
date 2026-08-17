@@ -16,6 +16,7 @@ include(":testkit")
 // depended on by nothing. That is why it sits next to :testkit rather than under demo/
 // ([BEN1-01]).
 include(":bench")
+include(":oracle")
 
 include(":kernel")
 include(":concord")
