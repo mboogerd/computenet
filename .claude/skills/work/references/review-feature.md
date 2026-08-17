@@ -804,6 +804,51 @@ bd update <feature-id> --set-metadata residual=$RES
 bd update <feature-id> --set-metadata review=passed
 ```
 
+**If the item you reviewed has NO epic ancestor at all**, the same shape
+applies for a different reason. 5f route 4 works unparented bugs and chores,
+so `epic-of.sh <item>` answering `(unparented)` is normal, not a defect — and
+there is no epic to file under (computenet-wpvy.42). File the residual as a
+**child of the reviewed item itself**, and do it *instead of* the
+`discovered-from` edge above, not in addition to it:
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
+# NOT `bd dep add "$RES" <item-id> --type=discovered-from` — see below.
+bd update "$RES" --parent=<item-id>
+```
+
+**The two edges are the same slot, so you get one of them.** `bd` holds at
+most one edge per ordered pair, and here both edges would run `RES -> <item>`:
+the reviewed item is simultaneously the `discovered-from` target and the
+proposed parent. Run §7's `bd dep add … discovered-from` first and the
+`--parent` update fails outright — `dependency … already exists with type
+"discovered-from" (requested "parent-child")` — leaving the residual with no
+parent at all, which is the state this paragraph exists to avoid
+(computenet-ofzz, measured again 2026-08-17). If you already added it, undo it
+first:
+
+```bash
+bd dep remove "$RES" <item-id>
+bd update "$RES" --parent=<item-id>
+```
+
+Parent-child is the stronger edge of the two and carries the provenance the
+`discovered-from` edge was there for, so nothing is lost by the swap. The
+`discovered-from` edge is still correct — and still required — when the
+residual points at a *different* bead than its parent.
+
+**What the parent buys, precisely.** `bv --robot-triage --graph-root <item>`
+finds the residual, `bd show <item>` names it, and a later session picking that
+item up as continuation work sees what the last review left. It does **not**
+change `epic-of.sh`, which walks up through the item and still answers
+`(unparented)` — correctly, since there is still no epic anywhere on the
+chain. Do not read that answer as the parenting having failed; check
+`bd show <RES>`'s `parent` field instead.
+
+Say in the verdict that you parented the residual to the item because the item
+has no epic, and that you dropped the `discovered-from` edge in favour of it,
+so both choices read as deliberate.
+
 **The edge is what replaces the parent, so do not skip it.** An unparented
 item is in `bd ready` like any other, so it is not lost — what it loses is
 every *epic-scoped* view, and with no parent there is nothing tying it to the

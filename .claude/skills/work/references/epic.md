@@ -115,6 +115,17 @@ cannot start until another lands. Not a preferred order, and not "these
 might touch the same files" (file overlap is handled by task-level
 scheduling — see [feature.md](feature.md)). Over-wiring starves the queue.
 
+**A required dependency whose target is NOT an epic has one answer, so two
+runs produce the same graph.** `bd` refuses an edge between an epic and a
+non-epic (below), so "this epic needs feature `X.3` of another epic" is
+unexpressible as written. **Push the edge down to the feature that actually
+needs it** — the feature-to-feature edge is same-class and legal — and
+**comment on the epic saying you did**, naming both ids. Do not invent an
+epic-to-epic edge as a stand-in: it blocks work that has no dependency, and
+the epic it names may never be scheduled. Without this written down, two
+breakdowns facing the same shape produce two different graphs
+(computenet-mxa).
+
 **A blocking edge cannot cross the epic boundary** — `bd` refuses one between
 an epic and a non-epic. So "these items wait on this epic's deliverable" is
 unexpressible as written, and the shape that *is* expressible is to give the

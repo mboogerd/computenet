@@ -107,5 +107,38 @@ co=$(sandbox clean); before=$(head_of "$co"); out=$(run_hook "$co")
 grep -q "cleared a half-applied" <<<"$out" && bad "claimed a heal that never happened" || ok "no spurious heal message"
 
 echo
+
+# computenet-od2q: the watchdog can cut a fetch that has ALREADY updated
+# origin/main. Before the fix that was read as "produced nothing" and the
+# available fast-forward was discarded, leaving the checkout stale for the
+# whole slot. Stub `git` so `fetch` does the real update and then hangs past a
+# 1s fuse; everything else passes through to the real git.
+echo "case 6: a cut fetch whose ref update already landed"
+c=$(sandbox od2q)
+stub="$ROOT/od2q-bin"; mkdir -p "$stub"
+cat > "$stub/git" <<'STUB'
+#!/usr/bin/env bash
+for a in "$@"; do
+  if [ "$a" = "fetch" ]; then
+    "$REAL_GIT" "$@"        # do the real ref update...
+    sleep 30                # ...then hang, so the watchdog CUTS us (rc != 0)
+  fi
+done
+exec "$REAL_GIT" "$@"
+STUB
+chmod +x "$stub/git"
+out=$(cd "$c" && REAL_GIT=$(command -v git) PATH="$stub:$PATH" FF_MAIN_FUSE=1 bash "$HOOK" 2>&1)
+head_now=$(git -C "$c" rev-parse main)
+origin_now=$(git -C "$c" rev-parse origin/main)
+if [ "$head_now" = "$origin_now" ]; then
+  ok "a cut fetch that already advanced the ref still fast-forwards (computenet-od2q)"
+else
+  bad "a cut fetch that already advanced the ref did NOT fast-forward — out was: $out"
+fi
+case "$out" in
+  *"was stopped"*) ok "it still reports that the fetch was stopped" ;;
+  *) bad "the stopped-fetch message disappeared — out was: $out" ;;
+esac
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
