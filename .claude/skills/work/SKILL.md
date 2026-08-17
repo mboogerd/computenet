@@ -37,11 +37,18 @@ felt like giving up.
 
 - `bd ready` hides `in_progress`/`blocked`/`deferred`; `bd list` hides
   *closed* unless `--all`. Every check below uses the one it means.
-- `--parent` scope differs by subcommand: `bd list --parent` is **one level
-  deep**; `bd ready --parent` and `bd blocked --parent` are
-  **descendant-scoped**. And `bd blocked` lists only items blocked by an open
-  dependency edge — a hand-set `--status=blocked` (an ask-human park) is
-  invisible to it.
+- `--parent` scope differs by subcommand — but **not the way this file used to
+  say**. `bd list --parent` is one level deep, and so is
+  `bd ready --parent`: it reaches **direct children only**, not descendants.
+  Measured 2026-08-17 on live data — `bd ready --parent=computenet-dqy.37`
+  finds `computenet-dqy.37.2`, while `bd ready --parent=computenet-dqy` does
+  **not**, though `epic-of.sh` resolves that item to `computenet-dqy`. An epic
+  with ready work two levels down therefore reports EMPTY, which is how a live
+  epic gets deferred and hidden on both machines (computenet-28vn). Use
+  `scripts/ready-in-epic.sh <epic>` for any epic-scoped ready question.
+  `bd blocked --parent`'s depth is **unverified** — treat it the same way.
+  And `bd blocked` lists only items blocked by an open dependency edge — a
+  hand-set `--status=blocked` (an ask-human park) is invisible to it.
 - `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
   reads `null`. It never includes comment bodies, only `comment_count`.
 - Epic- and feature-sized output overflows the inline tool-result limit
@@ -120,6 +127,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 |---|---|
 | `sweep-stale-claims.sh` | Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
 | `check-files-claim.sh` | Warns when a bead's own text names a file its `metadata.files` claim omits |
+| `ready-in-epic.sh` | Ready work anywhere beneath an epic — `bd ready --parent` reaches one level |
 | `reclaim-worktrees.sh` | Removes worktrees whose bead is already closed — the join `sweep-merged-prs.sh` cannot make |
 | `sweep-merged-prs.sh` | Closes beads whose PR merged after their session ended; removes their worktrees |
 | `next-batch.py` | Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
@@ -575,12 +583,23 @@ Never `bd ready --claim` (it claims whatever is first *at claim time*, not
 what you read).
 
 **Before committing to an already-broken-down epic, check it has workable
-surface** (`bd ready --parent` is descendant-scoped):
+surface** — with the depth-independent query, not `bd ready --parent`:
 
 ```bash
-bd ready --parent=<epic> --json      # workable = items NOT labeled 'human'
+.claude/skills/work/scripts/ready-in-epic.sh <epic>   # workable, ANY depth
 bd list --parent=<epic> --type=feature --status=in_progress --json  # resumable
 ```
+
+**Not `bd ready --parent`** — it reaches direct children only, so an epic with
+ready work two levels down reports empty (`bd traps`, computenet-28vn). That
+matters most right here: the `bd defer` below hides the epic on **both**
+machines, so it must never fire on evidence from an under-reporting query.
+Empty output with exit 0 is a real answer; **exit 3 means nothing was
+checked** — stop, do not defer. It also prints a `could not resolve the epic
+of <id>` line to **stderr** for any ready item whose parent chain is broken
+(a vanished ancestor, a cycle): that item was *not* classified, so resolve it
+by hand (`scripts/epic-of.sh <id>`) before treating the listing as complete —
+never defer with one outstanding.
 
 Zero workable items and nothing resumable splits into **two** cases. Separate
 them with step 4's listing, run now rather than later — same command, so no
@@ -754,8 +773,17 @@ window doesn't apply here — these are cross-session and evidence-gated.
 
 ```bash
 bd list --parent=<epic> --type=feature --status=in_progress --json   # resume first
-bd ready --parent=<epic> --type=feature --limit 1 --json             # else first ready
+.claude/skills/work/scripts/ready-in-epic.sh <epic>                  # else, ANY depth
 ```
+
+The second query is deliberately unfiltered by type: `bd ready --parent
+--type=feature` reaches direct children only *and* hides everything that is
+not a feature, so it can report an empty epic twice over (computenet-28vn).
+It prints `<id>\t<type>\t<priority>\t<title>` — take the first row whose
+type is `feature`; if there is none but there are other rows, that is the
+no-feature-layer shape below, and you already have its answer. The epic
+itself is never one of the rows, but a ready **sub-epic** under it can be —
+that is a real child needing breakdown (step 4), not a feature to implement.
 
 A resumed feature carrying `metadata.review=passed` was certified last
 session — check its PR (`gh pr view <pr> --json state`); `MERGED` →
@@ -766,7 +794,7 @@ directly to the epic (computenet-dqy: 69 children, one feature). Both feature
 queries return empty while work sits ready, so before falling through:
 
 ```bash
-bd ready --parent=<epic> --json      # no --type filter
+.claude/skills/work/scripts/ready-in-epic.sh <epic>   # already run above; same answer
 ```
 
 Non-empty → work these directly: each gets its own worktree, branch, and PR
@@ -886,8 +914,12 @@ fast-forwards strictly-behind, keeps strictly-ahead (unpushed work), and
 fails loudly on divergence.
 
 **A dirty inherited worktree may be a half-applied MUTATION** — this repo
-verifies pins by mutating production code, and an agent killed mid-mutation
-looks identical to one killed mid-improvement. Classify before acting
+verifies pins by mutating code — production **or test**, since a
+test-instrument defect is probed by breaking the test (task.md step 3,
+computenet-wpvy.34) — and an agent killed mid-mutation looks identical to one
+killed mid-improvement. So a dirty *test* file is not evidence of finished
+work any more than a dirty production file is; the marker, not the file's
+kind, is the discriminator. Classify before acting
 (computenet-leg):
 
 ```bash
@@ -978,6 +1010,20 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
 **Before claiming each task:**
 
+- **Re-validate a stated blocker or precondition against the ARTIFACT it
+  names, before you write it into a dispatch prompt.** A bead's "blocked until
+  X lands" was true when it was written; by dispatch time X may have landed
+  differently, partially, or not at all. Check the thing itself — the file,
+  the symbol, the test, the config — **not a commit subject line**, which
+  records what someone intended, not what is now true. Two items in one
+  session were dispatched on preconditions that no longer held
+  (computenet-rjyl). This is the orchestrator-authorship rule applied to
+  preconditions: a claim about what a change *does* needs a run or a citation.
+  When your check was indirect, relay it as such — **"I believe X; verify it
+  first"**, not as a checked fact. An agent cannot tell your verified claims
+  from your plausible ones, and it will build on both. The same applies at 5f
+  **route 4's admission gates**, which are where items with no feature parent
+  get their preconditions read.
 - **Re-derive `metadata.files` against the bead's current decided design.**
   The claim was set at filing; a design answered later can reach outside it
   (computenet-dqy.37 required violating its own claim). Design reaches wider
@@ -1231,7 +1277,13 @@ reads as a mild preference — treat it as a context hazard. The safe
 progress checks are: the completion notification (it always comes), the
 task's own bd comments (`bd comments <id> --json > "$SCRATCH/..."` —
 task.md has agents comment at parks and at finish), and
-`git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
+`git -C <task-worktree> log --oneline` plus `git -C <task-worktree> status
+--short` for commits and edits landing (movement there = alive). Those same
+three are how you establish whether an agent that returned *without* an
+outcome still has work in flight — you never need its transcript to answer
+that, and `SendMessage` to the agent is the fourth signal and also the
+remedy, because it keeps the agent's context where `TaskStop` discards it
+(computenet-77cx). An agent that seems slow is waited on or `TaskStop`ped at
 the budget deadline below — there is nothing useful between.
 
 **Find a stated outcome in an implementer's result before acting on it** —
@@ -1392,6 +1444,46 @@ query picks it up.
 ```bash
 gh pr checks <pr-url>
 ```
+
+**Green is not "the tests ran" — check they were not SKIPPED.** A required
+check goes green just as happily when the diff's own suites *skipped
+themselves*: an `assumeTrue`-guarded test whose precondition CI does not
+provide reports `SKIPPED` and the build reports success. Measured 2026-08-17 on
+PR #254 — a lane was widened specifically so a new two-JVM test would run on
+every PR, all six checks went green (`build-test-serial` in 2m19s), and the
+orchestrator announced that Linux execution was now proven. The job log said
+`TwoJvmMirrorTest > … SKIPPED`: green proved the *wiring*, not the behaviour
+(computenet-hacm). This is the CI twin of the `FROM-CACHE`/`UP-TO-DATE` trap
+this skill already warns about for local Gradle runs, and it is less visible,
+because `gh pr checks` reports a conclusion and a duration and nothing else.
+
+`gh run view <run-id> --log` works non-interactively and returns the whole
+run, every job — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
+Column 1 of each line is the job name, so the output also says *which lane*
+skipped. Save it, then read it with two greps:
+
+```bash
+gh run view <run-id> --log > "$SCRATCH/ci.log"
+grep -E 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
+grep -E '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
+```
+
+**Both filters are load-bearing; the naive grep hides exactly the line you
+came for.** Every build prints ~200 boilerplate
+`checkKotlinGradlePluginConfigurationErrors SKIPPED` and
+`processResources NO-SOURCE` *task* lines, so the bare marker pattern matched
+227 times on that run and a `| head -20` showed nothing but boilerplate — the
+`TwoJvmMirrorTest … SKIPPED` line was line 7519 of 7553. Dropping `> Task `
+lines leaves 11, with the real one in view. (Don't add `no tests`/`0 tests` to
+the pattern either: `0 tests` matches vitest's `10 tests` on every ui-test
+line.) The second grep is the other half — a whole suite that never ran prints
+as a task line, `:module:test NO-SOURCE`/`FROM-CACHE`, and the first grep
+deliberately drops it.
+
+Read both for the **modules this diff touches**. Anything skipped there → say
+so plainly in the PR body and in the session summary, or file it — never
+report CI green as verification of the behaviour. An `assumeTrue` guard that
+CI can never satisfy is a real finding about the test, not a detail.
 
 The task reviewer tested a branch without its merged siblings; this is the
 first signal the whole still builds. Red is work: file a task for the next
@@ -1565,6 +1657,11 @@ reports — or, if it will not report inside this session, say so in the PR and
 leave the feature for the next one. Reading `review=passed` as "ship it" here
 merges code whose acceptance nobody has finished checking (computenet-wpvy.28).
 
+**Before you ship, confirm the checks EXECUTED this diff's tests**, by 5d's
+`SKIPPED`/`NO-SOURCE` log read above. A green check on a suite that skipped
+itself is not verification of anything, and this is the last point at which
+saying so is cheap (computenet-hacm).
+
 **`gh pr ready` is the ship decision, not the ship.** The moment it returns,
 read [references/ship-feature.md](references/ship-feature.md) and follow its
 state table until `MERGED` or honestly parked. Short form: ready PRs **one at
@@ -1718,7 +1815,12 @@ its own gate in its header). Then:
 session does not re-litigate it — and so a park that turns out to be wrong is
 visible *as a park* rather than as silence (computenet-bypi).
 
-Two admission gates:
+Three admission gates:
+
+- **Its stated blocker or precondition still holds, checked against the
+  artifact it names** — 5b's rule, and it bites hardest here, where nothing
+  broke the item down and its "blocked until X lands" may be days old
+  (computenet-rjyl). A commit subject line is not the check.
 
 - **The item's own compute demand fits the slot.** A bead can demand
   thousands of suite runs while your dispatch prompt forbids starving the

@@ -124,11 +124,31 @@ than restarting. That's the whole reason the worktree is preserved.
    as bad as following it blindly; the next reader has to know the bead's own
    recipe is spent.
 
-   **Any time you deliberately break production code to prove a test catches
-   it — a mutation check — leave a marker first**, so an agent that inherits
-   your worktree after a crash can tell a live mutation from finished work.
-   The two are indistinguishable from the diff alone, and committing a
-   mutation is a silently broken production change:
+   **The same goes for any clause that predicts what the code does today**,
+   not only a reproduction. `feature.md` requires the breakdown to run the
+   one command that confirms such a clause, or to label it `unverified:` /
+   `untested-hypothesis:` when it didn't (computenet-j69i) — so a labelled
+   clause is a hypothesis handed to you deliberately: **check it before you
+   build on it**, with the same one command, and report what you found. An
+   *unlabelled* clause is a claim the breakdown says it verified; if it
+   nonetheless turns out false, that is a breakdown defect worth a
+   `bd comment` on your bead naming the clause and the command that
+   falsified it, not just a silent workaround.
+
+   **Any time you deliberately break code to prove something catches it — a
+   mutation check — leave a marker first**, so an agent that inherits your
+   worktree after a crash can tell a live mutation from finished work. The two
+   are indistinguishable from the diff alone.
+
+   **This covers a mutation to a TEST as well as to production code.** The
+   usual shape is breaking production to prove the test fails; the inverse is
+   just as real — a *test-instrument* defect (a probe that would pass against
+   a broken system) is diagnosed by mutating the **test**, and nothing about
+   the marker's purpose changes (computenet-wpvy.34). If anything the test
+   case is worse: a committed production mutation usually breaks a build
+   loudly, while a committed test mutation leaves a green suite that checks
+   less than it claims. Marker for both; the note says which file you broke
+   and what you removed:
 
    ```bash
    echo "<the call site you mutated, and what you removed>" > <your-worktree>/.mutation-in-progress
@@ -136,7 +156,8 @@ than restarting. That's the whole reason the worktree is preserved.
    rm <your-worktree>/.mutation-in-progress
    ```
 
-   Never commit the marker, and never commit while it exists.
+   Never commit the marker, and never commit while it exists. SKILL.md 5a
+   reads it when it inherits a dirty worktree.
 
    **Choose the instrument before you spend the slot — a bug has three, and
    step 3's local reproduction is only one of them.** For a *flake* filed on
