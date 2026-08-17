@@ -1,5 +1,10 @@
 plugins {
     id("buildsrc.convention.kotlin-jvm")
+    // computenet-7em.1.5: the mirror's own OR-map key and dependency-edge
+    // element cross `:wire` inside kernel deltas, so they carry
+    // `@kotlinx.serialization.Serializable` and need the plugin that generates
+    // their serializers — same pairing as `:demo:agora`.
+    alias(libs.plugins.kotlin.plugin.serialization)
     application
 }
 
