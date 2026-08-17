@@ -119,6 +119,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `.claude/skills/work/scripts/…` | Does |
 |---|---|
 | `sweep-stale-claims.sh` | Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
+| `check-files-claim.sh` | Warns when a bead's own text names a file its `metadata.files` claim omits |
 | `sweep-merged-prs.sh` | Closes beads whose PR merged after their session ended; removes their worktrees |
 | `next-batch.py` | Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
 | `ensure-worktree.sh` | Attaches a worktree on a branch, new or resumed, or fails loudly |
@@ -832,6 +833,26 @@ the order you picked features — a dispatch once told an agent that merged
 production code "will not be visible" in a worktree that contained it,
 inviting re-implementation (computenet-88v).
 
+**A file the bead's own text names must be in its `metadata.files`.** The
+claim is what bounds the implementer, so a bead demanding a file the claim
+omits is unsatisfiable from the moment it was written — and the implementer
+finds out in its first ten minutes, left choosing between stalling and
+working outside its claim. Neither is its call to make
+(computenet-yh6.1.12 shipped five files outside its claim, each one forced by
+its own acceptance). Check it mechanically before dispatching, on every bead
+in the batch:
+
+```bash
+.claude/skills/work/scripts/check-files-claim.sh <task-id>...   # exit 1 = look
+```
+
+It greps the description and acceptance for path-shaped strings and prints
+each one the claim does not cover. It **warns** rather than blocks — a bead
+may legitimately name a file it only reads — so read what it prints and
+either widen the claim or satisfy yourself the file is read-only. This
+applies wherever you author a bead, not only here: 5c's red-check task, 5e's
+residuals, step 7's friction items.
+
 Dispatch the batch in one message. Anything you add reaches the agent as
 established fact — relay artifacts, not mechanism:
 
@@ -858,6 +879,12 @@ Stay inside your metadata.files claim — sibling tasks are running on sibling
 branches and merge into the same feature branch. If the bead's own design or
 acceptance clause REQUIRES a file outside the claim, do not choose between
 them silently: report which file and which clause, and I will widen the claim.
+Report that the MOMENT you find it, not in your final summary — a claim that
+cannot be satisfied at all is my defect to fix, not a judgement call for you,
+and reporting it at the end means the whole task ran on a boundary we both
+knew was wrong. While you wait for my answer, keep working on whatever part
+of the task the claim DOES cover; if nothing is left, stop and say so rather
+than proceeding outside it.
 Tracker writes: ${crossBeadWrites or "none authorized — write only to this
 bead and to items you create."} Whatever that line says, never close,
 re-prioritise, reassign, re-parent or claim any bead other than your own.
