@@ -134,6 +134,15 @@ only when their claims are disjoint. Two branches editing the same file
 merge into a conflict, so an incomplete claim costs a hand-resolved merge
 later. Claim generously: a file you might touch belongs in the list.
 
+Two tasks **may** deliberately claim the same file when a dependency edge
+sequences them — a create-then-amend pair is the intended shape, not a claim
+collision. Overlap is only a defect among tasks meant to run *concurrently*;
+once `bd dep add` orders them they never share a batch, so the shared claim
+costs nothing and is the honest record of what each will touch
+(computenet-bx4y). This is the one case where an edge follows file overlap,
+and it is legal because the edge is an output dependency in its own right:
+the second task amends what the first creates.
+
 ## Dependencies
 
 `bd dep add <task> <blocker>` for **output dependencies only** — one task

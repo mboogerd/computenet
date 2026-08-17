@@ -139,6 +139,14 @@ Check:
   clear, tighten them (`bd update <task-id> --acceptance=…`) and review
   against the tightened version, saying so. Where it doesn't, you can't judge
   this task: say that rather than passing it on vibes.
+- **Missing entirely** — the shape a directly-filed bug or chore arrives in,
+  with no breakdown to have written them. Write them onto the bead
+  (`bd update <id> --acceptance=…`) *before* you judge, and quote them in
+  your verdict. Inventing a standard silently and then certifying against it
+  is the reviewer marking its own paper, and it is worse than it looks: the
+  bar lives only in your report, so a resumed item gets a different one
+  (computenet-n58c). Written onto the bead, it survives the session and the
+  orchestrator can disagree with it.
 
 ## 2. Prove the tests ran
 
@@ -159,6 +167,18 @@ transcripts that were not replayable in the order printed, and a finished
 deliverable left uncommitted. Four reviewers on that epic each derived this
 standard from the orchestrator's dispatch prompt rather than from this file,
 which worked only because the orchestrator happened to say it every time.
+
+**A DERIVED document is traced, not re-executed.** A consolidation — one that
+assembles findings its sources already established, and runs nothing of its
+own — has no commands to re-run, and re-executing its *sources* re-reviews
+work that already passed. Its standard is a trace: for each claim, name the
+upstream artifact that established it and the review that certified that
+artifact, and check that the claim still says what the source says.
+Untraceable claims — present in the derived document, absent upstream — are
+the defect this catches, and they are exactly what a re-execution standard
+misses. Where the document *does* run something of its own, that part is
+re-executed as above; the two standards apply per claim, not per document
+(computenet-bx4y).
 
 **Tolerance on transcripts.** Real `bd` output is pretty-printed and carries
 warning preambles; documents paste one-line JSON. Reformatting, eliding a
