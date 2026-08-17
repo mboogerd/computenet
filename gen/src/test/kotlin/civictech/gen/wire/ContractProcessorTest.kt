@@ -6,6 +6,7 @@ import com.tschuchort.compiletesting.SourceFile
 import com.tschuchort.compiletesting.configureKsp
 import com.tschuchort.compiletesting.kspSourcesDir
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
+import org.junit.jupiter.api.Timeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -645,6 +646,116 @@ class ContractProcessorTest {
         assertEquals(false, exclusiveBitOf(table, "tapBorrowed"), table)
         assertEquals(false, exclusiveBitOf(table, "tapFrozen"), table)
         assertEquals(true, exclusiveBitOf(table, "pushNested"), table)
+    }
+
+    // computenet-viot: the pin above (`pushNested`) is the only POSITIVE assertion the
+    // 93 I-6/I-8 widening shipped with. A scan that OVER-marks is invisible to a single
+    // positive case — computenet-yzsc (Borrowed/Frozen) and computenet-woto (Pair-held
+    // exclusives) were both measured the same afternoon and neither is caught above.
+    // The three cases below close most of that gap: no exclusive anywhere in the
+    // payload graph, a payload with only platform-typed (`String`/`List`/`Map`)
+    // properties, and a self-referential payload that must terminate the walk rather
+    // than recurse forever. Each is mutation-checked except the platform one, whose test
+    // KDoc records why a mutation-proof version could not be built in this harness (see
+    // the commit message / bd comment for the mutate-run-revert record).
+
+    @Test
+    fun `no exclusive anywhere in the payload graph yields exclusive false`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package example
+            import civictech.gen.wire.Contract
+
+            class PlainEnvelope(val label: String, val count: Int, val nested: Inner)
+            class Inner(val flag: Boolean)
+
+            @Contract
+            interface PlainContract {
+                fun push(envelope: PlainEnvelope)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
+    }
+
+    // Pins that a payload with only platform-typed properties (`String`, `List<String>`,
+    // `Map<String, Int>`) is not marked exclusive — the basic shape `isPlatformType`
+    // exists to keep cheap (`carriesExclusive`'s KDoc: "an exclusive is a kernel type,
+    // and it can only sit inside a `kotlin.*`/`java.*` container through a type
+    // argument, which the argument walk above already covers").
+    //
+    // LIMIT, stated rather than hidden: this assertion is not mutation-proof for the
+    // `isPlatformType` guard specifically. Measured directly — deleting the guard
+    // (`isPlatformType(fqn: String): Boolean = false`) and rerunning the whole class
+    // left all 21 tests green, this one included, because no genuinely compiled
+    // `kotlin.*`/`java.*` class can ever declare a field of our own `Owned` type, so
+    // opening `String`/`List`/`Map`'s own declared properties finds nothing exclusive
+    // either way. The natural way to force the guard to matter — a payload whose own
+    // fqn collides with the `kotlin.`/`java.` prefix, e.g. `package kotlin.demo` — does
+    // not compile at all here: KSP's round-1 resolution reports the type as
+    // `<ERROR TYPE: ...>` and `generateProxyClass` throws `IllegalArgumentException`
+    // for *any* class declared under a `kotlin.*`/`java.*` package root (reproduced with
+    // both prefixes; a sibling `acme.demo` package with the identical shape compiles and
+    // resolves fine), so the fqn-collision route is unavailable in this harness. The
+    // guard is real defensive code (its removal changes nothing observable via KSP for
+    // real classpath types, but the KDoc's justification — avoid opening the platform
+    // library's own declarations at all — is a cost/robustness argument, not a
+    // correctness one), and this test still guards the *shape* (no false positive from
+    // plain container-shaped platform fields); it does not prove `isPlatformType` is the
+    // mechanism keeping it false.
+    @Test
+    fun `a platform-typed property is not opened for exclusive reach`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package example
+            import civictech.gen.wire.Contract
+
+            class Envelope(val label: String, val tags: List<String>, val meta: Map<String, Int>)
+
+            @Contract
+            interface PlatformContract {
+                fun push(envelope: Envelope)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
+    }
+
+    // `carriesExclusive`'s `seen` fqn guard (KDoc: "a self-referential payload... ends
+    // rather than recursing forever") is what makes a self-referential payload safe to
+    // scan at all. `@Timeout` bounds the failure mode: if the guard regresses, this test
+    // fails fast on a timeout/StackOverflowError instead of hanging the whole suite for
+    // the module's 5-minute default. The walk genuinely reaches the self-reference
+    // (verified by mutation, not assumed): `Node`'s own property `next: Node?` resolves
+    // to the same fqn as `Node` itself, so `carriesExclusive` recurses into it once
+    // before `seen.add` short-circuits the second visit — deleting the guard reproduces
+    // a `StackOverflowError` here (see bd comment for the mutate-run-revert record).
+    @Test
+    @Timeout(30)
+    fun `a self-referential payload terminates instead of recursing forever`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package example
+            import civictech.gen.wire.Contract
+
+            data class Node(val next: Node?)
+
+            @Contract
+            interface NodeContract {
+                fun push(node: Node)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
     }
 
     /** Reads one `MethodDescriptor` row's `exclusive` flag out of a whitespace-normalised table. */
