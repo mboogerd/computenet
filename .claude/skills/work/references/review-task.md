@@ -497,7 +497,18 @@ own experiment, and not on a background job's notification — ending your turn
 has already fired the completion notification the orchestrator acts on,
 whatever the job does next. Run long commands in the foreground with a
 generous timeout, or poll a background job's output file with ordinary
-foreground calls. Out of room,
+foreground calls.
+
+There is no `timeout` binary on this host — neither `timeout` nor `gtimeout` —
+and its absence **fails open**: `timeout 600 ./gradlew …` prints `command not
+found`, and in a pipeline the status you read is the last stage's, so the
+verification that never ran reports success (computenet-fbuo). The generous
+timeout meant here is the **Bash tool's own `timeout` argument**, in
+milliseconds, up to 600000. For a job that genuinely outlasts that, use
+`run_in_background` and poll its output file with ordinary foreground calls —
+never end a turn waiting on it.
+
+Out of room,
 out of time, or blocked, give the partial verdict you have and put the rest
 under NOT VERIFIED — an honest partial verdict beats stopping mid-experiment.
 

@@ -229,7 +229,11 @@ than restarting. That's the whole reason the worktree is preserved.
    - **Give the Bash call an explicit timeout, up to 600000 ms.** Past its
      120s default the tool backgrounds the call, and a turn that ends waiting
      on a background job never resumes — your turn ending is your completion.
-     `:demo:beadsmirror:test` alone takes ~3m40s (computenet-hob2).
+     `:demo:beadsmirror:test` alone takes ~3m40s (computenet-hob2). That means
+     the **tool's** timeout argument: there is no `timeout` binary on this
+     host, and its absence fails OPEN — `timeout 600 ./gradlew …` prints
+     `command not found`, and in a pipeline the status you read belongs to the
+     last stage, so a suite that never ran reports success (computenet-fbuo).
    - Quote test counts *and the newest timestamp* read from the JUnit XML
      rather than the build result — the timestamp is what separates a run from
      a replay (measured 2026-08-14: a cached repeat run left `newest`
