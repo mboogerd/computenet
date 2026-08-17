@@ -1095,10 +1095,17 @@ check-wait loop: `gh pr checks` **exits 8 while anything is pending** — never
 exit status — and its required-check rows may not exist yet, so neither `$?`
 nor a bare `grep -q pending` settles it (computenet-luhx, computenet-15it,
 computenet-1zhu). A verdict
-carrying a **§6 hand-back** (the classifier refuses reviewers `git merge`,
-computenet-whx4) is yours to complete: do the merge, re-run the affected
-module suite on the merged base, and if the reviewer's disjointness claim
-doesn't hold, send back for a re-check rather than shipping on it.
+carrying a **§6 hand-back** is yours to complete, and it is the **normal**
+path, not an exception: review-feature.md §6 assigns the merge to you
+outright, because the classifier refuses reviewers `git merge`
+(computenet-whx4, computenet-dtvd). Do the merge, re-run the affected module
+suite on the merged base, and check the reviewer's disjointness claim
+yourself (`gh pr diff <pr-url> --name-only` against `git show --name-only
+<sha>`) — if it doesn't hold, send back for a scoped re-check rather than
+shipping on it. Expect the hand-back on any verdict where commits landed
+mid-review, and treat the reviewer's "origin/main unchanged at `<sha>`" as
+expired the moment it was written: the `log` above, not that line, is what
+settles it.
 
 **`gh pr ready` is the ship decision, not the ship.** The moment it returns,
 read [references/ship-feature.md](references/ship-feature.md) and follow its

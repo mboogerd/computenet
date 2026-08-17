@@ -457,13 +457,24 @@ of these is true:
   test you added, mutate the production code it covers (code you did not
   write), show the test failing, revert the mutation, show it passing, and
   quote the assertion message from the failing run. Name the mutation in the
-  verdict. That is the same standard review-task.md holds an implementer to,
-  and it removes the reason for the bar: a test that fails under a mutation of
-  code you did not write cannot have been shaped to the code, and its expected
-  values were not re-derived from the production formula. Meet it and certify
-  normally; skip any part of it and the repair is substantive as before. A
-  fully green feature should not cost a second opus review for tests that
-  prove themselves (computenet-7bc9);
+  verdict. That is the same mutation check review-task.md applies to an
+  implementer's tests. **Two conditions on the mutation**, because a red run
+  proves less than it looks like:
+  - **Mutate the defect the test claims to catch**, not whatever is easiest to
+    break. Deleting the method under test reddens any test that calls it —
+    including one that asserts the wrong thing — so it demonstrates that the
+    test *runs*, not that it *constrains*. If the test claims to catch an
+    off-by-one, the off-by-one is the mutation.
+  - **Say where each expected value came from.** Mutation-sensitivity is not
+    independence: a test that recomputes its expected value with a copy of the
+    production formula goes red under exactly that mutation and is still blind
+    to a bug in the formula — the false green that filed this bead. Expected
+    values must be literals or derived some other way, and the verdict says
+    which.
+
+  Meet all of it and certify normally; skip any part of it and the repair is
+  substantive as before. A fully green feature should not cost a second opus
+  review for tests that prove themselves (computenet-7bc9);
 - any regenerated generated file (`CONCORDANCE.md`, KSP output consumers);
 - any new claim filed against the honesty ledger (`concord/corpus/DISPUTES.md`)
   or a new bead asserting an existing requirement is broken;
@@ -577,7 +588,9 @@ Three outcomes, not two.
 
 Every feature criterion met, required checks green, no unowned seams — the
 three criteria in AGENTS.md § "Marking a PR ready is the agent's call" hold —
-and your own repairs were trivial by §5. Record the verdict, but **do not run
+and your own repairs were trivial by §5, or were a test-only repair that met
+§5's exception in full (name the mutation and the origin of the expected
+values in the comment below). Record the verdict, but **do not run
 `gh pr ready`**: on this repo a ready PR merges itself, and you are the party
 that just certified (and possibly repaired) this code, so shipping it too
 would be self-approval. The orchestrator reads your verdict and ships:
