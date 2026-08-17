@@ -140,9 +140,11 @@ verdict:
   <id> --reason "superseded: fixed as of <current-hash>"`. Next item.
 - **Fix** — only on one of two grounds:
   - *Verified defect*: the claim is checkable right now — the quoted
-    instruction really says what the report says it says, and the
-    misbehaviour reproduces cheaply (a read-only command, a missing path, a
-    flag that errors). Run the check yourself before believing the report;
+    instruction really says what the report says it says, and, where the
+    claim is about behaviour, the misbehaviour reproduces cheaply (a
+    read-only command, a missing path, a flag that errors); a purely
+    textual defect — two steps that contradict each other — is verified by
+    reading alone. Run the check yourself before believing the report;
     verification substitutes for recurrence.
   - *Recurrent*: at least two independent instances — the filing plus an
     instance comment from a different session. Two is the floor; four is
@@ -156,8 +158,13 @@ verdict:
   command, the verbatim output, what it cost — then park and release:
 
   ```bash
-  bd update <id> --add-label needs-evidence --assignee=""
+  bd update <id> --add-label needs-evidence --assignee="" --status=open
   ```
+
+  All three flags matter: step 2's `--claim` set assignee *and*
+  `in_progress`, and an item left `in_progress` is invisible to every
+  `--status=open` listing in this file — parked forever, un-parkable by
+  anyone.
 
   The comment is addressed to the next session that hits the same wall, not
   to the human; `work` step 7's upvote branch answers it and removes the
