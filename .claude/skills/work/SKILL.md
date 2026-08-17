@@ -601,29 +601,34 @@ stranded that way on one machine, and the fix for the leak could not reach
 them because it only looks forward (computenet-8l4r). This script inverts the
 join: it walks `git worktree list` and removes each `computenet-worktrees/<id>`
 whose bead is closed, whose tree is **clean**, which has **no rebase/merge in
-progress**, and whose **HEAD is contained in `origin/<its branch>`**. That last
-one is the guard a clean tree does not give you: `git status --short` says
-nothing about *commits*, so without it a worktree carrying unpushed work is
-deleted silently, `rc=0`, "removed". Detached HEAD, a branch origin has never
-seen, an unreachable origin, and local commits ahead of the remote tip are each
-a SKIP — the script has to *prove* the commits survive elsewhere. Removal is
+progress**, and whose **HEAD is contained in some `origin/*` branch**. That
+last one is the guard a clean tree does not give you: `git status --short`
+says nothing about *commits*, so without it a worktree carrying unpushed work
+is deleted silently, `rc=0`, "removed". It asks for containment in **any**
+origin branch rather than the same-named one because a task branch is never
+pushed (5c, computenet-zmso) — its commits reach origin inside the *feature*
+branch, so a by-name test was false for every task worktree and made this
+guard inert for the majority of them (computenet-13kh). The script fetches
+with `--prune` first, so a branch origin has since deleted cannot masquerade
+as containment. Detached HEAD, and commits on no origin branch at all —
+never pushed, or pushed to a branch origin later deleted, or reachable only
+from a tag or `refs/pull/*` — are each a SKIP; an unreachable origin aborts
+the whole run at `rc=3` before anything is checked. The script has to *prove*
+the commits survive elsewhere. Removal is
 additionally held back until the directory has been **quiet for 15 minutes**;
 treat that one as a cheap filter on the close/write race, **not** as a liveness
 test — an agent sitting on an idle worktree reads as quiet. `rc=1` means a
 candidate was dirty, mid-operation, not provably pushed, or a removal failed:
 look, do not re-run.
 
-**A stranded TASK worktree now always SKIPs here, and the message it prints is
-wrong about the cause.** Task branches are no longer pushed (5c,
-computenet-zmso), so `origin` has no `task/<id>` and the guard reports *"bead
-closed but origin has NO task/<id> — these commits exist only here"*. For a
-task the guard is the only thing left checking, and it is checking the wrong
-ref: a closed task bead means 5c merged it, so its commits reached origin
-**inside the feature branch**, not under their own name. Confirm that by hand
-before removing — `git -C <worktree> branch -r --contains HEAD` naming an
-`origin/feature/…` ref is the proof — then `git worktree remove` it yourself.
-Do **not** blanket-ignore the `rc=1`: the same line on a *feature* worktree
-still means exactly what it says.
+Task worktrees are reclaimed by the script now; the by-hand proof that used
+to be required here is gone (computenet-13kh). A `SKIP … on NO remote ref`
+line therefore means what it says whatever the worktree is — the commits are
+not on origin under any branch — so do **not** blanket-ignore the `rc=1`.
+The one case where those commits may nonetheless be redundant is a branch
+that was squash-merged and then deleted on origin: the content is on `main`
+under a new sha, these commits are not, and the script cannot tell the two
+apart. Judge that one by hand.
 
 **Capture to a file rather than piping, for every script whose exit code you
 have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
