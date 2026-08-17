@@ -153,6 +153,27 @@ interface Driver {
      * carried, and no driver is asked to retain a log of prior invocations —
      * everything the position needs is in the step.
      *
+     * [baseline] is the **optional catch-up anchor** (`computenet-yh6.1.12`).
+     * Omitted — `null`, the default — the delivery is an ordinary live frame
+     * and this verb means exactly what it meant before the parameter existed.
+     * Present, the delivery is stamped as a **catch-up baseline**: the frame a
+     * late-joining consumer receives in answer to a pull, which spec 24
+     * §Effectful (`[24-DUR-07]`/`[24-DUR-08]`) gives its own rule — an
+     * `Effectful` inlet acts on it, its timestamp never advances the
+     * processed-frontier, and its exact position is recorded separately so a
+     * replay or a live re-delivery of that same position is suppressed without
+     * re-firing.
+     *
+     * Its shape is a **merge-tag frontier**: scenario-local cell ids (resolved
+     * the same way [source] is — no scenario ever invents an implementation
+     * identifier) mapped to tag counters. Its *contents* are stated so the
+     * anchor is well-formed and the run reproducible; nothing asserts them.
+     * What is asserted is the frame's *kind* — a receiver keys on a baseline
+     * being present, and on the frame's own `([source], [counter])` position.
+     * A driver whose model has no catch-up baseline at all must fail loudly on
+     * a step that names one rather than deliver a plain live frame, by the same
+     * rule as every other refusal here.
+     *
      * A conforming driver **fails loudly** rather than approximate this: a
      * delivery that reaches the inlet without the stated position, or that
      * routes through the graph instead of injecting, asserts nothing about a
@@ -168,6 +189,7 @@ interface Driver {
         counter: Long,
         op: String,
         value: Value? = null,
+        baseline: Map<CellId, Long>? = null,
     )
 
     /** Gracefully retire [cellId], unlinking it. */

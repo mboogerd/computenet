@@ -931,7 +931,7 @@ carries the third.
   author the `[24-DUR-02]` frontier perturbation above alongside the
   `[24-DUR-05]` one.
 
-### The fourth boundary (`schema-gap`, `[24-DUR-07]`/`[24-DUR-08]`, `computenet-yh6.1.3.4.1`) — no driver path stamps `MessageContext.baseline` on an I-24 pull, so it is OPEN, not scenario-authored
+### The fourth boundary (`schema-gap`, `[24-DUR-07]`/`[24-DUR-08]`, `computenet-yh6.1.3.4.1`) — no driver path stamps `MessageContext.baseline` on an I-24 pull — CLOSED by `retransmit`'s optional baseline anchor (`computenet-yh6.1.12`), scenarios `DUR-BASELINE-01`/`DUR-BASELINE-02`
 
 `computenet-yh6.1.3.4` decided the normative rule for an `Effectful` inlet
 receiving a frame stamped `MessageContext.baseline` (spec 24 §Effectful,
@@ -1026,17 +1026,47 @@ scenario" AGENTS.md forbids, not a genuine `[24-DUR-07]`/`[24-DUR-08]` check.
 that switch is a kernel-side decision this task's scope excludes, not a
 concord-driver one.
 
-- **Resolves**: nothing at the corpus boundary yet. A gated `concord/schema`
-  change proposing the `retransmit` extension above (analogous in shape and
-  process to `computenet-em9i`/`computenet-7lb`) is the next step; scenario
-  authoring for `[24-DUR-07]`/`[24-DUR-08]` follows once it lands, gated on
-  the same `retransmit` verb surface as `computenet-yh6.1.3.3`/
-  `computenet-yh6.1.8`, not a new one.
-- **Coverage today**: `[24-DUR-07]`/`[24-DUR-08]` stay `gap` rows in
-  `doc/spec/CONCORDANCE.md`; the sole coverage is kernel-level
-  (`EffectfulBaselineGuardTest.kt`) plus the CHA2 evidence-lane reproduction
-  `BS-5` (`EffectReplayReproTest`, cited above under the journaled-source
-  double-fire boundary, `[CHA2-14]`).
+**CLOSED (`computenet-yh6.1.12`), by route (1) exactly as filed.** Everything
+above stands as the record of *why* the gap existed — it was real, and it was
+not authorable around. What changed is the verb surface, not the finding: the
+gated `concord/schema/scenario.md` change grew `retransmit` with an **optional**
+`baseline:` anchor (a merge-tag frontier stated as scenario-local cell ids to tag
+counters, resolved by the driver the same way `source:` is), threaded through
+`RetransmitStep`, the `Driver` SPI's `retransmit(...)`, the kernel bindings and
+the `CorpusRunner` dispatch arm. Route (2) — rewiring the `dur` profile's
+`effect-sink` through real link admission plus `pullServe`/`StateRequest` — was
+not taken, and the `CatchUp.kt` "deferred" push-catch-up-as-baseline switch is
+untouched; both remain exactly as described above.
+
+- **Optionality, demonstrated rather than asserted**: an omitted anchor produces
+  the `MessageContext(position, outlet.ref)` this binding stamped before the
+  parameter existed. `DUR-LIVE-01` and `DUR-CKPT-FRONTIER-01` pass **unmodified**
+  across the change, and `RetransmitBindingTest`'s "an omitted baseline anchor
+  advances the frontier, a stated one does not" pins the contrast head-on.
+- **Resolves**: `[24-DUR-07]` by `DUR-BASELINE-01` — a baseline delivered ahead
+  of any live traffic fires, and the two live frames that arrive *below* its
+  counter fire too. Collapsing `ManagedHost`'s baseline branch so a baseline
+  advances the processed-frontier fails it 20 of 20
+  ("effect-count(sink, key=k1): expected 1 but observed 0; … key=k2 … observed
+  0") with every other corpus scenario green. And `[24-DUR-08]` by
+  `DUR-BASELINE-02` — one catch-up position delivered four times (fire, live
+  re-delivery, crash+replay, post-recovery re-delivery) acts exactly once; the
+  live half fails 20 of 20 with `alreadyDischargedBaseline` forced false
+  ("expected 1 but observed 5") and the replay half 20 of 20 with
+  `restoreBaselineDischarge` neutered ("expected 1 but observed 2"), each with
+  the rest of the corpus green.
+- **What is still NOT covered, and is not claimed**: the anchor's *contents*.
+  `MessageContext.baseline` also carries dedup/incremental-pull currency (a
+  `StateRequest.since` frontier), and nothing here observes a tag counter — the
+  two scenarios assert the baseline's *kind* and its *position*, which is what
+  `[24-DUR-07]`/`[24-DUR-08]` are written about. A requirement about merge-tag
+  currency across a pull would still need route (2)'s real `StateRequest` path,
+  and would be a new boundary entry, not this one.
+- **Coverage today**: `[24-DUR-07]`/`[24-DUR-08]` are corpus-covered by
+  `DUR-BASELINE-01`/`DUR-BASELINE-02` in `doc/spec/CONCORDANCE.md`, alongside
+  the kernel-level `EffectfulBaselineGuardTest.kt` and the CHA2 evidence-lane
+  reproduction `BS-5` (`EffectReplayReproTest`, cited above under the
+  journaled-source double-fire boundary, `[CHA2-14]`).
 
 ### Not covered (deferred, honestly out of reach at W4-B)
 

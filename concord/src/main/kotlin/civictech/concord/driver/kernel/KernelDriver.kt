@@ -453,8 +453,9 @@ class KernelDriver(seed: Long? = null) : Driver {
         counter: Long,
         op: String,
         value: Value?,
+        baseline: Map<CellId, Long>?,
     ) {
-        if (cellId in durCells) return dur.retransmit(cellId, inlet, source, counter, op, value)
+        if (cellId in durCells) return dur.retransmit(cellId, inlet, source, counter, op, value, baseline)
         throw UnsupportedCatalogBinding(
             "retransmit at '$cellId': this binding injects an explicit wave position only at a durable " +
                 "effect-boundary sink (host: dur), where a processed-frontier decides whether the duplicate " +

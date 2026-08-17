@@ -55,6 +55,7 @@ class FakeDriver(
         counter: Long,
         op: String,
         value: Value?,
+        baseline: Map<CellId, Long>?,
     ) {
     }
     override fun despawn(cellId: CellId) {}
