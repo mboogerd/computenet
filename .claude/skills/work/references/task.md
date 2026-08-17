@@ -110,6 +110,20 @@ than restarting. That's the whole reason the worktree is preserved.
    output — not the fact that the test passes afterwards — is the evidence your
    fix is a fix and not a no-op.
 
+   **A prescribed reproduction is a hypothesis, not an instruction.** The bead
+   describes the code *as it was when the bead was written*, and a sibling item
+   in the same family may have landed since. So when the prescribed
+   reproduction passes unfixed, or the prescribed mutation changes nothing,
+   the first conclusion is that **the repro is stale — not that your fix
+   failed** (computenet-vyr). Check what has landed: `git log --oneline
+   <your-base>..origin/main -- <the files it names>`, and read the sibling
+   beads in the family. Then find a mutation or a reproduction that
+   *demonstrably discriminates* — one that fails before your change and passes
+   after — and **report the substitution**: what the bead prescribed, why it
+   no longer discriminates, and what you used instead. Quietly substituting is
+   as bad as following it blindly; the next reader has to know the bead's own
+   recipe is spent.
+
    **Any time you deliberately break production code to prove a test catches
    it — a mutation check — leave a marker first**, so an agent that inherits
    your worktree after a crash can tell a live mutation from finished work.
