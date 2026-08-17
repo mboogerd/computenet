@@ -65,11 +65,12 @@ no evidence.
 
 **If you were told this is a SUB-EPIC under an epic the session already
 holds**, you are working inside that claim: break it down exactly as below,
-but **do not claim it** — no `--claim`, no assignee, no `owner:` label, leave
-it `open`. Comment on it naming the session and the parent claim instead. A
-second epic claim is what the orchestrator is forbidden to spend; the
-provenance comment is what stops a concurrent machine reading the open
-sub-epic as free (computenet-k9uh).
+but **do not claim it** — no `--claim`, no assignee, no `owner:` label, and no
+comment: leave it `open` exactly as you found it, and report the feature ids
+as usual. A second epic claim is what the orchestrator is forbidden to spend.
+The provenance comment — what stops a concurrent machine reading the open
+sub-epic as free — is the orchestrator's to write and push, not yours
+(computenet-k9uh).
 
 ## Break it down
 
