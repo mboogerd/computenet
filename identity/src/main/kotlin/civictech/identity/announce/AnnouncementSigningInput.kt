@@ -66,8 +66,10 @@ private const val PRESENT: Byte = 0x01
 /**
  * The canonical bytes an announcement is signed over ([DSC1-ANN-02..03]).
  *
- * Pure, total over its stated domain, and **injective**: distinct inputs never
- * produce equal bytes. Injectivity is the security property, not a nicety — two
+ * Pure, total over its stated domain, and **injective for strings that are
+ * well-formed UTF-16** — see the surrogate caveat at the end, which is the one
+ * exception and is tracked as `computenet-9qgg`. Injectivity is the security
+ * property, not a nicety — two
  * announcements sharing an encoding would share a signature, so a signature
  * minted for one would verify the other. It is obtained by construction rather
  * than by testing:
@@ -92,6 +94,20 @@ private const val PRESENT: Byte = 0x01
  *
  * Because the grammar is prefix-free and self-delimiting at every position, the
  * byte string can be parsed back to exactly one input — which is injectivity.
+ *
+ * **Caveat: unpaired surrogates break that, and neither pin below catches it**
+ * (`computenet-9qgg`). `String.toByteArray(UTF_8)` substitutes `?` (`0x3f`) for
+ * an unpaired surrogate, so `portName = "\uD800"`, `"\uDC00"` and `"?"` all
+ * encode to the same byte and those three announcements collide — measured
+ * against this function, not a theoretical worry. The framing above is not at
+ * fault and cannot repair it: the loss is inside `String` → UTF-8, below the
+ * length prefix. It is unreachable from today's callers — a `portName` is a
+ * declared `@Contract` port name and a [PeerId] name is `ed25519:<base64url>`
+ * — but feature .4 will feed this from a wire-supplied `WireFrame.portName`,
+ * where the string is remote input. Closing it means either rejecting unpaired
+ * surrogates or encoding UTF-16 code units; both change the signed grammar and
+ * so are that feature's decision, not a change to make quietly here.
+ *
  * The seeded property test `AnnouncementCanonicalBytesPropertyTest` (BS-17)
  * probes that empirically; `AnnouncementCanonicalBytesGoldenVectorTest` pins the
  * exact bytes so a later refactor that changes them fails loudly instead of

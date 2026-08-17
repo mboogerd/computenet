@@ -170,6 +170,10 @@ class AnnouncementCanonicalBytesPropertyTest {
 
     // --- generators -------------------------------------------------------
 
+    // Note: these pools hold only well-formed UTF-16. Strings containing an
+    // UNPAIRED surrogate do collide under this encoding (canonicalBytes KDoc,
+    // computenet-9qgg); adding one here without first settling that decision
+    // would make the injectivity property below fail rather than assert it.
     private val portNames = listOf("", "orders", "orders/über", "a".repeat(64), "ports.in", "🔑")
     private val peerNames = listOf("ed25519:aaa", "ed25519:aab", "peer-1", "", "ünïcode-peer")
 
