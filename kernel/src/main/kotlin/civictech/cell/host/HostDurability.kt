@@ -42,12 +42,18 @@ private const val RECORD_BASELINE: Byte = 5
  * a run of consecutive discharged counters into a per-source high-water — is genuinely
  * lossless (contiguity means every counter at or below the high-water was itself
  * discharged, and 93 I-14 Rule S1 forbids re-issuing a pair, so an arrival at or below it
- * can only be a re-delivery of a frame that already fired). It is nonetheless not a bound:
- * the growth case above produces a *sparse* position set, never a contiguous run, so the
- * collapse would leave exactly the accumulation it was meant to remove. Consulting such a
- * high-water only for baseline-marked frames would bound it, and is what makes it wrong:
- * a baseline at an undischarged counter below the high-water would then be suppressed
- * without ever having fired, which is the silent, unrecoverable omission `[24-DUR-07]`
+ * can only be a re-delivery of a frame that already fired). It is nonetheless not a bound —
+ * though not because the growth case is always sparse: a lane that only answers
+ * `StateRequest`s stamps consecutive counters, so that case *is* a contiguous run and would
+ * collapse. What the collapse cannot bound is the **source dimension**. A [FanOutlet]'s
+ * `sourceId` is minted per outlet instance and re-minted on every epoch bump, so the
+ * distinct source lanes one inlet sees over a long life — N shards, each remote peer, each
+ * restart or replica spawn — are themselves unbounded, and one high-water each still grows
+ * without limit. A collapse is a legitimate *complement* to this cap (it would postpone
+ * eviction on a single lane) and never a replacement for it; it is not implemented.
+ * Consulting such a high-water only for baseline-marked frames would bound it, and is what
+ * makes it wrong: a baseline at an undischarged counter below the high-water would then be
+ * suppressed without ever having fired — the silent, unrecoverable omission `[24-DUR-07]`
  * chose firing over — and it would make replay-vs-pull an observable distinction at an
  * effect boundary, which spec 24 §Effectful says it must not be. A *retention horizon tied
  * to source-lane liveness* is the semantically exact answer, but it is not a bound either
@@ -66,12 +72,14 @@ private const val RECORD_BASELINE: Byte = 5
  * collaterally suppressed by it and `[24-DUR-07]` cannot be re-broken by this bound —
  * unlike the high-water candidates, whose loss mode is a silent omission.
  *
- * **The number.** A retained position costs ~32 bytes live and one serialized
- * [BaselineDischargeRecord] (a couple of hundred bytes) in every checkpoint blob, so 1024
- * holds a per-inlet ceiling in the low hundreds of kilobytes of checkpoint while being far
- * above any plausible legitimate in-flight retransmit window — the shard fan-out and
- * link-install bursts that motivate the residual are units to tens of baselines, not
- * thousands. It is a judgement, not a measurement: no workload has been profiled against
+ * **The number.** A retained position costs on the order of a hundred bytes live (a
+ * [Timestamp], its [UUID], and the set entry holding them) and one serialized
+ * [BaselineDischargeRecord] in every checkpoint blob — ~285 bytes measured on a
+ * structurally identical Java-serialized shape, and somewhat more here since Kotlin's
+ * class names are longer — so 1024 holds a per-inlet ceiling in the low hundreds of
+ * kilobytes of checkpoint while being far above any plausible legitimate in-flight
+ * retransmit window — the shard fan-out and link-install bursts that motivate the residual
+ * are units to tens of baselines, not thousands. It is a judgement, not a measurement: no workload has been profiled against
  * it, and the only evidence behind the figure is that arithmetic.
  */
 private const val DISCHARGED_BASELINE_CAP = 1024

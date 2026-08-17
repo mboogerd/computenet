@@ -934,12 +934,21 @@ Two alternatives were rejected on that criterion. A **per-source contiguity
 collapse** — folding a run of consecutive discharged counters into a per-source
 high-water — is genuinely lossless, since contiguity means every counter at or
 below the high-water was itself discharged and Rule S1 forbids re-issuing a
-pair. It is not a bound: the growth case produces a *sparse* position set, never
-a contiguous run. Consulting such a high-water only for baseline-marked frames
-would bound it, and is what makes it wrong — a baseline at an undischarged
-counter below the high-water would be suppressed without ever having fired,
-which is the silent unrecoverable omission `[24-DUR-07]` chose firing over, and
-it would make replay-versus-pull observable at an effect boundary. A **retention
+pair. It is not a bound, though not because the growth case is always sparse —
+a lane that only ever answers `StateRequest`s stamps consecutive counters, so
+that case *is* a contiguous run and would collapse. What the collapse cannot
+bound is the **source dimension**: a `FanOutlet`'s `sourceId` is minted per
+outlet instance and re-minted on every epoch bump, so the distinct source lanes
+one inlet sees over a long life — N shards, each remote peer, each restart or
+replica spawn — are themselves unbounded, and one high-water each still grows
+without limit. A collapse is therefore a legitimate *complement* to the cap
+(it would postpone eviction on a single lane) and never a replacement for it;
+it is not implemented here. Consulting such a high-water only for
+baseline-marked frames would bound it, and is what makes it wrong — a baseline
+at an undischarged counter below the high-water would be suppressed without
+ever having fired, which is the silent unrecoverable omission `[24-DUR-07]`
+chose firing over, and it would make replay-versus-pull observable at an effect
+boundary. A **retention
 horizon tied to source-lane liveness** is the semantically exact answer but is
 likewise not a bound (a live lane retains forever), and it needs link-teardown
 knowledge the sink does not have and cannot acquire without pushing an
