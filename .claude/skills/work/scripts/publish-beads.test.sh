@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for publish-beads.sh. Stubs `bd` on PATH. Exits 0 if all cases pass.
-# Expect "4 passed, 0 failed".
+# Expect "6 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/publish-beads.sh"}
@@ -15,7 +15,11 @@ cat > "$ROOT/bin/bd" <<'EOF'
 case "$1 $2" in
   "dolt push")
     n=$(cat "$CTRL/pushn" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$CTRL/pushn"
-    cat "$CTRL/push$n.out" 2>/dev/null || echo "push complete"; exit 0 ;;   # exit 0 even on rejection: the real bug
+    # Both signals are controllable per call: push$n.out is the output,
+    # push$n.rc the exit status (default 0 — the historical bug is a
+    # rejection printed at exit 0).
+    cat "$CTRL/push$n.out" 2>/dev/null || echo "push complete"
+    exit "$(cat "$CTRL/push$n.rc" 2>/dev/null || echo 0)" ;;
   "dolt pull")
     cat "$CTRL/pull.out" 2>/dev/null || echo "pull complete" ;;
 esac
@@ -53,6 +57,22 @@ fixture; echo '! [rejected]' > "$CTRL/push1.out"; echo '! [rejected]' > "$CTRL/p
 out=$("$SCRIPT" 2>&1); st=$?
 [ "$st" = 2 ] && grep -q "LOCAL-ONLY" <<<"$out" \
   && ok "double rejection exits 2 naming local-only state" || bad "double: exit=$st out=$out"
+
+# 5. NONZERO EXIT with CLEAN output is a failure too — the signal the
+#    output-only test used to miss (computenet-kbk0). Recovered by pull+push.
+fixture; echo 'push complete' > "$CTRL/push1.out"; echo 1 > "$CTRL/push1.rc"
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 0 ] && [ "$(cat "$CTRL/pushn")" = 2 ] && grep -q "recovering" <<<"$out" \
+  && ok "nonzero exit with clean output is caught and recovered" \
+  || bad "rc-only: exit=$st out=$out"
+
+# 6. …and a second nonzero exit with clean output still escalates.
+fixture; echo 'push complete' > "$CTRL/push1.out"; echo 1 > "$CTRL/push1.rc"
+echo 'push complete' > "$CTRL/push2.out"; echo 1 > "$CTRL/push2.rc"
+out=$("$SCRIPT" 2>&1); st=$?
+[ "$st" = 2 ] && grep -q "LOCAL-ONLY" <<<"$out" \
+  && ok "double nonzero exit exits 2 naming local-only state" \
+  || bad "rc-only double: exit=$st out=$out"
 
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
