@@ -542,8 +542,19 @@ jobs:
       - name: Compile the multi-jvm closure (parallel)
         run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses
 
+      # `--rerun` binds to the task immediately before it, so it applies to
+      # :demo:beadsmirror:test alone and exchange/shopping keep their cache.
+      # It is load-bearing, not hygiene: whether `bd` is on PATH is NOT a
+      # declared input of the test task, so a build-cache entry recorded before
+      # the install step above existed replays its SKIPPED report verbatim.
+      # Observed on this PR's own first run (32039390827, job 95415894698):
+      # install step green, `:demo:beadsmirror:test FROM-CACHE`, and the
+      # assertion below correctly went red on a one-test/one-skipped report the
+      # lane never produced. Cached-and-skipped is exactly the false green
+      # computenet-7em.5 exists to remove, so this lane executes the class every
+      # time (~30s locally) rather than trusting a replay of it.
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
-        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test -PmultiJvmOnly=true --max-workers=1
+        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test --rerun -PmultiJvmOnly=true --max-workers=1
 
       # computenet-7em.5. Same three checks as build-test-fast's copy of this
       # step — read that one for the reasoning — with the named class flipped,
