@@ -7,6 +7,7 @@ import civictech.demo.beadsmirror.feed.EdgeDiff
 import civictech.demo.beadsmirror.feed.FeedPosition
 import civictech.demo.beadsmirror.feed.FieldDiff
 import civictech.demo.beadsmirror.projector.DotMinter
+import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -103,9 +104,23 @@ class BaselineBuilder(private val minter: DotMinter) {
      * describe. The projector is new on purpose: re-baselining replaces state
      * rather than merging into it, so the caller (the orchestration task) swaps
      * this in wholesale and no pre-gap issue can survive as a zombie.
+     *
+     * @param refs when non-null (task computenet-7em.1.1), the fresh projector's
+     *   cells are built under [refs]' deterministic shared logical
+     *   `CellRef`s instead of random ones — so a rebuilt projector reuses the
+     *   SAME `CellRef`s as the one it replaces, and any replication link onto
+     *   the old projector's cells does not die from the swap. `null` (the
+     *   default) preserves this method's exact prior behaviour: a random-ref
+     *   projector, for every existing single-node caller.
      */
-    fun build(rows: List<ExportRow>, headCommit: String, headHeight: Long): MirrorProjector =
-        MirrorProjector(minter).also { it.applyAll(records(rows, headCommit, headHeight)) }
+    fun build(
+        rows: List<ExportRow>,
+        headCommit: String,
+        headHeight: Long,
+        refs: MirrorCellRefs? = null,
+    ): MirrorProjector =
+        (if (refs != null) MirrorProjector(minter, refs) else MirrorProjector(minter))
+            .also { it.applyAll(records(rows, headCommit, headHeight)) }
 
     /**
      * The row's issue fields as `null -> value` diffs, sorted by column.

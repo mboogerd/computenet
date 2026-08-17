@@ -96,6 +96,25 @@ class MirrorProjector(
     }
 
     /**
+     * A projector whose [cell] and [edges] are built under [refs]' deterministic
+     * shared logical [CellRef][civictech.cell.CellRef]s (task computenet-7em.1.1)
+     * instead of the primary constructor's random-ref defaults. Two projectors
+     * built with the same [MirrorCellRefs.rigName] and different
+     * [MirrorCellRefs.role]s yield cells whose `CellRef.id` agrees and whose
+     * `CellRef.instanceId` differs — the identity precondition feature
+     * computenet-7em.1's rule 1 states directly.
+     *
+     * The no-arg/default construction path above is untouched by this
+     * overload: every existing single-node caller keeps minting random refs
+     * exactly as before.
+     */
+    constructor(minter: DotMinter, refs: MirrorCellRefs) : this(
+        minter,
+        cell = OrMapCell(refs.mapRef),
+        edges = SetCell(refs.edgeRef),
+    )
+
+    /**
      * The dots this projector has minted and still believes live, per key.
      *
      * This is the observed-remove set: a removal tombstones exactly these, and
