@@ -35,10 +35,13 @@ import org.junit.jupiter.api.TestInstance
  * `bd dolt remote add`/`pull` anywhere; the convergence suite; the two-JVM
  * variant.
  *
- * Guarded like every other real-`bd` test in this module: green-but-skipped
- * where `bd`/`dolt` are not on `PATH` (CI installs neither — computenet-7em.5
- * is the sibling item addressing that on the CI side), a real gate on a
- * developer machine.
+ * Guarded like every other real-`bd` test in this module: skipped where
+ * `bd`/`dolt` are not on `PATH`. That guard is a **developer-machine
+ * affordance only** — since computenet-7em.5 landed (PR #294) both CI lanes
+ * install `bd` and `dolt`, and `.github/workflows/ci.yml`'s
+ * "Assert :demo:beadsmirror's e2e evidence ran" step fails the build on any
+ * skipped test in this module. So on CI a skip here is RED, not green: this
+ * class is expected to execute there, not to opt out.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class HeadlineLivenessTest {
