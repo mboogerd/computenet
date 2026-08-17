@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# File one friction item under the SDLC epic without the cross-machine id
-# collision. `bd create --parent=X` allocates the child id from
-# child_counters, a per-database table reconciled only at sync — two machines
-# filing under the same parent between syncs mint THE SAME id for different
-# beads (measured 2026-08-14: wpvy.40/.41/.42 each named two unrelated items;
-# the pull then aborts on child_counters, and last-write-wins resolution would
-# destroy real beads). Creating UNPARENTED yields a hash id and leaves the
-# counter untouched; re-parenting afterwards keeps that id. This applies to a
-# SHARED parent only — breakdown children under a claimed epic/feature are
-# exclusive by that claim and keep their dotted ids.
+# File one friction item under the SDLC epic. A thin wrapper over
+# create-ticket.sh, which owns the unparented-then-reparent idiom that avoids
+# the cross-machine id collision (see its header, and computenet-azt).
 #
-# Also: stamps skill_version (which skill revision produced the report),
-# applies the skill-friction label explicitly (labels are NOT inherited when
-# created unparented), and claims the item for this machine so exactly one
-# orchestrator lane drains it.
+# What this adds on top: the `work skill:` title prefix, the skill_version
+# stamp (which skill revision produced the report), the skill-friction label —
+# labels are NOT inherited when created unparented — and the claim, so exactly
+# one orchestrator lane drains it.
 #
 # Dedup is the CALLER's job, first: bd search "<words>" --status all --json
 # (--status all, or an already-fixed-and-closed item is invisible and gets
@@ -52,17 +45,7 @@ case "$TYPE" in bug|feature) ;; *) echo "--type must be bug or feature (bug = th
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [ -n "$SKILL_V" ] || SKILL_V=$(git hash-object "$SCRIPT_DIR/../SKILL.md")
 
-# 1. create with NO --parent: hash id, child_counters untouched.
-#    bd CREATE returns an object (bd SHOW returns a list).
-NEW=$(bd create "work skill: $TITLE" --type="$TYPE" --priority="$PRIO" \
-        --label=skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}" \
-        --description="$DESC" --acceptance="$ACCEPT" --json \
-      | jq -r '.id // empty')
-[ -n "$NEW" ] || { echo "bd create failed or returned no id" >&2; exit 1; }
-
-# 2. attach, then claim; the id does not change.
-bd update "$NEW" --parent="$PARENT" \
-  || { echo "$NEW created but NOT parented — recover: bd update $NEW --parent=$PARENT" >&2; exit 1; }
-bd update "$NEW" --claim \
-  || echo "note: claim on $NEW failed; it is filed and parented but unclaimed" >&2
-echo "$NEW"
+exec "$SCRIPT_DIR/create-ticket.sh" \
+  --type "$TYPE" --title "work skill: $TITLE" --parent "$PARENT" \
+  --desc "$DESC" --accept "$ACCEPT" --priority "$PRIO" \
+  --label skill-friction --metadata "{\"skill_version\":\"$SKILL_V\"}" --claim

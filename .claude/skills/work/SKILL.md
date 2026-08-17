@@ -61,6 +61,14 @@ felt like giving up.
   `--type`); `bd comment` takes the body positionally or via `--file` (not
   `--body-file`); clearing a metadata key is `--unset-metadata <key>`
   (`--set-metadata key=` merges, it does not clear).
+- **`bd create --parent=<shared epic>` is banned.** It allocates the child id
+  from `child_counters`, a per-database table reconciled only at sync, so two
+  machines filing between syncs mint the SAME id for different beads — a
+  primary-key collision whose resolution destroys one of them (computenet-azt,
+  computenet-wpvy.45). Use `scripts/create-ticket.sh`, which creates
+  unparented (hash id, counter untouched) and then re-parents. Breakdown
+  children under an epic or feature YOU claimed are exclusive by that claim
+  and keep their dotted ids — `--parent` is correct there.
 - `bd` calls are slow and `bd dolt pull`/`push` can run past 120s — give
   sync commands a ≥300s timeout, and never chain `bd` *writes* in one Bash
   block: one write per call, each with the long timeout, or the chain dies
@@ -88,6 +96,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `claim-epic.sh` | Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
 | `publish-beads.sh` | Publication push with rejection recovery, reading output not exit codes |
+| `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic and claims it |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
@@ -1278,13 +1287,14 @@ EOF
 ```
 
 `bug` = the skill misbehaved; `feature` = it worked as written but lacks a
-capability. The script creates **unparented** (a `--parent` create allocates
-the child id from a per-database counter, and two machines filing between
-syncs mint the same id for different beads — a primary-key collision whose
-"resolution" destroys real beads, computenet-wpvy.45), then re-parents to
-`computenet-wpvy`, labels, stamps the version, and claims. This applies to
-shared parents only — breakdown children under your claimed epic keep their
-dotted ids.
+capability. The script labels, stamps the version and claims, then delegates
+the create itself to `create-ticket.sh` — the sanctioned path for any ticket
+under a shared parent, which creates **unparented** (a `--parent` create
+allocates the child id from a per-database counter, and two machines filing
+between syncs mint the same id for different beads — a primary-key collision
+whose "resolution" destroys real beads, computenet-azt / computenet-wpvy.45)
+and then re-parents, keeping the hash id. This applies to shared parents only
+— breakdown children under your claimed epic keep their dotted ids.
 
 If `bd comment` is refused by the permission classifier (observed in
 unattended sessions while every other subcommand ran), the step still
