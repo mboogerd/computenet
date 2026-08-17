@@ -364,7 +364,10 @@ So:
   says how to re-take it. Three traps:
   a green check on a diff that touches no compiled input is evidence of
   nothing (it too can be cache and skip), so say which checks actually
-  exercised the changed modules; a check still `pending` is not a pass —
+  exercised the changed modules — an `assumeTrue`-guarded suite reports
+  `SKIPPED` under a green check, and only the job log says so; SKILL.md 5d
+  carries the two greps that find it in `gh run view <run-id> --log`
+  (computenet-hacm). A check still `pending` is not a pass —
   wait for it or certify draft; and `gh pr checks` **exits 8 while anything
   is pending**, so never put it on the left of `&&` (the next step is
   silently skipped) and never gate a wait loop on its exit status — a

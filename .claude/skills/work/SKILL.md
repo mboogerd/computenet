@@ -907,6 +907,20 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
 **Before claiming each task:**
 
+- **Re-validate a stated blocker or precondition against the ARTIFACT it
+  names, before you write it into a dispatch prompt.** A bead's "blocked until
+  X lands" was true when it was written; by dispatch time X may have landed
+  differently, partially, or not at all. Check the thing itself — the file,
+  the symbol, the test, the config — **not a commit subject line**, which
+  records what someone intended, not what is now true. Two items in one
+  session were dispatched on preconditions that no longer held
+  (computenet-rjyl). This is the orchestrator-authorship rule applied to
+  preconditions: a claim about what a change *does* needs a run or a citation.
+  When your check was indirect, relay it as such — **"I believe X; verify it
+  first"**, not as a checked fact. An agent cannot tell your verified claims
+  from your plausible ones, and it will build on both. The same applies at 5f
+  **route 4's admission gates**, which are where items with no feature parent
+  get their preconditions read.
 - **Re-derive `metadata.files` against the bead's current decided design.**
   The claim was set at filing; a design answered later can reach outside it
   (computenet-dqy.37 required violating its own claim). Design reaches wider
@@ -1160,7 +1174,13 @@ reads as a mild preference — treat it as a context hazard. The safe
 progress checks are: the completion notification (it always comes), the
 task's own bd comments (`bd comments <id> --json > "$SCRATCH/..."` —
 task.md has agents comment at parks and at finish), and
-`git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
+`git -C <task-worktree> log --oneline` plus `git -C <task-worktree> status
+--short` for commits and edits landing (movement there = alive). Those same
+three are how you establish whether an agent that returned *without* an
+outcome still has work in flight — you never need its transcript to answer
+that, and `SendMessage` to the agent is the fourth signal and also the
+remedy, because it keeps the agent's context where `TaskStop` discards it
+(computenet-77cx). An agent that seems slow is waited on or `TaskStop`ped at
 the budget deadline below — there is nothing useful between.
 
 **Find a stated outcome in an implementer's result before acting on it** —
@@ -1321,6 +1341,46 @@ query picks it up.
 ```bash
 gh pr checks <pr-url>
 ```
+
+**Green is not "the tests ran" — check they were not SKIPPED.** A required
+check goes green just as happily when the diff's own suites *skipped
+themselves*: an `assumeTrue`-guarded test whose precondition CI does not
+provide reports `SKIPPED` and the build reports success. Measured 2026-08-17 on
+PR #254 — a lane was widened specifically so a new two-JVM test would run on
+every PR, all six checks went green (`build-test-serial` in 2m19s), and the
+orchestrator announced that Linux execution was now proven. The job log said
+`TwoJvmMirrorTest > … SKIPPED`: green proved the *wiring*, not the behaviour
+(computenet-hacm). This is the CI twin of the `FROM-CACHE`/`UP-TO-DATE` trap
+this skill already warns about for local Gradle runs, and it is less visible,
+because `gh pr checks` reports a conclusion and a duration and nothing else.
+
+`gh run view <run-id> --log` works non-interactively and returns the whole
+run, every job — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
+Column 1 of each line is the job name, so the output also says *which lane*
+skipped. Save it, then read it with two greps:
+
+```bash
+gh run view <run-id> --log > "$SCRATCH/ci.log"
+grep -E 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
+grep -E '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
+```
+
+**Both filters are load-bearing; the naive grep hides exactly the line you
+came for.** Every build prints ~200 boilerplate
+`checkKotlinGradlePluginConfigurationErrors SKIPPED` and
+`processResources NO-SOURCE` *task* lines, so the bare marker pattern matched
+227 times on that run and a `| head -20` showed nothing but boilerplate — the
+`TwoJvmMirrorTest … SKIPPED` line was line 7519 of 7553. Dropping `> Task `
+lines leaves 11, with the real one in view. (Don't add `no tests`/`0 tests` to
+the pattern either: `0 tests` matches vitest's `10 tests` on every ui-test
+line.) The second grep is the other half — a whole suite that never ran prints
+as a task line, `:module:test NO-SOURCE`/`FROM-CACHE`, and the first grep
+deliberately drops it.
+
+Read both for the **modules this diff touches**. Anything skipped there → say
+so plainly in the PR body and in the session summary, or file it — never
+report CI green as verification of the behaviour. An `assumeTrue` guard that
+CI can never satisfy is a real finding about the test, not a detail.
 
 The task reviewer tested a branch without its merged siblings; this is the
 first signal the whole still builds. Red is work: file a task for the next
@@ -1494,6 +1554,11 @@ reports — or, if it will not report inside this session, say so in the PR and
 leave the feature for the next one. Reading `review=passed` as "ship it" here
 merges code whose acceptance nobody has finished checking (computenet-wpvy.28).
 
+**Before you ship, confirm the checks EXECUTED this diff's tests**, by 5d's
+`SKIPPED`/`NO-SOURCE` log read above. A green check on a suite that skipped
+itself is not verification of anything, and this is the last point at which
+saying so is cheap (computenet-hacm).
+
 **`gh pr ready` is the ship decision, not the ship.** The moment it returns,
 read [references/ship-feature.md](references/ship-feature.md) and follow its
 state table until `MERGED` or honestly parked. Short form: ready PRs **one at
@@ -1626,7 +1691,12 @@ with this session's pushed branches (`git diff --name-only
 origin/main...<branch>`, never titles); unparented ready bugs/chores;
 general ready order — ties break by the next criterion down.
 
-Two admission gates:
+Three admission gates:
+
+- **Its stated blocker or precondition still holds, checked against the
+  artifact it names** — 5b's rule, and it bites hardest here, where nothing
+  broke the item down and its "blocked until X lands" may be days old
+  (computenet-rjyl). A commit subject line is not the check.
 
 - **The item's own compute demand fits the slot.** A bead can demand
   thousands of suite runs while your dispatch prompt forbids starving the
