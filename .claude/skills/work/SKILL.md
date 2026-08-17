@@ -1082,8 +1082,10 @@ if git -C <feature-worktree> fetch origin <feature-branch> 2>/dev/null; then
   git -C <feature-worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
     && echo "OK: local contains origin/<feature-branch>" \
     || echo "STOP: origin/<feature-branch> is AHEAD — somebody pushed under you"
+elif git -C <feature-worktree> ls-remote origin >/dev/null 2>&1; then
+  echo "CHECK: origin has no <feature-branch> — 5a pushed it, so absence is not normal"
 else
-  echo "STOP: origin has no <feature-branch> — 5a pushed it, so absence is not normal here"
+  echo "STOP: origin is UNREACHABLE — this check proved nothing"
 fi
 gh pr list --head <feature-branch> --state open \
   --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect: only yours, or none
@@ -1109,11 +1111,20 @@ only after the first task merges, so `gh pr list` printing nothing is the
 expected first-run state (review-task.md §1 covers the same shape for
 reviewers). The branch itself is different: 5a ends with `git push -u origin
 <branch>`, so by the time you reach 5c `origin/<feature-branch>` exists — its
-absence means that push never landed or something deleted the ref, and it is
-worth a look before you merge, not a shrug. That is why the fetch is written
-as `if/else` rather than an `&&`/`||` chain: absent and ahead are different
-findings and a chain reports them as one line (5a's own check has the same
-shape, for the same reason).
+absence means that push never landed or something deleted the ref. That is a
+**`CHECK`**, deliberately not a `STOP`: `STOP` is reserved above for the two
+findings that mean *park via ask-human.md* — origin ahead, or a competing PR —
+because in those two somebody else may hold pushed unreviewed work. A missing
+branch endangers nobody's work; find out why and push it, then merge. And the
+third branch exists because a bare `if fetch` cannot tell "no such branch" from
+"the network is down" — it would diagnose an unreachable origin as an absent
+branch, an answer on a check that never ran (the same defect
+`computenet-dtl` fixed in 5a's block). `ls-remote` succeeds only if origin
+answered.
+
+That is also why this is written as `if/elif/else` rather than an `&&`/`||`
+chain: absent, ahead and unreachable are three different findings, and a chain
+reports them as one line.
 
 **The `--stat` that actually caught this is the two-dot diff *before* the
 merge.** Run `git diff --stat <feature-branch>..task/<task-id>` and read it
