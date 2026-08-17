@@ -1541,7 +1541,7 @@ a time anyway).
 failed command: either `The feature branch ${featureBranch} IS on origin.` or
 `The feature branch ${featureBranch} is NOT on origin yet — this is the first
 task under it, so resolve your baseline from the LOCAL feature branch as your
-reference's §1 does; its base commit is ${taskBase}.` You know which (5d has
+reference's §1 does; the task branch's base commit is ${taskBase}.` You know which (5d has
 not run yet for the first task); the reviewer would otherwise discover it by a
 fetch that fails (computenet-e3my). `${featureBranch}` is the feature's
 recorded `metadata.branch` and `${taskBase}` the base commit you gave 5b —
@@ -1922,7 +1922,9 @@ nothing to come back to. Never end a turn saying you will wait for a job.
 Committing your repairs on the feature branch, and pushing that branch, are
 EXPECTED AND AUTHORIZED — this sentence is the explicit grant AGENTS.md's
 conservative profile and multi-agent clause defer to, and your reference
-requires both (merging origin/main included). Do not
+authorizes both, including the `origin/main` merge on the branch where §6
+permits it — §6's NORMAL path hands that merge to the orchestrator, so read it
+before reaching for `git merge`. Do not
 rebase, switch branches, touch another worktree, or run gh pr ready.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
