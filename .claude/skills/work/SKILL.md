@@ -175,6 +175,7 @@ References carry the deep protocols; read one when its situation arises:
 | `references/ship-feature.md` | right after `gh pr ready`; on any draft verdict |
 | `references/orchestrator-authorship.md` | before writing a durable causal claim |
 | `references/ask-human.md` | parking a question a human must answer |
+| `references/dolt-conflict.md` | step 3, when `bd dolt pull` reports issue conflicts |
 | `references/epic.md` / `feature.md` / `task.md` | handed to breakdown/implementer dispatches |
 | `references/review-task.md` / `review-feature.md` | handed to reviewer dispatches |
 
@@ -467,11 +468,18 @@ only what left nothing behind.
 
 ```bash
 git fetch origin main
-bd dolt pull        # >=300s timeout; if it hard-fails on a merge conflict,
-                    # that needs operator resolution (computenet-gq0)
+bd dolt pull        # >=300s timeout; on "merge conflicts in issues require
+                    # operator resolution" see references/dolt-conflict.md
 ```
 
-**If this pull fails, stop the session and report.** It's the only look you
+**If this pull fails, stop the session and report** — with one exception you
+can clear yourself. `merge conflicts in issues require operator resolution` is
+an ordinary two-machine concurrent-edit conflict, not corruption, and
+[references/dolt-conflict.md](references/dolt-conflict.md) is the worked
+resolution (dolt CLI on the embedded DB; last-write-wins by `updated_at`; done
+unattended on 2026-08-12 for 11 conflicts, computenet-3v8). Resolve it, prove
+`pull` and `push` both work again, name the ids you resolved and which side
+won — then continue. Any *other* pull failure still stops the session. It's the only look you
 get at the other machine's state; claiming against stale state is the
 computenet-kg7/3v8 failure, where claim safety silently vanished for a slot.
 
