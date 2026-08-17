@@ -1162,6 +1162,14 @@ mid-review, and treat the reviewer's "origin/main unchanged at `<sha>`" as
 expired the moment it was written: the `log` above, not that line, is what
 settles it.
 
+**A verdict naming a pending measurement is not shippable yet.** `review=passed`
+means the review is finished, not that the feature may ship: a criterion
+riding an out-of-band measurement (a soak, a CI matrix run, an overnight job)
+leaves the ship gate with you. Read the run it names, and ship only once it
+reports — or, if it will not report inside this session, say so in the PR and
+leave the feature for the next one. Reading `review=passed` as "ship it" here
+merges code whose acceptance nobody has finished checking (computenet-wpvy.28).
+
 **`gh pr ready` is the ship decision, not the ship.** The moment it returns,
 read [references/ship-feature.md](references/ship-feature.md) and follow its
 state table until `MERGED` or honestly parked. Short form: ready PRs **one at
