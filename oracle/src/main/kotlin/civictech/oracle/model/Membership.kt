@@ -58,12 +58,12 @@ object Membership {
      * here — the source model that owns the slice decides what it accepts.
      */
     fun live(events: List<ScriptEvent>): Set<Any?> {
-        // Position of the last Observe by each writer, scanned once: `observedThrough[w]`
-        // grows as we sweep, so at a remove's position it holds exactly the writers'
-        // observation frontiers *at that moment*.
         val liveElements = LinkedHashSet<Any?>()
 
-        // adds[element] = positions of that element's adds, in order.
+        // adds[element] = that element's adds, in log order. Only adds recorded SO FAR are
+        // visible to a remove, which is how the rule's `k > i` ordering condition is
+        // enforced: a remove cannot reach an add that has not happened yet, and that is
+        // exactly why BS-3's re-add survives.
         val adds = LinkedHashMap<Any?, MutableList<Add>>()
 
         events.forEachIndexed { position, event ->
