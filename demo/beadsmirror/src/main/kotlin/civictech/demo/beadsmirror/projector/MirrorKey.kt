@@ -1,5 +1,6 @@
 package civictech.demo.beadsmirror.projector
 
+import kotlinx.serialization.SerialName
 import java.io.Serializable
 
 /**
@@ -16,7 +17,19 @@ import java.io.Serializable
  * Serializable keys and values (G-25 seam). The same requirement is why field
  * *values* are stored as their JSON **string** form rather than as
  * `kotlinx.serialization.json.JsonElement`, which is not `java.io.Serializable`.
+ *
+ * `@kotlinx.serialization.Serializable` on top of that, and registered by
+ * [civictech.demo.beadsmirror.wire.BeadsMirrorWireSerializers] (computenet-7em.1.5):
+ * this type is the mirror `OrMapCell`'s **key**, so a `TaggedMapDelta` gossiped
+ * to a peer over `:wire` encodes it through `WireCodec`'s `polymorphic(Any)`
+ * scope. Without both halves the very first cross-node delta throws
+ * `SerializationException: Serializer for subclass 'MirrorKey' is not found`,
+ * inside the poll loop, which freezes the node's HTTP routes at 503.
+ * `@SerialName` pins the discriminator to a package-independent string, the
+ * convention `:demo:agora`'s delta types follow.
  */
+@kotlinx.serialization.Serializable
+@SerialName("beadsmirror.MirrorKey")
 data class MirrorKey(val issueId: String, val field: String) : Serializable {
 
     override fun toString(): String = "$issueId/$field"
