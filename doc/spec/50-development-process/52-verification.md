@@ -135,7 +135,8 @@ evaluation points — glitch-free per-wave evaluation (20/22) when their
 inlets share an upstream fork, convergence-at-quiescence for independent
 sources.
 
-*(Exclusive payloads in shadow mode — decided in 93 I-20, unimplemented)*:
+*(Exclusive payloads in shadow mode — decided in 93 I-20; the discharging-sink
+half implemented, tap observation still unbuilt, G-47 below)*:
 NoOp-serving an inlet whose contract carries an exclusive payload MUST
 install a **discharging** sink, not a plain drop: `Owned` →
 `take()`-and-drop (consume-once satisfied), `Leased` → `release()` (buffer
@@ -146,9 +147,15 @@ fired before the sole consumer and uncounted by the SPSC rule, so
 invariants, shadows, and judges watch an exclusive pipeline without
 contending for consumption.
 
-⚠ CONFLICT (C-11): `Shadow.spawn`'s plain NoOp proxy drops Owned/Leased
-payloads without `take()`/`release()`, contradicting the decided
-discharging-sink rule for exclusive payloads (93 I-20).
+*(Conflict C-11 resolved, `computenet-ulss` + `computenet-3jv2` — the core
+landed, two narrow residuals filed. `Shadow.spawn` discharges Owned/Leased
+payloads via `Proxy.discharging` rather than dropping them, and the exclusive
+bit's KSP scan and the discharge walk both reach an exclusive nested in a
+plain payload object, not only `Map`/`Iterable`/`Array`. Still filed, not
+fixed: a platform container outside those three shapes —
+`Pair`/`Triple`/`Result`/`Optional` — is marked exclusive by the scan and then
+skipped by the walk (`computenet-woto`); the walk can also over-reach through
+a non-payload reference an argument happens to hold (`computenet-h6sf`).)*
 
 ⚠ GAP (G-47): the uncounted read-only Tap (a Borrowed projection fired
 before the sole consumer) that lets invariants/shadows/judges observe
