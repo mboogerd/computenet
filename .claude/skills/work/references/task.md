@@ -16,6 +16,18 @@ Two rules follow:
 - **Work only in your own worktree.** Never the main checkout, the feature
   worktree, or another task's.
 
+## Contents
+
+1–2. [Read the task, then check its dependencies](#12-read-the-task-then-check-its-dependencies)
+3–4. [Establish the evidence before you build on it](#34-establish-the-evidence-before-you-build-on-it)
+5–6. [Implement, then verify](#56-implement-then-verify)
+7–9. [Commit, file follow-ups, finish](#79-commit-file-follow-ups-finish)
+10. [Kill your background jobs, then report](#10-kill-your-background-jobs-then-report)
+
+The ten steps are one sequence; the groupings above exist so you can find a
+step again, not so you can skip to one.
+
+
 **Any bead body you write that quotes code goes through a quoted heredoc or
 `bd comment <id> --file <path>`** — backticks inside a double-quoted
 argument execute as shell and silently vanish from the stored text
@@ -51,6 +63,10 @@ Two cases reach past that line, and they route differently:
 earlier session started this and stopped at a clean point — read the beads
 comments for what's done and what's left, and continue from there rather
 than restarting. That's the whole reason the worktree is preserved.
+
+## 1–2. Read the task, then check its dependencies
+
+What the bead says, what its context says, and what has to have landed first.
 
 1. Read the task and its context:
    ```bash
@@ -88,6 +104,10 @@ than restarting. That's the whole reason the worktree is preserved.
    depends on isn't actually done, that's a data problem in beads, not
    something to route around — park it ([ask-human.md](ask-human.md))
    rather than implementing against an assumption.
+## 3–4. Establish the evidence before you build on it
+
+A bug's reproduction must fail unfixed; a measurement must be sized before it is run.
+
 3. **If this is a bug fix, make its reproduction fail before you fix
    anything.** A bead that prescribes the sequence to reproduce a bug carries
    the authority of whoever filed it, and can still be a false lead:
@@ -197,6 +217,10 @@ than restarting. That's the whole reason the worktree is preserved.
    ```bash
    bd comment <id> "Prescribed measurement does not fit a task slot: <N> runs x <per-run cost> = <total>. Ran <what was affordable> instead, which bounds <quantity> at <figure> and cannot discriminate <the question>. The full sample needs its own item."
    ```
+## 5–6. Implement, then verify
+
+The smallest coherent change, and proof the tests actually executed.
+
 5. Implement the smallest coherent change that satisfies the task.
    - Hit a fork that clears the [ask-human.md](ask-human.md) bar (ambiguous,
      expensive, risky, hard to revert)? Park it instead of guessing, then
@@ -299,6 +323,10 @@ than restarting. That's the whole reason the worktree is preserved.
    run overwriting `<module>/build/test-results`. Invocation, the `SUMMARY`
    fields to quote, and the two cases where a Gradle loop is still the right
    instrument are in [review-task.md](review-task.md) §2.
+## 7–9. Commit, file follow-ups, finish
+
+Your own index, work discovered on the way, and the bead state you leave behind.
+
 7. Commit on your branch, then push it. Your worktree has its own index, so
    ordinary staging is safe here:
    ```bash
@@ -342,6 +370,10 @@ than restarting. That's the whole reason the worktree is preserved.
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
+## 10. Kill your background jobs, then report
+
+Nothing stops them once you are gone, and your report is the evidence the next session trusts.
+
 10. **Before you report, kill every background job you started.** You cannot
     enumerate them from memory and there is no "list my background jobs"
     affordance here — `TaskStop` needs an id you must already hold, and a poll
