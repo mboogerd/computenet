@@ -50,6 +50,16 @@ class OperatorCatalogTest {
             )
         }
 
+        // Mutation-checking this line: register()'s failure message names the id TWICE (in
+        // "Catalog id '$id' cannot be registered" and again in "'$id' has not been added"), so
+        // stripping only the FIRST occurrence leaves all three BS-17 cases GREEN and reads as
+        // an unconstrained clause. Strip both. Measured both ways 2026-08-17: one occurrence
+        // removed -> 7 tests, 0 failures; both removed -> these three red.
+        //
+        // The assertion is a substring match on a generic English word, so it would also pass
+        // vacuously if the message ever gained "filter" as prose. It has none today (that is
+        // what the both-occurrences mutation proves). If prose is added, tighten this to the
+        // quoted form `shouldContain "'filter'"` or give the test a distinctive id.
         failure.message!! shouldContain "filter"
         failure.message!! shouldContain "reference model"
 
