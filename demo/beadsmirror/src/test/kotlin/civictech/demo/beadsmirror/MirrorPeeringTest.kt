@@ -9,6 +9,7 @@ import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorProjector
 import io.kotest.assertions.throwables.shouldNotThrowAny
 import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
@@ -234,6 +235,40 @@ class MirrorPeeringTest {
             MirrorPeering(settings).use { peering ->
                 shouldNotThrowAny { peering.rebind(projector(peering.refs)) }
                 peering.attachedProjector shouldBe null
+            }
+        }
+    }
+
+    @Nested
+    inner class BoundPort {
+
+        /**
+         * The `--listen 0` half of the flag clause (computenet-dqy.25): the
+         * port a listening node announces must be the one it **bound**, never
+         * the `0` it asked for. `WsTransport.listen` awaits its own start
+         * before returning, so this is deterministic rather than a race.
+         *
+         * The only test here that opens a socket — a bare local listen with no
+         * peer, not the two-node rig (computenet-7em.1.3/.4).
+         */
+        @Test
+        fun `--listen 0 reports the bound port, not the requested one`() {
+            MirrorPeering(MirrorPeeringSettings("bds2-port", MirrorWire.Listen(0))).use { peering ->
+                peering.boundWsPort shouldBe null // nothing is bound before connect()
+
+                peering.connect()
+
+                val bound = peering.boundWsPort
+                bound.shouldNotBeNull()
+                bound shouldNotBe 0
+            }
+        }
+
+        /** A dialer has no listener of its own, so it has no port to announce. */
+        @Test
+        fun `a dialer has no bound ws port`() {
+            MirrorPeering(MirrorPeeringSettings("bds2-port", MirrorWire.Dial("ws://localhost:1"))).use { peering ->
+                peering.boundWsPort shouldBe null
             }
         }
     }
