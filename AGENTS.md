@@ -234,8 +234,9 @@ never blocks the PR; it just means the merge has to be triggered manually.
 We are aiming at continuous integration: an agent that is confident a PR is
 done runs `gh pr ready` and lets it merge, without asking. No profile —
 conservative included — requires a human sentence for that call, and the
-"Agent Context Profiles" section below governs commit, push, rebase, manual
-merge, and Dolt remote sync, not this.
+"Agent Context Profiles" section below governs commit, push, rebase and manual
+merge, not this. (Dolt remote sync is likewise not the profile's call any more —
+see "Syncing bead state is required, not optional" below.)
 
 Confidence means all three of:
 
@@ -257,17 +258,52 @@ reviewer certifies (verdict + `metadata.review=passed`) and the orchestrator
 runs `gh pr ready`, so the agent that certified a change is never also the
 one that ships it.
 
-### Dolt sync of issue state is not "remote sync"
+### Syncing bead state is required, not optional
 
-`bd` writes — status, metadata, comments — land in the local Dolt database
-and are ordinary task-tracking bookkeeping. The conservative profile's "no
-Dolt remote sync unless asked" governs dispatched workers, not the /work
-orchestrator: an unattended orchestrator runs `bd dolt pull`/`bd dolt push`
-routinely as part of the session flow (without it, review/PR state never
-reaches the next session and finished work gets redone). Dispatched
-implementers and reviewers write bead state locally and never push — both by
-the conservative profile and because concurrent pushes from parallel agents
-contend.
+**Agents sync freely, by default, without asking.** `bd dolt pull && bd dolt
+push` after a shared-surface bead write is ordinary session flow, not an
+escalation. No profile — conservative included — requires a human sentence for
+it, and no agent should stop, hand off, or report "pending your approval" for a
+sync. Unsynced bead state is the failure mode this rule exists to prevent:
+review and PR state never reaches the next session, other machines act on a
+stale graph, and finished work gets redone. Sync is not a courtesy to the
+remote; it is how two machines stay one workspace.
+
+This section governs Dolt remote sync and **supersedes** the "Agent Context
+Profiles" line below — "Do not run git commits, git pushes, or Dolt remote sync
+unless explicitly asked" — for the sync half, in this file and in `CLAUDE.md`,
+whose managed block carries the same sentence. Git commits and git pushes are
+untouched by this section and still follow the profile; `gh pr ready` follows
+"Marking a PR ready is the agent's call" above.
+
+**The only restraint is redundancy.** Push because state needs to leave this
+machine, not on a timer:
+
+- If you already know more writes are coming and you will push again shortly,
+  **batch them** and push once at the natural checkpoint. Two pushes where one
+  would do is the waste to avoid — a round trip is seconds, but a push per
+  close, per comment, or per commit is noise that buys nothing.
+- Owned territory — items under an epic you claimed, items you claimed — still
+  accumulates locally and rides out on the Finalize push (SKILL.md step 6).
+- **Acquisitions and shared-surface writes push at the moment they happen**:
+  claiming an epic, claiming an item in another epic, filing or upvoting under
+  the SDLC epic, creating a shared anchor, stealing a stale claim. Their whole
+  point is that the *other* machine cannot proceed until it can see them.
+
+**Keep the bracket: `pull` → verify → write → `push`.** Never push without
+pulling first. The pull is what stops a clobber and what makes a claim a lock
+rather than a private note; skipping it is how two machines mint the same id or
+both claim one epic. See `.claude/skills/work/references/claim-sync.md`.
+
+Dispatched implementers and reviewers still **don't** push — not because they
+need permission, but because the orchestrator serializes pushes and a subagent
+push is exactly the redundant kind: concurrent pushes from parallel agents
+contend, and their writes are already carried by the orchestrator's next
+bracket.
+
+This section is deliberately **outside** the `bd`-managed block below. A `bd`
+regen rewrites that block from its own template and silently drops edits made
+inside it, so the override has to live here to survive.
 
 ## Multi-agent run discipline
 

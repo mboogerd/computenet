@@ -5,6 +5,13 @@ Subagents are handed ids that are already claimed and never claim their own.
 
 ## The principle
 
+**Syncing is required, not optional — and never something you ask about.**
+`bd dolt pull && bd dolt push` is ordinary session flow (AGENTS.md, "Syncing
+bead state is required, not optional"). No profile gates it, and a session that
+ends with shared-surface writes still local has failed, however tidy its report
+reads. The rule below is about *when*, never *whether*, and its only concern is
+avoiding a push that buys nothing.
+
 **Sync brackets acquisition, not writes. Ownership makes writes free.**
 (Decided 2026-08-13, computenet-wpvy.3, superseding the exactly-two-syncs
 rule — which dated from ~10-minute round-trips. Measured 2026-08-15 against
