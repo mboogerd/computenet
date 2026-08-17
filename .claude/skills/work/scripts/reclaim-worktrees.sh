@@ -32,7 +32,9 @@
 #    are technically recoverable, but nothing on the operator's screen says
 #    work was there, and ignored-but-wanted files in the directory are gone
 #    for good. So: resolve HEAD's branch, ask origin for it with a read-only
-#    `git ls-remote`, and require HEAD to be that tip or an ancestor of it.
+#    ANY origin/* ref (`git branch -r --contains`), not the same-named branch:
+#    a task branch is never pushed, so a by-name test is false for every task
+#    worktree (computenet-13kh). Its commits live in origin/<feature-branch>.
 #    Detached HEAD, a branch origin has never heard of, an unreachable origin,
 #    and local commits ahead of the remote tip are each a SKIP, never a
 #    removal — the check has to *prove* the commits are elsewhere, and
@@ -70,6 +72,14 @@ done
 
 command -v jq >/dev/null || { echo "reclaim-worktrees: jq unusable; NOTHING was checked" >&2; exit 3; }
 command -v bd >/dev/null || { echo "reclaim-worktrees: bd unusable; NOTHING was checked" >&2; exit 3; }
+
+# One fetch, before the loop: `branch -r --contains` reads REMOTE-TRACKING refs,
+# so a stale set would report commits as unheld and skip everything. A failed
+# fetch means we cannot prove anything — say so and remove nothing.
+if ! git fetch origin --quiet 2>/dev/null; then
+  echo "reclaim-worktrees: cannot fetch origin — containment is unprovable, NOTHING was checked" >&2
+  exit 3
+fi
 
 rc=0
 found=0
@@ -113,24 +123,24 @@ while IFS= read -r line; do
     rc=1
     continue
   fi
-  if ! remote_line=$(git -C "$path" ls-remote origin "refs/heads/$branch" 2>/dev/null); then
-    echo "SKIP $id: origin is UNREACHABLE — cannot prove $branch is pushed, so nothing is removed" >&2
-    rc=1
-    continue
-  fi
-  remote_sha=${remote_line%%$'\t'*}
+  # Containment is proven against ANY remote ref, not the same-named one.
+  # A task branch is never pushed (computenet-zmso): 5c merges it into the
+  # feature branch from the local ref, so `origin/task/<id>` does not exist
+  # and a by-name test reports "these commits exist only here" for every task
+  # worktree — false, and permanently (computenet-13kh). What is true is that
+  # the commits live in origin/<feature-branch>. `branch -r --contains` asks
+  # exactly the right question and subsumes the by-name case.
   head_sha=$(git -C "$path" rev-parse HEAD 2>/dev/null || true)
-  if [ -z "$remote_sha" ]; then
-    echo "SKIP $id: bead closed but origin has NO $branch — these commits exist only here:" >&2
-    git -C "$path" log --oneline -5 HEAD >&2 2>/dev/null
+  if [ -z "$head_sha" ]; then
+    echo "SKIP $id: cannot resolve HEAD — nothing removed" >&2
     rc=1
     continue
   fi
-  if [ "$remote_sha" != "$head_sha" ] \
-     && ! git -C "$path" merge-base --is-ancestor "$head_sha" "$remote_sha" 2>/dev/null; then
-    echo "SKIP $id: bead closed but HEAD is not contained in origin/$branch — UNPUSHED commits:" >&2
-    git -C "$path" log --oneline "$remote_sha..HEAD" >&2 2>/dev/null \
-      || echo "  (HEAD $head_sha vs origin $remote_sha — fetch origin and compare by hand)" >&2
+  holders=$(git -C "$path" branch -r --contains "$head_sha" 2>/dev/null | sed 's/^[ *]*//' | grep -v '\->' || true)
+  if [ -z "$holders" ]; then
+    echo "SKIP $id: bead closed but these commits are on NO remote ref — they exist only here:" >&2
+    git -C "$path" log --oneline -5 HEAD >&2 2>/dev/null
+    echo "  (checked every origin/* ref, not just origin/$branch)" >&2
     rc=1
     continue
   fi
