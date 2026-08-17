@@ -877,8 +877,12 @@ fast-forwards strictly-behind, keeps strictly-ahead (unpushed work), and
 fails loudly on divergence.
 
 **A dirty inherited worktree may be a half-applied MUTATION** — this repo
-verifies pins by mutating production code, and an agent killed mid-mutation
-looks identical to one killed mid-improvement. Classify before acting
+verifies pins by mutating code — production **or test**, since a
+test-instrument defect is probed by breaking the test (task.md step 3,
+computenet-wpvy.34) — and an agent killed mid-mutation looks identical to one
+killed mid-improvement. So a dirty *test* file is not evidence of finished
+work any more than a dirty production file is; the marker, not the file's
+kind, is the discriminator. Classify before acting
 (computenet-leg):
 
 ```bash
