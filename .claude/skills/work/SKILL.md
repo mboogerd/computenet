@@ -759,6 +759,18 @@ verdict. (`parked` is only meaningful on an empty batch.)
   (computenet-dqy.37 required violating its own claim). Design reaches wider
   → widen the claim and comment why. The dispatch prompt below also tells the
   implementer to report-and-widen rather than choose silently.
+- **An empty `files` claim is two different things — read the description
+  before scheduling one.** `next-batch.py` batches a claimless task alone
+  either way, which is right for both, but they need different bookkeeping.
+  A description opening `files unknowable before diagnosis` or `no diff: …`
+  is a **deliberate** empty claim (feature.md's two shapes: diagnosis-first,
+  and a measurement whose deliverable is a comment or a run id rather than a
+  file). Write the real claim from the diff afterwards for the first;
+  for the second there is nothing to write. **Neither opener present means
+  the task forgot its claim** — comment on it, fix it before dispatch, and
+  log the breakdown defect (computenet-wpvy.30). And never let a task take a
+  nominal claim over files it merely reads: a claim is a lock, so a read-only
+  lock blocks a sibling for no benefit.
 - **Restate any cross-bead write the bead's criteria demand — ids and
   action — in the dispatch prompt.** Authorization living only in the bead is
   invisible to the policy check, which reads the prompt; an agent doing
