@@ -226,6 +226,10 @@ than restarting. That's the whole reason the worktree is preserved.
      ./gradlew :kernel:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
      grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
      ```
+   - **Give the Bash call an explicit timeout, up to 600000 ms.** Past its
+     120s default the tool backgrounds the call, and a turn that ends waiting
+     on a background job never resumes — your turn ending is your completion.
+     `:demo:beadsmirror:test` alone takes ~3m40s (computenet-hob2).
    - Quote test counts *and the newest timestamp* read from the JUnit XML
      rather than the build result — the timestamp is what separates a run from
      a replay (measured 2026-08-14: a cached repeat run left `newest`
