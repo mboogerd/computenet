@@ -57,6 +57,7 @@ dotted=$(bd list --all --created-after "$SINCE" --limit 0 --skip-labels --json 2
 # owner:$BEADS_ACTOR as a label and never removes it. Without this, every
 # breakdown child under a finished epic would flag for two days.
 mine=$(bd list --all --label="owner:$BEADS_ACTOR" --limit 0 --json 2>/dev/null \
+       | sed -n '/^[[{]/,$p' \
        | jq -r "$ROWS | .id" 2>/dev/null)
 
 # Resolve ownership once per PARENT, not once per child: `bd show` is ~0.5s and
@@ -66,7 +67,8 @@ for parent in $(for id in $dotted; do echo "${id%.*}"; done | sort -u); do
   # -Fx: whole-line match, or parent computenet-7em.1 would match the line
   # computenet-7em.1.6 and silently skip a real finding.
   printf '%s\n' "$mine" | grep -Fxq "$parent" && continue
-  owner=$(bd show "$parent" --json 2>/dev/null | jq -r '.[0].assignee // ""' 2>/dev/null)
+  owner=$(bd show "$parent" --json 2>/dev/null | sed -n '/^[[{]/,$p' \
+          | jq -r '.[0].assignee // ""' 2>/dev/null)
   [ "$owner" = "$BEADS_ACTOR" ] && continue
   for id in $dotted; do
     [ "${id%.*}" = "$parent" ] || continue

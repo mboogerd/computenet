@@ -304,13 +304,14 @@ The smallest coherent change, and proof the tests actually executed.
    suggestion: past it the tool backgrounds the call whatever you asked for.
    The invariant that makes that survivable (computenet-ng9o):
 
-   > **Commit and push BEFORE you wait on evidence.** Then a stop — budget,
+   > **Commit BEFORE you wait on evidence.** Then a stop — budget,
    > classifier, host death — costs you the evidence, never the work. An agent
    > that waits first and is stopped strands uncommitted changes in a worktree
    > that reads to everyone downstream as "produced nothing".
 
-   That pulls step 7's commit-and-push earlier for this case only — your own
-   branch, nothing else, exactly as step 7 describes. It does **not** override
+   That pulls step 7's commit earlier for this case only — your own
+   branch, nothing else, exactly as step 7 describes, and still **without** a
+   push. It does **not** override
    step 3's marker rule: while `.mutation-in-progress` exists you never commit, so
    a mutation check is never what you background and wait on. Restore the code,
    remove the marker, commit, and only then start the long evidence run.
@@ -353,7 +354,7 @@ The smallest coherent change, and proof the tests actually executed.
    to the other rather than reaching for a bare sleep.
 
    **If you stop with the suite still running, say so ON THE BEAD** — which
-   suite, which log, what is committed and pushed — rather than returning the
+   suite, which log, what is committed (sha) — rather than returning the
    wait as your result. A result that is only "I am waiting" reads to the
    orchestrator exactly like a finished one.
    - Quote test counts *and the newest timestamp* read from the JUnit XML
@@ -435,11 +436,15 @@ Your own index, work discovered on the way, and the bead state you leave behind.
    `origin/main`. Run `git -C <your-worktree> status --short` before you
    report, and expect it empty.
 
-   Push even when the task is unfinished — an unpushed branch exists only on
-   this machine, so the work is invisible and gets redone if anything else
-   picks the task up.
+   Commit even when the task is unfinished — an uncommitted change exists
+   only in the working tree, so the work is invisible and gets redone if
+   anything else picks the task up. Your branch is local to **this machine**:
+   it survives this session, but if the whole machine is lost before the
+   orchestrator merges you, the commit goes with it. That is accepted — your
+   reviewer and the merge both run here, and the alternative (a push the
+   classifier denies) buys nothing.
 
-   Push **your own branch only**. Never merge into the feature branch, push
+   Touch **your own branch only**. Never merge into the feature branch, push
    it, or touch its PR: the orchestrator merges after review and serializes
    it so concurrent merges don't race.
 8. If implementation reveals genuine new follow-up work, create it as a

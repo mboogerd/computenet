@@ -61,8 +61,9 @@ downstream step reads that as nothing — the merge merges nothing, and a
 reviewer diffing `origin/<feature-branch>...HEAD` sees an empty diff and can
 reasonably fail the task for having produced nothing. If `status` is not
 empty, **say so and name the files**: the work exists and the defect is that
-it was not committed ([task.md](task.md) makes commit-and-push the required
-final step), which is a different verdict from "produced nothing". Do not
+it was not committed ([task.md](task.md) step 7 makes the commit the required
+final step — and the whole handoff, since implementers do not push), which is
+a different verdict from "produced nothing". Do not
 commit it for the implementer without saying you did.
 
 **Diff against the resolved base, never a bare local `main`.** A task worktree's
@@ -496,8 +497,17 @@ edge. Commit on the task branch:
 
 ```bash
 git -C <task-worktree> commit -m "review: <what you fixed>" -- <the paths you edited>
-git -C <task-worktree> push
+git -C <task-worktree> status --short          # expect empty
 ```
+
+**Commit; do NOT push.** A dispatched agent's `git push -u origin
+<task-branch>` is denied by the permission classifier, and the task branch is
+local by design (computenet-zmso, [task.md](task.md) step 7): the orchestrator
+merges `task/<id>` into the feature branch from the *local* ref, which
+worktrees of one repository share, and pushes the feature branch. **Name your
+repair commit's sha and `--stat` in your report** — that is what tells the
+orchestrator its merge should contain your work, and the only check that
+catches a repair the merge missed.
 
 `-m … -- <paths>`, never `-am`: this repo's shared index needs the pathspec,
 and `git` rejects the combination outright — `fatal: paths … with -a does not
@@ -608,13 +618,13 @@ matters more than the waiting does.** 600000 ms is the cap, not a
 suggestion: past it the tool backgrounds the call whatever you asked for.
 The invariant that makes that survivable (computenet-ng9o):
 
-> **Commit and push BEFORE you wait on evidence.** Then a stop — budget,
+> **Commit BEFORE you wait on evidence.** Then a stop — budget,
 > classifier, host death — costs you the evidence, never the work. An agent
 > that waits first and is stopped strands uncommitted changes in a worktree
 > that reads to everyone downstream as "produced nothing".
 
-That is section 4's `review:` commit, brought forward — commit and push what
-you have fixed before the wait, not after. It does **not** override the marker
+That is section 4's `review:` commit, brought forward — commit what
+you have fixed before the wait, not after; still no push. It does **not** override the marker
 rule above: while `.mutation-in-progress` exists you never commit, so a
 mutation check is never what you background and wait on. Restore the code,
 remove the marker, commit, and only then start the long evidence run.
@@ -657,7 +667,7 @@ that read as working around a block just given. If one form is refused, switch
 to the other rather than reaching for a bare sleep.
 
 **If you stop with the suite still running, say so ON THE BEAD** — which
-suite, which log, what is committed and pushed — rather than returning the
+suite, which log, what is committed (sha) — rather than returning the
 wait as your result. A result that is only "I am waiting" reads to the
 orchestrator exactly like a finished one.
 
