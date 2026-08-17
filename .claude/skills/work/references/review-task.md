@@ -538,8 +538,11 @@ catches a repair the merge missed.
 and `git` rejects the combination outright — `fatal: paths … with -a does not
 make sense` (computenet-2x5l).
 
-**Your repairs have an authorship bound, the same as a feature reviewer's**
-(review-feature.md §5) — without one, a task reviewer can rewrite the
+**Your repairs have an authorship bound, as a feature reviewer's do**
+([review-feature.md](review-feature.md) §5 states the same idea at feature
+scale, in more detail and in wording that is still being amended; the bound
+below is the one that governs a *task* review, so read it here rather than
+reconciling the two) — without one, a task reviewer can rewrite the
 deliverable and then certify its own text (computenet-r197). Your repair is
 **substantive**, and disqualifies you from certifying, if it touches a
 **behavioural code path**, or adds or semantically changes a **test or
