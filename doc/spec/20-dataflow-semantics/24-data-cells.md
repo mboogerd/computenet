@@ -907,10 +907,58 @@ Both baseline kinds take this one branch, so replay-versus-pull never becomes an
 observable distinction at an effect boundary, and PN-2 keeps `[24-DUR-05]`
 unchanged: a replayed frame the sink already acted on live is at or behind the
 restored frontier and is suppressed, while a journal-tail frame the sink never
-acted on fires — the effect catch-up half of the rule. The residual is growth:
-the discharged-baseline set is compacted at checkpoint only against positions
-the processed-frontier already covers, so a sink that takes many catch-up
-baselines over a long life accumulates entries.
+acted on fires — the effect catch-up half of the rule.
+
+**Bounding the discharged-baseline set** *(decided 2026-08-17,
+`computenet-yh6.1.3.4.2`)*. Because a baseline firing advances no frontier, the
+only compaction available — drop, at checkpoint, the positions the
+processed-frontier already covers — never fires for a source lane that emits
+baselines and no live frames after them: N-shard pull replies, repeated link
+installs against a state-holder that only answers `StateRequest`s, and repeated
+crash recoveries firing journal tails each leave permanent entries, in memory
+and in every subsequent checkpoint blob. The set is therefore **capped per
+inlet** (1024 positions), evicting the frontier-covered positions first — those
+are redundant by construction, since the frontier test is applied before the
+discharge test — and then oldest-discharge-first.
+
+The **loss mode is explicit**: an evicted position is no longer suppressed, so
+if that exact frame is re-delivered — an upstream retransmit of a baseline
+reply, or a journal-tail replay of it — the sink **re-fires the effect for it**.
+That is a duplicate external effect, bounded to positions older than the inlet's
+last 1024 baseline firings, and it sits under 93 I-7's stated
+external-idempotency ceiling. The direction is deliberate: eviction only ever
+*shrinks* the suppression set, so no live frame can become collaterally
+suppressed by it and `[24-DUR-07]` cannot be re-broken by the bound.
+
+Two alternatives were rejected on that criterion. A **per-source contiguity
+collapse** — folding a run of consecutive discharged counters into a per-source
+high-water — is genuinely lossless, since contiguity means every counter at or
+below the high-water was itself discharged and Rule S1 forbids re-issuing a
+pair. It is not a bound, though not because the growth case is always sparse —
+a lane that only ever answers `StateRequest`s stamps consecutive counters, so
+that case *is* a contiguous run and would collapse. What the collapse cannot
+bound is the **source dimension**: a `FanOutlet`'s `sourceId` is minted per
+outlet instance and re-minted on every epoch bump, so the distinct source lanes
+one inlet sees over a long life — N shards, each remote peer, each restart or
+replica spawn — are themselves unbounded, and one high-water each still grows
+without limit. A collapse is therefore a legitimate *complement* to the cap
+(it would postpone eviction on a single lane) and never a replacement for it;
+it is not implemented here. Consulting such a high-water only for
+baseline-marked frames would bound it, and is what makes it wrong — a baseline
+at an undischarged counter below the high-water would be suppressed without
+ever having fired, which is the silent unrecoverable omission `[24-DUR-07]`
+chose firing over, and it would make replay-versus-pull observable at an effect
+boundary. A **retention
+horizon tied to source-lane liveness** is the semantically exact answer but is
+likewise not a bound (a live lane retains forever), and it needs link-teardown
+knowledge the sink does not have and cannot acquire without pushing an
+obligation back onto the catch-up protocol — precisely what `[24-DUR-08]` was
+designed to avoid.
+
+The figure 1024 is a judgement, not a measurement: it is far above the
+units-to-tens of baselines a shard fan-out or link-install burst produces, and
+holds the per-inlet checkpoint cost in the low hundreds of kilobytes. No
+workload has been profiled against it.
 
 The decided journal classification still diverges from the landed
 tee: 93 I-7 journals only `PORT_API` data plus topology events, while the

@@ -26,6 +26,65 @@ private const val RECORD_OUTLET_WAVE: Byte = 4
 private const val RECORD_BASELINE: Byte = 5
 
 /**
+ * `[24-DUR-08]`'s bound: the most discharged-baseline positions
+ * ([HostDurability.dischargedBaselines]) one `Effectful` inlet retains
+ * (`computenet-yh6.1.3.4.2`; spec 24 §Effectful, end of the catch-up-baselines passage).
+ *
+ * **The set had no bound.** A baseline firing never advances the wave-position
+ * processed-frontier (`[24-DUR-07]`), so the only compaction available — drop what the
+ * frontier already covers, applied at [HostDurability.checkpoint] — never fires for a
+ * source lane that emits baselines and no live frames after them. N-shard pull replies,
+ * repeated link installs against a state-holder that only answers `StateRequest`s, and
+ * repeated crash recoveries firing journal tails each leave permanent entries, in memory
+ * and in every subsequent checkpoint blob.
+ *
+ * **Why a cap and not the other two candidates.** A *per-source contiguity collapse* — fold
+ * a run of consecutive discharged counters into a per-source high-water — is genuinely
+ * lossless (contiguity means every counter at or below the high-water was itself
+ * discharged, and 93 I-14 Rule S1 forbids re-issuing a pair, so an arrival at or below it
+ * can only be a re-delivery of a frame that already fired). It is nonetheless not a bound —
+ * though not because the growth case is always sparse: a lane that only answers
+ * `StateRequest`s stamps consecutive counters, so that case *is* a contiguous run and would
+ * collapse. What the collapse cannot bound is the **source dimension**. A [FanOutlet]'s
+ * `sourceId` is minted per outlet instance and re-minted on every epoch bump, so the
+ * distinct source lanes one inlet sees over a long life — N shards, each remote peer, each
+ * restart or replica spawn — are themselves unbounded, and one high-water each still grows
+ * without limit. A collapse is a legitimate *complement* to this cap (it would postpone
+ * eviction on a single lane) and never a replacement for it; it is not implemented.
+ * Consulting such a high-water only for baseline-marked frames would bound it, and is what
+ * makes it wrong: a baseline at an undischarged counter below the high-water would then be
+ * suppressed without ever having fired — the silent, unrecoverable omission `[24-DUR-07]`
+ * chose firing over — and it would make replay-vs-pull an observable distinction at an
+ * effect boundary, which spec 24 §Effectful says it must not be. A *retention horizon tied
+ * to source-lane liveness* is the semantically exact answer, but it is not a bound either
+ * (a live lane retains forever) and it needs link-teardown knowledge this class does not
+ * have and cannot acquire without pushing an obligation back onto the catch-up protocol —
+ * which is precisely what `[24-DUR-08]` was designed to avoid.
+ *
+ * **The loss mode, stated.** Eviction is oldest-discharge-first, after every
+ * frontier-covered position (which is redundant by construction) has been dropped. An
+ * evicted position is no longer suppressed: if that exact frame is re-delivered — an
+ * upstream retransmit of a baseline reply, or a journal-tail replay of it — the sink
+ * **re-fires the effect for it**. The loss is a duplicate external effect, bounded to
+ * positions older than this inlet's last [DISCHARGED_BASELINE_CAP] baseline firings, and
+ * it sits under 93 I-7's stated external-idempotency ceiling. It is deliberately in that
+ * direction: eviction only ever shrinks the suppression set, so no live frame can become
+ * collaterally suppressed by it and `[24-DUR-07]` cannot be re-broken by this bound —
+ * unlike the high-water candidates, whose loss mode is a silent omission.
+ *
+ * **The number.** A retained position costs on the order of a hundred bytes live (a
+ * [Timestamp], its [UUID], and the set entry holding them) and one serialized
+ * [BaselineDischargeRecord] in every checkpoint blob — ~285 bytes measured on a
+ * structurally identical Java-serialized shape, and somewhat more here since Kotlin's
+ * class names are longer — so 1024 holds a per-inlet ceiling in the low hundreds of
+ * kilobytes of checkpoint while being far above any plausible legitimate in-flight
+ * retransmit window — the shard fan-out and link-install bursts that motivate the residual
+ * are units to tens of baselines, not thousands. It is a judgement, not a measurement: no workload has been profiled against
+ * it, and the only evidence behind the figure is that arithmetic.
+ */
+private const val DISCHARGED_BASELINE_CAP = 1024
+
+/**
  * T05 finding 4: [HostDurability.recoverFrom] failed on [recordIndex] of
  * [total] journal records (0-based) and stopped there — every record before
  * it applied, every record from [recordIndex] onward did not. Thrown after
@@ -59,6 +118,9 @@ private data class FrontierRecord(val cellRef: CellRef, val portName: String, va
  * than on the baseline's link-install anchor also avoids the anchor recurring — two shards
  * replying with equal frontiers (`PartitionedShardSet`'s N per-shard baselines) share an
  * anchor but never a position, since 93 I-14 Rule S1 forbids re-issuing a pair.
+ *
+ * Because the set is exact and a baseline advances no frontier, it only ever grows;
+ * [DISCHARGED_BASELINE_CAP] is the bound, and states its loss mode.
  *
  * A **separate additive record type** for the same reason as [OutletWaveRecord]: a journal
  * written before this change contains no `RECORD_BASELINE` and replays byte-for-byte as it
@@ -175,6 +237,11 @@ internal class HostDurability(
      * wave position, so it must never advance a wave-position high-water. This is the
      * sink's own journaled state that makes a baseline firing crash-consistent, with no
      * obligation on the producer, the ingress or the catch-up protocol.
+     *
+     * Bounded per inlet at [DISCHARGED_BASELINE_CAP], evicting oldest-discharge-first,
+     * with the loss mode stated there: an evicted position that is re-delivered re-fires
+     * the effect. Insertion-ordered ([LinkedHashSet]) because that eviction order is part
+     * of the bound's contract, not an implementation detail.
      */
     private val dischargedBaselines = mutableMapOf<Pair<CellRef, String>, MutableSet<Timestamp>>()
 
@@ -348,7 +415,10 @@ internal class HostDurability(
             // Compacted while being written: a position the processed-frontier already
             // covers is suppressed by [alreadyProcessed] anyway, so keeping it would only
             // grow the set. That is the same test the guard applies first, so dropping it
-            // changes no decision.
+            // changes no decision. What that rule cannot compact — a lane that emits
+            // baselines and no live frames after them — is bounded instead by
+            // [DISCHARGED_BASELINE_CAP], so this blob carries at most that many records
+            // per inlet.
             val baselines = ArrayList<ByteArray>()
             dischargedBaselines.forEach { (key, positions) ->
                 if (journalSelector(key.first) !== journal) return@forEach
@@ -453,9 +523,30 @@ internal class HostDurability(
     fun alreadyDischargedBaseline(cellRef: CellRef, portName: String, timestamp: Timestamp): Boolean =
         dischargedBaselines[cellRef to portName]?.contains(timestamp) == true
 
-    /** Records a discharged baseline position in memory. Callers decide whether to also journal it. */
+    /**
+     * Records a discharged baseline position in memory, then enforces
+     * [DISCHARGED_BASELINE_CAP] on that inlet's set. Callers decide whether to also
+     * journal it.
+     *
+     * Eviction runs on the restore path too ([restoreBaselineDischarge]), and journal
+     * order is insertion order, so a recovered host holds exactly the set the crashed one
+     * held — the bound does not make recovery diverge from the live run.
+     */
     private fun recordBaselineDischarge(cellRef: CellRef, portName: String, timestamp: Timestamp) {
-        dischargedBaselines.getOrPut(cellRef to portName) { mutableSetOf() } += timestamp
+        val key = cellRef to portName
+        val positions = dischargedBaselines.getOrPut(key) { LinkedHashSet() }
+        positions += timestamp
+        if (positions.size <= DISCHARGED_BASELINE_CAP) return
+        // Free first: a position the wave-position frontier already covers is decided by
+        // [alreadyProcessed] before [alreadyDischargedBaseline] is ever consulted, so
+        // dropping it changes no decision at all. Same test `checkpoint` applies.
+        positions.removeIf { (processedFrontier[key]?.get(it.sourceId) ?: -1L) >= it.counter }
+        // Then the lossy step, oldest discharge first (see [DISCHARGED_BASELINE_CAP]).
+        val iterator = positions.iterator()
+        while (positions.size > DISCHARGED_BASELINE_CAP && iterator.hasNext()) {
+            iterator.next()
+            iterator.remove()
+        }
     }
 
     /**
