@@ -113,6 +113,7 @@ echo
 # available fast-forward was discarded, leaving the checkout stale for the
 # whole slot. Stub `git` so `fetch` does the real update and then hangs past a
 # 1s fuse; everything else passes through to the real git.
+echo "case 6: a cut fetch whose ref update already landed"
 c=$(sandbox od2q)
 stub="$ROOT/od2q-bin"; mkdir -p "$stub"
 cat > "$stub/git" <<'STUB'

@@ -223,6 +223,14 @@ if [ -e "$killed_flag" ] && [ "$rc" -ne 0 ]; then
   # there, not an ancestor, or not fast-forwardable. If nothing advanced, they
   # simply report "already current".
   #
+  # One consequence, accepted rather than overlooked: this is the ONE path
+  # that reaches the merge with the fuse already burned, so the checkout runs
+  # against the thinnest remaining harness budget (30s total, ~14s left) and
+  # is the likeliest to be cut mid-checkout. That is precisely the state
+  # heal_or_bail() above repairs on the next session, and it only arises when
+  # the ref actually advanced — so the trade is "a possibly half-applied
+  # checkout that self-heals" against "a certainly stale slot".
+  #
   # Distinct from computenet-wpvy.39, which was a cut fetch MISCLASSIFIED as
   # remote corruption. That classification is correct and stays; this is the
   # other half — a correctly-classified cut still throwing away a completed

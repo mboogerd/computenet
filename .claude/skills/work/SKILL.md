@@ -1503,8 +1503,10 @@ conflicts are yours and get a reviewer like any code you write.
   A residual filed on an **unparented** item (5f route 4 works those) is
   parented to the *item*, not to an epic — there is none — so the chain stays
   walkable and a later continuation session finds it (review-feature.md §7,
-  computenet-wpvy.42). Don't re-parent it to your current epic: it did not
-  come from there.
+  computenet-wpvy.42). That parent edge *replaces* §7's `discovered-from`
+  edge rather than joining it — same ordered pair, and `bd` holds one edge
+  per pair (computenet-ofzz). Don't re-parent it to your current epic: it did
+  not come from there.
 
 - **Draft verdict** → four shapes routing differently; read the verdict
   comment, then ship-feature.md §3–4. The substantive-repair case is a
@@ -1622,15 +1624,21 @@ blocked, also `bd defer` it (step 3's route) so the next session doesn't
 resume a dead queue.
 
 Build the pool from `bd ready --json`: features and tasks of other epics,
-plus unparented bugs and chores. Drop: `human`-labeled; SDLC-excluded (both
+plus every bug and chore with **no epic ancestor** — `epic-of.sh <id>`
+answering `(unparented)`, which is the test, not "has no `parent` field".
+The two differ: a residual filed by a previous session's reviewer is parented
+to the unparented item it came out of (review-feature.md §7), so it *has* a
+parent and still has no epic. Filtering on the raw `parent` field drops
+exactly the review-discovered work continuation is meant to pick up, and
+nothing else would ever find it (computenet-wpvy.42). Drop: `human`-labeled; SDLC-excluded (both
 halves of the test); `parked_at` within 6h; **anything that is review or
 verification of this session's own output** (warm context makes
 self-approval likely — excluded whatever its score); anything whose
 `metadata.files` overlaps a claim already `in_progress`. Order the rest:
 direct dependents of this session's completed items; file-surface overlap
 with this session's pushed branches (`git diff --name-only
-origin/main...<branch>`, never titles); unparented ready bugs/chores;
-general ready order — ties break by the next criterion down.
+origin/main...<branch>`, never titles); ready bugs/chores with no epic
+ancestor; general ready order — ties break by the next criterion down.
 
 Two admission gates:
 
