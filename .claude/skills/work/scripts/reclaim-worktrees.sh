@@ -31,14 +31,18 @@
 #    without a word — rc=0, "removed". The branch ref survives, so the commits
 #    are technically recoverable, but nothing on the operator's screen says
 #    work was there, and ignored-but-wanted files in the directory are gone
-#    for good. So: resolve HEAD's branch, ask origin for it with a read-only
-#    ANY origin/* ref (`git branch -r --contains`), not the same-named branch:
-#    a task branch is never pushed, so a by-name test is false for every task
-#    worktree (computenet-13kh). Its commits live in origin/<feature-branch>.
-#    Detached HEAD, a branch origin has never heard of, an unreachable origin,
-#    and local commits ahead of the remote tip are each a SKIP, never a
-#    removal — the check has to *prove* the commits are elsewhere, and
-#    "couldn't tell" is not a proof.
+#    for good. So: require HEAD to be contained in SOME origin ref
+#    (`git branch -r --contains`, after a pruning fetch) — deliberately not
+#    the same-named one. A task branch is never pushed (computenet-zmso), so
+#    a by-name test was false for every task worktree and this guard was
+#    inert for the majority of them (computenet-13kh); what is true is that
+#    the commits live in origin/<feature-branch>.
+#    Detached HEAD, commits on no origin branch at all (never pushed, or
+#    pushed to a branch origin has since deleted), and commits reachable only
+#    from a non-branch remote ref such as a tag or refs/pull/* are each a
+#    SKIP, never a removal. An unreachable origin aborts the whole run before
+#    anything is checked (exit 3). The check has to *prove* the commits are
+#    elsewhere, and "couldn't tell" is not a proof.
 #  * The worktree must be QUIET for --min-age-minutes (default 15, the same
 #    floor the liveness checks in SKILL.md step 3 and 5f use). This is the
 #    WEAKEST guard and is not a liveness test: an agent that has an idle
@@ -53,7 +57,7 @@
 # Exit: 0 = nothing stranded, or all reclaimed; 1 = a removal failed, or a
 #       candidate was skipped as dirty, mid-operation, or not provably pushed
 #       (all need a human eye); 2 = bad usage; 3 = a precondition failed (bd
-#       or jq unusable) — nothing was checked.
+#       or jq unusable, or origin unreachable) — nothing was checked.
 #
 # NOT guarded: files matched by .gitignore are invisible to every check here
 # and go with the directory. That is build output by construction; nothing
@@ -74,9 +78,18 @@ command -v jq >/dev/null || { echo "reclaim-worktrees: jq unusable; NOTHING was 
 command -v bd >/dev/null || { echo "reclaim-worktrees: bd unusable; NOTHING was checked" >&2; exit 3; }
 
 # One fetch, before the loop: `branch -r --contains` reads REMOTE-TRACKING refs,
-# so a stale set would report commits as unheld and skip everything. A failed
-# fetch means we cannot prove anything — say so and remove nothing.
-if ! git fetch origin --quiet 2>/dev/null; then
+# which are a CACHE, not origin. Two ways that cache lies, and they fail in
+# opposite directions:
+#  * too old -> commits that ARE on origin read as unheld: a skip, harmless.
+#  * too NEW -> `origin/<branch>` still exists locally after the branch was
+#    deleted or rewound on origin, and the guard then "proves" containment
+#    against a ref origin no longer has. That one DELETES a directory whose
+#    commits are nowhere but here. The predecessor asked origin directly with
+#    `ls-remote`, so it could not be fooled; `--prune` is what buys that
+#    authority back, by dropping every ref origin no longer advertises.
+# So: --prune, not a bare fetch. A failed fetch means we cannot prove
+# anything — say so and remove nothing.
+if ! git fetch origin --prune --quiet 2>/dev/null; then
   echo "reclaim-worktrees: cannot fetch origin — containment is unprovable, NOTHING was checked" >&2
   exit 3
 fi
@@ -140,7 +153,10 @@ while IFS= read -r line; do
   if [ -z "$holders" ]; then
     echo "SKIP $id: bead closed but these commits are on NO remote ref — they exist only here:" >&2
     git -C "$path" log --oneline -5 HEAD >&2 2>/dev/null
-    echo "  (checked every origin/* ref, not just origin/$branch)" >&2
+    echo "  (checked every origin/* branch, not just origin/$branch; tags and" >&2
+    echo "   refs/pull/* do not count. A branch squash-merged and then DELETED" >&2
+    echo "   on origin also lands here: the content is on main under a new sha," >&2
+    echo "   these commits are not. Judge by hand — nothing was removed.)" >&2
     rc=1
     continue
   fi
@@ -154,7 +170,10 @@ while IFS= read -r line; do
   fi
 
   if [ "$DRY_RUN" = 1 ]; then
-    echo "would remove $path (bead $id closed, tree clean, $branch on origin, quiet ${MIN_AGE}m+)"
+    # Name the ref that actually holds the commits, not $branch: for a task
+    # worktree the holder is the feature branch, and saying "$branch on
+    # origin" would repeat the very falsehood computenet-13kh was about.
+    echo "would remove $path (bead $id closed, tree clean, HEAD held by $(printf '%s' "$holders" | head -1), quiet ${MIN_AGE}m+)"
     continue
   fi
   if git worktree remove "$path" 2>/dev/null; then

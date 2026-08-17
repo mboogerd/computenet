@@ -2,7 +2,7 @@
 # Tests for reclaim-worktrees.sh. Stubs `bd` and builds real git worktrees
 # against a real (local, bare) origin, because the load-bearing guard is
 # "HEAD is on origin" and it cannot be exercised without one.
-# Expect "19 passed, 0 failed".
+# Expect "28 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/reclaim-worktrees.sh"}
@@ -108,6 +108,23 @@ out=$(run); rc=$?
 check "task branch absent from origin but held by the feature branch -> reclaimed" "removed" "$out"
 gone computenet-task "a task worktree whose commits are in the pushed feature branch is reclaimable"
 
+# The hole a bare (non-pruning) fetch leaves. `branch -r --contains` reads a
+# CACHE: push a branch, delete it on origin, and `origin/<branch>` survives
+# locally unless the fetch prunes. The guard would then "prove" containment
+# against a ref origin does not have and delete the only copy of the commits.
+# The predecessor asked origin directly (`ls-remote`) and could not be fooled;
+# --prune is what buys that authority back.
+mk computenet-staleref closed
+commit_in computenet-staleref "work origin later lost"
+git -C "$ROOT/computenet-worktrees/computenet-staleref" push -q origin b/computenet-staleref
+(cd "$REPO" && git fetch origin --quiet)                     # cache now holds origin/b/computenet-staleref
+git -C "$ROOT/origin.git" update-ref -d refs/heads/b/computenet-staleref
+age "$ROOT/computenet-worktrees/computenet-staleref"
+out=$(run); rc=$?
+check "stale remote-tracking ref must not count as containment" "on NO remote ref" "$out"
+check "stale ref case -> exit 1" "1" "$rc"
+alive computenet-staleref "a branch origin has DELETED must never prove containment"
+
 # Detached HEAD: no branch holds the commits.
 mk computenet-detached closed
 git -C "$ROOT/computenet-worktrees/computenet-detached" checkout -q --detach
@@ -130,6 +147,19 @@ mk computenet-happy closed
 out=$(run)
 check "clean+pushed+closed IS removed for real" "removed $ROOT/computenet-worktrees/computenet-happy" "$out"
 [ -d "$ROOT/computenet-worktrees/computenet-happy" ] && bad "happy path did not remove" || ok
+
+# Unreachable origin. Containment is unprovable for EVERY candidate, so this
+# aborts before the loop rather than skipping item by item: exit 3, and not a
+# single SKIP line, because nothing was checked. Last, because it breaks the
+# remote for good.
+mk computenet-unreachable closed
+git -C "$REPO" remote set-url origin "$ROOT/there-is-no-origin.git"
+out=$(run); rc=$?
+check "unreachable origin -> says nothing was checked" "NOTHING was checked" "$out"
+check "unreachable origin -> exit 3" "3" "$rc"
+[[ "$out" != *"SKIP"* && "$out" != *"removed"* ]] && ok \
+  || bad "unreachable origin must check nothing at all — got <$out>"
+alive computenet-unpushed "an unreachable origin must not remove anything"
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]
