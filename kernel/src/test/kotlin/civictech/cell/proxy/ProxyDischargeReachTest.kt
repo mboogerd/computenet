@@ -28,6 +28,8 @@ class ProxyDischargeReachTest {
 
     private class WithFn(val f: () -> Unit)
 
+    private class WithRunnable(val r: Runnable)
+
     private class Carrier(val first: Owned<String>, val second: Owned<String>)
 
     private class LeaseCarrier(val first: Leased<String>, val second: Leased<String>)
@@ -70,6 +72,24 @@ class ProxyDischargeReachTest {
     fun `an Owned captured by a lambda is not discharged`() {
         val captured = Owned("captured")
         val holder = WithFn { captured.take() }
+
+        Proxy.discharge(holder)
+
+        isLive(captured) shouldBe true
+    }
+
+    /**
+     * The same over-reach one SAM flavour over, found under review of computenet-h6sf: a
+     * Java functional interface is **not** a `kotlin.Function`, so `is Function<*>` does not
+     * stop it, and the walk opened the lambda's hidden carrier class and consumed the
+     * capture. `java.lang.Runnable` is a platform type to
+     * `ContractProcessor.carriesExclusive`, so the scan can no more see this capture than it
+     * can a `Function0`'s — the divergence, and the invariant violation, are identical.
+     */
+    @Test
+    fun `an Owned captured behind a Java functional interface is not discharged`() {
+        val captured = Owned("captured")
+        val holder = WithRunnable(Runnable { captured.take() })
 
         Proxy.discharge(holder)
 

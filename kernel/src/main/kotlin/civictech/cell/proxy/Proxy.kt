@@ -189,7 +189,9 @@ object Proxy {
      *   exclusive that no contract ever declared as payload — an exclusive consumed by
      *   something that never owned it, the mirror image of the drop this walk exists to
      *   prevent. Measured 2026-08-16 under review of computenet-ulss (`class WithFn(val f: ()
-     *   -> Unit)` capturing an `Owned`; pinned by `ProxyDischargeReachTest`).
+     *   -> Unit)` capturing an `Owned`; pinned by `ProxyDischargeReachTest`). The same stop
+     *   is applied structurally in [dischargeFields] for carriers that are *not*
+     *   `kotlin.Function` — a Java functional interface (`Runnable`) is one — see its KDoc.
      * - **Reflection failures are swallowed per field** rather than aborting the walk: this
      *   runs on suppression and denial paths, where discharging the fields that *are*
      *   reachable is strictly better than propagating out of a cleanup.
@@ -226,9 +228,20 @@ object Proxy {
      *   contract parameter *is* declaring it transferred; that is what the ownership types
      *   mean.
      *
-     * So the rule is: **the runtime walk's reach is exactly the compile-time scan's reach** —
-     * the function-value stop above closes the one place they measurably diverged. If those
-     * two ever disagree again, the divergence is the bug, in whichever direction it points.
+     * So the rule is: **the runtime walk's reach is exactly the compile-time scan's reach**.
+     * If those two disagree, the divergence is the bug, in whichever direction it points.
+     *
+     * **Where the rule is not yet exact, stated here rather than in a report.** The scan
+     * reads *declared* types; this walk reads *runtime* classes, and the two cannot be made
+     * to coincide by a stop list alone. The compiler-generated-carrier stops above and in
+     * [dischargeFields] close the cases that were measured. One residual is known and
+     * remains: a parameter declared as a supertype (`Any`, an interface) whose runtime value
+     * is a class holding an `Owned` is invisible to the scan — which therefore does not mark
+     * the method exclusive at all — yet is opened and consumed here if the method is
+     * exclusive for some *other* parameter. Measured 2026-08-17 under review
+     * (`Holder(val any: Any)` holding a class with an `Owned` property: consumed). Closing it
+     * needs the walk to be descriptor-driven rather than purely reflective; filed separately,
+     * not done here.
      */
     private fun discharge(value: Any?, seen: MutableSet<Any>) {
         if (value == null || !seen.add(value)) return
@@ -261,10 +274,24 @@ object Proxy {
         }
     }
 
-    /** The field walk behind [discharge]'s `else` branch. */
+    /**
+     * The field walk behind [discharge]'s `else` branch.
+     *
+     * Synthetic and hidden runtime classes are not opened, for the same reason
+     * [discharge] stops at `is Function<*>`: they are compiler-generated carriers whose
+     * fields are *captures*, and a compiler-generated class can never be the declared type
+     * of a contract parameter, so `ContractProcessor.carriesExclusive` can never mark a
+     * method exclusive on account of anything inside one. `is Function<*>` alone does not
+     * cover this — measured under review 2026-08-17, a capture behind a **Java** functional
+     * interface (`class WithRunnable(val r: Runnable)`, `Runnable { captured.take() }`) is
+     * not a `kotlin.Function`, and its carrier class
+     * (`…$$Lambda/0x…`, `isHidden=true isSynthetic=true`) was still opened and the capture
+     * consumed. Pinned by `ProxyDischargeReachTest`.
+     */
     private fun dischargeFields(value: Any, seen: MutableSet<Any>) {
         var clazz: Class<*>? = value.javaClass
         if (clazz!!.isEnum || clazz.isPrimitive || isPlatformClass(clazz)) return
+        if (clazz.isSynthetic || clazz.isHidden) return
         while (clazz != null && !isPlatformClass(clazz)) {
             clazz.declaredFields.forEach { field ->
                 if (Modifier.isStatic(field.modifiers) || field.isSynthetic) return@forEach
