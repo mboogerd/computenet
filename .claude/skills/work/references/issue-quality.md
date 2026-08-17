@@ -162,6 +162,13 @@ Five things, all of them:
 3. **Boundary** — non-goals in prose, plus the `metadata.files` claim. They
    must agree: a file in the claim that no instruction touches is noise, and a
    file the instructions require that isn't claimed is a merge conflict.
+   A criterion that requires writing to **another bead** (a comment on a
+   sibling, an update upstream) is part of the boundary too, and goes in
+   `metadata.cross_bead` — ids and action — as well as the prose: the
+   orchestrator relays that field verbatim into the dispatch prompt, and an
+   authorization living only in the description is invisible to the policy
+   check that reads the prompt (computenet-eetn). Omit the key when there is
+   none; that is the normal case. See [feature.md](feature.md).
 4. **Acceptance criteria** — which of the feature's rules and examples this
    task makes true. Task criteria are a partition of the feature's, not a
    restatement of them. A task whose criteria are the feature's whole criteria

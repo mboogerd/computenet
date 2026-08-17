@@ -189,6 +189,61 @@ Unique per machine — it's how claims tell two machines apart. Never fall back
 to `git config user.name` (identical on every machine here). Unset → stop and
 report; a wrong identity is worse than a dead run.
 
+**And check the checkout you are about to run scripts from is current**, here,
+before anything reads it:
+
+```bash
+M=<main-checkout>                       # the -C target, NOT wherever you were launched
+git -C "$M" fetch origin main --quiet
+git -C "$M" rev-parse HEAD origin/main
+git -C "$M" merge-base --is-ancestor origin/main HEAD \
+  && echo "OK: main checkout contains origin/main" \
+  || echo "STALE: this checkout does NOT contain origin/main — its scripts and SKILL.md are not the ones main has"
+git -C "$M" status --porcelain          # anything tracked here => another session may be mid-work
+```
+
+**`-C <main-checkout>` is the whole point of the check** — run it without it
+and you test whichever tree you happen to stand in. You may well have been
+launched from a worktree cut fresh from `origin/main`, in which case the
+bare command prints `OK` while the checkout the scripts actually come from is
+44 commits behind: the exact reported failure, now wearing a green light. The
+asymmetry *is* the bug (computenet-6xm).
+
+Every `scripts/*.sh` in this file runs from the **main checkout**, because
+that is where `bd` lives — and the main checkout's working copy drifts (44
+commits behind, measured; computenet-kcu). So a session can execute a version
+of a script that `main` has already fixed, and find out several steps later as
+a rejected push or a wrong answer, with nothing connecting the two.
+
+`STALE` → **fast-forward before continuing** (`git -C "$M" merge --ff-only
+origin/main`). Refused — local commits, or a modification to a file the
+fast-forward would overwrite — → stop and report: a session running scripts
+from an unknown revision is worse than a session that did not start.
+
+**Do not fast-forward a dirty checkout, even though git lets you.** Other
+sessions share this working tree and its index, so `status --porcelain` above
+is a check, not decoration. A `--ff-only` aborts only when it would overwrite
+a file *you* modified; with unrelated modifications staged or unstaged it
+succeeds and moves a shared HEAD out from under a concurrent session
+(measured). Tracked modifications present → stop and report them rather than
+merging. Worktrees attached to the same `.git` are unaffected either way —
+each has its own HEAD, index, and files — so only the main checkout's own
+occupants are at risk.
+
+This is a **one-shot pin, not a live guarantee**: it fixes the revision your
+scripts come from at session start, and `origin/main` will move under a long
+run. That is the intended trade — one consistent revision for the whole run
+beats a moving one, and re-fast-forwarding mid-run would shift scripts under
+your own in-flight steps. What it buys is that no *drifted* script ever runs
+unnoticed, and it buys it before step 3 reads anything. If a script behaves
+unlike its description later in the run, re-run this check before believing
+the description is wrong (15 minutes went that way once).
+
+Note the asymmetry with the dispatch rule below: **agents** read
+`.claude/skills/work/**` from their own worktree, cut fresh from
+`origin/main`, so they are current by construction. Only the orchestrator runs
+from the drifting checkout, which is why only the orchestrator needs this.
+
 ## 2. Arm the budget
 
 Don't burn turns polling a clock — arm a timer that tells you:
@@ -852,7 +907,15 @@ verdict. (`parked` is only meaningful on an empty batch.)
   mutation into the prompt under the word MANDATORY without running that
   check; the prompt is what makes a stale instruction sound authoritative.
 - **Restate any cross-bead write the bead's criteria demand — ids and
-  action — in the dispatch prompt.** Authorization living only in the bead is
+  action — in the dispatch prompt. Read it from the batch entry's
+  `cross_bead`, not from the prose.** `next-batch.py` surfaces the field the
+  breakdown wrote (feature.md); an empty string is the normal value and means
+  *none authorized*. Without a field you would be hand-grepping every task's
+  description for a clause you cannot reliably spot, to fill in an input this
+  skill treats as load-bearing (computenet-eetn). If a task's criteria plainly
+  demand a cross-bead write and `cross_bead` is empty, that is a breakdown
+  defect: write the field before dispatching, and say you did.
+  Authorization living only in the bead is
   invisible to the policy check, which reads the prompt; an agent doing
   commissioned cross-posting got flagged and the orchestrator adjudicated its
   own commission as an overstep (computenet-dqy.72, computenet-szdd). Write
