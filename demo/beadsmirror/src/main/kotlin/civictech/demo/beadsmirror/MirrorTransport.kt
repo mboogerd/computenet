@@ -28,6 +28,22 @@ import java.net.URI
  * (`TwoNodeRig`); in the two-JVM launch path each process constructs its own,
  * establishes exactly one end, and never partitions anything — see
  * [WsMirrorTransport.partition] for what that asymmetry costs there.
+ *
+ * **What the seam does NOT abstract: the address model.** The endpoint
+ * vocabulary is still `MirrorWire`'s, which is WebSocket-shaped — [listen]
+ * takes a port number, [MirrorLink.boundWsPort] hands one back, and [dial]
+ * takes a `ws://host:port` string, because `TwoNodeRig` builds the dialer's
+ * `MirrorWire.Dial` out of the listener's bound port and `BeadsMirrorApp`
+ * parses `--listen`/`--peer` into the same two shapes. A binding whose
+ * addresses are not ports and URIs — an iroh node id, say — therefore has to
+ * satisfy that vocabulary rather than replace it: return *some* non-null
+ * integer from [MirrorLink.boundWsPort] on its listening end (`TwoNodeRig`
+ * `checkNotNull`s it) and treat [dial]'s [String] as an opaque token it may
+ * ignore, which is sound precisely because a rig shares ONE transport instance
+ * between its two nodes, so the dialing end already knows where the listening
+ * end is. That is a wart in this interface, not a test edit: "zero test edits"
+ * survives it, and re-typing the address model is DSC0's call to make once a
+ * second binding exists to generalize from.
  */
 interface MirrorTransport {
 
