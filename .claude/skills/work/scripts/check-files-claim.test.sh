@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "6 passed, 0 failed".
+# Tests for check-files-claim.sh. Stubs `bd` on PATH. Expect "12 passed, 0 failed".
 set -uo pipefail
 
 SCRIPT=${1:-"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-files-claim.sh"}
@@ -51,6 +51,38 @@ check "reports only the uncovered one" 1 "names a/b/More.kt"
 
 bead "change a/b/Step.kt" "" ""
 check "empty claim -> reports" 1 "names a/b/Step.kt"
+
+# Live beads claim directories (`.github/workflows`) and globs
+# (`kernel/src/.../evolve/**`) as often as they claim files.
+bead "change .github/workflows/ci.yml" "" ".github/workflows,buildSrc"
+check "directory claim covers a file beneath it" 0 ""
+
+bead "change a/b/evolve/Evolution.kt" "" "a/b/evolve/**,doc/x.md"
+check "glob claim covers a file beneath it" 0 ""
+
+bead "change a/b/evolve/Evolution.kt" "" "a/b/other/**"
+check "glob claim elsewhere still reports" 1 "names a/b/evolve/Evolution.kt"
+
+# A few beads store metadata.files as a JSON array, which jq -r renders as
+# pretty-printed JSON rather than a comma-separated string.
+printf '[{"id":"computenet-x","description":"change a/b/Step.kt","metadata":{"files":["a/b/Step.kt","a/c/Other.kt"]}}]\n' > "$ROOT/show.json"
+check "array-shaped claim, covered" 0 ""
+printf '[{"id":"computenet-x","description":"change a/b/Step.kt","metadata":{"files":["a/c/Other.kt"]}}]\n' > "$ROOT/show.json"
+check "array-shaped claim, uncovered" 1 "names a/b/Step.kt"
+
+bead "change a/b/Step.kt" "" "a/b/Step.kt"
+cat > "$ROOT/bin/bd" <<'EOF'
+#!/usr/bin/env bash
+echo "bd: no issues found" >&2
+exit 1
+EOF
+chmod +x "$ROOT/bin/bd"
+out=$("$SCRIPT" computenet-x 2>&1); rc=$?
+if [ "$rc" = 0 ] && [[ "$out" == *"unreadable, skipping"* ]]; then
+  pass=$((pass+1))
+else
+  fail=$((fail+1)); echo "FAIL: a failing bd must say so, not pass silently (rc=$rc) out=<$out>"
+fi
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]
