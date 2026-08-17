@@ -125,7 +125,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `epic-of.sh` | Resolves a bead's effective epic (`.parent` chain, else dotted prefix) |
 | `claim-epic.sh` | Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
-| `publish-beads.sh` | Publication push with rejection recovery, reading output not exit codes |
+| `publish-beads.sh` | Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic and claims it |
 
@@ -1360,9 +1360,16 @@ git -C <worktree> push
 .claude/skills/work/scripts/publish-beads.sh
 ```
 
-The script reads output rather than exit codes (`bd dolt push` exits 0 while
-printing rejections), recovers a non-fast-forward inline (expected under
-concurrent operation), and escalates real conflicts. After a *recovered*
+The script fails on **either** signal — a nonzero exit or a rejection in the
+output — recovers a non-fast-forward inline (expected under concurrent
+operation), and escalates real conflicts. Neither signal alone is trusted:
+`dolt push` against a real non-fast-forward exits 1 and prints
+`! [rejected] … (non-fast-forward)` (measured 2026-08-17), but `bd dolt push`
+was once observed exiting 0 while printing a rejection, and staging a real
+non-fast-forward against the shared remote needs the *other* machine to push,
+so that propagation cannot be re-measured from here. `scripts/beads-nightly-sync.sh`
+uses the same pair; it previously tested the exit code only, and the two
+callers disagreed (computenet-kbk0). After a *recovered*
 push, verify your own writes survived the pull's merge — dolt reconciles
 last-write-wins, so a lost row is lost silently (name each write; don't
 assume):
