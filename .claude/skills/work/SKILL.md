@@ -1423,6 +1423,13 @@ Agent({
 claim another. Work ONLY in your own worktree at ${taskWorktree}, on branch
 ${taskBranch}. Do not touch the main checkout, the feature worktree, or
 another task's worktree.
+Committing on your own task branch is EXPECTED AND AUTHORIZED — this sentence
+IS the explicit grant both AGENTS.md clauses defer to ("unless explicitly
+asked", "unless your assignment explicitly grants it"), so the conservative
+profile is satisfied, not overridden. A task's deliverable IS commits on its
+branch, not a dirty worktree. What you must not do is push (not even your own
+task branch — the classifier denies it and nothing downstream needs it),
+merge, rebase, or switch branches.
 Your branch's BASE COMMIT, observed at dispatch — the commit the branch was
 cut from, NOT a diff baseline: ${taskBase}. Anything merged into main before
 it is already in your worktree; check with git rather than assuming either
@@ -1543,6 +1550,16 @@ as an implementer does, and the cap was measured on mixed lanes
 full, hold the reviewer and dispatch as a lane frees (you merge passes one at
 a time anyway).
 
+`${featureBranchOnOrigin}` below is one line, and it saves the reviewer a
+failed command: either `The feature branch ${featureBranch} IS on origin.` or
+`The feature branch ${featureBranch} is NOT on origin yet — this is the first
+task under it, so resolve your baseline from the LOCAL feature branch as your
+reference's §1 does; the task branch's base commit is ${taskBase}.` You know which (5d has
+not run yet for the first task); the reviewer would otherwise discover it by a
+fetch that fails (computenet-e3my). `${featureBranch}` is the feature's
+recorded `metadata.branch` and `${taskBase}` the base commit you gave 5b —
+the same two values, not new ones to compute.
+
 ```
 Agent({
   description: "Review task <id>",
@@ -1552,6 +1569,7 @@ Agent({
 ${taskWorktree}, not the main checkout) and follow it to review beads task
 ${id} against its own acceptance criteria.
 Worktree: ${taskWorktree}  ·  Branch: ${taskBranch}
+${featureBranchOnOrigin}
 Cross-bead writes authorized on this item: ${crossBeadWrites or "none"}.
 That is the same line the implementer was given: treat what it names as
 commissioned work rather than scope creep, and anything beyond it as
@@ -1565,6 +1583,11 @@ wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
+Committing your repairs on the task branch is EXPECTED AND AUTHORIZED — this
+sentence is the explicit grant AGENTS.md's conservative profile and
+multi-agent clause both defer to. Still do
+not push — not even the task branch (your reference says why) — and do not
+merge, rebase, or switch branches.
 Repair what you can within the task's scope. Report pass or fail, what you
 repaired, and — on fail — exactly what is missing.
 If you won't finish within ~45-60 minutes, stop at a clean point and write your
@@ -1638,6 +1661,17 @@ mid-review (one returned "Waiting on Arm A…" as its entire result). No
 pass/fail stated → `SendMessage` the same agent (context intact) to finish
 and state a verdict plus a NOT VERIFIED section. Agent-completed is not
 task-reviewed; a result skimmed as done here merges unreviewed code.
+
+**A pass carrying a SUBSTANTIVE repair is not final** (computenet-r197). If
+the task reviewer names repair shas and withholds `metadata.review=passed`, it
+has told you it authored part of the deliverable — dispatch a second reader
+scoped to *those shas only* before merging, rather than treating the pass as
+final. The dispatch template is
+[ship-feature.md](references/ship-feature.md) §4, written for a feature
+reviewer's substantive repair; read task for feature and the task worktree
+and branch for the feature's. A prose or design-record deliverable is
+substantive by default, because there rewriting the text is rewriting the
+thing under review.
 
 **Merge the passes yourself, one at a time** — reviewers must not merge
 (concurrent merges into one feature branch race).
@@ -1898,6 +1932,13 @@ wait first, or a stop strands uncommitted work that reads as nothing.
 The Bash tool auto-backgrounds anything that outruns its 120s default, and a turn that ends waiting on a
 background job never resumes: your turn ending IS your completion, so there is
 nothing to come back to. Never end a turn saying you will wait for a job.
+Committing your repairs on the feature branch, and pushing that branch, are
+EXPECTED AND AUTHORIZED — this sentence is the explicit grant AGENTS.md's
+conservative profile and multi-agent clause defer to, and your reference
+authorizes both, including the `origin/main` merge on the branch where §6
+permits it — §6's NORMAL path hands that merge to the orchestrator, so read it
+before reaching for `git merge`. Do not
+rebase, switch branches, touch another worktree, or run gh pr ready.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,

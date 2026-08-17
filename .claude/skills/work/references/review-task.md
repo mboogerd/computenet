@@ -44,6 +44,14 @@ BASE=$(git -C <task-worktree> merge-base "$FB" HEAD)
 git -C <task-worktree> diff "$BASE" HEAD
 ```
 
+**Say in your report which baseline you diffed against and why.** Three are
+possible — `origin/<feature-branch>`, the local `<feature-branch>`, or the
+base commit the dispatch names when neither exists — and they are not
+interchangeable: a reader cannot check your line counts or your scope claims
+without knowing which one produced them. Your dispatch prompt states whether
+the feature branch is on origin yet, so this is a fact you are given, not one
+to discover by a failed command (computenet-e3my).
+
 `bd show` never returns comment bodies, and the implementer's reasoning —
 what it decided, what it deliberately left — usually lives only there. Read
 both before the diff.
@@ -544,6 +552,26 @@ catches a repair the merge missed.
 `-m … -- <paths>`, never `-am`: this repo's shared index needs the pathspec,
 and `git` rejects the combination outright — `fatal: paths … with -a does not
 make sense` (computenet-2x5l).
+
+**Your repairs have an authorship bound, as a feature reviewer's do**
+([review-feature.md](review-feature.md) §5 states the same idea at feature
+scale, in more detail and in wording that is still being amended; the bound
+below is the one that governs a *task* review, so read it here rather than
+reconciling the two) — without one, a task reviewer can rewrite the
+deliverable and then certify its own text (computenet-r197). Your repair is
+**substantive**, and disqualifies you from certifying, if it touches a
+**behavioural code path**, or adds or semantically changes a **test or
+assertion**, or exceeds ~30 changed lines of code across your repair commits.
+**A repair to a task whose deliverable is prose or a design record is
+substantive by default** — there, rewriting the text *is* rewriting the
+deliverable, and there is no separate artifact left for anyone to check it
+against.
+
+On a substantive repair: **do not set `metadata.review=passed`.** Name your
+repair shas with a per-commit `--stat`, say what each does, and hand back a
+verdict that says an independent read is owed. The work is not discarded — it
+is committed on the branch, and SKILL.md 5c routes it to a second reader
+before merging rather than treating your pass as final.
 
 Fail it only when the approach is wrong at the design level, or repair would
 rewrite most of the diff. If the task turns out to be underspecified or the
