@@ -62,7 +62,7 @@ data class MirrorPeeringSettings(val rigName: String, val wire: MirrorWire) {
  * [MirrorTransport]'s production binding are the *only* places in the module
  * that name a `civictech.cell.replication` / `civictech.cell.wire` or a
  * `:wire` type — and since task computenet-7em.2.1 the `:wire` half is
- * [WsMirrorTransport]'s alone: this class asks its injected
+ * [WsMirrorTransport]'s alone: this class asks its
  * injected transport to establish an end and never names a socket. A
  * solo-mode run still loads none of it: the registry, the hosts, the
  * [Replication] linker and the transport are all instance state of an object
