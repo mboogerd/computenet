@@ -139,6 +139,27 @@ descriptive string there (`none (tracker mutations only)`) is read as a path
 and batched on, which is worse than an empty claim, not better
 (computenet-wpvy.30).
 
+**A clause that predicts CURRENT behaviour gets the same premise check you
+applied to your input.** You verify the epic's premises before splitting it;
+the examples and acceptance clauses *you write* are premises too, and an
+unverified one is paid for a layer down — the implementer builds against it,
+discovers a one-command probe falsifies it, and the cost lands on the party
+least placed to absorb it (computenet-j69i). So wherever a clause asserts
+something about code that already exists, or about an external tool's
+observable behaviour:
+
+- **Run the one command that confirms it** — `grep` for the symbol, `ls` the
+  path, `<tool> --help`, the single test — and write what you observed into
+  the clause. It is seconds at this layer.
+- **Or mark it `unverified:`** in as many words, so the implementer knows to
+  check it *first* rather than to trust it. That is a legitimate answer; an
+  unmarked guess is not, because nothing downstream can tell your checked
+  claims from your plausible ones.
+
+This is `task.md` step 3's rule — a prescribed reproduction is run against the
+unfixed code before anything is built on it — applied one layer up, to the
+clauses that generate those reproductions.
+
 If the task is a bug fix and you write a reproduction into its description,
 label it `verified-failing:` (with the output you watched it fail with) or
 `untested-hypothesis:` — see [issue-quality.md](issue-quality.md). An
@@ -175,6 +196,23 @@ costs nothing and is the honest record of what each will touch
 (computenet-bx4y). This is the one case where an edge follows file overlap,
 and it is legal because the edge is an output dependency in its own right:
 the second task amends what the first creates.
+
+**Evidence the implementer cannot produce locally must say so, and say how to
+read it.** A clause whose proof only exists on another platform or inside a CI
+job — "passes on Linux", "the serial lane runs it with two JVMs" — is
+unsatisfiable where the implementer is standing, and an implementer that does
+not know this spends slot time rediscovering it (computenet-wpvy.31). Split
+the clause explicitly:
+
+- **which half is local** (the suite it can run on darwin, the behaviour it
+  can prove here),
+- **which half rides on the CI dispatch**, named as such,
+- **the exact command that reads the dispatch's answer** — the `gh run view
+  <run-id> --log` or `gh pr checks` invocation, not "check CI".
+
+Without the third, "verified on Linux" becomes a claim nobody can check, and
+the platform half quietly turns into an unverified assertion the reviewer
+inherits.
 
 ## Dependencies
 

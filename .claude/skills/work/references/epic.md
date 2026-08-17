@@ -71,6 +71,13 @@ the cited spec text is the authority (AGENTS.md), not your first instinct.
 Propose features that together deliver the epic, each independently
 shippable or at least independently reviewable.
 
+**Evidence that can only be produced on another platform or inside a CI job
+is named as such**, with the command that reads its answer. The same rule
+`feature.md` applies to task clauses applies to the epic's own acceptance: a
+criterion whose proof lives in the serial lane, or on Linux, is unsatisfiable
+where an implementer stands, and saying so up front costs a sentence while
+discovering it costs slot time (computenet-wpvy.31).
+
 **Write them to [issue-quality.md](issue-quality.md)** — the feature section
 in particular (example mapping, EARS-phrased rules, concrete examples). It is
 the standard the feature reviewer judges against, so an issue that doesn't
