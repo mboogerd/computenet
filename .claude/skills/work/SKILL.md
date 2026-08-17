@@ -830,6 +830,15 @@ recently-parked items. **When one finishes, re-run this query and take the
 next** — don't fall to 5f while the epic still has direct children; after
 T-90m, stop taking new ones. Only when this query too is empty does 5f apply.
 
+**This query returning exactly one row is where the idle-lane question
+actually bites** (computenet-0a76): the single item is dispatched, one of the
+two lanes is busy, and 5f — which is where the other lane's work would come
+from — is not reachable until it returns. Do not infer an answer here and do
+not wait for 5f: apply
+[5f route 0](#5f-next-feature-or-wait-or-stop)'s four-part test to the free
+lane now, from this spot. It sanctions a second, genuinely disjoint unit and
+tells you when to leave the lane idle on purpose.
+
 **If you run several of these at once, keep at most ~2 open PRs against any
 one file.** Nothing else bounds the count here, and 5b's batching by disjoint
 `metadata.files` cannot help — items on a friction epic *share* the file by
@@ -846,7 +855,12 @@ Apply the same two filters to the feature picked above; nothing survives →
 **Structure**: a feature is the unit of integration — its own worktree,
 branch, and draft PR, into which reviewed task branches merge. A task is its
 own worktree and branch, cut from the feature branch. Work **one feature at a
-time**; the parallelism lives in its tasks.
+time**; the parallelism lives in its tasks. That rule bounds *features*, not
+the machine: when a capacity lane is free while the current unit is still
+running, the free-lane test is [5f route 0](#5f-next-feature-or-wait-or-stop)
+— read it there rather than inferring an answer, and rather than waiting for
+5f to become reachable, which it is not until the unit returns
+(computenet-0a76).
 
 **One worktree, one live agent.** A worktree belongs to the agent dispatched
 into it until **that agent's completion notification arrives in this
@@ -935,24 +949,49 @@ looking clean (computenet-aeg). Either `OK` is fine.
 This repo squash-merges, so a merged feature leaves a remote branch whose
 commits are *not* ancestors of anything — which trips the check exactly like
 genuinely unmerged work does, and a workable item then looks unworkable with
-no remediation offered (computenet-q8uv). The test is cheap:
+no remediation offered (computenet-q8uv). Two cheap tests, in this order:
 
 ```bash
-git -C <worktree> fetch origin <branch>
-git -C <worktree> diff --stat origin/main FETCH_HEAD    # empty => content is already on main
-git -C <worktree> log --oneline origin/main | grep -F "<the remote tip's subject>"
+gh pr list --head <branch> --state merged --json number,title   # any row => leftover
+git -C <worktree> log --oneline origin/main --grep '<the id in the branch name>' | head -3
 ```
 
-- **Empty diff, or a commit with that subject already on `origin/main`** →
-  **squash-merged leftover.** It carries nothing to orphan. Remediate rather
-  than stop: either take a distinct branch name and record it in
-  `metadata.branch` (which is what "everything below" already reads, so the
+A merged PR on that exact head, or a commit on `origin/main` naming that id,
+is the answer on its own — a squash merge leaves the source commits
+non-ancestral, so the ref outlives its content (verified 2026-08-17 against
+`friction/computenet-kd9s` / PR #262 and `friction/computenet-6xm` / PR #276,
+both still on origin, both correctly identified).
+
+**A `git diff` against `origin/main` is NOT the test, in either form** —
+worth stating because it is the obvious one to reach for. Bare, it diffs
+against everything `main` has landed *since*, which is never empty. Scoped to
+the branch's own files it is still only a *one-way* signal, and a decaying
+one: empty proves the content landed, but `main`'s later churn on those same
+files makes it non-empty again with nothing changed about the branch —
+measured 2026-08-17 on `friction/computenet-kd9s`, empty at one `main` and 993
+deletions at the `main` two PRs later. On the friction lane, where every PR
+edits this file, it goes stale within the hour. Use it only as a
+*confirmation* when it comes back empty, never to conclude "unmerged".
+
+- **A merged PR on the head, or an id match on `origin/main`** →
+  **squash-merged leftover.** It carries nothing to orphan.
+  Remediate rather than stop: either take a distinct branch name and record it
+  in `metadata.branch` (which is what "everything below" already reads, so the
   feature-id-as-branch-name rule has its exception here — an id that has been
   re-minted), or delete the dead ref (`git push origin --delete <branch>`) and
   proceed on the original name. Say which you did.
-- **A non-empty diff** → the branch carries **unmerged commits**, and the
-  `STOP` stands: it is a hard stop, and proceeding to 5b would orphan real
-  work. Nothing here weakens that case.
+- **Neither** → the branch carries **unmerged commits**, and the `STOP`
+  stands: it is a hard stop, and proceeding to 5b would orphan real work.
+  Nothing here weakens that case — verified on this very branch
+  (`friction/computenet-sjwd`: zero merged PRs on the head, no id on `main`,
+  real commits) still halting before 5b.
+- **`gh` failed** → that is not a reading (step 2's rule). The `--grep` is
+  local and still answers; if it too is unavailable, the `STOP` stands.
+
+`feature-branch.sh` already retires a *recorded* branch whose PR merged, so
+what reaches this test is the case it cannot see: an id with no
+`metadata.branch` yet whose `feature/<id>` name is already taken on origin —
+the re-minted id of computenet-q8uv.
 
 **The unreachable case is why there are two `OK` lines and not one.** A bare
 `fetch origin <branch>` fails identically for "no such branch on origin" and
@@ -1413,13 +1452,34 @@ that reads as neither pass nor fail.`
 **A reviewer that neither reports nor stops is invisible unless you look.**
 The completion notification never arrives, so nothing wakes you — the review
 is unbounded and the PR sits (computenet-sjwd). **At ~60 minutes after
-dispatch, check the bead rather than waiting**, using signals that cost
-nothing and are not the agent's transcript (a context hazard, above):
+dispatch, check the bead rather than waiting.**
+
+**You cannot feel 60 minutes pass** — between notifications you have no sense
+of elapsed time at all (step 2), and the budget monitor is the *only*
+persistent monitor, so this deadline does not get one. Give it a written
+timestamp instead, at dispatch, and read it at every decision point you reach
+while the reviewer is out (a merge, a dispatch, a poll round):
+
+```bash
+date -u +%s > "$SCRATCH/review-dispatched-<id>"      # at dispatch
+# later, at any decision point — no clock needed, just subtraction:
+echo $(( ($(date -u +%s) - $(cat "$SCRATCH/review-dispatched-<id>")) / 60 ))m
+```
+
+`$SCRATCH` is a shell variable that does not survive between Bash calls —
+spell the directory's absolute path out, as step 2 does. Past ~60, check the
+bead, using signals that cost nothing and are not the agent's transcript
+(a context hazard, above):
 
 ```bash
 bd show <id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0]|"\(.status) \(.metadata.review // "-") \(.comment_count)"'
 git -C <task-worktree> log --oneline -3
 ```
+
+If nothing else will bring you back — every other lane is idle and you would
+otherwise sit waiting — the bounded stall-watch form in step 2 is the shape
+to use (`persistent: false`, one `sleep 3600`, one `echo`), and it is then
+**the** bounded watch: `TaskStop` it before arming a PR-checks loop.
 
 **A bead untouched since the implementer's own comment is the signal** that
 the review has produced nothing durable. Then, in order — do not kill first:
@@ -1684,7 +1744,13 @@ that reads as neither pass nor fail.`
 })
 ```
 
-**Act only on a verdict.** Three cases:
+**Act only on a verdict.** Three cases — plus the fourth, where no
+notification ever arrives: a feature reviewer that neither reports nor stops
+is the shape computenet-sjwd measured (1h47m, nothing written, a green PR
+that could not ship). [5c](#5c-review-each-task-then-merge-it)'s dispatch
+timestamp, ~60-minute bead check, `SendMessage`-then-`TaskStop` ladder,
+re-dispatch framing and clear-the-blocker-first rule all apply here
+unchanged; the `TaskStop` case below is where that ladder lands.
 
 - **You had to `TaskStop` it** → that is a DRAFT verdict, not an absent one.
   Route on what it wrote to the bead (commits authored → substantive-repair
@@ -1875,9 +1941,12 @@ Take the first that applies. **Routes 1, 3 and 4 are all closed after
 T-90m** — new work you can't review and merge before the slot ends is a
 stranded branch.
 
-**0. A free capacity lane while the current unit is still running.** "One
-feature at a time" idles half the machine on a one-item-wide epic, and 5f is
-unreachable until the in-flight unit returns — so this is not theoretical
+**0. A free capacity lane while the current unit is still running.** This one
+is **not part of the cascade** and is not reached by falling through 5f: step
+5 sends you here directly, from the two places you stand when a lane frees
+under you — "one feature at a time" and the direct-child loop. Read it there
+and come back; a session that waits for 5f to become reachable idles half the
+machine for the length of every unit on a one-item-wide epic
 (computenet-0a76). **A second unit may run concurrently, under all four of
 these:**
 
@@ -1894,9 +1963,19 @@ these:**
   feature branch another unit is still using, which is 5c's serialized merge
   and does not survive two writers.
 
-Any one failing → **leave the lane idle deliberately, and say so**, rather
-than letting it read as an oversight. On the shape that produced this — a
-ready surface exactly one item wide — idle-and-wait *is* the answer, not a gap.
+Any one failing → **leave the lane idle deliberately, and say so** on the
+epic, rather than letting it read as an oversight. Two kernel-lane units at
+capacity 2 is the case the strict rule is right about.
+
+**Where the second unit comes from, on the shape that produced this.** A ready
+surface exactly one item wide means this *epic* has nothing else — so the
+candidate is routes 3 and 4's pool (a cross-epic blocker of this epic's
+remaining work; otherwise continuation work), taken under their acquisition
+bracket and their admission gates, and closed after T-90m like they are.
+Read them now rather than on the next pass. Nothing there survives the four
+tests → the lane stays idle, and that is the answer, not a gap. Record the
+call on the epic **at the time**, either way (computenet-0a76 did, and that is
+why it is auditable).
 
 **1. Another feature under this epic is ready or in progress** (and not
 recently parked) → 5a.

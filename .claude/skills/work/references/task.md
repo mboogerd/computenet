@@ -124,13 +124,8 @@ A bug's reproduction must fail unfixed; a measurement must be sized before it is
    failure:
 
    ```bash
-   ./gradlew :<module>:test --tests '<your new test>' --rerun --no-build-cache   # expect FAILED
+   ./gradlew :<module>:test --tests '<your new test>' --rerun    # expect FAILED
    ```
-
-   `--no-build-cache` alongside `--rerun` because this is a load-bearing
-   before/after run: `--rerun` alone can print an unmarked task line while
-   restoring the previous run's JUnit XML from the cache (computenet-qsfu,
-   [mutation-check.md](mutation-check.md) step 4).
 
    Quote the failing test name and its assertion message in your report. That
    output — not the fact that the test passes afterwards — is the evidence your
