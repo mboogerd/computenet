@@ -19,15 +19,16 @@ import org.junit.jupiter.api.Test
  * test — rather than naming a transport itself, and nothing in this file
  * imports `civictech.wire` or [civictech.demo.beadsmirror.WsMirrorTransport]:
  * a future transport (DSC0, epic computenet-7em §3) is a different [newRig]
- * supplied to a different concrete subclass, with zero edits here. Today the
- * only rig [TwoNodeRig.create] can build is wired to
- * [civictech.demo.beadsmirror.WsMirrorTransport] internally (computenet-7em.2.1
- * landed the seam one layer down, at [civictech.demo.beadsmirror.BeadsMirrorConfig.peeringTransport]);
- * [WsConvergenceSuiteTest] is that binding's only production instantiation.
+ * supplied to a different concrete subclass, with zero edits here.
+ * [TwoNodeRig.create] takes the binding as a parameter (computenet-7em.2.3)
+ * and defaults it to [civictech.demo.beadsmirror.WsMirrorTransport], the only
+ * one that exists; [WsConvergenceSuiteTest] is that default's only production
+ * instantiation.
  *
- * **Partition/heal are out of scope here** — computenet-7em.2's own
- * non-goals for this task route them to computenet-7em.2.3's own suite case,
- * which reuses [SeededSchedule] and this class's idle/assert shape.
+ * **Partition and heal ride the same parameter** (task computenet-7em.2.3):
+ * the mid-schedule partition case below drives [TwoNodeRig.partition] /
+ * [TwoNodeRig.heal], which delegate to the injected binding, so it re-runs
+ * over a future transport unedited like every other case here.
  *
  * **Idle, precisely.** [TwoNodeRig.Node.quiesce] on both nodes first (each
  * node's own persisted checkpoint reaches its own workspace's `dolt_log`
@@ -67,6 +68,96 @@ abstract class ConvergenceSuite(private val newRig: () -> TwoNodeRig) {
     // the three above.
 
     /**
+     * Feature rule 2 / design example 2 (task computenet-7em.2.3): the
+     * schedule half-applied, the peering severed, five more mutations landing
+     * on EACH side while severed, the peering healed — and at idle both folds
+     * equal *and* carrying all ten partition-era issues.
+     *
+     * **Why the ten ids are asserted explicitly and not only through
+     * equality.** Two nodes that both dropped every partition-era mutation are
+     * equal, so `fold(L) == fold(D)` alone cannot tell repair from mutual
+     * amnesia. The check that carries the meaning is
+     * [SeededSchedule.partitionIssueIds] present in BOTH folds with the field
+     * value its minting side wrote ([SeededSchedule.partitionDesign]).
+     *
+     * **The non-arrival check is one bounded read, not a wait.** Proving the
+     * partition actually severed anything needs a negative, and a negative
+     * cannot be awaited — so this case waits (bounded) until the listener's
+     * OWN fold carries its first partition-era issue, and then reads the
+     * dialer's served status for that id exactly once: 404 there, at a moment
+     * the listener demonstrably holds it, is a statement about the peering
+     * with no sleep in it.
+     *
+     * **This case rides the transport parameter** like every other in this
+     * class — it says "the peering is down", never "the socket is closed"
+     * ([TwoNodeRig.partition] delegates to the injected binding), so a future
+     * transport re-runs it unedited.
+     */
+    @Test
+    fun `a partition mid-schedule heals into equal folds carrying every partition-era mutation`() {
+        val seed = SeededSchedule.SEED_1
+        val schedule = SeededSchedule.derive(seed)
+        val rig = newRig()
+        try {
+            rig.startListener()
+            rig.startDialer()
+
+            // 1. the schedule to its halfway point, both sides concurrently.
+            val listenerHalf = schedule.listenerSteps.size / 2
+            val dialerHalf = schedule.dialerSteps.size / 2
+            runConcurrently(
+                rig,
+                schedule.listenerSteps.take(listenerHalf),
+                schedule.dialerSteps.take(dialerHalf),
+            )
+
+            // 2. sever, and land five more mutations on EACH severed side.
+            rig.partition()
+            runConcurrently(rig, schedule.listenerPartitionSteps, schedule.dialerPartitionSteps)
+
+            // 3. the one bounded non-arrival check: the listener holds its own
+            //    partition-era issue, and the dialer does not.
+            val listenerOnly = schedule.listenerPartitionIssueIds.first()
+            rig.listener.quiesce()
+            rig.await("seed $seed: the listener's own fold carries $listenerOnly while severed") {
+                listenerOnly in rig.listener.view()
+            }
+            rig.dialer.servedStatus(listenerOnly) shouldBe 404
+
+            // 4. heal, then run the rest of the schedule across the healed peering.
+            rig.heal()
+            runConcurrently(
+                rig,
+                schedule.listenerSteps.drop(listenerHalf),
+                schedule.dialerSteps.drop(dialerHalf),
+            )
+
+            // 5. idle, then the repair assertions.
+            rig.listener.quiesce()
+            rig.dialer.quiesce()
+            rig.await("seed $seed: the healed peering converges to equal folds") {
+                rig.listener.view() == rig.dialer.view() &&
+                    rig.listener.edgeView() == rig.dialer.edgeView() &&
+                    schedule.partitionIssueIds.all { it in rig.listener.view() && it in rig.dialer.view() }
+            }
+
+            rig.listener.view() shouldBe rig.dialer.view()
+            rig.listener.edgeView() shouldBe rig.dialer.edgeView()
+
+            schedule.partitionIssueIds.forEach { issueId ->
+                val onListener = rig.listener.view()[issueId]
+                    ?: error("seed $seed: partition-era issue $issueId never reached the listener's fold")
+                val onDialer = rig.dialer.view()[issueId]
+                    ?: error("seed $seed: partition-era issue $issueId never reached the dialer's fold")
+                onListener["design"] shouldBe json(schedule.partitionDesign(issueId))
+                onDialer["design"] shouldBe json(schedule.partitionDesign(issueId))
+            }
+        } finally {
+            rig.close()
+        }
+    }
+
+    /**
      * One seed, end to end: derive the schedule, run both sides concurrently
      * against a fresh rig's real `bd` workspaces, wait for idle, and assert
      * the three equalities the acceptance criteria name — [TwoNodeRig.Node.view],
@@ -81,7 +172,7 @@ abstract class ConvergenceSuite(private val newRig: () -> TwoNodeRig) {
             rig.startListener()
             rig.startDialer()
 
-            runConcurrently(rig, schedule)
+            runConcurrently(rig, schedule.listenerSteps, schedule.dialerSteps)
 
             rig.listener.quiesce()
             rig.dialer.quiesce()
@@ -109,20 +200,24 @@ abstract class ConvergenceSuite(private val newRig: () -> TwoNodeRig) {
      * failure from either side must fail the test, not vanish on a
      * background thread.
      */
-    private fun runConcurrently(rig: TwoNodeRig, schedule: SeededSchedule) {
+    private fun runConcurrently(
+        rig: TwoNodeRig,
+        listenerSteps: List<ScheduleStep>,
+        dialerSteps: List<ScheduleStep>,
+    ) {
         var listenerFailure: Throwable? = null
         var dialerFailure: Throwable? = null
 
         val listenerThread = Thread({
             try {
-                schedule.listenerSteps.forEach { it.apply(rig.listenerWorkspace) }
+                listenerSteps.forEach { it.apply(rig.listenerWorkspace) }
             } catch (t: Throwable) {
                 listenerFailure = t
             }
         }, "seeded-schedule-listener")
         val dialerThread = Thread({
             try {
-                schedule.dialerSteps.forEach { it.apply(rig.dialerWorkspace) }
+                dialerSteps.forEach { it.apply(rig.dialerWorkspace) }
             } catch (t: Throwable) {
                 dialerFailure = t
             }
