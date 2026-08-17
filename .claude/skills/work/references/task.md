@@ -110,6 +110,20 @@ than restarting. That's the whole reason the worktree is preserved.
    output — not the fact that the test passes afterwards — is the evidence your
    fix is a fix and not a no-op.
 
+   **A prescribed reproduction is a hypothesis, not an instruction.** The bead
+   describes the code *as it was when the bead was written*, and a sibling item
+   in the same family may have landed since. So when the prescribed
+   reproduction passes unfixed, or the prescribed mutation changes nothing,
+   the first conclusion is that **the repro is stale — not that your fix
+   failed** (computenet-vyr). Check what has landed: `git log --oneline
+   <your-base>..origin/main -- <the files it names>`, and read the sibling
+   beads in the family. Then find a mutation or a reproduction that
+   *demonstrably discriminates* — one that fails before your change and passes
+   after — and **report the substitution**: what the bead prescribed, why it
+   no longer discriminates, and what you used instead. Quietly substituting is
+   as bad as following it blindly; the next reader has to know the bead's own
+   recipe is spent.
+
    **Any time you deliberately break production code to prove a test catches
    it — a mutation check — leave a marker first**, so an agent that inherits
    your worktree after a crash can tell a live mutation from finished work.
@@ -328,7 +342,20 @@ than restarting. That's the whole reason the worktree is preserved.
 
    Leave the task `in_progress` — the reviewer and the orchestrator close it
    once it's merged.
-10. **Before you report, kill every background job you started** — `TaskStop`
+10. **Before you report, kill every background job you started.** You cannot
+    enumerate them from memory and there is no "list my background jobs"
+    affordance here — `TaskStop` needs an id you must already hold, and a poll
+    shell you backgrounded 40 tool calls ago is not something you will
+    reliably recall (computenet-k9d.10). Write each one down **as you start
+    it** and read the file back here:
+
+    ```bash
+    echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
+    # ... at report time: cat "$SCRATCH/jobs", kill each line, then rm -f it
+    ```
+
+    An empty or absent file is a positive answer — you started none. "I don't
+    think I started any" is not. Then: `TaskStop`
     each monitor, kill each backgrounded shell, exit each poll loop. Starting
     them is fine (waiting on CI, tailing a long run); leaving one alive is not,
     and never end your turn waiting on one, because nothing resumes you.

@@ -119,13 +119,15 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `.claude/skills/work/scripts/…` | Does |
 |---|---|
 | `sweep-stale-claims.sh` | Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
+| `check-files-claim.sh` | Warns when a bead's own text names a file its `metadata.files` claim omits |
+| `reclaim-worktrees.sh` | Removes worktrees whose bead is already closed — the join `sweep-merged-prs.sh` cannot make |
 | `sweep-merged-prs.sh` | Closes beads whose PR merged after their session ended; removes their worktrees |
 | `next-batch.py` | Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
 | `ensure-worktree.sh` | Attaches a worktree on a branch, new or resumed, or fails loudly |
 | `epic-of.sh` | Resolves a bead's effective epic (`.parent` chain, else dotted prefix) |
 | `claim-epic.sh` | Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
-| `publish-beads.sh` | Publication push with rejection recovery, reading output not exit codes |
+| `publish-beads.sh` | Publication push with rejection recovery; fails on a nonzero exit **or** a rejection in the output |
 | `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic and claims it |
 
@@ -187,6 +189,61 @@ echo "${BEADS_ACTOR:?BEADS_ACTOR must be set, uniquely, per machine}"
 Unique per machine — it's how claims tell two machines apart. Never fall back
 to `git config user.name` (identical on every machine here). Unset → stop and
 report; a wrong identity is worse than a dead run.
+
+**And check the checkout you are about to run scripts from is current**, here,
+before anything reads it:
+
+```bash
+M=<main-checkout>                       # the -C target, NOT wherever you were launched
+git -C "$M" fetch origin main --quiet
+git -C "$M" rev-parse HEAD origin/main
+git -C "$M" merge-base --is-ancestor origin/main HEAD \
+  && echo "OK: main checkout contains origin/main" \
+  || echo "STALE: this checkout does NOT contain origin/main — its scripts and SKILL.md are not the ones main has"
+git -C "$M" status --porcelain          # anything tracked here => another session may be mid-work
+```
+
+**`-C <main-checkout>` is the whole point of the check** — run it without it
+and you test whichever tree you happen to stand in. You may well have been
+launched from a worktree cut fresh from `origin/main`, in which case the
+bare command prints `OK` while the checkout the scripts actually come from is
+44 commits behind: the exact reported failure, now wearing a green light. The
+asymmetry *is* the bug (computenet-6xm).
+
+Every `scripts/*.sh` in this file runs from the **main checkout**, because
+that is where `bd` lives — and the main checkout's working copy drifts (44
+commits behind, measured; computenet-kcu). So a session can execute a version
+of a script that `main` has already fixed, and find out several steps later as
+a rejected push or a wrong answer, with nothing connecting the two.
+
+`STALE` → **fast-forward before continuing** (`git -C "$M" merge --ff-only
+origin/main`). Refused — local commits, or a modification to a file the
+fast-forward would overwrite — → stop and report: a session running scripts
+from an unknown revision is worse than a session that did not start.
+
+**Do not fast-forward a dirty checkout, even though git lets you.** Other
+sessions share this working tree and its index, so `status --porcelain` above
+is a check, not decoration. A `--ff-only` aborts only when it would overwrite
+a file *you* modified; with unrelated modifications staged or unstaged it
+succeeds and moves a shared HEAD out from under a concurrent session
+(measured). Tracked modifications present → stop and report them rather than
+merging. Worktrees attached to the same `.git` are unaffected either way —
+each has its own HEAD, index, and files — so only the main checkout's own
+occupants are at risk.
+
+This is a **one-shot pin, not a live guarantee**: it fixes the revision your
+scripts come from at session start, and `origin/main` will move under a long
+run. That is the intended trade — one consistent revision for the whole run
+beats a moving one, and re-fast-forwarding mid-run would shift scripts under
+your own in-flight steps. What it buys is that no *drifted* script ever runs
+unnoticed, and it buys it before step 3 reads anything. If a script behaves
+unlike its description later in the run, re-run this check before believing
+the description is wrong (15 minutes went that way once).
+
+Note the asymmetry with the dispatch rule below: **agents** read
+`.claude/skills/work/**` from their own worktree, cut fresh from
+`origin/main`, so they are current by construction. Only the orchestrator runs
+from the drifting checkout, which is why only the orchestrator needs this.
 
 ## 2. Arm the budget
 
@@ -258,6 +315,53 @@ done
 
   The three states the loop keeps apart — query failed, not yet reporting,
   unsettled — are one state to any test on `$?`, and two of them look green.
+- **A long job YOU started is not supervised by anything.** This is distinct
+  from a dispatched agent, whose completion notification always arrives: a
+  background Bash job that **hangs** produces no notification at all, so
+  absence of news is not progress — one such job silently consumed half a
+  session (computenet-6v1). Never start one bare. Give it a hard timeout so it
+  cannot outlive its usefulness — there is no `timeout(1)` on macOS, so the
+  bound goes in your wrapper (`perl -e 'alarm shift @ARGV; exec @ARGV' 3600
+  <cmd>` exits 142 at the deadline, verified) — and, when the job is long
+  enough that you would rather hear about a stall than wait out the alarm, add
+  a **stall watch**. Ledger the job first, then arm the watch as a **Monitor**:
+  each of its stdout lines becomes a notification, whereas a backgrounded loop's
+  `echo`s reach you only when the loop finally exits — too late to be a warning.
+
+  ```bash
+  # your own ledger — same one you drain in Finalize step 7
+  echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
+  ```
+
+  ```
+  Monitor({description: "stall watch on <job>", persistent: false, timeout_ms: 1900000,
+    command: `
+  L=<spell the log path out>   # the monitor's shell does not inherit your $SCRATCH
+  sz() { [ -f "$1" ] && wc -c < "$1" | tr -d ' ' || echo 0; }   # BSD wc pads with spaces
+  prev=$(sz "$L")
+  for i in $(seq 1 30); do
+    sleep 60
+    now=$(sz "$L")
+    [ "$now" = "$prev" ] && echo "round $i: STALLED — nothing written in 60s ($now bytes)"
+    prev=$now
+  done
+  echo "stall watch ended after 30m — job still running, or you missed its exit"`
+  })
+  ```
+
+  Two details are load-bearing. `wc -c < f` on darwin prints the count **padded
+  with leading spaces**, so comparing it against a bare `0` says "alive" for a
+  file that has sat empty the whole minute — precisely the stall; `tr -d ' '`
+  normalizes both sides. And the size has to be read for a *missing* file too
+  (`sz` returns `0`), because a job that dies before creating its log is the
+  same silence. While this watch is alive it is **the** bounded watch — finish
+  it or `TaskStop` it before arming a PR-checks loop.
+
+  **A hung child does not fail, it waits.** A JVM after `OutOfMemoryError`, a
+  container whose main thread died, a Gradle daemon that lost its worker — all
+  of these keep their process alive with no exit status ever arriving. So the
+  timeout has to live in *your* wrapper; trusting the child to exit is what
+  turns a dead job into a lost session.
 - **Between notifications you have no sense of elapsed time.** Run
   `date -u +%H:%M` before any budget-gated decision — one session misread
   1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
@@ -341,6 +445,35 @@ unconditional (no epic/claim/review filter): three narrow re-checks all
 missed the same four leaked features (computenet-wpvy.25). Read `rc`: 3 =
 nothing was checked (`gh`/`bd` unreachable), 1 = some closes or removals
 failed — neither is "clean sweep"; say which you got.
+
+**Then reclaim what the sweep structurally cannot**, in the same step:
+
+```bash
+.claude/skills/work/scripts/reclaim-worktrees.sh > "$SCRATCH/reclaim.txt" 2>&1
+rc=$?; cat "$SCRATCH/reclaim.txt"; echo "rc=$rc"   # --dry-run to preview
+```
+
+`sweep-merged-prs.sh` joins from the **bead** side — it lists non-closed beads
+and removes a worktree only as a consequence of a close it just performed. So
+a bead that reaches `closed` with its worktree still on disk is reclaimed by
+nothing, ever: not the sweep, not Finalize, not the resume path. That is every
+close route except the sweep's own — a human `bd close`, a session closing its
+own work, the SDLC lane's supersede-closes. Four directories were measured
+stranded that way on one machine, and the fix for the leak could not reach
+them because it only looks forward (computenet-8l4r). This script inverts the
+join: it walks `git worktree list` and removes each `computenet-worktrees/<id>`
+whose bead is closed, whose tree is **clean**, which has **no rebase/merge in
+progress**, and whose **HEAD is contained in `origin/<its branch>`**. That last
+one is the guard a clean tree does not give you: `git status --short` says
+nothing about *commits*, so without it a worktree carrying unpushed work is
+deleted silently, `rc=0`, "removed". Detached HEAD, a branch origin has never
+seen, an unreachable origin, and local commits ahead of the remote tip are each
+a SKIP — the script has to *prove* the commits survive elsewhere. Removal is
+additionally held back until the directory has been **quiet for 15 minutes**;
+treat that one as a cheap filter on the close/write race, **not** as a liveness
+test — an agent sitting on an idle worktree reads as quiet. `rc=1` means a
+candidate was dirty, mid-operation, not provably pushed, or a removal failed:
+look, do not re-run.
 
 **Capture to a file rather than piping, for every script whose exit code you
 have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
@@ -646,14 +779,35 @@ if git -C <worktree> fetch origin <branch> 2>/dev/null; then
   git -C <worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
     && echo "OK: worktree contains origin/<branch>" \
     || echo "STOP: on the branch at the wrong commit — origin/<branch> is not in HEAD"
-else
+elif git -C <worktree> ls-remote origin >/dev/null 2>&1; then
   echo "OK: origin has no <branch> yet (first run, nothing to compare)"
+else
+  echo "STOP: origin is UNREACHABLE — this check proved nothing"
 fi
 ```
 
-Read the verification line, and only it. `STOP` → do not enter 5b; proceeding
-silently orphans reviewed work while looking clean (computenet-aeg). Either
-`OK` is fine.
+Read the verification line, and only it, and know all four it can print:
+
+| line | meaning |
+|---|---|
+| `OK: worktree contains origin/<branch>` | verified — the remote tip is an ancestor of `HEAD` |
+| `OK: origin has no <branch> yet` | verified — origin is reachable and has no such branch, so there is genuinely nothing to compare |
+| `STOP: on the branch at the wrong commit` | the worktree is missing pushed work |
+| `STOP: origin is UNREACHABLE` | **nothing was checked** |
+
+`STOP` → do not enter 5b; proceeding silently orphans reviewed work while
+looking clean (computenet-aeg). Either `OK` is fine.
+
+**The unreachable case is why there are two `OK` lines and not one.** A bare
+`fetch origin <branch>` fails identically for "no such branch on origin" and
+for "the network is down", so the original single `else` reported an
+unreachable origin as *"first run, nothing to compare"* — an `OK` on a check
+that never ran, which is the failure this whole block exists to prevent
+(computenet-dtl). The bare `ls-remote origin` in the middle branch is what
+separates them: it succeeds only if origin actually answered. Bare, and with no
+ref argument, deliberately — `ls-remote --exit-code origin HEAD` exits 2 on an
+origin that is reachable but has no refs yet, which would report a reachable
+remote as unreachable.
 
 `ensure-worktree.sh` is idempotent: leaves an attached worktree alone,
 attaches local branches, tracks remote-only branches at the remote tip,
@@ -722,11 +876,10 @@ Returns `{batch: [{id, model, files, worktree, branch, resumed}], skipped,
 verdict, parked, capacity}`. The batch is what can safely run at once:
 resumables first (nothing else ever picks them back up), then ready tasks
 whose `files` claims don't overlap the batch; a task with no claim comes back
-alone. That is correct scheduling either way — but check the description
-before commenting: `files unknowable before diagnosis` marks a deliberate
-diagnosis-first task (feature.md's exception, computenet-ahu), dispatched
-alone by design; any other missing claim means the breakdown needs fixing —
-comment on it. The batch is also bounded
+alone. That is correct scheduling either way — but a claimless task still
+needs the bookkeeping split out under **Before claiming each task** below
+(deliberate vs forgotten); don't comment on one before reading it. The batch
+is also bounded
 by **machine capacity** (`capacity.max_parallel = max(1, cores // 5)`,
 measured — see `capacity_limit()` in the script): parallel Gradle contention
 lands as timeouts in exactly the suites the epics exist to characterise,
@@ -754,13 +907,95 @@ verdict. (`parked` is only meaningful on an empty batch.)
 
 **Before claiming each task:**
 
+- **Re-validate a stated blocker or precondition against the ARTIFACT it
+  names, before you write it into a dispatch prompt.** A bead's "blocked until
+  X lands" was true when it was written; by dispatch time X may have landed
+  differently, partially, or not at all. Check the thing itself — the file,
+  the symbol, the test, the config — **not a commit subject line**, which
+  records what someone intended, not what is now true. Two items in one
+  session were dispatched on preconditions that no longer held
+  (computenet-rjyl). This is the orchestrator-authorship rule applied to
+  preconditions: a claim about what a change *does* needs a run or a citation.
+  When your check was indirect, relay it as such — **"I believe X; verify it
+  first"**, not as a checked fact. An agent cannot tell your verified claims
+  from your plausible ones, and it will build on both. The same applies at 5f
+  **route 4's admission gates**, which are where items with no feature parent
+  get their preconditions read.
 - **Re-derive `metadata.files` against the bead's current decided design.**
   The claim was set at filing; a design answered later can reach outside it
   (computenet-dqy.37 required violating its own claim). Design reaches wider
   → widen the claim and comment why. The dispatch prompt below also tells the
   implementer to report-and-widen rather than choose silently.
+- **Disjoint paths are not enough — read each candidate's acceptance for a
+  cross-reference into another candidate's claim.** `next-batch.py` proves the
+  batch will not merge into a conflict; it cannot see that task A's acceptance
+  names a fixture, symbol or file that lives inside task B's claim, which is an
+  overlap *by construction* and no diff will reveal until both have landed
+  (computenet-nyd). You are already reading every candidate's criteria to write
+  the dispatch, so read them for this too, and **serialise the pair** — run one
+  in this batch and the other in the next — if any such reference exists.
+
+  The tell that you have one: **a dispatch prompt you cannot write without
+  saying both "X is in scope" and an exclusion that covers X.** A prompt
+  carrying both is not a boundary, it is a contradiction the agent has to
+  resolve by guessing. If you cannot make the boundary unambiguous in one
+  sentence, that *is* the signal to sequence rather than batch — do not ship
+  the contradiction and hope.
+- **An empty `files` claim is two different things — read the description
+  before scheduling one.** `next-batch.py` batches a claimless task alone
+  either way, which is right for both, but they need different bookkeeping.
+  A description opening `files unknowable before diagnosis` or `no diff: …`
+  is a **deliberate** empty claim (feature.md's two shapes: diagnosis-first,
+  and a measurement whose deliverable is a comment or a run id rather than a
+  file). Write the real claim from the diff afterwards for the first;
+  for the second there is nothing to write. **Nothing to that effect anywhere
+  in the description means the task forgot its claim** — comment on it, fix
+  it before dispatch, and log the breakdown defect (computenet-wpvy.30).
+  Nothing machine-checks these openers; you are reading for the *claim*, not
+  matching a literal. A near-miss (`no-diff:`, `No diff —`, `files unknown
+  until diagnosed`) is the deliberate shape, not a forgotten claim — treat it
+  as such, and normalise the wording to the canonical opener so the next
+  reader doesn't have to make the same call. Reserve "forgot" for a
+  description that says nothing about why the claim is empty. And never let a
+  task take a nominal claim over files it merely reads: a claim is a lock, so
+  a read-only lock blocks a sibling for no benefit. A *descriptive string*
+  where a path list belongs (`none (tracker mutations only)`) is that same
+  defect wearing a non-empty claim — `next-batch.py` reads it as a path and
+  batches on it, so it never reaches this bullet; if you see one, rewrite the
+  field empty and move the sentence into the description.
+- **Date a prescribed reproduction before you repeat it.** A bead that
+  prescribes its own repro or mutation froze an assumption about the code on
+  the day it was filed, and within one epic the siblings are deliberately
+  fixing the same defect class in adjacent files — so a sibling merging
+  *invalidates* it at a rate that is structural, not incidental
+  (computenet-vyr, computenet-dqy.36: the prescribed mutation had been made
+  inert by a sibling the orchestrator had merged an hour earlier, and
+  following it produced a green run that read as "my fix does not work").
+  Before dispatch, compare the bead's `created_at` against what has landed on
+  the files it names:
+
+  ```bash
+  git -C <main-checkout> log --oneline --since=<bead created_at> origin/main \
+    -- <the files the repro names>
+  ```
+
+  Anything comes back → **say so in the prompt instead of restating the repro
+  as mandatory**: name the sibling, and set `${repoAge}` to something like
+  "the repro predates <sha> (<sibling id>) on these files — treat it as a
+  hypothesis, verify it still discriminates before trusting a negative
+  result." Nothing comes back → `${repoAge}` is empty. Never copy a bead's
+  mutation into the prompt under the word MANDATORY without running that
+  check; the prompt is what makes a stale instruction sound authoritative.
 - **Restate any cross-bead write the bead's criteria demand — ids and
-  action — in the dispatch prompt.** Authorization living only in the bead is
+  action — in the dispatch prompt. Read it from the batch entry's
+  `cross_bead`, not from the prose.** `next-batch.py` surfaces the field the
+  breakdown wrote (feature.md); an empty string is the normal value and means
+  *none authorized*. Without a field you would be hand-grepping every task's
+  description for a clause you cannot reliably spot, to fill in an input this
+  skill treats as load-bearing (computenet-eetn). If a task's criteria plainly
+  demand a cross-bead write and `cross_bead` is empty, that is a breakdown
+  defect: write the field before dispatching, and say you did.
+  Authorization living only in the bead is
   invisible to the policy check, which reads the prompt; an agent doing
   commissioned cross-posting got flagged and the orchestrator adjudicated its
   own commission as an overstep (computenet-dqy.72, computenet-szdd). Write
@@ -832,6 +1067,26 @@ the order you picked features — a dispatch once told an agent that merged
 production code "will not be visible" in a worktree that contained it,
 inviting re-implementation (computenet-88v).
 
+**A file the bead's own text names must be in its `metadata.files`.** The
+claim is what bounds the implementer, so a bead demanding a file the claim
+omits is unsatisfiable from the moment it was written — and the implementer
+finds out in its first ten minutes, left choosing between stalling and
+working outside its claim. Neither is its call to make
+(computenet-yh6.1.12 shipped five files outside its claim, each one forced by
+its own acceptance). Check it mechanically before dispatching, on every bead
+in the batch:
+
+```bash
+.claude/skills/work/scripts/check-files-claim.sh <task-id>...   # exit 1 = look
+```
+
+It greps the description and acceptance for path-shaped strings and prints
+each one the claim does not cover. It **warns** rather than blocks — a bead
+may legitimately name a file it only reads — so read what it prints and
+either widen the claim or satisfy yourself the file is read-only. This
+applies wherever you author a bead, not only here: 5c's red-check task, 5e's
+residuals, step 7's friction items.
+
 Dispatch the batch in one message. Anything you add reaches the agent as
 established fact — relay artifacts, not mechanism:
 
@@ -858,13 +1113,22 @@ Stay inside your metadata.files claim — sibling tasks are running on sibling
 branches and merge into the same feature branch. If the bead's own design or
 acceptance clause REQUIRES a file outside the claim, do not choose between
 them silently: report which file and which clause, and I will widen the claim.
+Report that the MOMENT you find it, not in your final summary — a claim that
+cannot be satisfied at all is my defect to fix, not a judgement call for you,
+and reporting it at the end means the whole task ran on a boundary we both
+knew was wrong. While you wait for my answer, keep working on whatever part
+of the task the claim DOES cover; if nothing is left, stop and say so rather
+than proceeding outside it.
 Tracker writes: ${crossBeadWrites or "none authorized — write only to this
 bead and to items you create."} Whatever that line says, never close,
 re-prioritise, reassign, re-parent or claim any bead other than your own.
 If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
-message. A prescribed reproduction that passes unfixed is a false lead — say
-so on the bead rather than quietly substituting your own.
+message. A prescribed reproduction that passes unfixed is a false lead — and
+the likeliest reason is that it went stale, not that your fix failed, so
+check what landed since the bead was filed, substitute a mutation that
+demonstrably discriminates, and report the substitution on the bead rather
+than making it quietly. ${repoAge}
 Run every verification command — Gradle above all — in ONE foreground Bash
 call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
 anything that outruns its 120s default, and a turn that ends waiting on a
@@ -910,7 +1174,13 @@ reads as a mild preference — treat it as a context hazard. The safe
 progress checks are: the completion notification (it always comes), the
 task's own bd comments (`bd comments <id> --json > "$SCRATCH/..."` —
 task.md has agents comment at parks and at finish), and
-`git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
+`git -C <task-worktree> log --oneline` plus `git -C <task-worktree> status
+--short` for commits and edits landing (movement there = alive). Those same
+three are how you establish whether an agent that returned *without* an
+outcome still has work in flight — you never need its transcript to answer
+that, and `SendMessage` to the agent is the fourth signal and also the
+remedy, because it keeps the agent's context where `TaskStop` discards it
+(computenet-77cx). An agent that seems slow is waited on or `TaskStop`ped at
 the budget deadline below — there is nothing useful between.
 
 **Find a stated outcome in an implementer's result before acting on it** —
@@ -925,7 +1195,9 @@ to finish and report, and run nothing downstream on that task until it does.
 **On batch completion** (wait for the whole batch — a staggered re-batch
 computes overlap against a moving set): files touched outside a claim → fix
 that task's `files` metadata, and for a diagnosis-first task write the real
-claim from the diff — the empty claim was unknowable, not violated; a task parked a question → that's one task, not
+claim from the diff — the empty claim was unknowable, not violated. A *zero-diff* task that produced a diff is the
+opposite reading: its premise was wrong, so say so on the bead and write the
+claim, rather than recording it as the shape it was filed as. A task parked a question → that's one task, not
 the feature; a task reported done → 5c. **If a budget notification arrives
 while you're still waiting, the batch is over its limit**: `TaskStop` the
 stragglers, leave them `in_progress` with a comment (worktrees and branches
@@ -987,11 +1259,75 @@ unclaimed:
 
 ```bash
 git -C <feature-worktree> rev-parse --abbrev-ref HEAD   # must equal <feature-branch>
+if git -C <feature-worktree> fetch origin <feature-branch> 2>/dev/null; then
+  git -C <feature-worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
+    && echo "OK: local contains origin/<feature-branch>" \
+    || echo "STOP: origin/<feature-branch> is AHEAD — somebody pushed under you"
+elif git -C <feature-worktree> ls-remote origin >/dev/null 2>&1; then
+  echo "CHECK: origin has no <feature-branch> — 5a pushed it, so absence is not normal"
+else
+  echo "STOP: origin is UNREACHABLE — this check proved nothing"
+fi
+gh pr list --head <feature-branch> --state open \
+  --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect: only yours, or none
+git -C <feature-worktree> diff --stat <feature-branch>..task/<task-id>   # BEFORE the merge — see below
 git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
 git -C <feature-worktree> push
 bd close <task-id>
 git -C <task-worktree> status --short                   # expect empty; else an agent died mid-edit — report
 ```
+
+**Re-verify the feature branch immediately before you merge into it, and
+refuse on surprise.** 5a set this branch up, but that was potentially an hour
+and several merges ago, and nothing between then and here re-reads it
+(computenet-wpvy.29). Two things can have changed underneath: `origin` can
+hold a tip your local ref does not contain, and a PR you did not open can have
+this branch as its head. **Either is a STOP, not something to resolve** —
+both sides may hold pushed, unreviewed work, and picking a winner discards
+somebody's. Park the choice (`ask-human.md`) rather than merging or
+force-updating.
+
+**An absent *PR* is normal here; an absent *branch* is not.** 5d opens the PR
+only after the first task merges, so `gh pr list` printing nothing is the
+expected first-run state (review-task.md §1 covers the same shape for
+reviewers). The branch itself is different: 5a ends with `git push -u origin
+<branch>`, so by the time you reach 5c `origin/<feature-branch>` exists — its
+absence means that push never landed or something deleted the ref. That is a
+**`CHECK`**, deliberately not a `STOP`: `STOP` is reserved above for the two
+findings that mean *park via ask-human.md* — origin ahead, or a competing PR —
+because in those two somebody else may hold pushed unreviewed work. A missing
+branch endangers nobody's work; find out why and push it, then merge. And the
+third branch exists because a bare `if fetch` cannot tell "no such branch" from
+"the network is down" — it would diagnose an unreachable origin as an absent
+branch, an answer on a check that never ran (the same defect
+`computenet-dtl` fixed in 5a's block). `ls-remote` succeeds only if origin
+answered.
+
+That is also why this is written as `if/elif/else` rather than an `&&`/`||`
+chain: absent, ahead and unreachable are three different findings, and a chain
+reports them as one line.
+
+**The `--stat` that actually caught this is the two-dot diff *before* the
+merge.** Run `git diff --stat <feature-branch>..task/<task-id>` and read it
+every time, not only when something feels wrong: a two-dot diff shows both
+directions, so content sitting on the feature branch and absent from the task
+branch appears as a **deletion**. That is the signature of a base that moved
+— in the observed case, deletions under `references/` and a 262-line test
+file the implementer never wrote.
+
+**Do not substitute the post-merge `git diff --stat HEAD~1 HEAD` for it.** On
+a merge commit `HEAD~1` is the *first* parent, so that diff is the
+first-parent diff, which for a clean merge is exactly the task's own changes —
+a file the task never touched can never appear in it, and the check silently
+never fires (computenet-rbfa is the same first-parent trap read from the
+other side). One benign reading of the two-dot diff does remain: a sibling
+task from the same batch that already merged into this branch after this task
+forked shows up as reversals too. Check the reversed paths against that
+sibling's `files` claim before parking.
+
+5e carries the same guard in its shipping form before `gh pr ready`: the
+`headRefOid`-equals-local-`HEAD` check is the origin-ahead half, and the
+`gh pr list --head` line there is the competing-PR half.
 
 Do **not** remove the task worktree — every removal happens in step 6's
 sweep, after all agents have returned (removing now races the reviewer's own
@@ -1005,6 +1341,46 @@ query picks it up.
 ```bash
 gh pr checks <pr-url>
 ```
+
+**Green is not "the tests ran" — check they were not SKIPPED.** A required
+check goes green just as happily when the diff's own suites *skipped
+themselves*: an `assumeTrue`-guarded test whose precondition CI does not
+provide reports `SKIPPED` and the build reports success. Measured 2026-08-17 on
+PR #254 — a lane was widened specifically so a new two-JVM test would run on
+every PR, all six checks went green (`build-test-serial` in 2m19s), and the
+orchestrator announced that Linux execution was now proven. The job log said
+`TwoJvmMirrorTest > … SKIPPED`: green proved the *wiring*, not the behaviour
+(computenet-hacm). This is the CI twin of the `FROM-CACHE`/`UP-TO-DATE` trap
+this skill already warns about for local Gradle runs, and it is less visible,
+because `gh pr checks` reports a conclusion and a duration and nothing else.
+
+`gh run view <run-id> --log` works non-interactively and returns the whole
+run, every job — measured on #254's run 32008091003: 7553 lines, 828 KB, 3s.
+Column 1 of each line is the job name, so the output also says *which lane*
+skipped. Save it, then read it with two greps:
+
+```bash
+gh run view <run-id> --log > "$SCRATCH/ci.log"
+grep -E 'SKIPPED|NO-SOURCE' "$SCRATCH/ci.log" | grep -v '> Task '          # tests that skipped
+grep -E '> Task [^ ]*:test (SKIPPED|NO-SOURCE|UP-TO-DATE|FROM-CACHE)' "$SCRATCH/ci.log"   # suites never run
+```
+
+**Both filters are load-bearing; the naive grep hides exactly the line you
+came for.** Every build prints ~200 boilerplate
+`checkKotlinGradlePluginConfigurationErrors SKIPPED` and
+`processResources NO-SOURCE` *task* lines, so the bare marker pattern matched
+227 times on that run and a `| head -20` showed nothing but boilerplate — the
+`TwoJvmMirrorTest … SKIPPED` line was line 7519 of 7553. Dropping `> Task `
+lines leaves 11, with the real one in view. (Don't add `no tests`/`0 tests` to
+the pattern either: `0 tests` matches vitest's `10 tests` on every ui-test
+line.) The second grep is the other half — a whole suite that never ran prints
+as a task line, `:module:test NO-SOURCE`/`FROM-CACHE`, and the first grep
+deliberately drops it.
+
+Read both for the **modules this diff touches**. Anything skipped there → say
+so plainly in the PR body and in the session summary, or file it — never
+report CI green as verification of the behaviour. An `assumeTrue` guard that
+CI can never satisfy is a real finding about the test, not a detail.
 
 The task reviewer tested a branch without its merged siblings; this is the
 first signal the whole still builds. Red is work: file a task for the next
@@ -1133,9 +1509,17 @@ git -C <feature-worktree> log --oneline \
 # §6 merge moved the head
 git -C <feature-worktree> rev-parse HEAD
 gh pr view <pr-url> --json headRefOid -q .headRefOid    # must equal the line above
+gh pr list --head <branch> --state open \
+  --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect exactly one: yours
 gh pr checks <pr-url>
 gh pr ready <pr-url>
 ```
+
+Those two `gh` lines are 5c's pre-merge guard at the ship gate
+(computenet-wpvy.29). `headRefOid` **is** origin's tip of this branch, so the
+equality is the stronger form of 5c's origin-ahead check; a second open PR on
+this head, or one you did not open, is the collision 5c refuses to resolve —
+park it, do not `gh pr ready`.
 
 Sha mismatch = "checks not yet available for this commit", not a verdict —
 the PR head has been observed lagging the pushed ref by ~10 minutes with
@@ -1161,6 +1545,19 @@ shipping on it. Expect the hand-back on any verdict where commits landed
 mid-review, and treat the reviewer's "origin/main unchanged at `<sha>`" as
 expired the moment it was written: the `log` above, not that line, is what
 settles it.
+
+**A verdict naming a pending measurement is not shippable yet.** `review=passed`
+means the review is finished, not that the feature may ship: a criterion
+riding an out-of-band measurement (a soak, a CI matrix run, an overnight job)
+leaves the ship gate with you. Read the run it names, and ship only once it
+reports — or, if it will not report inside this session, say so in the PR and
+leave the feature for the next one. Reading `review=passed` as "ship it" here
+merges code whose acceptance nobody has finished checking (computenet-wpvy.28).
+
+**Before you ship, confirm the checks EXECUTED this diff's tests**, by 5d's
+`SKIPPED`/`NO-SOURCE` log read above. A green check on a suite that skipped
+itself is not verification of anything, and this is the last point at which
+saying so is cheap (computenet-hacm).
 
 **`gh pr ready` is the ship decision, not the ship.** The moment it returns,
 read [references/ship-feature.md](references/ship-feature.md) and follow its
@@ -1238,6 +1635,33 @@ bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_a
 
 - open or in_progress with the other machine's assignee, or *any* status
   touched within 15 minutes → treat as live; take the next candidate.
+  **This branch has no age test, and that is deliberate** (computenet-9ynn).
+  Step 3 will *take over* an open epic untouched for 15 minutes, so 5f is
+  strictly stricter than step 3 for the same state — an epic a dead machine
+  abandoned hours ago is claimable at step 3 but its children are skipped
+  here. The asymmetry is kept because the two branches guard different
+  things, not because one is merely more cautious — both claims are pushed
+  acquisitions, so "announced by a push" is not the discriminator
+  (claim-sync.md brackets 5f routes 3–4 exactly like step 3). Two reasons:
+
+  - **Step 3's age test only ever runs on an epic that is already
+    `open`.** `claim-epic.sh` refuses an `in_progress` epic outright, so
+    there the 15 minutes are a *secondary* guard on a claim that was
+    already released. Here the branch is the *primary* guard — nothing else
+    stands behind it.
+  - **The epic's `updated_at` is not evidence of deadness under an open
+    epic.** Owned-territory writes stay local until Finalize, so from
+    another machine's view the timestamp freezes at claim time and every
+    live multi-hour session reads as stale within 15 minutes. And the
+    holder's *child* claims are local by design (claim-sync.md, "…except on
+    5f routes 3–4"), so pulled state shows those children unclaimed. An age
+    test here would therefore declare essentially every live epic dead and
+    hand its unclaimed-looking children to a second machine — removing the
+    only visible protection they have.
+
+  The cost of leaving it is a machine declining work it is entitled to; the
+  cost of closing it is two machines on one item. Take the next candidate
+  and let step 3 reclaim the epic on the next session.
 - closed, older than 15 minutes → the assignee is provenance, so read the
   **candidate's own** `status`/`assignee` instead and skip it if another
   machine holds it. That reading is trustworthy here and only here: 5b makes
@@ -1267,7 +1691,12 @@ with this session's pushed branches (`git diff --name-only
 origin/main...<branch>`, never titles); unparented ready bugs/chores;
 general ready order — ties break by the next criterion down.
 
-Two admission gates:
+Three admission gates:
+
+- **Its stated blocker or precondition still holds, checked against the
+  artifact it names** — 5b's rule, and it bites hardest here, where nothing
+  broke the item down and its "blocked until X lands" may be days old
+  (computenet-rjyl). A commit subject line is not the check.
 
 - **The item's own compute demand fits the slot.** A bead can demand
   thousands of suite runs while your dispatch prompt forbids starving the
@@ -1360,9 +1789,16 @@ git -C <worktree> push
 .claude/skills/work/scripts/publish-beads.sh
 ```
 
-The script reads output rather than exit codes (`bd dolt push` exits 0 while
-printing rejections), recovers a non-fast-forward inline (expected under
-concurrent operation), and escalates real conflicts. After a *recovered*
+The script fails on **either** signal — a nonzero exit or a rejection in the
+output — recovers a non-fast-forward inline (expected under concurrent
+operation), and escalates real conflicts. Neither signal alone is trusted:
+`dolt push` against a real non-fast-forward exits 1 and prints
+`! [rejected] … (non-fast-forward)` (measured 2026-08-17), but `bd dolt push`
+was once observed exiting 0 while printing a rejection, and staging a real
+non-fast-forward against the shared remote needs the *other* machine to push,
+so that propagation cannot be re-measured from here. `scripts/beads-nightly-sync.sh`
+uses the same pair; it previously tested the exit code only, and the two
+callers disagreed (computenet-kbk0). After a *recovered*
 push, verify your own writes survived the pull's merge — dolt reconciles
 last-write-wins, so a lost row is lost silently (name each write; don't
 assume):
@@ -1426,7 +1862,11 @@ gh pr view <pr-url> --json state,mergeStateStatus,statusCheckRollup
 
 If the check closed anything, run `publish-beads.sh` once more.
 
-**7. `TaskStop` the budget monitor**, then summarize: epic worked and its
+**7. `TaskStop` the budget monitor, then drain the ledger** — `cat
+"$SCRATCH/jobs"` (step 2), `TaskStop` or kill every line still alive, then
+`rm -f` it. An absent or empty file is a positive answer: you started none.
+"I don't think I left any running" is not, and a background job outlives the
+session that forgot it. Then summarize: epic worked and its
 disposition (closed / released / closed-under-you), tasks completed, features
 left in draft (PR urls), parked questions (and what they ask), stale claims
 released at startup, what the startup sweep closed or flagged, what the merge

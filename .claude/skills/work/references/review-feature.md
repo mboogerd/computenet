@@ -143,6 +143,24 @@ this file's opening "every task here is closed".
 Read the parent epic too, and any spec sections the feature cites — those
 are the authority (AGENTS.md), above the feature's own prose.
 
+**Resolving the parent is a script, not a field read.** `bd show --json`
+**omits `parent` entirely when it is unset** — a parented bead carries the
+key, an unparented one has no such key at all — so `.[0].parent` reads `null`
+both for an item that genuinely has none *and* for an id `bd` could not
+resolve, and the field alone cannot tell you which. `bd list --parent` is no
+help either: it is not transitive, so a membership scan answers "unparented"
+for exactly the grandchildren that do have one (computenet-wpvy.32). Use the
+walk, which follows `.parent` when set and the dotted-id prefix otherwise:
+
+```bash
+.claude/skills/work/scripts/epic-of.sh <feature-id>
+```
+
+`(unparented)` is a **positive answer**, not a read failure — a flat epic
+breakdown and 5f's route-4 items are legitimately parentless, and the file
+already tells you how to review one. Only a non-zero exit (`(no such id: …)`
+or `(cycle? …)`) means unresolved.
+
 **`acceptance_criteria` may be empty**, and on a bead filed mid-session by
 another agent it usually is — nothing broke it down. That is not a dead end
 and not automatically a defect: the criteria are then whatever the
@@ -346,7 +364,10 @@ So:
   says how to re-take it. Three traps:
   a green check on a diff that touches no compiled input is evidence of
   nothing (it too can be cache and skip), so say which checks actually
-  exercised the changed modules; a check still `pending` is not a pass —
+  exercised the changed modules — an `assumeTrue`-guarded suite reports
+  `SKIPPED` under a green check, and only the job log says so; SKILL.md 5d
+  carries the two greps that find it in `gh run view <run-id> --log`
+  (computenet-hacm). A check still `pending` is not a pass —
   wait for it or certify draft; and `gh pr checks` **exits 8 while anything
   is pending**, so never put it on the left of `&&` (the next step is
   silently skipped) and never gate a wait loop on its exit status — a
@@ -448,8 +469,15 @@ mid-review:
 Your repairs are **substantive**, and disqualify you from certifying, if any
 of these is true:
 
-- more than ~30 changed lines total across your repair commits, or more than
-  three files touched;
+- more than ~30 changed lines total across your repair commits — **that is
+  insertions + deletions, exactly as the `--stat` above prints them**, not net
+  (a reviewer self-certified at 41 by reading it as net; the bound exists to
+  remove a judgement call, so it cannot leave one behind, computenet-e0i5) —
+  or more than three files touched. **Reflow counts.** If rewrapping alone
+  pushes you over, that is a reason to hand back a draft, not a reason to
+  recount: a reviewer trading its own verdict against its own line count is
+  the exact conflict this list exists to remove. Reflow less, or accept the
+  draft;
 - any **new or semantically changed test, corpus scenario, or assertion** —
   writing the check that decides the verdict is authoring the verdict.
   **Exception, and it is narrow: a test-only repair** — no production file in
@@ -551,6 +579,35 @@ git -C <worktree> log --oneline $(git -C <worktree> merge-base HEAD origin/main)
   (its conditions otherwise met) — the push/re-read-checks ordering below
   travels to the orchestrator along with the merge; only the re-fetch
   evidence above is yours to quote.
+
+**A stopping rule, because `main` can land faster than one review takes.**
+The hand-back above is already bounded — you list the shas once and stop, and
+the merge is the orchestrator's. The unbounded loop exists only on the
+merge-it-yourself branch: re-merge, re-run, re-fetch, and something else has
+landed. So on **that** branch it is not "re-merge on any commit" —
+
+- **Re-merge only for a commit that is behaviourally relevant to this diff**:
+  it touches a file this PR touches (`gh pr diff <pr-url> --name-only` against
+  `git show --name-only <sha>`), or it changes something this diff depends on.
+  A landed commit in an unrelated subsystem is *recorded*, not re-merged.
+- **Certify against the head you actually tested**, and say which one:
+  "verdict against `<worktree HEAD sha>`, with `origin/main` at `<sha>` as of
+  `<time>`". A verdict naming no sha cannot be checked against anything later.
+- **Stop after the second relevant re-merge.** A third means the base is
+  moving faster than this feature can be reviewed, which is a scheduling
+  problem and not yours: say so in the verdict, certify against the head you
+  tested, and hand the window to the orchestrator.
+
+The relevance test is the same on both branches: on the hand-back it decides
+whether you flag subsystem overlap for the orchestrator, here whether you
+merge at all.
+
+**The window after you certify belongs to the orchestrator.** Your re-fetch
+line expires the moment you write it (above), and 5e's pre-ship block
+independently re-reads `merge-base..origin/main`, compares the PR head to the
+worktree head, and sends the diff back to you when something relevant landed.
+So you do not hold the review open waiting for the ship: certify, name your
+sha, stop (computenet-wpvy.33).
 
 **That merge creates a new head, so it invalidates the `gh pr checks` reading
 §4 requires you to quote.** Every required check you read belongs to the
@@ -670,6 +727,17 @@ bd update <feature-id> --set-metadata residual=$RES
 ```bash
 bd update <feature-id> --set-metadata review=passed
 ```
+
+**A criterion waiting on an out-of-band measurement is a third shape**, and
+it is neither met nor unmet: the code is right and the number is not in yet
+(a soak, a CI matrix run, an overnight job). Do not invent a verdict for it
+and do not hold the review open until it reports. Certify the code, set
+`review=passed`, and in the verdict comment name **the pending measurement,
+its run id or url, and the criterion it settles** — then leave the ship gate
+with the orchestrator, which SKILL.md 5e tells to hold the ship until that
+measurement reports rather than reading `review=passed` as shippable
+(computenet-wpvy.28). `review=passed` means *this review is finished*, not
+*ship it*.
 
 `review=passed` is deliberate: an unmet criterion is not a reason to withhold
 a merge of code that is otherwise correct. The orchestrator still closes
@@ -864,6 +932,22 @@ file with ordinary foreground calls — never end a turn waiting on it.
 
 Out of room, out of time, or blocked, give the partial verdict you have and put the rest under NOT VERIFIED — an honest
 partial verdict beats stopping mid-experiment.
+
+**You cannot enumerate them from memory, so keep a ledger.** There is no
+"list my background jobs" affordance here — `TaskStop` needs an id you must
+already hold, and a poll shell you backgrounded 40 tool calls ago is not
+something you will reliably recall (computenet-k9d.10). So write each one down
+**as you start it**, one line, and read the file back at this step:
+
+```bash
+echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
+# ... at report time:
+cat "$SCRATCH/jobs"     # kill each line, then:
+rm -f "$SCRATCH/jobs"
+```
+
+An empty or absent file is a positive answer — you started none. What is not
+an answer is "I don't think I started any".
 
 **Kill every background job you started before you send that message** —
 `TaskStop` each monitor, kill each backgrounded shell, exit each poll loop.

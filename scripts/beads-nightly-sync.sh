@@ -16,14 +16,16 @@
 # ~6.0s). Budget well above that anyway — a push following a remote merge was
 # measured over 120s on the old transport and has not been re-measured here.
 #
-# KNOWN LIMITATION, unfixed by this script: the checks below test exit codes.
-# .claude/skills/work/scripts/publish-beads.sh records having seen `bd dolt
-# push` exit 0 while printing a non-fast-forward rejection (Error 1105), which
-# this script would report as success. A rejection exited 1 when re-checked on
-# bd 1.1.2 (2026-08-15), so the failure mode may be version-specific; until
-# that is settled, read this script's log rather than trusting its exit status
-# alone. A non-fast-forward is the expected outcome of two machines pushing on
-# a schedule; the recovery is pull, then push again.
+# The push check below tests BOTH signals — nonzero exit and a rejection in
+# the output — matching .claude/skills/work/scripts/publish-beads.sh, which
+# records having seen `bd dolt push` exit 0 while printing a non-fast-forward
+# rejection (Error 1105). A rejection exited 1 when re-checked on bd 1.1.2
+# (2026-08-15), so the exit-0 mode may be version-specific, but it has not
+# been refuted, so neither signal is trusted alone (computenet-kbk0). This
+# script's exit status is now safe to trust for the push step. A
+# non-fast-forward is the expected outcome of two machines pushing on a
+# schedule; unlike publish-beads.sh this script does NOT recover it — the
+# recovery is pull, then push again, i.e. re-run this script.
 #
 # Fail-loudly, never degraded-continue (computenet-kg7 lesson): any failure
 # in either step exits nonzero immediately, naming the command that failed.
@@ -76,8 +78,17 @@ EOF
 fi
 
 echo "beads-nightly-sync: $(date -u +%Y-%m-%dT%H:%M:%SZ) starting: bd dolt push"
-if ! bd dolt push; then
-    echo "beads-nightly-sync: FAILED — 'bd dolt push' exited nonzero. See doc/ops/beads-sync-runbook.md." >&2
+# Fail on EITHER signal — nonzero exit OR a rejection in the output. `dolt
+# push` against a real non-fast-forward exits 1 and prints
+# `! [rejected] ... (non-fast-forward)` (measured 2026-08-17), but `bd dolt
+# push` was once observed exiting 0 while printing a rejection, and that
+# propagation cannot be re-measured safely from one machine. The exit-code-only
+# test used here disagreed with publish-beads.sh's output-only test; both now
+# require the same pair (computenet-kbk0).
+push_out=$(bd dolt push 2>&1); push_rc=$?
+printf '%s\n' "$push_out"
+if [ "$push_rc" -ne 0 ] || grep -qiE "rejected|error" <<<"$push_out"; then
+    echo "beads-nightly-sync: FAILED — 'bd dolt push' rejected (exit $push_rc). See doc/ops/beads-sync-runbook.md." >&2
     exit 2
 fi
 

@@ -88,14 +88,28 @@ bd create --type=task --parent=<feature-id> --validate \
   --title="<outcome as a change to the system, not an activity>" \
   --description="<current state with path:line evidence / the decided direction, saying what's settled and what's left to judgment / non-goals / the exact verification command>" \
   --acceptance="<which of the feature's rules and examples this task makes true>" \
-  --metadata '{"model":"<sonnet|opus>","files":"<comma-separated paths it will create or modify>"}'
+  --metadata '{"model":"<sonnet|opus>","files":"<comma-separated paths it will create or modify>","cross_bead":"<ids and action, or omit>"}'
 ```
 
 Note the flag: `bd create` takes **`--metadata`** with a JSON object.
 `--set-metadata key=value` exists only on `bd update` — passing it to
 `bd create` fails with `unknown flag` and creates nothing.
 
-Both metadata fields are load-bearing — a task missing either can't be
+**`cross_bead` is where an authorized write to ANOTHER bead is recorded.** If
+this task's criteria require touching a bead other than its own — commenting
+on a sibling, updating an upstream item — name the ids and the action here
+(`"cross_bead":"computenet-abc: comment the measured number"`). Omit the key
+when there is none; that is the normal case and the orchestrator reads a
+missing key as "none authorized".
+
+Write it here rather than only in the description. The orchestrator has to
+restate this verbatim in the dispatch prompt — authorization living only in
+the bead is invisible to the policy check, which reads the prompt — and
+without a field it would have to hand-grep every task's prose for a clause it
+cannot reliably spot (computenet-eetn). A field it can read is the difference
+between a load-bearing input and a guess.
+
+The `model` and `files` fields are load-bearing — a task missing either can't be
 scheduled and gets sent back. One exception: a **diagnosis-first task** (a
 flake, a defect whose location *is* the question) cannot know its claim —
 any pre-diagnosis `files` is a guess that co-schedules a sibling into a
@@ -105,6 +119,25 @@ description with `files unknowable before diagnosis`, and put the expected
 scope in the acceptance criteria instead ("diff confined to test sources
 unless a production defect is found, in which case it is reported"). The
 orchestrator dispatches it alone and writes the real claim from the diff.
+
+A **zero-diff task** — a measurement, a soak, a spike whose deliverable is a
+bd comment or a run id rather than a file — has the same shape and the
+opposite cause: its claim is not unknowable, it is genuinely *empty*. Leave
+`files` empty and open the description with `no diff: <what it produces
+instead>`. **Never write a nominal claim over files it only reads**: a claim
+is a lock, so a read-only claim blocks a sibling that needs to write those
+files, for no benefit (computenet-wpvy.30). The orchestrator batches a
+claimless task alone, which is the right handling for both shapes.
+
+The description is the only thing that tells the orchestrator which shape it
+is looking at — nothing checks these openers mechanically, so use them
+verbatim rather than a paraphrase, and never leave `files` empty in silence:
+a task whose description explains neither emptiness reads as having simply
+**forgotten** its claim, and that is a breakdown defect to fix, not a shape to
+schedule around. Equally, never put the explanation *in* `files` — a
+descriptive string there (`none (tracker mutations only)`) is read as a path
+and batched on, which is worse than an empty claim, not better
+(computenet-wpvy.30).
 
 If the task is a bug fix and you write a reproduction into its description,
 label it `verified-failing:` (with the output you watched it fail with) or

@@ -200,32 +200,18 @@ def cap_batch(batch, skipped, cap):
     return batch[:cap], skipped
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.exit("usage: next-batch.py <feature-id> [--actor NAME]")
-    feature = sys.argv[1]
-    actor = os.environ.get("BEADS_ACTOR", "")
-    if "--actor" in sys.argv:
-        actor = sys.argv[sys.argv.index("--actor") + 1]
-    if not actor:
-        sys.exit("BEADS_ACTOR must be set, uniquely, per machine")
+def plan_batch(candidates):
+    """(batch, skipped) from `[(task, resumed)]` — the claim-disjointness rule.
 
-    # Resumable first, then newly ready. bd ready hides in_progress; bd list
-    # needs an explicit status. Neither alone sees the whole picture.
-    resumable = bd("list", "--parent", feature, "--status", "in_progress",
-                   "--assignee", actor)
-    ready = bd("ready", "--parent", feature)
-
-    seen, candidates = set(), []
-    for task, resumed in [(t, True) for t in resumable] + [(t, False) for t in ready]:
-        tid = task.get("id")
-        if not tid or tid in seen:
-            continue
-        if task.get("issue_type") in ("epic", "feature"):
-            continue                      # --parent is transitive; skip the tree
-        seen.add(tid)
-        candidates.append((task, resumed))
-
+    A task with no `files` claim is returned ALONE and everything else is
+    deferred behind it. That is deliberate for both shapes feature.md allows
+    an empty claim (diagnosis-first, and a zero-diff measurement whose
+    deliverable is a comment or a run id): neither can be proven disjoint from
+    a sibling, and serialising a task that writes nothing costs nothing
+    (computenet-wpvy.30). Note what does NOT reach that branch — a descriptive
+    string in `files` ("none (tracker mutations only)") is a non-empty claim
+    over a path that does not exist, and batches like any other.
+    """
     batch, skipped, taken = [], [], set()
     for task, resumed in candidates:
         tid = task["id"]
@@ -252,6 +238,36 @@ def main():
             continue
         taken |= files
         batch.append(_entry(task, resumed, sorted(files)))
+    return batch, skipped
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit("usage: next-batch.py <feature-id> [--actor NAME]")
+    feature = sys.argv[1]
+    actor = os.environ.get("BEADS_ACTOR", "")
+    if "--actor" in sys.argv:
+        actor = sys.argv[sys.argv.index("--actor") + 1]
+    if not actor:
+        sys.exit("BEADS_ACTOR must be set, uniquely, per machine")
+
+    # Resumable first, then newly ready. bd ready hides in_progress; bd list
+    # needs an explicit status. Neither alone sees the whole picture.
+    resumable = bd("list", "--parent", feature, "--status", "in_progress",
+                   "--assignee", actor)
+    ready = bd("ready", "--parent", feature)
+
+    seen, candidates = set(), []
+    for task, resumed in [(t, True) for t in resumable] + [(t, False) for t in ready]:
+        tid = task.get("id")
+        if not tid or tid in seen:
+            continue
+        if task.get("issue_type") in ("epic", "feature"):
+            continue                      # --parent is transitive; skip the tree
+        seen.add(tid)
+        candidates.append((task, resumed))
+
+    batch, skipped = plan_batch(candidates)
 
     cores = os.cpu_count() or 1
     cap = capacity_limit(cores)
@@ -358,6 +374,10 @@ def _entry(task, resumed, files):
         "id": tid,
         "model": meta.get("model") or "",     # empty => breakdown omitted it
         "files": files,
+        # Authorized writes to OTHER beads (computenet-eetn). Absent => none;
+        # the orchestrator must relay this verbatim into the dispatch prompt,
+        # so it is surfaced here rather than hand-grepped out of the prose.
+        "cross_bead": meta.get("cross_bead") or "",
         "worktree": meta.get("worktree") or f"../computenet-worktrees/{tid}",
         "branch": meta.get("branch") or f"task/{tid}",
         "resumed": resumed,

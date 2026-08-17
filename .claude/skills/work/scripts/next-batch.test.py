@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for next-batch.py: the claim-overlap rule (computenet-9eb),
-the empty-batch verdict (computenet-eic), and the parked-children ids that
-verdict hands to the 5e review (computenet-k9d.4).
+the empty-batch verdict (computenet-eic), the parked-children ids that verdict
+hands to the 5e review (computenet-k9d.4), and the claimless-runs-alone rule
+that feature.md's zero-diff convention leans on (computenet-wpvy.30), and the
+`cross_bead` field 5b relays verbatim into dispatch prompts (computenet-eetn).
 
 Run: python3 .claude/skills/work/scripts/next-batch.test.py
 """
@@ -36,6 +38,107 @@ for files, taken, expected, what in cases:
     if got != expected:
         failed += 1
         print(f"FAIL: {what} — expected overlap={expected}, got {got}")
+
+
+# --- plan_batch(): a claimless task runs ALONE (computenet-wpvy.30) ---------
+# feature.md now sends two legitimate shapes through this branch — a
+# diagnosis-first task and a zero-diff measurement — and SKILL.md 5b tells the
+# orchestrator the script "batches a claimless task alone either way". That
+# invariant was prose-only until here.
+
+def t(id, files=None, labels=None):
+    task = {"id": id, "issue_type": "task", "status": "open",
+            "labels": labels or []}
+    if files is not None:
+        task["metadata"] = {"files": files}
+    return task
+
+
+def ids(entries):
+    return [e["id"] for e in entries]
+
+
+plan_batch = getattr(nb, "plan_batch", None)
+plan_cases = [
+    # (candidates, expected batch ids, expected skipped ids, what)
+    ([t("a", "src/A.kt"), t("b", "src/B.kt")], ["a", "b"], [],
+     "disjoint claims batch together"),
+    ([t("z")], ["z"], [], "a task with NO files key at all is dispatched, alone"),
+    ([t("z", "")], ["z"], [], "an empty files string is the same as no key"),
+    ([t("z", "  ,  ")], ["z"], [], "whitespace-only claim is still claimless"),
+    ([t("z"), t("a", "src/A.kt")], ["z"], ["a"],
+     "a claimless task first defers every sibling behind it"),
+    ([t("a", "src/A.kt"), t("z")], ["a"], ["z"],
+     "a claimless task arriving after a batch is held, never co-scheduled"),
+    ([t("z"), t("y")], ["z"], ["y"], "two claimless tasks never share a batch"),
+    ([t("h", labels=["human"]), t("z")], ["z"], ["h"],
+     "a human-gated skip does not count as a batch that blocks the alone-task"),
+    # The observed defect this convention exists to prevent: a descriptive
+    # string is NOT claimless, so it batches like a path and the alone-rule
+    # never protects it. Pinned so the divergence stays visible.
+    ([t("d", "none (tracker mutations only; no repository files)"),
+      t("a", "src/A.kt")], ["d", "a"], [],
+     "a descriptive string in files reads as a path and batches normally"),
+]
+for candidates, want_batch, want_skipped, what in plan_cases:
+    if plan_batch is None:
+        failed += 1
+        print(f"FAIL: {what} — next-batch.py has no plan_batch()")
+        continue
+    got_b, got_s = plan_batch([(c, False) for c in candidates])
+    if ids(got_b) != want_batch or sorted(ids(got_s)) != sorted(want_skipped):
+        failed += 1
+        print(f"FAIL: {what} — expected batch={want_batch!r} skipped={want_skipped!r}, "
+              f"got batch={ids(got_b)!r} skipped={ids(got_s)!r}")
+
+# A claimless entry must carry an EMPTY files list to the caller — not a
+# guessed one — since 5b writes the real claim from the diff afterwards.
+if plan_batch is not None:
+    solo, _ = plan_batch([(t("z"), False)])
+    if solo[0].get("files") != []:
+        failed += 1
+        print(f"FAIL: a claimless entry must report files=[] — got {solo[0].get('files')!r}")
+    plan_entry_cases = 1
+else:
+    failed += 1
+    plan_entry_cases = 1
+    print("FAIL: claimless entry files — next-batch.py has no plan_batch()")
+
+
+# --- cross_bead reaches the entry (computenet-eetn) -------------------------
+# 5b reads authorized cross-bead writes off the batch entry instead of
+# hand-grepping the description, so the key has to be present on EVERY entry:
+# absent metadata must read as the empty string ("none authorized"), not as a
+# missing key the orchestrator silently skips over.
+
+def t_meta(id, **meta):
+    task = {"id": id, "issue_type": "task", "status": "open", "labels": []}
+    task["metadata"] = meta
+    return task
+
+
+entry = getattr(nb, "_entry", None)
+cross_bead_cases = [
+    (t_meta("a", files="src/A.kt"), "",
+     "no cross_bead key => empty string, the 'none authorized' value"),
+    (t_meta("b", files="src/B.kt", cross_bead=""),
+     "", "an explicitly empty cross_bead stays empty"),
+    (t_meta("c", files="src/C.kt",
+            cross_bead="computenet-iyi.4: add a bd comment recording the OQ-1 decision"),
+     "computenet-iyi.4: add a bd comment recording the OQ-1 decision",
+     "a written cross_bead reaches the entry verbatim, for verbatim relay"),
+    ({"id": "d", "issue_type": "task", "status": "open", "labels": []}, "",
+     "a task with NO metadata at all still carries the key"),
+]
+for task, want, what in cross_bead_cases:
+    if entry is None:
+        failed += 1
+        print(f"FAIL: {what} — next-batch.py has no _entry()")
+        continue
+    got = entry(task, False, []).get("cross_bead", "<<missing>>")
+    if got != want:
+        failed += 1
+        print(f"FAIL: {what} — expected {want!r}, got {got!r}")
 
 
 # --- classify(): the verdict for an EMPTY batch (computenet-eic) -------------
@@ -215,7 +318,8 @@ else:
     capacity_reason_cases = 1
     print("FAIL: capacity skip reason — next-batch.py has no cap_batch()")
 
-total = (len(cases) + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
+total = (len(cases) + len(plan_cases) + plan_entry_cases + len(cross_bead_cases)
+         + len(verdict_cases) + len(parked_cases) + len(agreement_cases)
          + len(capacity_cases) + len(cap_cases) + capacity_reason_cases)
 print(f"{total - failed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
