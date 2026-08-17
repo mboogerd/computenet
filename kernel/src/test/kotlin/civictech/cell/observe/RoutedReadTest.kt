@@ -130,6 +130,31 @@ class RoutedReadTest {
         cell.reads.get() shouldBe 1
     }
 
+    /**
+     * The case the explicit holds-first pre-check in [readRouted] exists for,
+     * and the only one that distinguishes it from plain delegation: a ref held
+     * for a flip that the registry no longer places *anywhere*. `ManagedHost.migrate`
+     * unpublishes each moving ref before the target host spawns and republishes
+     * it, so between those two points `location(ref)` is null while the flip
+     * hold is still in force. Without the pre-check this falls to the
+     * unplaced arm and answers NOT_HOSTED — "nowhere at all" — where KRD-03
+     * requires MIGRATING for a ref held for a migration flip. Delegation
+     * cannot cover it: there is no host to delegate to.
+     */
+    @Test
+    fun `a ref held for a flip and no longer placed anywhere answers MIGRATING, not NOT_HOSTED`() {
+        val cell = CountingBoundedCell().also { host.managementInlet.call.spawn(it) }
+        registry.hold(cell.ref)
+        registry.unpublish(cell.ref)
+        registry.location(cell.ref) shouldBe null
+
+        val result = readRouted(registry, cell.ref, StateRead())
+        result.isDone.shouldBeTrue()
+        result.isCompletedExceptionally.shouldBeFalse()
+        result.get() shouldBe StateReadResult.Unavailable(StateReadResult.Reason.MIGRATING)
+        cell.reads.get() shouldBe 0
+    }
+
     @Test
     fun `an unknown ref answers NOT_HOSTED through the routed entry, never null, an empty page, or an exception`() {
         val unknown = CellRef(UUID.randomUUID())
