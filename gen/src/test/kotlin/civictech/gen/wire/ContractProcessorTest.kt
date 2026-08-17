@@ -652,12 +652,15 @@ class ContractProcessorTest {
     // 93 I-6/I-8 widening shipped with. A scan that OVER-marks is invisible to a single
     // positive case — computenet-yzsc (Borrowed/Frozen) and computenet-woto (Pair-held
     // exclusives) were both measured the same afternoon and neither is caught above.
-    // The three cases below close most of that gap: no exclusive anywhere in the
+    // The four cases below close most of that gap: no exclusive anywhere in the
     // payload graph, a payload with only platform-typed (`String`/`List`/`Map`)
-    // properties, and a self-referential payload that must terminate the walk rather
-    // than recurse forever. Each is mutation-checked except the platform one, whose test
-    // KDoc records why a mutation-proof version could not be built in this harness (see
-    // the commit message / bd comment for the mutate-run-revert record).
+    // properties, a payload declared under a platform package prefix with a real
+    // exclusive field, and a self-referential payload that must terminate the walk
+    // rather than recurse forever. Each is mutation-checked; the platform-typed-property
+    // case's own KDoc records the narrower limit that remains (the `kotlin.`/`java.`
+    // branches of the guard are not provable in this harness — see that test's KDoc,
+    // and the following test for how the guard's other three prefixes are proven
+    // instead).
 
     @Test
     fun `no exclusive anywhere in the payload graph yields exclusive false`() {
@@ -687,25 +690,24 @@ class ContractProcessorTest {
     // and it can only sit inside a `kotlin.*`/`java.*` container through a type
     // argument, which the argument walk above already covers").
     //
-    // LIMIT, stated rather than hidden: this assertion is not mutation-proof for the
-    // `isPlatformType` guard specifically. Measured directly — deleting the guard
-    // (`isPlatformType(fqn: String): Boolean = false`) and rerunning the whole class
-    // left all 21 tests green, this one included, because no genuinely compiled
-    // `kotlin.*`/`java.*` class can ever declare a field of our own `Owned` type, so
-    // opening `String`/`List`/`Map`'s own declared properties finds nothing exclusive
-    // either way. The natural way to force the guard to matter — a payload whose own
-    // fqn collides with the `kotlin.`/`java.` prefix, e.g. `package kotlin.demo` — does
-    // not compile at all here: KSP's round-1 resolution reports the type as
-    // `<ERROR TYPE: ...>` and `generateProxyClass` throws `IllegalArgumentException`
-    // for *any* class declared under a `kotlin.*`/`java.*` package root (reproduced with
-    // both prefixes; a sibling `acme.demo` package with the identical shape compiles and
-    // resolves fine), so the fqn-collision route is unavailable in this harness. The
-    // guard is real defensive code (its removal changes nothing observable via KSP for
-    // real classpath types, but the KDoc's justification — avoid opening the platform
-    // library's own declarations at all — is a cost/robustness argument, not a
-    // correctness one), and this test still guards the *shape* (no false positive from
-    // plain container-shaped platform fields); it does not prove `isPlatformType` is the
-    // mechanism keeping it false.
+    // LIMIT, stated rather than hidden: this assertion alone is not mutation-proof for
+    // the `isPlatformType` guard's `kotlin.`/`java.` branches specifically. Measured
+    // directly — deleting the guard (`isPlatformType(fqn: String): Boolean = false`) and
+    // rerunning the whole class left all 21 tests green, this one included, because no
+    // genuinely compiled `kotlin.*`/`java.*` class can ever declare a field of our own
+    // `Owned` type, so opening `String`/`List`/`Map`'s own declared properties finds
+    // nothing exclusive either way. The natural way to force those two branches to
+    // matter — a payload whose own fqn collides with the `kotlin.`/`java.` prefix, e.g.
+    // `package kotlin.demo` — does not compile at all here: KSP's round-1 resolution
+    // reports the type as `<ERROR TYPE: ...>` and `generateProxyClass` throws
+    // `IllegalArgumentException` for *any* class declared under a `kotlin.*`/`java.*`
+    // package root specifically (reproduced with both prefixes; a sibling `acme.demo`
+    // package with the identical shape compiles and resolves fine), so the fqn-collision
+    // route is unavailable for those two prefixes in this harness. This test still
+    // guards the *shape* (no false positive from plain container-shaped platform
+    // fields); it does not prove the `kotlin.`/`java.` branches are the mechanism
+    // keeping it false. The next test closes that gap for the guard's other three
+    // prefixes, which are not compiler-reserved and do compile.
     @Test
     fun `a platform-typed property is not opened for exclusive reach`() {
         val (compilation, result) = compileKeepingSources(
@@ -718,6 +720,46 @@ class ContractProcessorTest {
             @Contract
             interface PlatformContract {
                 fun push(envelope: Envelope)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
+    }
+
+    // Mutation-proof for the `isPlatformType` guard, closing the limit stated above.
+    // `kotlin.*` and `java.*` are compiler-reserved package roots (no user source may
+    // declare a class there — see the LIMIT note above), but `javax.*`, `jdk.*`, and
+    // `sun.*` — the guard's other three prefixes — are not: a user payload class can be
+    // declared under one and still compile. Declaring the payload itself under
+    // `javax.demo`, with a directly-nested `Owned` field, exercises the guard exactly
+    // where it matters: `carriesExclusive` is called on the payload's own type first, so
+    // `isPlatformType("javax.demo.Wrapper")` short-circuits the walk before it ever opens
+    // `Wrapper`'s declared properties. Measured: with the guard intact, `push`'s
+    // exclusive bit is `false` (this test, as written); deleting the guard
+    // (`isPlatformType(fqn: String): Boolean = false`) flips it to `true`. That is the
+    // over-marking shape this whole file exists to catch, and it is the guard's other
+    // three prefixes, not the two the KDoc above singles out as unprovable.
+    @Test
+    fun `a payload declared under a platform package prefix is not opened even with a real exclusive field`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package civictech.cell
+            class Owned<T : Any>(private val value: T)
+            """.trimIndent(),
+            """
+            package javax.demo
+            import civictech.cell.Owned
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Key
+
+            class Wrapper(val inner: Owned<String>)
+
+            @Contract
+            interface JavaxContract {
+                fun push(@Key w: Wrapper)
             }
             """.trimIndent(),
         )
