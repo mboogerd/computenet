@@ -112,11 +112,18 @@ class HeadlineLivenessTest {
     private val rigOrFail: TwoNodeRig get() = checkNotNull(rig) { "the rig was never built" }
 
     /**
-     * Feature rule 1 (headline): the create on the listener's workspace
-     * reaches the dialer's view and served fold, while the dialer's OWN
-     * `dolt_log` head is byte-identical to what it was before the create, and
-     * the dialer's own `bd export` has never heard of the issue. Only the
-     * cell delta crossed — no bd-level sync moved anything to node B.
+     * Feature rule 1 (headline) AND rule 2's content half: the create on the
+     * listener's workspace reaches the dialer's view and served fold — not
+     * merely as a presence key but as the field value itself, the created
+     * issue's `title` — while the dialer's OWN `dolt_log` head is
+     * byte-identical to what it was before the create, and the dialer's own
+     * `bd export` has never heard of the issue. Only the cell delta crossed —
+     * no bd-level sync moved anything to node B.
+     *
+     * The stored value is `bd`'s own JSON-quoted string, matching the
+     * convention every other field-value assertion in this module uses (see
+     * `RebaselineTest.kt`'s `view().getValue("B")["title"] shouldBe
+     * "\"Beta\""`) — not the bare title text.
      */
     @Test
     fun `a bd mutation on the listener's workspace reaches the dialer's fold while the dialer's dolt head is unchanged`() {
@@ -124,6 +131,7 @@ class HeadlineLivenessTest {
 
         dialer.servedStatus(idHeadline) shouldBe 200
         dialer.view().keys.contains(idHeadline) shouldBe true
+        dialer.view().getValue(idHeadline)["title"] shouldBe "\"headline\""
 
         dialer.logHead() shouldBe dialerHeadBeforeMutations
         dialer.exportNow().map { it.id }.contains(idHeadline) shouldBe false
