@@ -840,7 +840,11 @@ the agent's intent, so only an explicit `timeout` argument changes it.
 `:demo:beadsmirror:test` takes ~3m40s; without that argument the call is
 backgrounded, the agent ends its turn saying it will wait, and nothing ever
 wakes it. Five stalls across two items in one session, ~40 minutes lost
-(computenet-hob2).
+(computenet-hob2). The three agent-facing references carry the same rule
+together with the reason `timeout(1)` is not the answer — it is not installed
+on this host and fails open — so **stop pasting that warning into dispatch
+prompts by hand**; it was hand-carried into four prompts in one session
+(computenet-fbuo).
 
 **While a batch runs, never read a running agent's output** — not
 `TaskOutput`, not `Read`, not `tail`. For a local agent that file is the
