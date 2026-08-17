@@ -911,14 +911,15 @@ batch — one call, because `bd create` has no `--set-metadata` and a follow-up
 
 ```bash
 bd create --parent=<feature-id> --type=task --title "<one line>" \
+  --description "<what is red, plus the pasted failing log excerpt>" \
   --metadata '{"model":"sonnet","files":"<the files it may touch>"}'
 ```
 
 That create is under a feature THIS session claimed, so the dotted id is
-exclusive and `--parent` is correct here. It carries carrying the log excerpt issue-quality.md's CI-evidence rule
-requires — the run link alone ages out before the task runs
-(computenet-ttz). The one narrow exception — a red check in a module this diff doesn't
-touch — requires
+exclusive and `--parent` is correct here. The description carries the log
+excerpt issue-quality.md's CI-evidence rule requires — the run link alone
+ages out before the task runs (computenet-ttz). The one narrow exception —
+a red check in a module this diff doesn't touch — requires
 [references/red-check-attribution.md](references/red-check-attribution.md)'s
 four artifacts before treating any red as not this feature's. Never ship on
 "it's a flake".
