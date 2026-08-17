@@ -88,8 +88,9 @@ creates unparented for a hash id and re-parents. Dotted ids stay correct for
 breakdown children under something this lane has claimed.
 
 `--parent` is not transitive, so this listing shows direct children only. If
-the epic ever grows a feature layer, walk descendants with `epic_of` from
-`work`'s 5b rather than assuming one level. Order by
+the epic ever grows a feature layer, walk descendants with
+`.claude/skills/work/scripts/epic-of.sh` rather than assuming one level.
+Order by
 `comment_count` descending — comment count is recurrence, and recurrence is
 priority. Skip anything labeled `human`. Then pick by assignee — filing
 machines pre-claim items (SKILL.md step 7), and the claim decides which
@@ -100,10 +101,12 @@ orchestrator drains what:
   rejected → pull, re-check the assignee, take the next item if it's gone.
 - **Assigned to the other machine** → theirs; skip it — *unless* the claim
   is stale (untouched for more than 12h, per `updated_at` from the step-1
-  pull). Then steal it with the full bracket: `bd dolt pull` to confirm it
-  is still untouched, re-claim, `bd dolt push`, and note the steal in a
-  comment. This is the liveness backstop for a machine that claimed at
-  filing and died before draining.
+  pull; deliberately far above `work`'s 15-minute liveness window, because a
+  filing machine holds its claim across whole sessions before draining).
+  Then steal it with the full bracket: `bd dolt pull` to confirm it is still
+  untouched, re-claim, `bd dolt push`, and note the steal in a comment. This
+  is the liveness backstop for a machine that claimed at filing and died
+  before draining.
 
 ```bash
 bd update <id> --claim
@@ -163,8 +166,12 @@ the fix is attributable to the revision it amends.
 
 Commit, push, open a **draft** PR. Then dispatch a fresh reviewer agent
 (never yourself in the same breath) to check the fix against the item's
-acceptance and the surrounding skill text; ship per AGENTS.md's confidence
-rule — the reviewer certifies, you run `gh pr ready`.
+acceptance and the surrounding skill text. The reviewer runs under
+`work`'s `references/agent-execution.md` — put that path in the dispatch
+prompt, along with the explicit foreground-timeout line every `work`
+dispatch carries (a bare Gradle or long command otherwise backgrounds at
+120s and the agent stalls). Ship per AGENTS.md's confidence rule — the
+reviewer certifies, you run `gh pr ready`.
 
 On merge:
 
@@ -179,8 +186,13 @@ several items per session is normal.
 ## 5. Finalize
 
 ```bash
-bd dolt push
+.claude/skills/work/scripts/publish-beads.sh   # >=300s timeout
 ```
+
+Never a bare `bd dolt push`: it has been observed exiting 0 while printing a
+rejection, so the exit code alone is not a signal (`work`'s claim-sync.md;
+computenet-kbk0). The script fails on either signal and recovers a
+non-fast-forward inline.
 
 Report: items closed (with PRs), items superseded-closed, items left open
 and why, and the one-command oversight view for the human:
