@@ -53,23 +53,13 @@ uname -sm
 echo "${JAVA_HOME:-<unset>}"
 ```
 
-Measured 2026-08-13 on computenet-dqy.46: every measured number in the item
-reproduced exactly, and the only false statement was the environment — the
-run claimed a JDK the machine could not show, while the comparison bound had
-been taken on JDK 21.0.11, so two same-size figures came from different
-runtimes. `buildSrc`'s `jvmToolchain(21)` governs Gradle-launched JVMs but
-not a manual `java -cp` run, which is why the claim mattered.
-
-**Run those three commands; do not carry their answers in this file.** They
-are shell- and session-dependent and have already disagreed. Two readings of
-*this same host*: 2026-08-14 from a `/work` session, `/usr/libexec/java_home
--V` listed 9 JVMs topping out at JBR 25.0.2, `JAVA_HOME` **unset**, and
-`~/.gradle/jdks/` held only `CACHEDIR.TAG` (no provisioned toolchain);
-2026-08-14 from another session on the same machine, `java_home -V` failed
-outright with "Unable to locate a Java Runtime" while `JAVA_HOME` pointed at
-Homebrew OpenJDK 26.0.1. Both are true reports of different shells. So check
-the diff's environment claim against a reading *you* just took, quote it, and
-treat any environment fact written down here or in a bead as expired.
+On computenet-dqy.46 every measured number reproduced exactly and the only
+false statement was the environment claim — two same-size figures from
+different runtimes. **Run those three commands; do not carry their answers
+in this file.** They are shell- and session-dependent and two same-day
+readings of the same host have already disagreed outright. Check the diff's
+environment claim against a reading *you* just took, quote it, and treat any
+environment fact written down here or in a bead as expired.
 
 **Validating a workflow change** has one command that works on this host —
 there is no `actionlint` here and `pip3 install pyyaml` is PEP-668 blocked, so
@@ -121,7 +111,7 @@ reviewer unaware of a withdrawn certification reviews the wrong thing.
 The redirect to a file is likewise not optional:
 the JSON overruns the tool-result limit
 on exactly the beads that need it, and a truncated array reads as fewer
-comments rather than as an error (SKILL.md, "Two `bd` JSON traps").
+comments rather than as an error ([bd-traps.md](bd-traps.md)).
 
 **`bd list --parent` coming back empty is a shape, not a dead end.** This
 file is written for a feature with child tasks, but an epic can be broken
@@ -277,82 +267,14 @@ has reviewed nothing.
 The module suites the tasks ran individually may not cover their
 interaction. Run the affected module tests, and the repo-wide gate if the
 feature touched anything cross-cutting — then prove the run happened.
-
-`BUILD SUCCESSFUL` is not that proof. Gradle replays cached results for
-unchanged inputs, and a cached green build is indistinguishable from a real
-one in the output you normally read: measured 2026-08-12, a green
-`build-test-fast` finished in 21s with `:demo:tiering:test FROM-CACHE` and
-`48 executed, 53 from cache`. So "I ran it and it was green" and "I ran it
-and nothing happened" are the same sentence unless you read further.
-
-Per suite you run, consume and **quote in your verdict**:
-
-- **The task-count line** — Gradle's `N actionable tasks: X executed, Y from
-  cache` (or `up-to-date`), at the end of the run — measured 2026-08-14, the
-  last line under `--no-configuration-cache`, second-to-last in the default
-  mode where `Configuration cache entry reused.` follows it. `tail -3` catches
-  both.
-- **The per-task state line**, read as an *absence*. This build does print
-  `> Task :<module>:test` at the default log level, but **a task that really
-  executed prints with no marker**, so grepping for `FROM-CACHE`/`UP-TO-DATE`
-  returns nothing both when the task ran and when the log never carried task
-  lines. Grep for the task and look at what follows it — four states, only two
-  marked: `FROM-CACHE`, `UP-TO-DATE`, no marker (it ran), and no line at all
-  (never in the graph, or the log lost it) — and keep a log that
-  still has it: measured 2026-08-14, `| tail -30` drops it (the line sat 88
-  lines above the end of a 178-line `./gradlew testClasses`) and `-q` prints
-  no task lines, no task-count line and no `BUILD SUCCESSFUL` at all. Details
-  and the three-run measurement are in [review-task.md](review-task.md) §2.
-
-  ```bash
-  ./gradlew :kernel:test --tests '<TestName>' > "$SCRATCH/run.log" 2>&1
-  grep -E '^> Task :kernel:test( |$)' "$SCRATCH/run.log"; tail -3 "$SCRATCH/run.log"
-  ```
-
-  With only a truncated log, don't claim this check — use the task-count line
-  plus the XML timestamp below, or `--rerun`. But **`--rerun` alone is not
-  proof of execution**: measured 2026-08-15, a `:concord:test --rerun` printed
-  an *unmarked* task line and `1 executed` while restoring the previous run's
-  JUnit XML from the build cache — 253 stale tests with older internal
-  `timestamp` attributes under fresh file mtimes. Read the XML's content, not
-  the file's mtime, and for a load-bearing run — any mutation check, any
-  before/after comparison — pass `--no-build-cache` too
-  ([mutation-check.md](mutation-check.md) step 4, computenet-qsfu).
-- **The JUnit XML counts and timestamp**, which prove the results are from
-  *this* run, not the last one. Measured 2026-08-14: a cached repeat run left
-  `newest` at the previous run's `12:40:26.685Z` with identical counts and a
-  green build; `--rerun` advanced it to `12:40:45.016Z`. The timestamp, not
-  the count, is what separates a run from a replay:
-
-  ```bash
-  # One glob PER MODULE you verified — substitute the real module paths; a
-  # glob matching nothing is indistinguishable from a passing empty suite,
-  # so the snippet refuses to report zero files (computenet-wpvy.41).
-  python3 -c '
-  import glob, sys
-  from xml.etree import ElementTree as ET
-  paths = [p for g in sys.argv[1:] for p in glob.glob(g)]
-  if not paths: sys.exit("NO RESULT FILES - wrong glob or module; zero is not a pass")
-  t = f = e = 0; newest = ""
-  for p in paths:
-      r = ET.parse(p).getroot()
-      t += int(r.get("tests", 0)); f += int(r.get("failures", 0)); e += int(r.get("errors", 0))
-      newest = max(newest, r.get("timestamp", ""))
-  print(f"{len(paths)} files: {t} tests, {f} failures, {e} errors, newest {newest}")' \
-    '<module>/build/test-results/test/TEST-*.xml'
-  ```
-
-An unquantified "suites green" — yours or the implementers' — is not a
-verification record, and nobody re-runs it after you: your verdict *is* the
-evidence the merge rests on.
-
-`--rerun` binds to the task it follows, not to the command line:
-`./gradlew :kernel:test :wire:test --rerun` re-ran only `:wire:test` while
-`:kernel:test` came back `UP-TO-DATE`, with both task names on screen and
-`BUILD SUCCESSFUL` at the end. One `--rerun` per test task, or one task per
-invocation; `--rerun-tasks` for a repo-wide run. The rest of the cache-proof
-mechanics — mutation checks, and not destroying a rare failure's evidence
-with `-q` — are in [review-task.md](review-task.md) §2; use them here
+**[gradle-evidence.md](gradle-evidence.md) is that proof standard**: the
+task-count line, the per-task state line read as an absence, and the JUnit
+XML counts + timestamp via `scripts/junit-count.py`, plus the `--rerun` and
+`--no-build-cache` semantics. Per suite you run, consume those signals and
+**quote them in your verdict** — an unquantified "suites green", yours or
+the implementers', is not a verification record, and nobody re-runs it after
+you: your verdict *is* the evidence the merge rests on. The mutation-check
+mechanics are in [review-task.md](review-task.md) §2; use them here
 unchanged when a seam is what you're testing.
 
 **When the diff's only executable artifact is in NO Gradle source set** — a
@@ -417,51 +339,21 @@ So:
   Quote each required check's name and conclusion in your verdict — and quote
   them for the **PR's current head**. If §6's re-fetch makes you merge
   `origin/main`, that merge moves the head and this reading goes stale; §6
-  says how to re-take it. Three traps:
-  a green check on a diff that touches no compiled input is evidence of
-  nothing (it too can be cache and skip), so say which checks actually
-  exercised the changed modules — an `assumeTrue`-guarded suite reports
-  `SKIPPED` under a green check, and only the job log says so; SKILL.md 5d
-  carries the two greps that find it in `gh run view <run-id> --log`
-  (computenet-hacm). A check still `pending` is not a pass —
-  wait for it or certify draft; and `gh pr checks` **exits 8 while anything
-  is pending**, so never put it on the left of `&&` (the next step is
-  silently skipped) and never gate a wait loop on its exit status — a
-  jq/until waiter exited instantly looking like a completed green wait
-  (computenet-luhx). Gate on the printed rows instead — but **not** on
-  `grep -q pending` alone: the required check runs are created asynchronously
-  after a push, so for roughly the first minute `gh pr checks` prints only the
-  `auto-merge` row and "nothing pending" is indistinguishable from all-green
-  (computenet-1zhu). Require the six required rows
-  (`build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test`)
-  to be PRESENT *and* none of them pending. **The loop, inline, because this
-  is where you need it** (computenet-elm3). It is SKILL.md step 2's loop
-  **verbatim** — if you find these two texts differing, SKILL.md is the
-  original and this copy is the drift:
+  says how to re-take it. A green check on a diff that touches no compiled
+  input is evidence of nothing (it too can be cache and skip), so say which
+  checks actually exercised the changed modules — an `assumeTrue`-guarded
+  suite reports `SKIPPED` under a green check, and only the job log says so;
+  merge-task.md §4 carries the two greps that find it in `gh run view
+  <run-id> --log` (computenet-hacm). A check still `pending` is not a pass —
+  wait for it or certify draft, and wait with the script, never a hand-rolled
+  loop or anything gated on `gh pr checks`' exit status (it exits 8 while
+  pending, and its rows can be legitimately absent for the first minute —
+  computenet-luhx, computenet-1zhu, computenet-15it, computenet-elm3):
 
   ```bash
-  req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
-  for i in $(seq 1 40); do
-    rows=$(gh pr checks <pr-url> 2>&1)     # exit status deliberately not tested
-    n=$(echo "$rows" | grep -cE "$req")
-    if [ "$n" -lt 6 ]; then
-      if echo "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
-        echo "round $i: only $n of 6 required rows reporting"   # normal early state
-      else
-        echo "round $i: QUERY FAILED: $rows"                    # no rows at all
-      fi
-      sleep 20; continue
-    fi
-    echo "$rows" | grep -q pending || { echo SETTLED; echo "$rows"; break; }
-    sleep 20
-  done
+  .claude/skills/work/scripts/wait-checks.sh <pr-url>
+  # SETTLED (0) / TIMEOUT-PENDING (4) / QUERY-FAILED (3 — nothing was checked)
   ```
-
-  The inner `if` is not decoration: **query failed**, **not yet reporting**
-  and **unsettled** are three states, and a loop that collapses the first two
-  reports a network failure as an ordinary wait and then times out looking
-  like a red check (computenet-15it). `for i in $(seq …)` is the bounded form
-  this harness accepts; a bare long `sleep` is refused.
 
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
@@ -535,35 +427,16 @@ done
 ```
 
 Read that list first and confirm every commit on it is one you wrote; the
-line counts are only meaningful once it is. **The `--no-merges` in both
-commands is load-bearing for those counts, not just tidiness**: on a merge
-commit `--stat` prints the *first-parent* diff, so a merge left in this list
-would bill you for everything that landed on `main` since you forked
-(computenet-rbfa; §6 states the rule in full). Two ways of asking the question
-give the wrong answer, both because §6 tells you to merge `origin/main`
-mid-review:
-
-- `git diff --stat <review-base-sha>...HEAD` credits you with everything that
-  landed on `main` in the meantime. Measured during this file's own review,
-  2026-08-12: after merging `origin/main` and authoring nothing, it reported
-  `2 files changed, 131 insertions(+), 2 deletions(-)` — all of it commit
-  `0440342` from `main`, including a whole new test file
-  (`InspectorBindTest.kt`). That is over two of the bounds below, so it turns
-  an untouched branch into a forced draft.
-- `--no-merges` alone does not fix it. It drops the merge commit, not the
-  commits the merge brought in — the same run still listed `0440342`. The
-  `--not origin/main` is what excludes them.
-- **`--not origin/main` against a stale `origin/main` does not fix it either**,
-  which is why the fetch sits above the snippet rather than in §6. Measured
-  2026-08-12 on a synthetic branch built to this exact shape (base commit,
-  a commit landing on `main` mid-review, one merge of `origin/main`, one
-  `review:` repair): with `origin/main` left where the worktree happened to
-  have it, the command listed two commits — `review: my one repair` **and**
-  `main commit A`, which the reviewer never touched; after
-  `git fetch origin main`, the same command listed only `review: my one
-  repair`. It fails in the safe direction — it over-counts, and can never hide
-  your own work — but a single extra file is enough to cross the bounds below
-  and force a draft on an untouched branch.
+line counts are only meaningful once it is. **Every flag in that snippet is
+load-bearing**, each against a measured false-positive (computenet-rbfa; §6
+states the merge-commit rule in full): `git diff --stat <base>...HEAD`
+credits you with everything that landed on `main` mid-review; `--no-merges`
+alone drops the merge commit but not the commits it brought in — the
+`--not origin/main` is what excludes them; and `--not origin/main` against a
+stale fetch still over-counts, which is why the fetch sits above the snippet
+rather than in §6. All three fail in the safe direction — they over-count
+and can never hide your own work — but a single extra file crosses the
+bounds below and forces a draft on an untouched branch.
 
 Your repairs are **substantive**, and disqualify you from certifying, if any
 of these is true:
@@ -839,48 +712,50 @@ that cannot be checked honestly is filed, never weakened into a passing
 scenario. Failing sound work for it, or passing it and letting the criterion
 disappear, are both wrong.
 
-Merge it, and keep the residual alive:
+Merge it, and keep the residual alive. **Where the residual attaches depends
+on one query**, run before you file — the answer has changed under a live
+session, since a concurrent session can close the epic mid-review:
+
+```bash
+bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'
+.claude/skills/work/scripts/epic-of.sh <feature-id>   # (unparented) is a real answer
+```
+
+| the reviewed item has… | attach the residual by |
+|---|---|
+| an **open** epic ancestor | `bd update "$RES" --parent=<epic-id>` — the epic cannot close while it is open, and the epic's owner is who schedules it |
+| a **closed** epic ancestor | no parent, plus `bd dep add "$RES" <feature-id> --type=discovered-from` — a closed epic schedules nothing (nobody selects it at step 3), and the edge keeps the residual reachable from the work it came out of: `bv --robot-triage --graph-root` traverses it exactly like parentage |
+| **no epic at all** (a 5f route-4 item — `(unparented)` is normal, computenet-wpvy.42) | `bd update "$RES" --parent=<item-id>` — parent it to the reviewed item itself, and do **not** also add the `discovered-from` edge (one-slot rule below) |
+
+Create it the same way in all three cases:
 
 ```bash
 # Create UNPARENTED, then attach: a --parent create allocates the child id
-# from a per-database counter, and if the epic's holder (or the other
-# machine) files under it between syncs, two beads mint one id
-# (computenet-wpvy.45). The hash id survives the re-parent unchanged.
-# bd CREATE returns an object (bd SHOW a list), and bd prints warnings on
-# stdout before the JSON, so slice from the first `{` before jq (SKILL.md).
+# from a per-database counter, and two machines filing between syncs mint one
+# id for different beads (computenet-wpvy.45); the hash id survives the
+# re-parent. bd CREATE returns an object (bd SHOW a list), and bd prints
+# warnings on stdout before the JSON, so slice from the first `{` before jq.
 bd create "<the unmet criterion, verbatim>" --type=bug \
-  --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
+  --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet — and, on the closed-epic row: filed UNPARENTED deliberately, epic <epic-id> closed at review time>" \
   --acceptance="<the original criterion, unchanged>" \
   --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
 cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
 ```
 
-A shell variable cannot cross a Bash call — shell state does not persist
-between them — so the id goes to a file and every later call re-reads it.
-Check the `cat` printed a real id before going on: if `jq` saw a warning
-preamble it writes an empty file, and every command below would then run
-against an empty `$RES`. `review=passed` is the last write: a sequence that
-dies leaves the feature uncertified rather than certified with a residual
-nobody recorded.
+A shell variable cannot cross a Bash call, so the id goes to a file and
+every later call re-reads it (`RES=$(cat "$SCRATCH/residual-id")` first).
+Check the `cat` printed a real id: if `jq` saw a warning preamble it writes
+an empty file, and everything below would run against an empty `$RES`.
+Then, **one `bd` write per call**, in order:
 
-```bash
-RES=$(cat "$SCRATCH/residual-id")
-bd update "$RES" --parent=<epic-id>
-```
-
-```bash
-RES=$(cat "$SCRATCH/residual-id")
-bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES under <epic-id>, which is what carries the unmet criterion forward."
-```
-
-```bash
-RES=$(cat "$SCRATCH/residual-id")
-bd update <feature-id> --set-metadata residual=$RES
-```
-
-```bash
-bd update <feature-id> --set-metadata review=passed
-```
+1. the attach write from the table;
+2. `bd comment <feature-id>` — the verified criteria with their evidence,
+   the unmet criterion **verbatim** (a residual glossed as "minor follow-up"
+   is how it stops existing), `$RES`, and how it is attached;
+3. `bd update <feature-id> --set-metadata residual=$RES`;
+4. **last**, `bd update <feature-id> --set-metadata review=passed` — a
+   sequence that dies earlier leaves the feature uncertified rather than
+   certified with a residual nobody recorded.
 
 **A criterion waiting on an out-of-band measurement is a third shape**, and
 it is neither met nor unmet: the code is right and the number is not in yet
@@ -902,119 +777,28 @@ open, and it is the epic's owner who schedules it, not you. Name the unmet
 criterion verbatim in the comment; a residual glossed as "minor follow-up" is
 how it stops existing.
 
-**If the epic is already closed, file the residual UNPARENTED plus a
-`discovered-from` edge.** Check before you file — it is one query, and the
-answer changed under a live session on 2026-08-14, when the epic was closed
-by a concurrent session while this feature was still in review:
+**On the no-epic row, the parent edge and the `discovered-from` edge are the
+same slot, so you get exactly one.** `bd` holds at most one edge per ordered
+pair, and there both would run `RES -> <item>`: add the `discovered-from`
+edge first and the `--parent` update fails outright — `dependency … already
+exists` — leaving the residual with no parent at all (computenet-ofzz,
+measured again 2026-08-17). Already added it? `bd dep remove "$RES"
+<item-id>`, then `--parent`. Parent-child is the stronger edge and carries
+the same provenance; the `discovered-from` edge is still correct — and
+required — when the residual points at a *different* bead than its parent
+(that is how unparented beads reach `--graph-root` views, e.g.
+computenet-bybk and computenet-0her onto computenet-dqy.60). After parenting to an epic-less
+item, `epic-of.sh` still answers `(unparented)` — correctly, there is still
+no epic on the chain; check `bd show <RES>`'s `parent` field, not that.
 
-```bash
-bd show <epic-id> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'
-```
+On the closed-epic row, do not parent to the closed epic even though `bd`
+lets you and the child stays visible in `bd ready` — **that visibility is
+exactly what makes the wrong choice silent**: a closed epic schedules
+nothing, nobody selects it at step 3, and the criterion would sit in a
+container no session opens again.
 
-`closed` → the paragraph above stops being true of it. `bd` will let you
-parent to it, and the child stays perfectly visible — `computenet-dqy.37` is
-closed and its child `computenet-dqy.37.2` is open, in `bd ready`, and
-returned by `bv --robot-triage --graph-root computenet-dqy.37`. **That
-visibility is exactly what makes the wrong choice silent.** The reason not to
-parent there is the scheduling one: a closed epic schedules nothing. Nobody
-selects it at step 3, its owner label has been dropped, and the criterion
-would sit in a container no session opens again. So file the residual with no
-parent, and give it the two references that stand in for one:
-
-```bash
-# bd CREATE returns an object (bd SHOW a list), and bd prints warnings on
-# stdout before the JSON, so slice from the first `{` before jq (SKILL.md).
-bd create "<the unmet criterion, verbatim>" --type=bug \
-  --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>. Filed UNPARENTED deliberately: parent epic <epic-id> was already closed at review time." \
-  --acceptance="<the original criterion, unchanged>" \
-  --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
-cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
-```
-
-A shell variable cannot cross a Bash call — shell state does not persist
-between them — so the id goes to a file and every later call re-reads it.
-Check the `cat` printed a real id before going on: if `jq` saw a warning
-preamble it writes an empty file, and every command below would then run
-against an empty `$RES`. `review=passed` is the last write: a sequence that
-dies leaves the feature uncertified rather than certified with a residual
-nobody recorded.
-
-```bash
-RES=$(cat "$SCRATCH/residual-id")
-bd dep add "$RES" <feature-id> --type=discovered-from
-```
-
-```bash
-RES=$(cat "$SCRATCH/residual-id")
-bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES, UNPARENTED because <epic-id> is closed, linked discovered-from <feature-id>."
-```
-
-```bash
-RES=$(cat "$SCRATCH/residual-id")
-bd update <feature-id> --set-metadata residual=$RES
-```
-
-```bash
-bd update <feature-id> --set-metadata review=passed
-```
-
-**If the item you reviewed has NO epic ancestor at all**, the same shape
-applies for a different reason. 5f route 4 works unparented bugs and chores,
-so `epic-of.sh <item>` answering `(unparented)` is normal, not a defect — and
-there is no epic to file under (computenet-wpvy.42). File the residual as a
-**child of the reviewed item itself**, and do it *instead of* the
-`discovered-from` edge above, not in addition to it:
-
-```bash
-RES=$(cat "$SCRATCH/residual-id")
-# NOT `bd dep add "$RES" <item-id> --type=discovered-from` — see below.
-bd update "$RES" --parent=<item-id>
-```
-
-**The two edges are the same slot, so you get one of them.** `bd` holds at
-most one edge per ordered pair, and here both edges would run `RES -> <item>`:
-the reviewed item is simultaneously the `discovered-from` target and the
-proposed parent. Run §7's `bd dep add … discovered-from` first and the
-`--parent` update fails outright — `dependency … already exists with type
-"discovered-from" (requested "parent-child")` — leaving the residual with no
-parent at all, which is the state this paragraph exists to avoid
-(computenet-ofzz, measured again 2026-08-17). If you already added it, undo it
-first:
-
-```bash
-bd dep remove "$RES" <item-id>
-bd update "$RES" --parent=<item-id>
-```
-
-Parent-child is the stronger edge of the two and carries the provenance the
-`discovered-from` edge was there for, so nothing is lost by the swap. The
-`discovered-from` edge is still correct — and still required — when the
-residual points at a *different* bead than its parent.
-
-**What the parent buys, precisely.** `bv --robot-triage --graph-root <item>`
-finds the residual, `bd show <item>` names it, and a later session picking that
-item up as continuation work sees what the last review left. It does **not**
-change `epic-of.sh`, which walks up through the item and still answers
-`(unparented)` — correctly, since there is still no epic anywhere on the
-chain. Do not read that answer as the parenting having failed; check
-`bd show <RES>`'s `parent` field instead.
-
-Say in the verdict that you parented the residual to the item because the item
-has no epic, and that you dropped the `discovered-from` edge in favour of it,
-so both choices read as deliberate.
-
-**The edge is what replaces the parent, so do not skip it.** An unparented
-item is in `bd ready` like any other, so it is not lost — what it loses is
-every *epic-scoped* view, and with no parent there is nothing tying it to the
-work it came out of. The `discovered-from` edge restores that: it is a real
-graph edge, so `bv --robot-triage --graph-root` traverses it the same way it
-traverses parentage, which is how `computenet-bybk` and `computenet-0her`
-reach `--graph-root computenet-dqy` while being unparented — their only link
-is a `discovered-from` onto `computenet-dqy.60`. Without the edge the
-residual is reachable only by a whole-tracker query nobody runs on purpose.
-
-Say in your report that the residual is unparented and why, so the
-orchestrator does not read it as a filing mistake.
+Say in your report how the residual is attached and why, so the orchestrator
+does not read an unparented or item-parented filing as a mistake.
 
 ### Draft
 
@@ -1067,105 +851,26 @@ orchestrator closes it once it has confirmed the PR actually merged.
 
 ## When the diff under review edits `.claude/skills/work/`
 
-Reviewing a rewritten instruction *by executing the rewritten instruction*
-proves nothing. If the diff touches `.claude/skills/work/`, the branch under
-review **is** the procedure you were told to follow, and the circularity has
-to be broken deliberately:
-
-- **Follow the copy on `main`, not the copy in the worktree.** Read every
-  skill file you need with `git show origin/main:<path>` (after a
-  `git fetch origin main`), so the procedure you execute is the one already
-  agreed, not the one being proposed.
-- **Review the worktree copy as DATA.** It is the artifact under judgement,
-  never your instructions.
-- **Expect `main`'s instruction to contradict the change you are approving,
-  and follow `main`'s anyway.** A reviewer hit exactly this: the reference on
-  `main` told it to run a step that the very PR deletes. Do the step, note the
-  contradiction in your report, and **do not record it as a defect in the
-  PR** — the PR removing a step is the point of the PR, not a fault in it.
-
-- **Run the skills rubric gate.** It is the one check a skill diff has that
-  compiling and testing cannot give it, and it lives outside this flow, so
-  nothing else will run it:
-
-  ```bash
-  ruby .claude/skills/remediate-friction/scripts/validate-skills.rb
-  ```
-
-  Run it from `main`'s copy per the rule above, against the worktree's files.
-  Failures are structural (bad frontmatter, a long reference with no
-  `## Contents`) and are defects in the PR. Notes prefixed `note:` are
-  warnings — report them, but do not fail a PR for a pre-existing one it did
-  not introduce.
-
-The reason to read from `main` rather than the worktree is not only
-circularity. The main checkout's local branch is not refreshed by anything in
-this flow, so `origin/main:` is also the only reliable way to get the
-*current* text (computenet-kcu).
+The circularity-breaking procedure — follow `main`'s copy, review the
+worktree copy as data, expect and tolerate the contradiction, run the skills
+rubric gate (`validate-skills.rb`) — is [review-task.md](review-task.md)
+§ "When the diff under review edits `.claude/skills/work/`", the single
+copy. It applies here unchanged.
 
 ## 8. Report
 
-**Your final message must state the verdict in one word — READY or DRAFT, the
-pass and the fail of §7 — plus a NOT VERIFIED section naming everything you
-did not check.** Nothing resumes you. When your turn ends the orchestrator
-gets a completion notification that looks the same whether you finished or
-not, so a result that never states a verdict can be read as approval and
-shipped uncertified — one review returned "Waiting on Arm A. I will resume
-when it completes." as its entire result after 108 tool calls. So never end a
-turn waiting: not on another arm of your own experiment, and not on a
-background job's notification — ending your turn has already fired the
-completion notification the orchestrator acts on, whatever the job does next.
-Run long commands in the foreground with a generous timeout, or poll a
-background job's output file with ordinary foreground calls.
+**Your final message must state the verdict in one word — READY or DRAFT,
+the pass and the fail of §7 — plus a NOT VERIFIED section naming everything
+you did not check.** Nothing resumes you, and a result that never states a
+verdict can be read as approval and shipped uncertified. The rules that make
+the deliverable reach the orchestrator at all — never end a turn waiting,
+the Bash-tool timeout (there is no `timeout` binary on this host), the job
+ledger, and killing every background job before you report — are
+[agent-execution.md](agent-execution.md); they bind here in full. Out of
+room, out of time, or blocked: give the partial verdict you have and put the
+rest under NOT VERIFIED — an honest partial verdict beats stopping
+mid-experiment.
 
-There is no `timeout` binary on this host — neither `timeout` nor `gtimeout`
-(verified 2026-08-17). A bare `timeout 600 ./gradlew …` prints `command not
-found` and does exit 127, but **piped it fails open**: `timeout … | tee log`
-gives you the last stage's status, i.e. 0, so a suite that never ran reports
-success. `${PIPESTATUS[0]}` is not the rescue either — under zsh, this
-repo's session shell, `PIPESTATUS` is empty and only lowercase `pipestatus`
-carries the 127 (computenet-fbuo). The generous timeout meant here is the
-**Bash tool's own `timeout` argument**, in milliseconds, up to 600000. For a
-job that genuinely outlasts that, use `run_in_background` and poll its output
-file with ordinary foreground calls — never end a turn waiting on it.
-
-Out of room, out of time, or blocked, give the partial verdict you have and put the rest under NOT VERIFIED — an honest
-partial verdict beats stopping mid-experiment.
-
-**You cannot enumerate them from memory, so keep a ledger.** There is no
-"list my background jobs" affordance here — `TaskStop` needs an id you must
-already hold, and a poll shell you backgrounded 40 tool calls ago is not
-something you will reliably recall (computenet-k9d.10). So write each one down
-**as you start it**, one line, and read the file back at this step:
-
-```bash
-echo "<Monitor|shell|loop> <id or pid> <what it waits for>" >> "$SCRATCH/jobs"
-# ... at report time:
-cat "$SCRATCH/jobs"     # kill each line, then:
-rm -f "$SCRATCH/jobs"
-```
-
-An empty or absent file is a positive answer — you started none. What is not
-an answer is "I don't think I started any".
-
-**Kill every background job you started before you send that message** —
-`TaskStop` each monitor, kill each backgrounded shell, exit each poll loop.
-Background jobs are legitimate (waiting on CI, tailing a long run); leaving one
-alive is not. Nothing stops it once you are gone: every time it fires it
-delivers another task-notification to the orchestrator carrying a stale copy of
-the verdict above, and `TaskStop` on a completed agent answers "not running",
-so the orchestrator has no handle at all. Six such wakes in one session
-(computenet-k9d.8) — one agent's stuck wait-loop, one agent's `Monitor` that
-behaved exactly as designed and merely outlived its purpose; that pair is the
-whole evidence base, but both classes cost the same. Two traps that make loops
-stick: a `pgrep -f <pattern>` waiter matches any *sibling* process carrying
-that pattern in its argv — your own backgrounded poll shell among them — so
-the condition never goes false. (It does not match the waiting shell itself or
-its ancestors: measured 2026-08-14 on darwin/arm64, macOS `pgrep` excludes both
-unless given `-a`.) And
-`gh pr checks --watch` returns immediately when only `auto-merge` has reported
-on a fresh head, so it is not usable as a wait — which is why these loops get
-hand-rolled in the first place.
 
 The feature id, the verdict and why, and — as artifacts, not adjectives — the
 test counts with their executed/from-cache accounting, `uname -sm`, the

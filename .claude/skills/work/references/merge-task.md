@@ -106,9 +106,10 @@ git -C <task-worktree> log --oneline -3
 ```
 
 If nothing else will bring you back — every other lane is idle and you would
-otherwise sit waiting — the bounded stall-watch form in step 2 is the shape
-to use (`persistent: false`, one `sleep 3600`, one `echo`), and it is then
-**the** bounded watch: `TaskStop` it before arming a PR-checks loop.
+otherwise sit waiting — the bounded stall-watch Monitor in
+[long-jobs.md](long-jobs.md) is the shape to use (`persistent: false`, one
+`sleep 3600`, one `echo`), and it is then **the** bounded watch: `TaskStop`
+it before arming a PR-checks loop.
 
 **A bead untouched since the implementer's own comment is the signal** that
 the review has produced nothing durable. Then, in order — do not kill first:
@@ -192,82 +193,47 @@ Two consequences you own, because nothing else can:
   you must end with a task reviewed-but-unmerged, say so in the summary with
   the machine name — that branch is only resumable here.
 
-First confirm the feature
-worktree is still on the recorded branch (computenet-wpvy.29), and close the
-task before touching worktrees, so a crash can't leave merged work looking
-unclaimed:
+The gate sequence, the merge, the durability proof and the close are one
+script — run it `--dry-run` first, read every gate line and the incoming
+two-dot `--stat` it prints (the deletion signature below is a *pre-merge*
+read: once the real run merges and pushes, parking is no longer on offer),
+then run it for real:
 
 ```bash
-git -C <feature-worktree> rev-parse --abbrev-ref HEAD   # must equal <feature-branch>
-if git -C <feature-worktree> fetch origin <feature-branch> 2>/dev/null; then
-  git -C <feature-worktree> merge-base --is-ancestor FETCH_HEAD HEAD \
-    && echo "OK: local contains origin/<feature-branch>" \
-    || echo "STOP: origin/<feature-branch> is AHEAD — somebody pushed under you"
-elif git -C <feature-worktree> ls-remote origin >/dev/null 2>&1; then
-  echo "CHECK: origin has no <feature-branch> — 5a pushed it, so absence is not normal"
-else
-  echo "STOP: origin is UNREACHABLE — this check proved nothing"
-fi
-gh pr list --head <feature-branch> --state open \
-  --json number,author -q '.[] | "\(.number) \(.author.login)"'   # expect: only yours, or none
-git -C <feature-worktree> diff --stat <feature-branch>..task/<task-id>   # BEFORE the merge — see below
-git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
-git -C <feature-worktree> push
-git -C <feature-worktree> fetch origin <feature-branch> \
-  && git -C <feature-worktree> merge-base --is-ancestor HEAD FETCH_HEAD \
-  && echo "OK: the merge is on origin — durable" \
-  || echo "STOP: the merge is NOT on origin — do not close the task"
-bd close <task-id>
-git -C <task-worktree> status --short                   # expect empty; else an agent died mid-edit — report
+.claude/skills/work/scripts/merge-task.sh --dry-run <task-id> <feature-branch>
+# gates green and the --stat reads clean → the same command without --dry-run
 ```
 
-**Re-verify the feature branch immediately before you merge into it, and
-refuse on surprise.** 5a set this branch up, but that was potentially an hour
-and several merges ago, and nothing between then and here re-reads it
-(computenet-wpvy.29). Two things can have changed underneath: `origin` can
-hold a tip your local ref does not contain, and a PR you did not open can have
-this branch as its head. **Either is a STOP, not something to resolve** —
-both sides may hold pushed, unreviewed work, and picking a winner discards
-somebody's. Park the choice (`ask-human.md`) rather than merging or
-force-updating.
+Its gates, in order (each prints `GATE <name>: PASS` or aborts before any
+mutation): the feature worktree is still on the recorded branch
+(computenet-wpvy.29 — 5a set it up potentially an hour and several merges
+ago, and nothing else re-reads it); the local ref contains
+`origin/<feature-branch>` (three-way classifier — ahead / absent / origin
+unreachable are three different findings, computenet-dtl); no open PR on the
+feature head that is not yours; then the **two-dot** `--stat` of what will
+merge. After the gates it merges `--no-ff`, pushes, proves the merge is on
+origin, and only then runs `bd close <task-id>`.
 
-**An absent *PR* is normal here; an absent *branch* is not.** 5d opens the PR
-only after the first task merges, so `gh pr list` printing nothing is the
-expected first-run state (review-task.md §1 covers the same shape for
-reviewers). The branch itself is different: 5a ends with `git push -u origin
-<branch>`, so by the time you reach 5c `origin/<feature-branch>` exists — its
-absence means that push never landed or something deleted the ref. That is a
-**`CHECK`**, deliberately not a `STOP`: `STOP` is reserved above for the two
-findings that mean *park via ask-human.md* — origin ahead, or a competing PR —
-because in those two somebody else may hold pushed unreviewed work. A missing
-branch endangers nobody's work; find out why and push it, then merge. And the
-third branch exists because a bare `if fetch` cannot tell "no such branch" from
-"the network is down" — it would diagnose an unreachable origin as an absent
-branch, an answer on a check that never ran (the same defect
-`computenet-dtl` fixed in 5a's block). `ls-remote` succeeds only if origin
-answered.
+How to read its verdicts:
 
-That is also why this is written as `if/elif/else` rather than an `&&`/`||`
-chain: absent, ahead and unreachable are three different findings, and a chain
-reports them as one line.
-
-**The `--stat` that actually caught this is the two-dot diff *before* the
-merge.** Run `git diff --stat <feature-branch>..task/<task-id>` and read it
-every time, not only when something feels wrong: a two-dot diff shows both
-directions, so content sitting on the feature branch and absent from the task
-branch appears as a **deletion**. That is the signature of a base that moved
-— in the observed case, deletions under `references/` and a 262-line test
-file the implementer never wrote.
-
-**Do not substitute the post-merge `git diff --stat HEAD~1 HEAD` for it.** On
-a merge commit `HEAD~1` is the *first* parent, so that diff is the
-first-parent diff, which for a clean merge is exactly the task's own changes —
-a file the task never touched can never appear in it, and the check silently
-never fires (computenet-rbfa is the same first-parent trap read from the
-other side). One benign reading of the two-dot diff does remain: a sibling
-task from the same batch that already merged into this branch after this task
-forked shows up as reversals too. Check the reversed paths against that
-sibling's `files` claim before parking.
+- **Origin AHEAD, or a competing PR** → **STOP and park** (`ask-human.md`):
+  both sides may hold pushed, unreviewed work, and picking a winner discards
+  somebody's. Never merge or force-update through it.
+- **Absent feature branch** → a `CHECK`, not a STOP: 5a ends with
+  `git push -u origin <branch>`, so absence means that push never landed or
+  the ref was deleted. It endangers nobody's work — find out why, push it,
+  re-run. (An absent *PR* is simply the normal first-run state; 5d has not
+  fired yet.)
+- **Origin unreachable** → nothing was checked; do not proceed on it.
+- **Deletions in the two-dot `--stat`** → the signature of a base that moved:
+  content on the feature branch and absent from the task branch shows as a
+  deletion (a post-merge `git diff --stat HEAD~1 HEAD` can never show this —
+  first-parent trap, computenet-rbfa). One benign reading: a sibling from the
+  same batch that merged after this task forked shows as reversals too —
+  check the reversed paths against that sibling's `files` claim before
+  parking.
+- **Durability proof failed** → do not close the task and do not remove the
+  worktree; diagnose and retry. The script refuses the close itself.
 
 5e carries the same guard in its shipping form before `gh pr ready`: the
 `headRefOid`-equals-local-`HEAD` check is the origin-ahead half, and the
