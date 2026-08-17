@@ -12,6 +12,10 @@ plugins {
 include(":gen")
 include(":nature")
 include(":testkit")
+// :bench is infrastructure, not an application — benchmark sources for the repository,
+// depended on by nothing. That is why it sits next to :testkit rather than under demo/
+// ([BEN1-01]).
+include(":bench")
 
 include(":kernel")
 include(":concord")
