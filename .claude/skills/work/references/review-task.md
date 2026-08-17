@@ -139,22 +139,25 @@ Check:
   clear, tighten them (`bd update <task-id> --acceptance=…`) and review
   against the tightened version, saying so. Where it doesn't, you can't judge
   this task: say that rather than passing it on vibes.
-- **Absent entirely, with nothing to fall back on named.** Fall back in
-  order and **say which text you used**: the structured description, then the
-  comment thread (`bd comments <id> --json > "$SCRATCH/c.json"`, then read the
-  file — `bd show` carries only `comment_count`), then **park** rather than
-  pass if the standard exists nowhere (computenet-qxg5).
-- **Missing entirely** — the shape a directly-filed bug or chore arrives in,
-  with no breakdown to have written them. Write them onto the bead
-  (`bd update <id> --acceptance=…`) *before* you judge, and quote them in
-  your verdict. Inventing a standard silently and then certifying against it
-  is the reviewer marking its own paper, and it is worse than it looks: the
-  bar lives only in your report, so a resumed item gets a different one
-  (computenet-n58c). Written onto the bead, it survives the session and the
-  orchestrator can disagree with it. This is a backstop, not the normal
-  route: SKILL.md 5f has the orchestrator write them before dispatch, so
-  their absence is itself a finding — name it in your report alongside the
-  criteria you wrote.
+- **Missing entirely** — empty, or the key absent from `bd show --json`
+  altogether (both read as `null`, and neither is a `bd` failure). This is the
+  shape a directly-filed bug or chore arrives in, with no breakdown to have
+  written them, and three reviewers hit it in one session. Do not invent a
+  standard silently: that is the reviewer marking its own paper, and it is
+  worse than it looks, because the bar lives only in your report and a resumed
+  item gets a different one (computenet-n58c). Fall back **in order**, and
+  **say which text you used** (computenet-qxg5):
+  1. the **structured description**, read with the parent feature or epic;
+  2. the **comment thread** — `bd comments <id> --json > "$SCRATCH/c.json"`,
+     then read the file, since `bd show` carries only `comment_count`;
+  3. **nothing locatable anywhere → park it**, rather than pass.
+
+  Whichever answered, write it onto the bead (`bd update <id> --acceptance=…`)
+  *before* you judge and quote it in your verdict: written down it survives
+  the session and the orchestrator can disagree with it. This is a backstop,
+  not the normal route — SKILL.md 5f has the orchestrator write criteria
+  before dispatch, so their absence is itself a finding. Name it in your
+  report alongside the criteria you wrote.
 
 ## 2. Prove the tests ran
 
