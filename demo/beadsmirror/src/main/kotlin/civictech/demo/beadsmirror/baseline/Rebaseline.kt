@@ -39,6 +39,21 @@ sealed interface RebaselineReason {
      * raised.
      */
     data class CheckpointGone(val checkpoint: String) : RebaselineReason
+
+    /**
+     * A `bd dolt pull` merged a peer's history into the mirrored workspace:
+     * [mergeCommit] lies strictly after the feed's checkpoint and has two or
+     * more parents, so [FeedCondition.HistoryMerged] was raised and the
+     * incremental walk refused (epic computenet-7em §2 bullet 4; task
+     * computenet-7em.4.1).
+     *
+     * Runs on the poller thread, exactly like [CheckpointGone], and is subject
+     * to the same [EmptyExportRefused] guard — the guard keys on `reason !is
+     * FirstStart`, and a merged workspace is emphatically not a first start,
+     * so a zero-row export here still refuses rather than replacing a
+     * populated fold with nothing.
+     */
+    data class HistoryMerged(val mergeCommit: String) : RebaselineReason
 }
 
 /**
