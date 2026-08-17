@@ -267,7 +267,8 @@ stale *tasks* the sweep above already reopened, and a stale *feature* is the
 **Only after the liveness check, reconcile beads against merged PRs:**
 
 ```bash
-.claude/skills/work/scripts/sweep-merged-prs.sh        # --dry-run to preview
+.claude/skills/work/scripts/sweep-merged-prs.sh > "$SCRATCH/sweep.txt" 2>&1
+rc=$?; tail -40 "$SCRATCH/sweep.txt"; echo "rc=$rc"   # --dry-run to preview
 ```
 
 Auto-merge lands PRs minutes *after* their session ends, so no session
@@ -276,9 +277,20 @@ It runs here and nowhere earlier — it removes worktrees, and a concurrent
 session's just-merged worktree is clean *by definition*, so sweeping before
 the liveness check deletes a live run's state. It is deliberately
 unconditional (no epic/claim/review filter): three narrow re-checks all
-missed the same four leaked features (computenet-wpvy.25). Read its exit
-code: 3 = nothing was checked (`gh`/`bd` unreachable), 1 = some closes or
-removals failed — neither is "clean sweep"; say which you got.
+missed the same four leaked features (computenet-wpvy.25). Read `rc`: 3 =
+nothing was checked (`gh`/`bd` unreachable), 1 = some closes or removals
+failed — neither is "clean sweep"; say which you got.
+
+**Capture to a file rather than piping, for every script whose exit code you
+have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
+is long enough that `script.sh | tail -40` is the natural thing to type, and
+the pipe makes `$?` the exit code of `tail`, which is always 0. The bash
+escape hatch does not exist here: this repo's session shell is **zsh**, where
+`${PIPESTATUS[0]}` is not an array subscript at all and expands to the empty
+string — `echo EXIT=${PIPESTATUS[0]}` printed a bare `EXIT=` for three
+separate scripts in one session, which reads at a glance like a successful
+zero and is exactly the unearned "clean sweep" this paragraph exists to
+prevent (computenet-8d88). Never write `${PIPESTATUS[n]}` in this skill.
 
 **Select and claim one epic** — highest priority, skipping the SDLC epic
 (see "The SDLC exclusion" below; the filter is in the command because a
