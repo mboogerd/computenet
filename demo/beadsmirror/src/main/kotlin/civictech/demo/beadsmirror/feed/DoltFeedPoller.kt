@@ -32,6 +32,11 @@ data class PollLoopStopped(val failure: Throwable, val checkpoint: String?)
  *    with [FeedCondition.CheckpointGone] instead, emitting nothing. Any other
  *    [IllegalArgumentException] a tick's read raises propagates uncaught,
  *    rather than being folded into the same compaction condition.
+ *    A [HistoryMergedException] — a `bd dolt pull` merged peer history into
+ *    the walked range (task computenet-7em.4.1) — is converted the same way,
+ *    into [FeedCondition.HistoryMerged], and likewise emits nothing. The two
+ *    are separate conditions because the checkpoint survives a pull, so a
+ *    merge never presents as truncation.
  * 3. Otherwise, if the read produced records, hands the whole batch to
  *    [onBatch] and ONLY THEN persists the last record's commit hash as the
  *    new checkpoint — so a crash between steps 3's two halves re-delivers the
@@ -136,6 +141,9 @@ class DoltFeedPoller(
             feed.readFrom(after)
         } catch (e: CheckpointNotInHistoryException) {
             onCondition(FeedCondition.CheckpointGone(e.checkpoint))
+            return
+        } catch (e: HistoryMergedException) {
+            onCondition(FeedCondition.HistoryMerged(e.mergeCommit))
             return
         }
         if (records.isEmpty()) return
