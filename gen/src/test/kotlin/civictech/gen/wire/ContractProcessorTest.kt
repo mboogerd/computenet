@@ -6,6 +6,7 @@ import com.tschuchort.compiletesting.SourceFile
 import com.tschuchort.compiletesting.configureKsp
 import com.tschuchort.compiletesting.kspSourcesDir
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
+import org.junit.jupiter.api.Timeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -645,6 +646,158 @@ class ContractProcessorTest {
         assertEquals(false, exclusiveBitOf(table, "tapBorrowed"), table)
         assertEquals(false, exclusiveBitOf(table, "tapFrozen"), table)
         assertEquals(true, exclusiveBitOf(table, "pushNested"), table)
+    }
+
+    // computenet-viot: the pin above (`pushNested`) is the only POSITIVE assertion the
+    // 93 I-6/I-8 widening shipped with. A scan that OVER-marks is invisible to a single
+    // positive case — computenet-yzsc (Borrowed/Frozen) and computenet-woto (Pair-held
+    // exclusives) were both measured the same afternoon and neither is caught above.
+    // The four cases below close most of that gap: no exclusive anywhere in the
+    // payload graph, a payload with only platform-typed (`String`/`List`/`Map`)
+    // properties, a payload declared under a platform package prefix with a real
+    // exclusive field, and a self-referential payload that must terminate the walk
+    // rather than recurse forever. Each is mutation-checked; the platform-typed-property
+    // case's own KDoc records the narrower limit that remains (the `kotlin.`/`java.`
+    // branches of the guard are not provable in this harness — see that test's KDoc,
+    // and the following test for how the guard's other three prefixes are proven
+    // instead).
+
+    @Test
+    fun `no exclusive anywhere in the payload graph yields exclusive false`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package example
+            import civictech.gen.wire.Contract
+
+            class PlainEnvelope(val label: String, val count: Int, val nested: Inner)
+            class Inner(val flag: Boolean)
+
+            @Contract
+            interface PlainContract {
+                fun push(envelope: PlainEnvelope)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
+    }
+
+    // Pins that a payload with only platform-typed properties (`String`, `List<String>`,
+    // `Map<String, Int>`) is not marked exclusive — the basic shape `isPlatformType`
+    // exists to keep cheap (`carriesExclusive`'s KDoc: "an exclusive is a kernel type,
+    // and it can only sit inside a `kotlin.*`/`java.*` container through a type
+    // argument, which the argument walk above already covers").
+    //
+    // LIMIT, stated rather than hidden: this assertion alone is not mutation-proof for
+    // the `isPlatformType` guard's `kotlin.`/`java.` branches specifically. Measured
+    // directly — deleting the guard (`isPlatformType(fqn: String): Boolean = false`) and
+    // rerunning the whole class left all 21 tests green, this one included, because no
+    // genuinely compiled `kotlin.*`/`java.*` class can ever declare a field of our own
+    // `Owned` type, so opening `String`/`List`/`Map`'s own declared properties finds
+    // nothing exclusive either way. The natural way to force those two branches to
+    // matter — a payload whose own fqn collides with the `kotlin.`/`java.` prefix, e.g.
+    // `package kotlin.demo` — does not compile at all here: KSP's round-1 resolution
+    // reports the type as `<ERROR TYPE: ...>` and `generateProxyClass` throws
+    // `IllegalArgumentException` for *any* class declared under a `kotlin.*`/`java.*`
+    // package root specifically (reproduced with both prefixes; a sibling `acme.demo`
+    // package with the identical shape compiles and resolves fine), so the fqn-collision
+    // route is unavailable for those two prefixes in this harness. This test still
+    // guards the *shape* (no false positive from plain container-shaped platform
+    // fields); it does not prove the `kotlin.`/`java.` branches are the mechanism
+    // keeping it false. The next test closes that gap for the guard's other three
+    // prefixes, which are not compiler-reserved and do compile.
+    @Test
+    fun `a platform-typed property is not opened for exclusive reach`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package example
+            import civictech.gen.wire.Contract
+
+            class Envelope(val label: String, val tags: List<String>, val meta: Map<String, Int>)
+
+            @Contract
+            interface PlatformContract {
+                fun push(envelope: Envelope)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
+    }
+
+    // Mutation-proof for the `isPlatformType` guard, closing the limit stated above.
+    // `kotlin.*` and `java.*` are compiler-reserved package roots (no user source may
+    // declare a class there — see the LIMIT note above), but `javax.*`, `jdk.*`, and
+    // `sun.*` — the guard's other three prefixes — are not: a user payload class can be
+    // declared under one and still compile. Declaring the payload itself under
+    // `javax.demo`, with a directly-nested `Owned` field, exercises the guard exactly
+    // where it matters: `carriesExclusive` is called on the payload's own type first, so
+    // `isPlatformType("javax.demo.Wrapper")` short-circuits the walk before it ever opens
+    // `Wrapper`'s declared properties. Measured: with the guard intact, `push`'s
+    // exclusive bit is `false` (this test, as written); deleting the guard
+    // (`isPlatformType(fqn: String): Boolean = false`) flips it to `true`. That is the
+    // over-marking shape this whole file exists to catch, and it is the guard's other
+    // three prefixes, not the two the KDoc above singles out as unprovable.
+    @Test
+    fun `a payload declared under a platform package prefix is not opened even with a real exclusive field`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package civictech.cell
+            class Owned<T : Any>(private val value: T)
+            """.trimIndent(),
+            """
+            package javax.demo
+            import civictech.cell.Owned
+            import civictech.gen.wire.Contract
+            import civictech.gen.wire.Key
+
+            class Wrapper(val inner: Owned<String>)
+
+            @Contract
+            interface JavaxContract {
+                fun push(@Key w: Wrapper)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
+    }
+
+    // `carriesExclusive`'s `seen` fqn guard (KDoc: "a self-referential payload... ends
+    // rather than recursing forever") is what makes a self-referential payload safe to
+    // scan at all. `@Timeout` bounds the failure mode: if the guard regresses, this test
+    // fails fast on a timeout/StackOverflowError instead of hanging the whole suite for
+    // the module's 5-minute default. The walk genuinely reaches the self-reference
+    // (verified by mutation, not assumed): `Node`'s own property `next: Node?` resolves
+    // to the same fqn as `Node` itself, so `carriesExclusive` recurses into it once
+    // before `seen.add` short-circuits the second visit — deleting the guard reproduces
+    // a `StackOverflowError` here (see bd comment for the mutate-run-revert record).
+    @Test
+    @Timeout(30)
+    fun `a self-referential payload terminates instead of recursing forever`() {
+        val (compilation, result) = compileKeepingSources(
+            """
+            package example
+            import civictech.gen.wire.Contract
+
+            data class Node(val next: Node?)
+
+            @Contract
+            interface NodeContract {
+                fun push(node: Node)
+            }
+            """.trimIndent(),
+        )
+        assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
+
+        val table = generatedSource(compilation, "ContractTable_").replace(Regex("\\s+"), " ")
+        assertEquals(false, exclusiveBitOf(table, "push"), table)
     }
 
     /** Reads one `MethodDescriptor` row's `exclusive` flag out of a whitespace-normalised table. */
