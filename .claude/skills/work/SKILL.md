@@ -82,7 +82,18 @@ felt like giving up.
   (computenet-csm).
 - `bd` prints warnings on stdout **before** the JSON, so `jq` and
   `json.loads` fail on the raw stream; slice from the first line starting
-  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing.
+  `[` or `{` (`sed -n '/^[[{]/,$p'`) before parsing. **Every documented
+  snippet in this skill carries that slice** — it is not decoration, and
+  removing it to shorten a line reintroduces the bug (computenet-efhi).
+  Setting `beads.role` silences the *role* warning (it is `maintainer` here),
+  but that is one warning of several: the id-collision backstop and Dolt's own
+  notices print the same way, so the slice stays regardless.
+
+  **An empty `jq` result must never be read as an empty query result.** That
+  is the whole harm: the pipe fails, `jq` prints nothing, exit status is the
+  last stage's, and "no rows" is indistinguishable from "the parse died". If a
+  query you expect to return something returns nothing, re-run it without the
+  `jq` and look at the raw stream before believing it.
 - Comments are read one way only: `bd comments <id> --json >
   "$SCRATCH/c-<id>.json"`, then read the file. Inline reads truncate on
   long-lived beads (~34KB observed) and present as *fewer comments than
@@ -110,7 +121,7 @@ felt like giving up.
 
   ```bash
   ROWS='(if type=="array" then . else (.issues // []) end)[]'
-  bd list … --json | jq -r "$ROWS | .id"
+  bd list … --json | sed -n '/^[[{]/,$p' | jq -r "$ROWS | .id"
   ```
 
 - **Re-parenting a reviewer-filed residual takes two commands.** A
@@ -441,7 +452,7 @@ is a resume — not that anything failed. Observed 2026-08-15 mid-breakdown
 
   Those files survive a host-process exit, so the usual reason to miss them is
   not knowing the path, not deletion. If you genuinely cannot recover it, take
-  the start from the epic's claim — `bd show <epic> --json | jq -r
+  the start from the epic's claim — `bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r
   '.[0].started_at'`, which `--claim` sets at step 3, a few minutes after the
   true start — and the slot length from the routine that invoked you. (A first
   bd comment's timestamp works too, but nothing before step 5 requires one, so
@@ -739,7 +750,7 @@ looks exactly like a dead breakdown if you only count children
 `human` label + a `QUESTION:` comment:
 
 ```bash
-bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.labels)"'
 bd comments <epic> --json > "$SCRATCH/epic-comments.json"
 ```
 
@@ -770,7 +781,7 @@ they rot after their blocker clears (computenet-6i1: 3 of 4 parked items were
 finishable). List them repo-wide and keep the ones under this epic:
 
 ```bash
-bd list --status=blocked --limit 0 --json | jq -r '.[] | .id'
+bd list --status=blocked --limit 0 --json | sed -n '/^[[{]/,$p' | jq -r '.[] | .id'
 .claude/skills/work/scripts/epic-of.sh <each id>       # keep those under <epic>
 bd comments <id> --json > "$SCRATCH/parked-<id>.json"  # read the QUESTION
 ```
@@ -1175,7 +1186,7 @@ sibling.
 under one is an acquisition and gets pushed like any other:
 
 ```bash
-bd show <epic> --json | jq -r '.[0].status'    # local read, no network
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0].status'    # local read, no network
 # closed → bd dolt push        (>=300s timeout) right after the claim
 ```
 
@@ -1395,7 +1406,18 @@ and state a verdict plus a NOT VERIFIED section. Agent-completed is not
 task-reviewed; a result skimmed as done here merges unreviewed code.
 
 **Merge the passes yourself, one at a time** — reviewers must not merge
-(concurrent merges into one feature branch race). First confirm the feature
+(concurrent merges into one feature branch race).
+
+**The task branch is LOCAL by design; the feature branch is what must be
+durable.** A dispatched implementer's `git push -u origin <task-branch>` is
+denied by the permission classifier, so task.md now has implementers commit and
+*not* push (computenet-zmso). Nothing needs the remote task branch: its
+reviewer works in that worktree, and the merge below reads the local ref, which
+worktrees of one repository share. What that shifts onto you is the durability
+check — **after the push, confirm the merge is actually on origin before you
+close the task**, since a close is what tells every later session the work
+landed. `STOP` → the push did not take; do not close, and do not remove the
+worktree. First confirm the feature
 worktree is still on the recorded branch (computenet-wpvy.29), and close the
 task before touching worktrees, so a crash can't leave merged work looking
 unclaimed:
@@ -1416,6 +1438,10 @@ gh pr list --head <feature-branch> --state open \
 git -C <feature-worktree> diff --stat <feature-branch>..task/<task-id>   # BEFORE the merge — see below
 git -C <feature-worktree> merge --no-ff task/<task-id> -m "Merge <task-id>"
 git -C <feature-worktree> push
+git -C <feature-worktree> fetch origin <feature-branch> \
+  && git -C <feature-worktree> merge-base --is-ancestor HEAD FETCH_HEAD \
+  && echo "OK: the merge is on origin — durable" \
+  || echo "STOP: the merge is NOT on origin — do not close the task"
 bd close <task-id>
 git -C <task-worktree> status --short                   # expect empty; else an agent died mid-edit — report
 ```
@@ -1840,7 +1866,7 @@ always pushed, a child claim only once its epic closes (5b):
 
 ```bash
 .claude/skills/work/scripts/epic-of.sh <candidate-id>
-bd show <that epic> --json | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
+bd show <that epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee) \(.updated_at)"'
 ```
 
 - open or in_progress with the other machine's assignee, or *any* status
@@ -1983,7 +2009,7 @@ Otherwise, in order:
 **1. The epic decision.** One query, three branches:
 
 ```bash
-bd show <epic> --json | jq -r '.[0] | "\(.status) \(.assignee)"'
+bd show <epic> --json | sed -n '/^[[{]/,$p' | jq -r '.[0] | "\(.status) \(.assignee)"'
 bd list --parent=<epic> --all --json     # children; must be non-empty to close
 ```
 

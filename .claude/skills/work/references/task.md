@@ -409,13 +409,24 @@ The smallest coherent change, and proof the tests actually executed.
 
 Your own index, work discovered on the way, and the bead state you leave behind.
 
-7. Commit on your branch, then push it. Your worktree has its own index, so
-   ordinary staging is safe here:
+7. **Commit on your branch. Do NOT push it — that is the orchestrator's.**
+   Your worktree has its own index, so ordinary staging is safe here:
    ```bash
    git -C <your-worktree> add <your paths>
    git -C <your-worktree> commit -m "<what changed and why>"
-   git -C <your-worktree> push -u origin <your-branch>
+   git -C <your-worktree> status --short            # expect empty
    ```
+
+   A dispatched implementer's `git push -u origin <task-branch>` is **denied
+   by the permission classifier**, so pushing was never reliable and the
+   branches that did get pushed were luck (computenet-zmso). Nothing
+   downstream needs the remote branch anyway: your reviewer works in this
+   worktree, and SKILL.md 5c merges `task/<id>` into the feature branch from
+   the *local* ref — worktrees of one repository share refs. The feature
+   branch is what gets pushed, by the orchestrator, after the merge.
+
+   **The commit is therefore the whole handoff.** Uncommitted work is
+   invisible to every downstream step, and there is no push to catch it later.
    **This is a gate, not a formality: reporting a task done with an
    uncommitted deliverable is an error.** Every downstream step reads the
    branch, so a finished file that was never committed is indistinguishable
