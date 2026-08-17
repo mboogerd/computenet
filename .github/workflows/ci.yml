@@ -408,6 +408,15 @@ jobs:
       # (measured, run 31572635923). The guard keeps the scoping honest: a
       # multi-jvm-tagged test added in any other module fails this step
       # instead of silently never running.
+      #
+      # :demo:beadsmirror is scoped in here for correctness, but buys no
+      # coverage on this runner yet: its only multi-jvm class
+      # (TwoJvmMirrorTest) is assumeTrue-guarded on `bd` and `dolt` being on
+      # PATH and this image installs neither, so the lane runs it and it
+      # reports SKIPPED (observed, run 32004218853 job 95310345107). Green
+      # here is therefore not evidence that the BDS2 mirror works; that
+      # evidence exists only on a developer machine until computenet-7em.5
+      # provisions the two binaries.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
           stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange|beadsmirror)/' || true)
