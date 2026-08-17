@@ -787,7 +787,7 @@ measured again 2026-08-17). Already added it? `bd dep remove "$RES"
 the same provenance; the `discovered-from` edge is still correct — and
 required — when the residual points at a *different* bead than its parent
 (that is how unparented beads reach `--graph-root` views, e.g.
-computenet-bybk onto computenet-dqy.60). After parenting to an epic-less
+computenet-bybk and computenet-0her onto computenet-dqy.60). After parenting to an epic-less
 item, `epic-of.sh` still answers `(unparented)` — correctly, there is still
 no epic on the chain; check `bd show <RES>`'s `parent` field, not that.
 

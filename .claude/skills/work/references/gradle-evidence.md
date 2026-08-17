@@ -59,9 +59,12 @@ the committed script rather than an inline program:
 
 ```bash
 .claude/skills/work/scripts/junit-count.py '<module>/build/test-results'
-# repo-wide: pass each module root, or the checkout root — the script
-# globs BOTH depths itself (demo/* modules are nested one level deeper;
-# a single-depth glob undercounted 496 for 586 with no visible sign)
+# repo-wide: pass every module's build/test-results dir — demo/* included
+# (*/build/test-results */*/build/test-results as two shell globs); the
+# demo/* modules sit one level deeper, and a glob that misses them
+# undercounted 496 for 586 with no visible sign. The script's own two
+# depths are per results dir (files directly in it, and per-task subdirs);
+# a module root or the checkout root matches nothing and exits NO-RESULTS.
 ```
 
 It prints per-directory and total `tests/failures/errors/skipped` plus the

@@ -194,11 +194,14 @@ Two consequences you own, because nothing else can:
   the machine name — that branch is only resumable here.
 
 The gate sequence, the merge, the durability proof and the close are one
-script — run it per pass, and read every gate line it prints:
+script — run it `--dry-run` first, read every gate line and the incoming
+two-dot `--stat` it prints (the deletion signature below is a *pre-merge*
+read: once the real run merges and pushes, parking is no longer on offer),
+then run it for real:
 
 ```bash
-.claude/skills/work/scripts/merge-task.sh <task-id> <feature-branch>
-# --dry-run stops after the gates, before any mutation
+.claude/skills/work/scripts/merge-task.sh --dry-run <task-id> <feature-branch>
+# gates green and the --stat reads clean → the same command without --dry-run
 ```
 
 Its gates, in order (each prints `GATE <name>: PASS` or aborts before any
