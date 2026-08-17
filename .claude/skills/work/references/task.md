@@ -272,6 +272,35 @@ than restarting. That's the whole reason the worktree is preserved.
      zsh, `${PIPESTATUS[0]}` is empty rather than 127 (computenet-fbuo). For a
      job that outlasts 600000 ms, use `run_in_background` and poll its output
      file with ordinary foreground calls — never end a turn waiting on it.
+
+   **A suite you KNOW exceeds 10 minutes must be backgrounded, and the order
+   matters more than the waiting does.** 600000 ms is the cap, not a
+   suggestion: past it the tool backgrounds the call whatever you asked for.
+   The invariant that makes that survivable (computenet-ng9o):
+
+   > **Commit and push BEFORE you wait on evidence.** Then a stop — budget,
+   > classifier, host death — costs you the evidence, never the work. An agent
+   > that waits first and is stopped strands uncommitted changes in a worktree
+   > that reads to everyone downstream as "produced nothing".
+
+   Then background it and wait with an **until-loop**, which is the form this
+   harness accepts — a bare long `sleep`, and `for i in $(seq 1 N); do sleep`,
+   have both been refused by the classifier:
+
+   ```bash
+   # run_in_background: true, writing to "$SCRATCH/run.log"
+   until grep -qE 'BUILD (SUCCESSFUL|FAILED)' "$SCRATCH/run.log" 2>/dev/null; do sleep 20; done
+   tail -5 "$SCRATCH/run.log"
+   ```
+
+   Wait on the **log's own content**, not on a process: a `pgrep -f <pattern>`
+   waiter matches your own poll shell in its argv and never goes false (below).
+   And record the job in `$SCRATCH/jobs` when you start it, per step 10.
+
+   **If you stop with the suite still running, say so ON THE BEAD** — which
+   suite, which log, what is committed and pushed — rather than returning the
+   wait as your result. A result that is only "I am waiting" reads to the
+   orchestrator exactly like a finished one.
    - Quote test counts *and the newest timestamp* read from the JUnit XML
      rather than the build result — the timestamp is what separates a run from
      a replay (measured 2026-08-14: a cached repeat run left `newest`
