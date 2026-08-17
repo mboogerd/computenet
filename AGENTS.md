@@ -393,13 +393,21 @@ Rules:
   [ "$(bd list --all --limit 0 --json | sed -n '/^[[{]/,$p' \
         | jq '(if type=="array" then . else .issues end) | length')" \
     = "$(grep -c . .beads/issues.jsonl)" ] \
+    && echo "export FRESH" \
     || echo "STALE export — bv is reading a frozen file; repair before triaging"
   ```
 
+  Both sides are the same population — `bd list --all` and the exporter both
+  exclude infra, template, gate and memory records by default, and every line
+  of the export is one `"_type":"issue"` record — so the counts are
+  comparable. A gap of one or two records seconds after a `bd` write is just
+  the 60s export throttle, not the wedge: re-run it before repairing.
+
   **Repair by moving the stale export aside** and letting the next `bd`
   mutation re-export, or by filtering the deleted ids out of it. **Not** by
-  `bd init --from-jsonl`, which the warning itself suggests: that re-imports
-  the deleted beads, which is the wrong direction.
+  `bd init --from-jsonl`, which the warning itself suggests: it re-imports
+  from the stale file as a *re-init*, not a merge, resurrecting the beads
+  that were deliberately deleted.
 - Recommendations can include blocked or already-claimed work ranked by graph
   importance. Only `quick_ref.top_picks` and entries marked actionable are
   claimable; verify with `bd show <id>` before claiming.
