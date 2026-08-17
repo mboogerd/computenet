@@ -175,6 +175,7 @@ References carry the deep protocols; read one when its situation arises:
 | `references/ship-feature.md` | right after `gh pr ready`; on any draft verdict |
 | `references/orchestrator-authorship.md` | before writing a durable causal claim |
 | `references/ask-human.md` | parking a question a human must answer |
+| `references/mutation-check.md` | the one mutation-check procedure; cited by task.md, both review references |
 | `references/epic.md` / `feature.md` / `task.md` | handed to breakdown/implementer dispatches |
 | `references/review-task.md` / `review-feature.md` | handed to reviewer dispatches |
 
@@ -953,7 +954,10 @@ test-instrument defect is probed by breaking the test (task.md step 3,
 computenet-wpvy.34) — and an agent killed mid-mutation looks identical to one
 killed mid-improvement. So a dirty *test* file is not evidence of finished
 work any more than a dirty production file is; the marker, not the file's
-kind, is the discriminator. Classify before acting
+kind, is the discriminator. The marker is **gitignored**, so a clean
+`git status --short` is not evidence there is no marker — look for the file
+itself ([references/mutation-check.md](references/mutation-check.md) step 5,
+computenet-9ytv). Classify before acting
 (computenet-leg):
 
 ```bash

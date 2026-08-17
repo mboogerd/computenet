@@ -377,6 +377,12 @@ What to consume, per test run:
   contents (measured). A patch in your own `$SCRATCH` is worktree-local and
   cannot be taken by anyone else.
 
+  **The procedure is [mutation-check.md](mutation-check.md); follow it rather
+  than improvising.** It carries the order that makes the check safe (commit
+  first), what to do when the Edit tool refuses the strongest mutation, why
+  `--rerun` alone can restore a cached XML, and how to verify the revert
+  actually reverted. Three sessions each got a different one of those wrong.
+
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,
   because the incident that produced it (computenet-leg) was a *feature

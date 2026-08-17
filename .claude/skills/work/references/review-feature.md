@@ -485,7 +485,8 @@ of these is true:
   test you added, mutate the production code it covers (code you did not
   write), show the test failing, revert the mutation, show it passing, and
   quote the assertion message from the failing run. Name the mutation in the
-  verdict. That is the same mutation check review-task.md applies to an
+  verdict, following [mutation-check.md](mutation-check.md). That is the same
+  mutation check review-task.md applies to an
   implementer's tests. **Two conditions on the mutation**, because a red run
   proves less than it looks like:
   - **Mutate the defect the test claims to catch**, not whatever is easiest to
