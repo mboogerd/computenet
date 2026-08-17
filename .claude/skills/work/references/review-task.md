@@ -22,7 +22,7 @@ it.
 
 ## Contents
 
-1. The standard, then the diff — criteria from the bead, diff against the fetched base
+1. The standard, then the diff — criteria from the bead, diff against the resolved base
 2. Prove the tests ran — not replayed from cache, and not zero tests
 3. Your run is on macOS; the required checks are not
 4. Repair, don't bounce — the authorship bound and `review:` commits
