@@ -16,6 +16,17 @@ import java.util.jar.JarFile
  *
  * This works while the catalog is still nearly empty because it diffs the *kernel package's
  * actual classes* against the inventory, not the catalog's registrations against it.
+ *
+ * Caveat (see operator-inventory.txt's header for the full caution): diffing the classpath
+ * rather than hand-authored source means some reddened diffs — a Kotlin file-facade `*Kt`
+ * class appearing/disappearing, or a generated `*Base`/`*Ports`/`*Api` name changing — carry no
+ * operator-vocabulary information on their own; verify an operator was actually added, removed,
+ * or renamed before updating [OperatorCatalog] or the reference model.
+ *
+ * The jar branch of [actualTopLevelClassNames] (below) is exercised by this task's own
+ * `:oracle:test` run only if Gradle resolves `:kernel`'s project dependency as a jar rather than
+ * a directory classpath entry; on this build it resolves as a directory, so the jar branch is
+ * implemented per the bead's instruction but not exercised by this test suite.
  */
 class OperatorInventoryTest {
 
