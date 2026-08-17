@@ -61,21 +61,46 @@ which a cache restore also freshens.
 
 **5. Revert — and verify it, do not assume it.** Two ways `git checkout` lies:
 
-- **On an untracked file it exits 0 and does nothing.** If the mutation
-  *created* the file, `rm` is the revert.
+- **An untracked file cannot be checked out at all**, and *how* you name it
+  decides whether you find out. Measured on this host (git 2.50.1): naming
+  the path — `git checkout -- new.kt` — **errors**, `pathspec 'new.kt' did
+  not match any file(s) known to git`, exit 1, which is the loud, safe case.
+  A pathspec that also covers tracked files — `git checkout -- .`, a
+  directory, a glob — **exits 0, prints nothing, and leaves the untracked
+  file mutated**. That is the silent one, and it is the one that produced a
+  green run against mutated content. So: revert by naming the exact file,
+  never `git checkout -- .`; and if the mutation *created* the file, `rm` is
+  the revert.
 - **On a file you also edited for real it reverts the whole file**, eating
   your own work along with the mutation. Step 1 is what makes this safe; if
-  you edited after committing, `git stash push -- <file>` first (never bare
-  `git stash` — `refs/stash` is shared by every worktree of this repo, and a
-  pop can take another worktree's entry).
+  you edited after committing, park your edit as a patch in your own
+  `$SCRATCH` first — **never `git stash`, not even `git stash push -- <file>`**:
+  `refs/stash` is a single ref shared by every linked worktree of this repo,
+  so a `pop` takes whatever any *other* agent pushed last. Measured: two
+  worktrees each `stash push -- f.txt`, and the first worktree's `pop`
+  restored the *second* one's content, exit 0
+  ([review-task.md](review-task.md) §2 carries the same measurement).
+
+  ```bash
+  git -C <your-worktree> diff -- <file> > "$SCRATCH/my-edits.patch"
+  git -C <your-worktree> checkout -- <file>   # now exactly HEAD's content
+  # ... mutate, run, watch the named test FAIL, then revert ...
+  git -C <your-worktree> checkout -- <file>
+  git -C <your-worktree> apply "$SCRATCH/my-edits.patch"
+  ```
 
 Then prove it:
 
 ```bash
-git -C <your-worktree> diff -- <file>      # expect EMPTY for a tracked file
+git -C <your-worktree> diff -- <file>      # tracked: expect EMPTY output
+grep -n '<the mutated phrase>' <file>      # untracked: expect NO match
 rm -f <your-worktree>/.mutation-in-progress
 ls <your-worktree>/.mutation-in-progress   # expect: No such file
 ```
+
+`git diff` proves nothing about an untracked file — it is empty whether or not
+the mutation is still there — so for a file git does not track, the re-grep is
+the only proof.
 
 **The marker is gitignored, so a clean `git status --short` does NOT mean the
 marker is gone.** Removing it needs its own step and its own check — SKILL.md

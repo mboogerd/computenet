@@ -291,7 +291,14 @@ Per suite you run, consume and **quote in your verdict**:
   ```
 
   With only a truncated log, don't claim this check — use the task-count line
-  plus the XML timestamp below, or `--rerun`.
+  plus the XML timestamp below, or `--rerun`. But **`--rerun` alone is not
+  proof of execution**: measured 2026-08-15, a `:concord:test --rerun` printed
+  an *unmarked* task line and `1 executed` while restoring the previous run's
+  JUnit XML from the build cache — 253 stale tests with older internal
+  `timestamp` attributes under fresh file mtimes. Read the XML's content, not
+  the file's mtime, and for a load-bearing run — any mutation check, any
+  before/after comparison — pass `--no-build-cache` too
+  ([mutation-check.md](mutation-check.md) step 4, computenet-qsfu).
 - **The JUnit XML counts and timestamp**, which prove the results are from
   *this* run, not the last one. Measured 2026-08-14: a cached repeat run left
   `newest` at the previous run's `12:40:26.685Z` with identical counts and a
