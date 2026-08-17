@@ -1500,6 +1500,12 @@ state table until `MERGED` or honestly parked. Short form: ready PRs **one at
 a time**; `MERGED` → `bd close` the feature, leave its worktree for step 6;
 conflicts are yours and get a reviewer like any code you write.
 
+  A residual filed on an **unparented** item (5f route 4 works those) is
+  parented to the *item*, not to an epic — there is none — so the chain stays
+  walkable and a later continuation session finds it (review-feature.md §7,
+  computenet-wpvy.42). Don't re-parent it to your current epic: it did not
+  come from there.
+
 - **Draft verdict** → four shapes routing differently; read the verdict
   comment, then ship-feature.md §3–4. The substantive-repair case is a
   finished feature needing only an independent reader — never 5b, never a

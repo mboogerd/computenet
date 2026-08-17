@@ -143,7 +143,10 @@ heal_or_bail() {
 # cost is 3s more before a genuinely offline laptop gives up, once per session
 # start — cheap against a wrongly cut fetch, which skips a fast-forward and is
 # exactly what saturation produces.
-fuse=15
+# Overridable ONLY so the test harness can align the fuse with a stubbed
+# fetch's duration (computenet-od2q's cut-after-ref-update case is otherwise
+# untestable in under 15s). Nothing in the real flow sets it.
+fuse=${FF_MAIN_FUSE:-15}
 
 # One private directory per invocation, holding both the captured fetch output
 # and the watchdog's kill flag. `mktemp -d` is what makes the flag path unique:
@@ -209,8 +212,22 @@ if [ -e "$killed_flag" ] && [ "$rc" -ne 0 ]; then
   # signal — "died of signal 15", "possible repository corruption on the remote
   # side" — and repeating it would hand the operator a scary diagnosis we
   # manufactured. Under load this is often a HEALTHY fetch that was merely slow.
-  echo "ff-main: fetch exceeded ${fuse}s and was stopped — left alone (offline or heavily loaded?)."
-  exit 0
+  echo "ff-main: fetch exceeded ${fuse}s and was stopped (offline or heavily loaded?)."
+  # ...but DO NOT give up here. The cut can land in the window AFTER the ref
+  # update and before git exits, so origin/main may already have advanced —
+  # and treating a stopped fetch as "produced nothing" discards a
+  # fast-forward that was available, leaving the checkout stale for the whole
+  # slot for no reason (computenet-od2q, observed once on a real-git harness).
+  # Falling through is safe rather than optimistic: every guard below is
+  # unchanged and each one independently refuses to act on a ref that is not
+  # there, not an ancestor, or not fast-forwardable. If nothing advanced, they
+  # simply report "already current".
+  #
+  # Distinct from computenet-wpvy.39, which was a cut fetch MISCLASSIFIED as
+  # remote corruption. That classification is correct and stays; this is the
+  # other half — a correctly-classified cut still throwing away a completed
+  # ref update.
+  echo "ff-main: checking whether the ref advanced before the cut anyway."
 elif [ "$rc" -ne 0 ]; then
   # git failed on its own account. This text is genuinely git's.
   echo "ff-main: fetch did not complete — left alone. git said:"

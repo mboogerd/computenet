@@ -801,6 +801,18 @@ bd update <feature-id> --set-metadata residual=$RES
 bd update <feature-id> --set-metadata review=passed
 ```
 
+**If the item you reviewed has NO epic ancestor at all**, the same shape
+applies for a different reason. 5f route 4 works unparented bugs and chores,
+so `epic-of.sh <item>` answering `(unparented)` is normal, not a defect — and
+there is no epic to file under (computenet-wpvy.42). File the residual as a
+**child of the reviewed item itself**: `bd update <RES> --parent=<item-id>`.
+That keeps the chain walkable — `epic-of.sh` resolves the residual through the
+item, `bv --robot-triage --graph-root <item>` finds it, and a later session
+picking that item up as continuation work sees what the last review left. Say
+in the verdict that you parented it to the item because the item has no epic,
+so the choice reads as deliberate. Add the `discovered-from` edge as well; it
+costs nothing and survives a later re-parent.
+
 **The edge is what replaces the parent, so do not skip it.** An unparented
 item is in `bd ready` like any other, so it is not lost — what it loses is
 every *epic-scoped* view, and with no parent there is nothing tying it to the
