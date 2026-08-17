@@ -6,6 +6,7 @@ import civictech.demo.beadsmirror.BeadsMirrorApp
 import civictech.demo.beadsmirror.BeadsMirrorConfig
 import civictech.demo.beadsmirror.MirrorPeeringSettings
 import civictech.demo.beadsmirror.MirrorWire
+import civictech.demo.beadsmirror.WsMirrorTransport
 import civictech.demo.beadsmirror.baseline.ExportRow
 import civictech.demo.beadsmirror.baseline.BdExportReader
 import civictech.demo.beadsmirror.dolt.DoltSql
@@ -66,6 +67,25 @@ class TwoNodeRig private constructor(
     private val tempDirs = mutableListOf<Path>()
     private val searchRoot = tempDir("beadsmirror-tworig-searchroot-")
 
+    /**
+     * The rig's transport wiring, injected into BOTH nodes (task
+     * computenet-7em.2.1) — one instance, because a partition is a property of
+     * the peering rather than of either node, so the object that severs it has
+     * to be the one that established both ends.
+     *
+     * This is the seam the DSC0 iroh re-run turns: nothing in this file, and
+     * nothing in any test that drives it, names a socket type — the only
+     * `:wire` reference left in the module is inside
+     * [civictech.demo.beadsmirror.WsMirrorTransport], and swapping this one
+     * expression is the whole of what a different transport costs.
+     *
+     * The near-zero reconnect backoff is the same T12 seam `:wire`'s own
+     * reconnect tests use: a heal then costs scheduling rather than the
+     * production 1s-doubling wall clock, and a dropped socket the rig did not
+     * ask for is retried promptly instead of on a real-network schedule.
+     */
+    private val transport = WsMirrorTransport(reconnectBackoff = { 10L })
+
     private var listenerNode: Node? = null
     private var dialerNode: Node? = null
 
@@ -109,10 +129,36 @@ class TwoNodeRig private constructor(
                 repoSearchRoot = searchRoot,
                 onEvent = {},
                 peering = MirrorPeeringSettings(rigName, wire),
+                peeringTransport = transport,
             ),
         )
         return Node(role, workspace, app, runDir)
     }
+
+    /**
+     * Sever the peering between the two nodes at the transport level, so
+     * neither node's deltas can reach the other until [heal] (task
+     * computenet-7em.2.1).
+     *
+     * Delegated to the injected binding, which decides what severing means for
+     * its transport — for the WebSocket binding it is the dialing end shutting
+     * its connection down for good, the listener staying bound throughout (see
+     * [civictech.demo.beadsmirror.WsMirrorTransport]). A test states "the
+     * peering is down", never "the socket is closed", which is what lets the
+     * same case run over a different transport unedited.
+     *
+     * Each node keeps folding its own workspace while severed; what stops is
+     * the gossip between them.
+     */
+    fun partition() = transport.partition()
+
+    /**
+     * Re-establish what [partition] severed. Returns once the peering is
+     * carrying again — convergence follows through the ordinary
+     * re-announcement catch-up, so the caller still awaits the *fold*, with
+     * [await], rather than assuming this call converged anything.
+     */
+    fun heal() = transport.heal()
 
     /**
      * [awaitUntil] with both nodes' diagnostics folded into the failure —

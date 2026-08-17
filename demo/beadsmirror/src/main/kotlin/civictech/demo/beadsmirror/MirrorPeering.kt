@@ -7,8 +7,6 @@ import civictech.cell.replication.Replication
 import civictech.cell.wire.Peering
 import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorProjector
-import civictech.wire.WsTransport
-import java.net.URI
 
 /**
  * Which end of the socket this node is (feature computenet-7em.1, task
@@ -60,11 +58,15 @@ data class MirrorPeeringSettings(val rigName: String, val wire: MirrorWire) {
  * and [MirrorProjector.edges] spawned as replicas of one logical cell and
  * gossiped to one peer over the real `:wire` WebSocket transport.
  *
- * **Constructed only when [BeadsMirrorConfig.peering] is set.** This class is
- * the *only* place in the module that names a `:wire` or a
- * `civictech.cell.replication` / `civictech.cell.wire` type, so a solo-mode
- * run never loads one: the registry, the hosts, the [Replication] linker and
- * the transport are all instance state of an object solo mode never creates.
+ * **Constructed only when [BeadsMirrorConfig.peering] is set.** This class and
+ * [MirrorTransport]'s production binding are the *only* places in the module
+ * that name a `civictech.cell.replication` / `civictech.cell.wire` or a
+ * `:wire` type — and since task computenet-7em.2.1 the `:wire` half is
+ * [WsMirrorTransport]'s alone: this class asks its
+ * injected transport to establish an end and never names a socket. A
+ * solo-mode run still loads none of it: the registry, the hosts, the
+ * [Replication] linker and the transport are all instance state of an object
+ * solo mode never creates.
  *
  * **Ordering is load-bearing, and it is why this is three calls rather than
  * one.** The order the app must drive is:
@@ -95,7 +97,25 @@ data class MirrorPeeringSettings(val rigName: String, val wire: MirrorWire) {
  * **On `Peering.chainOnReannounce`.** This rig deliberately does not call it,
  * and the omission is not an oversight — see [connect].
  */
-class MirrorPeering(val settings: MirrorPeeringSettings) : AutoCloseable {
+class MirrorPeering(
+    val settings: MirrorPeeringSettings,
+    /**
+     * The wiring that establishes this node's end of the peering — injected
+     * rather than named, so a future transport is a new [MirrorTransport]
+     * binding and nothing else (task computenet-7em.2.1).
+     *
+     * It is a constructor parameter and **not** a field of
+     * [MirrorPeeringSettings], because settings are a parsed-flags value the
+     * CLI tests compare with `shouldBe`: a binding has identity equality, so
+     * carrying it there would make two settings parsed from identical flags
+     * unequal.
+     *
+     * The default is the production binding, and the two nodes of an in-JVM
+     * rig instead share **one** instance ([BeadsMirrorConfig.peeringTransport])
+     * — a partition is a property of the peering, not of either node.
+     */
+    private val transport: MirrorTransport = WsMirrorTransport(),
+) : AutoCloseable {
 
     /** The shared logical refs this node's projector cells are built under. */
     val refs: MirrorCellRefs = settings.refs
@@ -116,8 +136,8 @@ class MirrorPeering(val settings: MirrorPeeringSettings) : AutoCloseable {
     /** The peering bridge's own host — its egress/ingress cells publish here too. */
     private val bridgeHost = ManagedHost(registry = registry)
 
-    private var listener: WsTransport.WsListener? = null
-    private var connection: WsTransport.WsConnection? = null
+    /** This node's established end of the peering, or `null` before [connect]. */
+    private var link: MirrorLink? = null
 
     /**
      * The projector whose cells are currently replicated, or `null` before
@@ -136,7 +156,7 @@ class MirrorPeering(val settings: MirrorPeeringSettings) : AutoCloseable {
      * *asked for*: `--listen 0` means "any free port", and announcing the
      * requested value there would announce `0` (computenet-dqy.25).
      */
-    val boundWsPort: Int? get() = listener?.port
+    val boundWsPort: Int? get() = link?.boundWsPort
 
     /** Spawns [projector]'s two cells as replicas on this node's host. */
     fun attach(projector: MirrorProjector) {
@@ -221,17 +241,15 @@ class MirrorPeering(val settings: MirrorPeeringSettings) : AutoCloseable {
      */
     fun connect() {
         val side = Peering.Side(registry, bridgeHost, peer = PeerId("${settings.rigName}-${settings.role}"))
-        when (val wire = settings.wire) {
-            is MirrorWire.Listen -> listener = WsTransport.listen(wire.wsPort, side)
-            is MirrorWire.Dial -> connection = WsTransport.connect(URI(wire.uri), side)
+        link = when (val wire = settings.wire) {
+            is MirrorWire.Listen -> transport.listen(wire.wsPort, side)
+            is MirrorWire.Dial -> transport.dial(wire.uri, side)
         }
     }
 
-    /** Best-effort socket teardown; the hosts and the registry are plain objects. */
+    /** Best-effort teardown of this node's end; the hosts and the registry are plain objects. */
     override fun close() {
-        listener?.let { runCatching { it.stop() } }
-        connection?.let { runCatching { it.close() } }
-        listener = null
-        connection = null
+        link?.let { runCatching { it.close() } }
+        link = null
     }
 }

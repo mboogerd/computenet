@@ -149,7 +149,7 @@ class BeadsMirrorApp private constructor(
             // no-op swap hook, and no `:wire`/replication class is loaded.
             // Constructed before the projector because Replication's registry
             // hooks must precede every announcement (see [MirrorPeering]).
-            val peering = config.peering?.let(::MirrorPeering)
+            val peering = config.peering?.let { MirrorPeering(it, config.peeringTransport ?: WsMirrorTransport()) }
             val refs = peering?.refs
 
             val minter = DotMinter(workspaceIdentity)
@@ -246,6 +246,12 @@ class BeadsMirrorApp private constructor(
  *   mode is exactly the app that existed before this parameter did**: no
  *   registry, no host, no [MirrorPeering], no `:wire` class loaded, and the
  *   projector keeps its random-`CellRef` default.
+ * @param peeringTransport the transport binding [peering] establishes its end
+ *   through (task computenet-7em.2.1); `null` — the default — means the
+ *   production [WsMirrorTransport], constructed lazily *inside* the
+ *   [peering]-only branch so a solo run still loads no `:wire` class. Supplied
+ *   only by a rig that must hold the two nodes' peering as one object, because
+ *   partition and heal are properties of the peering rather than of a node.
  */
 data class BeadsMirrorConfig(
     val workspace: Path,
@@ -255,6 +261,7 @@ data class BeadsMirrorConfig(
     val repoSearchRoot: Path = Path.of("").toAbsolutePath(),
     val onEvent: (MirrorEvent) -> Unit = ::printMirrorEvent,
     val peering: MirrorPeeringSettings? = null,
+    val peeringTransport: MirrorTransport? = null,
 )
 
 /**
