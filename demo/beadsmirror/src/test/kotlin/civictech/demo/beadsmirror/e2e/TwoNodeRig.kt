@@ -10,6 +10,7 @@ import civictech.demo.beadsmirror.MirrorWire
 import civictech.demo.beadsmirror.WsMirrorTransport
 import civictech.demo.beadsmirror.baseline.ExportRow
 import civictech.demo.beadsmirror.baseline.BdExportReader
+import civictech.demo.beadsmirror.baseline.MirrorEvent
 import civictech.demo.beadsmirror.dolt.DoltSql
 import civictech.demo.beadsmirror.feed.DoltCommitFeed
 import civictech.demo.beadsmirror.projector.DotMinter
@@ -25,6 +26,7 @@ import org.opentest4j.AssertionFailedError
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.util.Collections
 import java.util.UUID
 
 /**
@@ -129,18 +131,24 @@ class TwoNodeRig private constructor(
 
     private fun start(role: String, workspace: BdScratchWorkspace, wire: MirrorWire): Node {
         val runDir = tempDir("beadsmirror-tworig-$role-run-")
+        // Captured per node, and created BEFORE the app starts: a start always
+        // re-baselines, so the FirstStart event is emitted inside
+        // BeadsMirrorApp.start and a list installed afterwards would miss it.
+        // Synchronized because the poller thread appends while the test thread
+        // reads (task computenet-7em.4.3).
+        val events = Collections.synchronizedList(mutableListOf<MirrorEvent>())
         val app = BeadsMirrorApp.start(
             BeadsMirrorConfig(
                 workspace = workspace.root,
                 pollInterval = pollInterval,
                 runDir = runDir,
                 repoSearchRoot = searchRoot,
-                onEvent = {},
+                onEvent = { events += it },
                 peering = MirrorPeeringSettings(rigName, wire),
                 peeringTransport = transport,
             ),
         )
-        return Node(role, workspace, app, runDir)
+        return Node(role, workspace, app, runDir, events)
     }
 
     /**
@@ -212,6 +220,7 @@ class TwoNodeRig private constructor(
         val workspace: BdScratchWorkspace,
         val app: BeadsMirrorApp,
         private val runDir: Path,
+        private val capturedEvents: MutableList<MirrorEvent>,
     ) : AutoCloseable {
 
         private val probe = HttpProbe("http://localhost:${app.boundPort}")
@@ -229,6 +238,21 @@ class TwoNodeRig private constructor(
          * says a dot's provenance must name.
          */
         val dotSourceId: UUID = DotMinter(sanitizedDoltDatabaseName(workspace.root)).sourceId
+
+        /**
+         * Every [MirrorEvent] this node's [BeadsMirrorConfig.onEvent] has
+         * received so far, oldest first, as an immutable snapshot (task
+         * computenet-7em.4.3).
+         *
+         * This is the *typed* surface a re-baseline is observed through — a
+         * test asserts `Rebaselined(reason = HistoryMerged(..))` rather than
+         * inferring a rebuild from log prose or from a fold that happens to
+         * change. The list starts with the [civictech.demo.beadsmirror.baseline.RebaselineReason.FirstStart]
+         * event every node emits during [BeadsMirrorApp.start], so a test
+         * looking for a later re-baseline filters by reason rather than by
+         * emptiness.
+         */
+        fun events(): List<MirrorEvent> = synchronized(capturedEvents) { capturedEvents.toList() }
 
         fun view(): Map<String, Map<String, String>> = projector.view()
 
@@ -309,11 +333,32 @@ class TwoNodeRig private constructor(
              * this class.
              */
             transport: MirrorTransport = WsMirrorTransport(reconnectBackoff = { 10L }),
+            /**
+             * The two workspaces the nodes mirror — defaulted to two fresh,
+             * mutually *independent* scratch workspaces, which is what every
+             * caller before task computenet-7em.4.3 got and still gets.
+             *
+             * Passing them in is what lets a rig run on workspaces that are
+             * related to each other — specifically
+             * [BdScratchWorkspace.createSyncedPair]'s pusher/puller pair
+             * sharing one `file://` bare Dolt remote, so a REAL `bd dolt
+             * push`/`bd dolt pull` can land a peer's history in a running
+             * mirror's workspace ([PullRebaselineTest]). The rig cannot mint
+             * such a pair itself: the relation is between the two, and only
+             * the factory that builds both knows the remote.
+             *
+             * Ownership is unchanged either way — [close] closes both
+             * workspaces, so a caller supplying a pair may (and
+             * [PullRebaselineTest] does) also close the pair, which is
+             * idempotent.
+             */
+            listenerWorkspace: BdScratchWorkspace = BdScratchWorkspace.create(),
+            dialerWorkspace: BdScratchWorkspace = BdScratchWorkspace.create(),
         ): TwoNodeRig =
             TwoNodeRig(
                 rigName = "$name-${System.nanoTime()}",
-                listenerWorkspace = BdScratchWorkspace.create(),
-                dialerWorkspace = BdScratchWorkspace.create(),
+                listenerWorkspace = listenerWorkspace,
+                dialerWorkspace = dialerWorkspace,
                 pollInterval = pollInterval,
                 transport = transport,
             )
