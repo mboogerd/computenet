@@ -161,16 +161,35 @@ breakdown and 5f's route-4 items are legitimately parentless, and the file
 already tells you how to review one. Only a non-zero exit (`(no such id: …)`
 or `(cycle? …)`) means unresolved.
 
-**`acceptance_criteria` may be empty**, and on a bead filed mid-session by
-another agent it usually is — nothing broke it down. That is not a dead end
-and not automatically a defect: the criteria are then whatever the
-description and the parent epic state, read together. Write what you derived
-onto the bead (`bd update <id> --acceptance=…`) before judging, and quote it
-in your verdict, so the next reader judges the same item you did
-(computenet-d7tk). **When you file a bead yourself** — §7's residuals, a task
-for work you did not repair — put its criteria in the field, with that same
-flag, rather than only in the description: a bead filed mid-session should
-match one filed by a breakdown, or the next reviewer inherits this problem.
+**`acceptance_criteria` may be empty or absent altogether** — on a bead filed
+mid-session by another agent it usually is, because nothing broke it down, and
+three reviewers hit it in one session (computenet-d7tk, computenet-qxg5).
+`bd show --json` cannot even tell the two apart: `.[0].acceptance_criteria`
+reads `null` for an empty field and the key is simply missing for an absent
+one, which is easy to misread as a `bd` failure rather than as the bead's real
+shape. It is neither a dead end nor automatically a defect. Do not assume the
+field is there, and do not invent a standard silently. Fall back **in this
+order**, and **say in your report which text you treated as the criteria**:
+
+1. the **structured description read together with the parent epic** — the
+   description's "Implement"/"Test"/non-goals clauses, bounded by what the
+   epic says the feature is for;
+2. the **comment thread**, where a long-lived item's real standard often lives
+   (a human's answer, a clarification, a decision-ready summary). It needs
+   `bd comments <id> --json > "$SCRATCH/c.json"` and then reading the file,
+   since `bd show` carries only `comment_count`;
+3. **nothing locatable anywhere → park it** ([ask-human.md](ask-human.md)),
+   not pass. A bead whose standard exists nowhere cannot be certified against,
+   and a pass here is a reviewer certifying its own invention.
+
+Whichever step answered, **write what you derived back onto the bead**
+(`bd update <id> --acceptance=…`) *before* you judge, and quote it in your
+verdict — so the bar survives the session, the next reader judges the same
+item you did, and the orchestrator can disagree with it. **When you file a
+bead yourself** — §7's residuals, a task for work you did not repair — put its
+criteria in the field, with that same flag, rather than only in the
+description: a bead filed mid-session should match one filed by a breakdown,
+or the next reviewer inherits this problem.
 
 Judge the criteria as written. If they don't meet
 [issue-quality.md](issue-quality.md), tighten them against the epic and the
@@ -336,6 +355,35 @@ mechanics — mutation checks, and not destroying a rare failure's evidence
 with `-q` — are in [review-task.md](review-task.md) §2; use them here
 unchanged when a seam is what you're testing.
 
+**When the diff's only executable artifact is in NO Gradle source set** — a
+script under `scripts/`, a hook, a harness, a `.claude/skills/**/*.sh` — there
+is no suite to cache-prove and the recipe above has nothing to bite on
+(computenet-wl77). Two things substitute, and both are required:
+
+- **Execute the artifact directly** and quote what it printed. That is the
+  run; there is no build to stand in for it.
+- **Show its arms are load-bearing by perturbing what each one claims to
+  measure.** A script that reports PASS/SKIP/FAIL is only evidence if you can
+  make each verdict appear on demand — feed it the state that should produce
+  each, and quote the three outputs. That is this shape's mutation check, and
+  without it "I ran it and it printed OK" proves the script runs, not that it
+  measures anything.
+
+  **Look for a companion `*.test.sh` before you build fixtures**, because
+  under `.claude/skills/work/scripts/` and `scripts/flake-loop/` nearly every
+  script has one, and each is already a per-arm harness: it stubs `bd` (or
+  `git`) on `PATH`, drives one fixture per verdict and prints `N passed, M
+  failed`. Run it, quote that line, and confirm it covers the arm the diff
+  changed — adding the missing case is a cheaper repair than inventing the
+  whole rig. Where no companion exists, build the fixtures yourself in
+  `$SCRATCH` and say in the verdict that you did.
+
+**And say plainly what the required checks did and did not evidence.** For
+such a diff they evidence exactly one thing — *the branch does not break the
+build* — because no required check executes the artifact at all. A verdict
+that rests on green checks here is resting on a fact about other code. Say so
+in as many words rather than letting six green rows read as verification.
+
 ## 4. Your run is on macOS; the required checks are not
 
 Run `uname -sm` and put its output in your report. (For a diff proven
@@ -386,15 +434,54 @@ So:
   `auto-merge` row and "nothing pending" is indistinguishable from all-green
   (computenet-1zhu). Require the six required rows
   (`build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test`)
-  to be PRESENT *and* none of them pending; SKILL.md step 2 carries the loop.
+  to be PRESENT *and* none of them pending. **The loop, inline, because this
+  is where you need it** (computenet-elm3). It is SKILL.md step 2's loop
+  **verbatim** — if you find these two texts differing, SKILL.md is the
+  original and this copy is the drift:
+
+  ```bash
+  req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
+  for i in $(seq 1 40); do
+    rows=$(gh pr checks <pr-url> 2>&1)     # exit status deliberately not tested
+    n=$(echo "$rows" | grep -cE "$req")
+    if [ "$n" -lt 6 ]; then
+      if echo "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
+        echo "round $i: only $n of 6 required rows reporting"   # normal early state
+      else
+        echo "round $i: QUERY FAILED: $rows"                    # no rows at all
+      fi
+      sleep 20; continue
+    fi
+    echo "$rows" | grep -q pending || { echo SETTLED; echo "$rows"; break; }
+    sleep 20
+  done
+  ```
+
+  The inner `if` is not decoration: **query failed**, **not yet reporting**
+  and **unsettled** are three states, and a loop that collapses the first two
+  reports a network failure as an ordinary wait and then times out looking
+  like a red check (computenet-15it). `for i in $(seq …)` is the bounded form
+  this harness accepts; a bare long `sleep` is refused.
+
   A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 
 ## 5. Repair by default — up to a bound
 
 A rejection forfeits everything already spent on the feature, so fix what you
-can rather than sending it back. Within the feature's stated scope, repair:
-missed criteria, broken seams, failing tests, gaps between tasks.
+can rather than sending it back.
+
+**Budget the repair, because it obliges a CI cycle.** A repair moves the head,
+so §6's re-read is no longer optional for you: you owe one full required-check
+cycle — **2–4 minutes on this repo** — plus the poll to watch it, on top of
+the repair itself. **Repair anyway**; this note exists so the cost is
+*expected*, not so it is avoided (computenet-elm3). Plan it against the
+~45–60 minute bound you were dispatched with, and if the repair plus its cycle
+will not fit, that is the moment to hand back rather than after you have spent
+the time. The poll idiom is in §6, at the point of use.
+
+Within the feature's stated scope, repair: missed criteria, broken seams,
+failing tests, gaps between tasks.
 
 Commit repairs on the feature branch, in the feature worktree:
 
@@ -481,15 +568,46 @@ mid-review:
 Your repairs are **substantive**, and disqualify you from certifying, if any
 of these is true:
 
-- more than ~30 changed lines total across your repair commits — **that is
-  insertions + deletions, exactly as the `--stat` above prints them**, not net
-  (a reviewer self-certified at 41 by reading it as net; the bound exists to
-  remove a judgement call, so it cannot leave one behind, computenet-e0i5) —
-  or more than three files touched. **Reflow counts.** If rewrapping alone
-  pushes you over, that is a reason to hand back a draft, not a reason to
-  recount: a reviewer trading its own verdict against its own line count is
-  the exact conflict this list exists to remove. Reflow less, or accept the
-  draft;
+- **it touches a behavioural code path** — anything that changes what the
+  system *does* at runtime. That is the primary test, and the command below
+  decides it rather than your reading of the diff. A repair that only corrects
+  **text** — prose, comments, KDoc, a message string nothing asserts on — does
+  not fire *this* bullet however long it is. The next two still bind it;
+- for a repair that *is* code, more than **~30 changed lines** — insertions +
+  deletions, not net (a reviewer self-certified at 41 by reading it as net;
+  computenet-e0i5).
+
+  **Count the code half, and count it mechanically.** `--stat`'s
+  "X insertions(+), Y deletions(-)" is the *whole* diff, prose included, so it
+  cannot answer this bullet on its own; and hand-partitioning the diff into
+  halves would put back exactly the judgement call e0i5 removed. Filter to
+  non-comment lines in non-prose files and count what survives
+  (computenet-hhm4):
+
+  ```bash
+  git show <sha> -- . ':(exclude)*.md' ':(exclude)doc/**' \
+    | grep -E '^[+-]' | grep -vE '^[+-]{3}' \
+    | grep -vE '^[+-][[:space:]]*(\*|//|/\*|#)' | wc -l
+  ```
+
+  **Zero is the first bullet's answer too**: nothing executable changed. Two
+  reviewers handed the same commit — "28 insertions, 15 deletions, mostly
+  wrapped prose" — now get the same number from the same command, so no
+  verdict turns on which of them counted, and a reflow cannot inflate it
+  (computenet-hhm4, computenet-e0i5 — two beads, opposite readings, one rule);
+- more than **three files touched**, whether the repair is code or text. This
+  bullet is unconditional, and it is what stops "it's only prose" becoming a
+  licence: in this repository prose under `.claude/skills/**` and `doc/spec/**`
+  *is* the deliverable — agents execute it — so a reviewer that rewrites a
+  reference and then certifies itself is the conflict this list exists to
+  remove, whatever the file extension. A file count is also the one bound a
+  reflow cannot inflate;
+- **when the filter prints nothing, say so and quote the repair diff** in your
+  verdict, so the orchestrator can spot-check it. "Text-only" means *cheaply
+  checkable by someone else*, never *nobody need read it*: one such repair
+  corrected KDoc that contradicted measured exit codes (computenet-h6a),
+  another a workflow header naming the wrong surface (computenet-dqy.63).
+  Both were right; both were checked before they shipped;
 - any **new or semantically changed test, corpus scenario, or assertion** —
   writing the check that decides the verdict is authoring the verdict.
   **Exception, and it is narrow: a test-only repair** — no production file in
