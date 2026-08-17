@@ -32,12 +32,16 @@ done
 cutoff=$(( $(date +%s) - HOURS * 3600 ))
 
 # --limit 0 = unlimited; the default of 50 would silently strand the rest.
+# `bd list --json` is a bare array, except under --skip-labels where it is
+# {"issues":[...]}. Accept either (computenet-kr18); and do NOT fold a jq
+# failure into '[]' — an unparsable answer is not "nothing is stale".
+ROWS='(if type=="array" then . else (.issues // []) end)[]'
 aged=$(bd list --status=in_progress --assignee="$BEADS_ACTOR" \
           --exclude-type=epic,feature --limit 0 --json 2>/dev/null \
-        | jq -c --argjson cutoff "$cutoff" '
-            [.[] | select((.updated_at | fromdateiso8601) < $cutoff)
-                 | select(((.labels // []) | index("skill-friction")) | not)]' \
-        || echo '[]')
+        | jq -c --argjson cutoff "$cutoff" "
+            [$ROWS | select((.updated_at | fromdateiso8601) < \$cutoff)
+                   | select(((.labels // []) | index(\"skill-friction\")) | not)]") \
+  || { echo "bd list/jq failed — refusing to report a clean sweep" >&2; exit 3; }
 
 # An item with review=passed or a pending ship decision is WAITING, not
 # abandoned: releasing it to open puts reviewed work back in bd ready as if
