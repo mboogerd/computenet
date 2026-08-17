@@ -115,10 +115,15 @@ is a lock, so a read-only claim blocks a sibling that needs to write those
 files, for no benefit (computenet-wpvy.30). The orchestrator batches a
 claimless task alone, which is the right handling for both shapes.
 
-The two openers are what tell the orchestrator which it is looking at — a
-task whose `files` is empty and whose description says neither has simply
+The description is the only thing that tells the orchestrator which shape it
+is looking at — nothing checks these openers mechanically, so use them
+verbatim rather than a paraphrase, and never leave `files` empty in silence:
+a task whose description explains neither emptiness reads as having simply
 **forgotten** its claim, and that is a breakdown defect to fix, not a shape to
-schedule around.
+schedule around. Equally, never put the explanation *in* `files` — a
+descriptive string there (`none (tracker mutations only)`) is read as a path
+and batched on, which is worse than an empty claim, not better
+(computenet-wpvy.30).
 
 If the task is a bug fix and you write a reproduction into its description,
 label it `verified-failing:` (with the output you watched it fail with) or
