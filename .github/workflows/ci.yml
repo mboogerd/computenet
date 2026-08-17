@@ -401,15 +401,16 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
-      # The five multi-jvm classes live only in :demo:exchange and :demo:shopping,
-      # yet this lane used to run repo-wide `check` under --max-workers=1: every
-      # module compiled serially plus ten empty test-JVM forks, ~190s of overhead
-      # for ~16s of actual multi-jvm testing (measured, run 31572635923). The
-      # guard keeps the scoping honest: a multi-jvm-tagged test added in any
-      # other module fails this step instead of silently never running.
+      # The multi-jvm classes live only in :demo:exchange, :demo:shopping and
+      # :demo:beadsmirror, yet this lane used to run repo-wide `check` under
+      # --max-workers=1: every module compiled serially plus ten empty
+      # test-JVM forks, ~190s of overhead for ~16s of actual multi-jvm testing
+      # (measured, run 31572635923). The guard keeps the scoping honest: a
+      # multi-jvm-tagged test added in any other module fails this step
+      # instead of silently never running.
       - name: Guard - multi-jvm tests live only in the scoped modules
         run: |
-          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange)/' || true)
+          stray=$(grep -rl 'Tag("multi-jvm")' --include='*.kt' --exclude-dir=build . | grep -vE '^\./demo/(shopping|exchange|beadsmirror)/' || true)
           if [ -n "$stray" ]; then
             echo "multi-jvm-tagged tests outside the serial lane's scoped modules — widen the module list in this job:"
             echo "$stray"
@@ -417,14 +418,14 @@ jobs:
           fi
 
       # Two phases: compile the dependency closure with full parallelism, then
-      # run only the two owning modules' tests at one worker — the quiet-VM
+      # run only the three owning modules' tests at one worker — the quiet-VM
       # property T13 asked for applies to the process-forking tests themselves,
       # not to compilation.
       - name: Compile the multi-jvm closure (parallel)
-        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses
+        run: ./gradlew :demo:exchange:testClasses :demo:shopping:testClasses :demo:beadsmirror:testClasses
 
       - name: Multi-JVM serial lane (process-startup + wall-clock timing tests)
-        run: ./gradlew :demo:exchange:test :demo:shopping:test -PmultiJvmOnly=true --max-workers=1
+        run: ./gradlew :demo:exchange:test :demo:shopping:test :demo:beadsmirror:test -PmultiJvmOnly=true --max-workers=1
 
       # Same rationale as the fast lane above. This lane is where the
       # process-kill/relaunch tests live, so it is the likeliest to hang.
