@@ -50,7 +50,7 @@ echo "-- push rejected; recovering: pull, then push --"
 pout=$(bd dolt pull 2>&1)
 printf '%s\n' "$pout"
 if grep -qi "conflict" <<<"$pout"; then
-  echo "ESCALATE: merge conflict — operator resolution required (runbook §3.3); state is LOCAL-ONLY" >&2
+  echo "ESCALATE: merge conflict — see .claude/skills/work/references/dolt-conflict.md (issues-only modify/modify is resolvable here; anything else needs an operator); state is LOCAL-ONLY" >&2
   exit 2
 fi
 out=$(bd dolt push 2>&1); rc=$?

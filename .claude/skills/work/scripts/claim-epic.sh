@@ -75,7 +75,7 @@ if grep -qiE "rejected|error" <<<"$push_out"; then
   pull_out=$(bd dolt pull 2>&1)
   if grep -qi "conflict" <<<"$pull_out"; then
     printf '%s\n' "$pull_out" >&2
-    echo "ESCALATE: pull hit a merge conflict — operator resolution (doc/ops/beads-sync-runbook.md §3.3); claim is LOCAL-ONLY" >&2
+    echo "ESCALATE: pull hit a merge conflict — see .claude/skills/work/references/dolt-conflict.md (an issues-only modify/modify conflict is resolvable here; anything else needs an operator); claim is LOCAL-ONLY" >&2
     exit 2
   fi
   now_assignee=$(bd show "$id" --json | jq -r '.[0].assignee // ""')
