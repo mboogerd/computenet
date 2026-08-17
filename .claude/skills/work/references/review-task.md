@@ -22,7 +22,7 @@ it.
 
 ## Contents
 
-1. The standard, then the diff — criteria from the bead, diff against the fetched base
+1. The standard, then the diff — criteria from the bead, diff against the resolved base
 2. Prove the tests ran — not replayed from cache, and not zero tests
 3. Your run is on macOS; the required checks are not
 4. Repair, don't bounce — the authorship bound and `review:` commits
@@ -36,8 +36,12 @@ reading a self-modifying change needs, before §5.
 ```bash
 bd show <task-id> --json                          # criteria, files claim (a LIST — unwrap .[0])
 bd comments <task-id> --json                      # the implementer's landing notes
-git -C <task-worktree> fetch origin <feature-branch> main
-git -C <task-worktree> diff origin/<feature-branch>...HEAD
+git -C <task-worktree> fetch origin main
+git -C <task-worktree> fetch origin <feature-branch> || true   # may not exist yet
+FB=$(git -C <task-worktree> rev-parse --verify -q origin/<feature-branch> \
+     || git -C <task-worktree> rev-parse --verify -q <feature-branch>)
+BASE=$(git -C <task-worktree> merge-base "$FB" HEAD)
+git -C <task-worktree> diff "$BASE" HEAD
 ```
 
 `bd show` never returns comment bodies, and the implementer's reasoning —
@@ -61,7 +65,7 @@ it was not committed ([task.md](task.md) makes commit-and-push the required
 final step), which is a different verdict from "produced nothing". Do not
 commit it for the implementer without saying you did.
 
-**Diff against the fetched remote base, never a local ref.** A task worktree's
+**Diff against the resolved base, never a bare local `main`.** A task worktree's
 `main` is whatever the machine last fetched, and its copy of the feature
 branch can be behind the merges the orchestrator has already made. Both
 produce a diff that looks plausible and is wrong: the obvious
@@ -76,6 +80,21 @@ of it. Fetch `main` in the same command so
 feature branch itself forked long before current `origin/main`, say so in your
 report: that is a merge hazard the feature review has to resolve, not
 something to fix on a task branch.
+
+**The feature branch may not be on origin at all.** 5a pushes it and 5d opens
+its PR only after the FIRST task merges, so for task 1 of every feature
+`origin/<feature-branch>` does not exist and a bare
+`git fetch origin <feature-branch>` fails hard with `couldn't find remote ref`.
+That is why the fetch above is best-effort and the base comes from
+`merge-base`: worktrees of one repository share their refs, so the local
+`<feature-branch>` the orchestrator created is readable from the task
+worktree whether or not it has ever been pushed, and the merge-base of it
+with HEAD is the right baseline in both cases. Do not substitute
+`origin/main` by hand — it is the correct base only when the feature branch
+happens to be sitting on it, which is true for a fresh feature and false for
+a resumed one carrying prior task merges, where it silently pulls that prior
+work into your diff. Three reviewers in one session each rediscovered the
+failure and each improvised that substitution (computenet-u1ai).
 
 Check:
 
