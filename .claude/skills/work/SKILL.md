@@ -267,8 +267,9 @@ stale *tasks* the sweep above already reopened, and a stale *feature* is the
 **Only after the liveness check, reconcile beads against merged PRs:**
 
 ```bash
-.claude/skills/work/scripts/sweep-merged-prs.sh > "$SCRATCH/sweep.txt" 2>&1
-rc=$?; tail -40 "$SCRATCH/sweep.txt"; echo "rc=$rc"   # --dry-run to preview
+# $SCRATCH must already exist — create it once here if you haven't (see "bd traps")
+.claude/skills/work/scripts/sweep-merged-prs.sh > "$SCRATCH/sweep.txt" 2>&1  # --dry-run to preview
+rc=$?; tail -40 "$SCRATCH/sweep.txt"; echo "rc=$rc"
 ```
 
 Auto-merge lands PRs minutes *after* their session ends, so no session
