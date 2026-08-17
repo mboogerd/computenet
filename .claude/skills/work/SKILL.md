@@ -37,11 +37,18 @@ felt like giving up.
 
 - `bd ready` hides `in_progress`/`blocked`/`deferred`; `bd list` hides
   *closed* unless `--all`. Every check below uses the one it means.
-- `--parent` scope differs by subcommand: `bd list --parent` is **one level
-  deep**; `bd ready --parent` and `bd blocked --parent` are
-  **descendant-scoped**. And `bd blocked` lists only items blocked by an open
-  dependency edge — a hand-set `--status=blocked` (an ask-human park) is
-  invisible to it.
+- `--parent` scope differs by subcommand — but **not the way this file used to
+  say**. `bd list --parent` is one level deep, and so is
+  `bd ready --parent`: it reaches **direct children only**, not descendants.
+  Measured 2026-08-17 on live data — `bd ready --parent=computenet-dqy.37`
+  finds `computenet-dqy.37.2`, while `bd ready --parent=computenet-dqy` does
+  **not**, though `epic-of.sh` resolves that item to `computenet-dqy`. An epic
+  with ready work two levels down therefore reports EMPTY, which is how a live
+  epic gets deferred and hidden on both machines (computenet-28vn). Use
+  `scripts/ready-in-epic.sh <epic>` for any epic-scoped ready question.
+  `bd blocked --parent`'s depth is **unverified** — treat it the same way.
+  And `bd blocked` lists only items blocked by an open dependency edge — a
+  hand-set `--status=blocked` (an ask-human park) is invisible to it.
 - `bd show <id> --json` returns a **list** — unwrap `.[0]` or every field
   reads `null`. It never includes comment bodies, only `comment_count`.
 - Epic- and feature-sized output overflows the inline tool-result limit
@@ -120,6 +127,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 |---|---|
 | `sweep-stale-claims.sh` | Reopens this machine's task claims abandoned by a dead run (skips reviewed-and-waiting and skill-friction items) |
 | `check-files-claim.sh` | Warns when a bead's own text names a file its `metadata.files` claim omits |
+| `ready-in-epic.sh` | Ready work anywhere beneath an epic — `bd ready --parent` reaches one level |
 | `reclaim-worktrees.sh` | Removes worktrees whose bead is already closed — the join `sweep-merged-prs.sh` cannot make |
 | `sweep-merged-prs.sh` | Closes beads whose PR merged after their session ended; removes their worktrees |
 | `next-batch.py` | Next set of tasks safe to run in parallel — file-disjoint AND within machine capacity |
@@ -510,12 +518,23 @@ Never `bd ready --claim` (it claims whatever is first *at claim time*, not
 what you read).
 
 **Before committing to an already-broken-down epic, check it has workable
-surface** (`bd ready --parent` is descendant-scoped):
+surface** — with the depth-independent query, not `bd ready --parent`:
 
 ```bash
-bd ready --parent=<epic> --json      # workable = items NOT labeled 'human'
+.claude/skills/work/scripts/ready-in-epic.sh <epic>   # workable, ANY depth
 bd list --parent=<epic> --type=feature --status=in_progress --json  # resumable
 ```
+
+**Not `bd ready --parent`** — it reaches direct children only, so an epic with
+ready work two levels down reports empty (`bd traps`, computenet-28vn). That
+matters most right here: the `bd defer` below hides the epic on **both**
+machines, so it must never fire on evidence from an under-reporting query.
+Empty output with exit 0 is a real answer; **exit 3 means nothing was
+checked** — stop, do not defer. It also prints a `could not resolve the epic
+of <id>` line to **stderr** for any ready item whose parent chain is broken
+(a vanished ancestor, a cycle): that item was *not* classified, so resolve it
+by hand (`scripts/epic-of.sh <id>`) before treating the listing as complete —
+never defer with one outstanding.
 
 Zero workable items and nothing resumable splits into **two** cases. Separate
 them with step 4's listing, run now rather than later — same command, so no
@@ -683,8 +702,17 @@ window doesn't apply here — these are cross-session and evidence-gated.
 
 ```bash
 bd list --parent=<epic> --type=feature --status=in_progress --json   # resume first
-bd ready --parent=<epic> --type=feature --limit 1 --json             # else first ready
+.claude/skills/work/scripts/ready-in-epic.sh <epic>                  # else, ANY depth
 ```
+
+The second query is deliberately unfiltered by type: `bd ready --parent
+--type=feature` reaches direct children only *and* hides everything that is
+not a feature, so it can report an empty epic twice over (computenet-28vn).
+It prints `<id>\t<type>\t<priority>\t<title>` — take the first row whose
+type is `feature`; if there is none but there are other rows, that is the
+no-feature-layer shape below, and you already have its answer. The epic
+itself is never one of the rows, but a ready **sub-epic** under it can be —
+that is a real child needing breakdown (step 4), not a feature to implement.
 
 A resumed feature carrying `metadata.review=passed` was certified last
 session — check its PR (`gh pr view <pr> --json state`); `MERGED` →
@@ -695,7 +723,7 @@ directly to the epic (computenet-dqy: 69 children, one feature). Both feature
 queries return empty while work sits ready, so before falling through:
 
 ```bash
-bd ready --parent=<epic> --json      # no --type filter
+.claude/skills/work/scripts/ready-in-epic.sh <epic>   # already run above; same answer
 ```
 
 Non-empty → work these directly: each gets its own worktree, branch, and PR
