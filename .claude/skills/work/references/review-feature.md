@@ -441,9 +441,11 @@ done
 ```
 
 Read that list first and confirm every commit on it is one you wrote; the
-line counts are only meaningful once it is. **If any entry is a merge commit,
-its `--stat` is the first-parent diff, not its own contribution** — do not
-count it as yours (computenet-rbfa). Two ways of asking the question
+line counts are only meaningful once it is. **The `--no-merges` in both
+commands is load-bearing for those counts, not just tidiness**: on a merge
+commit `--stat` prints the *first-parent* diff, so a merge left in this list
+would bill you for everything that landed on `main` since you forked
+(computenet-rbfa; §6 states the rule in full). Two ways of asking the question
 give the wrong answer, both because §6 tells you to merge `origin/main`
 mid-review:
 
@@ -588,10 +590,11 @@ contributed.** For a merge, `git show` prints the **first-parent** diff — whic
 for a `--no-ff` merge of a sibling's work is that sibling's entire change, and
 for your own `origin/main` merge is everything that landed on `main` since you
 forked. Either way it reads as if the merge authored all of it, which invites
-attributing a sibling PR's work to this branch (computenet-rbfa; the same
-first-parent trap that made a post-merge `HEAD~1 HEAD` check vacuous, §6
-above). When you enumerate what **this branch** changed — for §5's line count,
-for your report, for anything — use three dots:
+attributing a sibling PR's work to this branch (computenet-rbfa; SKILL.md step
+5c reads the same first-parent trap from the other side, where a post-merge
+`git diff --stat HEAD~1 HEAD` silently never fires). When you enumerate what
+**this branch** changed — for §5's line count, for your report, for anything —
+use three dots:
 
 ```bash
 git -C <worktree> diff --name-only origin/main...HEAD    # what THIS branch changed
@@ -599,7 +602,11 @@ git -C <worktree> diff --stat      origin/main...HEAD
 ```
 
 `git show --name-only <sha>` on a **non-merge** commit is fine and is what §6's
-relevance test uses; the trap is specifically merges.
+relevance test uses; the trap is specifically merges. The shas §6 feeds it are
+safe by construction: they come from `merge-base..origin/main`, and the `main`
+ruleset requires linear history and the repo squash-merges, so nothing has
+landed there as a merge commit since the ruleset went active (last merge commit
+on `main`: `c387809f`, 2026-07-29).
 
 **A stopping rule, because `main` can land faster than one review takes.**
 The hand-back above is already bounded — you list the shas once and stop, and
