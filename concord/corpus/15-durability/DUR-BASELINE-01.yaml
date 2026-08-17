@@ -1,0 +1,93 @@
+# Concord corpus scenario (KFX-BASELINE, `computenet-yh6.1.12`): `[24-DUR-07]` —
+# an `Effectful` inlet ACTS on a catch-up baseline, and a baseline's timestamp
+# NEVER advances the processed-frontier.
+#
+# WHY THIS FILE COULD NOT EXIST BEFORE. `concord/corpus/DISPUTES.md`'s "fourth
+# boundary" (opened by `computenet-yh6.1.3.4.1`) recorded that no driver path
+# reachable from any profile ever stamped `MessageContext.baseline`: the I-24 pull
+# that mints one is answered by `FanOutlet.baselineTo`, fired only from `pullServe`'s
+# `StateRequest` handler, and no concord driver issues a `StateRequest`; push
+# catch-up on link install is explicitly not baseline-stamped (`CatchUp.kt`); and the
+# `dur` profile's `effect-sink` edge is a raw `outlet.subscribe` that bypasses link
+# admission entirely. The narrowest route the entry named — grow `retransmit` with an
+# optional inline baseline anchor — is what `computenet-yh6.1.12` took, as its own
+# gated `concord/schema` change.
+#
+# THE CONSTRUCTION, and why its ORDER is the whole assertion. A journaled source feeds
+# an `Effectful` sink. The FIRST thing that reaches the sink is a catch-up baseline at
+# counter 9 — a position far ahead of anything the source has emitted, exactly as a
+# real pull reply is anchored at the link-install event rather than at a wave position.
+# Only afterwards do two ordinary live adds arrive, minting counters 1 and 2, i.e.
+# BELOW the baseline's. That inversion is the point: a guard that took the baseline's
+# timestamp as a frontier high-water would swallow both of them, and they are genuine
+# frames the sink has never acted on.
+#
+#   * `key: kbase, exactly: 1` — the ACT half of the rule: a baseline that fired zero
+#     times reads "observed 0", so the check is not one-directional.
+#   * `key: k1` / `key: k2, exactly: 1` — the NEVER-ADVANCES half, and the arm that
+#     actually kills the mutation below.
+#   * `no-dead-letters` — a baseline is delivered, not refused; nothing here is a
+#     failure event.
+#
+# WHY THE CHECKS ARE KEYED RATHER THAN UNKEYED. The unkeyed `effect-count` derives
+# the expected key set from the scripted `add`s on the sink's direct upstreams and
+# REFUSES a `retransmit` of an element no `add` names (`Checks.expectedEffectKeys`) —
+# which `kbase` deliberately is: a catch-up baseline carries state the scenario never
+# pushed through the graph, which is what makes it a catch-up. Every key this sink can
+# see is therefore named explicitly, one check each, so nothing fires zero times
+# invisibly.
+#
+# WHAT THE `baseline:` MAP DOES AND DOES NOT ASSERT. It states a merge-tag frontier —
+# scenario-local cell ids to tag counters, resolved by the driver to the named cell's
+# own per-source identity, so the scenario invents no implementation identifier. Its
+# CONTENTS are not observed by anything: `[24-DUR-07]` is written about the frame's
+# kind and its position, and no check here reads a tag counter. `{source: 4}` makes
+# the frame well-formed and the run reproducible; it is not a claim about merge-tag
+# currency, and this scenario must not be read as covering one.
+#
+# NON-VACUITY (the perturbation was actually run against the whole `dur` profile, and
+# this is its observed result — the evidence for the `covers:` line):
+#   * `[24-DUR-07]` — collapse the baseline branch in `ManagedHost.deliver`'s
+#     `Effectful` post-delivery arm so that a baseline advances the processed-frontier
+#     like any live frame (`if (baseline != null) recordAndJournalBaselineDischarge`
+#     becomes unreachable, `advanceAndJournalFrontier` runs unconditionally). This
+#     scenario then fails 20 of 20 runs with "effect-count(sink, key=k1): expected 1
+#     but observed 0; effect-count(sink, key=k2): expected 1 but observed 0", while
+#     EVERY other scenario in the corpus stays green — `DUR-BASELINE-02`,
+#     `DUR-LIVE-01`, `DUR-CKPT-FRONTIER-01`, `DUR-REPLAY-01`, `DUR-SRCID-01/02`,
+#     `DUR-ATOMIC-01`, `DUR-SNAPTAIL-01` and `DUR-GF-01` included. Rule (1) of I-24 is
+#     asserted here and nowhere else in the corpus.
+id: DUR-BASELINE-01
+title: An Effectful sink acts on a catch-up baseline, and the baseline advances no processed-frontier
+covers: [24-DUR-07]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a journaled source feeding an Effectful sink
+  when: >
+    a catch-up baseline is delivered at the sink's inlet, anchored at a merge-tag
+    frontier and stamped at a position far ahead of anything the source has
+    emitted, and only afterwards does ordinary live traffic arrive from that same
+    source at positions BELOW the baseline's
+  then: >
+    the sink acted on the baseline, and every live frame below it acted too — the
+    baseline's timestamp was never admitted to the processed-frontier
+graph:
+  cells:
+    - {id: source, type: journal-set-source, host: dur}
+    - {id: sink, type: effect-sink, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  - {type: retransmit, on: sink, source: source, counter: 9, op: add, value: kbase, baseline: {source: 4}}
+  - {type: quiesce}
+  - {type: apply, on: source, op: add, value: k1}
+  - {type: quiesce}
+  - {type: apply, on: source, op: add, value: k2}
+  - {type: quiesce}
+checks:
+  - {type: effect-count, sink: sink, key: kbase, exactly: 1}
+  - {type: effect-count, sink: sink, key: k1, exactly: 1}
+  - {type: effect-count, sink: sink, key: k2, exactly: 1}
+  - {type: no-dead-letters}

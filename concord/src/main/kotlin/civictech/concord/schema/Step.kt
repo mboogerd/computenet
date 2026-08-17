@@ -174,6 +174,24 @@ data class RestartStep(val on: String) : Step
  * carries. There is no `times:`: each duplicate names its own position, so
  * repeating one means another step.
  *
+ * [baseline] is the **optional catch-up anchor** (`computenet-yh6.1.12`, the
+ * second gated schema change to this verb): when present the delivery is
+ * stamped as a catch-up **baseline** — `MessageContext.baseline` — rather than
+ * as an ordinary live frame, which is what `[24-DUR-07]`/`[24-DUR-08]` are
+ * written about. It maps **scenario-local cell ids to tag counters**, resolved
+ * by the driver exactly as [source] is (the named cell's own per-source
+ * identity), so the scenario never invents an implementation identifier. Omit
+ * it — the default — and the step means precisely what it meant before this
+ * field existed: a plain live duplicate carrying no baseline at all.
+ *
+ * **The anchor's *contents* are not asserted by anything.** A conforming
+ * receiver keys on the *presence* of a baseline (act, but never advance the
+ * processed-frontier from a baseline's timestamp) and on the frame's position,
+ * never on which tag counters the anchor holds. Stating them is what makes the
+ * step's anchor well-formed and its run reproducible, not an assertion about
+ * merge-tag currency; a scenario must not be written as though a check read
+ * them.
+ *
  * This is not [RestartStep] or [RestoreStep]: neither the target's state nor
  * its checkpoint is touched and nothing is recovered — only whether the
  * receiving inlet's processed-frontier suppresses this one delivery is at
@@ -191,6 +209,7 @@ data class RetransmitStep(
     val counter: Long,
     val op: String,
     @Contextual val value: Value? = null,
+    val baseline: Map<String, Long>? = null,
 ) : Step
 
 /** Gracefully retire cell [on] (`despawn(cellId)`), unlinking it. */

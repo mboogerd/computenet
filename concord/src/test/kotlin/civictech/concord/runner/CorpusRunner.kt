@@ -540,7 +540,9 @@ class CorpusRunner {
                 // no memory of prior invocations (schema/scenario.md, `####
                 // retransmit`).
                 is RetransmitStep ->
-                    driver.retransmit(step.on, step.inlet, step.source, step.counter, step.op, step.value)
+                    driver.retransmit(
+                        step.on, step.inlet, step.source, step.counter, step.op, step.value, step.baseline,
+                    )
                 is DespawnStep -> driver.despawn(step.on)
             }
         }

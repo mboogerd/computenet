@@ -6,6 +6,7 @@ import civictech.cell.CurrentContext
 import civictech.cell.MessageContext
 import civictech.cell.Propagate
 import civictech.cell.Stateful
+import civictech.cell.TagFrontier
 import civictech.cell.Timestamp
 import civictech.cell.consistency.GlitchFreeCell
 import civictech.cell.data.SetApi
@@ -438,7 +439,15 @@ internal class KernelDriverDur(
      *    asking for a port this binding cannot resolve, and silently delivering
      *    to the default would make the step's own `inlet:` a lie.
      */
-    fun retransmit(cellId: CellId, inlet: String?, source: CellId, counter: Long, op: String, value: Value?) {
+    fun retransmit(
+        cellId: CellId,
+        inlet: String?,
+        source: CellId,
+        counter: Long,
+        op: String,
+        value: Value?,
+        baseline: Map<CellId, Long>? = null,
+    ) {
         val target = cells[cellId]
             ?: throw UnsupportedCatalogBinding("retransmit target '$cellId' is not a durable-host cell")
         if (target.type != EFFECT_SINK) {
@@ -465,9 +474,54 @@ internal class KernelDriverDur(
         val position = Timestamp(outlet.waveState().sourceId, counter)
         val delta = retransmittedDelta(op, value, position)
         val sinkInlet = (HostedCellProxy.create(target.ref, host, DeltaSink::class.java) as DeltaSink).inlet.call
-        CurrentContext.with(MessageContext(position, outlet.ref)) {
+        CurrentContext.with(MessageContext(position, outlet.ref, baseline = anchor(baseline))) {
             sinkInlet.propagate(delta)
         }
+    }
+
+    /**
+     * The optional catch-up anchor of a `retransmit` (`computenet-yh6.1.12`):
+     * the scenario's `baseline:` map — scenario-local cell id -> tag counter —
+     * lowered to the [TagFrontier] `MessageContext.baseline` carries.
+     *
+     * `null` in, `null` out, and that is the whole of the optionality: an
+     * omitted anchor produces exactly the `MessageContext(position, outlet.ref)`
+     * this binding stamped before the parameter existed, so every pre-existing
+     * `retransmit` step keeps its meaning byte for byte.
+     *
+     * Each named cell is resolved through the **same** route as the step's
+     * `source:` — its own `FanOutlet`'s per-source identity — so a scenario
+     * never names an implementation identifier, and the same scenario run twice
+     * anchors at the same frontier. Two loud refusals, matching [retransmit]'s
+     * own: a cell this driver does not hold, and a cell with no `outlet`
+     * `FanOutlet` to take an identity from.
+     *
+     * **What this anchor is, and is not.** `[24-DUR-07]`/`[24-DUR-08]` are
+     * written about a baseline's *kind* and its *position*: the receiving
+     * `Effectful` inlet acts on a baseline, never advances its
+     * processed-frontier from one, and records the exact position it fired at.
+     * None of that reads the anchor's tag counters, and no check in the corpus
+     * does either. The counters are here to make the frame well-formed — a
+     * baseline whose anchor is an empty or fabricated frontier would be a
+     * different thing from what a real pull reply stamps — not because
+     * something asserts them. A scenario must not be authored as though they
+     * were observable.
+     */
+    private fun anchor(baseline: Map<CellId, Long>?): TagFrontier? {
+        if (baseline == null) return null
+        val counters = baseline.entries.associate { (cellId, counter) ->
+            val bound = cells[cellId]
+                ?: throw UnsupportedCatalogBinding(
+                    "retransmit baseline names '$cellId', which is not a durable-host cell",
+                )
+            val cellOutlet = PortRegistry.of(bound.cell)["outlet"] as? FanOutlet<*>
+                ?: throw UnsupportedCatalogBinding(
+                    "retransmit baseline names '$cellId' (${bound.type}), which registers no 'outlet' FanOutlet, " +
+                        "so it has no per-source identity a merge-tag frontier could be anchored on",
+                )
+            cellOutlet.waveState().sourceId to counter
+        }
+        return TagFrontier(counters)
     }
 
     /**

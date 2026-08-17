@@ -1,0 +1,89 @@
+# Concord corpus scenario (KFX-BASELINE, `computenet-yh6.1.12`): `[24-DUR-08]` —
+# a baseline firing records its EXACT position in the sink's own journaled
+# discharged-baseline state, so the same catch-up position never fires twice —
+# on a live re-delivery or across a crash.
+#
+# WHY THIS FILE COULD NOT EXIST BEFORE: see `DUR-BASELINE-01`'s header and
+# `concord/corpus/DISPUTES.md`'s "fourth boundary". Until `computenet-yh6.1.12`
+# grew `retransmit`'s optional baseline anchor, no driver path in any profile
+# stamped `MessageContext.baseline` at all.
+#
+# WHY A SEPARATE DISCHARGE RECORD IS THE ONLY THING THAT CAN SUPPRESS THIS. `[24-DUR-07]`
+# (asserted next door) says a baseline advances no processed-frontier — so for a
+# baseline position, and only for a baseline position, the ordinary frontier suppresses
+# nothing. Every arrival after the first in this script would therefore re-fire the
+# effect if the sink did not keep its own exact-position record.
+#
+# THE CONSTRUCTION: one catch-up position (counter 7, anchored) delivered FOUR times.
+#   1. the first arrival — fires, and journals its discharge;
+#   2. the same position again, live on the running host — suppressed by the in-memory
+#      record (the live half);
+#   3. a crash: `despawn ctl` rebuilds the durable host from its journal, whose tail
+#      holds both frames above. The in-memory record died with the host, so only the
+#      journaled `RECORD_BASELINE` can stop the replay re-firing (the replay half);
+#   4. the same position once more after recovery — the recovered record suppresses it
+#      too, which is what makes the restored state a real one rather than a
+#      replay-only special case.
+#
+# `key: kbase, exactly: 1` is therefore both directions at once: 0 means the baseline
+# never acted at all, anything above 1 names which of the four arrivals leaked.
+# `no-dead-letters` states the suppression's SHAPE (KFX-20): the guard discharges the
+# suppressed invocation's payload and counts it rather than dead-lettering it.
+#
+# WHY THE CHECK IS KEYED: as in `DUR-BASELINE-01` — the unkeyed derivation refuses a
+# `retransmit` of an element no scripted `add` names, and a catch-up baseline is
+# exactly that. `kbase` is the only key this sink can see, and it is named explicitly.
+#
+# WHAT THE `baseline:` MAP DOES AND DOES NOT ASSERT: as in `DUR-BASELINE-01` — the
+# anchor's contents are observed by nothing; the frame's kind and its exact position
+# are what `[24-DUR-08]` is about.
+#
+# NON-VACUITY (both perturbations were actually run against the whole `dur` profile,
+# and these are their observed results — the evidence for the `covers:` line). They
+# are deliberately one per half, because a single mutation could not tell the live
+# suppression from the crash-recovered one:
+#   * LIVE half — make `HostDurability.alreadyDischargedBaseline` always return
+#     `false`, leaving the record itself written and restored. This scenario fails
+#     20 of 20 runs with "effect-count(sink, key=kbase): expected 1 but observed 5",
+#     while every other scenario in the corpus stays green (`DUR-BASELINE-01`
+#     included).
+#   * REPLAY half — keep the live lookup and neuter `restoreBaselineDischarge`, so
+#     recovery drops the journaled `RECORD_BASELINE`. This scenario fails 20 of 20
+#     with "expected 1 but observed 2" — the crash-replayed frame re-firing, and
+#     nothing else — while every other scenario stays green. Without step 3's crash
+#     the second perturbation would change nothing observable, which is why the
+#     script carries it.
+id: DUR-BASELINE-02
+title: A discharged catch-up baseline is suppressed on live re-delivery and on journal replay
+covers: [24-DUR-08]
+profile: dur
+kind: example
+narrative:
+  given: >
+    a durable host carrying a journaled source feeding an Effectful sink, plus a
+    journal controller
+  when: >
+    a catch-up baseline fires at the sink, the very same baseline position is
+    delivered again live, the host crashes and recovers from its journal, and the
+    same position arrives once more after recovery
+  then: >
+    the baseline acted exactly once across all four arrivals
+graph:
+  cells:
+    - {id: source, type: journal-set-source, host: dur}
+    - {id: sink, type: effect-sink, host: dur}
+    - {id: ctl, type: journal, host: dur}
+  links:
+    - {from: source, to: sink}
+script:
+  - {type: retransmit, on: sink, source: source, counter: 7, op: add, value: kbase, baseline: {source: 2}}
+  - {type: quiesce}
+  - {type: retransmit, on: sink, source: source, counter: 7, op: add, value: kbase, baseline: {source: 2}}
+  - {type: quiesce}
+  - {type: despawn, on: ctl}
+  - {type: quiesce}
+  - {type: retransmit, on: sink, source: source, counter: 7, op: add, value: kbase, baseline: {source: 2}}
+  - {type: quiesce}
+checks:
+  - {type: effect-count, sink: sink, key: kbase, exactly: 1}
+  - {type: no-dead-letters}

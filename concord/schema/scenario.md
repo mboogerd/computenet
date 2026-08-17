@@ -200,7 +200,7 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
 | restart | `{type: restart, on: s}` | `restart(cell)` |
 | despawn | `{type: despawn, on: c}` | `despawn(cell)` |
 | read-state | `{type: read-state, on: s, limit: 2}` | `readState(cell, cursor, limit)`, looped to completion |
-| retransmit | `{type: retransmit, on: c, inlet?: in, source: s, counter: N, op: add, value?: apple}` | `retransmit(cell, inlet, source, counter, op, value?)` |
+| retransmit | `{type: retransmit, on: c, inlet?: in, source: s, counter: N, op: add, value?: apple, baseline?: {s: N}}` | `retransmit(cell, inlet, source, counter, op, value?, baseline?)` |
 
 - **`op`** is a neutral op verb the cell catalog defines (`add`, `remove`, `put`,
   `remove-key`, `increment`, `decrement`, …).
@@ -215,6 +215,8 @@ The step model is **verb-complete** for the whole corpus. **Canonical YAML is a
   default 200.
 - **`retransmit … source:` / `counter:`** name the explicit `(sourceId, counter)`
   wave position the injected delivery carries — see below.
+- **`retransmit … baseline:`** is optional; present, it makes the delivery a
+  **catch-up baseline** rather than an ordinary live frame — see below.
 
 #### `restart` (D-C12, spec 21 §RESTART re-baselines / spec 30/31 rule 5)
 
@@ -371,6 +373,54 @@ whether its `Effectful` processed-frontier suppresses this one delivery is at
 stake. No `times:` — a `retransmit` step is one specific duplicate; repeating
 one means another `retransmit` step, since each must name its own `(source,
 counter)`.
+
+**`baseline:` — the optional catch-up anchor** (second gated schema change to
+this verb, `computenet-yh6.1.12`).
+
+*Status.* Landed. This paragraph is the single-writer review of the extension;
+the matching `RetransmitStep` field, `Driver` SPI parameter,
+`civictech.concord.driver.kernel` binding and `CorpusRunner` dispatch moved with
+it in the same ticket, per D-C12's rule that a step verb's seams move together.
+Two corpus scenarios drive it: `DUR-BASELINE-01` (`[24-DUR-07]`) and
+`DUR-BASELINE-02` (`[24-DUR-08]`).
+
+*Why the verb had to grow.* Spec 24 §Effectful gives a frame carrying a
+**catch-up baseline** (`MessageContext.baseline`, 93 I-24) its own rule: the
+sink ACTS on it, its timestamp NEVER advances the processed-frontier, and its
+exact position is recorded separately so a replay or a live re-delivery of that
+position is suppressed without re-firing. `concord/corpus/DISPUTES.md`'s "fourth
+boundary" established, with file:line evidence, that **no** driver path in any
+profile ever stamped one: the pull that mints a baseline is answered by
+`FanOutlet.baselineTo` from `pullServe`'s `StateRequest` handler, which no
+concord driver issues; push catch-up on link install is explicitly not
+baseline-stamped; and the `dur` profile's `effect-sink` edge is a raw
+`outlet.subscribe` that bypasses link admission. The same entry named this
+extension as the narrowest unblocking route, over the materially larger
+alternative of rewiring `effect-sink` through real link admission plus a pull.
+
+*Shape.* `baseline:` is a **merge-tag frontier**: scenario-local **cell ids**
+mapped to tag counters, e.g. `baseline: {source: 4}`. Each id is resolved by the
+driver exactly as `source:` is — to that cell's own per-source identity — so a
+scenario never invents an implementation identifier, and the same file anchors
+at the same frontier on every run. A cell the driver does not hold, or one with
+no outlet identity to anchor on, is a **loud refusal**, like every other
+capability refusal on this verb.
+
+*Optional means unchanged.* Omitted — the default — the step is byte-for-byte
+what it was before this field existed: `MessageContext(position, sourcePort)`
+with `baseline` at its `null` default, an ordinary live duplicate. `DUR-LIVE-01`
+and `DUR-CKPT-FRONTIER-01` are unmodified by the extension and still pass, and
+`RetransmitBindingTest` pins the contrast directly — the same position delivered
+with and without an anchor, where only the anchorless one advances the frontier.
+
+*What it does NOT assert.* The anchor's **contents** are observed by nothing. A
+conforming receiver keys on the frame's *kind* (a baseline is present) and on
+its `(source, counter)` position; no check in the corpus reads a tag counter,
+and none may be authored as though it did. Stating the counters is what makes
+the frame well-formed and the run reproducible — not a claim about merge-tag
+currency or incremental-pull dedup. A scenario needing THAT would need a real
+`StateRequest` path, which is the route this extension deliberately did not
+take.
 
 **No new check is needed.** The existing keyed `effect-count` (`{type:
 effect-count, sink: s, key: k1, exactly: 1}`) already states "this key fired

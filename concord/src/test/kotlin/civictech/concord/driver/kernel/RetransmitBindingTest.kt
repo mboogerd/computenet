@@ -75,6 +75,63 @@ class RetransmitBindingTest {
         d.keys() shouldBe listOf("k1", "k2", "ahead")
     }
 
+    /**
+     * The optional baseline anchor (`computenet-yh6.1.12`), pinned as a
+     * *contrast* rather than as an assertion about the anchor's contents. Two
+     * retransmits identical in every field but one — a position ahead of the
+     * frontier, delivered with and without `baseline:` — and the difference the
+     * step's presence makes is exactly `[24-DUR-07]`'s rule: an ordinary live
+     * delivery ADVANCES the processed-frontier, a baseline delivery does not.
+     *
+     * The omitted-anchor arm is the optionality evidence at the binding: it is
+     * the same behaviour this file already pinned before the parameter existed
+     * (`a live duplicate at the restored frontier is suppressed…`), re-asserted
+     * against the widened signature.
+     */
+    @Test
+    fun `an omitted baseline anchor advances the frontier, a stated one does not`() {
+        val withoutAnchor = durGraph()
+        withoutAnchor.retransmit("sink", null, "source", 9, "add", s("plain"))
+        withoutAnchor.quiesce(budget)
+        withoutAnchor.keys() shouldBe listOf("plain")
+        // it was a live frame, so the frontier is now at counter 9: everything at
+        // or behind it is suppressed
+        withoutAnchor.retransmit("sink", null, "source", 4, "add", s("below"))
+        withoutAnchor.quiesce(budget)
+        withoutAnchor.keys() shouldBe listOf("plain")
+
+        val withAnchor = durGraph()
+        withAnchor.retransmit("sink", null, "source", 9, "add", s("plain"), mapOf("source" to 3L))
+        withAnchor.quiesce(budget)
+        withAnchor.keys() shouldBe listOf("plain")
+        // a baseline is anchored at a link-install event, not at a wave position:
+        // the frontier never moved, so a genuine live frame BELOW it still fires
+        withAnchor.retransmit("sink", null, "source", 4, "add", s("below"))
+        withAnchor.quiesce(budget)
+        withAnchor.keys() shouldBe listOf("plain", "below")
+    }
+
+    @Test
+    fun `a baseline anchor naming a cell this driver does not hold is refused`() {
+        val d = durGraph()
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("sink", null, "source", 9, "add", s("k1"), mapOf("nosuch" to 1L))
+        }
+        refused.message!! shouldContain "retransmit baseline names 'nosuch'"
+    }
+
+    @Test
+    fun `a baseline anchor naming a cell with no outlet identity is refused`() {
+        val d = durGraph()
+        d.spawn(KernelDriverDur.DUR_HOST, "view", "journal-set-view", emptyMap())
+
+        val refused = assertThrows<UnsupportedCatalogBinding> {
+            d.retransmit("sink", null, "source", 9, "add", s("k1"), mapOf("view" to 1L))
+        }
+        refused.message!! shouldContain "no per-source identity a merge-tag frontier could be anchored on"
+    }
+
     @Test
     fun `a retransmit at a core cell fails loudly rather than injecting an unobserved delivery`() {
         val d = KernelDriver(0L)
