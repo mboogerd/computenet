@@ -58,18 +58,23 @@ future (see 30/31) — never on data-path contracts.
 every port contract, the flag rides the generated `ContractDescriptor`, and
 the KSP processor **fails compilation** when a data contract (management =
 false) declares a non-Unit return — push-only is enforced, not advised.
-Effect classification for shadow mode is today the `Effectful` cell marker
-(52, G-32), orthogonal to the contract flag. `@Contract(effect = true)` is a
-**third classification axis** (decided in 93 I-17, unimplemented): it marks a
-world-touching boundary contract (e.g. `DbWriter.persist`), emitted by the
-same KSP scan as `management`. Shadow suppression MUST cut at
-`effect = true` boundary contracts — never at a cell's data inlets — so
-interior cells keep emitting the derived deltas a judge needs; this amends
-the landed cell-granularity rule (G-32's NoOp-serve of every fan-in inlet of
-an `Effectful` cell as the only suppression mode). The `Effectful` cell
-marker is retained as the coarse fallback for opaque, non-portable I/O
-inside served logic: such a cell is replaced wholesale in shadow mode and
-terminates judgeability downstream of itself.
+Effect classification for shadow mode was originally only the `Effectful`
+cell marker (52, G-32). `@Contract(effect = true)` is a **third
+classification axis** (decided in 93 I-17): it marks a world-touching
+boundary contract (e.g. `DbWriter.persist`), emitted by the same KSP scan as
+`management`, and rides the generated `ContractDescriptor.effect` field.
+**Implemented** (93 I-17, landed by computenet-3jv2): `Shadow.spawn` cuts
+suppression at `effect = true` boundary contracts — every `FanInlet` whose
+`ContractRegistry.descriptor(...).effect == true` is NoOp-served — instead of
+at a cell's data inlets, so interior cells keep emitting the derived deltas a
+judge needs; this amends the landed cell-granularity rule (G-32's NoOp-serve
+of every fan-in inlet of an `Effectful` cell) from the *only* suppression
+mode to a coarse fallback layered underneath it. The `Effectful` cell marker
+is retained as that fallback for opaque, non-portable I/O inside served
+logic: such a cell is still replaced wholesale in shadow mode and terminates
+judgeability downstream of itself. The rest of the 93 I-17 observation
+membrane — downstream-only taps, SCC-closed cuts, gate-invariant consistency
+points — remains undecided/unbuilt; see 50/52.
 
 ## The Inlet/Outlet duality
 
