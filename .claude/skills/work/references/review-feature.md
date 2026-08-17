@@ -340,8 +340,14 @@ So:
   is pending**, so never put it on the left of `&&` (the next step is
   silently skipped) and never gate a wait loop on its exit status — a
   jq/until waiter exited instantly looking like a completed green wait
-  (computenet-luhx). Gate on the printed rows instead:
-  `until ! gh pr checks <pr-url> | grep -q pending; do sleep 30; done`. A **red** required check is not yours to wave
+  (computenet-luhx). Gate on the printed rows instead — but **not** on
+  `grep -q pending` alone: the required check runs are created asynchronously
+  after a push, so for roughly the first minute `gh pr checks` prints only the
+  `auto-merge` row and "nothing pending" is indistinguishable from all-green
+  (computenet-1zhu). Require the six required rows
+  (`build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test`)
+  to be PRESENT *and* none of them pending; SKILL.md step 2 carries the loop.
+  A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 
 ## 5. Repair by default — up to a bound

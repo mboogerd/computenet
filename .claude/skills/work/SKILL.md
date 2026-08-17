@@ -212,11 +212,14 @@ Three standing disciplines:
 req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
 for i in $(seq 1 40); do
   rows=$(gh pr checks <pr-url> 2>&1)     # exit status deliberately not tested
-  if ! echo "$rows" | grep -qE 'pass|fail|pending'; then
-    echo "round $i: QUERY FAILED"; sleep 20; continue          # no rows at all
-  fi
-  if [ "$(echo "$rows" | grep -cE "$req")" -lt 6 ]; then
-    echo "round $i: checks not yet reporting"; sleep 20; continue
+  n=$(echo "$rows" | grep -cE "$req")
+  if [ "$n" -lt 6 ]; then
+    if echo "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
+      echo "round $i: only $n of 6 required rows reporting"   # normal early state
+    else
+      echo "round $i: QUERY FAILED: $rows"                    # no rows at all
+    fi
+    sleep 20; continue
   fi
   echo "$rows" | grep -q pending || { echo SETTLED; echo "$rows"; break; }
   sleep 20
