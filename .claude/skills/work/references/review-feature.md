@@ -143,6 +143,17 @@ this file's opening "every task here is closed".
 Read the parent epic too, and any spec sections the feature cites — those
 are the authority (AGENTS.md), above the feature's own prose.
 
+**`acceptance_criteria` may be empty**, and on a bead filed mid-session by
+another agent it usually is — nothing broke it down. That is not a dead end
+and not automatically a defect: the criteria are then whatever the
+description and the parent epic state, read together. Write what you derived
+onto the bead (`bd update <id> --acceptance=…`) before judging, and quote it
+in your verdict, so the next reader judges the same item you did
+(computenet-d7tk). **When you file a bead yourself** — §7's residuals, a task
+for work you did not repair — put its criteria in the field, with that same
+flag, rather than only in the description: a bead filed mid-session should
+match one filed by a breakdown, or the next reviewer inherits this problem.
+
 Judge the criteria as written. If they don't meet
 [issue-quality.md](issue-quality.md), tighten them against the epic and the
 cited spec before judging, and say in your report that you did — you are
@@ -340,8 +351,14 @@ So:
   is pending**, so never put it on the left of `&&` (the next step is
   silently skipped) and never gate a wait loop on its exit status — a
   jq/until waiter exited instantly looking like a completed green wait
-  (computenet-luhx). Gate on the printed rows instead:
-  `until ! gh pr checks <pr-url> | grep -q pending; do sleep 30; done`. A **red** required check is not yours to wave
+  (computenet-luhx). Gate on the printed rows instead — but **not** on
+  `grep -q pending` alone: the required check runs are created asynchronously
+  after a push, so for roughly the first minute `gh pr checks` prints only the
+  `auto-merge` row and "nothing pending" is indistinguishable from all-green
+  (computenet-1zhu). Require the six required rows
+  (`build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test`)
+  to be PRESENT *and* none of them pending; SKILL.md step 2 carries the loop.
+  A **red** required check is not yours to wave
   through: report it and leave the verdict draft.
 
 ## 5. Repair by default — up to a bound
@@ -434,7 +451,30 @@ of these is true:
 - more than ~30 changed lines total across your repair commits, or more than
   three files touched;
 - any **new or semantically changed test, corpus scenario, or assertion** —
-  writing the check that decides the verdict is authoring the verdict;
+  writing the check that decides the verdict is authoring the verdict.
+  **Exception, and it is narrow: a test-only repair** — no production file in
+  any of your repair commits — that you have *demonstrated failing*. For each
+  test you added, mutate the production code it covers (code you did not
+  write), show the test failing, revert the mutation, show it passing, and
+  quote the assertion message from the failing run. Name the mutation in the
+  verdict. That is the same mutation check review-task.md applies to an
+  implementer's tests. **Two conditions on the mutation**, because a red run
+  proves less than it looks like:
+  - **Mutate the defect the test claims to catch**, not whatever is easiest to
+    break. Deleting the method under test reddens any test that calls it —
+    including one that asserts the wrong thing — so it demonstrates that the
+    test *runs*, not that it *constrains*. If the test claims to catch an
+    off-by-one, the off-by-one is the mutation.
+  - **Say where each expected value came from.** Mutation-sensitivity is not
+    independence: a test that recomputes its expected value with a copy of the
+    production formula goes red under exactly that mutation and is still blind
+    to a bug in the formula — the false green that filed this bead. Expected
+    values must be literals or derived some other way, and the verdict says
+    which.
+
+  Meet all of it and certify normally; skip any part of it and the repair is
+  substantive as before. A fully green feature should not cost a second opus
+  review for tests that prove themselves (computenet-7bc9);
 - any regenerated generated file (`CONCORDANCE.md`, KSP output consumers);
 - any new claim filed against the honesty ledger (`concord/corpus/DISPUTES.md`)
   or a new bead asserting an existing requirement is broken;
@@ -475,19 +515,34 @@ git -C <worktree> log --oneline $(git -C <worktree> merge-base HEAD origin/main)
 ```
 
 - **Empty output** → nothing landed since you integrated. Say so in the
-  verdict ("re-fetched at <time>, origin/main unchanged at `<sha>`").
-- **Any commits** → your evidence is stale. Merge `origin/main` again, re-run
-  at least the affected module suite (§3, with fresh task-count and JUnit
-  numbers — the old ones no longer describe the code being merged), and quote
-  the shas that landed. If one of them touches the same subsystem as this
-  feature, re-read the diff too, not just the tests.
+  verdict ("re-fetched at <time>, origin/main unchanged at `<sha>`") — and
+  understand that line as **expiring the moment you write it**. It is a
+  timestamped observation, not a guarantee about the merge; auto-merge can
+  land another PR while your report is in flight, which is why the
+  orchestrator re-reads rather than trusting it.
+- **Any commits** → your evidence is stale, and **the merge is not yours to
+  run.** `git merge` is denied to reviewer agents by the permission
+  classifier — four instances across two sessions now (computenet-whx4,
+  computenet-dtvd) — so prescribing it to you produced a refusal every time
+  and an improvised recovery each time. Hand it back instead, as the normal
+  path rather than a fallback: state in your verdict which shas landed,
+  whether their files are disjoint from this diff (**list both file sets**:
+  `gh pr diff <pr-url> --name-only` against `git show --name-only <sha>`), and
+  that the merge plus the §3 re-run on the merged base belongs to the
+  orchestrator. If one of the landed shas touches the same subsystem as this
+  feature, say so — that is the signal for the orchestrator to send the diff
+  back to you for a scoped re-read rather than shipping on this verdict.
 
-  **If the harness refuses the merge** (`git merge` has been denied to
-  reviewer agents by the permission classifier — twice in one session,
-  computenet-whx4), the hand-back is the prescribed outcome, not a failure:
-  state in your verdict which shas landed, whether their files are disjoint
-  from this diff (list both file sets), and that the merge + §3 re-run on the
-  merged base is handed to the orchestrator. Do not quietly skip the re-check
+  SKILL.md 5e carries the other half: the orchestrator does the merge, re-runs
+  the affected module suite, and sends back for a re-check when the
+  disjointness claim does not hold. A verdict must never ride a merge nobody
+  assessed.
+
+  If your harness does *not* refuse the merge, running it yourself is still
+  fine — merge, re-run the affected module suite (§3, with fresh task-count
+  and JUnit numbers; the old ones no longer describe the code being merged),
+  quote the shas, and re-read the diff if one of them touches this
+  subsystem. Do not quietly skip the re-check
   and do not report the denial as a blocker on the feature itself. The same
   applies to any other refused command in this file: substitute the
   documented equivalent (e.g. `--rerun` instead of deleting
@@ -533,16 +588,34 @@ Three outcomes, not two.
 
 Every feature criterion met, required checks green, no unowned seams — the
 three criteria in AGENTS.md § "Marking a PR ready is the agent's call" hold —
-and your own repairs were trivial by §5. Record the verdict, but **do not run
+and your own repairs were trivial by §5, or were a test-only repair that met
+§5's exception in full (name the mutation and the origin of the expected
+values in the comment below). Record the verdict, but **do not run
 `gh pr ready`**: on this repo a ready PR merges itself, and you are the party
 that just certified (and possibly repaired) this code, so shipping it too
 would be self-approval. The orchestrator reads your verdict and ships:
 
+**One `bd` write per call** (SKILL.md's `bd` traps). `bd` writes can run past
+120s, and a chained block that dies mid-sequence leaves a half-recorded
+certification — the worst state available, since `review=passed` without its
+evidence comment reads as a clean pass. Each fenced block below is **one**
+call; run them in order, and check each returned before the next.
+
 ```bash
 git -C <worktree> push
+```
+
+```bash
 bd comment <feature-id> "Review passed: <criteria verified with their evidence; test counts and executed/from-cache accounting; uname; gh pr checks conclusions; re-fetch result; what you repaired and its --stat>. Verdict: ready."
+```
+
+```bash
 bd update <feature-id> --set-metadata review=passed
 ```
+
+`review=passed` goes **last**: it is the flag the orchestrator ships on, so a
+sequence that dies earlier leaves the feature uncertified rather than
+certified with nothing behind it.
 
 ### Ready with residual — the honest negative result
 
@@ -562,14 +635,40 @@ Merge it, and keep the residual alive:
 # from a per-database counter, and if the epic's holder (or the other
 # machine) files under it between syncs, two beads mint one id
 # (computenet-wpvy.45). The hash id survives the re-parent unchanged.
-RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
+# bd CREATE returns an object (bd SHOW a list), and bd prints warnings on
+# stdout before the JSON, so slice from the first `{` before jq (SKILL.md).
+bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>" \
   --acceptance="<the original criterion, unchanged>" \
-  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+  --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
+cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
+```
+
+A shell variable cannot cross a Bash call — shell state does not persist
+between them — so the id goes to a file and every later call re-reads it.
+Check the `cat` printed a real id before going on: if `jq` saw a warning
+preamble it writes an empty file, and every command below would then run
+against an empty `$RES`. `review=passed` is the last write: a sequence that
+dies leaves the feature uncertified rather than certified with a residual
+nobody recorded.
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update "$RES" --parent=<epic-id>
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES under <epic-id>, which is what carries the unmet criterion forward."
-bd update <feature-id> --set-metadata review=passed
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update <feature-id> --set-metadata residual=$RES
+```
+
+```bash
+bd update <feature-id> --set-metadata review=passed
 ```
 
 `review=passed` is deliberate: an unmet criterion is not a reason to withhold
@@ -601,14 +700,40 @@ would sit in a container no session opens again. So file the residual with no
 parent, and give it the two references that stand in for one:
 
 ```bash
-RES=$(bd create "<the unmet criterion, verbatim>" --type=bug \
+# bd CREATE returns an object (bd SHOW a list), and bd prints warnings on
+# stdout before the JSON, so slice from the first `{` before jq (SKILL.md).
+bd create "<the unmet criterion, verbatim>" --type=bug \
   --description="Residual from <feature-id> (PR <url>): <what was tried, what was measured, why it is unmet>. Filed UNPARENTED deliberately: parent epic <epic-id> was already closed at review time." \
   --acceptance="<the original criterion, unchanged>" \
-  --json | jq -r '.id')          # bd CREATE returns an object; bd SHOW a list
+  --json | sed -n '/^[[{]/,$p' | jq -r '.id' > "$SCRATCH/residual-id"
+cat "$SCRATCH/residual-id"      # must print the new id, not an empty line
+```
+
+A shell variable cannot cross a Bash call — shell state does not persist
+between them — so the id goes to a file and every later call re-reads it.
+Check the `cat` printed a real id before going on: if `jq` saw a warning
+preamble it writes an empty file, and every command below would then run
+against an empty `$RES`. `review=passed` is the last write: a sequence that
+dies leaves the feature uncertified rather than certified with a residual
+nobody recorded.
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd dep add "$RES" <feature-id> --type=discovered-from
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd comment <feature-id> "Review passed with residual: <verified criteria + evidence as above>. NOT met: <criterion, verbatim> — <evidence that it is not met>. Filed as $RES, UNPARENTED because <epic-id> is closed, linked discovered-from <feature-id>."
-bd update <feature-id> --set-metadata review=passed
+```
+
+```bash
+RES=$(cat "$SCRATCH/residual-id")
 bd update <feature-id> --set-metadata residual=$RES
+```
+
+```bash
+bd update <feature-id> --set-metadata review=passed
 ```
 
 **The edge is what replaces the parent, so do not skip it.** An unparented
@@ -724,9 +849,20 @@ turn waiting: not on another arm of your own experiment, and not on a
 background job's notification — ending your turn has already fired the
 completion notification the orchestrator acts on, whatever the job does next.
 Run long commands in the foreground with a generous timeout, or poll a
-background job's output file with ordinary foreground calls. Out of room, out
-of time, or blocked, give the
-partial verdict you have and put the rest under NOT VERIFIED — an honest
+background job's output file with ordinary foreground calls.
+
+There is no `timeout` binary on this host — neither `timeout` nor `gtimeout`
+(verified 2026-08-17). A bare `timeout 600 ./gradlew …` prints `command not
+found` and does exit 127, but **piped it fails open**: `timeout … | tee log`
+gives you the last stage's status, i.e. 0, so a suite that never ran reports
+success. `${PIPESTATUS[0]}` is not the rescue either — under zsh, this
+repo's session shell, `PIPESTATUS` is empty and only lowercase `pipestatus`
+carries the 127 (computenet-fbuo). The generous timeout meant here is the
+**Bash tool's own `timeout` argument**, in milliseconds, up to 600000. For a
+job that genuinely outlasts that, use `run_in_background` and poll its output
+file with ordinary foreground calls — never end a turn waiting on it.
+
+Out of room, out of time, or blocked, give the partial verdict you have and put the rest under NOT VERIFIED — an honest
 partial verdict beats stopping mid-experiment.
 
 **Kill every background job you started before you send that message** —

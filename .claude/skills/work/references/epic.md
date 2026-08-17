@@ -43,6 +43,26 @@ than producing children that inherit it. Deferring the question into a child
 task as a "discovery step" is not verification — it is the same unverified
 assumption, one level further from anyone who could notice.
 
+**A false premise the epic itself already retired is re-scoped in place, not
+parked.** An epic that cites its own upstream spike and says "re-scope against
+its finding before writing code" is not blocked — it is instructing you. If
+that finding is *decided, verified and prescriptive* (it names the replacement,
+and something ran to establish it), rewrite the epic's title, description and
+acceptance to match, comment the trace — the finding's id, the artifact, what
+changed — and break down the rewritten epic. Park only when the finding is
+absent, disputed, or its application to this epic is genuinely ambiguous; that
+is ask-human.md's bar, and a decided finding does not clear it. Producing
+children against text the repo has already disproved is the expensive failure:
+a whole feature set inherits the dead premise, and no downstream reviewer is
+positioned to catch it (computenet-taug).
+
+**Report the re-scope to the orchestrator in as many words** — the epic it
+claimed is no longer the epic it read, and it has no other way to find that
+out. Name the finding, quote the old acceptance and the new one, and say you
+rewrote it in place. Without that, the orchestrator is left deciding whether
+to trust a breakdown that unilaterally rewrote its own epic's acceptance, on
+no evidence.
+
 ## Break it down
 
 Read the full epic (`bd show <id>`) and every spec/doc section it cites —
@@ -87,6 +107,16 @@ Wire `bd dep add` only for real output dependencies — one feature genuinely
 cannot start until another lands. Not a preferred order, and not "these
 might touch the same files" (file overlap is handled by task-level
 scheduling — see [feature.md](feature.md)). Over-wiring starves the queue.
+
+**A blocking edge cannot cross the epic boundary** — `bd` refuses one between
+an epic and a non-epic. So "these items wait on this epic's deliverable" is
+unexpressible as written, and the shape that *is* expressible is to give the
+epic's own deliverable a **feature** child and block the dependents on that
+feature: a same-class edge `bd` accepts. Filing the dependents as children of
+the epic instead and leaving the deliverable unrepresented is the failure this
+prevents — the epic then reads as already broken down, its own work is never
+scheduled, and the children wait forever on something nobody is building
+(computenet-45rf).
 
 Apply the [ask-human.md](ask-human.md) bar: if the epic's scope is genuinely
 ambiguous, or the split has a risky/expensive/hard-to-revert fork, park a

@@ -22,7 +22,7 @@ it.
 
 ## Contents
 
-1. The standard, then the diff — criteria from the bead, diff against the fetched base
+1. The standard, then the diff — criteria from the bead, diff against the resolved base
 2. Prove the tests ran — not replayed from cache, and not zero tests
 3. Your run is on macOS; the required checks are not
 4. Repair, don't bounce — the authorship bound and `review:` commits
@@ -36,8 +36,12 @@ reading a self-modifying change needs, before §5.
 ```bash
 bd show <task-id> --json                          # criteria, files claim (a LIST — unwrap .[0])
 bd comments <task-id> --json                      # the implementer's landing notes
-git -C <task-worktree> fetch origin <feature-branch> main
-git -C <task-worktree> diff origin/<feature-branch>...HEAD
+git -C <task-worktree> fetch origin main
+git -C <task-worktree> fetch origin <feature-branch> || true   # may not exist yet
+FB=$(git -C <task-worktree> rev-parse --verify -q origin/<feature-branch> \
+     || git -C <task-worktree> rev-parse --verify -q <feature-branch>)
+BASE=$(git -C <task-worktree> merge-base "$FB" HEAD)
+git -C <task-worktree> diff "$BASE" HEAD
 ```
 
 `bd show` never returns comment bodies, and the implementer's reasoning —
@@ -61,7 +65,7 @@ it was not committed ([task.md](task.md) makes commit-and-push the required
 final step), which is a different verdict from "produced nothing". Do not
 commit it for the implementer without saying you did.
 
-**Diff against the fetched remote base, never a local ref.** A task worktree's
+**Diff against the resolved base, never a bare local `main`.** A task worktree's
 `main` is whatever the machine last fetched, and its copy of the feature
 branch can be behind the merges the orchestrator has already made. Both
 produce a diff that looks plausible and is wrong: the obvious
@@ -76,6 +80,21 @@ of it. Fetch `main` in the same command so
 feature branch itself forked long before current `origin/main`, say so in your
 report: that is a merge hazard the feature review has to resolve, not
 something to fix on a task branch.
+
+**The feature branch may not be on origin at all.** 5a pushes it and 5d opens
+its PR only after the FIRST task merges, so for task 1 of every feature
+`origin/<feature-branch>` does not exist and a bare
+`git fetch origin <feature-branch>` fails hard with `couldn't find remote ref`.
+That is why the fetch above is best-effort and the base comes from
+`merge-base`: worktrees of one repository share their refs, so the local
+`<feature-branch>` the orchestrator created is readable from the task
+worktree whether or not it has ever been pushed, and the merge-base of it
+with HEAD is the right baseline in both cases. Do not substitute
+`origin/main` by hand — it is the correct base only when the feature branch
+happens to be sitting on it, which is true for a fresh feature and false for
+a resumed one carrying prior task merges, where it silently pulls that prior
+work into your diff. Three reviewers in one session each rediscovered the
+failure and each improvised that substitution (computenet-u1ai).
 
 Check:
 
@@ -120,6 +139,17 @@ Check:
   clear, tighten them (`bd update <task-id> --acceptance=…`) and review
   against the tightened version, saying so. Where it doesn't, you can't judge
   this task: say that rather than passing it on vibes.
+- **Missing entirely** — the shape a directly-filed bug or chore arrives in,
+  with no breakdown to have written them. Write them onto the bead
+  (`bd update <id> --acceptance=…`) *before* you judge, and quote them in
+  your verdict. Inventing a standard silently and then certifying against it
+  is the reviewer marking its own paper, and it is worse than it looks: the
+  bar lives only in your report, so a resumed item gets a different one
+  (computenet-n58c). Written onto the bead, it survives the session and the
+  orchestrator can disagree with it. This is a backstop, not the normal
+  route: SKILL.md 5f has the orchestrator write them before dispatch, so
+  their absence is itself a finding — name it in your report alongside the
+  criteria you wrote.
 
 ## 2. Prove the tests ran
 
@@ -140,6 +170,18 @@ transcripts that were not replayable in the order printed, and a finished
 deliverable left uncommitted. Four reviewers on that epic each derived this
 standard from the orchestrator's dispatch prompt rather than from this file,
 which worked only because the orchestrator happened to say it every time.
+
+**A DERIVED document is traced, not re-executed.** A consolidation — one that
+assembles findings its sources already established, and runs nothing of its
+own — has no commands to re-run, and re-executing its *sources* re-reviews
+work that already passed. Its standard is a trace: for each claim, name the
+upstream artifact that established it and the review that certified that
+artifact, and check that the claim still says what the source says.
+Untraceable claims — present in the derived document, absent upstream — are
+the defect this catches, and they are exactly what a re-execution standard
+misses. Where the document *does* run something of its own, that part is
+re-executed as above; the two standards apply per claim, not per document
+(computenet-bx4y).
 
 **Tolerance on transcripts.** Real `bd` output is pretty-printed and carries
 warning preambles; documents paste one-line JSON. Reformatting, eliding a
@@ -288,6 +330,43 @@ What to consume, per test run:
   "I did the mutation check and it failed as expected" is the same
   unfalsifiable sentence this section exists to stop.
 
+  **Read the BUILD LOG, not only the JUnit XML.** A mutation that fails to
+  *compile* leaves the previous run's XML on disk, and that stale XML parses
+  as a plausible result — a mutation verdict for a mutation that never ran.
+  It is not an exotic case: a mutation is often *expected* to break
+  compilation. Caching and a failed compile look identical from the XML
+  alone, and §2 warns only about caching (computenet-2x5l). Check both:
+
+  ```bash
+  ./gradlew :<module>:test --tests '<TestName>' --rerun > "$SCRATCH/mut.log" 2>&1
+  grep -E '^e:|BUILD' "$SCRATCH/mut.log"     # 'e:' lines = it never compiled
+  ```
+
+  A `BUILD FAILED` with `e:` lines is **not** a red test. Fix the mutation
+  until it compiles, or pick a different one, and never quote the XML from a
+  run that did not build.
+
+  **Revert only what you mutated.** `git checkout -- <file>` is file-granular
+  and silently discards any *other* edit you made to that file earlier in the
+  review — §2's mutation and §4's repair both happen and nothing orders them,
+  so this is the ordinary case, not a corner (one reviewer lost a KDoc repair
+  this way). Undo the mutation by hand, or park your own work as a patch
+  first:
+
+  ```bash
+  git -C <task-worktree> diff -- <file> > "$SCRATCH/my-repairs.patch"
+  git -C <task-worktree> checkout -- <file>     # now only HEAD's content
+  # ... mutate, re-run, watch the named test FAIL ...
+  git -C <task-worktree> checkout -- <file>     # undo the mutation
+  git -C <task-worktree> apply "$SCRATCH/my-repairs.patch"
+  ```
+
+  **Not `git stash`.** `refs/stash` is a single repo-wide ref *shared by every
+  linked worktree* — a dozen of them run here at once — so `git -C <mine>
+  stash pop` silently pops whatever agent stashed last, exit 0, wrong file
+  contents (measured). A patch in your own `$SCRATCH` is worktree-local and
+  cannot be taken by anyone else.
+
   **Leave the marker while it is applied** — the same rule
   [task.md](task.md) step 3 gives implementers, and it matters more here,
   because the incident that produced it (computenet-leg) was a *feature
@@ -406,9 +485,13 @@ within its stated scope: a missed criterion, a thin test, a small wrong
 edge. Commit on the task branch:
 
 ```bash
-git -C <task-worktree> commit -am "review: <what you fixed>"
+git -C <task-worktree> commit -m "review: <what you fixed>" -- <the paths you edited>
 git -C <task-worktree> push
 ```
+
+`-m … -- <paths>`, never `-am`: this repo's shared index needs the pathspec,
+and `git` rejects the combination outright — `fatal: paths … with -a does not
+make sense` (computenet-2x5l).
 
 Fail it only when the approach is wrong at the design level, or repair would
 rewrite most of the diff. If the task turns out to be underspecified or the
@@ -478,8 +561,20 @@ own experiment, and not on a background job's notification — ending your turn
 has already fired the completion notification the orchestrator acts on,
 whatever the job does next. Run long commands in the foreground with a
 generous timeout, or poll a background job's output file with ordinary
-foreground calls. Out of room,
-out of time, or blocked, give the partial verdict you have and put the rest
+foreground calls.
+
+There is no `timeout` binary on this host — neither `timeout` nor `gtimeout`
+(verified 2026-08-17). A bare `timeout 600 ./gradlew …` prints `command not
+found` and does exit 127, but **piped it fails open**: `timeout … | tee log`
+gives you the last stage's status, i.e. 0, so a suite that never ran reports
+success. `${PIPESTATUS[0]}` is not the rescue either — under zsh, this
+repo's session shell, `PIPESTATUS` is empty and only lowercase `pipestatus`
+carries the 127 (computenet-fbuo). The generous timeout meant here is the
+**Bash tool's own `timeout` argument**, in milliseconds, up to 600000. For a
+job that genuinely outlasts that, use `run_in_background` and poll its output
+file with ordinary foreground calls — never end a turn waiting on it.
+
+Out of room, out of time, or blocked, give the partial verdict you have and put the rest
 under NOT VERIFIED — an honest partial verdict beats stopping mid-experiment.
 
 **Kill every background job you started before you send that message** —

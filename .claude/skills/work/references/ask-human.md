@@ -29,8 +29,16 @@ small uncertainty makes no progress, which is the same as failing.
 
 Hand the item to a human — reassign it, don't just tag it:
 
+**One `bd` write per Bash call** (SKILL.md's `bd` traps): `bd` writes can run
+past 120s, and a chained block that dies mid-sequence leaves the item parked
+with no question on it — visible to nobody, which is the whole point of
+parking. Two calls:
+
 ```bash
 bd update <id> --status=blocked --add-label=human --assignee=human
+```
+
+```bash
 # A question quoting code needs a heredoc-built body or --file — inline
 # backticks execute as shell (issue-quality.md "Backticks…", computenet-9w9).
 bd comment <id> "QUESTION: <the actual question, with enough context that someone cold can answer it — what you were doing, the options you're choosing between, what you'd do by default, and why it's not a call you should make unilaterally>"

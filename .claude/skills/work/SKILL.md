@@ -61,6 +61,44 @@ felt like giving up.
   `--type`); `bd comment` takes the body positionally or via `--file` (not
   `--body-file`); clearing a metadata key is `--unset-metadata <key>`
   (`--set-metadata key=` merges, it does not clear).
+- **`bd create` has no `--set-metadata`** — that flag exists only on `bd
+  update`. On create the spelling is `--metadata '<json object>'`, so
+  `model` and `files` go in as
+  `--metadata '{"model":"sonnet","files":"kernel/src/..."}'`. Getting this
+  wrong is silent in the way that matters: the bead is created, the routing
+  fields are not, and `next-batch.py` dispatches it with no model and no file
+  claim (computenet-kd9s, computenet-w8jt). Don't reach for a second `bd
+  update` instead — it is a second write that can fail on its own and leave
+  the bead half-configured; one `--metadata` on the create is atomic.
+  `scripts/create-ticket.sh` takes `--metadata` and passes it through.
+- **`bd list --json` changes shape under `--skip-labels`**: a bare array by
+  default, `{"issues":[...]}` with the flag. A `jq '.[]'` written against one
+  yields nothing against the other and exits 0, so the caller reads an empty
+  result as "no rows" (computenet-kr18). Use the shape-agnostic row selector
+  everywhere, and never `|| echo '[]'` a `jq` failure into a clean answer:
+
+  ```bash
+  ROWS='(if type=="array" then . else (.issues // []) end)[]'
+  bd list … --json | jq -r "$ROWS | .id"
+  ```
+
+- **Re-parenting a reviewer-filed residual takes two commands.** A
+  `discovered-from` edge occupies the same slot as parent-child, so
+  `bd update <child> --parent=<parent>` errors when review-feature.md §7's
+  prescribed edge already exists (computenet-ofzz). Remove it first:
+
+  ```bash
+  bd dep remove <child> <parent>
+  bd update <child> --parent=<parent>
+  ```
+- **`bd create --parent=<shared epic>` is banned.** It allocates the child id
+  from `child_counters`, a per-database table reconciled only at sync, so two
+  machines filing between syncs mint the SAME id for different beads — a
+  primary-key collision whose resolution destroys one of them (computenet-azt,
+  computenet-wpvy.45). Use `scripts/create-ticket.sh`, which creates
+  unparented (hash id, counter untouched) and then re-parents. Breakdown
+  children under an epic or feature YOU claimed are exclusive by that claim
+  and keep their dotted ids — `--parent` is correct there.
 - `bd` calls are slow and `bd dolt pull`/`push` can run past 120s — give
   sync commands a ≥300s timeout, and never chain `bd` *writes* in one Bash
   block: one write per call, each with the long timeout, or the chain dies
@@ -88,6 +126,7 @@ sibling test (`<name>.test.sh`, or `next-batch.test.py`).
 | `claim-epic.sh` | Claims or takes over an epic and pushes the acquisition (the claim-as-lock bracket) |
 | `feature-branch.sh` | Resolves a feature's branch + worktree, minting `-rN` when the old PR squash-merged |
 | `publish-beads.sh` | Publication push with rejection recovery, reading output not exit codes |
+| `create-ticket.sh` | THE create path for a ticket under a shared epic — unparented, then re-parented |
 | `file-friction.sh` | Files a friction item collision-free under the SDLC epic and claims it |
 
 (`scripts/beads-nightly-sync.sh` is the **repo-root** catch-up job; no
@@ -185,10 +224,40 @@ Three standing disciplines:
   (`for i in $(seq 1 N)`), exits on a terminal state, and there is at most
   one alive; `TaskStop` the old one and let the stop land before arming a
   replacement.
-- **A failed `gh` call is not a reading.** Socket exhaustion (`dial tcp …
-  can't assign requested address`) says nothing about the PR; the idiom
-  `gh … 2>/dev/null || echo "?"` folds it into a green nobody earned. Every
-  wait loop separates "the query failed" from "the condition is not met".
+- **A failed `gh` call is not a reading — and neither is a nonzero exit.**
+  Socket exhaustion (`dial tcp … can't assign requested address`) says
+  nothing about the PR; the idiom `gh … 2>/dev/null || echo "?"` folds it
+  into a green nobody earned. The inverse trap is just as wrong: `gh pr
+  checks` **exits 8 while anything is pending**, with well-formed rows on
+  stdout, so an `||` branch fires on the ordinary pending case and reports a
+  query failure that never happened (computenet-15it). Classify on the
+  OUTPUT, never on `$?`. And the rows can be *absent*: a check run is created
+  asynchronously after a push, so for roughly the first minute the output is
+  legitimately just the `auto-merge` row — nothing is pending, and a bare
+  `grep -q pending` cannot tell that from all-green (computenet-1zhu). A
+  reading is settled only when every required check is PRESENT and none of
+  them is pending:
+
+```bash
+req='build-test-fast|build-test-serial|concord-full|ui-test|agora-ui-test|kernel-test'
+for i in $(seq 1 40); do
+  rows=$(gh pr checks <pr-url> 2>&1)     # exit status deliberately not tested
+  n=$(echo "$rows" | grep -cE "$req")
+  if [ "$n" -lt 6 ]; then
+    if echo "$rows" | grep -qE '(pass|fail|pending|skipping)[[:space:]]'; then
+      echo "round $i: only $n of 6 required rows reporting"   # normal early state
+    else
+      echo "round $i: QUERY FAILED: $rows"                    # no rows at all
+    fi
+    sleep 20; continue
+  fi
+  echo "$rows" | grep -q pending || { echo SETTLED; echo "$rows"; break; }
+  sleep 20
+done
+```
+
+  The three states the loop keeps apart — query failed, not yet reporting,
+  unsettled — are one state to any test on `$?`, and two of them look green.
 - **Between notifications you have no sense of elapsed time.** Run
   `date -u +%H:%M` before any budget-gated decision — one session misread
   1h31m as ~3h20m and nearly idled a third of its slot (computenet-776).
@@ -258,7 +327,9 @@ stale *tasks* the sweep above already reopened, and a stale *feature* is the
 **Only after the liveness check, reconcile beads against merged PRs:**
 
 ```bash
-.claude/skills/work/scripts/sweep-merged-prs.sh        # --dry-run to preview
+# $SCRATCH must already exist — create it once here if you haven't (see "bd traps")
+.claude/skills/work/scripts/sweep-merged-prs.sh > "$SCRATCH/sweep.txt" 2>&1  # --dry-run to preview
+rc=$?; tail -40 "$SCRATCH/sweep.txt"; echo "rc=$rc"
 ```
 
 Auto-merge lands PRs minutes *after* their session ends, so no session
@@ -267,9 +338,20 @@ It runs here and nowhere earlier — it removes worktrees, and a concurrent
 session's just-merged worktree is clean *by definition*, so sweeping before
 the liveness check deletes a live run's state. It is deliberately
 unconditional (no epic/claim/review filter): three narrow re-checks all
-missed the same four leaked features (computenet-wpvy.25). Read its exit
-code: 3 = nothing was checked (`gh`/`bd` unreachable), 1 = some closes or
-removals failed — neither is "clean sweep"; say which you got.
+missed the same four leaked features (computenet-wpvy.25). Read `rc`: 3 =
+nothing was checked (`gh`/`bd` unreachable), 1 = some closes or removals
+failed — neither is "clean sweep"; say which you got.
+
+**Capture to a file rather than piping, for every script whose exit code you
+have to report** — this one, `claim-epic.sh`, `publish-beads.sh`. Their output
+is long enough that `script.sh | tail -40` is the natural thing to type, and
+the pipe makes `$?` the exit code of `tail`, which is always 0. The bash
+escape hatch does not exist here: this repo's session shell is **zsh**, where
+`${PIPESTATUS[0]}` is not an array subscript at all and expands to the empty
+string — `echo EXIT=${PIPESTATUS[0]}` printed a bare `EXIT=` for three
+separate scripts in one session, which reads at a glance like a successful
+zero and is exactly the unearned "clean sweep" this paragraph exists to
+prevent (computenet-8d88). Never write `${PIPESTATUS[n]}` in this skill.
 
 **Select and claim one epic** — highest priority, skipping the SDLC epic
 (see "The SDLC exclusion" below; the filter is in the command because a
@@ -302,8 +384,30 @@ bd ready --parent=<epic> --json      # workable = items NOT labeled 'human'
 bd list --parent=<epic> --type=feature --status=in_progress --json  # resumable
 ```
 
-Zero workable items and nothing resumable, for an epic that *has* children →
-park it and select the next:
+Zero workable items and nothing resumable splits into **two** cases. Separate
+them with step 4's listing, run now rather than later — same command, so no
+extra round-trip:
+
+```bash
+bd list --parent=<epic> --all --json     # statuses of ALL children, closed included
+```
+
+- **At least one child, and every child closed** → the epic is *finished*, not
+  stalled. Close it and drop the owner label — step 6's identical branch,
+  including its guard: **an epic with no children at all is mid-breakdown, not
+  finished** (`every child closed` is vacuously true there), so that case goes
+  to step 4, never to `bd close`.
+
+  ```bash
+  bd close <epic> && bd update <epic> --remove-label=owner:$BEADS_ACTOR
+  ```
+
+  `bd defer` here would park a completed epic and hide it from both machines
+  until a human noticed. **Closing a drained epic does not consume the
+  session's one epic claim** — it is bookkeeping, not work — so the session
+  then selects and claims a real work epic and proceeds (computenet-q93p).
+- **Children open but none workable** (human-gated, or blocked on another
+  epic) → park it and select the next:
 
 ```bash
 bd comment <epic> "Parking: no workable surface. <ids: human-gated / blocked on <other-epic>>"
@@ -318,7 +422,9 @@ Nothing claimable at all → report and stop.
 **One epic *claim* per session** — the claim is how a concurrent run tells a
 live session from a crash. The rule limits claims, not work: when the epic
 runs dry, 5f says what you may still pick up; idling for hours is a failure
-mode, not compliance. There is deliberately no resume preference across
+mode, not compliance. It counts *work* epics only — an epic this step closed
+as drained, or deferred as unworkable, was never worked, so selecting the next
+one is not a second claim. There is deliberately no resume preference across
 sessions — a released epic re-competes on priority.
 
 ## 4. Ensure the epic has features
@@ -329,6 +435,30 @@ bd list --parent=<epic> --all --json
 
 `--all` matters: without it a *finished* epic reads as never-broken-down and
 you'd re-create its feature set.
+
+**Children are not decomposition — look for the epic's OWN deliverable among
+them.** An epic whose children are its *dependents* (items that consume what
+the epic is supposed to produce) reads as broken-down, so the breakdown never
+runs and the deliverable is never scheduled, while the children sit
+permanently unworkable waiting on it (computenet-45rf). Two readings, both
+from the listing you already have (`issue_type` and `description` are both in
+it): **no child is a `feature`**, or **every child's description names the
+epic as a prerequisite** rather than describing a part of it. Either →
+dispatch the breakdown as if the epic were empty, and say in the prompt that
+existing children are consumers, not parts. The second reading is the
+load-bearing one — computenet-umx's dependents were filed *as features*, so
+the type test alone would have missed the case that motivated this.
+
+The same shape is why step 3's workable-surface check must not commit to an
+epic whose only workable children are declared consumers of undelivered work:
+they are workable in `bd ready`'s sense and unstartable in fact.
+
+**A prerequisite between an epic and a non-epic is unexpressible as a bd
+blocking edge** — `bd` refuses a blocking dependency across the epic boundary.
+So the breakdown cannot wire "these tasks wait on the epic"; it has to give
+the epic's own deliverable a **feature** child and block the dependents on
+*that*, which is a legal same-class edge. `epic.md` says this too; it belongs
+here because it is what makes the fix above expressible at all.
 
 Empty → dispatch the breakdown, **wait for its completion notification**,
 re-run the query. Don't fall through to step 5 while it runs.
@@ -346,6 +476,13 @@ Follow it to break epic ${epic} into features. Run bd with
 Report the feature ids created.`
 })
 ```
+
+**Read the breakdown's report for a re-scope.** `epic.md` requires it to
+rewrite an epic's title, description and acceptance in place when the epic
+cites its own decided upstream finding, and to say so in as many words. If it
+did, re-read the epic (`bd show <epic>`) before step 5 — the acceptance every
+feature review traces back to is no longer the text you claimed
+(computenet-taug). No such statement means no re-scope; don't infer one.
 
 **Still empty? Check for a deliberate park before retrying.** `epic.md`
 requires the breakdown to verify the epic's load-bearing premises and park
@@ -728,6 +865,11 @@ If this is a bug fix, task.md step 3 is not optional: run the reproduction
 against the UNFIXED code first and quote the failing test name and assertion
 message. A prescribed reproduction that passes unfixed is a false lead — say
 so on the bead rather than quietly substituting your own.
+Run every verification command — Gradle above all — in ONE foreground Bash
+call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
+anything that outruns its 120s default, and a turn that ends waiting on a
+background job never resumes: your turn ending IS your completion, so there is
+nothing to come back to. Never end a turn saying you will wait for a job.
 If you won't finish within ~45-60 minutes, stop at a clean point and leave
 the task in_progress with a bd comment saying what's done and what's left.
 Your worktree and branch are preserved, so a later batch resumes you here.
@@ -745,6 +887,20 @@ checkout's working copy drifts (measured 44 commits behind, computenet-kcu).
 An agent with no worktree reads via `git show origin/main:<path>`. Say which
 in every prompt.
 
+**Every dispatch prompt carries the foreground-timeout line**, implementer
+and reviewer alike — reviewers drive the same suites. Telling an agent to
+"run it in the foreground" does not work and was already tried: the
+foreground/background choice belongs to the Bash tool's 120s default, not to
+the agent's intent, so only an explicit `timeout` argument changes it.
+`:demo:beadsmirror:test` takes ~3m40s; without that argument the call is
+backgrounded, the agent ends its turn saying it will wait, and nothing ever
+wakes it. Five stalls across two items in one session, ~40 minutes lost
+(computenet-hob2). The three agent-facing references carry the same rule
+together with the reason `timeout(1)` is not the answer — it is not installed
+on this host and fails open — so **stop pasting that warning into dispatch
+prompts by hand**; it was hand-carried into four prompts in one session
+(computenet-fbuo).
+
 **While a batch runs, never read a running agent's output** — not
 `TaskOutput`, not `Read`, not `tail`. For a local agent that file is the
 full JSONL transcript (thinking blocks, tool payloads); one call dumped
@@ -756,6 +912,15 @@ task's own bd comments (`bd comments <id> --json > "$SCRATCH/..."` —
 task.md has agents comment at parks and at finish), and
 `git -C <task-worktree> log --oneline` for commits landing. An agent that seems slow is waited on or `TaskStop`ped at
 the budget deadline below — there is nothing useful between.
+
+**Find a stated outcome in an implementer's result before acting on it** —
+the same rule 5c gives reviewers, and the same failure. A completion
+notification looks identical whether the agent finished or stopped itself
+mid-task; one returned "I will wait for the background test run notification
+before finalizing" as its entire result — no outcome, no files, no commit, no
+bead state (computenet-itwc). Done / blocked / premise-wrong, plus the files
+touched, or it is not a report: `SendMessage` the same agent (context intact)
+to finish and report, and run nothing downstream on that task until it does.
 
 **On batch completion** (wait for the whole batch — a staggered re-batch
 computes overlap against a moving set): files touched outside a claim → fix
@@ -791,6 +956,11 @@ Cross-bead writes authorized on this item: ${crossBeadWrites or "none"}.
 That is the same line the implementer was given: treat what it names as
 commissioned work rather than scope creep, and anything beyond it as
 unauthorized.
+Run every verification command — Gradle above all — in ONE foreground Bash
+call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
+anything that outruns its 120s default, and a turn that ends waiting on a
+background job never resumes: your turn ending IS your completion, so there is
+nothing to come back to. Never end a turn saying you will wait for a job.
 Repair what you can within the task's scope. Report pass or fail, what you
 repaired, and — on fail — exactly what is missing.
 If you won't finish within ~45-60 minutes, stop at a clean point and write your
@@ -837,12 +1007,21 @@ gh pr checks <pr-url>
 ```
 
 The task reviewer tested a branch without its merged siblings; this is the
-first signal the whole still builds. Red is work: file a task
-(`bd create --parent=<feature-id>` with `model` and `files`) for the next
-batch, carrying the log excerpt issue-quality.md's CI-evidence rule
-requires — the run link alone ages out before the task runs
-(computenet-ttz). The one narrow exception — a red check in a module this diff doesn't
-touch — requires
+first signal the whole still builds. Red is work: file a task for the next
+batch — one call, because `bd create` has no `--set-metadata` and a follow-up
+`bd update` can fail on its own (see `bd traps`):
+
+```bash
+bd create --parent=<feature-id> --type=task --title "<one line>" \
+  --description "<what is red, plus the pasted failing log excerpt>" \
+  --metadata '{"model":"sonnet","files":"<the files it may touch>"}'
+```
+
+That create is under a feature THIS session claimed, so the dotted id is
+exclusive and `--parent` is correct here. The description carries the log
+excerpt issue-quality.md's CI-evidence rule requires — the run link alone
+ages out before the task runs (computenet-ttz). The one narrow exception —
+a red check in a module this diff doesn't touch — requires
 [references/red-check-attribution.md](references/red-check-attribution.md)'s
 four artifacts before treating any red as not this feature's. Never ship on
 "it's a flake".
@@ -907,6 +1086,11 @@ Children left open as ask-human.md parks, deferred by design rather than
 missed (5b's parked-residue): ${parkedChildren or "none"}. Confirm each is
 really a park and not a child blocked on a real dependency that inherited the
 human label from its parent; a real block means work remains.
+Run every verification command — Gradle above all — in ONE foreground Bash
+call with an explicit timeout, up to 600000 ms. The Bash tool auto-backgrounds
+anything that outruns its 120s default, and a turn that ends waiting on a
+background job never resumes: your turn ending IS your completion, so there is
+nothing to come back to. Never end a turn saying you will wait for a job.
 Repair what you can within the feature's scope. You decide the verdict —
 ready or draft — but do NOT run gh pr ready; the orchestrator ships. On a
 draft verdict, file beads tasks for what's missing. Report your verdict, why,
@@ -960,14 +1144,23 @@ the branch is at N+1 would ready a PR on evidence that never covered the
 merged code. Wait for agreement, re-read. Commits in the `log` output the
 verdict doesn't mention, touching this diff's files (`gh pr diff <pr-url>
 --name-only`) → merge `origin/main` in and send back for a re-check. Red
-required check → red-check-attribution.md; pending → wait — and know that
-`gh pr checks` **exits 8 while anything is pending**: never `&&`-chain it
-(the next step silently skips) and never gate a wait on its exit status;
-read the rows (`grep -q pending`) instead (computenet-luhx). A verdict
-carrying a **§6 hand-back** (the classifier refuses reviewers `git merge`,
-computenet-whx4) is yours to complete: do the merge, re-run the affected
-module suite on the merged base, and if the reviewer's disjointness claim
-doesn't hold, send back for a re-check rather than shipping on it.
+required check → red-check-attribution.md; pending → wait, with step 2's
+check-wait loop: `gh pr checks` **exits 8 while anything is pending** — never
+`&&`-chain it (the next step silently skips) and never gate a wait on its
+exit status — and its required-check rows may not exist yet, so neither `$?`
+nor a bare `grep -q pending` settles it (computenet-luhx, computenet-15it,
+computenet-1zhu). A verdict
+carrying a **§6 hand-back** is yours to complete, and it is the **normal**
+path, not an exception: review-feature.md §6 assigns the merge to you
+outright, because the classifier refuses reviewers `git merge`
+(computenet-whx4, computenet-dtvd). Do the merge, re-run the affected module
+suite on the merged base, and check the reviewer's disjointness claim
+yourself (`gh pr diff <pr-url> --name-only` against `git show --name-only
+<sha>`) — if it doesn't hold, send back for a scoped re-check rather than
+shipping on it. Expect the hand-back on any verdict where commits landed
+mid-review, and treat the reviewer's "origin/main unchanged at `<sha>`" as
+expired the moment it was written: the `log` above, not that line, is what
+settles it.
 
 **`gh pr ready` is the ship decision, not the ship.** The moment it returns,
 read [references/ship-feature.md](references/ship-feature.md) and follow its
@@ -1088,6 +1281,17 @@ Two admission gates:
   default; `WORK_CONTINUATION_MARGIN_MIN` overrides). Never admit on elapsed
   fraction alone — that converts idle time into half-finished branches,
   which is worse than idling.
+
+**A directly-filed bug or chore usually has no acceptance criteria** — nothing
+broke it down, so nobody wrote them. Write them onto the bead before you
+dispatch (`bd update <id> --acceptance=…`, to
+[references/issue-quality.md](references/issue-quality.md)'s standard), and
+say in the dispatch prompt that they are yours. Skip this and the reviewer
+invents the bar it then certifies against, which is marking its own paper; and
+because the bar then lives only in a dispatch prompt that is discarded, a
+resumed item gets a different one (computenet-n58c). This is orchestrator work
+under the authorship rule above — it is a claim about what "done" means, and
+it gets a reviewer like anything else you write.
 
 Work the admitted item by shape: feature via 5a; a task via its parent
 feature's flow; an unparented bug/chore as its own worktree/branch/PR like a
@@ -1278,13 +1482,14 @@ EOF
 ```
 
 `bug` = the skill misbehaved; `feature` = it worked as written but lacks a
-capability. The script creates **unparented** (a `--parent` create allocates
-the child id from a per-database counter, and two machines filing between
-syncs mint the same id for different beads — a primary-key collision whose
-"resolution" destroys real beads, computenet-wpvy.45), then re-parents to
-`computenet-wpvy`, labels, stamps the version, and claims. This applies to
-shared parents only — breakdown children under your claimed epic keep their
-dotted ids.
+capability. The script labels, stamps the version and claims, then delegates
+the create itself to `create-ticket.sh` — the sanctioned path for any ticket
+under a shared parent, which creates **unparented** (a `--parent` create
+allocates the child id from a per-database counter, and two machines filing
+between syncs mint the same id for different beads — a primary-key collision
+whose "resolution" destroys real beads, computenet-azt / computenet-wpvy.45)
+and then re-parents, keeping the hash id. This applies to shared parents only
+— breakdown children under your claimed epic keep their dotted ids.
 
 If `bd comment` is refused by the permission classifier (observed in
 unattended sessions while every other subcommand ran), the step still

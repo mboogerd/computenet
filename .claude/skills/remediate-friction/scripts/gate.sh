@@ -30,13 +30,16 @@ cd "$REPO"
 # skill-friction here made the lane refuse to fire while unlabelled children
 # sat open — measured 2026-08-14, 8 labelled vs 15 actual, with wpvy.25/.26/.39
 # invisible to this count. The label is provenance, not a gate.
+# `bd list --json` is a bare array, except under --skip-labels where it is
+# {"issues":[...]} — accept either rather than depending on one (computenet-kr18).
+ROWS='(if type=="array" then . else (.issues // []) end)[]'
 count="$(bd list --parent="$SDLC_EPIC" --json 2>/dev/null |
-  jq --arg me "$BEADS_ACTOR" '[ .[]
-    | select(((.labels // []) | index("human")) == null)
+  jq --arg me "$BEADS_ACTOR" "[ $ROWS
+    | select(((.labels // []) | index(\"human\")) == null)
     | select(
-        (.status == "open" and ((.assignee // "") == "" or .assignee == $me))
-        or (.status == "in_progress" and .assignee == $me)
-      ) ] | length')"
+        (.status == \"open\" and ((.assignee // \"\") == \"\" or .assignee == \$me))
+        or (.status == \"in_progress\" and .assignee == \$me)
+      ) ] | length")"
 [ "${count:-0}" -gt 0 ] || exit 0
 
 # Single-flight: one orchestrator per machine, with stale-lock recovery.

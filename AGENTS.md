@@ -323,6 +323,42 @@ locally. (The Docker/Codex harness under `scripts/plan-orchestrator/` and
 `doc/archive/runs/ORCHESTRATION.md` is retired; recent runs used git worktrees
 with the orchestrator merging — the discipline above applies either way.)
 
+## Creating tickets under a shared epic
+
+**Never hand-type `bd create --parent=<shared epic>`.** Tickets under a parent
+this session does not own are created through
+`.claude/skills/work/scripts/create-ticket.sh`, which creates *unparented* and
+then re-parents.
+
+The reason is a primary-key collision that destroys beads. `bd create --parent=X`
+allocates the child id from `child_counters`, a **per-database** table
+reconciled only at sync. Two machines filing under the same parent between
+syncs read the same `last_child` and mint **the same id for different beads**
+(measured 2026-08-14: from a common ancestor at `last_child=39` one machine
+went to 45 and the other to 42, and `wpvy.40/.41/.42` each named two unrelated
+items). The pull then aborts on `child_counters`, and the runbook's
+last-write-wins resolution would destroy one bead of each pair. Creating
+unparented yields a hash id and leaves the counter untouched; re-parenting
+afterwards keeps that id. `computenet-wpvy.47` (2026-08-15) is what a
+hand-typed create under the SDLC epic looks like after the fact — harmless
+that time, unrecoverable the time the other machine mints the same id.
+
+**Scope is shared parents only.** Breakdown children under an epic or feature
+this session has *claimed* are exclusive by that claim, cannot collide, and
+keep their readable dotted ids — `bd create --parent=` is correct there. Reads,
+updates, claims and closes through `bd` are unaffected; only *create* draws
+from the counter.
+
+`.beads/hooks/pre-push` warns (never blocks) when this machine has recently
+minted a dotted id under a parent it does not own — the `wpvy.47` signature.
+The warning is a backstop, not the rule: by the time it fires the id exists and
+cannot be changed. Modifying `bd` itself to close the manual path was
+considered and rejected as out of scope (`computenet-azt`).
+
+This section is deliberately **outside** the `bd`-managed block below, for the
+same reason the sync section above is: a `bd` regen rewrites that block from
+its own template and silently drops edits made inside it.
+
 ## Choosing work: bv (beads_viewer)
 
 Work **selection and prioritization** starts with `bv`
@@ -342,6 +378,36 @@ Rules:
   have no export, so `bv` fails there by design.
 - `bv` output embeds `br ...` claim/show commands. Translate them to `bd`
   (`bd update <id> --claim`, `bd show <id>`).
+- **Check the export is fresh before trusting `bv`.** `bd` refuses to
+  overwrite `.beads/issues.jsonl` when it holds a record the Dolt store no
+  longer has — the state a *deliberately deleted* bead leaves behind — and
+  then the export stops tracking the DB entirely while every `bd` command
+  still reports success. The refusal is announced only as a side effect of an
+  unrelated mutation, so a session that only reads never sees it, and `bv`
+  silently ranks against hours-old state with the newest beads invisible
+  (computenet-exb0; hit again 2026-08-17 when a dispatched reviewer created
+  and deleted 7 throwaway beads to test `bd` behaviour). One line, before the
+  triage:
+
+  ```bash
+  [ "$(bd list --all --limit 0 --json | sed -n '/^[[{]/,$p' \
+        | jq '(if type=="array" then . else .issues end) | length')" \
+    = "$(grep -c . .beads/issues.jsonl)" ] \
+    && echo "export FRESH" \
+    || echo "STALE export — bv is reading a frozen file; repair before triaging"
+  ```
+
+  Both sides are the same population — `bd list --all` and the exporter both
+  exclude infra, template, gate and memory records by default, and every line
+  of the export is one `"_type":"issue"` record — so the counts are
+  comparable. A gap of one or two records seconds after a `bd` write is just
+  the 60s export throttle, not the wedge: re-run it before repairing.
+
+  **Repair by moving the stale export aside** and letting the next `bd`
+  mutation re-export, or by filtering the deleted ids out of it. **Not** by
+  `bd init --from-jsonl`, which the warning itself suggests: it re-imports
+  from the stale file as a *re-init*, not a merge, resurrecting the beads
+  that were deliberately deleted.
 - Recommendations can include blocked or already-claimed work ranked by graph
   importance. Only `quick_ref.top_picks` and entries marked actionable are
   claimable; verify with `bd show <id>` before claiming.
