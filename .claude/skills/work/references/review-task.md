@@ -146,7 +146,10 @@ Check:
   is the reviewer marking its own paper, and it is worse than it looks: the
   bar lives only in your report, so a resumed item gets a different one
   (computenet-n58c). Written onto the bead, it survives the session and the
-  orchestrator can disagree with it.
+  orchestrator can disagree with it. This is a backstop, not the normal
+  route: SKILL.md 5f has the orchestrator write them before dispatch, so
+  their absence is itself a finding — name it in your report alongside the
+  criteria you wrote.
 
 ## 2. Prove the tests ran
 
