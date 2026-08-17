@@ -1,5 +1,9 @@
 package civictech.demo.beadsmirror
 
+import civictech.demo.beadsmirror.feed.ChangeRecord
+import civictech.demo.beadsmirror.feed.DiffType
+import civictech.demo.beadsmirror.feed.FeedPosition
+import civictech.demo.beadsmirror.feed.FieldDiff
 import civictech.demo.beadsmirror.projector.DotMinter
 import civictech.demo.beadsmirror.projector.MirrorCellRefs
 import civictech.demo.beadsmirror.projector.MirrorProjector
@@ -8,6 +12,7 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
@@ -37,6 +42,16 @@ class MirrorPeeringTest {
         null -> MirrorProjector(DotMinter("beads-scratch-solo"))
         else -> MirrorProjector(DotMinter("beads-scratch-solo"), refs)
     }
+
+    /** A one-issue create record, so a projector can be given observable state. */
+    private fun createRecord(height: Long, issue: String) = ChangeRecord(
+        commitHash = "commit-$height",
+        position = FeedPosition(height, 0),
+        issueId = issue,
+        diffType = DiffType.ADDED,
+        fieldDiffs = listOf(FieldDiff("status", old = null, new = JsonPrimitive("open"))),
+        edgeDiffs = emptyList(),
+    )
 
     @Nested
     inner class FlagParsing {
@@ -170,6 +185,37 @@ class MirrorPeeringTest {
                 val strayRefs = MirrorCellRefs("a-different-rig", MirrorCellRefs.LISTENER)
                 val failure = shouldThrow<IllegalArgumentException> { state.swap(projector(strayRefs)) }
                 failure.message!! shouldContain "CellRef"
+            }
+        }
+
+        /**
+         * The observable half of the rebind clause, and the check on
+         * [MirrorPeering.rebind]'s `carryTagState = false`: a re-baseline
+         * exists to *discard* the projector it replaces, so the cells the mesh
+         * is re-pointed at must still hold the fresh baseline alone.
+         *
+         * `Replication.rebind`'s default (`carryTagState = true`) restores the
+         * incumbent's [civictech.cell.Stateful] snapshot into the candidate,
+         * and `OrMapCell.restore` *clears and replaces* rather than merging —
+         * so with the default this swap would leave the mesh serving the
+         * discarded projector's issue and lose the rebuilt one. Flip either
+         * call in [MirrorPeering.rebind] to the default and this test goes red
+         * on exactly that substitution.
+         */
+        @Test
+        fun `the rebound cells hold the fresh baseline, not the discarded projector's state`() {
+            MirrorPeering(settings).use { peering ->
+                val incumbent = projector(peering.refs)
+                incumbent.apply(createRecord(1, "ZOMBIE"))
+                peering.attach(incumbent)
+                val state = MirrorState(incumbent, onSwap = peering::rebind)
+
+                val rebuilt = projector(peering.refs)
+                rebuilt.apply(createRecord(2, "FRESH"))
+
+                state.swap(rebuilt)
+
+                rebuilt.view().keys shouldBe setOf("FRESH")
             }
         }
 
