@@ -61,12 +61,12 @@ out=$("$SCRIPT" 2>&1); st=$?
 [ "$st" = 0 ] && [ -z "$out" ] \
   && ok "hash ids ignored" || bad "hash: exit=$st out=$out"
 
-# 5. no BEADS_ACTOR: skip quietly rather than flag everything
+# 5. no BEADS_ACTOR: skip, but SAY so — a silently dead backstop is the worst case
 fixture
 echo '[{"id":"computenet-wpvy.47","created_by":"MacBoo"}]' > "$CTRL/list.json"
 out=$(env -u BEADS_ACTOR "$SCRIPT" 2>&1); st=$?
-[ "$st" = 0 ] && [ -z "$out" ] \
-  && ok "no BEADS_ACTOR skips quietly" || bad "actor: exit=$st out=$out"
+[ "$st" = 0 ] && grep -q "BEADS_ACTOR is unset" <<<"$out" && ! grep -q "wpvy.47" <<<"$out" \
+  && ok "no BEADS_ACTOR skips audibly" || bad "actor: exit=$st out=$out"
 
 # 6. empty window: silent
 fixture

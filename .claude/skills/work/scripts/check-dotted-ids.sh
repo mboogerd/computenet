@@ -18,9 +18,11 @@
 #   other machine's dotted children are neither our mistake nor ours to fix.
 #   Measured while building this: without the created_by filter a 5-day window
 #   printed ~20 historical wpvy.N lines, which is how a hook gets disabled.
-# * Skips (quietly, exit 0) when BEADS_ACTOR or jq is missing rather than
-#   guessing: a check that cannot tell ours from theirs would flag every
-#   breakdown child, and a hook that cries wolf gets disabled.
+# * Skips (exit 0) when BEADS_ACTOR or jq is missing rather than guessing: a
+#   check that cannot tell ours from theirs would flag every breakdown child,
+#   and a hook that cries wolf gets disabled. The BEADS_ACTOR skip says so in
+#   one line rather than returning silently: a backstop that is quietly dead
+#   on a machine reads exactly like a backstop that found nothing.
 #
 # Cost: two `bd list` calls plus one `bd show` per flagged parent — ~3s quiet,
 # ~6s when it reports. Once per push, never in the edit loop.
@@ -32,7 +34,10 @@ DAYS=2
 [ "${1:-}" = --days ] && DAYS=$2
 
 command -v jq >/dev/null 2>&1 || exit 0
-[ -n "${BEADS_ACTOR:-}" ] || exit 0
+if [ -z "${BEADS_ACTOR:-}" ]; then
+  echo >&2 "beads id-collision check skipped: BEADS_ACTOR is unset (set it per machine to enable)"
+  exit 0
+fi
 
 SINCE=$(date -u -v-"${DAYS}"d +%Y-%m-%d 2>/dev/null) \
   || SINCE=$(date -u -d "${DAYS} days ago" +%Y-%m-%d 2>/dev/null) \
