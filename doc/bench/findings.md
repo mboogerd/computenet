@@ -722,3 +722,227 @@ toolchain JDK and append a corrected entry). Neither is repaired here: correctin
 rendered block is verbatim tool output — and re-measuring is an 18-minute sweep, not a
 review-time edit. Nothing under `kernel/src/main` was touched, and `NOISE_FLOOR` was not
 changed.
+
+---
+
+## 2026-08-18 — REAL-drive per-operator delta-application throughput, re-measured on the toolchain JDK
+
+`computenet-am2h`, dispatched from the correction appended above (`computenet-x9e.4`
+review) once `computenet-hqid` landed. **This entry supersedes the 2026-08-18 REAL
+entry above (`computenet-x9e.4.5`) for environment purposes**: that entry's sweep ran
+on Homebrew JDK 26.0.1 while its `Harness:` line claimed Eclipse Adoptium 21.0.11 (the
+render JVM, not the measuring one — `computenet-hqid`'s defect). This sweep re-runs the
+identical benchmark, at the identical unmodified annotation config, invoking the
+Gradle toolchain JDK 21 by absolute path exactly as the SIM entry's own command block
+does, on the now-fixed renderer (`ThroughputReport.renderRun`/`MeasuringJvm.fromJmhLog`,
+`computenet-hqid`), which reads the measuring JVM from the run's own JMH stdout banner
+and refuses to render without it. `kernel/src/main` is unchanged between the original
+REAL entry's harness commit (`9622223b`) and this one's (`6951a26e`) — `git diff
+--name-only 9622223b 6951a26e -- kernel/src/main` is empty — so the subjects measured
+are the identical code; only the bench renderer/environment-capture machinery differs.
+
+Commands, exactly:
+
+```
+./gradlew :bench:jmhJar
+/Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java \
+     -jar bench/build/libs/bench-jmh.jar 'OperatorThroughputBenchmark.real' \
+     -rf csv -rff /abs/path/real-throughput.csv > /abs/path/real-throughput.log 2>&1
+```
+
+(stdout and stderr redirected directly to the log file rather than piped through
+`tee`; the resulting log carries the identical JMH banner content `tee` would have
+captured, and `ThroughputReport.runLogFor`'s by-name convention — `real-throughput.csv`
+paired with `real-throughput.log` — accepted it without refusal.) The Gradle
+toolchain's own JDK 21 (Eclipse Adoptium/Temurin 21.0.11) was invoked explicitly by
+absolute path, not the shell's bare `java` (Homebrew JDK 26.0.1 on this host — the exact
+substitution that produced the entry being superseded). Then, per `ThroughputReport`'s
+KDoc, through the entry point `computenet-hqid` added:
+
+```
+./gradlew :bench:test -PbenchOnly=true --rerun \
+  --tests 'civictech.bench.micro.ThroughputReportRenderTest' \
+  -Dcivictech.bench.jmhResults=/abs/path/real-throughput.csv \
+  -Dcivictech.bench.harnessSha=6951a26e \
+  -Dcivictech.bench.date=2026-08-18 \
+  -Dcivictech.bench.subject="REAL-drive per-operator delta-application throughput over the BEN1 micro-graphs (re-measured on the toolchain JDK)"
+```
+
+which reads the measuring JVM from `real-throughput.log` (beside the results file, by
+`runLogFor`'s convention) rather than from the render process, and printed the
+rendered report to the test's captured stdout (JUnit XML `<system-out>`), read back and
+pasted verbatim below rather than retyped. Host quiesced for the whole run — no
+concurrent Gradle build, test suite, or other benchmark; this was the only active
+workload on the machine. Wall-clock for the JMH sweep itself: **18m 29s** (started
+2026-08-18T19:59:47Z, results file written 2026-08-18T20:18:16Z), matching both prior
+sweeps' ~18m30s almost exactly; the render step added a few seconds on top.
+
+**The measuring JVM, from this run's own retained banner** (`real-throughput.log`,
+quoted rather than paraphrased):
+
+```
+# JMH version: 1.37
+# VM version: JDK 21.0.11, OpenJDK 64-Bit Server VM, 21.0.11+10-LTS
+# VM invoker: /Users/MerlijnB/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home/bin/java
+# VM options: <none>
+```
+
+`MeasuringJvm.fromJmhLog` resolves this to `jvmVendor = "Eclipse Adoptium
+(Temurin-21.0.11+10)"` (its release file's `IMPLEMENTOR`/`IMPLEMENTOR_VERSION`),
+`jvmVersion = "21.0.11"`, `heapSettings = "JVM defaults (VM options: <none>)"` — the
+measuring fork's own facts, not the Gradle `:bench:test` JVM's. No `Harness:` line
+appears below because no row cleared `NOISE_FLOOR` into a table (see next), so this
+paragraph is this entry's explicit substitute for it: **Environment — JVM Eclipse
+Adoptium (Temurin-21.0.11+10) 21.0.11 · heap JVM defaults (VM options: `<none>`) ·
+Apple M2 Pro, 10 cores, Mac OS X 26.6.2** (CPU/core/OS captured on this render's own
+host, per `RunEnvironment.forRun`'s documented residual — sound here because the
+render ran on the same machine as the sweep). `[BEN1-23]` is satisfied by this
+paragraph rather than by a table cell, and it is sourced from the artifacts above, not
+asserted.
+
+Renderer's own output (`ThroughputReport.renderRun` via `ThroughputReportRenderTest`),
+pasted verbatim:
+
+## (no entry for drive=REAL) — every row classified Unreportable against NOISE_FLOOR 0.005; see the omissions below
+
+Omitted rows (drive=REAL):
+- TAGGED_SET insert (drive=REAL): relative dispersion 0.07387365467327402 exceeds NOISE_FLOOR 0.005 — value=561811.681804 ± 41503.082173 ops/s; Unreportable, excluded from the table
+- FILTER insert (drive=REAL): relative dispersion 0.0269866325409201 exceeds NOISE_FLOOR 0.005 — value=669977.214852 ± 18080.428908 ops/s; Unreportable, excluded from the table
+- UNION insert (drive=REAL): relative dispersion 0.05057086183682231 exceeds NOISE_FLOOR 0.005 — value=612562.500318 ± 30977.81357 ops/s; Unreportable, excluded from the table
+- INTERSECT insert (drive=REAL): relative dispersion 0.053766902701104666 exceeds NOISE_FLOOR 0.005 — value=268157.494884 ± 14417.997936 ops/s; Unreportable, excluded from the table
+- COUNT insert (drive=REAL): relative dispersion 0.042709417670606625 exceeds NOISE_FLOOR 0.005 — value=756376.463176 ± 32304.398282 ops/s; Unreportable, excluded from the table
+- FLAT_MAP insert (drive=REAL): relative dispersion 0.04088701716181732 exceeds NOISE_FLOOR 0.005 — value=473515.682041 ± 19360.643818 ops/s; Unreportable, excluded from the table
+- PRESENCE_COUNT insert (drive=REAL): relative dispersion 0.03391374518464031 exceeds NOISE_FLOOR 0.005 — value=288174.161945 ± 9773.065097 ops/s; Unreportable, excluded from the table
+- QUORUM insert (drive=REAL): relative dispersion 0.038162407784747325 exceeds NOISE_FLOOR 0.005 — value=283140.939454 ± 10805.339992 ops/s; Unreportable, excluded from the table
+- JOIN_SET insert (drive=REAL): relative dispersion 0.023190439427781484 exceeds NOISE_FLOOR 0.005 — value=238682.634119 ± 5535.155169 ops/s; Unreportable, excluded from the table
+- SEMI_JOIN insert (drive=REAL): relative dispersion 0.024529418935812196 exceeds NOISE_FLOOR 0.005 — value=247207.799576 ± 6063.86368 ops/s; Unreportable, excluded from the table
+- LOOKUP_JOIN insert (drive=REAL): relative dispersion 0.04434162503108245 exceeds NOISE_FLOOR 0.005 — value=314662.273591 ± 13952.636547 ops/s; Unreportable, excluded from the table
+- GROUP_BY_COUNT insert (drive=REAL): relative dispersion 0.04645493515991331 exceeds NOISE_FLOOR 0.005 — value=698504.752085 ± 32448.992967 ops/s; Unreportable, excluded from the table
+- GROUP_BY_SUM insert (drive=REAL): relative dispersion 0.04996014212100643 exceeds NOISE_FLOOR 0.005 — value=680665.676023 ± 34006.153911 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MIN insert (drive=REAL): relative dispersion 0.05012158979644599 exceeds NOISE_FLOOR 0.005 — value=549147.78996 ± 27524.160266 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MAX insert (drive=REAL): relative dispersion 0.03557004015479431 exceeds NOISE_FLOOR 0.005 — value=547737.431423 ± 19483.04243 ops/s; Unreportable, excluded from the table
+- GROUP_BY_TOP_K insert (drive=REAL): relative dispersion 0.03445081068664864 exceeds NOISE_FLOOR 0.005 — value=551432.665135 ± 18997.302353 ops/s; Unreportable, excluded from the table
+- COMBINE_LATEST insert (drive=REAL): relative dispersion 0.024708376637471496 exceeds NOISE_FLOOR 0.005 — value=353339.736078 ± 8730.45128 ops/s; Unreportable, excluded from the table
+- COALESCING_COMBINE insert (drive=REAL): relative dispersion 0.008130578319984231 exceeds NOISE_FLOOR 0.005 — value=877348.02572 ± 7133.346837 ops/s; Unreportable, excluded from the table
+- TAGGED_SET retract (drive=REAL): relative dispersion 0.00825948475116123 exceeds NOISE_FLOOR 0.005 — value=644110.452441 ± 5320.02046 ops/s; Unreportable, excluded from the table
+- FILTER retract (drive=REAL): relative dispersion 0.017803433666175913 exceeds NOISE_FLOOR 0.005 — value=760129.538366 ± 13532.915814 ops/s; Unreportable, excluded from the table
+- UNION retract (drive=REAL): relative dispersion 0.05057709328723574 exceeds NOISE_FLOOR 0.005 — value=631500.264707 ± 31939.447799 ops/s; Unreportable, excluded from the table
+- INTERSECT retract (drive=REAL): relative dispersion 0.014535091499546515 exceeds NOISE_FLOOR 0.005 — value=352098.885319 ± 5117.789515 ops/s; Unreportable, excluded from the table
+- COUNT retract (drive=REAL): relative dispersion 0.05361215936537731 exceeds NOISE_FLOOR 0.005 — value=859702.833398 ± 46090.525311 ops/s; Unreportable, excluded from the table
+- FLAT_MAP retract (drive=REAL): relative dispersion 0.00936337255069882 exceeds NOISE_FLOOR 0.005 — value=614380.270768 ± 5752.671363 ops/s; Unreportable, excluded from the table
+- PRESENCE_COUNT retract (drive=REAL): relative dispersion 0.0360114761768751 exceeds NOISE_FLOOR 0.005 — value=323000.152781 ± 11631.712307 ops/s; Unreportable, excluded from the table
+- QUORUM retract (drive=REAL): relative dispersion 0.011664945660104674 exceeds NOISE_FLOOR 0.005 — value=351054.412967 ± 4095.030651 ops/s; Unreportable, excluded from the table
+- JOIN_SET retract (drive=REAL): relative dispersion 0.04349990929812057 exceeds NOISE_FLOOR 0.005 — value=324938.432219 ± 14134.792329 ops/s; Unreportable, excluded from the table
+- SEMI_JOIN retract (drive=REAL): relative dispersion 0.014248562411884148 exceeds NOISE_FLOOR 0.005 — value=320659.899499 ± 4568.942591 ops/s; Unreportable, excluded from the table
+- LOOKUP_JOIN retract (drive=REAL): relative dispersion 0.007706459882709759 exceeds NOISE_FLOOR 0.005 — value=412556.430889 ± 3179.349584 ops/s; Unreportable, excluded from the table
+- GROUP_BY_COUNT retract (drive=REAL): relative dispersion 0.018823501402218036 exceeds NOISE_FLOOR 0.005 — value=763411.56164 ± 14370.078601 ops/s; Unreportable, excluded from the table
+- GROUP_BY_SUM retract (drive=REAL): relative dispersion 0.013165746167304017 exceeds NOISE_FLOOR 0.005 — value=783227.245001 ± 10311.771099 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MIN retract (drive=REAL): relative dispersion 0.043925476883878135 exceeds NOISE_FLOOR 0.005 — value=732529.444565 ± 32176.705184 ops/s; Unreportable, excluded from the table
+- GROUP_BY_MAX retract (drive=REAL): relative dispersion 0.026426372362627883 exceeds NOISE_FLOOR 0.005 — value=682758.594839 ± 18042.832861 ops/s; Unreportable, excluded from the table
+- GROUP_BY_TOP_K retract (drive=REAL): relative dispersion 0.02790305645545981 exceeds NOISE_FLOOR 0.005 — value=679125.618774 ± 18949.680481 ops/s; Unreportable, excluded from the table
+- COMBINE_LATEST retract (drive=REAL): relative dispersion 0.0077781849099402296 exceeds NOISE_FLOOR 0.005 — value=412090.15408 ± 3205.313418 ops/s; Unreportable, excluded from the table
+- COALESCING_COMBINE retract (drive=REAL): relative dispersion 0.014307495868452057 exceeds NOISE_FLOOR 0.005 — value=882075.366929 ± 12620.289668 ops/s; Unreportable, excluded from the table
+
+### Every combination was measured; all 36 are Unreportable, not omitted-from-running
+
+Same cross product as both prior entries — 18 `Subject` constants x 2 `Direction`s = 36
+combinations — at the unmodified annotation config (`Fork(2)`, `Warmup(iterations=5,
+time=1s)`, `Measurement(iterations=10, time=1s)`), unraised. All 36 were run; none were
+skipped for wall-clock or any other reason. This time **all 36**, not 35, classify
+`Unreportable` against `NOISE_FLOOR` (0.005) — zero rows clear the floor, so
+`Findings.entry` produces no table at all, and `Report.text()`'s own fallback line
+above ("no entry for drive=REAL ... see the omissions below") is the honest rendering
+of that outcome, not a defect in this run. Per this task's own instructions and
+`[BEN1-25]`, that **is** the entry: no fork or iteration count was raised toward JMH's
+defaults, and `NOISE_FLOOR` (`bench/src/main/kotlin/civictech/bench/Dispersion.kt`,
+confirmed unchanged: `const val NOISE_FLOOR: Double = 0.005`) was not touched.
+
+### `drive=REAL` is literal
+
+Unchanged from the superseded entry's own statement, restated because it still holds:
+every row above ran on a `ManagedHost` with a `VirtualThreadScheduler`, driven to
+quiescence through that scheduler's `awaitDrained` fence — real dispatch on real
+(virtual) threads, not `SimWorld`/`SimulationController` (`[BEN1-26]`).
+
+### WAL/journal statement (`[BEN1-29]`)
+
+Re-confirmed against the current source rather than assumed: `Graphs.kt`'s `Rig` for
+`Drive.REAL` still constructs `ManagedHost(scheduler = scheduler)` with no `journal`
+argument (`bench/src/main/kotlin/civictech/bench/micro/Graphs.kt:699`), and no
+`civictech.cell.durability` type appears anywhere in `Graphs.kt`, `Deltas.kt`, or
+`OperatorThroughputBenchmark.kt`; WAL/journal sync is not in play for this entry either,
+so KBLK is not named.
+
+### Dispersion range, and the JDK re-measurement's actual finding (`[BEN1-27]`)
+
+Across all 36 rows, relative dispersion ranged from **0.00771** (`LOOKUP_JOIN retract`)
+to **0.07387** (`TAGGED_SET insert`). Split by direction: INSERT (18 rows) 0.00813 –
+0.07387, 0 of 18 Reportable; RETRACT (18 rows) 0.00771 – 0.05361, 0 of 18 Reportable.
+Unlike both prior entries, RETRACT contributes zero Reportable rows here — this run's
+own former counterpart's sole Reportable row, `GROUP_BY_MAX retract`, now measures
+0.02643 (score 682758.59 ± 18042.83 ops/s), 5.5x its originally-recorded 0.00480 and
+comfortably above `NOISE_FLOOR`. This entry does not re-open `[BEN1-28]`'s
+`TagState`-growth suspicion (out of this task's scope; that observation rests on the
+INSERT/RETRACT split within a single drive and is not this ticket's to re-litigate) —
+it is reported here only as part of this run's own dispersion facts, not as a
+correction to that finding.
+
+**The comparison this task exists to settle.** The two runs now on record, both on the
+Gradle toolchain JDK 21 (Eclipse Adoptium/Temurin 21.0.11):
+
+| entry | dispersion range (36 rows) | Reportable |
+| --- | --- | --- |
+| SIM-drive (`computenet-x9e.4.4`) | 0.00355 – 0.08467 | 5 of 36 |
+| REAL-drive, this entry (`computenet-am2h`) | 0.00771 – 0.07387 | 0 of 36 |
+| REAL-drive, superseded (`computenet-x9e.4.5`, JDK 26) | 0.00480 – 0.1526 | 1 of 36 |
+
+Controlling for JDK moves REAL's range **materially**, not marginally: its ceiling
+compresses from 0.1526 to 0.07387 (roughly half), its floor rises from 0.00480 to
+0.00771, and its Reportable count drops from 1 to 0 — while SIM's own range (measured
+once, unchanged) sits at 0.00355–0.08467. The controlled REAL range now sits almost
+entirely *inside* SIM's own range rather than extending to roughly double SIM's ceiling,
+which is the opposite of what the superseded entry's "SIM removes real-thread
+scheduling and OS jitter" explanation predicts: if that mechanism explained the
+original gap, holding the JDK constant should have left REAL's ceiling still clearly
+above SIM's. It did not. A per-row comparison against the superseded entry's own 36
+values (same subjects, same directions) shows the shift is not uniform — most INSERT
+rows tightened substantially (several fell to a quarter to a third of their original
+dispersion) while several RETRACT rows widened several-fold (`COUNT retract` 0.00750 ->
+0.05361, `GROUP_BY_MIN retract` 0.00864 -> 0.04393, `PRESENCE_COUNT retract` 0.00706 ->
+0.03601) — a redistribution consistent with a genuine JIT/GC-default difference between
+JDK 21 and JDK 26 affecting these operators unevenly, not with a single scalar noise
+factor.
+
+**Decision: withdraw, not restate.** The superseded entry's cross-drive dispersion
+comparison read SIM's tighter range as attributable to the drive (SIM's absence of
+real-scheduler jitter). This re-measurement does not reproduce that pattern: with JDK
+held constant, REAL's range now nests inside SIM's rather than extending past it, and
+the residual gap that remains — SIM still classifies 5 rows Reportable against REAL's
+0 — sits entirely at the near-`NOISE_FLOOR` boundary, exactly where prior spot-checks
+(tracked as `computenet-x9e.7`) already found reportability status to flip run-to-run
+under repeat measurement on a single JVM (REAL `GROUP_BY_MAX retract` 0.00480 ->
+0.0154; SIM `GROUP_BY_TOP_K retract` 0.00355 -> 0.00973; SIM `COUNT retract` 0.00499 ->
+0.0404, all re-measuring *above* their original value). A 5-versus-0 Reportable-count
+difference confined to that unstable boundary, on top of a dispersion-range shift this
+large from a JDK change alone, is not evidence the drive itself produces tighter
+dispersion. **The SIM entry's cross-drive dispersion-attribution claim
+("SIM removes real-thread scheduling and OS jitter ... consistent with real-scheduler
+jitter being an additional ... contributor to dispersion") is hereby withdrawn as
+unsupported.** What survives, unaffected: each entry's own per-row scores and
+dispersions, `[BEN1-25]`'s omission accounting, `[BEN1-27]`'s no-mixed-table property,
+`[BEN1-26]`'s per-drive labelling, and the INSERT/RETRACT asymmetry *within* each drive
+taken on its own (a within-drive comparison, never resting on the cross-drive claim
+withdrawn here).
+
+### Trigger (`[BEN1-31]`/`[BEN1-32]`)
+
+`TriggerClaim.None` — MARKED INCOMPLETE. This entry cites neither G-21 nor G-43; no gap
+trigger question is answered by a per-operator throughput re-measurement at this
+config.
+
+### Scope confirmation
+
+`git diff --name-only 9622223b 6951a26e -- kernel/src/main concord/ inspect/src
+wire/src demo/` is empty; the annotation config (`Fork(2)`, `Warmup(5,1s)`,
+`Measurement(10,1s)`) was not touched or widened; `NOISE_FLOOR` was not touched; neither
+entry above this one was edited.
