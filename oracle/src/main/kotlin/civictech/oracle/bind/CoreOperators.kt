@@ -3,6 +3,7 @@ package civictech.oracle.bind
 import civictech.cell.data.Aggregators
 import civictech.cell.data.CounterCell
 import civictech.cell.data.KeyedSetCell
+import civictech.cell.data.MapCell
 import civictech.cell.data.PnCounterCell
 import civictech.cell.data.SetCell
 import civictech.cell.data.op.CombineLatestCell
@@ -39,6 +40,7 @@ import civictech.oracle.model.KeyedCombiner
 import civictech.oracle.model.KeyedSetSourceModel
 import civictech.oracle.model.LongSelector
 import civictech.oracle.model.LookupJoinModel
+import civictech.oracle.model.MapCellSourceModel
 import civictech.oracle.model.PnCounterSourceModel
 import civictech.oracle.model.PresenceCountModel
 import civictech.oracle.model.QuorumSetModel
@@ -51,8 +53,10 @@ import java.util.TreeMap
 
 /**
  * The paired registrations for `[ORA1-MODEL-02]`'s vocabulary — the set-source, unary and
- * fan-in slice (computenet-4ru.5.1) and the binary, keyed-join, map-join and group-by family
- * (computenet-4ru.5.2): for each id, the kernel `CellFactory` that builds the real cell, the
+ * fan-in slice (computenet-4ru.5.1), the binary, keyed-join, map-join and group-by family
+ * (computenet-4ru.5.2), and `MapCell` (computenet-4ru.5.3, which also closes the vocabulary's
+ * honesty ledger — see `civictech.oracle.model.MapCellModel.kt`'s module KDoc): for each id,
+ * the kernel `CellFactory` that builds the real cell, the
  * [civictech.oracle.model.ReferenceOp] that says what the answer should be, and the
  * [ShapeRule] the generator links graphs by.
  *
@@ -101,6 +105,7 @@ object CoreOperators {
     object Ids {
         const val SET = "set"
         const val KEYED_SET = "keyedSet"
+        const val MAP = "map"
         const val COUNTER = "counter"
         const val PN_COUNTER = "pnCounter"
         const val FILTER = "filter"
@@ -141,7 +146,7 @@ object CoreOperators {
 
         /** Every id this file registers, in registration order. */
         val ALL: List<String> = listOf(
-            SET, KEYED_SET, COUNTER, PN_COUNTER,
+            SET, KEYED_SET, COUNTER, PN_COUNTER, MAP,
             FILTER, FLAT_MAP_SET, MAP_SET, COUNT,
             UNION, PRESENCE_COUNT, QUORUM_SET,
             INTERSECT, JOIN_SET, SEMI_JOIN, ANTI_JOIN,
@@ -228,6 +233,28 @@ object CoreOperators {
             shape = ShapeRule.source(SCALAR),
             kernel = CellFactory { ref -> PnCounterCell(ref) },
             model = PnCounterSourceModel,
+        )
+
+        /* `MapCell` — untagged last-writer-wins map ([24-OP-MAP-01]).
+         *
+         * `[ORA1-MODEL-08]` restricts this entry to a single-writer FIFO script slice: two
+         * writers into one `MapCell` resolve concurrent same-key puts by **arrival order**,
+         * and `MapDelta` carries no causal tags to recover that order from (G-23) — the
+         * script's own event order is not warranted to be the order a live run would
+         * actually deliver once more than one writer is involved. `[ORA1-MODEL-09]`'s
+         * generation-time rejection of a multi-writer case is the generator's job
+         * (computenet-4ru.6, not built here); `MapCellSourceModel.evaluate` enforces the
+         * same restriction on the evaluation side, throwing
+         * `MapCellSourceModel.MultiWriterMapSliceException` for an out-of-band multi-writer
+         * slice rather than returning a guessed winner. See `MapCellModel.kt`'s KDoc for the
+         * full reasoning and for the honesty-ledger exclusions this task also closes out
+         * (`ListCell`, `OrMapCell`, `MergeableGroupByCell`, window close/eviction,
+         * `CoalescingCombineCell`; `[ORA1-HONEST-02]`). */
+        OperatorCatalog.register(
+            id = Ids.MAP,
+            shape = ShapeRule.source(SCALAR_MAP),
+            kernel = CellFactory { ref -> MapCell<Any?, Any?>(ref) },
+            model = MapCellSourceModel,
         )
 
         // --- unary operators -----------------------------------------------
