@@ -187,6 +187,14 @@ object CoreOperators {
     private val FAN_IN_SET_INPUTS = List(CANONICAL_FAN_IN_ARITY) { SCALAR_SET }
 
     /**
+     * The port names a fan-in cell advertises for [CANONICAL_FAN_IN_ARITY] arms: `UnionSetCell`,
+     * `PresenceCountCell` and `QuorumSetCell` each expose exactly ONE dynamic `inlet` that every
+     * arm connects to (`UnionSetApi`/`PresenceCountApi`/`QuorumSetApi` in
+     * `civictech.cell.data.op`), so the advertised rule repeats that one name once per arm.
+     */
+    private val FAN_IN_INLET_PORTS = List(CANONICAL_FAN_IN_ARITY) { "inlet" }
+
+    /**
      * Binds every id in [Ids.ALL] into [OperatorCatalog].
      *
      * @throws IllegalStateException if any of them is already registered — [OperatorCatalog]
@@ -304,7 +312,7 @@ object CoreOperators {
          * halves are n-ary. */
         OperatorCatalog.register(
             id = Ids.UNION,
-            shape = ShapeRule(FAN_IN_SET_INPUTS, SCALAR_SET),
+            shape = ShapeRule(FAN_IN_SET_INPUTS, SCALAR_SET, FAN_IN_INLET_PORTS),
             kernel = CellFactory { ref -> UnionSetCell<Any?>(ref) },
             model = UnionSetModel,
         )
@@ -314,7 +322,7 @@ object CoreOperators {
          * drop to zero. */
         OperatorCatalog.register(
             id = Ids.PRESENCE_COUNT,
-            shape = ShapeRule(FAN_IN_SET_INPUTS, ElementShape.MapOf(SCALAR, SCALAR)),
+            shape = ShapeRule(FAN_IN_SET_INPUTS, ElementShape.MapOf(SCALAR, SCALAR), FAN_IN_INLET_PORTS),
             kernel = CellFactory { ref -> PresenceCountCell<Any?>(ref) },
             model = PresenceCountModel,
         )
@@ -326,7 +334,7 @@ object CoreOperators {
          * see QuorumSetModel's KDoc. */
         OperatorCatalog.register(
             id = Ids.QUORUM_SET,
-            shape = ShapeRule(FAN_IN_SET_INPUTS, SCALAR_SET),
+            shape = ShapeRule(FAN_IN_SET_INPUTS, SCALAR_SET, FAN_IN_INLET_PORTS),
             kernel = CellFactory { ref -> QuorumSetCell<Any?>(ref) { arms -> Thresholds.MAJORITY.required(arms) } },
             model = QuorumSetModel(Thresholds.MAJORITY),
         )
@@ -460,7 +468,7 @@ object CoreOperators {
          * which this task's bead cites, is a concord scenario id for a different cell. */
         OperatorCatalog.register(
             id = Ids.LOOKUP_JOIN,
-            shape = ShapeRule.binary(SCALAR_MAP, SCALAR_MAP, SCALAR_MAP),
+            shape = ShapeRule.binary(SCALAR_MAP, SCALAR_MAP, SCALAR_MAP, leftPort = "fact", rightPort = "dimension"),
             kernel = CellFactory { ref ->
                 LookupJoinCell<Any?, Any?, Any?, Any?, Any?>(
                     ref,
