@@ -168,10 +168,20 @@ class FlatMapSetModel(private val transform: ElementExpansion) : OperatorModel, 
  * "emits only when membership size changes" is an emission rule the batch reference cannot
  * and need not express: at quiescence the observable is the count, and effective-only
  * emission is what makes the kernel's count equal it.
+ *
+ * The count is a **`Long`**, not the `Int` `Set.size` hands back. [ModelState] is compared for
+ * *structural* equality against what a differential run folds out of the kernel terminal, and
+ * this cell's outlet is `Propagate<CounterDelta>` whose `amount` is a `Long`
+ * (kernel/src/main/kotlin/civictech/cell/data/delta/CounterDelta.kt), so a terminal over it
+ * reads `2L`, and `ScalarState(2) != ScalarState(2L)` — an `Int` here would mismatch on every
+ * case the runner (computenet-4ru.8) ever built. It is also what keeps the model's own
+ * `Scalar` family self-consistent with [CounterSourceModel]/[PnCounterSourceModel], whose
+ * `netTotal` is a `Long`. [PresenceCountModel]'s counts stay `Int` for exactly the same
+ * reason in the other direction: `PresenceCountCell`'s outlet is `MapDelta<E, Int>`.
  */
 object CountModel : OperatorModel, Serializable {
     override fun evaluate(inputs: List<ModelState>): ModelState =
-        ModelState.ScalarState(single(inputs, "CountModel").asSet("CountModel").elements.size)
+        ModelState.ScalarState(single(inputs, "CountModel").asSet("CountModel").elements.size.toLong())
 
     override fun toString(): String = "CountModel"
 }

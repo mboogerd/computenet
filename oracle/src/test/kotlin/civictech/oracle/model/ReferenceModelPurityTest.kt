@@ -83,7 +83,7 @@ class ReferenceModelPurityTest {
 
         result["union"] shouldBe ModelState.SetState(setOf("a", "bb", "shared", "c"))
         result["filter"] shouldBe ModelState.SetState(setOf("a", "c"))
-        result["count"] shouldBe ModelState.ScalarState(2)
+        result["count"] shouldBe ModelState.ScalarState(2L)
         withClue("intersection quorum: only 'shared' is asserted by both sources") {
             result["quorum"] shouldBe ModelState.SetState(setOf("shared"))
         }

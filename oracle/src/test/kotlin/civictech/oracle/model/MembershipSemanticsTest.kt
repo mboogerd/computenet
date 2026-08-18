@@ -17,14 +17,25 @@ import org.junit.jupiter.api.Test
  * ## The two mutations these tests were built to catch
  *
  * [Membership]'s rule has two independent halves, and each is pinned by exactly one of BS-2
- * and BS-3 — which is why both tests are needed and neither subsumes the other. Measured
- * against this file, 2026-08-17:
+ * and BS-3 — which is why both tests are needed and neither subsumes the other. Re-measured
+ * by the task review, 2026-08-18, with `./gradlew :oracle:test --tests
+ * 'civictech.oracle.model.MembershipSemanticsTest' --rerun --no-build-cache`, one mutation at
+ * a time; **10 tests ran under each**:
  *
  * - Making `Membership.observes` return `true` unconditionally (every writer observes
- *   everything) reddens **BS-2** and the two `an unobserved remove` cases; BS-3 stays green.
+ *   everything) — the observation half — reddens **3**: `BS-2 a remove by a writer that never
+ *   observed the add …`, `one uncovered add among several keeps the element live`, and
+ *   `an observe does not reach an add issued after it`, each `expected:<["x"]> but was:<[]>`.
+ *   BS-3 stays green.
  * - Changing the final liveness fold from `issued.any { !it.covered }` to
  *   `issued.all { !it.covered }` (an element dies if *any* of its adds was covered) reddens
- *   **BS-3**; BS-2 stays green.
+ *   **2**: `BS-3 an element re-added after an observed remove …` and `one uncovered add among
+ *   several keeps the element live`, again `expected:<["x"]> but was:<[]>`. BS-2 stays green.
+ *
+ * `an unobserved remove of an element nobody ever added is a no-op` survives **both**, and
+ * deliberately: with no add on the log there is nothing for either half of the rule to cover,
+ * so that case pins the absence of a crash rather than the rule. (An earlier revision of this
+ * KDoc counted it among the first mutation's casualties; re-running says it is not one.)
  *
  * Both mutations were checked to remove the *only* thing the assertion depends on: the
  * assertions below are on the returned element set itself, not on a message that some second

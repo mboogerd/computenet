@@ -3,6 +3,7 @@ package civictech.oracle.model
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.assertions.withClue
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import org.junit.jupiter.api.Test
 
@@ -116,10 +117,19 @@ class SetOperatorModelTest {
         toText.evaluate(listOf(setOfElements(1, 2))) shouldBe setOfElements("1", "2")
     }
 
+    /**
+     * The reading is a `Long`, matching the `CounterDelta.amount` a kernel `CountCell`
+     * terminal folds out: `ScalarState(3) != ScalarState(3L)`, and the model is compared
+     * against the kernel by structural equality. See [CountModel]'s KDoc.
+     */
     @Test
-    fun `CountCell counts distinct live elements`() {
-        CountModel.evaluate(listOf(setOfElements("a", "b", "c"))) shouldBe ModelState.ScalarState(3)
-        CountModel.evaluate(listOf(setOfElements())) shouldBe ModelState.ScalarState(0)
+    fun `CountCell counts distinct live elements as a Long counter reading`() {
+        CountModel.evaluate(listOf(setOfElements("a", "b", "c"))) shouldBe ModelState.ScalarState(3L)
+        CountModel.evaluate(listOf(setOfElements())) shouldBe ModelState.ScalarState(0L)
+
+        withClue("an Int reading would mismatch the kernel's CounterDelta(Long) on every case") {
+            CountModel.evaluate(listOf(setOfElements("a"))) shouldNotBe ModelState.ScalarState(1)
+        }
     }
 
     @Test
