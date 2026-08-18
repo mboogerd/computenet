@@ -656,3 +656,69 @@ prose, without constructing any mixed-drive table:
 
 No numeric value from either drive is merged into a shared row or table; each entry's
 `FindingsTable` stands on its own, per `[BEN1-27]`.
+
+---
+
+## 2026-08-18 — Correction to the two entries above: the recorded environment describes the *rendering* JVM, not the measuring one
+
+Appended at feature review of `computenet-x9e.4` (PR #322), against the retained JMH
+stdout logs of both sweeps. The measured scores and dispersions above are unaffected;
+what is wrong is the `Harness:` line's environment fields, and — because of that — one
+of the cross-drive statements the SIM entry makes.
+
+**The mechanism.** `RunEnvironment.capture` (`bench/src/main/kotlin/civictech/bench/Env.kt`)
+reads `System.getProperty("java.vendor")`, `"java.version"` and
+`ManagementFactory.getRuntimeMXBean().inputArguments` **of the process that calls it**.
+`ThroughputReportRenderTest` calls it inside the Gradle `:bench:test` JVM — the toolchain
+JDK 21 (`jvmToolchain(21)`), launched with `-Xmx2g` — long after the JMH forks have
+exited. JMH's CSV output carries score, error, unit and `Param:` columns and **no JVM
+columns at all**, so nothing about the JVM that actually produced the numbers ever
+reaches the renderer. The `Harness:` line's JVM vendor, JVM version and heap fields are
+therefore properties of the render step, not of the measurement.
+
+**What the sweeps actually ran on**, from each run's own retained JMH banner:
+
+| entry | `# VM version` in the sweep's own log | `# VM options` | `Harness:` line claims |
+| --- | --- | --- | --- |
+| REAL-drive (`computenet-x9e.4.5`) | `JDK 26.0.1, OpenJDK 64-Bit Server VM, 26.0.1` (invoker `/opt/homebrew/Cellar/openjdk/26.0.1/...`) | `<none>` | `Eclipse Adoptium/21.0.11 · heap -Xmx2g` |
+| SIM-drive (`computenet-x9e.4.4`) | `JDK 21.0.11, OpenJDK 64-Bit Server VM, 21.0.11+10-LTS` (invoker `~/.gradle/jdks/eclipse_adoptium-21-...`) | `<none>` | `Eclipse Adoptium/21.0.11 · heap -Xmx2g` |
+
+So the REAL entry's JVM field is wrong by five major versions and its heap field names a
+flag its forks never received; the SIM entry's JVM field is right (its own "Commands,
+exactly" block invoked the toolchain JDK by absolute path for precisely this reason) and
+only its heap field is wrong. The REAL entry is internally inconsistent on its own face:
+its rendered `Harness:` line says Adoptium 21.0.11 while its own "Commands, exactly"
+block shows a bare `java -jar`, which on this host resolves to the Homebrew JDK 26.
+
+**Demonstrated, not inferred.** Re-running the REAL entry's own documented render command
+against its retained `real-throughput.csv` — the file JDK 26 produced — reproduced the
+identical `Harness:` line, `Eclipse Adoptium/21.0.11 · heap -Xmx2g` included. The
+environment fields cannot distinguish the two runs because they never saw either of them.
+
+**Consequences, stated rather than tidied away:**
+
+- The one Reportable REAL row (`GROUP_BY_MAX retract`) does not satisfy `[BEN1-23]` as
+  rendered: the JVM vendor/version and heap it carries are not the ones it was measured
+  under. Both entries' heap field is wrong.
+- The SIM entry's "Comparison with REAL-drive" section is **confounded**. It states the
+  two sweeps ran "at the same annotation config on the same machine" — true of config and
+  machine, false of runtime — and reads SIM's tighter dispersion (5/36 Reportable vs
+  1/36; range 0.00355–0.08467 vs 0.00480–0.1526) as attributable to the drive, with
+  "SIM removes real-thread scheduling and OS jitter" offered as the explanation. A JDK
+  21-vs-26 difference in JIT and GC defaults is an uncontrolled alternative explanation of
+  the same spread, and nothing in either run separates the two. Until REAL is re-measured
+  on the toolchain JDK, the cross-drive dispersion comparison should not be read as
+  drive-attributable.
+- **Not affected**: the per-row scores and dispersions (they are what each CSV says), the
+  omission lists and their `NOISE_FLOOR` classification, `[BEN1-25]`'s exclusion
+  behaviour, `[BEN1-27]`'s no-mixed-table property, and both entries' `[BEN1-29]`
+  WAL/journal statements. The INSERT/RETRACT asymmetry is observed **within** each drive
+  independently, so it does not rest on the cross-drive comparison and survives it.
+
+**Follow-ups filed:** `computenet-hqid` (the renderer must not present a render-time
+environment as the measurement's) and `computenet-am2h` (re-measure the REAL sweep on the
+toolchain JDK and append a corrected entry). Neither is repaired here: correcting the
+`Harness:` line by hand would break the property both sweep entries rest on — that the
+rendered block is verbatim tool output — and re-measuring is an 18-minute sweep, not a
+review-time edit. Nothing under `kernel/src/main` was touched, and `NOISE_FLOOR` was not
+changed.
