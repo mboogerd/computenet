@@ -15,8 +15,10 @@ plugins {
 // projector -> shell against a --workspace path). computenet-7em.1.2 adds
 // :wire for the opt-in two-node mode, in which the projector's two cells
 // gossip their deltas to one peer over the real WebSocket transport
-// (civictech.demo.beadsmirror.MirrorPeering — the only file in the module that
-// names a :wire type, so a solo run loads none of it).
+// (civictech.demo.beadsmirror.MirrorTransport's WsMirrorTransport binding —
+// the only file in the module that names a :wire type, so a solo run loads
+// none of it; MirrorPeering itself only names civictech.cell.wire.Peering, a
+// :kernel type despite the package name — corrected, computenet-mwwr).
 dependencies {
     implementation(project(":kernel"))
     implementation(project(":demo:shell"))
