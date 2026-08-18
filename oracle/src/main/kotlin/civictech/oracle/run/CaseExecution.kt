@@ -16,6 +16,8 @@ import civictech.oracle.bind.CoreOperators
 import civictech.oracle.bind.OperatorCatalog
 import civictech.oracle.gen.CaseTopology
 import civictech.oracle.gen.GeneratedCase
+import civictech.oracle.gen.TerminalSpec
+import civictech.oracle.gen.TopologyNode
 import civictech.oracle.model.ElementShape
 import civictech.oracle.model.ModelNode
 import civictech.oracle.model.NodeId
@@ -143,12 +145,36 @@ object CaseExecution {
      * [CaseTopology.placement]: multi-host placement is the sibling task's too, and a topology
      * that asks for a second ordinal is refused rather than silently collapsed.
      */
-    fun applyCase(case: GeneratedCase, world: SimWorld): CaseGraph {
+    fun applyCase(case: GeneratedCase, world: SimWorld): CaseGraph = assemble(case, world).graph
+
+    /**
+     * Everything [applyCase] builds, plus the handle → [CellRef] map and the **mutable**
+     * terminals map backing [CaseGraph.terminals] — needed by [linkLateTerminals] (BS-7,
+     * `[ORA1-DIFF-05]`) to add a late terminal's fold after the mid-script
+     * [civictech.oracle.gen.CaseStep.Barrier], without re-applying the spec (which would
+     * double-spawn every cell) and without changing [CaseGraph]'s own shape.
+     *
+     * [CaseGraph.terminals] is typed `Map`, but the instance behind it here is exactly
+     * [terminals] — the same `LinkedHashMap`, aliased, not copied — so mutating [terminals]
+     * through this assembly is visible through [CaseGraph.terminals] too.
+     */
+    class CaseAssembly internal constructor(
+        val graph: CaseGraph,
+        internal val refs: Map<String, CellRef>,
+        internal val terminals: MutableMap<String, TerminalFold>,
+    )
+
+    /**
+     * [applyCase]'s full build: spawns every node ([GraphSpec.applyTo]), links a fold behind
+     * every **eager** (non-late) terminal, and binds every source — same behavior as before,
+     * just also handing back the pieces [linkLateTerminals] needs.
+     */
+    fun assemble(case: GeneratedCase, world: SimWorld): CaseAssembly {
         require(case.topology.placement.values.all { it == 0 }) {
             "Topology places handles on host ordinals " +
-                "${case.topology.placement.values.distinct().sorted()}; multi-host placement is " +
-                "the late-joiner/placement sibling task's, and collapsing it onto one host here " +
-                "would silently run a different case than the one asked for."
+                "${case.topology.placement.values.distinct().sorted()}; this assembly path " +
+                "only ever ran on one host, and collapsing a second ordinal onto it would " +
+                "silently run a different case than the one asked for."
         }
 
         val refs = case.spec.applyTo(world.host.managementInlet)
@@ -156,22 +182,7 @@ object CaseExecution {
 
         val terminals = LinkedHashMap<String, TerminalFold>()
         case.topology.terminals.filter { !it.late }.forEach { terminal ->
-            val node = nodes[terminal.handle]
-                ?: error("Terminal '${terminal.name}' reads handle '${terminal.handle}', which the topology does not declare")
-            val entry = OperatorCatalog.entry(node.catalogId)
-                ?: error("Terminal '${terminal.name}' reads node '${node.handle}', whose catalog id '${node.catalogId}' is not registered")
-            val ref = refs[terminal.handle]
-                ?: error("Terminal '${terminal.name}' reads handle '${terminal.handle}', which the applied GraphSpec did not spawn")
-
-            val fold = foldFor(entry.shape.output, node.catalogId)
-            world.host.managementInlet.call.spawn(fold)
-            val result = world.host.managementInlet.call
-                .connect(ref, entry.shape.outputPort, fold.ref, TERMINAL_INLET)
-            check(result !is LinkResult.Rejected) {
-                "Linking terminal '${terminal.name}' to ${node.handle}.${entry.shape.outputPort} " +
-                    "was rejected: ${(result as LinkResult.Rejected).reason}"
-            }
-            terminals[terminal.name] = fold
+            terminals[terminal.name] = linkTerminal(terminal, nodes, refs, world)
         }
 
         val sources = LinkedHashMap<SourceId, ScriptSource>()
@@ -182,7 +193,59 @@ object CaseExecution {
             sources[source] = scriptSourceFor(node.catalogId, node.handle, ref, world)
         }
 
-        return CaseGraph(terminals = terminals, sources = sources)
+        return CaseAssembly(
+            graph = CaseGraph(terminals = terminals, sources = sources),
+            refs = refs,
+            terminals = terminals,
+        )
+    }
+
+    /**
+     * Links every [TerminalSpec.late] terminal not already linked — the driving loop calls
+     * this exactly once, at [case]'s single [civictech.oracle.gen.CaseStep.Barrier], after
+     * [assembly]'s graph has quiesced (BS-7, `[ORA1-DIFF-05]`; `[24-CATCHUP-01]`/
+     * `[21-CATCHUP-02]`: a late link plus catch-up converges the late view to the early one).
+     *
+     * Linking before the barrier would silently turn the late terminal into an early one and
+     * make the property untestable; linking here mirrors `GenerativeGraphTest`'s mid-run late
+     * joiner (`kernel/src/test/kotlin/civictech/cell/verify/GenerativeGraphTest.kt`), which
+     * spawns and connects the collector cell mid-script rather than at graph-build time.
+     *
+     * Idempotent: a terminal already present in [CaseAssembly.terminals] (already linked, by
+     * this call or an earlier one) is skipped, so a script with more than one Barrier — none
+     * exist today; `ScriptGenerator` emits at most one — would not double-link.
+     */
+    fun linkLateTerminals(case: GeneratedCase, world: SimWorld, assembly: CaseAssembly) {
+        val nodes = case.topology.nodes.associateBy { it.handle }
+        case.topology.terminals.filter { it.late }.forEach { terminal ->
+            if (assembly.terminals.containsKey(terminal.name)) return@forEach
+            assembly.terminals[terminal.name] = linkTerminal(terminal, nodes, assembly.refs, world)
+        }
+    }
+
+    /** Spawns a [TerminalFold] matching [terminal]'s node's output shape and connects it. */
+    private fun linkTerminal(
+        terminal: TerminalSpec,
+        nodes: Map<String, TopologyNode>,
+        refs: Map<String, CellRef>,
+        world: SimWorld,
+    ): TerminalFold {
+        val node = nodes[terminal.handle]
+            ?: error("Terminal '${terminal.name}' reads handle '${terminal.handle}', which the topology does not declare")
+        val entry = OperatorCatalog.entry(node.catalogId)
+            ?: error("Terminal '${terminal.name}' reads node '${node.handle}', whose catalog id '${node.catalogId}' is not registered")
+        val ref = refs[terminal.handle]
+            ?: error("Terminal '${terminal.name}' reads handle '${terminal.handle}', which the applied GraphSpec did not spawn")
+
+        val fold = foldFor(entry.shape.output, node.catalogId)
+        world.host.managementInlet.call.spawn(fold)
+        val result = world.host.managementInlet.call
+            .connect(ref, entry.shape.outputPort, fold.ref, TERMINAL_INLET)
+        check(result !is LinkResult.Rejected) {
+            "Linking terminal '${terminal.name}' to ${node.handle}.${entry.shape.outputPort} " +
+                "was rejected: ${(result as LinkResult.Rejected).reason}"
+        }
+        return fold
     }
 
     /** Every [TerminalFold] registers its inlet under this name (see `TerminalFold.kt`). */
