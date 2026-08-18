@@ -83,8 +83,12 @@ class ThroughputReportTest {
 
     @Test
     fun `refuses a row whose error is NaN because the run had too few samples`() {
-        // Observed 2026-08-18 from a real `-f 1 -wi 1 -i 1` smoke run: JMH writes the
-        // literal NaN when it has fewer than two samples to compute an error from.
+        // Observed 2026-08-18 from a real `-f 1 -wi 1 -i 1` smoke run (Samples=1): JMH
+        // writes the literal NaN. Confirmed against JMH 1.37's own
+        // AbstractStatistics.getMeanErrorAt (org.openjdk.jmh:jmh-core:1.37, the pinned
+        // dependency): it returns NaN for every n <= 2, and only becomes finite once
+        // n > 2 (i.e. at three samples), so the remedy this refusal states must name
+        // three, not two.
         val csv = listOf(
             header,
             """"civictech.bench.micro.OperatorThroughputBenchmark.sim","thrpt",1,1,469734.975841,NaN,"ops/s",INSERT,FILTER"""",
@@ -93,6 +97,38 @@ class ThroughputReportTest {
             ThroughputReport.parseCsv(csv)
         }
         assertTrue(failure.message!!.contains("too few"), failure.message)
+        assertTrue(failure.message!!.contains("at least three measurement"), failure.message)
+    }
+
+    @Test
+    fun `still refuses at exactly two measurement samples, and does not advise re-running at two`() {
+        // The boundary the earlier (wrong) advice missed: JMH's ListStatistics also
+        // writes NaN at Samples=2, not only below it. A session that followed "re-run
+        // with at least two" would land back on this identical refusal.
+        val csv = listOf(
+            header,
+            """"civictech.bench.micro.OperatorThroughputBenchmark.sim","thrpt",1,2,469734.975841,NaN,"ops/s",INSERT,FILTER"""",
+        ).joinToString("\n")
+        val failure = assertThrows(ThroughputReportException::class.java) {
+            ThroughputReport.parseCsv(csv)
+        }
+        assertTrue(failure.message!!.contains("too few"), failure.message)
+        assertTrue(failure.message!!.contains("at least three measurement"), failure.message)
+        assertFalse(failure.message!!.contains("at least two measurement"), failure.message)
+    }
+
+    @Test
+    fun `a row with a finite error at three measurement samples parses cleanly`() {
+        // Three is the fewest sample count JMH's own statistics resolve to a finite
+        // error at (getN() > 2 in AbstractStatistics.getMeanErrorAt) — the row the
+        // corrected remedy actually leads to.
+        val csv = listOf(
+            header,
+            """"civictech.bench.micro.OperatorThroughputBenchmark.sim","thrpt",1,3,469734.975841,58421.87,"ops/s",INSERT,FILTER"""",
+        ).joinToString("\n")
+        val rows = ThroughputReport.parseCsv(csv)
+        assertEquals(1, rows.size)
+        assertTrue(rows.single().scoreError.isFinite())
     }
 
     @Test
